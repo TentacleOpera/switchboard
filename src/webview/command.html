@@ -8,7 +8,7 @@
     <meta name="theme-color" content="#0d0d0d">
     <link rel="manifest" href="/manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/icon-180.png">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'nonce-{{NONCE}}' 'self' 'unsafe-eval' 'unsafe-inline'; script-src-attr 'unsafe-inline'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self'; manifest-src 'self';">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{NONCE}}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self'; manifest-src 'self';">
     <title>Switchboard Command</title>
     <style>
         @font-face {
@@ -814,6 +814,10 @@
                         <span class="nav-btn-icon">🚀</span>
                         <span>Mission</span>
                     </button>
+                    <button class="nav-btn" data-view="teams" title="Teams">
+                        <span class="nav-btn-icon">👥</span>
+                        <span>Teams</span>
+                    </button>
                 </div>
                 <div class="tablet-rail-divider"></div>
                 <div class="tablet-rail-section" id="tablet-teams-rail">
@@ -930,6 +934,7 @@
                         <div class="list-header-row">
                             <span style="font-weight:600; font-size:14px; color:var(--text-primary);">TEAM ROSTER</span>
                         </div>
+                        <div id="teams-notice" class="status-chip unknown hidden"></div>
                         <div class="teams-roster-list" id="teams-roster-list">
                             <!-- Team cards populated by script -->
                         </div>

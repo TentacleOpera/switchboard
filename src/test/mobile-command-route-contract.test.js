@@ -97,6 +97,85 @@ function run() {
         assert.ok(matches.length >= 2, `Expected at least 2 width breakpoints, found: ${matches.length}`);
     });
 
+    test('both nav surfaces carry all four destinations', () => {
+        // The tablet rail shipped with three: Teams was phone-only, so on an iPad
+        // the Teams view was unreachable whenever the roster was empty.
+        for (const [label, re] of [
+            ['tablet rail', /<nav class="tablet-rail"[\s\S]*?<\/nav>/],
+            ['phone nav', /<nav[^>]*id="phone-nav-bar"[\s\S]*?<\/nav>/],
+        ]) {
+            const block = (html.match(re) || [''])[0];
+            assert.ok(block, `${label} block not found in served HTML`);
+            for (const view of ['dispatch', 'move', 'mission', 'teams']) {
+                assert.ok(block.includes(`data-view="${view}"`),
+                    `${label} must carry the ${view} destination`);
+            }
+        }
+    });
+
+    test('served /command CSP grants no eval and no inline script', () => {
+        // This is the one surface designed to be reached from a device that is not
+        // the operator's desk; it shipped with 'unsafe-eval', 'unsafe-inline' and
+        // script-src-attr while using none of them.
+        for (const policy of [result.csp, html]) {
+            assert.ok(!/unsafe-eval/.test(policy), "CSP must not grant 'unsafe-eval'");
+            assert.ok(!/script-src-attr/.test(policy), 'CSP must not grant script-src-attr');
+            assert.ok(!/script-src[^;]*unsafe-inline/.test(policy), "script-src must not grant 'unsafe-inline'");
+        }
+    });
+
+    const js = fs.readFileSync(path.join(REPO_ROOT, 'src', 'webview', 'command.js'), 'utf8');
+
+    test('LAUNCH reaches /kanban/queue/next and nothing arms Mission Control', () => {
+        assert.ok(js.includes('/kanban/queue/next'), 'LAUNCH must post /kanban/queue/next');
+        assert.ok(!js.includes('/mission-control/start'), 'must not call /mission-control/start');
+        assert.ok(!js.includes('/mission-control/confirm'), 'must not call /mission-control/confirm');
+        assert.ok(!/\bready\s*:\s*true/.test(js), 'must not write ready');
+    });
+
+    test('the terminal viewer and the document preview carry no write path', () => {
+        assert.ok(!/\.send\s*\(/.test(js), 'the pty socket must never be written to');
+        assert.ok(!/method:\s*['"]PUT['"][^}]*plan\b/i.test(js), 'the preview must not save');
+        assert.ok(!js.includes('/kanban/plan/save'), 'the preview must not save');
+    });
+
+    test('board reads unwrap the { success, data } envelope', () => {
+        // /kanban/plans, /kanban/columns and /kanban/plan all answer through
+        // _handleReadEndpoint. Read as bare bodies, the board was empty, the
+        // column dropdowns were empty and the preview always said "no content".
+        for (const route of ['/kanban/plans', '/kanban/columns', '/kanban/plan?']) {
+            const idx = js.indexOf(route);
+            assert.ok(idx > 0, `expected a read of ${route}`);
+            const window = js.slice(idx, idx + 900);
+            assert.ok(/payload\.data|\.data\s*!==\s*undefined/.test(window),
+                `the read of ${route} must unwrap the { success, data } envelope`);
+        }
+    });
+
+    test('no read targets a field its writer does not persist', () => {
+        // Each of these shipped, and each resolved to undefined on every card,
+        // mission or seat. The row projection is KanbanDatabase._readRows; the
+        // fleet projection is the ptyListTerminals arm.
+        const absent = [
+            ['priority_starred', 'plan rows persist priorityStarred'],
+            ['.subtaskCount', 'plan rows carry no subtaskCount'],
+            ['activeMission.members', 'mission records carry plans/features, not members'],
+            ['activeMission.codename', 'a mission codename is persisted as name'],
+            ['t.name === headName', 'the fleet projection emits friendlyName, not name'],
+            ['liveSeat.working', 'the fleet projection has no working flag'],
+            ["ordersData?.groups", 'GET /terminals/standing-orders returns no groups key'],
+        ];
+        for (const [needle, why] of absent) {
+            assert.ok(!js.includes(needle), `${needle}: ${why}`);
+        }
+    });
+
+    test('the roster is real, and a dormant team seats on tap', () => {
+        assert.ok(js.includes('ptyListAgentGroups'), 'the roster must come from ptyListAgentGroups');
+        assert.ok(js.includes('ptyStartTeam'), 'a dormant team must seat via ptyStartTeam');
+        assert.ok(!/Coder Fleet|Lead Team/.test(js), 'no fabricated placeholder teams');
+    });
+
     console.log(`\nResults: ${passed} passed, ${failed} failed\n`);
     if (failed > 0) {
         process.exit(1);

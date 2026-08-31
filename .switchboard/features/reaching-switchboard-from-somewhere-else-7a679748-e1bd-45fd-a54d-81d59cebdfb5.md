@@ -140,3 +140,23 @@ deliverables) and deliberately kept whole; see its Recommendation for why.
   every workspace from one `start_url`. Do not widen the CSP beyond the single `manifest-src`
   directive, and do not touch the bind policy, the peer check, the Host guard or the token
   model.
+
+## Review Findings
+
+Both subtasks were implemented in one commit (`0b91aa16`) and reviewed together. The
+discovery subtask (`088bdaa1`) is sound — every Goal Invariant holds and its CSP test is
+correctly written over the *set* of shell-class policies, which is what caught the command
+route's third copy. The command route (`6482f7c3`) shipped with all three board reads against
+the wrong response envelope, four reads against field names their writers do not persist, a
+permanently-empty team roster backfilled with two fabricated teams, Teams unreachable on the
+tablet, and its plan-required tap-to-seat removed on the false premise that `ptyStartTeam` does
+not exist; all are fixed, and the feature's own reconciled shared surfaces (the third CSP copy,
+`viewport-fit=cover` on both pages, one manifest at `start_url: /`) are each satisfied. The
+feature goal — Switchboard *operable* from a device that is not the host — is achieved in code
+but not yet demonstrated: no part of either subtask has been exercised on a phone or tablet, and
+the running server predates both routes.
+
+## Deferred Findings
+
+- MAJOR — Neither subtask's on-device verification was executed (no phone, no iPad, no install, no one-screen measurement). Both subtasks' core mechanisms are manual-only; passing contract suites is not evidence either surface works in the hand. See each subtask's own Deferred Findings. `.switchboard/features/reaching-switchboard-from-somewhere-else-7a679748-e1bd-45fd-a54d-81d59cebdfb5.md:1`
+- NIT — The subtask checklist above still shows both items unchecked and **PLAN REVIEWED**; the board, not this file, is the authority on column state. `.switchboard/features/reaching-switchboard-from-somewhere-else-7a679748-e1bd-45fd-a54d-81d59cebdfb5.md:36`

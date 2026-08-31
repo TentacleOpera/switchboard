@@ -92,6 +92,15 @@ const extensionConfig = {
                     to: 'webview/[name][ext]'
                 },
                 {
+                    // The web app manifest. `_handleServeManifest` looks in
+                    // dist/webview before src/webview, and src/** is excluded from
+                    // the VSIX — without this pattern a dist-only layout answers
+                    // 404 and the board installs as a plain bookmark.
+                    from: 'src/webview/manifest.{json,webmanifest}',
+                    to: 'webview/[name][ext]',
+                    noErrorOnMissing: true
+                },
+                {
                     from: path.resolve(__dirname, 'node_modules', 'sql.js', 'dist', 'sql-wasm.js'),
                     to: 'sql-wasm.js'
                 },

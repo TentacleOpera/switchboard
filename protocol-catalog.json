@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-08-31T06:56:17.418Z",
+  "generatedAt": "2026-08-31T08:57:07.415Z",
   "summary": {
     "totalArms": 642,
     "totalVerbs": 553,
@@ -14,7 +14,7 @@
       "TaskViewer": 104,
       "Setup": 101
     },
-    "apiEndpointCount": 109,
+    "apiEndpointCount": 111,
     "manualReviewCount": 7
   },
   "providers": {
@@ -28338,7 +28338,17 @@
       "prefix": false
     },
     {
+      "path": "/command",
+      "method": "GET",
+      "prefix": false
+    },
+    {
       "path": "/design/asset",
+      "method": "GET",
+      "prefix": false
+    },
+    {
+      "path": "/manifest.json",
       "method": "GET",
       "prefix": false
     },

@@ -378,7 +378,7 @@ export function getSetupHtml(repoRoot: string, workspaceRoot: string, capabiliti
     }
     let content = fs.readFileSync(htmlPath, 'utf8');
     const nonce = makeNonce();
-    const csp = `default-src 'self'; script-src 'nonce-${nonce}' 'self' 'unsafe-eval' 'unsafe-inline'; script-src-attr 'unsafe-inline'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self';`;
+    const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self';`;
     content = content.replace(/<script>/g, `<script nonce="${nonce}">`);
     // setup.html carries the marker — pass expectMarker so its deletion warns.
     // (It was deleted once, by 3224366, and shipped a dead Setup panel in 1.7.13.)
@@ -487,7 +487,7 @@ export function getConnectionsHtml(repoRoot: string, workspaceRoot: string, capa
     }
     let content = fs.readFileSync(htmlPath, 'utf8');
     const nonce = makeNonce();
-    const csp = `default-src 'self'; script-src 'nonce-${nonce}' 'self' 'unsafe-eval' 'unsafe-inline'; script-src-attr 'unsafe-inline'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self';`;
+    const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self';`;
     content = content.replace(/\{\{NONCE\}\}/g, nonce);
     content = content.replace(/\{\{CONNECTIONS_JS_URI\}\}/g, '/static/webview/connections.js');
     content = content.replace(/<script>/g, `<script nonce="${nonce}">`);
@@ -512,7 +512,7 @@ export function getLinearHtml(repoRoot: string, workspaceRoot: string, capabilit
     }
     let content = fs.readFileSync(htmlPath, 'utf8');
     const nonce = makeNonce();
-    const csp = `default-src 'self'; script-src 'nonce-${nonce}' 'self' 'unsafe-eval' 'unsafe-inline'; script-src-attr 'unsafe-inline'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self';`;
+    const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self';`;
     content = content.replace(/\{\{NONCE\}\}/g, nonce);
     content = content.replace(/\{\{LINEAR_JS_URI\}\}/g, '/static/webview/linear.js');
     content = content.replace(/<script>/g, `<script nonce="${nonce}">`);
@@ -537,7 +537,7 @@ export function getCommandHtml(repoRoot: string, workspaceRoot: string, capabili
     }
     let content = fs.readFileSync(htmlPath, 'utf8');
     const nonce = makeNonce();
-    const csp = `default-src 'self'; script-src 'nonce-${nonce}' 'self' 'unsafe-eval' 'unsafe-inline'; script-src-attr 'unsafe-inline'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self'; manifest-src 'self';`;
+    const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self'; manifest-src 'self';`;
     content = content.replace(/\{\{NONCE\}\}/g, nonce);
     content = content.replace(/\{\{COMMAND_JS_URI\}\}/g, '/static/webview/command.js');
     content = content.replace(/<script>/g, `<script nonce="${nonce}">`);

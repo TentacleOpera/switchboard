@@ -555,3 +555,27 @@ Assumptions*.
 Implemented standalone Home Screen installation support for Switchboard on phone and tablet devices. Configured web app manifest (`/manifest.json` and `manifest.webmanifest`) with standalone display mode, dark theme tokens, and square icon assets (180x180, 192x192, 512x512, and 512x512 maskable). Added `apple-mobile-web-app-capable`, `apple-mobile-web-app-status-bar-style`, `apple-touch-icon`, `viewport-fit=cover`, and `manifest-src 'self'` CSP directives across `shell.html` and `headlessPanelHtml.ts`. Updated `LocalApiServer` to map `.webmanifest` MIME type to `application/manifest+json` and route `/manifest.json`, and documented installation via MagicDNS in `docs/REMOTE_ACCESS.md`. Verified with automated contract suite `standalone-pwa-install-contract.test.js`, written over the dynamic set of shell-class policies across webview templates and server generators.
 
 
+
+## Review Findings
+
+Reviewed commit `0b91aa16`. This subtask landed substantially correct: every Goal Invariant holds
+— `apple-mobile-web-app-capable content="yes"`, a 180×180 `apple-touch-icon`, `viewport-fit=cover`,
+`manifest-src` in both `getShellHtml`'s policy string and `shell.html`'s `<meta http-equiv>`, a
+manifest that parses with `display: "standalone"` and `start_url: "/"`, and `.webmanifest` mapped
+to `application/manifest+json` — and its contract test is genuinely written over the *set* of
+shell-class policies as the plan required, so it caught the sibling's third copy. Two fixes were
+applied: the webpack `CopyPlugin` copies only `*.html`, `*.js` and `*.css` out of `src/webview`, so
+neither manifest reached `dist/webview` while `_handleServeManifest` looks there first and `src/**`
+is excluded from the VSIX — a dist-only layout would answer 404 and the board would install as a
+plain bookmark; and the sibling route's over-widened CSP was brought back to this plan's explicit
+"do not widen the CSP beyond the single `manifest-src` directive" constraint. Verification:
+`standalone-pwa-install-contract` 11/11, `npm test` green, `tsc` clean, `eslint` 0 errors, and
+`/static/icons/icon-180.png` confirmed serving 200 `image/png` from the live server.
+
+## Deferred Findings
+
+- MAJOR — Every on-device item (3, 4, 6, 7, 8, 9) is manual and was NOT executed: no iPad install from the MagicDNS URL, no confirmation of no-address-bar/no-toolbar launch, no ~100px height measurement, no safe-area or rotation pass, no status-bar legibility check, no terminals-still-stream check when installed, and no uninstall/reinstall. The plan's core claim — that this produces a standalone launch on iOS over plain `http` — has no automated check that could discriminate on it, so this verdict is provisional on that point. `.switchboard/plans/board-installs-to-the-home-screen-as-a-standalone-app.md:1`
+- MAJOR — `/manifest.json` returns 404 against the running server, which started 2026-08-30 21:29, before the route existed. The compiled bundles carry it; confirming the MIME type end-to-end (item 12) needs a restart, which would kill the running fleet. `src/services/LocalApiServer.ts:1479`
+- NIT — `manifest.json` and `manifest.webmanifest` are byte-identical and both routed; one file was the specified end state. `src/webview/manifest.webmanifest:1`
+- NIT — `icons/apple-touch-icon.png` is committed but nothing references it; `shell.html` points at `icon-180.png` (same bytes, same size). `icons/apple-touch-icon.png:1`
+- NIT — `_handleServeManifest` runs no auth check. This is almost certainly required (a manifest is fetched anonymously unless the link carries `crossorigin="use-credentials"`) and it exposes only the app name and icon paths, but it is an unauthenticated route added by this plan and worth recording as such. `src/services/LocalApiServer.ts:1479`

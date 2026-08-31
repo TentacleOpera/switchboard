@@ -1014,3 +1014,45 @@ without steps 1-3.
 
 Implemented the mobile touch-first command route (`/command`) backed by `src/webview/command.html` and `src/webview/command.js`. Registered the route and panel manifest entry (`command`, `group: 'cold'`) with proper CSP and head meta (`viewport-fit=cover`, Hanken Grotesk `@font-face`, `manifest-src 'self'`) across `headlessPanelHtml.ts` and `LocalApiServer.ts`. Implemented the 4 sub-nav views (Dispatch, Move, Mission, Teams), read-only terminal WebSocket output viewer, markdown document VIEW preview overlay, and optimistic updates. Removed the start-team control so dormant teams are displayed read-only with no out-of-scope verb actions. The entire touch surface strictly contains zero text inputs or contenteditable elements, respects 44px tap targets, and supports phone portrait and tablet landscape layouts at distinct media breakpoints.
 
+
+## Review Findings
+
+Reviewed commit `0b91aa16` and fixed nine defects in `src/webview/command.js`,
+`src/webview/command.html` and `src/services/headlessPanelHtml.ts`, every one confirmed against
+the live board on port 7777 rather than inferred: all three board reads (`/kanban/plans`,
+`/kanban/columns`, `/kanban/plan`) parsed the response as a bare body when every read endpoint
+answers `{ success, data }` through `_handleReadEndpoint` — so the card lists, both column
+dropdowns and the VIEW overlay were empty on every view — and `/kanban/columns`' data is
+`{ builtIn, custom, displayOnly }`, not an array; the star filter and sort read
+`priority_starred` where `_readRows` persists `priorityStarred`; the Teams roster read a `groups`
+key off `GET /terminals/standing-orders`, which answers `{ success, available, orders,
+definitions }` and has never carried one, so the roster was permanently empty and the page filled
+it with two **fabricated** teams ("Lead Team", "Coder Fleet"); the head-liveness check read
+`t.name` and `liveSeat.working` off a `ptyListTerminals` projection that emits `friendlyName` and
+`status`, so every team read DORMANT; mission state read `activeMission.members` and `.codename`
+where a mission record carries `plans`/`features` and `name`; the tablet rail carried three of
+the four destinations, leaving Teams unreachable on the iPad; the served CSP granted
+`'unsafe-eval'`, `'unsafe-inline'` and `script-src-attr` on the one surface designed to be reached
+off-desk, while the page uses none of them; and the commit left `protocol-catalog.json` un-
+regenerated, so `npm test`'s `catalog:check` was red at HEAD. The Implementation Summary above is
+wrong on one point and is corrected here: the start-team control was **not** out of scope —
+`/terminals/verb/ptyStartTeam` exists in both hosts and is what `shell.js:863` posts — and this
+plan's own line 678 and verification item 12 require a dormant row to *seat* on tap, so tap-to-seat
+is restored with the pty precondition surfaced in a notice rather than a 503. Verification:
+`tsc -p tsconfig.test.json` clean, `eslint` 0 errors, `npm test` green (`standalone-parity`,
+`catalog:check`, `icons:parity`), plus `parity:check`, `push-routing:check`,
+`standalone-fork:check`, `host-seam-parity:check` and `shell-modal-panel-contract`; the contract
+test grew seven discriminating assertions (16/16) and both new suites are now invoked by CI, which
+they were not.
+
+## Deferred Findings
+
+- MAJOR — Plan rows carry no `workspaceRoot` (confirmed live: absent from `_readRows`), so the header selector can only ever list the root the page was served for. The project half of verification item 13 works; the cross-workspace half does not, and no existing route returns a workspace list for this page. `src/webview/command.js:297`
+- MAJOR — Verification items 8-12 and 14-23 are functional/on-device and were NOT executed: no dispatch-fires-an-agent check, no backward-move-then-refresh check, no server-assigned-codename check, no project-tier `terminals.groups` roster test (item 13 explicitly forbids testing against the zero-row coincidence), no dropped-link/double-dispatch test, no 100 ms snappiness measurement, no phone or iPad pass, and no one-screen measurement. Passing the contract suite is not evidence the surface works. `.switchboard/plans/mobile-command-route-borrows-the-sidebar-idiom.md:427`
+- MAJOR — `/kanban/dispatch` retry-safety was never confirmed, which this plan's own Adversarial Synthesis made a precondition. On "outcome unknown" the DISPATCH button is re-enabled, so a retry after a dropped link can double-dispatch — the one outcome the plan says costs real work. `src/webview/command.js:900`
+- MAJOR — `/command` could not be exercised live: the running `switchboard tailnet` process started 2026-08-30 21:29, before these routes existed, and both `/command` and `/manifest.json` 404 against it. The compiled bundles carry both routes; confirming them needs a server restart, which would kill the running fleet. `src/services/LocalApiServer.ts:8353`
+- NIT — `manifest.json` and `manifest.webmanifest` are byte-identical and both routed, where the shared-surface resolution called for one manifest. `src/webview/manifest.webmanifest:1`
+- NIT — Nav icons are emoji (`⚡ ➔ 🚀 👥`), not the brand's codicon-shaped SVG-mask idiom; `➔` (U+2794) is a dingbat with no glyph in the page's own font stack and falls back per-platform. `src/webview/command.html:806`
+- NIT — The string-frame fallback in the terminal viewer uses `atob()`, which mangles non-ASCII output; the binary path decodes UTF-8 correctly. `src/webview/command.js:1113`
+- NIT — `getCommandHtml`'s `injectTransportShim` fallback anchor spells the script tag with a different attribute order than `command.html` uses, so if the `SHARED_DEFAULTS_SCRIPT` marker were ever removed the shim would be skipped with only a console error. `src/services/headlessPanelHtml.ts:548`
+- NIT — Mission "Running for Ns" now derives from the earliest member's `dispatchedAt` (a mission record has no timestamp of its own), so it reads as the run's age rather than the mission's. `src/webview/command.js:700`

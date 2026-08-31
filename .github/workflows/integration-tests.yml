@@ -487,6 +487,16 @@ jobs:
       - name: CLI board commands contract (field existence, ready set, exit codes, third-door rule)
         run: npm run test:contract:cli-board-commands
 
+      # The two off-desk surfaces. Both tests shipped defined-but-uninvoked, which
+      # is the "green while incomplete" hole: /command's board reads were all
+      # against the wrong envelope and the wrong field names while its own suite
+      # passed, because a served-HTML test cannot see a fetch parse.
+      - name: Mobile command route contract (served HTML, control allowlist, endpoint set)
+        run: npm run test:contract:mobile-command-route
+
+      - name: Standalone PWA install contract (meta tags, manifest, CSP set, icons)
+        run: npm run test:contract:standalone-pwa-install
+
       - name: Transfer bundle contract (round trip, re-keying, classifier, credential guard, host parity)
         run: npm run test:contract:transfer-bundle
 

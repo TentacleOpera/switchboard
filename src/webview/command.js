@@ -78,6 +78,7 @@
 
     // Teams Elements
     const teamsRosterList = document.getElementById('teams-roster-list');
+    const teamsNotice = document.getElementById('teams-notice');
     const tabletTeamsRail = document.getElementById('tablet-teams-rail');
     const paneTerminalViewer = document.getElementById('pane-terminal-viewer');
     const btnCloseTerminal = document.getElementById('btn-close-terminal');
@@ -227,13 +228,25 @@
 
     async function fetchColumns() {
         try {
-            const res = await fetch('/kanban/columns');
+            const res = await fetch(`/kanban/columns${currentWorkspaceRoot ? `?workspaceRoot=${encodeURIComponent(currentWorkspaceRoot)}` : ''}`);
             if (res.ok) {
-                const data = await res.json();
-                if (Array.isArray(data)) {
-                    allColumns = data.filter(c => c && typeof c.id === 'string');
-                    populateColumnDropdowns();
-                }
+                const payload = await res.json();
+                // Every read endpoint answers { success, data } (_handleReadEndpoint),
+                // and /kanban/columns' data is { builtIn, custom, displayOnly } — not an
+                // array. Reading the body as an array left both column dropdowns empty.
+                // `displayOnly` names no writable column, so it is deliberately excluded.
+                const data = (payload && payload.data !== undefined) ? payload.data : payload;
+                const raw = Array.isArray(data)
+                    ? data
+                    : [...(Array.isArray(data?.builtIn) ? data.builtIn : []),
+                       ...(Array.isArray(data?.custom) ? data.custom : [])];
+                const seen = new Set();
+                allColumns = raw.filter(c => {
+                    if (!c || typeof c.id !== 'string' || seen.has(c.id)) return false;
+                    seen.add(c.id);
+                    return true;
+                });
+                populateColumnDropdowns();
             }
         } catch (err) {
             console.warn('[Command] Failed to fetch columns:', err);
@@ -280,7 +293,11 @@
             const queryRoot = currentWorkspaceRoot ? `?workspaceRoot=${encodeURIComponent(currentWorkspaceRoot)}` : '';
             const res = await fetch(`/kanban/plans${queryRoot}`);
             if (res.ok) {
-                const data = await res.json();
+                const payload = await res.json();
+                // { success, data: [...] } — the same envelope the CLI's board
+                // commands had to be fixed for. Read as a bare array the board
+                // was empty on every view.
+                const data = (payload && payload.data !== undefined) ? payload.data : payload;
                 if (Array.isArray(data)) {
                     allCards = data;
                     extractWorkspaceProjects(data);
@@ -366,12 +383,21 @@
                 liveFleet = Array.isArray(fleetData?.terminals) ? fleetData.terminals : [];
             }
 
-            // Fetch team definitions / standing orders
-            const ordersRes = await fetch('/terminals/standing-orders');
-            if (ordersRes.ok) {
-                const ordersData = await ordersRes.json();
-                // Build team roster from registered groups
-                teamRoster = Array.isArray(ordersData?.groups) ? ordersData.groups : [];
+            // Team definitions. `GET /terminals/standing-orders` answers
+            // { success, available, orders, definitions } and has NO `groups` key —
+            // reading one left the roster permanently empty. `ptyListAgentGroups` is
+            // the verb the Terminals panel itself uses for this list, and it is one of
+            // the two verbs reachable before the pty host is ready.
+            const groupsRes = await fetch('/terminals/verb/ptyListAgentGroups', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cwd: currentWorkspaceRoot })
+            });
+            if (groupsRes.ok) {
+                const groupsData = await groupsRes.json();
+                teamRoster = (groupsData && groupsData.success && Array.isArray(groupsData.groups))
+                    ? groupsData.groups
+                    : [];
             }
         } catch (err) {
             console.warn('[Command] Failed to fetch teams state:', err);
@@ -390,14 +416,16 @@
 
     function isMissionInFlight() {
         if (!activeMission) return false;
-        return activeMission.runState === 'in-flight' || (activeMission.dispatchedAt && !activeMission.completedAt);
+        // `runState` is derived server-side from member state and is the only
+        // in-flight signal a mission record carries.
+        return activeMission.runState === 'in-flight';
     }
 
     function updateMissionLock() {
         const locked = isMissionInFlight();
         if (locked) {
             lockBanner.classList.remove('hidden');
-            lockMissionCodename.textContent = activeMission.codename || activeMission.title || 'Active Operation';
+            lockMissionCodename.textContent = missionLabel('Active Operation');
         } else {
             lockBanner.classList.add('hidden');
         }
@@ -424,7 +452,7 @@
             ...rawCard,
             id: cardId,
             kanbanColumn: optColumn !== undefined ? optColumn : rawCard.kanbanColumn,
-            priority_starred: optStar !== undefined ? (optStar ? 1 : 0) : rawCard.priority_starred,
+            priorityStarred: optStar !== undefined ? (optStar ? 1 : 0) : rawCard.priorityStarred,
         };
     }
 
@@ -445,13 +473,13 @@
         cards = cards.filter(c => c.kanbanColumn !== 'done' && c.kanbanColumn !== 'completed' && c.kanbanColumn !== 'archived');
 
         if (dispatchStarredOnly) {
-            cards = cards.filter(c => Boolean(c.priority_starred));
+            cards = cards.filter(c => Boolean(c.priorityStarred));
         }
 
         // Sort starred first, then complexity
         cards.sort((a, b) => {
-            const starA = a.priority_starred ? 1 : 0;
-            const starB = b.priority_starred ? 1 : 0;
+            const starA = a.priorityStarred ? 1 : 0;
+            const starB = b.priorityStarred ? 1 : 0;
             if (starA !== starB) return starB - starA;
             return (Number(b.complexity) || 0) - (Number(a.complexity) || 0);
         });
@@ -521,15 +549,15 @@
         }
 
         if (moveStarredOnly) {
-            cards = cards.filter(c => Boolean(c.priority_starred) || c.id === selectedMoveCardId);
+            cards = cards.filter(c => Boolean(c.priorityStarred) || c.id === selectedMoveCardId);
         }
 
         // Starred first, then moved card rises to top if it was acted on
         cards.sort((a, b) => {
             if (a.id === selectedMoveCardId) return -1;
             if (b.id === selectedMoveCardId) return 1;
-            const starA = a.priority_starred ? 1 : 0;
-            const starB = b.priority_starred ? 1 : 0;
+            const starA = a.priorityStarred ? 1 : 0;
+            const starB = b.priorityStarred ? 1 : 0;
             if (starA !== starB) return starB - starA;
             return 0;
         });
@@ -604,10 +632,15 @@
             badges.appendChild(dot);
         }
 
-        if (card.isFeature || card.subtaskCount > 0) {
+        // Plan rows carry no `subtaskCount`; the link is the subtask's own
+        // `featureId`, so count the siblings rather than print a hardcoded 0.
+        const subtaskCount = card.isFeature
+            ? allCards.filter(c => c.featureId && c.featureId === card.planId).length
+            : 0;
+        if (card.isFeature) {
             const st = document.createElement('span');
             st.className = 'subtask-badge';
-            st.textContent = `${card.subtaskCount || 0} subtasks`;
+            st.textContent = `${subtaskCount} subtask${subtaskCount === 1 ? '' : 's'}`;
             badges.appendChild(st);
         }
 
@@ -624,7 +657,7 @@
         const actions = document.createElement('div');
         actions.className = 'cmd-card-actions';
 
-        const isStarred = Boolean(card.priority_starred);
+        const isStarred = Boolean(card.priorityStarred);
         const starBtn = document.createElement('button');
         starBtn.className = `btn-card-action${isStarred ? ' starred' : ''}`;
         starBtn.textContent = isStarred ? '★ Starred' : '☆ Star';
@@ -651,6 +684,39 @@
 
     // ── 3. Mission View Rendering ──────────────────────────────────────
 
+    /**
+     * A mission record carries `plans: string[]` and `features: string[]` (planIds)
+     * and no `members` array, so every read of a mission `members` array resolved to
+     * undefined and the view always reported "No members staged" — including
+     * straight after a successful member add. Resolve each id against the board so
+     * a member row can show its real title, its seat and its completion.
+     */
+    function missionMembers() {
+        if (!activeMission) { return []; }
+        const ids = [
+            ...(Array.isArray(activeMission.plans) ? activeMission.plans.map(id => ({ id, kind: 'plan' })) : []),
+            ...(Array.isArray(activeMission.features) ? activeMission.features.map(id => ({ id, kind: 'feature' })) : []),
+        ];
+        return ids.map(({ id, kind }) => {
+            const card = allCards.find(c => (c.planId || c.sessionId) === id) || null;
+            return {
+                id,
+                kind,
+                title: card ? (card.topic || card.planFile || id) : id,
+                // Both persisted on the plan row; the mission stores neither.
+                seat: card ? (card.dispatchedTerminal || '') : '',
+                dispatchedAt: card ? (card.dispatchedAt || null) : null,
+                completed: Boolean(card && card.completedAt),
+            };
+        });
+    }
+
+    /** The mission's server-assigned codename lands in `name` (_uniqueCodename);
+     *  there is no `codename` or `title` field on a mission record. */
+    function missionLabel(fallback) {
+        return (activeMission && activeMission.name) || fallback;
+    }
+
     function renderMissionView() {
         if (!missionStagingContainer || !missionProgressContainer) return;
 
@@ -660,12 +726,17 @@
             missionStagingContainer.classList.add('hidden');
             missionProgressContainer.classList.remove('hidden');
 
-            missionProgressCodename.textContent = activeMission.codename || activeMission.title || 'OPERATION IN FLIGHT';
-            const elapsedSec = activeMission.dispatchedAt ? Math.floor((Date.now() - new Date(activeMission.dispatchedAt).getTime()) / 1000) : 0;
-            missionProgressElapsed.textContent = `Running for ${elapsedSec > 0 ? elapsedSec : 0}s`;
+            missionProgressCodename.textContent = missionLabel('OPERATION IN FLIGHT');
+            const members = missionMembers();
+            // A mission has no dispatch timestamp of its own; the run started when
+            // its earliest member was dispatched.
+            const stamps = members.map(m => m.dispatchedAt).filter(Boolean).map(v => new Date(v).getTime())
+                .filter(n => Number.isFinite(n));
+            const startedAt = stamps.length ? Math.min(...stamps) : 0;
+            const elapsedSec = startedAt ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : 0;
+            missionProgressElapsed.textContent = startedAt ? `Running for ${elapsedSec}s` : 'Running';
 
             missionProgressMembersList.innerHTML = '';
-            const members = Array.isArray(activeMission.members) ? activeMission.members : [];
             if (members.length === 0) {
                 missionProgressMembersList.innerHTML = '<div style="color:var(--text-secondary); font-size:12px;">No members listed.</div>';
             } else {
@@ -676,7 +747,7 @@
 
                     const name = document.createElement('span');
                     name.style.fontSize = '12px';
-                    name.textContent = m.title || m.id;
+                    name.textContent = m.title;
                     row.appendChild(name);
 
                     const status = document.createElement('span');
@@ -692,7 +763,7 @@
             missionProgressContainer.classList.add('hidden');
 
             missionMembersList.innerHTML = '';
-            const members = Array.isArray(activeMission?.members) ? activeMission.members : [];
+            const members = missionMembers();
             if (members.length === 0) {
                 missionMembersList.innerHTML = '<div style="color:var(--text-secondary); font-size:12px; padding:8px 0;">No members staged. Add candidates below.</div>';
             } else {
@@ -707,7 +778,7 @@
 
                     const title = document.createElement('span');
                     title.style.fontSize = '12px';
-                    title.textContent = m.title || m.id;
+                    title.textContent = m.title;
                     row.appendChild(title);
 
                     const removeBtn = document.createElement('button');
@@ -743,12 +814,16 @@
         if (tabletTeamsRail) tabletTeamsRail.innerHTML = '';
 
         if (teamRoster.length === 0) {
-            // Default placeholder teams if roster is empty
-            const defaults = [
-                { id: 'team-lead', name: 'Lead Team', head: 'Coding', seats: 2, iconUri: '/static/icons/nav-agent-control.svg' },
-                { id: 'team-coder', name: 'Coder Fleet', head: 'coder-1', seats: 3, iconUri: '/static/icons/nav-terminals.svg' }
-            ];
-            defaults.forEach(t => renderTeamRow(t));
+            // Never invent teams. A placeholder roster is indistinguishable from
+            // real board state on a phone, and two of them shipped here.
+            if (teamsRosterList) {
+                const empty = document.createElement('div');
+                empty.style.padding = '20px';
+                empty.style.color = 'var(--text-secondary)';
+                empty.style.textAlign = 'center';
+                empty.textContent = 'No teams declared for this workspace.';
+                teamsRosterList.appendChild(empty);
+            }
             return;
         }
 
@@ -757,12 +832,87 @@
         });
     }
 
+    /** Mirror of terminals.js resolveArtForShell — art:/pack:/data: only. */
+    function resolveTeamIconUri(value) {
+        const v = String(value || '').trim();
+        if (!v) { return null; }
+        if (v.startsWith('data:')) { return v; }
+        if (v.startsWith('art:')) {
+            const name = v.slice('art:'.length).trim();
+            return name ? '/static/icons/' + encodeURIComponent(name) + '.png' : null;
+        }
+        if (v.startsWith('pack:')) {
+            const file = v.slice('pack:'.length).trim();
+            return file ? '/static/icons/' + encodeURIComponent(file) : null;
+        }
+        return null;
+    }
+
+    /**
+     * The live head of a declared team. A team definition names a `headRole`, not
+     * a seat name — the seat is whichever live terminal holds that role, which is
+     * the same predicate the Terminals panel's rail uses for its fixed slots. The
+     * fleet projection emits `friendlyName` and `status`; it has no `name` and no
+     * `working`, so both were read as undefined here and every team read DORMANT.
+     */
+    function resolveTeamHeadSeat(team) {
+        const role = team.headRole || '';
+        return liveFleet.find(t => t && t.status !== 'exited'
+            && ((role && t.role === role) || (team.head && t.friendlyName === team.head))) || null;
+    }
+
+    /** Seats a declared team asks for: its head plus every member's count. */
+    function declaredSeatCount(team) {
+        const members = Array.isArray(team.members) ? team.members : [];
+        return 1 + members.reduce((n, m) => n + (Number(m && m.count) || 0), 0);
+    }
+
+    /** Start a dormant team. Same verb and payload the desktop rail's dormant
+     *  slot posts; a dormant row means "seat this team", never "open a terminal". */
+    async function seatTeam(team, btn) {
+        if (btn) { btn.disabled = true; }
+        try {
+            const res = await fetch('/terminals/verb/ptyStartTeam', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ teamId: team.id, cwd: currentWorkspaceRoot })
+            });
+            let data = null;
+            try { data = await res.json(); } catch { /* ignore */ }
+            if (!data || data.success === false) {
+                // The pty host is a real precondition on this route (a host without
+                // node-pty answers here, it does not 503 the page) — state it.
+                setTeamNotice((data && data.error) || 'Could not seat this team');
+            } else {
+                setTeamNotice('');
+                await fetchTeamsState();
+                renderTeamsView();
+            }
+        } catch (err) {
+            setTeamNotice('Outcome unknown (connection dropped)');
+        } finally {
+            if (btn) { btn.disabled = false; }
+        }
+    }
+
+    function setTeamNotice(text) {
+        if (!teamsNotice) { return; }
+        teamsNotice.textContent = text || '';
+        teamsNotice.classList.toggle('hidden', !text);
+    }
+
     function renderTeamRow(team) {
-        const headName = team.head || team.name;
-        const liveSeat = liveFleet.find(t => t.name === headName);
+        const liveSeat = resolveTeamHeadSeat(team);
+        const headName = liveSeat ? liveSeat.friendlyName : (team.head || team.name);
         const isDormant = !liveSeat;
-        const isHeld = isMissionInFlight() && activeMission?.members?.some(m => m.seat === headName);
-        const isWorking = liveSeat && liveSeat.working;
+        // A mission holds a team through the mission's own `team` field — mission
+        // records carry `plans`/`features`/`team`, never a `members` array.
+        const heldTeam = String(activeMission?.team || '');
+        const isHeld = isMissionInFlight() && heldTeam !== ''
+            && (heldTeam === team.id || heldTeam === team.name);
+        // A dispatched plan is attributed to its seat, so a head holding a planId
+        // is working. There is no `working` flag on the fleet projection.
+        const isWorking = Boolean(liveSeat && liveSeat.planId);
 
         let stateLabel = 'IDLE';
         let stateClass = 'team-state-idle';
@@ -787,10 +937,11 @@
 
             const iconBox = document.createElement('div');
             iconBox.className = 'team-icon-box';
-            if (team.iconUri) {
+            const teamIconUri = resolveTeamIconUri(team.icon);
+            if (teamIconUri) {
                 const img = document.createElement('img');
                 img.className = 'team-icon-img';
-                img.src = team.iconUri;
+                img.src = teamIconUri;
                 img.alt = '';
                 iconBox.appendChild(img);
             } else {
@@ -808,7 +959,7 @@
 
             const seats = document.createElement('span');
             seats.className = 'team-seats-subtitle';
-            const seatCount = Array.isArray(team.members) ? team.members.length : (team.seats || 1);
+            const seatCount = declaredSeatCount(team);
             seats.textContent = `${seatCount} seat${seatCount > 1 ? 's' : ''} · Head: ${headName}`;
             info.appendChild(seats);
 
@@ -820,11 +971,13 @@
             stateBadge.textContent = stateLabel;
             card.appendChild(stateBadge);
 
-            if (!isDormant) {
-                card.addEventListener('click', () => {
-                    openTerminalViewer(team);
-                });
-            }
+            card.addEventListener('click', () => {
+                if (isDormant) {
+                    seatTeam(team, null);
+                } else {
+                    openTerminalViewer(team, headName);
+                }
+            });
 
             teamsRosterList.appendChild(card);
         }
@@ -838,9 +991,10 @@
             railBtn.style.minHeight = '48px';
             railBtn.style.padding = '4px';
 
-            if (team.iconUri) {
+            const railIconUri = resolveTeamIconUri(team.icon);
+            if (railIconUri) {
                 const img = document.createElement('img');
-                img.src = team.iconUri;
+                img.src = railIconUri;
                 img.style.width = '20px';
                 img.style.height = '20px';
                 img.alt = '';
@@ -854,11 +1008,13 @@
                 railBtn.appendChild(glyph);
             }
 
-            if (!isDormant) {
-                railBtn.addEventListener('click', () => {
-                    openTerminalViewer(team);
-                });
-            }
+            railBtn.addEventListener('click', () => {
+                if (isDormant) {
+                    seatTeam(team, railBtn);
+                } else {
+                    openTerminalViewer(team, headName);
+                }
+            });
 
             tabletTeamsRail.appendChild(railBtn);
         }
@@ -1068,8 +1224,8 @@
 
     // ── 6. Read-Only Terminal Viewer ───────────────────────────────────
 
-    function openTerminalViewer(team) {
-        const headName = team.head || team.name;
+    function openTerminalViewer(team, resolvedHead) {
+        const headName = resolvedHead || (resolveTeamHeadSeat(team) || {}).friendlyName || team.name;
         terminalViewerTitle.textContent = `Terminal: ${headName}`;
         terminalStreamOutput.textContent = 'Connecting to terminal stream...\n';
 
@@ -1172,8 +1328,9 @@
             const queryRoot = currentWorkspaceRoot ? `&workspaceRoot=${encodeURIComponent(currentWorkspaceRoot)}` : '';
             const res = await fetch(`/kanban/plan?planId=${encodeURIComponent(cardId)}${queryRoot}`);
             if (res.ok) {
-                const planData = await res.json();
-                const md = planData?.content || `# ${planData?.title || 'Plan'}\n\nNo file content available.`;
+                const payload = await res.json();
+                const planData = (payload && payload.data !== undefined) ? payload.data : payload;
+                const md = planData?.content || `# ${planData?.topic || 'Plan'}\n\nNo file content available.`;
                 if (typeof renderMarkdown === 'function') {
                     previewContent.innerHTML = renderMarkdown(md);
                 } else {
