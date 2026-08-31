@@ -444,3 +444,9 @@ for the implementing coder.)*
   no filter) is the v1 mechanism — it preserves the protocol-parity claim when the user passes it
   explicitly. A future `GET` endpoint exposing the active filter would let the CLI default to the
   board's selection without a flag; that is a separate, additive change and not required to ship.
+
+---
+
+## Implementation Summary
+
+Implemented all 12 proposed changes in `src/standalone/cli.ts`. The bare `switchboard` command is now the interactive board console (connects to a running server, shows a menu for browsing columns, searching, filtering by project, inspecting fleet, and direct prefix dispatch). `switchboard local` and `switchboard tailnet` remain the serve commands. New subcommands `plans`, `ready`, `dispatch`, `clear`, `fleet`, `verb`, `help`, `about`/`version`, and `setup` were added, all routing through existing HTTP endpoints (`GET /kanban/plans`, `POST /kanban/dispatch`, `POST /terminals/verb/*`) — the CLI never opens `kanban.db` or calls `move-card.js`. The full exit-code table (0/1/2/3/4/5/6) is implemented, EOF/SIGINT during the interactive prompt exits 0 without dispatching, and all new subcommands are in the `subcommandTargetsCwd` exclusion list so they never create a `.switchboard/`. Token discovery reads `.switchboard/api-server-token.txt` when present, falling back to loopback-trust when absent. The `setup` command delegates to existing `init`/`scaffold`/`control-plane` handlers by rewriting `process.argv`. TypeScript compiles clean (no new errors in cli.ts).

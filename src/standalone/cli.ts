@@ -11,8 +11,16 @@ import { DEFAULT_DISPLAY_HOSTNAME, isLoopbackHostname } from '../utils/loopbackH
 import { detectTailnetAddress, resolveMagicDnsNames } from '../utils/tailnetDetect';
 
 function usage(): string {
-    return `Usage: npx switchboard [local] [options]      (default: serve the loopback board)
-       npx switchboard tailnet [options]            (serve the loopback board AND your tailnet)
+    return `Usage: npx switchboard                        (interactive board console — default)
+       npx switchboard local [options]            (serve the loopback board)
+       npx switchboard tailnet [options]          (serve the loopback board AND your tailnet)
+       npx switchboard plans [column] [--project <name>] [--search <query>] [--limit N] [--offset N] [--json]
+       npx switchboard ready [--project <name>] [--json]
+       npx switchboard dispatch <planId|prefix> [column] [--project <name>] [--json]
+       npx switchboard clear <terminal|--all> [--json]
+       npx switchboard fleet [--json]
+       npx switchboard verb <verbName> [jsonPayload] [--json]
+       npx switchboard setup [init|scaffold|control-plane] [options]
        npx switchboard stop
        npx switchboard status [--json]
        npx switchboard logs [-f|--follow]
@@ -28,12 +36,28 @@ function usage(): string {
        npx switchboard token clear
        npx switchboard export [--out <path>] [--workspace <path>]
        npx switchboard import <bundle.json> [--workspace <path>]
+       npx switchboard help [command]
+       npx switchboard about | version
+
+Board commands (drive the board from a terminal):
+  (bare)              Interactive board console — browse columns, search, dispatch.
+                      Connects to a running server; exits 1 if none is running.
+  plans               List cards with optional column/project/search filtering.
+  ready               List cards ready to dispatch (PLAN REVIEWED, subtasks excluded).
+                      Interactive picker on a TTY; lists and exits 0 otherwise.
+  dispatch            Dispatch a card by planId or unique prefix. Column defaults
+                      to auto (complexity routing). Exit codes:
+                        0 dispatched  1 offline  2 nothing ready  3 refused
+                        4 auth failed  5 bad input  6 unavailable
+  clear               Clear a terminal seat (or --all seats).
+  fleet               Show live terminal seats, roles, and assigned plans.
+  verb                Call any protocol verb directly: switchboard verb <name> <json>
+  setup               Unified setup wizard (init, scaffold, control-plane).
+  help                Show this help (alias: --help, -h).
+  about               Show version and system info (alias: version, --version, -v).
 
 Serve modes:
-  local               Serve the board on loopback (127.0.0.1) only. This is the
-                      default when no subcommand is given — 'npx switchboard' means
-                      'npx switchboard local'. The board is reachable from this
-                      machine only.
+  local               Serve the board on loopback (127.0.0.1) only.
   tailnet             Serve the board on loopback AND on this machine's Tailscale
                       interface address, so any device on your tailnet can open it.
                       No token, no enrolment — tailnet membership is the control.
@@ -68,14 +92,19 @@ Options:
   --detach             serve: run in background (detached). Implies --no-open unless --open is given.
   --no-open            Do not open a browser
   --open               serve --detach: open a browser anyway (overrides implied --no-open)
-  --json               status: machine-readable JSON output
+  --json               Machine-readable JSON output (status, plans, fleet, verb, etc.)
   -f, --follow         logs: tail live output
   --target <name>      Protocol target for 'init': agents, claude, or both (default: both)
   --pat <token>        PAT for cloning (visible in process list — prefer SWITCHBOARD_PAT env var)
   --keep-sub-repo-db   Keep an existing sub-repo kanban.db instead of deleting it (headless default: delete)
   --cleanup <repo>     migrate: archive the named source repo's .switchboard/ after merging (repeatable)
   --cleanup-all        migrate: archive ALL source repos' .switchboard/ after merging
+  --project <name>     plans/ready/dispatch: filter by project (empty = no filter)
+  --search <query>     plans: search card titles and plan files
+  --limit <N>          plans: pagination limit (default: 10)
+  --offset <N>         plans: pagination offset (default: 0)
   --help               Show this help
+  --version            Show version and system info
 `;
 }
 
@@ -107,8 +136,8 @@ function resolveSecretKey(inputKey: string): string {
     process.exit(1);
 }
 
-function parseArgs(argv: string[]): { workspace?: string; port?: number; hostname?: string; noOpen: boolean; open: boolean; detach: boolean; help: boolean; out?: string; importBundle?: string } {
-    const args = { noOpen: false, open: false, detach: false, help: false, port: 7777 } as any;
+function parseArgs(argv: string[]): { workspace?: string; port?: number; hostname?: string; noOpen: boolean; open: boolean; detach: boolean; help: boolean; version: boolean; out?: string; importBundle?: string } {
+    const args = { noOpen: false, open: false, detach: false, help: false, version: false, port: 7777 } as any;
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
         if (a === '--workspace') { args.workspace = argv[++i]; }
@@ -120,6 +149,7 @@ function parseArgs(argv: string[]): { workspace?: string; port?: number; hostnam
         else if (a === '--open') { args.open = true; }
         else if (a === '--detach') { args.detach = true; }
         else if (a === '--help' || a === '-h') { args.help = true; }
+        else if (a === '--version' || a === '-v') { args.version = true; }
     }
     return args;
 }
@@ -396,6 +426,177 @@ async function waitForHealth(port: number, timeoutMs = 10000): Promise<void> {
     throw new Error(`Health check timed out on port ${port}`);
 }
 
+// ── Board command helpers ──────────────────────────────────────
+//
+// The functions below serve the `plans`, `ready`, `dispatch`, `clear`, `fleet`,
+// `verb`, and bare-`switchboard` console commands. They are HTTP clients over
+// loopback — they never open kanban.db, never call move-card.js, and never
+// reimplement dispatch routing. The server's `performKanbanDispatch` is the
+// single implementation; the CLI is a third door onto it.
+
+/**
+ * Discover an auth token for the running server.
+ *
+ * Reads `.switchboard/api-server-token.txt` (published by the sibling
+ * `publish-agent-api-token-for-out-of-process-agents` plan). When no token file
+ * exists, returns null — the server's `_checkAuth` returns true on loopback with
+ * no token configured, so the CLI works unauthenticated locally. The token value
+ * is never printed; only its source (file / none) is reported in debug output.
+ */
+function discoverAuthToken(workspaceRoot: string): string | null {
+    const tokenFile = path.join(workspaceRoot, '.switchboard', 'api-server-token.txt');
+    try {
+        if (fs.existsSync(tokenFile)) {
+            const raw = fs.readFileSync(tokenFile, 'utf8').trim();
+            return raw || null;
+        }
+    } catch { /* ignore */ }
+    return null;
+}
+
+interface ApiResponse {
+    status: number;
+    body: string;
+    json: () => any;
+}
+
+/**
+ * HTTP GET against the running server with auth headers attached.
+ * Rejects on network error or timeout — callers handle the rejection.
+ */
+function apiGet(port: number, pathname: string, workspaceRoot: string, query?: Record<string, string>): Promise<ApiResponse> {
+    const token = discoverAuthToken(workspaceRoot);
+    let url = `http://127.0.0.1:${port}${pathname}`;
+    if (query) {
+        const qs = new URLSearchParams(query).toString();
+        if (qs) { url += `?${qs}`; }
+    }
+    return new Promise((resolve, reject) => {
+        const headers: http.OutgoingHttpHeaders = {};
+        if (token) { headers['Authorization'] = `Bearer ${token}`; }
+        const req = http.get(url, { headers }, (res) => {
+            let body = '';
+            res.on('data', (c: Buffer) => body += c.toString());
+            res.on('end', () => {
+                const status = res.statusCode ?? 200;
+                resolve({
+                    status,
+                    body,
+                    json: () => { try { return JSON.parse(body); } catch { return null; } },
+                });
+            });
+        });
+        req.on('error', reject);
+        req.setTimeout(15000, () => { try { req.destroy(); } catch { /* */ } reject(new Error('Request timed out')); });
+    });
+}
+
+/**
+ * HTTP POST against the running server with auth headers and a JSON body.
+ */
+function apiPost(port: number, pathname: string, workspaceRoot: string, payload: unknown): Promise<ApiResponse> {
+    const token = discoverAuthToken(workspaceRoot);
+    const url = `http://127.0.0.1:${port}${pathname}`;
+    const bodyStr = payload === undefined ? '' : JSON.stringify(payload);
+    return new Promise((resolve, reject) => {
+        const headers: http.OutgoingHttpHeaders = {
+            'Content-Type': 'application/json',
+        };
+        if (bodyStr) { headers['Content-Length'] = Buffer.byteLength(bodyStr); }
+        if (token) { headers['Authorization'] = `Bearer ${token}`; }
+        const req = http.request(url, { method: 'POST', headers }, (res) => {
+            let body = '';
+            res.on('data', (c: Buffer) => body += c.toString());
+            res.on('end', () => {
+                const status = res.statusCode ?? 200;
+                resolve({
+                    status,
+                    body,
+                    json: () => { try { return JSON.parse(body); } catch { return null; } },
+                });
+            });
+        });
+        req.on('error', reject);
+        req.setTimeout(15000, () => { try { req.destroy(); } catch { /* */ } reject(new Error('Request timed out')); });
+        if (bodyStr) { req.write(bodyStr); }
+        req.end();
+    });
+}
+
+/** The first 8 hex chars of a planId — short enough to type, unique in practice. */
+function shortPrefix(planId: string): string {
+    return String(planId || '').replace(/-/g, '').slice(0, 8);
+}
+
+/**
+ * Resolve a short prefix to a full planId by fetching the full board and
+ * matching. Returns the full planId, or null if no match, or an array of
+ * candidates if the prefix is ambiguous.
+ */
+async function resolvePrefix(port: number, workspaceRoot: string, prefix: string): Promise<{ planId: string } | { ambiguous: string[] } | null> {
+    // If it's already a full UUID, return it directly.
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(prefix)) {
+        return { planId: prefix.toLowerCase() };
+    }
+    const cleanPrefix = prefix.replace(/-/g, '').toLowerCase();
+    if (cleanPrefix.length < 3) {
+        return null; // too short to resolve
+    }
+    const res = await apiGet(port, '/kanban/plans', workspaceRoot);
+    if (res.status !== 200) { return null; }
+    const plans = res.json();
+    if (!Array.isArray(plans)) { return null; }
+    const matches: string[] = [];
+    for (const p of plans) {
+        const pid = String(p?.planId || '');
+        if (pid.replace(/-/g, '').toLowerCase().startsWith(cleanPrefix)) {
+            matches.push(pid);
+        }
+    }
+    if (matches.length === 0) { return null; }
+    if (matches.length === 1) { return { planId: matches[0] }; }
+    return { ambiguous: matches };
+}
+
+/** Map an HTTP status code from /kanban/dispatch to the CLI exit code. */
+function dispatchExitCode(status: number): number {
+    switch (status) {
+        case 200: return 0;
+        case 401: return 4;
+        case 409: return 3;
+        case 502: return 3;
+        case 400: return 5;
+        case 404: return 5;
+        case 503: return 6;
+        default: return 1; // 500 or unknown → offline/broke
+    }
+}
+
+/** The two columns that constitute "ready to go" (matching the Mission Control protocol). */
+const READY_COLUMNS = ['PLAN REVIEWED', 'STAGING'];
+
+/** Filter subtasks (featureId === '') and optionally project, client-side. */
+function filterPlans(plans: any[], projectFilter?: string): any[] {
+    let filtered = plans.filter((p: any) => {
+        const fid = String(p?.featureId ?? '');
+        return fid === ''; // subtasks excluded
+    });
+    if (projectFilter) {
+        filtered = filtered.filter((p: any) => String(p?.project ?? '') === projectFilter);
+    }
+    return filtered;
+}
+
+/** Format a single plan row for human-readable listing. */
+function formatPlanLine(p: any, index?: number): string {
+    const prefix = shortPrefix(String(p?.planId || ''));
+    const col = String(p?.kanbanColumn || '?');
+    const title = String(p?.title || p?.planFile || '(untitled)');
+    const proj = p?.project ? ` [${p.project}]` : '';
+    const num = index !== undefined ? `${index + 1}. ` : '';
+    return `${num}${prefix}  ${col.padEnd(16)} ${title}${proj}`;
+}
+
 /**
  * The transfer bundle's CLI surface. `export`/`import` are the same
  * TransferBundleService the extension's palette commands and the two
@@ -612,6 +813,824 @@ async function runPendingBundleImport(workspaceRoot: string, bundlePath: string)
     }
 }
 
+// ── Board command implementations ──────────────────────────────
+
+/** Read the version string from package.json (the source of truth). */
+function readVersion(): string {
+    try {
+        const pkgPath = path.resolve(__dirname, '..', '..', 'package.json');
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+        return String(pkg.version || 'unknown');
+    } catch { return 'unknown'; }
+}
+
+/** The UFO ANSI banner used by `about` and the bare console. */
+function banner(version: string): string {
+    return [
+        '       .---.',
+        " _...-'     '-..._       SWITCHBOARD v" + version,
+        '.-~  ●   ●   ●   ●  ~-.   Autonomous Agent Fleet Console',
+        '(________________________)',
+        '      \\   :    :   /       https://github.com/TentacleOpera/switchboard',
+        '       \\  :    :  /        Host: Standalone (' + process.platform + ' ' + process.arch + ')',
+        '',
+    ].join('\n');
+}
+
+/** `switchboard about` / `switchboard version` / `--version` / `-v` */
+async function cmdAbout(workspaceRoot: string, jsonFlag: boolean): Promise<void> {
+    const version = readVersion();
+    if (jsonFlag) {
+        routeLogsToStderr();
+        const payload: Record<string, unknown> = {
+            version,
+            service: 'switchboard',
+            host: 'standalone',
+            platform: process.platform,
+            arch: process.arch,
+            workspaceRoot,
+        };
+        const port = await findRunningInstance(workspaceRoot);
+        if (port !== null) {
+            payload.serverUrl = `http://127.0.0.1:${port}`;
+            payload.running = true;
+            try {
+                const health = await getHealthJson(port);
+                payload.pid = health.pid;
+                payload.terminalCount = health.terminalCount ?? 0;
+                payload.terminals = health.terminals ?? [];
+            } catch { /* server may have stopped */ }
+        } else {
+            payload.running = false;
+        }
+        emitJson(payload);
+        exitFlushed(0);
+    }
+    console.log(banner(version));
+    const port = await findRunningInstance(workspaceRoot);
+    if (port !== null) {
+        console.log(`Active Server:    http://127.0.0.1:${port} (Local)`);
+        try {
+            const health = await getHealthJson(port);
+            console.log(`Workspace:        ${health.selectedWorkspaceRoot ?? workspaceRoot}`);
+            const seats = health.terminals ?? [];
+            console.log(`Active Fleet:     ${seats.length} seat${seats.length === 1 ? '' : 's'}${seats.length > 0 ? ' (' + seats.join(', ') + ')' : ''}`);
+        } catch { /* */ }
+    } else {
+        console.log('Active Server:    (not running)');
+        console.log(`Workspace:        ${workspaceRoot}`);
+    }
+    exitFlushed(0);
+}
+
+/** `switchboard help [command]` — alias for `--help` / `-h`. */
+function cmdHelp(command?: string): void {
+    if (command && command !== 'help') {
+        // Could add per-command help in the future; for now, show full usage.
+        console.log(usage());
+    } else {
+        console.log(usage());
+    }
+    process.exit(0);
+}
+
+/**
+ * `switchboard plans [column] [--project <name>] [--search <query>] [--limit N] [--offset N] [--json]`
+ *
+ * Lists cards from GET /kanban/plans with optional column, project, and search
+ * filtering. Project and search are filtered client-side (the API has no params
+ * for them). Pagination via --limit and --offset.
+ */
+async function cmdPlans(workspaceRoot: string, argv: string[]): Promise<void> {
+    const jsonFlag = argv.includes('--json');
+    if (jsonFlag) { routeLogsToStderr(); }
+
+    let column: string | undefined;
+    let project: string | undefined;
+    let search: string | undefined;
+    let limit = 10;
+    let offset = 0;
+    for (let i = 0; i < argv.length; i++) {
+        const a = argv[i];
+        if (a === '--json') { continue; }
+        if (a === '--project') { project = argv[++i]; continue; }
+        if (a === '--search') { search = argv[++i]; continue; }
+        if (a === '--limit') { limit = parseInt(argv[++i], 10) || 10; continue; }
+        if (a === '--offset') { offset = parseInt(argv[++i], 10) || 0; continue; }
+        if (!a.startsWith('-') && !column) { column = a; continue; }
+    }
+
+    const port = await findRunningInstance(workspaceRoot);
+    if (port === null) {
+        if (jsonFlag) { emitJson({ success: false, error: 'No running Switchboard instance' }); }
+        else { console.error('[switchboard] No running Switchboard instance for this workspace.'); }
+        exitFlushed(1);
+    }
+
+    const query: Record<string, string> = {};
+    if (column) { query.column = column; }
+    const res = await apiGet(port, '/kanban/plans', workspaceRoot, query);
+    if (res.status === 401) {
+        if (jsonFlag) { emitJson({ success: false, error: 'Authentication failed' }); }
+        else { console.error('[switchboard] Authentication failed (401). The server requires a token.'); }
+        exitFlushed(4);
+    }
+    if (res.status !== 200) {
+        if (jsonFlag) { emitJson({ success: false, error: `Server returned ${res.status}`, body: res.body }); }
+        else { console.error(`[switchboard] Server returned ${res.status}: ${res.body}`); }
+        exitFlushed(1);
+    }
+
+    let plans = res.json();
+    if (!Array.isArray(plans)) { plans = []; }
+
+    // Client-side filters (matching the Mission Control protocol's jq).
+    // Subtasks (featureId !== '') are excluded from the ready/dispatch view but
+    // `plans` is a general listing — include subtasks unless filtering by column
+    // that implies ready. For `plans` we include all cards but still apply
+    // project and search filters.
+    if (project) {
+        plans = plans.filter((p: any) => String(p?.project ?? '') === project);
+    }
+    if (search) {
+        const q = search.toLowerCase();
+        plans = plans.filter((p: any) => {
+            const title = String(p?.title || '').toLowerCase();
+            const planFile = String(p?.planFile || '').toLowerCase();
+            const pid = String(p?.planId || '').toLowerCase();
+            return title.includes(q) || planFile.includes(q) || pid.includes(q);
+        });
+    }
+
+    const total = plans.length;
+    const paged = plans.slice(offset, offset + limit);
+
+    if (jsonFlag) {
+        emitJson({ success: true, count: total, plans: paged });
+        exitFlushed(0);
+    }
+
+    if (total === 0) {
+        console.log('[switchboard] No cards found.');
+        exitFlushed(0);
+    }
+    console.log(`[switchboard] ${total} card${total === 1 ? '' : 's'}${column ? ` in ${column}` : ''}${project ? ` [${project}]` : ''}${search ? ` matching "${search}"` : ''}:`);
+    for (let i = 0; i < paged.length; i++) {
+        console.log(`  ${formatPlanLine(paged[i], i + offset)}`);
+    }
+    if (offset + limit < total) {
+        console.log(`  ... ${total - offset - limit} more (use --offset ${offset + limit} to see them)`);
+    }
+    exitFlushed(0);
+}
+
+/**
+ * `switchboard ready [--project <name>] [--json]`
+ *
+ * Lists cards ready to dispatch: the two ready columns (PLAN REVIEWED, STAGING),
+ * subtasks excluded (featureId === ''). Interactive picker on a TTY; lists and
+ * exits 0 on non-interactive stdin or --json. EOF/SIGINT during the prompt
+ * exits 0 without dispatching.
+ */
+async function cmdReady(workspaceRoot: string, argv: string[]): Promise<void> {
+    const jsonFlag = argv.includes('--json');
+    if (jsonFlag) { routeLogsToStderr(); }
+
+    let project: string | undefined;
+    for (let i = 0; i < argv.length; i++) {
+        if (argv[i] === '--json') { continue; }
+        if (argv[i] === '--project') { project = argv[++i]; continue; }
+    }
+
+    const port = await findRunningInstance(workspaceRoot);
+    if (port === null) {
+        if (jsonFlag) { emitJson({ success: false, error: 'No running Switchboard instance' }); }
+        else { console.error('[switchboard] No running Switchboard instance for this workspace.'); }
+        exitFlushed(1);
+    }
+
+    // Fetch plans from both ready columns and merge.
+    const readyPlans: any[] = [];
+    for (const col of READY_COLUMNS) {
+        const res = await apiGet(port, '/kanban/plans', workspaceRoot, { column: col });
+        if (res.status === 401) {
+            if (jsonFlag) { emitJson({ success: false, error: 'Authentication failed' }); }
+            else { console.error('[switchboard] Authentication failed (401). The server requires a token.'); }
+            exitFlushed(4);
+        }
+        if (res.status === 200) {
+            const plans = res.json();
+            if (Array.isArray(plans)) { readyPlans.push(...plans); }
+        }
+    }
+
+    // Filter subtasks and project client-side.
+    const filtered = filterPlans(readyPlans, project);
+
+    if (filtered.length === 0) {
+        if (jsonFlag) { emitJson({ success: true, count: 0, plans: [] }); }
+        else { console.log('[switchboard] Nothing ready to dispatch.'); }
+        exitFlushed(2);
+    }
+
+    if (jsonFlag) {
+        emitJson({ success: true, count: filtered.length, plans: filtered });
+        exitFlushed(0);
+    }
+
+    // Print the list.
+    console.log(`[switchboard] ${filtered.length} card${filtered.length === 1 ? '' : 's'} ready to dispatch:`);
+    for (let i = 0; i < filtered.length; i++) {
+        console.log(`  ${formatPlanLine(filtered[i], i)}`);
+    }
+
+    // Non-interactive: print and exit 0 (never block on a hidden prompt).
+    if (!process.stdin.isTTY) {
+        exitFlushed(0);
+    }
+
+    // Interactive picker. EOF/SIGINT/dropped pipe = exit 0, no dispatch.
+    const prompter = openPrompter();
+    try {
+        // Install SIGINT handler that exits 0 without dispatching.
+        const onSigInt = (): void => { prompter.close(); exitFlushed(0); };
+        process.once('SIGINT', onSigInt);
+
+        const answer = await prompter.ask('\nSelect a card to dispatch (1-' + filtered.length + ') [or Enter to exit]: ');
+        process.removeListener('SIGINT', onSigInt);
+
+        // null = EOF or closed stdin → exit 0, no dispatch.
+        if (answer === null || answer === '') {
+            exitFlushed(0);
+        }
+        const num = parseInt(answer, 10);
+        if (isNaN(num) || num < 1 || num > filtered.length) {
+            console.error(`[switchboard] Invalid selection '${answer}'. No card dispatched.`);
+            exitFlushed(5);
+        }
+        const selected = filtered[num - 1];
+        const planId = String(selected?.planId || '');
+        console.log(`[switchboard] Dispatching ${shortPrefix(planId)} (${String(selected?.title || '')})…`);
+        await doDispatch(port, workspaceRoot, planId, 'auto');
+    } finally {
+        prompter.close();
+    }
+}
+
+/**
+ * Core dispatch logic shared by `ready` picker and `dispatch` subcommand.
+ * Calls POST /kanban/dispatch and maps the exit code. When `jsonFlag` is true,
+ * emits the result as JSON on stdout (logs already routed to stderr by caller).
+ */
+async function doDispatch(port: number, workspaceRoot: string, planId: string, targetColumn: string, jsonFlag = false): Promise<void> {
+    const res = await apiPost(port, '/kanban/dispatch', workspaceRoot, {
+        plan: planId,
+        targetColumn,
+        workspaceRoot,
+    });
+    const code = dispatchExitCode(res.status);
+    const data = res.json();
+    if (jsonFlag) {
+        emitJson({ success: code === 0, status: res.status, exitCode: code, result: data });
+    } else if (code === 0) {
+        console.log(`[switchboard] Dispatched: ${String(data?.dispatchedAgent || 'agent')} → ${String(data?.column || targetColumn)}`);
+        if (data?.role) { console.log(`  Role: ${data.role}`); }
+    } else {
+        const errMsg = String(data?.error || res.body || 'dispatch failed');
+        console.error(`[switchboard] ${errMsg}`);
+    }
+    exitFlushed(code);
+}
+
+/**
+ * `switchboard dispatch <planId|prefix> [column] [--project <name>] [--json]`
+ *
+ * Resolves a full UUID or short prefix, then calls POST /kanban/dispatch.
+ * Omitted column defaults to 'auto' (complexity routing).
+ */
+async function cmdDispatch(workspaceRoot: string, argv: string[]): Promise<void> {
+    const jsonFlag = argv.includes('--json');
+    if (jsonFlag) { routeLogsToStderr(); }
+
+    let ref: string | undefined;
+    let column = 'auto';
+    let project: string | undefined;
+    for (let i = 0; i < argv.length; i++) {
+        const a = argv[i];
+        if (a === '--json') { continue; }
+        if (a === '--project') { project = argv[++i]; continue; }
+        if (!a.startsWith('-') && !ref) { ref = a; continue; }
+        if (!a.startsWith('-') && ref && column === 'auto') { column = a; continue; }
+    }
+
+    if (!ref) {
+        if (jsonFlag) { emitJson({ success: false, error: 'Missing planId or prefix' }); }
+        else { console.error('Usage: npx switchboard dispatch <planId|prefix> [column] [--project <name>] [--json]'); }
+        exitFlushed(5);
+    }
+
+    const port = await findRunningInstance(workspaceRoot);
+    if (port === null) {
+        if (jsonFlag) { emitJson({ success: false, error: 'No running Switchboard instance' }); }
+        else { console.error('[switchboard] No running Switchboard instance for this workspace.'); }
+        exitFlushed(1);
+    }
+
+    // Resolve prefix to full planId.
+    const resolved = await resolvePrefix(port, workspaceRoot, ref);
+    if (resolved === null) {
+        if (jsonFlag) { emitJson({ success: false, error: `No plan matches prefix '${ref}'` }); }
+        else { console.error(`[switchboard] No plan matches prefix '${ref}'.`); }
+        exitFlushed(5);
+    }
+    if ('ambiguous' in resolved) {
+        if (jsonFlag) { emitJson({ success: false, error: 'Ambiguous prefix', matches: resolved.ambiguous }); }
+        else {
+            console.error(`[switchboard] Ambiguous prefix '${ref}' — matches ${resolved.ambiguous.length} cards:`);
+            for (const pid of resolved.ambiguous) {
+                console.error(`  ${shortPrefix(pid)}  ${pid}`);
+            }
+        }
+        exitFlushed(5);
+    }
+
+    const planId = (resolved as { planId: string }).planId;
+
+    // If --project was given, verify the plan's project matches.
+    if (project) {
+        const plansRes = await apiGet(port, '/kanban/plans', workspaceRoot);
+        if (plansRes.status === 200) {
+            const plans = plansRes.json();
+            const plan = Array.isArray(plans) ? plans.find((p: any) => p?.planId === planId) : null;
+            if (plan && String(plan.project ?? '') !== project) {
+                if (jsonFlag) { emitJson({ success: false, error: `Plan ${shortPrefix(planId)} is in project '${plan.project ?? ''}', not '${project}'` }); }
+                else { console.error(`[switchboard] Plan ${shortPrefix(planId)} is in project '${plan.project ?? ''}', not '${project}'.`); }
+                exitFlushed(5);
+            }
+        }
+    }
+
+    await doDispatch(port, workspaceRoot, planId, column, jsonFlag);
+}
+
+/**
+ * `switchboard clear <terminal|--all> [--json]`
+ *
+ * Clears a terminal seat by calling POST /terminals/verb/ptyClearTerminal.
+ * `--all` iterates all active seats from /health.
+ */
+async function cmdClear(workspaceRoot: string, argv: string[]): Promise<void> {
+    const jsonFlag = argv.includes('--json');
+    if (jsonFlag) { routeLogsToStderr(); }
+
+    const positional = argv.filter(a => !a.startsWith('-'));
+    const target = positional[0];
+    if (!target) {
+        if (jsonFlag) { emitJson({ success: false, error: 'Missing terminal name or --all' }); }
+        else { console.error('Usage: npx switchboard clear <terminal|--all> [--json]'); }
+        exitFlushed(5);
+    }
+
+    const port = await findRunningInstance(workspaceRoot);
+    if (port === null) {
+        if (jsonFlag) { emitJson({ success: false, error: 'No running Switchboard instance' }); }
+        else { console.error('[switchboard] No running Switchboard instance for this workspace.'); }
+        exitFlushed(1);
+    }
+
+    const targets: string[] = [];
+    if (target === '--all') {
+        try {
+            const health = await getHealthJson(port);
+            targets.push(...(health.terminals ?? []));
+        } catch { /* */ }
+        if (targets.length === 0) {
+            if (jsonFlag) { emitJson({ success: true, cleared: [] }); }
+            else { console.log('[switchboard] No active terminals to clear.'); }
+            exitFlushed(0);
+        }
+    } else {
+        targets.push(target);
+    }
+
+    const results: Array<{ name: string; ok: boolean; error?: string }> = [];
+    for (const name of targets) {
+        const res = await apiPost(port, '/terminals/verb/ptyClearTerminal', workspaceRoot, { name });
+        const ok = res.status === 200;
+        const data = res.json();
+        results.push({ name, ok, error: ok ? undefined : String(data?.error || res.body) });
+        if (!jsonFlag) {
+            if (ok) { console.log(`Cleared ${name} (OK)`); }
+            else { console.error(`Failed to clear ${name}: ${String(data?.error || res.body)}`); }
+        }
+    }
+
+    if (jsonFlag) {
+        emitJson({ success: results.every(r => r.ok), cleared: results });
+        exitFlushed(0);
+    }
+    exitFlushed(results.every(r => r.ok) ? 0 : 1);
+}
+
+/**
+ * `switchboard fleet [--json]`
+ *
+ * Queries /health and POST /terminals/verb/ptyListTerminals for a compact
+ * table of live terminal seats, roles, liveness, and assigned plans.
+ */
+async function cmdFleet(workspaceRoot: string, argv: string[]): Promise<void> {
+    const jsonFlag = argv.includes('--json');
+    if (jsonFlag) { routeLogsToStderr(); }
+
+    const port = await findRunningInstance(workspaceRoot);
+    if (port === null) {
+        if (jsonFlag) { emitJson({ success: false, error: 'No running Switchboard instance' }); }
+        else { console.error('[switchboard] No running Switchboard instance for this workspace.'); }
+        exitFlushed(1);
+    }
+
+    let health: Awaited<ReturnType<typeof getHealthJson>>;
+    try {
+        health = await getHealthJson(port);
+    } catch {
+        if (jsonFlag) { emitJson({ success: false, error: 'Could not reach server' }); }
+        else { console.error('[switchboard] No running Switchboard instance for this workspace.'); }
+        exitFlushed(1);
+    }
+
+    // Fetch detailed terminal info via ptyListTerminals.
+    let terminals: any[] = [];
+    const res = await apiPost(port, '/terminals/verb/ptyListTerminals', workspaceRoot, {});
+    if (res.status === 200) {
+        const data = res.json();
+        // ptyListTerminals returns { success, terminals } or an array.
+        if (Array.isArray(data)) { terminals = data; }
+        else if (data?.terminals && Array.isArray(data.terminals)) { terminals = data.terminals; }
+        else if (data?.result && Array.isArray(data.result)) { terminals = data.result; }
+    }
+
+    if (jsonFlag) {
+        emitJson({
+            success: true,
+            port,
+            pid: health.pid,
+            terminalCount: health.terminalCount ?? 0,
+            terminals,
+        });
+        exitFlushed(0);
+    }
+
+    if (terminals.length === 0) {
+        console.log('[switchboard] No active terminals.');
+        exitFlushed(0);
+    }
+
+    // Compact table.
+    const header = ['SEAT', 'ROLE', 'STATUS', 'CURRENT PLAN / TASK'];
+    const rows: string[][] = [header];
+    for (const t of terminals) {
+        const name = String(t?.name || t?.terminalName || '?');
+        const role = String(t?.role || '-');
+        const status = t?.alive || t?.active ? 'active' : 'idle';
+        const plan = t?.currentPlanTitle || t?.planTitle || t?.planId ? String(t?.currentPlanTitle || t?.planTitle || shortPrefix(String(t?.planId || ''))) : '-';
+        rows.push([name, role, status, plan]);
+    }
+    // Compute column widths.
+    const widths = header.map((_, i) => Math.max(...rows.map(r => r[i].length)));
+    for (const row of rows) {
+        console.log('  ' + row.map((cell, i) => cell.padEnd(widths[i] + 2)).join('').trimEnd());
+    }
+    exitFlushed(0);
+}
+
+/**
+ * `switchboard verb <verbName> [jsonPayload] [--json]`
+ *
+ * Direct CLI access to any protocol verb via POST /terminals/verb/<verbName>
+ * or POST /kanban/verb/<verbName>. Automatically handles auth, port discovery,
+ * and response formatting.
+ */
+async function cmdVerb(workspaceRoot: string, argv: string[]): Promise<void> {
+    const jsonFlag = argv.includes('--json');
+    if (jsonFlag) { routeLogsToStderr(); }
+
+    const positional = argv.filter(a => !a.startsWith('-'));
+    const verbName = positional[0];
+    const payloadArg = positional[1];
+
+    if (!verbName) {
+        if (jsonFlag) { emitJson({ success: false, error: 'Missing verb name' }); }
+        else { console.error('Usage: npx switchboard verb <verbName> [jsonPayload] [--json]'); }
+        exitFlushed(5);
+    }
+
+    let payload: unknown = {};
+    if (payloadArg) {
+        try { payload = JSON.parse(payloadArg); }
+        catch {
+            if (jsonFlag) { emitJson({ success: false, error: 'Invalid JSON payload' }); }
+            else { console.error(`[switchboard] Invalid JSON payload: ${payloadArg}`); }
+            exitFlushed(5);
+        }
+    }
+
+    const port = await findRunningInstance(workspaceRoot);
+    if (port === null) {
+        if (jsonFlag) { emitJson({ success: false, error: 'No running Switchboard instance' }); }
+        else { console.error('[switchboard] No running Switchboard instance for this workspace.'); }
+        exitFlushed(1);
+    }
+
+    // Try /terminals/verb/<name> first, then /kanban/verb/<name>.
+    let res = await apiPost(port, `/terminals/verb/${encodeURIComponent(verbName)}`, workspaceRoot, payload);
+    if (res.status === 404) {
+        res = await apiPost(port, `/kanban/verb/${encodeURIComponent(verbName)}`, workspaceRoot, payload);
+    }
+
+    if (jsonFlag) {
+        const data = res.json();
+        emitJson({ success: res.status >= 200 && res.status < 300, status: res.status, result: data });
+        exitFlushed(res.status >= 200 && res.status < 300 ? 0 : 1);
+    }
+
+    if (res.status >= 200 && res.status < 300) {
+        const data = res.json();
+        if (data && typeof data === 'object') {
+            console.log(JSON.stringify(data, null, 2));
+        } else {
+            console.log(res.body || 'OK');
+        }
+        exitFlushed(0);
+    }
+    console.error(`[switchboard] verb '${verbName}' returned ${res.status}: ${res.body}`);
+    exitFlushed(1);
+}
+
+/**
+ * `switchboard setup [init|scaffold|control-plane] [options]`
+ *
+ * Unified setup wizard. When run bare on a TTY, presents a numbered menu.
+ * Subcommands are callable directly for non-interactive use.
+ */
+async function cmdSetup(workspaceRoot: string, argv: string[]): Promise<void> {
+    const sub = argv[0];
+
+    // Direct subcommand passthrough: rewrite process.argv to replace 'setup'
+    // with the subcommand, then return so main() falls through to the existing
+    // handler. Splicing 'setup' out (rather than overwriting) keeps the
+    // subcommand's own args in their original positions.
+    if (sub === 'init' || sub === 'scaffold' || sub === 'control-plane') {
+        const setupIdx = process.argv.indexOf('setup');
+        if (setupIdx >= 0) {
+            process.argv.splice(setupIdx, 1);
+        }
+        return; // main() continues to the init/scaffold/control-plane handler
+    }
+
+    // Interactive menu (TTY only).
+    if (!process.stdin.isTTY) {
+        console.error('[switchboard] Non-interactive setup requires a subcommand: init, scaffold, or control-plane.');
+        console.error('  switchboard setup init [--target <agents|claude|both>]');
+        console.error('  switchboard setup scaffold --parent-dir <dir> --workspace-name <name> --repo <url>');
+        console.error('  switchboard setup control-plane <detect|preview|migrate>');
+        exitFlushed(5);
+    }
+
+    const version = readVersion();
+    console.log(banner(version).replace('Autonomous Agent Fleet Console', 'Workspace & Scaffolding Wizard'));
+    console.log('  [1] Initialize Switchboard in this repository (rules, skills, constitution, workflows)');
+    console.log('  [2] Scaffold Multi-Repo Control Plane (link & group multiple repos)');
+    console.log('  [3] Detect & Migrate Existing Sub-Repos');
+    console.log('  [4] Configure API Tokens & Secrets (ClickUp, Linear, Notion, Stitch)');
+    console.log('');
+
+    const prompter = openPrompter();
+    try {
+        const answer = await prompter.ask('Select an option [1-4] (or Enter to exit): ');
+        if (answer === null || answer === '') { exitFlushed(0); }
+        const setupIdx = process.argv.indexOf('setup');
+        switch (answer) {
+            case '1':
+                prompter.close();
+                if (setupIdx >= 0) { process.argv[setupIdx] = 'init'; }
+                return; // → init handler
+            case '2':
+                prompter.close();
+                if (setupIdx >= 0) { process.argv[setupIdx] = 'scaffold'; }
+                return; // → scaffold handler
+            case '3':
+                prompter.close();
+                if (setupIdx >= 0) { process.argv[setupIdx] = 'control-plane'; }
+                return; // → control-plane handler
+            case '4':
+                console.log('\n[switchboard] Use `npx switchboard secrets set <key> <value>` to configure API tokens.');
+                console.log('  Keys: clickup, linear, notion, stitch, apiToken');
+                exitFlushed(0);
+            default:
+                console.error(`[switchboard] Invalid option '${answer}'.`);
+                exitFlushed(5);
+        }
+    } finally {
+        prompter.close();
+    }
+}
+
+/**
+ * `switchboard` (bare) — interactive board console.
+ *
+ * Connects to the running server and presents a menu: browse by column, search,
+ * filter by project, inspect fleet, or type a plan prefix to dispatch directly.
+ * If no server is running, exits 1 with advice.
+ */
+async function cmdBoardConsole(workspaceRoot: string): Promise<void> {
+    const port = await findRunningInstance(workspaceRoot);
+    if (port === null) {
+        console.error('[switchboard] No running Switchboard instance for this workspace.');
+        console.error('[switchboard] Start one with `switchboard local` (this machine) or `switchboard tailnet` (your tailnet).');
+        exitFlushed(1);
+    }
+
+    let health: Awaited<ReturnType<typeof getHealthJson>>;
+    try {
+        health = await getHealthJson(port);
+    } catch {
+        console.error('[switchboard] No running Switchboard instance for this workspace.');
+        exitFlushed(1);
+    }
+
+    const version = readVersion();
+    const seats = health.terminals ?? [];
+
+    // Board summary — fetch column counts.
+    let boardSummary = '';
+    try {
+        const plansRes = await apiGet(port, '/kanban/plans', workspaceRoot);
+        if (plansRes.status === 200) {
+            const plans = plansRes.json();
+            if (Array.isArray(plans)) {
+                const colCounts: Record<string, number> = {};
+                for (const p of plans) {
+                    const col = String(p?.kanbanColumn || '?');
+                    colCounts[col] = (colCounts[col] || 0) + 1;
+                }
+                const cols = Object.entries(colCounts);
+                if (cols.length > 0) {
+                    boardSummary = 'BOARD SUMMARY:\n  ' + cols.map(([col, n]) => `${col} (${n})`).join('  ·  ');
+                }
+            }
+        }
+    } catch { /* */ }
+
+    console.log(banner(version));
+    console.log(`  Active Server:    http://127.0.0.1:${port}`);
+    console.log(`  Workspace:        ${health.selectedWorkspaceRoot ?? workspaceRoot}`);
+    console.log(`  Active Fleet:     ${seats.length} seat${seats.length === 1 ? '' : 's'}`);
+    if (boardSummary) { console.log(''); console.log(boardSummary); }
+    console.log('');
+    console.log('MENU:');
+    console.log('  [1] Browse & Dispatch by Column');
+    console.log('  [2] Search Plans & Features (keyword, title, or UUID prefix)');
+    console.log('  [3] Filter by Project');
+    console.log('  [4] Inspect Fleet Status');
+    console.log('  [5] Setup & Scaffolding Wizard');
+    console.log('  [q] Exit (or Enter)');
+    console.log('');
+
+    const prompter = openPrompter();
+    try {
+        const onSigInt = (): void => { prompter.close(); exitFlushed(0); };
+        process.once('SIGINT', onSigInt);
+
+        const answer = await prompter.ask('Select an option [1-5] (or enter plan ID / prefix to dispatch): ');
+        process.removeListener('SIGINT', onSigInt);
+
+        if (answer === null || answer === '' || answer === 'q') { exitFlushed(0); }
+
+        // Numeric menu option.
+        if (/^[1-5]$/.test(answer)) {
+            switch (answer) {
+                case '1': {
+                    // Browse by column — list all columns, let user pick one.
+                    const plansRes = await apiGet(port, '/kanban/plans', workspaceRoot);
+                    if (plansRes.status !== 200) {
+                        console.error(`[switchboard] Could not fetch plans (HTTP ${plansRes.status}).`);
+                        exitFlushed(1);
+                    }
+                    const plans = plansRes.json();
+                    if (!Array.isArray(plans) || plans.length === 0) {
+                        console.log('[switchboard] No cards on the board.');
+                        exitFlushed(0);
+                    }
+                    const colCounts: Record<string, number> = {};
+                    for (const p of plans) {
+                        const col = String(p?.kanbanColumn || '?');
+                        colCounts[col] = (colCounts[col] || 0) + 1;
+                    }
+                    const cols = Object.keys(colCounts);
+                    console.log('\nColumns:');
+                    cols.forEach((col, i) => console.log(`  ${i + 1}. ${col} (${colCounts[col]})`));
+                    const colAnswer = await prompter.ask('\nSelect a column [1-' + cols.length + ']: ');
+                    if (colAnswer === null || colAnswer === '') { exitFlushed(0); }
+                    const colNum = parseInt(colAnswer, 10);
+                    if (isNaN(colNum) || colNum < 1 || colNum > cols.length) {
+                        console.error(`[switchboard] Invalid selection '${colAnswer}'.`);
+                        exitFlushed(5);
+                    }
+                    const selectedCol = cols[colNum - 1];
+                    const colPlans = plans.filter((p: any) => String(p?.kanbanColumn) === selectedCol);
+                    console.log(`\n${selectedCol} (${colPlans.length}):`);
+                    colPlans.forEach((p: any, i: number) => console.log(`  ${formatPlanLine(p, i)}`));
+                    if (colPlans.length === 0) { exitFlushed(0); }
+                    const pickAnswer = await prompter.ask('\nSelect a card to dispatch [1-' + colPlans.length + '] (or Enter to exit): ');
+                    if (pickAnswer === null || pickAnswer === '') { exitFlushed(0); }
+                    const pickNum = parseInt(pickAnswer, 10);
+                    if (isNaN(pickNum) || pickNum < 1 || pickNum > colPlans.length) {
+                        console.error(`[switchboard] Invalid selection '${pickAnswer}'.`);
+                        exitFlushed(5);
+                    }
+                    const selected = colPlans[pickNum - 1];
+                    const planId = String(selected?.planId || '');
+                    console.log(`\n[switchboard] Dispatching ${shortPrefix(planId)} (${String(selected?.title || '')})…`);
+                    await doDispatch(port, workspaceRoot, planId, 'auto');
+                    break;
+                }
+                case '2': {
+                    const q = await prompter.ask('Search query: ');
+                    if (q === null || q === '') { exitFlushed(0); }
+                    const plansRes = await apiGet(port, '/kanban/plans', workspaceRoot);
+                    if (plansRes.status !== 200) { console.error(`[switchboard] Could not fetch plans (HTTP ${plansRes.status}).`); exitFlushed(1); }
+                    let plans = plansRes.json();
+                    if (!Array.isArray(plans)) { plans = []; }
+                    const ql = q.toLowerCase();
+                    const matches = plans.filter((p: any) => {
+                        return String(p?.title || '').toLowerCase().includes(ql)
+                            || String(p?.planFile || '').toLowerCase().includes(ql)
+                            || String(p?.planId || '').toLowerCase().includes(ql);
+                    });
+                    if (matches.length === 0) { console.log('[switchboard] No matches.'); exitFlushed(0); }
+                    console.log(`\n${matches.length} match${matches.length === 1 ? '' : 'es'}:`);
+                    matches.forEach((p: any, i: number) => console.log(`  ${formatPlanLine(p, i)}`));
+                    const pickAnswer = await prompter.ask('\nSelect a card to dispatch [1-' + matches.length + '] (or Enter to exit): ');
+                    if (pickAnswer === null || pickAnswer === '') { exitFlushed(0); }
+                    const pickNum = parseInt(pickAnswer, 10);
+                    if (isNaN(pickNum) || pickNum < 1 || pickNum > matches.length) { console.error(`[switchboard] Invalid selection.`); exitFlushed(5); }
+                    const selected = matches[pickNum - 1];
+                    const planId = String(selected?.planId || '');
+                    console.log(`\n[switchboard] Dispatching ${shortPrefix(planId)} (${String(selected?.title || '')})…`);
+                    await doDispatch(port, workspaceRoot, planId, 'auto');
+                    break;
+                }
+                case '3': {
+                    const proj = await prompter.ask('Project name (or Enter for all): ');
+                    if (proj === null) { exitFlushed(0); }
+                    // Re-run ready with project filter.
+                    const projArg = proj ? ['--project', proj] : [];
+                    prompter.close();
+                    await cmdReady(workspaceRoot, projArg);
+                    break;
+                }
+                case '4': {
+                    prompter.close();
+                    await cmdFleet(workspaceRoot, []);
+                    break;
+                }
+                case '5': {
+                    prompter.close();
+                    // The setup wizard is a separate workflow — print instructions
+                    // rather than attempting in-process delegation (the init/scaffold
+                    // handlers are above this point in main()'s flow and cannot be
+                    // re-entered from here).
+                    console.log('\n[switchboard] Setup & Scaffolding Wizard:');
+                    console.log('  Run `switchboard setup` to access the interactive wizard,');
+                    console.log('  or use a direct subcommand:');
+                    console.log('    switchboard setup init [--target <agents|claude|both>]');
+                    console.log('    switchboard setup scaffold --parent-dir <dir> --workspace-name <name> --repo <url>');
+                    console.log('    switchboard setup control-plane <detect|preview|migrate>');
+                    exitFlushed(0);
+                }
+            }
+            exitFlushed(0);
+        }
+
+        // Not numeric — try as a plan prefix to dispatch directly.
+        const resolved = await resolvePrefix(port, workspaceRoot, answer);
+        if (resolved === null) {
+            console.error(`[switchboard] No plan matches '${answer}'.`);
+            exitFlushed(5);
+        }
+        if ('ambiguous' in resolved) {
+            console.error(`[switchboard] Ambiguous prefix '${answer}' — matches ${resolved.ambiguous.length} cards:`);
+            for (const pid of resolved.ambiguous) { console.error(`  ${shortPrefix(pid)}  ${pid}`); }
+            exitFlushed(5);
+        }
+        const planId = (resolved as { planId: string }).planId;
+        console.log(`\n[switchboard] Dispatching ${shortPrefix(planId)}…`);
+        await doDispatch(port, workspaceRoot, planId, 'auto');
+    } finally {
+        prompter.close();
+    }
+}
+
 async function main() {
     // ── Serve-mode whitelist ──────────────────────────────────────
     //
@@ -628,6 +1647,8 @@ async function main() {
     const KNOWN_SUBCOMMANDS = new Set([
         'local', 'tailnet', 'stop', 'status', 'logs', 'init', 'scaffold',
         'control-plane', 'secrets', 'token', 'export', 'import',
+        'plans', 'ready', 'dispatch', 'clear', 'fleet', 'verb',
+        'help', 'about', 'version', 'setup',
     ]);
     const firstArg = process.argv[2];
     const isFlag = firstArg && firstArg.startsWith('-');
@@ -658,8 +1679,10 @@ async function main() {
 
     const args = parseArgs(process.argv.slice(2));
     if (args.help) {
-        console.log(usage());
-        process.exit(0);
+        cmdHelp(process.argv[3]);
+    }
+    if (args.version) {
+        await cmdAbout(path.resolve(args.workspace || process.cwd()), false);
     }
 
     const workspaceRoot = path.resolve(args.workspace || process.cwd());
@@ -672,12 +1695,20 @@ async function main() {
     // arguments and never touch the cwd. Creating .switchboard/ here would leave a
     // stray control-plane marker in whatever directory the command was launched from
     // — including $HOME, which `isAllowedSwitchboardLocation` exists to keep out.
-    // `stop`, `status`, and `logs` are read-only queries against an existing
-    // .switchboard/ — they must not create one in a directory that has none.
+    // `stop`, `status`, `logs`, and the board commands (`plans`, `ready`,
+    // `dispatch`, `clear`, `fleet`, `verb`, `help`, `about`, `version`, `setup`)
+    // are read-only queries against an existing .switchboard/ — they must not
+    // create one in a directory that has none. The bare `switchboard` (no
+    // subcommand) is also a read-only console: `!firstArg` covers it.
     // Every other path (server start, secrets, init) does use workspaceRoot.
     const subcommand = process.argv[2];
-    const subcommandTargetsCwd = subcommand !== 'scaffold' && subcommand !== 'control-plane'
-        && subcommand !== 'stop' && subcommand !== 'status' && subcommand !== 'logs';
+    const subcommandTargetsCwd = !!firstArg
+        && subcommand !== 'scaffold' && subcommand !== 'control-plane'
+        && subcommand !== 'stop' && subcommand !== 'status' && subcommand !== 'logs'
+        && subcommand !== 'plans' && subcommand !== 'ready' && subcommand !== 'dispatch'
+        && subcommand !== 'clear' && subcommand !== 'fleet' && subcommand !== 'verb'
+        && subcommand !== 'help' && subcommand !== 'about' && subcommand !== 'version'
+        && subcommand !== 'setup';
     const switchboardDir = path.join(workspaceRoot, '.switchboard');
     if (subcommandTargetsCwd && !fs.existsSync(switchboardDir)) {
         fs.mkdirSync(switchboardDir, { recursive: true });
@@ -891,6 +1922,16 @@ async function main() {
             console.error(`[switchboard] Transfer import failed: ${err instanceof Error ? err.message : String(err)}`);
             process.exit(1);
         }
+    }
+
+    // `setup` is placed before init/scaffold/control-plane so it can delegate
+    // by rewriting process.argv and returning — the code falls through to the
+    // matching handler below.
+    if (process.argv[2] === 'setup') {
+        await cmdSetup(workspaceRoot, process.argv.slice(3));
+        // cmdSetup exits or returns after rewriting process.argv.
+        // If it returned, process.argv[2] is now init/scaffold/control-plane
+        // and the matching handler below will fire.
     }
 
     if (process.argv[2] === 'init') {
@@ -1302,6 +2343,61 @@ async function main() {
         await new Promise(() => { /* never resolves */ });
     }
 
+    // ── help ──────────────────────────────────────────────────────
+    if (process.argv[2] === 'help') {
+        cmdHelp(process.argv[3]);
+    }
+
+    // ── about / version ───────────────────────────────────────────
+    if (process.argv[2] === 'about' || process.argv[2] === 'version') {
+        const jsonFlag = process.argv.slice(3).includes('--json');
+        await cmdAbout(workspaceRoot, jsonFlag);
+    }
+
+    // ── plans ─────────────────────────────────────────────────────
+    if (process.argv[2] === 'plans') {
+        await cmdPlans(workspaceRoot, process.argv.slice(3));
+    }
+
+    // ── ready ─────────────────────────────────────────────────────
+    if (process.argv[2] === 'ready') {
+        await cmdReady(workspaceRoot, process.argv.slice(3));
+    }
+
+    // ── dispatch ──────────────────────────────────────────────────
+    if (process.argv[2] === 'dispatch') {
+        await cmdDispatch(workspaceRoot, process.argv.slice(3));
+    }
+
+    // ── clear ─────────────────────────────────────────────────────
+    if (process.argv[2] === 'clear') {
+        await cmdClear(workspaceRoot, process.argv.slice(3));
+    }
+
+    // ── fleet ─────────────────────────────────────────────────────
+    if (process.argv[2] === 'fleet') {
+        await cmdFleet(workspaceRoot, process.argv.slice(3));
+    }
+
+    // ── verb ──────────────────────────────────────────────────────
+    if (process.argv[2] === 'verb') {
+        await cmdVerb(workspaceRoot, process.argv.slice(3));
+    }
+
+    // ── Bare `switchboard`: interactive board console ─────────────
+    //
+    // No subcommand (truly bare `npx switchboard`) connects to a running
+    // server and presents the interactive board navigator. This is the
+    // primary terminal interface — the default front door when a server is
+    // already running. If no server is running, exit 1 with advice to start
+    // one. `switchboard local` and `switchboard tailnet` are the serve
+    // commands; flags without a subcommand (e.g. `--hostname foo`) still
+    // fall through to the serve path below for backward compatibility.
+    if (!firstArg) {
+        await cmdBoardConsole(workspaceRoot);
+    }
+
+    // ── Server start path (local / tailnet / serve flags) ─────────
     const existing = await findRunningInstance(workspaceRoot);
     if (existing !== null) {
         console.error(`[switchboard] Another Switchboard instance is already running on port ${existing} for ${workspaceRoot}.`);
