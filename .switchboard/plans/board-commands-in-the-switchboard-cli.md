@@ -203,60 +203,41 @@ space.
 
 ## Proposed Changes
 
-1. **`switchboard` (bare command) / `switchboard ready [column] [--project <name>] [--json]`** — the primary interactive terminal interface.
-   - **`switchboard`** with no subcommand is the front door: it connects to the running Switchboard server and presents the interactive board console.
-   - **UFO ANSI Art Banner:** On TTY interactive launch, renders a compact, glowing cyan UFO ANSI art banner (matching the webview's `switchboard-ufo.svg` brand asset and theme-accent palette). Suppressed when `--no-ansi` is given, under `--json`, or when stdout is not a TTY.
+1. **`switchboard` (Interactive Board Console & Plan Navigator)** — the primary terminal interface.
+   - **`switchboard`** with no subcommand connects to the running Switchboard server and presents the interactive board navigator:
      ```text
             .---.
-      _...-'     '-..._       SWITCHBOARD
+      _...-'     '-..._       SWITCHBOARD v1.7.13
     .-~  ●   ●   ●   ●  ~-.   Autonomous Agent Fleet Console
    (________________________)
-         \   :    :   /
-          \  :    :  /
+         \   :    :   /       http://127.0.0.1:7777 (Tailscale: 100.110.206.86:7777)
+          \  :    :  /        Workspace: switchboard (6 active seats)
+
+    BOARD SUMMARY:
+      STAGING (4)  ·  CREATED (8)  ·  PLAN REVIEWED (3)  ·  CODE REVIEWED (1)
+
+    MENU:
+      [1] Browse & Dispatch by Column (STAGING, CREATED, PLAN REVIEWED, etc.)
+      [2] Search Plans & Features (keyword, title, or UUID prefix with pagination)
+      [3] Filter by Project
+      [4] Inspect Fleet Status (live tasks & seats)
+      [5] Clear Terminal Context (unbracketed /clear reset)
+      [6] Setup & Scaffolding Wizard
+      [q] Exit (or Enter)
+
+    Select an option [1-6] (or enter plan ID / prefix to dispatch): 
      ```
-   - If no server is running, it exits cleanly (code 1) with:
-     ```text
-     No running Switchboard server for this workspace.
-       Start local server:   switchboard local
-       Start remote tailnet: switchboard tailnet
-     ```
-   - **Server startup separation:** `switchboard local` and `switchboard tailnet` are the explicit server start commands (local loopback vs tailnet remote access). Bare `switchboard` never silently launches a server in the background; it drives the board.
-   - Output is a numbered list of `type · title · short id`. Then it **prompts for a number and dispatches that card.** Enter alone exits without acting — one command, one keystroke, on any device.
+   - **User Choice Over Assumptions:** Instead of guessing 3 "ready" cards, the user can instantly browse any column, search by query, filter by project, or type a card prefix directly at the prompt to dispatch.
+   - If no server is running, exits cleanly (code 1) advising `switchboard local` or `switchboard tailnet`.
 
-   **1a. `--project <name>` (the filter-discovery fix).** `GET /kanban/plans` accepts `column` and
-   `featureId` but **not** `project` (`LocalApiServer.ts:6428-6445`), and no endpoint exposes
-   `kanban.activeProjectFilter` (the config-table value the board reads via `getConfigSync`). The
-   Mission Control protocol gets the filter injected into its prompt by the host; the CLI has no
-   equivalent injection. Therefore the CLI takes the filter explicitly: `--project <name>` filters
-   client-side (keep only rows whose `project` equals the value exactly, matching the protocol's jq).
-   Omitted/empty `--project` = no filter (matches the protocol's empty-filter behavior — keep
-   everything). A future `GET` endpoint exposing `kanban.activeProjectFilter` would let the CLI default
-   to the board's active filter; until then the flag is the explicit mechanism and the parity claim
-   holds only when the user passes it.
+2. **`switchboard plans [column] [--project <name>] [--search <query>] [--json]`** — direct listing and filtering command.
+   - Lists cards with pagination (`--limit 10`, `--offset N`), column filtering, and search terms.
+   - In non-interactive / `--json` mode, outputs `{ success: true, count: N, plans: [...] }` on stdout.
 
-2. **`switchboard dispatch <planId|prefix> [column] [--project <name>] [--json]`** — the direct form,
-   for when the card is already known. Accepts a unique short id prefix as well as a full planId; an
-   ambiguous prefix lists the matches and exits non-zero (exit 5) rather than picking one.
-
-   **Prefix search scope = all columns.** The resolver fetches the full board (`GET /kanban/plans`
-   without a column filter, or `GET /kanban/board`) and matches the prefix against every card's
-   `planId`, not just the two ready columns — a card sitting in `STAGING` that someone wants to
-   re-dispatch must be findable. `--project`, when given, narrows the search set the same way it
-   narrows `ready`.
-
-   Omitted column means `auto`, which is `performKanbanDispatch`'s existing complexity routing. Surface
-   the `400` from `_canonicalColumnId` verbatim on a bad column: it lists the valid ids and is the
-   caller's self-correction signal.
-
-3. **`--json` on both, following `status` exactly: `routeLogsToStderr()` then `emitJson(...)`, so
-   stdout is parseable.** `--json` also **suppresses the prompt** — a non-interactive invocation must
-   never block waiting on stdin.
-
-   **`--json ready` is list-only.** The non-JSON `ready` is list+pick+dispatch in one command; the
-   `--json` form lists and exits (no dispatch path), because a machine consumer cannot answer a
-   prompt. A machine consumer does list-then-dispatch as two calls: `switchboard ready --json` then
-   `switchboard dispatch <id> --json`. The `--json` flag is a *behavior* flag on `ready`, not just a
-   format flag — state this in `--help`.
+3. **`switchboard dispatch <planId|prefix> [column] [--project <name>] [--json]`** — direct one-shot dispatch command.
+   - Resolves full UUIDs or short prefixes across **all board columns**.
+   - Omitted column defaults to `auto` complexity routing.
+   - Clean exit codes (0 = success, 1 = offline, 3 = refused, 4 = auth, 5 = bad input/prefix, 6 = unavailable).
 
 4. **Never prompt when stdin is not a TTY.** Print the list and exit 0. A piped or `nohup`-ed
    invocation that blocks forever on a hidden prompt is the worst failure mode this command has.
