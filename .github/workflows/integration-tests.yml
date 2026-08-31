@@ -476,6 +476,17 @@ jobs:
       # guard tuned on raw entropy blocks the export on prose prompt overrides.
       # Round-trips onto a destination at a DIFFERENT absolute path, which is what
       # proves the bundle carries no machine identity.
+      # The CLI's board commands are the terminal's door onto the board. Every
+      # end-to-end assertion in their plan needs a live board, a live terminal
+      # and a TTY, so none of them can gate CI — this pins the invariants that
+      # CAN be discriminated statically, and they are exactly the ones that
+      # broke: reading `title` on a row whose writer only ever sets `topic`,
+      # reading `--all` out of a positional list, reading `name`/`alive` off a
+      # ptyListTerminals projection that emits `friendlyName`/`status`, and
+      # falling back to /kanban/verb on a 404 the terminal rail never sends.
+      - name: CLI board commands contract (field existence, ready set, exit codes, third-door rule)
+        run: npm run test:contract:cli-board-commands
+
       - name: Transfer bundle contract (round trip, re-keying, classifier, credential guard, host parity)
         run: npm run test:contract:transfer-bundle
 

@@ -43,7 +43,9 @@ Board commands (drive the board from a terminal):
   (bare)              Interactive board console — browse columns, search, dispatch.
                       Connects to a running server; exits 1 if none is running.
   plans               List cards with optional column/project/search filtering.
-  ready               List cards ready to dispatch (PLAN REVIEWED, subtasks excluded).
+  ready               List cards ready to dispatch (PLAN REVIEWED + CREATED,
+                      subtasks excluded) — the same set the Mission Control
+                      protocol's "What Is Ready To Go" defines.
                       Interactive picker on a TTY; lists and exits 0 otherwise.
   dispatch            Dispatch a card by planId or unique prefix. Column defaults
                       to auto (complexity routing). Exit codes:
@@ -467,10 +469,17 @@ interface ApiResponse {
 function apiGet(port: number, pathname: string, workspaceRoot: string, query?: Record<string, string>): Promise<ApiResponse> {
     const token = discoverAuthToken(workspaceRoot);
     let url = `http://127.0.0.1:${port}${pathname}`;
-    if (query) {
-        const qs = new URLSearchParams(query).toString();
-        if (qs) { url += `?${qs}`; }
-    }
+    // `workspaceRoot` is NOT optional on the read path. `_resolveDbFromQuery`
+    // falls back to the host's own selected root when the param is absent — on
+    // the extension host that is a DIFFERENT board from the one the CLI's cwd
+    // names. The dispatch POST already carries `workspaceRoot` in its body, so
+    // omitting it here lets `ready` list one board's cards and `dispatch`
+    // resolve them against another (404 → exit 5, "plan not found" for a card
+    // the CLI just printed). The Mission Control protocol passes
+    // `workspaceRoot=$WS` on every read for exactly this reason.
+    const params: Record<string, string> = { ...(query || {}), workspaceRoot };
+    const qs = new URLSearchParams(params).toString();
+    if (qs) { url += `?${qs}`; }
     return new Promise((resolve, reject) => {
         const headers: http.OutgoingHttpHeaders = {};
         if (token) { headers['Authorization'] = `Bearer ${token}`; }
@@ -580,8 +589,18 @@ function dispatchExitCode(status: number): number {
     }
 }
 
-/** The two columns that constitute "ready to go" (matching the Mission Control protocol). */
-const READY_COLUMNS = ['PLAN REVIEWED', 'STAGING'];
+/**
+ * The two columns that constitute "ready to go".
+ *
+ * These are the protocol's, not a guess: `.agents/protocols/switchboard-mission-control/SKILL.md`
+ * § "What Is Ready To Go" defines ready as the two dispatchable lanes —
+ * `CREATED` (planning lane) and `PLAN REVIEWED` (coding lane) — and names
+ * `STAGING` explicitly among the columns that are NOT ready ("a manual staging
+ * column"). A CLI that answered the same question with a different column set
+ * would be the "two definitions of one question" the plan's verification step 6
+ * exists to prevent.
+ */
+const READY_COLUMNS = ['PLAN REVIEWED', 'CREATED'];
 
 /** Filter subtasks (featureId === '') and optionally project, client-side. */
 function filterPlans(plans: any[], projectFilter?: string): any[] {
@@ -595,11 +614,27 @@ function filterPlans(plans: any[], projectFilter?: string): any[] {
     return filtered;
 }
 
+/**
+ * A plan row's human title.
+ *
+ * The field is `topic`, NOT `title`. `GET /kanban/plans` serialises
+ * `KanbanPlanRecord` straight out of `KanbanDatabase._readRows`, whose object
+ * literal has no `title` key at all (KanbanDatabase.ts:10923 sets `topic`), and
+ * the Mission Control protocol's own jq reads `.topic`. Reading `.title` is
+ * always `undefined`, which silently degraded every listing to an absolute plan
+ * file path and made `--search` unable to match a card by name.
+ * `title` is kept as a leading fallback only so a future/aliased payload that
+ * does carry one is not ignored.
+ */
+function planTitle(p: any): string {
+    return String(p?.topic || p?.title || p?.planFile || '(untitled)');
+}
+
 /** Format a single plan row for human-readable listing. */
 function formatPlanLine(p: any, index?: number): string {
     const prefix = shortPrefix(String(p?.planId || ''));
     const col = String(p?.kanbanColumn || '?');
-    const title = String(p?.title || p?.planFile || '(untitled)');
+    const title = planTitle(p);
     const proj = p?.project ? ` [${p.project}]` : '';
     const num = index !== undefined ? `${index + 1}. ` : '';
     return `${num}${prefix}  ${col.padEnd(16)} ${title}${proj}`;
@@ -962,7 +997,7 @@ async function cmdPlans(workspaceRoot: string, argv: string[]): Promise<void> {
     if (search) {
         const q = search.toLowerCase();
         plans = plans.filter((p: any) => {
-            const title = String(p?.title || '').toLowerCase();
+            const title = planTitle(p).toLowerCase();
             const planFile = String(p?.planFile || '').toLowerCase();
             const pid = String(p?.planId || '').toLowerCase();
             return title.includes(q) || planFile.includes(q) || pid.includes(q);
@@ -994,8 +1029,8 @@ async function cmdPlans(workspaceRoot: string, argv: string[]): Promise<void> {
 /**
  * `switchboard ready [--project <name>] [--json]`
  *
- * Lists cards ready to dispatch: the two ready columns (PLAN REVIEWED, STAGING),
- * subtasks excluded (featureId === ''). Interactive picker on a TTY; lists and
+ * Lists cards ready to dispatch: the two ready columns (PLAN REVIEWED, CREATED
+ * — see READY_COLUMNS), subtasks excluded (featureId === ''). Picker on a TTY; lists and
  * exits 0 on non-interactive stdin or --json. EOF/SIGINT during the prompt
  * exits 0 without dispatching.
  */
@@ -1077,7 +1112,7 @@ async function cmdReady(workspaceRoot: string, argv: string[]): Promise<void> {
         }
         const selected = filtered[num - 1];
         const planId = String(selected?.planId || '');
-        console.log(`[switchboard] Dispatching ${shortPrefix(planId)} (${String(selected?.title || '')})…`);
+        console.log(`[switchboard] Dispatching ${shortPrefix(planId)} (${planTitle(selected)})…`);
         await doDispatch(port, workspaceRoot, planId, 'auto');
     } finally {
         prompter.close();
@@ -1190,8 +1225,13 @@ async function cmdClear(workspaceRoot: string, argv: string[]): Promise<void> {
     const jsonFlag = argv.includes('--json');
     if (jsonFlag) { routeLogsToStderr(); }
 
+    // `--all` is a flag, so it cannot be read out of the positional list — the
+    // positional filter strips every leading-dash token. Reading it from
+    // `positional[0]` made `switchboard clear --all` exit 5 ("Missing terminal
+    // name or --all") and left the whole fan-out branch below unreachable.
+    const clearAll = argv.includes('--all');
     const positional = argv.filter(a => !a.startsWith('-'));
-    const target = positional[0];
+    const target = clearAll ? '--all' : positional[0];
     if (!target) {
         if (jsonFlag) { emitJson({ success: false, error: 'Missing terminal name or --all' }); }
         else { console.error('Usage: npx switchboard clear <terminal|--all> [--json]'); }
@@ -1206,7 +1246,7 @@ async function cmdClear(workspaceRoot: string, argv: string[]): Promise<void> {
     }
 
     const targets: string[] = [];
-    if (target === '--all') {
+    if (clearAll) {
         try {
             const health = await getHealthJson(port);
             targets.push(...(health.terminals ?? []));
@@ -1295,11 +1335,18 @@ async function cmdFleet(workspaceRoot: string, argv: string[]): Promise<void> {
     // Compact table.
     const header = ['SEAT', 'ROLE', 'STATUS', 'CURRENT PLAN / TASK'];
     const rows: string[][] = [header];
+    // Field names come from the ptyListTerminals projection, not from a guess:
+    // bootstrap.ts:1857 (and ptyHost.ts's identical shape) emits
+    // `friendlyName` / `role` / `status`. There is no `name`, `terminalName`,
+    // `alive` or `active` key on those rows — reading them printed `?` for every
+    // seat and `idle` for every status, on a table whose entire job is to say
+    // which seats are live.
     for (const t of terminals) {
-        const name = String(t?.name || t?.terminalName || '?');
+        const name = String(t?.friendlyName || t?.name || t?.terminalName || '?');
         const role = String(t?.role || '-');
-        const status = t?.alive || t?.active ? 'active' : 'idle';
-        const plan = t?.currentPlanTitle || t?.planTitle || t?.planId ? String(t?.currentPlanTitle || t?.planTitle || shortPrefix(String(t?.planId || ''))) : '-';
+        const status = String(t?.status || (t?.alive || t?.active ? 'active' : 'idle'));
+        const planLabel = t?.currentPlanTitle || t?.planTitle || t?.topic || '';
+        const plan = String(planLabel || (t?.planId ? shortPrefix(String(t.planId)) : '') || '-');
         rows.push([name, role, status, plan]);
     }
     // Compute column widths.
@@ -1349,8 +1396,19 @@ async function cmdVerb(workspaceRoot: string, argv: string[]): Promise<void> {
     }
 
     // Try /terminals/verb/<name> first, then /kanban/verb/<name>.
+    //
+    // The terminal rail NEVER answers 404 for an unknown verb: the path prefix
+    // matches, the request reaches the host's terminalVerb seam, and its
+    // `default:` arm returns `{success:false, error:"...not implemented..."}` /
+    // `"Unknown terminal verb '<verb>'"` — which LocalApiServer turns into a
+    // 502 (LocalApiServer.ts:4424). A 404-only fallback therefore never fired,
+    // and every kanban verb (including the plan's own `verb moveCard` example)
+    // died on the terminal rail. Retry only on those two non-executing
+    // refusals, never on a generic 502 — a blind retry could run a
+    // side-effecting terminal verb twice.
+    const VERB_NOT_HERE = /not implemented|unknown (terminal |pty )?verb|missing verb/i;
     let res = await apiPost(port, `/terminals/verb/${encodeURIComponent(verbName)}`, workspaceRoot, payload);
-    if (res.status === 404) {
+    if (res.status === 404 || (res.status >= 400 && VERB_NOT_HERE.test(String(res.json()?.error || '')))) {
         res = await apiPost(port, `/kanban/verb/${encodeURIComponent(verbName)}`, workspaceRoot, payload);
     }
 
@@ -1557,7 +1615,7 @@ async function cmdBoardConsole(workspaceRoot: string): Promise<void> {
                     }
                     const selected = colPlans[pickNum - 1];
                     const planId = String(selected?.planId || '');
-                    console.log(`\n[switchboard] Dispatching ${shortPrefix(planId)} (${String(selected?.title || '')})…`);
+                    console.log(`\n[switchboard] Dispatching ${shortPrefix(planId)} (${planTitle(selected)})…`);
                     await doDispatch(port, workspaceRoot, planId, 'auto');
                     break;
                 }
@@ -1569,7 +1627,7 @@ async function cmdBoardConsole(workspaceRoot: string): Promise<void> {
                     const plans = extractPlans(plansRes.json());
                     const ql = q.toLowerCase();
                     const matches = plans.filter((p: any) => {
-                        return String(p?.title || '').toLowerCase().includes(ql)
+                        return planTitle(p).toLowerCase().includes(ql)
                             || String(p?.planFile || '').toLowerCase().includes(ql)
                             || String(p?.planId || '').toLowerCase().includes(ql);
                     });
@@ -1582,7 +1640,7 @@ async function cmdBoardConsole(workspaceRoot: string): Promise<void> {
                     if (isNaN(pickNum) || pickNum < 1 || pickNum > matches.length) { console.error(`[switchboard] Invalid selection.`); exitFlushed(5); }
                     const selected = matches[pickNum - 1];
                     const planId = String(selected?.planId || '');
-                    console.log(`\n[switchboard] Dispatching ${shortPrefix(planId)} (${String(selected?.title || '')})…`);
+                    console.log(`\n[switchboard] Dispatching ${shortPrefix(planId)} (${planTitle(selected)})…`);
                     await doDispatch(port, workspaceRoot, planId, 'auto');
                     break;
                 }
@@ -1688,7 +1746,9 @@ async function main() {
         cmdHelp(process.argv[3]);
     }
     if (args.version) {
-        await cmdAbout(path.resolve(args.workspace || process.cwd()), false);
+        // `--json` is honoured here too: `about --json` and `--version --json`
+        // are the same command and must not disagree about their output shape.
+        await cmdAbout(path.resolve(args.workspace || process.cwd()), process.argv.includes('--json'));
     }
 
     const workspaceRoot = path.resolve(args.workspace || process.cwd());

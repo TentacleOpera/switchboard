@@ -450,3 +450,34 @@ for the implementing coder.)*
 ## Implementation Summary
 
 Implemented all 12 proposed changes in `src/standalone/cli.ts`. The bare `switchboard` command is now the interactive board console (connects to a running server, shows a menu for browsing columns, searching, filtering by project, inspecting fleet, and direct prefix dispatch). `switchboard local` and `switchboard tailnet` remain the serve commands. New subcommands `plans`, `ready`, `dispatch`, `clear`, `fleet`, `verb`, `help`, `about`/`version`, and `setup` were added, all routing through existing HTTP endpoints (`GET /kanban/plans`, `POST /kanban/dispatch`, `POST /terminals/verb/*`) — the CLI never opens `kanban.db` or calls `move-card.js`. The full exit-code table (0/1/2/3/4/5/6) is implemented, EOF/SIGINT during the interactive prompt exits 0 without dispatching, and all new subcommands are in the `subcommandTargetsCwd` exclusion list so they never create a `.switchboard/`. Token discovery reads `.switchboard/api-server-token.txt` when present, falling back to loopback-trust when absent. The `setup` command delegates to existing `init`/`scaffold`/`control-plane` handlers by rewriting `process.argv`. TypeScript compiles clean (no new errors in cli.ts).
+
+## Review Findings
+
+Reviewed the two implementation commits (`45a5a73a`, `dea7c1a9`) and fixed six defects in
+`src/standalone/cli.ts`, all confirmed against the live board on port 7777 rather than inferred:
+plan rows carry `topic`, never `title` (six read sites, which silently degraded every listing to an
+absolute plan-file path and made `--search` unable to match a card by name); `switchboard clear --all`
+was unreachable because `--all` was read out of a positional list that strips leading-dash tokens;
+`fleet` read `name`/`alive`/`active` off a `ptyListTerminals` projection that emits
+`friendlyName`/`status`; `verb` fell back to `/kanban/verb` only on a 404 the terminal rail never
+sends (it answers 502 "not implemented"); every GET omitted `workspaceRoot`, so the reads resolved a
+different board from the dispatch POST on the extension host; and `READY_COLUMNS` was
+`PLAN REVIEWED + STAGING` where the protocol's `## What Is Ready To Go` — this plan's own verification
+step 6 — defines `PLAN REVIEWED + CREATED` and names STAGING as not ready. Added
+`src/test/cli-board-commands-contract.test.js` (verified to fail against the pre-fix source) and wired
+it into `package.json` and `.github/workflows/integration-tests.yml`, because the plan's 17 automated
+checks were written but never implemented and nothing in CI touched the CLI. Verification: `tsc -p
+tsconfig.test.json --noEmit` clean, `eslint` 0 errors, `npm test` green, and the new test plus
+`parity:check`, `push-routing:check`, `standalone-fork:check`, `host-seam-parity:check`,
+`kanban-dispatch-callers:check`, `verb-returns:check`, `goal-invariant-verification`,
+`pty-route-surface` and `workspace-root-write-path` all pass (`mirror:check` is red at HEAD on
+pre-existing `.claude/skills/switchboard-remote/SKILL.md` drift, unrelated to this work).
+
+## Deferred Findings
+
+- MAJOR — The picker dispatches every selected card with `targetColumn: 'auto'` (complexity routing to a coding column), so a `CREATED` card — the protocol's *planning* lane — is sent to a coder rather than a planner. The listing prints each card's column so the choice is visible, but the lane distinction the protocol draws is not honoured by the dispatch. `src/standalone/cli.ts:1104`
+- MAJOR — None of the plan's 17 `### Automated Tests` were implemented as end-to-end tests; each needs a live board, a live terminal and a TTY. The new contract test covers only the statically-discriminable invariants. The core interactive paths (EOF/SIGINT-does-not-dispatch, the numbered picker actually dispatching the Nth card, `--json` list-only) remain manual-only. `src/test/cli-board-commands-contract.test.js:1`
+- NIT — `switchboard setup init` does not get `.switchboard/` pre-created: `subcommandTargetsCwd` is computed from `process.argv[2]` before `cmdSetup` rewrites it, so it sees `setup` (excluded) rather than `init`. `bootstrapControlPlaneLayout` creates the directory itself, so this is currently harmless. `src/standalone/cli.ts:1721`
+- NIT — Board-console menu option `[5]` prints setup instructions instead of entering the wizard, because the `init`/`scaffold` handlers sit earlier in `main()`'s flow and cannot be re-entered. Documented in-code; the plan's change 1 lists it as a menu entry. `src/standalone/cli.ts:1621`
+- NIT — `cmdHelp` ignores its `command` argument and prints full usage for both branches, so `switchboard help dispatch` and `switchboard help` are identical. `src/standalone/cli.ts:911`
+- NIT — The plan's change 9 example `switchboard verb moveCard '{...}'` names a verb neither rail implements; the fallback now reaches `/kanban/verb`, but `moveCard` is not in the catalog. `.switchboard/plans/board-commands-in-the-switchboard-cli.md:292`
