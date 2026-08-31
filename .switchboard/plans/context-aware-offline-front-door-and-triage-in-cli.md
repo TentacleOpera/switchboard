@@ -2,7 +2,7 @@
 
 ## Goal
 
-Replace the single-track "start local server now? [Y/n]" offline prompt in `switchboard` with a comprehensive, neutral front-door triage experience that properly addresses all real-world operator scenarios: first-time workspace setup, remote tailnet server crashes, remote headless installations, and local development.
+Replace the single-track "start local server now? [Y/n]" offline prompt in `switchboard` with a comprehensive, neutral front-door triage experience that properly addresses all real-world operator scenarios: first-time workspace setup, remote tailnet server crashes, remote headless installations, and local development, and update the CLI banner tagline from "Autonomous Agent Fleet Console" to "Agent Fleet Command".
 
 ### Problem Analysis & Root Cause
 
@@ -36,7 +36,7 @@ Start local board server now? [Y/n]:
    ```text
           .---.
     _...-'     '-..._       SWITCHBOARD v1.7.13
-   .-~  ●   ●   ●   ●  ~-.   Autonomous Agent Fleet Console
+   .-~  ●   ●   ●   ●  ~-.   Agent Fleet Command
    (________________________)
          \   :    :   /       https://github.com/TentacleOpera/switchboard
           \  :    :  /        Host: Standalone (linux x64)
@@ -174,6 +174,11 @@ Key risks: (1) the adaptive menu's online branch could drop the `cmdBoardConsole
 
 4. **Remove the `Start local server now? [Y/n]` prompt** (cli.ts:1593) — a consequence of step 1. After the refactor, grep `cli.ts` for `Start local` and `Start local board server now?` must return zero matches.
 
+
+5. **Update CLI Banner Tagline:**
+   - In `banner(version)` (cli.ts:875), change `Autonomous Agent Fleet Console` to `Agent Fleet Command`.
+   - In `cmdSetup` (cli.ts:1465), update `.replace('Agent Fleet Command', 'Workspace & Scaffolding Wizard')`.
+
 #### Implementation
 - The adaptive branch is the only structural change to `cmdMainMenu`'s control flow. The re-spawn mechanism (`spawn(process.execPath, [__filename, <sub>], { stdio: 'inherit' })` → await exit → `exitFlushed(code)`) is copied verbatim from the existing GUI Mode (cli.ts:1568) and Setup (cli.ts:1654) branches.
 - `emitOfflineGuidance` is a ~15-line function: branch on `jsonFlag`, emit either the 4-line `console.error` block or `emitJson(...)`, then `exitFlushed(1)`. The `hints` array is `['switchboard local', 'switchboard tailnet', 'switchboard setup', 'switchboard help']`.
@@ -217,6 +222,7 @@ Update the breaking assertions to pin the NEW adaptive contract:
   - `cmdBoardConsole` keeps its `findRunningInstance → null → exitFlushed(1)` backstop.
 
 ### Goal Invariants
+- `banner()` in `cli.ts` emits `Agent Fleet Command` instead of `Autonomous Agent Fleet Console`.
 - Assert `cli.ts` contains zero matches for the regex `/Start local (board )?server now\?/` — the single-track prompt is eliminated.
 - Assert `cmdMainMenu` in `cli.ts` contains the string `Open Board Console` — the online board-navigator path is present (the local-development scenario is served).
 - Assert `cmdMainMenu` in `cli.ts` contains the strings `Start Local Board`, `Start Remote / Tailnet Board`, `Setup & Scaffolding Wizard`, `Help & Command Documentation`, and `Server Status & Diagnostics` — all 5 offline triage branches are rendered.
