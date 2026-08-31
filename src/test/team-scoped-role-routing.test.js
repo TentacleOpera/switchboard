@@ -620,11 +620,22 @@ async function item6() {
     await test('the fleet first-match fallback is unchanged (team check is before it, not replacing it)', () => {
         // _resolveAgentTerminalForPlan must still have the fleet first-match after
         // the team check. The team check is additive, not a replacement.
-        const methodStart = taskViewerTs.indexOf('private async _resolveAgentTerminalForPlan(');
-        assert.ok(methodStart > 0);
-        // `_getAgentNameForRole` is the method's LAST line (~1810 chars in), so
-        // the window has to span the whole method body.
-        const method = taskViewerTs.slice(methodStart, methodStart + 2200);
+        // The chain lives in _resolveExactAgentTerminalForPlan; the outer
+        // _resolveAgentTerminalForPlan delegates to it and then applies role
+        // degradation. This gate went red when that split landed, because it
+        // still named the outer method (whose body no longer contains any of
+        // the three steps) — the resolution order itself never changed.
+        const methodStart = taskViewerTs.indexOf('private async _resolveExactAgentTerminalForPlan(');
+        assert.ok(methodStart > 0, '_resolveExactAgentTerminalForPlan not found');
+        // Slice to the next method declaration rather than a fixed width: the
+        // body grows, and a magic char count silently stops covering the last
+        // resolution step (this gate went red at 2200 when the method reached
+        // ~2650 chars, with nothing actually broken).
+        const afterStart = taskViewerTs.slice(methodStart + 1);
+        const nextMethod = afterStart.search(/\n    (?:private|public|protected)\s/);
+        const method = nextMethod > -1
+            ? taskViewerTs.slice(methodStart, methodStart + 1 + nextMethod)
+            : taskViewerTs.slice(methodStart);
         assert.ok(method.includes('ptyListTerminals'), 'fleet consultation must still be present');
         assert.ok(method.includes('_getAgentNameForRole'), 'role fallback must still be present');
         assert.ok(method.includes('resolveTeamRoleTerminal'), 'team check must be present');
@@ -952,10 +963,26 @@ async function item9() {
             assert.ok(NEW_REVIEW_TEAM_HEAD_PROMPT.includes(phrase),
                 `NEW_REVIEW_TEAM_HEAD_PROMPT must contain "${phrase}"`);
         }
-        assert.ok(teamWiringTs.includes('"seatBlock":false'),
+        // Scoped to the assembled constant / the Review preset slice. A bare
+        // file-wide `includes` would go green on any unrelated "seatBlock":false
+        // elsewhere in these two very large files — the exact "green while
+        // incomplete" hole this gate exists to close.
+        assert.ok(NEW_REVIEW_TEAM_HEAD_PROMPT.includes('"seatBlock":false'),
             'NEW_REVIEW_TEAM_HEAD_PROMPT must include seatBlock:false in its ptySendPrompt payload');
-        assert.ok(kanbanHtml.includes('"seatBlock":false'),
+        const reviewPresetStart = kanbanHtml.indexOf("name: 'Review'");
+        assert.ok(reviewPresetStart > 0, "Review preset not found in kanban.html");
+        const reviewPreset = kanbanHtml.slice(reviewPresetStart, kanbanHtml.indexOf("name: 'Multi-agent planning'", reviewPresetStart));
+        assert.ok(reviewPreset.includes('"seatBlock":false'),
             'Review team preset headPrompt must include seatBlock:false in its ptySendPrompt payload');
+        // The Review preset has reviewer seats and NO coder seat, so
+        // wireSpawnedTeam can never substitute {coder} (it only matches
+        // def.role === 'coder'). The placeholder would survive into the
+        // installed standing order and the head would POST to a terminal
+        // literally named "{coder}" every round, failing silently.
+        assert.ok(!NEW_REVIEW_TEAM_HEAD_PROMPT.includes('{coder}'),
+            'NEW_REVIEW_TEAM_HEAD_PROMPT must not use {coder} — the Review team has no coder seat to substitute');
+        assert.ok(!reviewPreset.includes('{coder}'),
+            'Review team preset headPrompt must not use {coder} — the Review team has no coder seat to substitute');
     });
 
     await test('migrateAgentGroups repairs structure and never rewrites a persisted head prompt', () => {

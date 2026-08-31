@@ -25,3 +25,15 @@ No hard ordering; three independent defects on one path.
 
 **Related plan left standalone.** *Two reviewer-to-coder relays pass promptComposed true and strip the coder's seat safeguards* is in CREATED and so is not a subtask here, but it is the same suppression decision at two further call sites, and it also re-pins the audit gate meant to catch exactly this class of bug. Coding the fixStep subtask without it means two passes at the same logic and a gate re-pinned against a partial site inventory. Consider sequencing them together.
 
+
+## Review Findings
+
+All three subtasks reviewed in one pass against commit `efdd104f`. The feature's goal — the reviewer-to-coder relay stops stripping seat safeguards — is achieved: the delegation `fixStep` payload now carries `"seatBlock":false`, `originLead` is dropped when it shares no registered team with the reviewer on both the single-card and batch paths, and the reviewer prompt carries the plan-authority split, the inbound field-existence check (base + advanced) and the provisional-verdict clause. Two defects were found and fixed: a CRITICAL invented `{"name":"{coder}"}` payload in both Review-team head-prompt mirrors (the preset has no coder seat, so the placeholder could never substitute and the head would have POSTed to a terminal literally named `{coder}`), and a MAJOR regression where `reviewerCoderTerminal` was moved under the delegation gate, silently unwiring the mechanical pre-check gate and the Phone-a-Friend pre-review that also route to it. Two CI gates were left red by the coder or by unrelated refactors and are now green, and the plan-named `kanban-default-prompt-previews.test.js` was defined-but-never-invoked and is now wired into `.github/workflows/integration-tests.yml`. Full per-subtask findings and deferred items are in the three subtask plan files.
+
+## Deferred Findings
+
+- MAJOR — `src/services/teamWiring.ts:2385` `terminalsShareTeam` drops `originLead` when groups exist but no roster parses to strings (object-shaped legacy members); the conservative-keep only covers the no-groups case.
+- MAJOR — `src/services/TaskViewerProvider.ts:21941` `installReviewerCallbackOrder` is now gated on `coder && originLead`; a coder receiving mechanical-gate findings with delegation off reports to its lead rather than the reviewer.
+- MAJOR (external) — `src/test/standing-orders-marker-contract.test.js:753` cannot run against the current working tree, so the byte-identity gate for the two Review head-prompt mirrors could not be executed this pass; identity was verified by hand instead (1613 chars, identical). Caused by the uncommitted standing-orders-library WIP.
+- MAJOR (external) — `src/services/teamWiring.ts:1782` TS2345 and the `stage-marker-commit-contract` / `standing-orders-definitions-contract` failures are all owned by that same uncommitted WIP, not by this feature.
+- NIT — the cross-team guard drops the lead rather than resolving the reviewer's actual team lead; the plan's own Outstanding Question on that remains open.

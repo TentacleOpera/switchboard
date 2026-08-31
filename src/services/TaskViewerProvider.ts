@@ -21900,6 +21900,16 @@ Each plan file must include:
                 const coder = (ownTeam && ownTeam.length > 0)
                     ? await this.resolveTeamRoleTerminal(resolvedWorkspaceRoot, targetAgent, 'coder')
                     : (originLead ? await this.resolveTeamRoleTerminal(resolvedWorkspaceRoot, originLead, 'coder') : null);
+                // reviewerCoderTerminal is assigned as soon as a coder
+                // resolves, BEFORE the two lead guards below. It is not
+                // delegation-only state: the mechanical pre-check gate and the
+                // Phone-a-Friend pre-review both route their findings to it, and
+                // both run whether or not a lead survived the guards. Gating this
+                // assignment on originLead silently unwires those two paths.
+                // Delegation itself stays gated — see `coder && originLead`.
+                if (coder) {
+                    reviewerCoderTerminal = coder;
+                }
                 // Self-target guard: dispatched_terminal (what
                 // plausibleOriginTerminal returns) is the terminal the card was
                 // last dispatched TO — the dispatch TARGET, not the sender. On a
@@ -21910,7 +21920,7 @@ Each plan file must include:
                 // report to itself. Drop a self-or-coder-targeted lead; the
                 // three-way guard below then falls the reviewer back to
                 // fix-itself (the correct conservative outcome).
-                if (originLead && (originLead === targetAgent || originLead === coder)) {
+                if (originLead && (originLead === targetAgent || originLead === reviewerCoderTerminal)) {
                     originLead = undefined;
                 }
                 // Cross-team guard (new): originLead is the last dispatch TARGET, not
@@ -21931,7 +21941,6 @@ Each plan file must include:
                 }
                 if (coder && originLead) {
                     reviewerDelegationMode = true;
-                    reviewerCoderTerminal = coder;
                     // Install a pair-scoped callback override on the coder so
                     // it reports to the reviewer (not the lead) after
                     // completing fix instructions. Removed when the coder is

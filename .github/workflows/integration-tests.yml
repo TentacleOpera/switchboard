@@ -589,6 +589,14 @@ jobs:
       - name: Reviewer prompt anti-artifact contract (directive presence, completion handshake co-existence)
         run: npm run test:contract:reviewer-prompt
 
+      # The reviewer prompt's plan-authority split and inbound field-existence
+      # check are rendered, not just declared: this is the only gate that runs
+      # the preview builder in BOTH advancedReviewer states and can see the
+      # advanced-only grep protocol leak into the base steps (or vanish from
+      # the advanced ones). It shipped defined-but-never-invoked.
+      - name: Default prompt previews (reviewer plan-authority split + inbound field-existence check, both advanced states)
+        run: npm run test:contract:default-prompt-previews
+
       # A scheduled agent never moves a card. The canMoveCards checkbox was
       # deleted as inverted — unticked it restricted nothing, ticked it handed an
       # unattended 03:00 job the sanctioned card-move route with none of the

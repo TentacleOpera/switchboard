@@ -878,6 +878,7 @@
     "test:regression:plan-registry": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/plan-registry-reconciliation.test.js",
     "test:contract:scheduled-no-board-authority": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/scheduled-prompts-carry-no-board-authority.test.js",
     "test:contract:reviewer-prompt": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/reviewer-prompt-anti-artifact-contract.test.js",
+    "test:contract:default-prompt-previews": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/kanban-default-prompt-previews.test.js",
     "test:contract:reviewer-prompt-behaviour": "mocha --ui tdd --require ./src/test/bootstrap/sandboxStateHome.js out/services/__tests__/agentPromptBuilder.test.js",
     "test:contract:pty-host-gating": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-host-gating-contract.test.js",
     "test:contract:standalone-fleet-seam": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/standalone-fleet-seam-contract.test.js",
