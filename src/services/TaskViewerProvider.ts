@@ -2402,21 +2402,21 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     /**
-     * Returns the names of all alive coding terminals (lead or coder role),
-     * leads first then coders, sorted. Reads from the in-memory
-     * `_terminalAgentInfo` cache (populated at terminal creation time,
-     * workspace-agnostic) cross-referenced with `vscode.window.terminals` for
-     * VS Code terminals and `getFleetLiveness()` for PTY fleet terminals.
+     * Returns the names of all alive coding terminals (lead, coder or intern
+     * role), leads first, then coders, then interns, each group sorted.
+     *
+     * Reads `getFleetLiveness()` and NOTHING else. Teams are PTY-only, so the
+     * VS Code side of this resolver was removed: it no longer consults
+     * `_terminalAgentInfo` or `vscode.window.terminals`, and it therefore prunes
+     * nothing (`getActualTerminalAgentNames` remains that map's pruner). It also
+     * does NOT read the deprecated `.switchboard/state.json` — unlike
+     * `getAliveRoleTerminalNames`, which is invisible to PTY fleet terminals.
      *
      * This is the fallback resolver for queue dispatch without a team: when
      * `resolveCodingHeadFromGroups` finds no team head, this method finds any
-     * live coding terminal so the Run-queue button and `dispatchNextFromQueue`
-     * can proceed without a registered team. It does NOT read from the
-     * deprecated `.switchboard/state.json` (unlike `getAliveRoleTerminalNames`,
-     * which is invisible to PTY fleet terminals).
-     *
-     * Stale `_terminalAgentInfo` entries (terminal closed, not yet pruned) are
-     * pruned during iteration — same pattern as `getActualTerminalAgentNames`.
+     * live coding terminal so the Run-queue button, `dispatchNextFromQueue` and
+     * the scheduled queue pop can proceed without a registered team. Interns
+     * count — a grid whose only coding agent is an intern is still a live pool.
      */
     public getAliveCodingTerminalNames(): string[] {
         const fleetLiveness = this.getFleetLiveness();
@@ -11312,9 +11312,10 @@ Each plan file must include:
     private async _getAliveAutobanTerminalNames(
         role: string,
         workspaceRoot: string,
-        includeBackups: boolean = true
+        includeBackups: boolean = true,
+        opts?: { allowPtyFleet?: boolean }
     ): Promise<string[]> {
-        const aliveTerminals = await this._getAliveAutobanTerminalRegistry(workspaceRoot);
+        const aliveTerminals = await this._getAliveAutobanTerminalRegistry(workspaceRoot, opts);
         return this._getAliveAutobanTerminalNamesFromRegistry(role, aliveTerminals, includeBackups);
     }
 
@@ -11372,7 +11373,10 @@ Each plan file must include:
         const aliveEntries = Object.entries(aliveRegistry)
             .filter(([, info]) => this._normalizeAgentKey((info as any)?.role) === normalizedRole)
             .filter(([, info]) => !this._isAutobanBackupTerminalInfo(info))
-            .filter(([, info]) => !info?.hidden)
+            // Teams are PTY-only: a VS Code registry row is never an eligible seat here.
+            // (There is deliberately no `!info.hidden` filter — nothing in the codebase
+            // writes a `hidden` flag onto a terminal registry row, so such a filter would
+            // be inert while reading as if operator intent were being honoured.)
             .filter(([, info]) => this._isFleetTerminalInfo(info))
             .sort(([a], [b]) => a.localeCompare(b));
 
@@ -11427,7 +11431,12 @@ Each plan file must include:
         const resolvedRequestedName = typeof requestedName === 'string' ? requestedName.trim() : '';
         const roleLabel = this._getAutobanRoleLabel(normalizedRole);
 
-        const livePrimaryRoleTerminals = await this._getAliveAutobanTerminalNames(normalizedRole, workspaceRoot, false);
+        // allowPtyFleet: true is load-bearing now that this function creates ONLY PTY
+        // terminals. The default registry read drops every PTY row (it keeps a row on a
+        // VS Code pid/name match or a heartbeat, and PTY rows have neither), so without
+        // it the MAX_TERMINALS_PER_ROLE cap counts zero forever and never fires.
+        const livePrimaryRoleTerminals = await this._getAliveAutobanTerminalNames(
+            normalizedRole, workspaceRoot, false, { allowPtyFleet: true });
         if (livePrimaryRoleTerminals.length >= MAX_TERMINALS_PER_ROLE) {
             this._seams().ui.showWarningMessage(`${roleLabel} already has ${MAX_TERMINALS_PER_ROLE} terminals.`);
             return undefined;
@@ -11459,6 +11468,16 @@ Each plan file must include:
             role: normalizedRole,
             name: uniqueName,
             cwd: cwd || workspaceRoot,
+            // `worktreePath` is a SEPARATE field from `cwd` on the fleet handle
+            // (ptyFleetService.create's 4th argument) and it is the only thing the
+            // registry mirror carries into `worktreePath` on the row. Omitting it is
+            // not cosmetic: _findTerminalNameByWorktreePathAndRole matches on that
+            // field, so a worktree seat created without it is invisible to the
+            // create-if-missing guard in ensureWorktreeTerminals (a fresh terminal on
+            // every call), to the per-worktree role cap, and to worktree affinity in
+            // _resolveExactAgentTerminalForPlan. The VS Code path this replaced wrote
+            // `worktreePath: cwd || undefined` on the state row for exactly this reason.
+            worktreePath: cwd || undefined,
             claudeInlineRendering: vscode.workspace
                 .getConfiguration('switchboard')
                 .get<boolean>('terminal.claudeInlineRendering', true),
@@ -27699,7 +27718,17 @@ Each plan file must include:
                         outcome = 'kanban provider unavailable';
                     }
                 } else if (apiServer && typeof apiServer.dispatchNextFromQueue === 'function') {
-                    const headTerminal = (await this._kanbanProvider?.resolveCodingHeadFromGroups(wsRoot)) || '';
+                    let headTerminal = (await this._kanbanProvider?.resolveCodingHeadFromGroups(wsRoot)) || '';
+                    if (!headTerminal) {
+                        // No registered team head — fall back to any live coding seat.
+                        // getAliveCodingTerminalNames() reads getFleetLiveness() ONLY, so
+                        // this is a PTY-only fallback (it cannot reach a VS Code terminal)
+                        // and it now includes interns: a grid whose only coding agent is an
+                        // intern still pops the queue instead of reporting "no coding
+                        // terminal live". Teams are not required to run the schedule.
+                        const codingTerminals = this.getAliveCodingTerminalNames();
+                        if (codingTerminals.length > 0) { headTerminal = codingTerminals[0]; }
+                    }
                     if (!headTerminal) {
                         outcome = 'no coding terminal live';
                     } else {

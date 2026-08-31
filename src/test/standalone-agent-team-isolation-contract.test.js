@@ -310,5 +310,54 @@ test('TaskViewerProvider fleet-verb seam populates _ptyTerminalNames and _ptyLiv
     );
 });
 
+// `functionBody` brace-walks from the FIRST `{` after the header, and this
+// method's return type is an inline object literal
+// (`Promise<{ role: string; name: string } | undefined>`) — so it would extract
+// the return type and assert against nothing. Slice to the next member instead.
+function createAutobanTerminalBody() {
+    const header = 'private async _createAutobanTerminal(';
+    const start = taskViewerTs.indexOf(header);
+    assert.ok(start >= 0, 'could not find _createAutobanTerminal — the test needs updating, not the guard removing');
+    const end = taskViewerTs.indexOf('\n    private ', start + header.length);
+    assert.ok(end > start, 'could not find the end of _createAutobanTerminal');
+    const body = taskViewerTs.slice(start, end);
+    assert.ok(/ptyCreateTerminal/.test(body), 'the extracted body must contain the PTY create call');
+    return body;
+}
+
+console.log('\n--- PTY seats keep their worktree identity ---');
+
+test('_createAutobanTerminal passes worktreePath to ptyCreateTerminal, not just cwd', () => {
+    const body = createAutobanTerminalBody();
+    assert.ok(
+        /ptyCreateTerminal[\s\S]*?worktreePath:\s*cwd/.test(body),
+        'the ptyCreateTerminal payload must carry worktreePath — cwd alone leaves the registry row '
+        + 'without one, and _findTerminalNameByWorktreePathAndRole (the create-if-missing guard in '
+        + 'ensureWorktreeTerminals, the per-worktree role cap, and worktree affinity) matches on that field'
+    );
+});
+
+test('the per-role terminal cap can see the PTY rows this path creates', () => {
+    const body = createAutobanTerminalBody();
+    assert.ok(
+        /_getAliveAutobanTerminalNames\([\s\S]{0,160}?allowPtyFleet:\s*true/.test(body),
+        'MAX_TERMINALS_PER_ROLE must be counted with allowPtyFleet: true — the default registry read '
+        + 'drops every PTY row, so the cap would count zero forever'
+    );
+});
+
+test('_selectAutobanTerminal filters on the fleet flag, not on an unwritten `hidden` field', () => {
+    const body = functionBody(taskViewerTs, 'private async _selectAutobanTerminal(');
+    assert.ok(
+        /_isFleetTerminalInfo\(info\)/.test(body),
+        'team seat selection must be PTY-only'
+    );
+    assert.ok(
+        !/info\?\.hidden/.test(body),
+        'nothing in the codebase writes a `hidden` flag onto a terminal registry row — a filter on it '
+        + 'is inert while reading as if operator intent were honoured'
+    );
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) { process.exit(1); }

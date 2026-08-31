@@ -27,3 +27,19 @@ PTY-only lands first: it narrows the pool that complexity routing then degrades 
 
 Team automation now resolves and delivers exclusively through live PTY seats across extension and standalone hosts, with explicit failure when no eligible seat exists. Complexity routing preserves the preferred tier but degrades bidirectionally through live, visible PTY roles, including `recommendedRole` and single-agent cases. Team startup now reports roles missing startup commands while preserving non-fatal spawn behavior. Verification for this run used full diff review and whitespace checks; automated tests and compilation were skipped by directive.
 
+
+## Review Findings
+
+Reviewed commit `6db5751` across all three subtasks. The feature goal — seat resolution that either lands on a real PTY seat or says why not — is achieved, with two defects fixed in this pass: `_createAutobanTerminal` was omitting `worktreePath` from the `ptyCreateTerminal` payload (leaving every worktree seat unmatched by `_findTerminalNameByWorktreePathAndRole`, so `ensureWorktreeTerminals` would have spawned a fresh terminal on every call with the per-worktree cap also blind), and the scheduled queue pop's teamless coding-head fallback had been deleted outright rather than narrowed to PTY, which broke the feature's own headline case of a single live coding agent taking everything. Also fixed: the `MAX_TERMINALS_PER_ROLE` cap was counting a registry read that drops all PTY rows, a `!info.hidden` filter that no writer in the codebase populates, and a `getAliveCodingTerminalNames` docblock left describing the VS Code cross-reference the commit removed. Files changed: `src/services/TaskViewerProvider.ts`, `src/test/queue-pipeline-contract.test.js`, `src/test/standalone-agent-team-isolation-contract.test.js`. Verification: `tsc -p tsconfig.test.json` clean, `eslint` 0 errors on changed files, `standalone-parity:check` and `host-seam-parity:check` green, and nine CI-wired contract suites green including the four new mutation-verified guards; the core PTY-vs-VS-Code creation behaviour still has only source-text discriminators and the manual checks were not executed, so that half of the verdict is provisional.
+
+## Deferred Findings
+
+- MAJOR — `.github/workflows/integration-tests.yml` — `npm test` (vscode-test) is not invoked by any CI job, so `src/test/kanban-complexity.test.ts` (the commit's only coverage of `resolveAutoDispatchColumn` degradation, hidden-column refusal and pair-mode refusal) never runs in CI.
+- MAJOR — `src/services/KanbanProvider.ts:1626` — `resolveRoutedRole`'s default-on degradation ignores column visibility while the other two degradation sites honour it, so `recommendedRole` can name a role dispatch will refuse.
+- MAJOR — `src/services/KanbanProvider.ts:1363`, `:2332` — `codingHeadLive` still excludes intern-headed teams although `resolveCodingHeadFromGroups` now returns them.
+- MAJOR — `src/services/TaskViewerProvider.ts:11374` — `_selectAutobanTerminal`'s PTY filter is unconditional rather than fleet-gated, so a fleet-less install selects no autoban terminal at all.
+- NIT — `src/services/TaskViewerProvider.ts:11411` — `_createAutobanTerminal`'s `reveal` parameter is now unused; new terminals are never focused.
+- NIT — `src/services/TaskViewerProvider.ts:11497` — `setTerminalAgentInfo` writes an unsuffixed key that `getActualTerminalAgentNames()` prunes on its next call.
+- NIT — `src/services/TaskViewerProvider.ts:27543` — `_ensureSurvivorTerminal` still creates a VS Code terminal ungated (scheduler job seat, not a team role).
+- NIT — `src/services/KanbanProvider.ts:1625` — the live-pool read happens before the `degradeLivePool` flag is tested.
+- NIT — `src/services/agentGroupInstantiation.ts:184` — `instantiateExternalHeadedTeam` does not report `commandlessRoles`, so externally-headed teams still start commandless members silently.

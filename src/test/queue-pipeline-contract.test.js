@@ -24,6 +24,7 @@ require(path.join(process.cwd(), 'src', 'test', 'bootstrap', 'sandboxStateHome.j
 
 const { LocalApiServer } = require(path.join(process.cwd(), 'out', 'services', 'LocalApiServer.js'));
 const { applyStandingOrders } = require(path.join(process.cwd(), 'out', 'services', 'standingOrders.js'));
+const { resolveRoleWithDegradation } = require(path.join(process.cwd(), 'out', 'services', 'complexityScale.js'));
 
 let failures = 0;
 async function check(name, fn) {
@@ -1236,6 +1237,59 @@ async function run() {
             'the released=true notice must say "will be re-staged to a stronger seat"');
         assert.ok(/could not be released/.test(block),
             'the released=false notice must say "could not be released" — the now-false "will be re-staged" claim must not repeat');
+    });
+
+    // ── Complexity routing degrades across the live pool ──────────────────
+    //
+    // The only other coverage of this function lives in
+    // src/test/kanban-complexity.test.ts, which runs under `npm test`
+    // (vscode-test) — a script no CI workflow invokes. Without these
+    // assertions the degradation ladder is unguarded in CI.
+
+    await check('resolveRoleWithDegradation returns the preferred role when it is live', () => {
+        for (const r of ['intern', 'coder', 'lead']) {
+            assert.strictEqual(resolveRoleWithDegradation(r, new Set(['intern', 'coder', 'lead'])), r);
+            assert.strictEqual(resolveRoleWithDegradation(r, new Set([r])), r);
+        }
+    });
+
+    await check('resolveRoleWithDegradation degrades outward, upward first', () => {
+        // intern prefers up
+        assert.strictEqual(resolveRoleWithDegradation('intern', new Set(['coder'])), 'coder');
+        assert.strictEqual(resolveRoleWithDegradation('intern', new Set(['lead'])), 'lead');
+        assert.strictEqual(resolveRoleWithDegradation('intern', new Set(['coder', 'lead'])), 'coder');
+        // lead degrades down
+        assert.strictEqual(resolveRoleWithDegradation('lead', new Set(['coder'])), 'coder');
+        assert.strictEqual(resolveRoleWithDegradation('lead', new Set(['intern'])), 'intern');
+        assert.strictEqual(resolveRoleWithDegradation('lead', new Set(['coder', 'intern'])), 'coder');
+        // coder is equidistant — the upward bias breaks the tie
+        assert.strictEqual(resolveRoleWithDegradation('coder', new Set(['lead', 'intern'])), 'lead');
+        assert.strictEqual(resolveRoleWithDegradation('coder', new Set(['intern'])), 'intern');
+        assert.strictEqual(resolveRoleWithDegradation('coder', new Set(['lead'])), 'lead');
+    });
+
+    await check('resolveRoleWithDegradation returns null on an empty pool, never a guess', () => {
+        for (const r of ['intern', 'coder', 'lead']) {
+            assert.strictEqual(resolveRoleWithDegradation(r, new Set()), null);
+        }
+        assert.strictEqual(resolveRoleWithDegradation('coder', undefined), null);
+        // A single live agent takes everything — the feature's headline case.
+        assert.strictEqual(resolveRoleWithDegradation('intern', new Set(['lead'])), 'lead');
+        assert.strictEqual(resolveRoleWithDegradation('lead', new Set(['intern'])), 'intern');
+    });
+
+    await check('the scheduled queue pop still falls back to a live coding seat without a team', () => {
+        const fs = require('fs');
+        const provider = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'TaskViewerProvider.ts'), 'utf8');
+        const i = provider.indexOf('typeof apiServer.dispatchNextFromQueue');
+        assert.ok(i > 0, 'the scheduled queue-pop branch must exist');
+        const block = provider.slice(i, provider.indexOf('dispatchNextFromQueue({', i));
+        assert.ok(/resolveCodingHeadFromGroups/.test(block),
+            'the pop must prefer a registered team head');
+        assert.ok(/getAliveCodingTerminalNames\(\)/.test(block),
+            'the pop must fall back to any live coding seat — a teamless PTY grid still pops the queue');
+        assert.ok(!/getAliveRoleTerminalNames/.test(block),
+            'the fallback must not reach the deprecated state.json registry (invisible to PTY seats)');
     });
 
     console.log('');
