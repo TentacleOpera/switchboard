@@ -533,6 +533,14 @@ function shortPrefix(planId: string): string {
  * matching. Returns the full planId, or null if no match, or an array of
  * candidates if the prefix is ambiguous.
  */
+/** Extract plan array from /kanban/plans API response (handles { data: [...] } and raw arrays). */
+function extractPlans(raw: any): any[] {
+    if (Array.isArray(raw)) { return raw; }
+    if (Array.isArray(raw?.data)) { return raw.data; }
+    if (Array.isArray(raw?.plans)) { return raw.plans; }
+    return [];
+}
+
 async function resolvePrefix(port: number, workspaceRoot: string, prefix: string): Promise<{ planId: string } | { ambiguous: string[] } | null> {
     // If it's already a full UUID, return it directly.
     if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(prefix)) {
@@ -544,8 +552,8 @@ async function resolvePrefix(port: number, workspaceRoot: string, prefix: string
     }
     const res = await apiGet(port, '/kanban/plans', workspaceRoot);
     if (res.status !== 200) { return null; }
-    const plans = res.json();
-    if (!Array.isArray(plans)) { return null; }
+    const plans = extractPlans(res.json());
+    if (plans.length === 0) { return null; }
     const matches: string[] = [];
     for (const p of plans) {
         const pid = String(p?.planId || '');
@@ -941,8 +949,7 @@ async function cmdPlans(workspaceRoot: string, argv: string[]): Promise<void> {
         exitFlushed(1);
     }
 
-    let plans = res.json();
-    if (!Array.isArray(plans)) { plans = []; }
+    let plans = extractPlans(res.json());
 
     // Client-side filters (matching the Mission Control protocol's jq).
     // Subtasks (featureId !== '') are excluded from the ready/dispatch view but
@@ -1019,8 +1026,8 @@ async function cmdReady(workspaceRoot: string, argv: string[]): Promise<void> {
             exitFlushed(4);
         }
         if (res.status === 200) {
-            const plans = res.json();
-            if (Array.isArray(plans)) { readyPlans.push(...plans); }
+            const plans = extractPlans(res.json());
+            readyPlans.push(...plans);
         }
     }
 
@@ -1160,8 +1167,8 @@ async function cmdDispatch(workspaceRoot: string, argv: string[]): Promise<void>
     if (project) {
         const plansRes = await apiGet(port, '/kanban/plans', workspaceRoot);
         if (plansRes.status === 200) {
-            const plans = plansRes.json();
-            const plan = Array.isArray(plans) ? plans.find((p: any) => p?.planId === planId) : null;
+            const plans = extractPlans(plansRes.json());
+            const plan = plans.find((p: any) => p?.planId === planId);
             if (plan && String(plan.project ?? '') !== project) {
                 if (jsonFlag) { emitJson({ success: false, error: `Plan ${shortPrefix(planId)} is in project '${plan.project ?? ''}', not '${project}'` }); }
                 else { console.error(`[switchboard] Plan ${shortPrefix(planId)} is in project '${plan.project ?? ''}', not '${project}'.`); }
@@ -1466,8 +1473,8 @@ async function cmdBoardConsole(workspaceRoot: string): Promise<void> {
     try {
         const plansRes = await apiGet(port, '/kanban/plans', workspaceRoot);
         if (plansRes.status === 200) {
-            const plans = plansRes.json();
-            if (Array.isArray(plans)) {
+            const plans = extractPlans(plansRes.json());
+            if (plans.length > 0) {
                 const colCounts: Record<string, number> = {};
                 for (const p of plans) {
                     const col = String(p?.kanbanColumn || '?');
@@ -1516,8 +1523,8 @@ async function cmdBoardConsole(workspaceRoot: string): Promise<void> {
                         console.error(`[switchboard] Could not fetch plans (HTTP ${plansRes.status}).`);
                         exitFlushed(1);
                     }
-                    const plans = plansRes.json();
-                    if (!Array.isArray(plans) || plans.length === 0) {
+                    const plans = extractPlans(plansRes.json());
+                    if (plans.length === 0) {
                         console.log('[switchboard] No cards on the board.');
                         exitFlushed(0);
                     }
@@ -1559,8 +1566,7 @@ async function cmdBoardConsole(workspaceRoot: string): Promise<void> {
                     if (q === null || q === '') { exitFlushed(0); }
                     const plansRes = await apiGet(port, '/kanban/plans', workspaceRoot);
                     if (plansRes.status !== 200) { console.error(`[switchboard] Could not fetch plans (HTTP ${plansRes.status}).`); exitFlushed(1); }
-                    let plans = plansRes.json();
-                    if (!Array.isArray(plans)) { plans = []; }
+                    const plans = extractPlans(plansRes.json());
                     const ql = q.toLowerCase();
                     const matches = plans.filter((p: any) => {
                         return String(p?.title || '').toLowerCase().includes(ql)
