@@ -228,11 +228,14 @@ function run() {
         'cmdMainMenu must exit 0 on a non-TTY — a piped or cron bare invocation must not block on a prompt.'
     );
     // The board console keeps its own no-server backstop for the probe→select race.
+    // The backstop now routes through the shared emitOfflineGuidance helper
+    // (which itself calls exitFlushed(1)) — the literal exitFlushed(1) lives in
+    // the helper, not at the call site, so the regex accepts either form.
     const console_ = cli.slice(cli.indexOf('async function cmdBoardConsole('), cli.indexOf('async function main()'));
     assert.match(
         console_,
-        /const port = await findRunningInstance\(workspaceRoot\);\s*if \(port === null\) \{[\s\S]{0,400}?exitFlushed\(1\);/,
-        'cmdBoardConsole must keep its findRunningInstance + exitFlushed(1) backstop.'
+        /const port = await findRunningInstance\(workspaceRoot\);\s*if \(port === null\) \{[\s\S]{0,400}?(exitFlushed\(1\);|emitOfflineGuidance\()/,
+        'cmdBoardConsole must keep its findRunningInstance + exit-1 backstop (directly or via emitOfflineGuidance).'
     );
 
     // Every branch that starts something re-spawns this file with a real
@@ -243,39 +246,94 @@ function run() {
     // and a bare argv has no 'setup' token to rewrite — so an in-process call
     // makes every wizard choice a no-op that then falls through to the serve
     // path and silently starts a board instead.
+    //
+    // The adaptive menu has two render branches keyed on findRunningInstance:
+    //   • Offline — 5-option triage (local, tailnet, setup, help, status).
+    //     [1]/[2] re-spawn [__filename, serveSub] in the foreground; the
+    //     operator explicitly chose to start a board, so the child runs the
+    //     full serve path inheriting the TTY (NOT --detach — a detached spawn
+    //     would orphan the operator from the board they just asked to start).
+    //     [3]/[4]/[5] re-spawn setup / help / status.
+    //   • Online — 4-option menu (board console, setup, help, diagnostics).
+    //     [1] calls cmdBoardConsole in-process (no spawn — matches the previous
+    //     CLI Mode handoff); [2]/[3]/[4] re-spawn setup / help / status.
     const respawns = [...menu.matchAll(/spawn\(process\.execPath, \[__filename, ([^\]]*)\]/g)].map(m => m[1]);
     assert.ok(
-        respawns.length >= 3,
-        `cmdMainMenu must re-spawn itself for GUI serve, CLI auto-start and Setup; found ${respawns.length}.`
+        respawns.length >= 5,
+        `cmdMainMenu must re-spawn itself for local, tailnet, setup, help and status; found ${respawns.length}.`
     );
     assert.ok(
         respawns.some(a => /^serveSub$/.test(a.trim())),
-        'GUI mode must re-spawn [__filename, serveSub] — the whole serve path lives inline in main(), '
-        + 'there is no cmdLocal/cmdTailnet to call.'
+        'Offline [1]/[2] must re-spawn [__filename, serveSub] — the whole serve path lives inline in '
+        + "main(), there is no cmdLocal/cmdTailnet to call."
     );
     assert.match(
         menu,
-        /serveSub = sub === '1' \? 'local' : 'tailnet'/,
-        "GUI mode must map its two choices onto the 'local' and 'tailnet' subcommands."
+        /serveSub = answer === '1' \? 'local' : 'tailnet'/,
+        "Offline branch must map its two choices onto the 'local' and 'tailnet' subcommands."
     );
     assert.ok(
-        respawns.some(a => a.includes("'local'") && a.includes("'--detach'")),
-        "CLI mode's offline auto-start must re-spawn [__filename, 'local', '--detach'] — a foreground "
-        + 'spawn would turn the menu process into the server and the board console would never appear.'
+        !respawns.some(a => a.includes("'--detach'")),
+        "Offline [1] must re-spawn [__filename, 'local'] in the foreground (stdio: 'inherit') — NOT "
+        + "'--detach'. The operator explicitly chose to start a board; a detached spawn orphans them "
+        + 'from the board they just asked to start, and the single-track auto-start path is gone.'
     );
     assert.ok(
         respawns.some(a => a.trim() === "'setup'"),
         "Setup must re-spawn [__filename, 'setup'] rather than calling cmdSetup() in-process."
     );
-    // The auto-start child inherits stdin (stdio: 'inherit') and may render
-    // firstRunDatabaseMenu on the same TTY, so the menu's own readline must be
-    // closed before the spawn — two interfaces on one tty split the keystrokes.
-    const autoStart = menu.slice(menu.indexOf('Server is offline.'), menu.indexOf("'--detach'"));
-    assert.match(
-        autoStart,
-        /prompter\.close\(\);/,
-        'cmdMainMenu must close its prompter BEFORE spawning the auto-start child that inherits stdin.'
+    assert.ok(
+        respawns.some(a => a.trim() === "'help'"),
+        "Help must re-spawn [__filename, 'help'] — the front door offers it as a top-level option."
     );
+    assert.ok(
+        respawns.some(a => a.trim() === "'status'"),
+        "Status/diagnostics must re-spawn [__filename, 'status'] — the front door offers it as a "
+        + 'top-level option.'
+    );
+    // The single-track "Start local server now? [Y/n]" prompt is gone — the
+    // adaptive menu offers an explicit [1] Start Local Board instead.
+    assert.ok(
+        !/Start local (board )?server now\?/.test(menu),
+        'cmdMainMenu must NOT contain the single-track "Start local server now?" prompt — the adaptive '
+        + 'menu replaces it with an explicit [1] Start Local Board option.'
+    );
+    // The offline branch renders all five triage labels.
+    for (const label of [
+        'Start Local Board',
+        'Start Remote Tailnet Board',
+        'Setup & Scaffolding Wizard',
+        'Help & Command Documentation',
+        'Server Status & Diagnostics',
+    ]) {
+        assert.ok(
+            menu.includes(label),
+            `cmdMainMenu offline branch must render the "${label}" triage option.`
+        );
+    }
+    // The online branch must survive too — a regex that only checks the offline
+    // 5-option labels would pass if the online branch were accidentally deleted.
+    assert.ok(
+        menu.includes('Open Board Console'),
+        'cmdMainMenu online branch must render the "Open Board Console" entry — the local-development '
+        + 'scenario (a running server) is served by handing off to cmdBoardConsole.'
+    );
+    // Every spawn in cmdMainMenu that inherits stdin is preceded by
+    // prompter.close() — the child may render firstRunDatabaseMenu on the same
+    // TTY, and two readline interfaces reading one tty split the operator's
+    // keystrokes between them.
+    for (const m of menu.matchAll(/spawn\(process\.execPath, \[__filename, [^\]]*\], \{ stdio: 'inherit' \}\);/g)) {
+        const spawnAt = m.index;
+        // Walk backwards from the spawn to the preceding prompter.ask(...) and
+        // assert a prompter.close() sits between them (closer to the spawn).
+        const askAt = menu.lastIndexOf('prompter.ask(', spawnAt);
+        const closeAt = menu.lastIndexOf('prompter.close();', spawnAt);
+        assert.ok(
+            closeAt > askAt,
+            `cmdMainMenu must close its prompter BEFORE the stdio:'inherit' spawn at offset ${spawnAt} `
+            + '— two readline interfaces on one tty split the keystrokes.'
+        );
+    }
     assert.ok(
         !/\bawait cmdSetup\(/.test(menu),
         'cmdMainMenu must NOT call cmdSetup() in-process: cmdSetup returns after an argv rewrite that '
@@ -297,6 +355,44 @@ function run() {
             + 'argv-rewrite handoff depends on it, and the front door re-spawns precisely because it does.'
         );
     }
+
+    // ── 11. Shared offline guidance — every board command emits the same
+    //        multi-scenario message from one helper, not a terse one-liner. ──
+    // Plan: .switchboard/plans/context-aware-offline-front-door-and-triage-in-cli.md
+    assert.match(
+        cli,
+        /function emitOfflineGuidance\(jsonFlag: boolean\): never \{/,
+        'cli.ts must define a shared emitOfflineGuidance(jsonFlag) helper.'
+    );
+    assert.match(
+        cli,
+        /hints: OFFLINE_HINTS,/,
+        'emitOfflineGuidance --json payload must include a hints array (additive — existing '
+        + 'success/error consumers are unaffected).'
+    );
+    const guidanceHints = cli.match(/const OFFLINE_HINTS = \[([\s\S]*?)\];/);
+    assert.ok(guidanceHints, 'OFFLINE_HINTS array must be defined.');
+    assert.ok(
+        /'switchboard local'/.test(guidanceHints[1]) && /'switchboard tailnet'/.test(guidanceHints[1])
+            && /'switchboard setup'/.test(guidanceHints[1]) && /'switchboard help'/.test(guidanceHints[1]),
+        'OFFLINE_HINTS must carry all four recovery suggestions (local, tailnet, setup, help).'
+    );
+    for (const cmd of ['cmdPlans', 'cmdReady', 'cmdDispatch', 'cmdClear', 'cmdFleet', 'cmdBoardConsole']) {
+        const fnStart = cli.indexOf(`async function ${cmd}(`);
+        assert.ok(fnStart > 0, `cli.ts must define ${cmd}.`);
+        const fnEnd = cli.indexOf('async function ', fnStart + 1);
+        const body = cli.slice(fnStart, fnEnd > 0 ? fnEnd : undefined);
+        assert.ok(
+            body.includes('emitOfflineGuidance('),
+            `${cmd} must call the shared emitOfflineGuidance helper when findRunningInstance returns null.`
+        );
+    }
+    // The CLI banner tagline is "Agent Fleet Command" (renamed from
+    // "Autonomous Agent Fleet Console").
+    assert.ok(
+        /Agent Fleet Command/.test(cli) && !/Autonomous Agent Fleet Console/.test(cli),
+        'cli.ts banner tagline must be "Agent Fleet Command", not "Autonomous Agent Fleet Console".'
+    );
 
     console.log('cli board commands contract test passed');
 }

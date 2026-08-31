@@ -259,6 +259,41 @@ function emitJson(payload: unknown): void {
 }
 
 /**
+ * Shared multi-scenario offline guidance emitted by every board command
+ * (`cmdPlans`, `cmdReady`, `cmdDispatch`, `cmdClear`, `cmdFleet`,
+ * `cmdBoardConsole`) when `findRunningInstance` returns null. Replaces the old
+ * terse one-liner that biased toward local loopback. The `--json` form gains a
+ * `hints` array (additive — existing `success`/`error` consumers are
+ * unaffected) so programmatic clients can surface recovery suggestions.
+ *
+ * Always exits 1, matching the previous one-liner path's exit code.
+ */
+const OFFLINE_HINTS = [
+    'switchboard local',
+    'switchboard tailnet',
+    'switchboard setup',
+    'switchboard help',
+];
+function emitOfflineGuidance(jsonFlag: boolean): never {
+    if (jsonFlag) {
+        emitJson({
+            success: false,
+            error: 'No running Switchboard instance',
+            hints: OFFLINE_HINTS,
+        });
+    } else {
+        console.error('[switchboard] No running Switchboard instance found for this workspace.');
+        console.error('');
+        console.error('How to resolve:');
+        console.error('  • Local use:    Run `switchboard local` to serve the board on this machine.');
+        console.error('  • Remote use:   Run `switchboard tailnet` to serve across your Tailscale network.');
+        console.error('  • First run:    Run `switchboard setup` to initialize this repository.');
+        console.error('  • Help & info:  Run `switchboard help` to see all commands and options.');
+    }
+    return exitFlushed(1);
+}
+
+/**
  * Size cap before the active log file is rotated to `server.log.1`.
  *
  * 10 MiB is enough for a multi-day orchestration run of startup banners,
@@ -872,7 +907,7 @@ function banner(version: string): string {
     return [
         '       .---.',
         " _...-'     '-..._       SWITCHBOARD v" + version,
-        '.-~  ●   ●   ●   ●  ~-.   Autonomous Agent Fleet Console',
+        '.-~  ●   ●   ●   ●  ~-.   Agent Fleet Command',
         '(________________________)',
         '      \\   :    :   /       https://github.com/TentacleOpera/switchboard',
         '       \\  :    :  /        Host: Standalone (' + process.platform + ' ' + process.arch + ')',
@@ -965,9 +1000,7 @@ async function cmdPlans(workspaceRoot: string, argv: string[]): Promise<void> {
 
     const port = await findRunningInstance(workspaceRoot);
     if (port === null) {
-        if (jsonFlag) { emitJson({ success: false, error: 'No running Switchboard instance' }); }
-        else { console.error('[switchboard] No running Switchboard instance for this workspace.'); }
-        exitFlushed(1);
+        emitOfflineGuidance(jsonFlag);
     }
 
     const query: Record<string, string> = {};
@@ -1046,9 +1079,7 @@ async function cmdReady(workspaceRoot: string, argv: string[]): Promise<void> {
 
     const port = await findRunningInstance(workspaceRoot);
     if (port === null) {
-        if (jsonFlag) { emitJson({ success: false, error: 'No running Switchboard instance' }); }
-        else { console.error('[switchboard] No running Switchboard instance for this workspace.'); }
-        exitFlushed(1);
+        emitOfflineGuidance(jsonFlag);
     }
 
     // Fetch plans from both ready columns and merge.
@@ -1173,9 +1204,7 @@ async function cmdDispatch(workspaceRoot: string, argv: string[]): Promise<void>
 
     const port = await findRunningInstance(workspaceRoot);
     if (port === null) {
-        if (jsonFlag) { emitJson({ success: false, error: 'No running Switchboard instance' }); }
-        else { console.error('[switchboard] No running Switchboard instance for this workspace.'); }
-        exitFlushed(1);
+        emitOfflineGuidance(jsonFlag);
     }
 
     // Resolve prefix to full planId.
@@ -1240,9 +1269,7 @@ async function cmdClear(workspaceRoot: string, argv: string[]): Promise<void> {
 
     const port = await findRunningInstance(workspaceRoot);
     if (port === null) {
-        if (jsonFlag) { emitJson({ success: false, error: 'No running Switchboard instance' }); }
-        else { console.error('[switchboard] No running Switchboard instance for this workspace.'); }
-        exitFlushed(1);
+        emitOfflineGuidance(jsonFlag);
     }
 
     const targets: string[] = [];
@@ -1291,9 +1318,7 @@ async function cmdFleet(workspaceRoot: string, argv: string[]): Promise<void> {
 
     const port = await findRunningInstance(workspaceRoot);
     if (port === null) {
-        if (jsonFlag) { emitJson({ success: false, error: 'No running Switchboard instance' }); }
-        else { console.error('[switchboard] No running Switchboard instance for this workspace.'); }
-        exitFlushed(1);
+        emitOfflineGuidance(jsonFlag);
     }
 
     let health: Awaited<ReturnType<typeof getHealthJson>>;
@@ -1462,7 +1487,7 @@ async function cmdSetup(workspaceRoot: string, argv: string[]): Promise<void> {
     }
 
     const version = readVersion();
-    console.log(banner(version).replace('Autonomous Agent Fleet Console', 'Workspace & Scaffolding Wizard'));
+    console.log(banner(version).replace('Agent Fleet Command', 'Workspace & Scaffolding Wizard'));
     console.log('  [1] Initialize Switchboard in this repository (rules, skills, constitution, workflows)');
     console.log('  [2] Scaffold Multi-Repo Control Plane (link & group multiple repos)');
     console.log('  [3] Detect & Migrate Existing Sub-Repos');
@@ -1503,12 +1528,17 @@ async function cmdSetup(workspaceRoot: string, argv: string[]): Promise<void> {
 /**
  * `switchboard` (bare, interactive TTY) — top-level front-door menu.
  *
- * Always presents the Main Menu (GUI / CLI / Setup / Exit) regardless of
- * whether a server is running. GUI mode re-spawns the process with the
- * `local`/`tailnet` subcommand (reusing the entire existing serve path);
- * CLI mode launches the board console when a server is online, or offers to
- * boot a detached local server on demand. Non-TTY invocations exit 0 with
- * usage so a piped/cron bare call never hangs.
+ * Adaptive: the option set changes based on whether a Switchboard instance is
+ * answering `/health`. Offline presents a 5-option triage menu (local, tailnet,
+ * setup, help, diagnostics) that gives equal weight to first-time, remote, and
+ * local-development scenarios instead of biasing toward a single loopback
+ * prompt. Online presents a 4-option menu (board console, setup, help,
+ * diagnostics) — serve options are omitted because starting a second server is
+ * not the online operator's need. Every writing branch re-spawns this file with
+ * a real subcommand (reusing the entire existing serve / setup / help / status
+ * path); the online `[1]` calls `cmdBoardConsole` in-process, matching the
+ * previous CLI Mode handoff. Non-TTY invocations exit 0 with usage so a
+ * piped/cron bare call never hangs.
  */
 async function cmdMainMenu(workspaceRoot: string): Promise<void> {
     // Non-TTY guard: a piped/cron bare invocation has no menu to show.
@@ -1523,127 +1553,103 @@ async function cmdMainMenu(workspaceRoot: string): Promise<void> {
 
     for (;;) {
         // Probe server status once per loop iteration so a server that
-        // started/stopped between renders is reflected.
+        // started/stopped between renders is reflected. The probe result is
+        // trusted for both the branch decision and the action — re-probing
+        // between render and selection would race a state change and ship a
+        // mismatched menu/action.
         const port = await findRunningInstance(workspaceRoot);
+        const online = port !== null;
 
         console.log(banner(version));
-        console.log(`  Active Server:    ${port !== null ? `Online: http://127.0.0.1:${port}` : 'Offline'}`);
         console.log(`  Workspace:        ${workspaceRoot}`);
+        console.log(`  Server Status:    ${online ? `Online: http://127.0.0.1:${port}` : 'Offline (No active Switchboard instance detected)'}`);
         console.log('');
-        console.log('MAIN MENU:');
-        console.log('  [1] GUI Mode  — Start Local (127.0.0.1) or Remote Tailnet Board');
-        console.log('  [2] CLI Mode  — Interactive Terminal Board Navigator (Plans, Fleet, Dispatch)');
-        console.log('  [3] Setup     — Workspace & Multi-Repo Scaffolding Wizard');
-        console.log('  [q] Exit (or Enter)');
-        console.log('');
+        console.log('OPTIONS:');
+        if (online) {
+            console.log('  [1] Open Board Console (CLI navigator — browse columns, search, dispatch)');
+            console.log('  [2] Setup & Scaffolding Wizard (init, multi-repo scaffold, secrets)');
+            console.log('  [3] Help & Command Documentation (view CLI command manual)');
+            console.log('  [4] Server Status & Diagnostics (inspect ports, tokens, logs)');
+            console.log('  [q] Exit (or Enter)');
+            console.log('');
+        } else {
+            console.log('  [1] Start Local Board (127.0.0.1 loopback — this machine only)');
+            console.log('  [2] Start Remote Tailnet Board (Tailscale mesh — iPad/phone/remote access)');
+            console.log('  [3] Setup & Scaffolding Wizard (init, multi-repo scaffold, secrets)');
+            console.log('  [4] Help & Command Documentation (view CLI command manual)');
+            console.log('  [5] Server Status & Diagnostics (inspect ports, tokens, logs)');
+            console.log('  [q] Exit (or Enter)');
+            console.log('');
+        }
 
         const prompter = openPrompter();
         try {
             const onSigInt = (): void => { prompter.close(); exitFlushed(0); };
             process.once('SIGINT', onSigInt);
-            const answer = await prompter.ask('Select an option [1-3/q]: ');
+            const answer = await prompter.ask(online ? 'Select an option [1-4/q]: ' : 'Select an option [1-5/q]: ');
             process.removeListener('SIGINT', onSigInt);
 
             if (answer === null || answer === '' || answer === 'q') {
                 exitFlushed(0);
             }
 
-            if (answer === '1') {
-                // GUI Mode — sub-prompt for local or tailnet, then re-spawn.
-                for (;;) {
-                    console.log('');
-                    console.log('  GUI Mode:');
-                    console.log('    [1] switchboard local   (serve the loopback board)');
-                    console.log('    [2] switchboard tailnet  (serve loopback AND your tailnet)');
-                    console.log('    [q] Back to Main Menu');
-                    const sub = await prompter.ask('  Select [1-2/q]: ');
-                    if (sub === null || sub === '' || sub === 'q') { break; }
-                    if (sub === '1' || sub === '2') {
-                        const serveSub = sub === '1' ? 'local' : 'tailnet';
-                        prompter.close();
-                        // Re-spawn the process with the serve subcommand. The
-                        // child inherits the TTY and runs the full existing
-                        // serve path (first-run DB menu, port fallback, browser
-                        // open, detach). The menu process is replaced.
-                        const child = spawn(process.execPath, [__filename, serveSub], { stdio: 'inherit' });
-                        const code: number = await new Promise((resolve) => {
-                            child.on('exit', (c) => resolve(c ?? 0));
-                            child.on('error', (err) => {
-                                console.error(`[switchboard] Failed to start server: ${err instanceof Error ? err.message : String(err)}`);
-                                resolve(1);
-                            });
-                        });
-                        exitFlushed(code);
-                    }
-                    // Invalid sub-choice — re-prompt.
-                }
-                // Back to main menu (q/empty on sub-prompt).
-                prompter.close();
-                continue;
-            }
-
-            if (answer === '2') {
-                if (port !== null) {
-                    // Server online — hand off to the board console.
+            // ── Online branch ────────────────────────────────────────────
+            if (online) {
+                if (answer === '1') {
+                    // Hand off to the board console in-process — matches the
+                    // previous CLI Mode handoff. cmdBoardConsole re-probes
+                    // findRunningInstance and exits 1 with the offline guidance
+                    // if the server died between render and selection.
                     prompter.close();
                     await cmdBoardConsole(workspaceRoot);
                     return;
                 }
-                // Offline — offer to boot a detached local server.
-                const start = await prompter.ask('  Server is offline. Start local server now? [Y/n] ');
-                if (start === null) { exitFlushed(0); }
-                if (start === '' || start.toLowerCase() === 'y') {
-                    // Close our readline BEFORE the child inherits stdin. The
-                    // child may run firstRunDatabaseMenu on the same TTY, and
-                    // two readline interfaces reading one tty split the
-                    // operator's keystrokes between them.
+                if (answer === '2' || answer === '3' || answer === '4') {
+                    const sub = answer === '2' ? 'setup' : answer === '3' ? 'help' : 'status';
                     prompter.close();
-                    // Spawn `switchboard local --detach` — the intermediate
-                    // process prints its startup messages, forks the actual
-                    // detached server, and exits. We then poll for the server
-                    // to be answering /health.
-                    const child = spawn(process.execPath, [__filename, 'local', '--detach'], { stdio: 'inherit' });
-                    const startCode: number = await new Promise((resolve) => {
-                        child.on('exit', (c) => resolve(c ?? 1));
+                    const child = spawn(process.execPath, [__filename, sub], { stdio: 'inherit' });
+                    const code: number = await new Promise((resolve) => {
+                        child.on('exit', (c) => resolve(c ?? 0));
                         child.on('error', (err) => {
-                            console.error(`[switchboard] Failed to start server: ${err instanceof Error ? err.message : String(err)}`);
+                            console.error(`[switchboard] Failed to launch ${sub}: ${err instanceof Error ? err.message : String(err)}`);
                             resolve(1);
                         });
                     });
-                    if (startCode !== 0) {
-                        // The intermediate polls /health for 15s itself and
-                        // prints its own diagnosis before exiting non-zero.
-                        // Polling a second time would add 15 silent seconds and
-                        // a duplicate error to a failure already reported.
-                        exitFlushed(startCode);
-                    }
-                    const AUTO_START_TIMEOUT_MS = 15000;
-                    const autoStartBegin = Date.now();
-                    let autoPort: number | null = null;
-                    while (Date.now() - autoStartBegin < AUTO_START_TIMEOUT_MS) {
-                        autoPort = await findRunningInstance(workspaceRoot);
-                        if (autoPort !== null) break;
-                        await new Promise(r => setTimeout(r, 250));
-                    }
-                    if (autoPort === null) {
-                        console.error(`[switchboard] Detached server failed to start within ${AUTO_START_TIMEOUT_MS / 1000}s.`);
-                        console.error('[switchboard] Check the log file: .switchboard/logs/server.log');
-                        exitFlushed(1);
-                    }
-                    prompter.close();
-                    await cmdBoardConsole(workspaceRoot);
-                    return;
+                    exitFlushed(code);
                 }
-                // Declined — loop back to the main menu.
+                // Invalid input — re-prompt (loop continues).
                 prompter.close();
                 continue;
             }
 
-            if (answer === '3') {
+            // ── Offline branch ───────────────────────────────────────────
+            if (answer === '1' || answer === '2') {
+                const serveSub = answer === '1' ? 'local' : 'tailnet';
+                // Close our readline BEFORE the child inherits stdin. The
+                // child may run firstRunDatabaseMenu on the same TTY, and two
+                // readline interfaces reading one tty split the operator's
+                // keystrokes between them.
                 prompter.close();
-                // Re-spawn with the `setup` subcommand rather than calling
-                // cmdSetup() here. cmdSetup does NOT run the wizard's choice
-                // itself: it rewrites process.argv ('setup' -> 'init' /
+                // Re-spawn the process with the serve subcommand. The child
+                // inherits the TTY and runs the full existing serve path
+                // (first-run DB menu, port fallback, browser open). The menu
+                // process is replaced.
+                const child = spawn(process.execPath, [__filename, serveSub], { stdio: 'inherit' });
+                const code: number = await new Promise((resolve) => {
+                    child.on('exit', (c) => resolve(c ?? 0));
+                    child.on('error', (err) => {
+                        console.error(`[switchboard] Failed to start server: ${err instanceof Error ? err.message : String(err)}`);
+                        resolve(1);
+                    });
+                });
+                exitFlushed(code);
+            }
+            if (answer === '3' || answer === '4' || answer === '5') {
+                const sub = answer === '3' ? 'setup' : answer === '4' ? 'help' : 'status';
+                prompter.close();
+                // Re-spawn with the subcommand rather than calling it
+                // in-process. cmdSetup, for instance, does NOT run the wizard's
+                // choice itself: it rewrites process.argv ('setup' -> 'init' /
                 // 'scaffold' / 'control-plane') and returns, relying on main()
                 // to fall through to those handlers. From the bare front door
                 // that fallthrough is impossible twice over — argv carries no
@@ -1651,17 +1657,16 @@ async function cmdMainMenu(workspaceRoot: string): Promise<void> {
                 // handlers sit ABOVE this routing point in main(). Calling it
                 // in-process makes every wizard choice a no-op that then falls
                 // through to the serve path and silently starts a board.
-                const child = spawn(process.execPath, [__filename, 'setup'], { stdio: 'inherit' });
+                const child = spawn(process.execPath, [__filename, sub], { stdio: 'inherit' });
                 const code: number = await new Promise((resolve) => {
                     child.on('exit', (c) => resolve(c ?? 0));
                     child.on('error', (err) => {
-                        console.error(`[switchboard] Failed to open the setup wizard: ${err instanceof Error ? err.message : String(err)}`);
+                        console.error(`[switchboard] Failed to launch ${sub}: ${err instanceof Error ? err.message : String(err)}`);
                         resolve(1);
                     });
                 });
                 exitFlushed(code);
             }
-
             // Invalid input — re-prompt (loop continues).
             prompter.close();
         } finally {
@@ -1680,9 +1685,7 @@ async function cmdMainMenu(workspaceRoot: string): Promise<void> {
 async function cmdBoardConsole(workspaceRoot: string): Promise<void> {
     const port = await findRunningInstance(workspaceRoot);
     if (port === null) {
-        console.error('[switchboard] No running Switchboard instance for this workspace.');
-        console.error('[switchboard] Start one with `switchboard local` (this machine) or `switchboard tailnet` (your tailnet).');
-        exitFlushed(1);
+        emitOfflineGuidance(false);
     }
 
     let health: Awaited<ReturnType<typeof getHealthJson>>;
