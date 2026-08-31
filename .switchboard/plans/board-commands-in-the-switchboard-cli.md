@@ -221,13 +221,13 @@ space.
       [2] Search Plans & Features (keyword, title, or UUID prefix with pagination)
       [3] Filter by Project
       [4] Inspect Fleet Status (live tasks & seats)
-      [5] Clear Terminal Context (unbracketed /clear reset)
-      [6] Setup & Scaffolding Wizard
+      [5] Setup & Scaffolding Wizard
       [q] Exit (or Enter)
 
-    Select an option [1-6] (or enter plan ID / prefix to dispatch): 
+    Select an option [1-5] (or enter plan ID / prefix to dispatch): 
      ```
    - **User Choice Over Assumptions:** Instead of guessing 3 "ready" cards, the user can instantly browse any column, search by query, filter by project, or type a card prefix directly at the prompt to dispatch.
+   - Terminal clearing is handled automatically by the dispatch runtime; `switchboard clear` is retained solely as a low-level CLI utility for maintenance.
    - If no server is running, exits cleanly (code 1) advising `switchboard local` or `switchboard tailnet`.
 
 2. **`switchboard plans [column] [--project <name>] [--search <query>] [--json]`** — direct listing and filtering command.
