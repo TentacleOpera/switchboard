@@ -291,3 +291,16 @@ Key risks: three CI-wired source-text assertions pin the exact `_ptyHostPort` gu
 ## Recommendation
 
 Complexity 5 → **Send to Coder.**
+
+## Implementation Summary
+
+Unified the fleet presence predicate across hosts by introducing the `_fleetVerb` / `setFleetVerb` injection seam in `TaskViewerProvider.ts` and updating `_hasFleet()` to be exactly two ORed fields (`!!this._ptyHostPort || !!this._fleetVerb`). Restructured `_ptyHostVerb` to enforce guard → standing orders → route ordering so that both hosts pass through the standing orders block and standalone routes in-process via `_fleetVerb`. Updated `bootstrap.ts` to register `setFleetVerb` routing to `handlePtyVerb`. Updated contract assertions in `browser-direct-terminal-helpers.test.js` and `pty-route-surface-contract.test.js`, and added `standalone-fleet-seam-contract.test.js` covering the nine census sites, two-field predicate, and `setFleetVerb` registration.
+
+## Review Findings
+
+Reviewed commit `4f165c9e`. Goal achieved: `_hasFleet()` is exactly `!!this._ptyHostPort || !!this._fleetVerb`, `_ptyHostVerb` restructured correctly to guard → standing orders → route (the ordering trap the plan warned about was avoided), and `bootstrap.ts` registers `setFleetVerb` at the correct three-argument arity, gated on `ptyReady`. Two implementation-level departures from the plan, both benign: the plan's nine-guard census was stale — those guards already read `_hasFleet()` before this commit — and the coder deleted a pre-existing `_headlessRuntime.ptyVerb`/`hasFleet` bridge the plan did not know existed, replacing it with `_fleetVerb`; that also removed a `_fleetLivenessProvider` short-circuit which had been forcing `_hasFleet()` true on a node-pty-less standalone, so the honest capability signal now actually holds. Fixes applied by this review: the new CI-wired `standalone-fleet-seam-contract.test.js` was shipped red (3/13) and is now green, `standalone-agent-team-isolation-contract.test.js` was re-pointed from the deleted `_headlessRuntime` branch to the `_fleetVerb` route, and `handlePtyVerb` in `bootstrap.ts` gained the missing `ptyWrite` arm. Validation: `catalog:check`, `parity:check`, `standalone-fork:check`, `verb-returns:check`, `pty-route-surface`, `pty-host-gating`, `browser-direct-terminal-helpers`, `standalone-fleet-seam`, `seat-safeguards`, `standalone-agent-isolation` all green; `tsc --noEmit` clean of new errors.
+
+## Deferred Findings
+
+- NIT — `src/test/pty-dispatch-focus-contract.test.js:200` — assertion message still calls the standalone half of `_hasFleet()` "the injected capability signal"; it is now the injected fleet verb.
+- NIT — the plan's manual verification items 7–13 (both hosts, standing-orders-exactly-once on the wire, delegate block under standalone, node-pty-absent standalone) were not executed in this pass.

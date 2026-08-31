@@ -293,15 +293,20 @@ test('_isLikelyPtyDispatchTarget consults getFleetLiveness', () => {
     );
 });
 
-test('TaskViewerProvider headlessRuntime verb handler populates _ptyTerminalNames and _ptyLiveness on ptyListTerminals', () => {
+// The standalone route used to be a self-contained `_headlessRuntime.ptyVerb`
+// branch with its OWN copy of the name/liveness population. It is now the
+// injected `_fleetVerb` seam, which falls through to the single shared
+// population block below the route — so pin the population as reachable FROM
+// that route, which is what the cache actually depends on.
+test('TaskViewerProvider fleet-verb seam populates _ptyTerminalNames and _ptyLiveness on ptyListTerminals', () => {
     const body = functionBody(taskViewerTs, 'private async _ptyHostVerb(verb: string, payload: any, signal?: AbortSignal): Promise<any>');
     assert.ok(
-        /this\._headlessRuntime[\s\S]*?this\._ptyTerminalNames\s*=\s*result\.terminals/.test(body),
-        '_ptyHostVerb must populate _ptyTerminalNames for headlessRuntime when ptyListTerminals succeeds'
+        /this\._fleetVerb\(verb, payload, signal\)[\s\S]*?this\._ptyTerminalNames\s*=\s*result\.terminals/.test(body),
+        '_ptyHostVerb must populate _ptyTerminalNames on the _fleetVerb route when ptyListTerminals succeeds'
     );
     assert.ok(
-        /this\._headlessRuntime[\s\S]*?this\._ptyLiveness\s*=/.test(body),
-        '_ptyHostVerb must populate _ptyLiveness for headlessRuntime when ptyListTerminals succeeds'
+        /this\._fleetVerb\(verb, payload, signal\)[\s\S]*?this\._ptyLiveness\s*=/.test(body),
+        '_ptyHostVerb must populate _ptyLiveness on the _fleetVerb route when ptyListTerminals succeeds'
     );
 });
 

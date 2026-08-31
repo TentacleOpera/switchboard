@@ -667,10 +667,15 @@ function classifyDispatchCallSites() {
     return { composed, uncomposed };
 }
 
-// Audit re-run 2026-08-30 (reviewer pass). The counts below were 7/2/5 and had
-// drifted to 12/5/7 while the tail-anchored classifier hid two of the marked
-// sites, so the gate was reporting the wrong shape in the UNSAFE direction. The
-// five marked sites, each justified:
+// Audit re-run 2026-08-31 (reviewer pass). The counts moved 12/5/7 -> 14/5/9:
+// the fleet-creation policy added `createFleetTerminalAndDeliver`, whose two
+// `_dispatchExecuteMessage` sites (the pre-spawn re-check delivery and the
+// post-spawn delivery) both pass the raw caller prompt UNCOMPOSED, so the
+// delivery layer appends the seat block on both. That is the safe direction.
+//
+// The earlier 2026-08-30 re-run moved 7/2/5 -> 12/5/7 after a tail-anchored
+// classifier hid two of the marked sites, so the gate was reporting the wrong
+// shape in the UNSAFE direction. The five marked sites, each justified:
 //   1. the standing-orders one-shot — the rendered orders block IS the payload,
 //      so a seat directive block appended after it would be a second suffix;
 //   2. batch-group dispatch — prompt from buildKanbanBatchPrompt;
@@ -685,11 +690,11 @@ function classifyDispatchCallSites() {
 // today — but the marker is doing semantic work it was not designed for. Left
 // as-is deliberately and recorded, rather than changed by a reviewer on a path
 // outside the plan under review.
-test('exactly 12 _dispatchExecuteMessage call sites exist, and exactly 5 pass promptComposed: true', () => {
+test('exactly 14 _dispatchExecuteMessage call sites exist, and exactly 5 pass promptComposed: true', () => {
     const { composed, uncomposed } = classifyDispatchCallSites();
     assert.strictEqual(
-        composed.length + uncomposed.length, 12,
-        `Expected 12 _dispatchExecuteMessage call sites (the audited set), found ${composed.length + uncomposed.length}. ` +
+        composed.length + uncomposed.length, 14,
+        `Expected 14 _dispatchExecuteMessage call sites (the audited set), found ${composed.length + uncomposed.length}. ` +
         'A new call site must be classified deliberately: it defaults to promptComposed=false and therefore ' +
         'GAINS the seat block, which is the safe direction — but the audit must be re-run.'
     );
@@ -701,12 +706,13 @@ test('exactly 12 _dispatchExecuteMessage call sites exist, and exactly 5 pass pr
     );
 });
 
-test('each of the 7 uncomposed dispatch call sites is enumerated and unmarked', () => {
+test('each of the 9 uncomposed dispatch call sites is enumerated and unmarked', () => {
     const { uncomposed } = classifyDispatchCallSites();
     assert.strictEqual(
-        uncomposed.length, 7,
-        `Expected 7 uncomposed dispatch call sites — dispatchCustomPromptToRole, the two Mission Control ` +
-        `kickoffs, the pair-programming send, _tryFleetDeliveryForRole, the Airlock patch hand-off and the ` +
+        uncomposed.length, 9,
+        `Expected 9 uncomposed dispatch call sites — dispatchCustomPromptToRole, the two Mission Control ` +
+        `kickoffs, the pair-programming send, _tryFleetDeliveryForRole, createFleetTerminalAndDeliver's ` +
+        `pre-spawn re-check and post-spawn delivery, the Airlock patch hand-off and the ` +
         `team-automation scheduler send. Found ${uncomposed.length} at lines [${uncomposed.join(', ')}].`
     );
     // Each must reach the funnel WITHOUT the marker, so the delivery layer

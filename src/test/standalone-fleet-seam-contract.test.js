@@ -5,8 +5,8 @@
  *
  * Pins the nine census guard sites in TaskViewerProvider to `_hasFleet()`,
  * verifies `hasPtyHost()` delegates to `_hasFleet()`, asserts `bootstrap.ts`
- * injects the fleet verb seam into TaskViewerProvider, and verifies kept extension-only
- * sites retain `_ptyHostPort`.
+ * injects the fleet verb seam into TaskViewerProvider, and verifies the
+ * extension-only agent-group arm still refuses without a reachable fleet.
  *
  * (feature_plan_20260812150000_fleet-seam-standalone-terminal-parity.md)
  */
@@ -49,7 +49,18 @@ function extractMethodBody(tsSource, methodName) {
             if (parenDepth === 0) { i++; break; }
         }
     }
-    while (i < tsSource.length && tsSource[i] !== '{') { i++; }
+    // Skip a return-type annotation: the body's `{` is the first one at
+    // angle-bracket depth 0. Without this, a signature like
+    // `Promise<{ a: string } | undefined>` hands back the RETURN TYPE's object
+    // literal instead of the method body, and every assertion against that
+    // method silently tests the wrong text.
+    let angle = 0;
+    for (; i < tsSource.length; i++) {
+        const ch = tsSource[i];
+        if (ch === '<') { angle++; continue; }
+        if (ch === '>') { if (angle > 0) angle--; continue; }
+        if (ch === '{' && angle === 0) { break; }
+    }
     let depth = 0;
     const bodyStart = i;
     for (let j = bodyStart; j < tsSource.length; j++) {
@@ -92,10 +103,18 @@ function run() {
             'broadcastAgentCompleted must check this._hasFleet()');
     });
 
-    test('sendPromptToAgentTerminal guards terminal creation on _hasFleet', () => {
+    // The miss branch used to be `if (this._hasFleet()) { return false; }` — a
+    // decline. The sibling creation-policy subtask replaced the decline with a
+    // fleet spawn in the same delivery, so the predicate is pinned here but the
+    // decline literal deliberately is NOT.
+    test('sendPromptToAgentTerminal spawns in the fleet on the miss path', () => {
         const body = extractMethodBody(taskViewerSource, 'sendPromptToAgentTerminal');
-        assert.match(body, /if\s*\(\s*this\._hasFleet\(\)\s*\)\s*\{\s*return\s+false;\s*\}/,
-            'sendPromptToAgentTerminal must guard creation on this._hasFleet()');
+        assert.match(body, /if\s*\(\s*this\._hasFleet\(\)\s*\)\s*\{/,
+            'sendPromptToAgentTerminal must branch on this._hasFleet()');
+        assert.match(body, /createFleetTerminalAndDeliver\(/,
+            'the _hasFleet() branch must spawn in the fleet, not return false');
+        assert.doesNotMatch(body, /if\s*\(\s*this\._ptyHostPort\s*\)/,
+            'sendPromptToAgentTerminal must not read the child-process port as a fleet predicate');
     });
 
     test('_isTerminalLive checks _hasFleet', () => {
@@ -143,10 +162,15 @@ function run() {
     });
 
     // 4. Kept extension-only sites retain _ptyHostPort
-    test('instantiateAgentGroup keeps _ptyHostPort (extension-only)', () => {
+    // The plan's census predicted this arm still read `_ptyHostPort`; it has read
+    // `_hasFleet()` since before this change. Either predicate is correct here —
+    // standalone never reaches this arm (bootstrap registers
+    // setAgentGroupInstantiator and drives ptyFleetService directly) — so pin
+    // what the code actually does rather than the census's prediction.
+    test('instantiateAgentGroup refuses when no fleet is reachable', () => {
         const body = extractMethodBody(taskViewerSource, 'instantiateAgentGroup');
-        assert.match(body, /!this\._ptyHostPort/,
-            'instantiateAgentGroup must retain !this._ptyHostPort guard');
+        assert.match(body, /if\s*\(!this\._hasFleet\(\)\)\s*\{/,
+            'instantiateAgentGroup must refuse when no fleet is reachable');
     });
 
     console.log(`\nResults: ${passed} passed, ${failed} failed\n`);

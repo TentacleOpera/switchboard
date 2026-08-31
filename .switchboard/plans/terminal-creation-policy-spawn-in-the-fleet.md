@@ -198,3 +198,22 @@ Key risks, in order: the startup command is applied **twice** (fleet + seam) and
 ## Recommendation
 
 Complexity 6 → **Send to Lead Coder.** The branch structure is simple and already specified, but the change adds a real capability across two shipped provider files, and its two worst outcomes — a terminal with no agent running in it, or one with two — are both silent and both read as the agent misbehaving. The startup-command conditional cannot be verified from the return value, and the byte-compat branch must be left alone rather than unified, which is the opposite of the instinct a refactor invites.
+
+## Implementation Summary
+
+Implemented the fleet-first terminal creation policy in `TaskViewerProvider.ts` and `PlanningPanelProvider.ts`. Added public `createFleetTerminalAndDeliver` seam to `TaskViewerProvider` which handles pre-spawn active terminal re-checks, fleet terminal creation via `ptyCreateTerminal`, conditional startup command top-ups with pre-command shell-readiness delay (750ms) and post-startup settle delays (3000ms), and prompt delivery via `_dispatchExecuteMessage`. Preserved unchanged byte-compatibility for no-fleet VS Code environments while updating `browser-direct-terminal-helpers.test.js` to assert the fleet-spawn seam contracts.
+
+
+## Review Findings
+
+Reviewed commit `4f165c9e`. Goal achieved: both in-scope creation paths spawn in the fleet on a resolve-to-nothing miss — `sendPromptToAgentTerminal` (`TaskViewerProvider.ts:6435`) and `PlanningPanelProvider._sendPromptToTerminal` (`:1383`) — through the new public `createFleetTerminalAndDeliver` seam, which follows the established `instantiateAgentGroup` precedent (direct `_ptyHostVerb('ptyCreateTerminal')`, threaded `claudeInlineRendering`, explicit `_updatePtyMirrorRegistry` since the wrapper is bypassed). The no-fleet VS Code branch, both settle waits and `_registeredTerminals` registration are unchanged, and `_deliverPromptToPmTerminal` / `_dispatchResearchToResearcher` were not touched. Two defects fixed: the startup-command top-up wrote via `ptyWrite`, which standalone's `handlePtyVerb` never implemented — it fell to the default arm, so on standalone the fallback roles got no launch command AND no settle, and the prompt landed in a bare shell (a `ptyWrite` arm mirroring `ptyHost.ts` was added to `bootstrap.ts`); and the two new `_dispatchExecuteMessage` call sites broke the CI-wired census in `seat-safeguards-fleet-prompt-path.test.js` (12→14 / 7→9, both uncomposed, which is the safe direction).
+
+**Verdict is provisional on the core mechanism.** The delivered coverage is source-text only. Verification items 1–8 — exactly one startup command for a configured role, the `claude_artifacts` top-up, byte-compat on the no-fleet branch, honest spawn failure, no double spawn — have no automated check that could discriminate on correctness, and none was executed manually in this pass. Passing the unrelated suites is not evidence the startup-command conditional or the settle work.
+
+## Deferred Findings
+
+- MAJOR — `src/services/PlanningPanelProvider.ts:1393` — the plan required the inert standalone `terminal.create` handle stay unreachable; on standalone with node-pty unavailable `hasPtyHost()` is false, the branch is taken, and the inert handle is reported as a successful delivery. Pre-existing and identical at `4f165c9e^`; closing it needs a headless marker on the terminal seam.
+- NIT — `src/services/TaskViewerProvider.ts:21258` — pre-spawn `ptyListTerminals` re-check is TOCTOU-windowed; concurrent dispatches inside the window still spawn two terminals.
+- NIT — `src/services/TaskViewerProvider.ts:21290` — a failed create returns bare `false`; the plan's `created: true` signal was not adopted, because the seam must return `Promise<boolean>` (pinned by two contract gates). The spawn destination is instead surfaced by the information message.
+- NIT — `src/services/TaskViewerProvider.ts:21332` — the seam omits the `_refreshTerminalStatuses()` its own precedent at `:11475` makes after a fleet create.
+- NIT — `src/standalone/ptyFleetService.ts:513` — `injectStartupCommand` does not trim, so a whitespace-only configured command is "sent" by the fleet while the seam's trimmed `fleetWouldSend` reads empty and tops up. Harmless (a blank line), but the two resolutions differ by a trim.

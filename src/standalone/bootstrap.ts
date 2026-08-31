@@ -1959,6 +1959,32 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     return { success: true };
                 }
 
+                case 'ptyWrite': {
+                    // Mirrors ptyHost.ts's arm exactly. Without it, every
+                    // `_ptyHostVerb('ptyWrite', ...)` in TaskViewerProvider —
+                    // including createFleetTerminalAndDeliver's startup-command
+                    // top-up — fell into the default arm on standalone and
+                    // reported "not implemented". The top-up failing is silent:
+                    // the terminal exists and accepts the prompt, but no agent
+                    // was ever launched in it.
+                    const handle = ptyFleetService.get(payload.name);
+                    if (!handle) { return { success: false, error: `No such terminal: ${payload.name}` }; }
+                    if (handle.status !== 'active') { return { success: false, error: `Terminal ${payload.name} is not active` }; }
+                    const data: string = payload.data || '';
+                    // Content rule, mirroring sendToTerminal / ptyHost: a single-line
+                    // leading-slash write is a slash command, and every slash command
+                    // gets the input line reset first. writeSlashCommand also takes the
+                    // per-terminal lock, so the command cannot splice into an in-flight
+                    // chunked paste from sendPromptToPty.
+                    const body = data.replace(/[\r\n]+$/, '');
+                    if (body && !body.includes('\n') && body.trimStart().startsWith('/')) {
+                        await writeSlashCommand(handle, body);
+                    } else {
+                        handle.write(data);
+                    }
+                    return { success: true };
+                }
+
                 case 'ptySendModel': {
                     const handle = ptyFleetService.get(payload.name);
                     if (!handle) { return { success: false, error: `No such terminal: ${payload.name}` }; }
