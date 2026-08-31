@@ -11,7 +11,7 @@ import { DEFAULT_DISPLAY_HOSTNAME, isLoopbackHostname } from '../utils/loopbackH
 import { detectTailnetAddress, resolveMagicDnsNames } from '../utils/tailnetDetect';
 
 function usage(): string {
-    return `Usage: npx switchboard                        (interactive board console — default)
+    return `Usage: npx switchboard                        (interactive front-door menu — default)
        npx switchboard local [options]            (serve the loopback board)
        npx switchboard tailnet [options]          (serve the loopback board AND your tailnet)
        npx switchboard plans [column] [--project <name>] [--search <query>] [--limit N] [--offset N] [--json]
@@ -2500,9 +2500,15 @@ async function main() {
 
         const port = await findRunningInstance(workspaceRoot);
         if (port === null) {
-            if (jsonFlag) { emitJson({ running: false }); }
-            else { console.log('[switchboard] No running Switchboard instance for this workspace.'); }
-            exitFlushed(1);
+            // `--json` keeps its established `{ running: false }` shape — that is
+            // the machine contract and must not gain a hints array here. The
+            // human path routes through the shared guidance instead of a bare
+            // one-liner: the front door's offline `[5] Server Status &
+            // Diagnostics` re-spawns this command, and "inspect ports, tokens,
+            // logs" answered by a single sentence is a dead end for the exact
+            // operator the triage menu exists to orient.
+            if (jsonFlag) { emitJson({ running: false }); exitFlushed(1); }
+            emitOfflineGuidance(false);
         }
 
         let health: Awaited<ReturnType<typeof getHealthJson>> | undefined;

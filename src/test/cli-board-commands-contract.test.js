@@ -257,13 +257,54 @@ function run() {
     //   • Online — 4-option menu (board console, setup, help, diagnostics).
     //     [1] calls cmdBoardConsole in-process (no spawn — matches the previous
     //     CLI Mode handoff); [2]/[3]/[4] re-spawn setup / help / status.
-    const respawns = [...menu.matchAll(/spawn\(process\.execPath, \[__filename, ([^\]]*)\]/g)].map(m => m[1]);
+    // The spawn argument is an expression, not always a literal: the menu
+    // consolidates its three writing branches onto two ternary-assigned
+    // variables (`serveSub` for the offline serve choice, `sub` for
+    // setup/help/status on both branches). Counting spawn *call sites*
+    // therefore measures the code's shape, not the contract — what matters is
+    // that every one of the five subcommands is reachable from the front door.
+    // Resolve each spawn argument through its `const <id> = ...` assignment
+    // inside cmdMainMenu and assert on the resulting set.
+    const respawns = [...menu.matchAll(/spawn\(process\.execPath, \[__filename, ([^\]]*)\]/g)].map(m => m[1].trim());
     assert.ok(
-        respawns.length >= 5,
-        `cmdMainMenu must re-spawn itself for local, tailnet, setup, help and status; found ${respawns.length}.`
+        respawns.length >= 3,
+        'cmdMainMenu must re-spawn itself for its writing branches (the offline serve choice, and '
+        + `setup/help/status on both branches); found ${respawns.length} spawn site(s).`
     );
+    const reachableSubs = new Set();
+    for (const arg of respawns) {
+        const literals = [...arg.matchAll(/'([^']+)'/g)].map(m => m[1]);
+        if (literals.length) { literals.forEach(s => reachableSubs.add(s)); continue; }
+        assert.ok(
+            /^[A-Za-z_$][\w$]*$/.test(arg),
+            `cmdMainMenu spawn argument "${arg}" is neither a string literal nor a plain identifier — `
+            + 'this check cannot resolve which subcommand it reaches.'
+        );
+        const assigns = [...menu.matchAll(new RegExp(`(?:const|let)\\s+${arg}\\s*=\\s*([^;]+);`, 'g'))];
+        assert.ok(
+            assigns.length > 0,
+            `cmdMainMenu spawns [__filename, ${arg}] but never assigns ${arg} — cannot verify which `
+            + 'subcommand it reaches.'
+        );
+        for (const a of assigns) {
+            for (const m of a[1].matchAll(/'([^']+)'/g)) { reachableSubs.add(m[1]); }
+        }
+    }
     assert.ok(
-        respawns.some(a => /^serveSub$/.test(a.trim())),
+        !reachableSubs.has('--detach') && !/\[__filename, [^\]]*'--detach'/.test(menu),
+        "Offline [1] must re-spawn [__filename, 'local'] in the foreground (stdio: 'inherit') — NOT "
+        + "'--detach'. The operator explicitly chose to start a board; a detached spawn orphans them "
+        + 'from the board they just asked to start, and the single-track auto-start path is gone.'
+    );
+    for (const sub of ['local', 'tailnet', 'setup', 'help', 'status']) {
+        assert.ok(
+            reachableSubs.has(sub),
+            `cmdMainMenu must be able to re-spawn [__filename, '${sub}'] — the front door offers it as a `
+            + `top-level option. Resolved reachable subcommands: ${[...reachableSubs].join(', ') || '(none)'}.`
+        );
+    }
+    assert.ok(
+        respawns.some(a => a === 'serveSub'),
         'Offline [1]/[2] must re-spawn [__filename, serveSub] — the whole serve path lives inline in '
         + "main(), there is no cmdLocal/cmdTailnet to call."
     );
@@ -272,24 +313,19 @@ function run() {
         /serveSub = answer === '1' \? 'local' : 'tailnet'/,
         "Offline branch must map its two choices onto the 'local' and 'tailnet' subcommands."
     );
-    assert.ok(
-        !respawns.some(a => a.includes("'--detach'")),
-        "Offline [1] must re-spawn [__filename, 'local'] in the foreground (stdio: 'inherit') — NOT "
-        + "'--detach'. The operator explicitly chose to start a board; a detached spawn orphans them "
-        + 'from the board they just asked to start, and the single-track auto-start path is gone.'
+    // Both ternary mappings are pinned separately. Asserting only the resolved
+    // union would let either branch be deleted silently: the surviving branch's
+    // `const sub` alone contributes setup/help/status.
+    assert.match(
+        menu,
+        /sub = answer === '3' \? 'setup' : answer === '4' \? 'help' : 'status'/,
+        "Offline [3]/[4]/[5] must map onto the 'setup', 'help' and 'status' subcommands."
     );
-    assert.ok(
-        respawns.some(a => a.trim() === "'setup'"),
-        "Setup must re-spawn [__filename, 'setup'] rather than calling cmdSetup() in-process."
-    );
-    assert.ok(
-        respawns.some(a => a.trim() === "'help'"),
-        "Help must re-spawn [__filename, 'help'] — the front door offers it as a top-level option."
-    );
-    assert.ok(
-        respawns.some(a => a.trim() === "'status'"),
-        "Status/diagnostics must re-spawn [__filename, 'status'] — the front door offers it as a "
-        + 'top-level option.'
+    assert.match(
+        menu,
+        /sub = answer === '2' \? 'setup' : answer === '3' \? 'help' : 'status'/,
+        "Online [2]/[3]/[4] must map onto the 'setup', 'help' and 'status' subcommands — the online "
+        + 'branch shifts down by one because [1] is Open Board Console, not a serve option.'
     );
     // The single-track "Start local server now? [Y/n]" prompt is gone — the
     // adaptive menu offers an explicit [1] Start Local Board instead.
