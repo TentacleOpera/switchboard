@@ -46,7 +46,7 @@ Start local board server now? [Y/n]:
 
    OPTIONS:
      [1] Start Local Board (127.0.0.1 loopback — this machine only)
-     [2] Start Remote / Tailnet Board (Tailscale mesh — iPad/phone/remote access)
+     [2] Start Remote Tailnet Board (Tailscale mesh — iPad/phone/remote access)
      [3] Setup & Scaffolding Wizard (init, multi-repo scaffold, secrets)
      [4] Help & Command Documentation (view CLI command manual)
      [5] Server Status & Diagnostics (inspect ports, tokens, logs)
@@ -203,7 +203,7 @@ Update the breaking assertions to pin the NEW adaptive contract:
 3. **Replace** the `respawns.length >= 3` composition check (lines 247-250) with: the offline branch has ≥5 respawns (`local`, `tailnet`, `setup`, `help`, `status`); the online branch has ≥3 respawns (`setup`, `help`, `status`) plus an in-process `cmdBoardConsole` call.
 4. **Replace** the `autoStart` prompter-close-before-spawn check (lines 273-277) with: every spawn in `cmdMainMenu` that inherits stdin is preceded by `prompter.close()` (the offline `[1]`/`[2]` re-spawns do this).
 5. **Add** an assertion that `cmdMainMenu` does NOT contain `Start local server now?` or `Start local board server now?` — the single-track prompt is gone.
-6. **Add** an assertion that the offline branch renders all five triage labels (`Start Local Board`, `Start Remote / Tailnet Board`, `Setup & Scaffolding Wizard`, `Help & Command Documentation`, `Server Status & Diagnostics`).
+6. **Add** an assertion that the offline branch renders all five triage labels (`Start Local Board`, `Start Remote Tailnet Board`, `Setup & Scaffolding Wizard`, `Help & Command Documentation`, `Server Status & Diagnostics`).
 7. **Preserve** unchanged: bare-routing-to-`cmdMainMenu` (line 217), no no-server error in menu (line 222), non-TTY exit 0 (line 225-229), `cmdBoardConsole` backstop (line 232-236), no in-process `cmdSetup` (line 280-284), handler ordering (lines 289-298).
 
 #### Edge Cases
@@ -225,7 +225,7 @@ Update the breaking assertions to pin the NEW adaptive contract:
 - `banner()` in `cli.ts` emits `Agent Fleet Command` instead of `Autonomous Agent Fleet Console`.
 - Assert `cli.ts` contains zero matches for the regex `/Start local (board )?server now\?/` — the single-track prompt is eliminated.
 - Assert `cmdMainMenu` in `cli.ts` contains the string `Open Board Console` — the online board-navigator path is present (the local-development scenario is served).
-- Assert `cmdMainMenu` in `cli.ts` contains the strings `Start Local Board`, `Start Remote / Tailnet Board`, `Setup & Scaffolding Wizard`, `Help & Command Documentation`, and `Server Status & Diagnostics` — all 5 offline triage branches are rendered.
+- Assert `cmdMainMenu` in `cli.ts` contains the strings `Start Local Board`, `Start Remote Tailnet Board`, `Setup & Scaffolding Wizard`, `Help & Command Documentation`, and `Server Status & Diagnostics` — all 5 offline triage branches are rendered.
 - Assert a shared `emitOfflineGuidance` function exists in `cli.ts` and is called from `cmdPlans`, `cmdReady`, `cmdDispatch`, `cmdClear`, `cmdFleet`, and `cmdBoardConsole` — all six board commands emit uniform multi-scenario guidance, not a one-liner.
 - Assert the `--json` offline payload in `emitOfflineGuidance` includes a `hints` array of length 4 — machine-readable recovery suggestions are present.
 
