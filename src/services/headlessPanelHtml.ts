@@ -159,7 +159,7 @@ export function getShellHtml(repoRoot: string, themeClass?: string): PanelHtmlRe
     }
     let content = fs.readFileSync(htmlPath, 'utf8');
     const nonce = makeNonce();
-    const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self';`;
+    const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self'; manifest-src 'self';`;
     content = content.replace(/\{\{NONCE\}\}/g, nonce);
     content = applyThemeClass(content, themeClass);
     return { html: content, csp };
@@ -526,6 +526,31 @@ export function getLinearHtml(repoRoot: string, workspaceRoot: string, capabilit
     return { html: content, csp };
 }
 
+export function getCommandHtml(repoRoot: string, workspaceRoot: string, capabilities?: HostCapabilities, themeClass?: string): PanelHtmlResult {
+    const candidates = [
+        path.join(repoRoot, 'dist', 'webview', 'command.html'),
+        path.join(repoRoot, 'src', 'webview', 'command.html'),
+    ];
+    const htmlPath = findFile(candidates);
+    if (!htmlPath) {
+        return { html: '<html><body>Command panel HTML not found.</body></html>', csp: '' };
+    }
+    let content = fs.readFileSync(htmlPath, 'utf8');
+    const nonce = makeNonce();
+    const csp = `default-src 'self'; script-src 'nonce-${nonce}' 'self' 'unsafe-eval' 'unsafe-inline'; script-src-attr 'unsafe-inline'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self'; manifest-src 'self';`;
+    content = content.replace(/\{\{NONCE\}\}/g, nonce);
+    content = content.replace(/\{\{COMMAND_JS_URI\}\}/g, '/static/webview/command.js');
+    content = content.replace(/<script>/g, `<script nonce="${nonce}">`);
+    content = injectTransportShim(content, nonce, '<!-- SHARED_DEFAULTS_SCRIPT -->', `<script nonce="${nonce}" src="/static/webview/command.js"></script>`, false);
+    content = content.replace(/\{\{HANKEN_FONT_URI\}\}/g, '/static/designs/HankenGrotesk-Variable.woff2');
+    content = content.replace(/\{\{GEIST_PIXEL_FONT_URI\}\}/g, '/static/designs/GeistPixel-Square.woff2');
+    const caps = { ...DEFAULT_HOST_CAPABILITIES, ...capabilities };
+    const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="command" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}"`;
+    content = injectBodyAttributes(content, bodyAttr);
+    content = applyThemeClass(content, themeClass);
+    return { html: content, csp };
+}
+
 export interface PanelManifestEntry {
     id: string;
     label: string;
@@ -586,6 +611,7 @@ export function getPanelsManifest(availability?: PanelAvailability): PanelManife
         { id: 'planning', label: 'Artifacts', icon: `${iconDir}/nav-artifacts.svg`, route: '/planning', enabled: planningEnabled, group: 'cold' },
         { id: 'tickets', label: 'Tickets', icon: `${iconDir}/nav-tickets.svg`, route: '/tickets', enabled: ticketsEnabled, group: 'cold' },
         { id: 'design', label: 'Design', icon: `${iconDir}/nav-design.svg`, route: '/design', enabled: designEnabled, group: 'cold' },
+        { id: 'command', label: 'Command', icon: `${iconDir}/nav-command.svg`, route: '/command', enabled: true, group: 'cold' },
         { id: 'memo', label: 'Memo', icon: `${iconDir}/nav-memo.svg`, route: '/memo', enabled: true, group: 'cold', railHidden: true, presentation: 'modal' },
         { id: 'setup', label: 'Setup', icon: `${iconDir}/nav-setup.svg`, route: '/setup', enabled: setupEnabled, group: 'cold', railHidden: true },
         { id: 'connections', label: 'Connections', icon: `${iconDir}/nav-connections.svg`, route: '/connections', enabled: connectionsEnabled, group: 'cold', railHidden: true },
@@ -606,8 +632,10 @@ export function getPanelHtmlById(id: string, repoRoot: string, workspaceRoot: st
         case 'connections': return getConnectionsHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'terminals': return getTerminalsHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'linear': return getLinearHtml(repoRoot, workspaceRoot, capabilities, themeClass);
+        case 'command': return getCommandHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         default: return null;
     }
 }
+
 
 

@@ -3,8 +3,14 @@
 
 <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Switchboard</title>
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/icon-180.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Switchboard" />
+    <meta name="theme-color" content="#0a0a0f" />
     <!--
         Headless app-shell — Feature: Headless Browser UI.
         Left icon strip + same-origin iframe content area. The strip is rendered
@@ -14,7 +20,7 @@
         CSP: same-origin only; scripts via nonce; frames same-origin; WebSocket
         to 127.0.0.1 for the panels' live transport.
     -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{NONCE}}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self';" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{NONCE}}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self'; manifest-src 'self';" />
     <style>
         @font-face {
             font-family: 'Hanken Grotesk';
@@ -52,6 +58,10 @@
             font-family: var(--font);
             display: flex;
             flex-direction: row;
+            padding-top: env(safe-area-inset-top, 0px);
+            padding-bottom: env(safe-area-inset-bottom, 0px);
+            padding-left: env(safe-area-inset-left, 0px);
+            padding-right: env(safe-area-inset-right, 0px);
         }
         #strip {
             flex: 0 0 48px;
@@ -172,8 +182,8 @@
            Fixed positioning; right offset tracks --dock-width when the dock is open. */
         #top-right-cluster {
             position: fixed;
-            top: 6px;
-            right: calc(var(--dock-width, 0px) + 6px);
+            top: calc(env(safe-area-inset-top, 0px) + 6px);
+            right: calc(var(--dock-width, 0px) + env(safe-area-inset-right, 0px) + 6px);
             z-index: 40;
             display: flex;
             flex-direction: row;

@@ -1009,3 +1009,8 @@ loop the surface exists for and it is testable end-to-end on its own; (3) the op
 over those two; (4) Mission; (5) Teams and the rail icons; (6) VIEW. Steps 5 and 6 are the
 droppable tail if the seat runs long — the surface is useful without them, and is not useful
 without steps 1-3.
+
+## Implementation Summary
+
+Implemented the mobile touch-first command route (`/command`) backed by `src/webview/command.html` and `src/webview/command.js`. Registered the route and panel manifest entry (`command`, `group: 'cold'`) with proper CSP and head meta (`viewport-fit=cover`, Hanken Grotesk `@font-face`, `manifest-src 'self'`) across `headlessPanelHtml.ts` and `LocalApiServer.ts`. Implemented the 4 sub-nav views (Dispatch, Move, Mission, Teams), read-only terminal WebSocket output viewer, markdown document VIEW preview overlay, and optimistic updates. Removed the start-team control so dormant teams are displayed read-only with no out-of-scope verb actions. The entire touch surface strictly contains zero text inputs or contenteditable elements, respects 44px tap targets, and supports phone portrait and tablet landscape layouts at distinct media breakpoints.
+

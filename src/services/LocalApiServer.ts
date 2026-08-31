@@ -1231,6 +1231,7 @@ export class LocalApiServer {
             '.html': 'text/html',
             '.css': 'text/css',
             '.json': 'application/json',
+            '.webmanifest': 'application/manifest+json',
             '.woff2': 'font/woff2',
             '.png': 'image/png',
             '.svg': 'image/svg+xml',
@@ -1473,6 +1474,32 @@ export class LocalApiServer {
             res.writeHead(500, { 'Content-Type': 'text/plain' });
             res.end(`Failed to render panel '${id}'`);
         }
+    }
+
+    private async _handleServeManifest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!this._options.serveStatic) {
+            res.writeHead(503, { 'Content-Type': 'text/plain' });
+            res.end('Manifest serving not configured');
+            return;
+        }
+
+        const roots = this._options.serveStatic.staticRoutes['webview'] || [];
+        const filesToTry = ['manifest.webmanifest', 'manifest.json'];
+        for (const root of roots) {
+            for (const file of filesToTry) {
+                const candidate = path.resolve(root, file);
+                if (fsSync.existsSync(candidate) && fsSync.statSync(candidate).isFile()) {
+                    res.writeHead(200, {
+                        'Content-Type': 'application/manifest+json',
+                        'Cache-Control': 'no-cache',
+                    });
+                    res.end(fsSync.readFileSync(candidate));
+                    return;
+                }
+            }
+        }
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Manifest not found' }));
     }
 
     private async _handleServeStatic(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -8323,8 +8350,12 @@ export class LocalApiServer {
                 await this._handleServePanelById('mission-control', req, res);
             } else if ((pathname === '/linear' || pathname === '/linear.html') && req.method === 'GET') {
                 await this._handleServePanelById('linear', req, res);
+            } else if ((pathname === '/command' || pathname === '/command.html') && req.method === 'GET') {
+                await this._handleServePanelById('command', req, res);
             } else if (pathname === '/design/asset' && req.method === 'GET') {
                 await this._handleDesignAsset(req, res);
+            } else if ((pathname === '/manifest.json' || pathname === '/manifest.webmanifest') && req.method === 'GET') {
+                await this._handleServeManifest(req, res);
             } else if (pathname.startsWith('/static/') && req.method === 'GET') {
                 await this._handleServeStatic(req, res);
             } else {

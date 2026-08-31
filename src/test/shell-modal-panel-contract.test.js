@@ -83,7 +83,7 @@ test('shell.html body markup keeps #content and #tooltip-overlay as siblings', (
     // is that the overlay stays at BODY level — nested inside #content or the
     // dock it would be clipped and painted invisible.
     assert.ok(
-        /(?:<div id="content"><\/div>|<\/aside>)\s*<div id="tooltip-overlay"><\/div>/.test(body),
+        /(?:<div id="content"><\/div>|<\/aside>|id="top-right-cluster"[^>]*><\/div>)\s*<div id="tooltip-overlay"><\/div>/.test(body),
         'the overlay must remain a body-level sibling of #content'
     );
 });

@@ -980,6 +980,7 @@
     "test:contract:terminal-chrome-not-in-buffer": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-chrome-not-in-buffer.test.js",
     "test:contract:shell-terminal-strip": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/shell-terminal-strip.test.js",
     "test:contract:shell-modal-panel": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/shell-modal-panel-contract.test.js",
+    "test:contract:standalone-pwa-install": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/standalone-pwa-install-contract.test.js",
     "test:contract:shell-agent-dock": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/shell-agent-dock.test.js",
     "test:contract:terminal-grid-entry-point": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-grid-entry-point.test.js",
     "test:contract:terminal-pane-pinning": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-pane-pinning-contract.test.js",
@@ -1043,6 +1044,7 @@
     "test:contract:review-column-persistence": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/review-column-persistence-regression.test.js",
     "test:contract:team-release-control": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/team-release-control-contract.test.js",
     "test:contract:roster-clear-mid-turn": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/roster-clear-mid-turn-deferral.test.js",
+    "test:contract:mobile-command-route": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/mobile-command-route-contract.test.js",
     "test:contract:workspace-mappings": "mocha --ui tdd --require ./src/test/bootstrap/sandboxStateHome.js --require ./src/test/bootstrap/vscodeStub.js out/test/workspace-identity-precedence.test.js out/test/browser-host-workspace-mappings.test.js out/test/child-switchboard-creation-regression.test.js"
   },
   "devDependencies": {

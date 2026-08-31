@@ -1,0 +1,987 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0d0d0d">
+    <link rel="manifest" href="/manifest.json">
+    <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/icon-180.png">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'nonce-{{NONCE}}' 'self' 'unsafe-eval' 'unsafe-inline'; script-src-attr 'unsafe-inline'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self'; manifest-src 'self';">
+    <title>Switchboard Command</title>
+    <style>
+        @font-face {
+            font-family: 'Hanken Grotesk';
+            src: url('{{HANKEN_FONT_URI}}') format('woff2');
+            font-weight: 100 900;
+            font-style: normal;
+            font-display: swap;
+        }
+        @font-face {
+            font-family: 'GeistPixel';
+            src: url('{{GEIST_PIXEL_FONT_URI}}') format('woff2');
+            font-weight: 400;
+            font-style: normal;
+            font-display: swap;
+        }
+        :root {
+            --bg-color: #0d0d0d;
+            --panel-bg: #000000;
+            --panel-bg2: #050505;
+            --border-color: #333333;
+            --border-bright: #444444;
+            --text-primary: #e0e0e0;
+            --text-secondary: #8C8C8C;
+            --accent-primary: #00e5ff;
+            --accent-teal: var(--accent-primary);
+            --accent-teal-dim: color-mix(in srgb, var(--accent-teal) 40%, transparent);
+            --accent-green: #4ec9b0;
+            --accent-red: #f85149;
+            --accent-amber: #f59e0b;
+            --font-family: 'Hanken Grotesk', Menlo, Consolas, sans-serif;
+            --font-code: Menlo, Consolas, monospace;
+        }
+
+        body.cyber-theme-enabled { }
+
+        body.theme-claudify {
+            --accent-primary: #D97757;
+            --accent-teal: #D97757;
+            --accent-teal-dim: color-mix(in srgb, #D97757 40%, transparent);
+            --text-secondary: #8C8C8C;
+            --border-color: #333333;
+            --border-bright: #444444;
+        }
+
+        * {
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            width: 100%;
+            background: var(--bg-color);
+            color: var(--text-primary);
+            font-family: var(--font-family);
+            overflow: hidden;
+            touch-action: manipulation;
+        }
+
+        #app-root {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            width: 100%;
+            padding-top: env(safe-area-inset-top);
+            padding-left: env(safe-area-inset-left);
+            padding-right: env(safe-area-inset-right);
+            padding-bottom: env(safe-area-inset-bottom);
+        }
+
+        /* Top Header */
+        .cmd-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 8px 14px;
+            background: var(--panel-bg);
+            border-bottom: 1px solid var(--border-color);
+            flex-shrink: 0;
+            min-height: 48px;
+        }
+
+        .cmd-header-left {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex: 1;
+            min-width: 0;
+        }
+
+        .cmd-logo {
+            font-family: 'GeistPixel', var(--font-code);
+            font-size: 13px;
+            color: var(--accent-primary);
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+
+        .workspace-project-select {
+            flex: 1;
+            min-width: 140px;
+            max-width: 320px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 6px 8px;
+            font-family: var(--font-family);
+            font-size: 12px;
+            min-height: 38px;
+            outline: none;
+        }
+
+        .workspace-project-select:focus {
+            border-color: var(--accent-primary);
+        }
+
+        /* Mission in-flight lock banner */
+        .mission-lock-banner {
+            background: rgba(245, 158, 11, 0.15);
+            border-bottom: 1px solid var(--accent-amber);
+            color: var(--accent-amber);
+            padding: 6px 14px;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        .mission-lock-banner.hidden {
+            display: none;
+        }
+
+        /* Main Content Layout */
+        .cmd-main-container {
+            display: flex;
+            flex: 1;
+            min-height: 0;
+            position: relative;
+        }
+
+        .tablet-rail {
+            display: none;
+            width: 72px;
+            background: var(--panel-bg);
+            border-right: 1px solid var(--border-color);
+            flex-direction: column;
+            align-items: center;
+            padding: 8px 0;
+            gap: 6px;
+            overflow-y: auto;
+            flex-shrink: 0;
+        }
+
+        .tablet-rail-section {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+            width: 100%;
+        }
+
+        .tablet-rail-divider {
+            width: 40px;
+            height: 1px;
+            background: var(--border-color);
+            margin: 6px 0;
+        }
+
+        .cmd-view-container {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            min-width: 0;
+            height: 100%;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .cmd-view-pane {
+            display: none;
+            flex-direction: column;
+            flex: 1;
+            min-height: 0;
+            padding: 12px;
+            overflow-y: auto;
+        }
+
+        .cmd-view-pane.active {
+            display: flex;
+        }
+
+        /* Bottom Nav (Phone) */
+        .phone-nav-bar {
+            display: flex;
+            background: var(--panel-bg);
+            border-top: 1px solid var(--border-color);
+            flex-shrink: 0;
+            min-height: 52px;
+        }
+
+        .nav-btn {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-family: var(--font-family);
+            font-size: 11px;
+            font-weight: 500;
+            cursor: pointer;
+            padding: 6px 2px;
+            min-height: 48px;
+            transition: color 0.15s, background 0.15s;
+        }
+
+        .nav-btn:hover, .nav-btn:active {
+            color: var(--text-primary);
+        }
+
+        .nav-btn.active {
+            color: var(--accent-primary);
+            border-top: 2px solid var(--accent-primary);
+        }
+
+        .nav-btn-icon {
+            font-size: 14px;
+            margin-bottom: 2px;
+        }
+
+        /* Card List Styles */
+        .list-header-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 10px;
+            flex-shrink: 0;
+        }
+
+        .star-filter-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            cursor: pointer;
+            min-height: 44px;
+        }
+
+        .star-filter-btn.active {
+            border-color: var(--accent-amber);
+            color: var(--accent-amber);
+            background: rgba(245, 158, 11, 0.1);
+        }
+
+        .cards-scroll-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            flex: 1;
+            overflow-y: auto;
+            min-height: 80px;
+            padding-bottom: 8px;
+        }
+
+        .cmd-card-item {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 10px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            cursor: pointer;
+            transition: border-color 0.15s, background 0.15s;
+            min-height: 48px;
+        }
+
+        .cmd-card-item.selected {
+            border-color: var(--accent-primary);
+            background: rgba(0, 229, 255, 0.05);
+        }
+
+        .cmd-card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 6px;
+        }
+
+        .cmd-card-title {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-primary);
+            line-height: 1.3;
+            flex: 1;
+        }
+
+        .cmd-card-badges {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-shrink: 0;
+        }
+
+        .complexity-dot {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            font-weight: bold;
+            font-family: var(--font-code);
+            color: #000;
+        }
+
+        .comp-very-low { background: #4ec9b0; }
+        .comp-low { background: #00e5ff; }
+        .comp-medium { background: #e5c07b; }
+        .comp-high { background: #f59e0b; }
+        .comp-very-high { background: #f85149; color: #fff; }
+
+        .subtask-badge {
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 3px;
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text-secondary);
+            font-family: var(--font-code);
+        }
+
+        .column-badge {
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 3px;
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            color: var(--accent-primary);
+            text-transform: uppercase;
+        }
+
+        .cmd-card-actions {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-top: 4px;
+        }
+
+        .btn-card-action {
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            border-radius: 4px;
+            padding: 6px 10px;
+            font-size: 11px;
+            cursor: pointer;
+            min-height: 44px;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .btn-card-action.starred {
+            color: var(--accent-amber);
+            border-color: var(--accent-amber);
+        }
+
+        /* Action Anchors / Action Panels */
+        .cmd-action-box {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-top: 10px;
+            flex-shrink: 0;
+        }
+
+        .action-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .cmd-select {
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 8px 10px;
+            font-size: 13px;
+            font-family: var(--font-family);
+            min-height: 44px;
+            flex: 1;
+            outline: none;
+        }
+
+        .cmd-select:focus {
+            border-color: var(--accent-primary);
+        }
+
+        .primary-action-btn {
+            background: var(--accent-primary);
+            color: #000000;
+            border: none;
+            border-radius: 6px;
+            font-family: var(--font-family);
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            padding: 12px 18px;
+            cursor: pointer;
+            min-height: 48px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            transition: opacity 0.15s, transform 0.05s;
+        }
+
+        .primary-action-btn:active {
+            transform: scale(0.99);
+        }
+
+        .primary-action-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .secondary-action-btn {
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-family: var(--font-family);
+            font-size: 13px;
+            font-weight: 600;
+            padding: 10px 14px;
+            cursor: pointer;
+            min-height: 44px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .status-chip {
+            font-size: 11px;
+            font-family: var(--font-code);
+            padding: 4px 8px;
+            border-radius: 4px;
+            background: var(--panel-bg2);
+            color: var(--text-secondary);
+            border: 1px solid var(--border-color);
+            text-align: center;
+        }
+
+        .status-chip.success {
+            color: var(--accent-green);
+            border-color: var(--accent-green);
+            background: rgba(78, 201, 176, 0.1);
+        }
+
+        .status-chip.pending {
+            color: var(--accent-primary);
+            border-color: var(--accent-primary);
+            background: rgba(0, 229, 255, 0.1);
+        }
+
+        .status-chip.unknown {
+            color: var(--accent-amber);
+            border-color: var(--accent-amber);
+            background: rgba(245, 158, 11, 0.1);
+        }
+
+        .status-chip.error {
+            color: var(--accent-red);
+            border-color: var(--accent-red);
+            background: rgba(248, 81, 73, 0.1);
+        }
+
+        /* Teams View */
+        .teams-roster-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            flex: 1;
+            overflow-y: auto;
+        }
+
+        .team-roster-card {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            cursor: pointer;
+            min-height: 52px;
+        }
+
+        .team-roster-card.is-dormant {
+            opacity: 0.55;
+            border-style: dashed;
+        }
+
+        .team-roster-left {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex: 1;
+            min-width: 0;
+        }
+
+        .team-icon-box {
+            width: 32px;
+            height: 32px;
+            border-radius: 4px;
+            background: var(--panel-bg2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'GeistPixel', var(--font-code);
+            font-size: 14px;
+            color: var(--accent-primary);
+            flex-shrink: 0;
+            overflow: hidden;
+        }
+
+        .team-icon-img {
+            width: 24px;
+            height: 24px;
+            image-rendering: pixelated;
+        }
+
+        .team-info-col {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            min-width: 0;
+        }
+
+        .team-name-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .team-seats-subtitle {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .team-state-badge {
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            padding: 3px 8px;
+            border-radius: 3px;
+            letter-spacing: 0.5px;
+            font-family: var(--font-code);
+        }
+
+        .team-state-working {
+            background: rgba(78, 201, 176, 0.15);
+            color: var(--accent-green);
+            border: 1px solid var(--accent-green);
+        }
+
+        .team-state-idle {
+            background: var(--panel-bg2);
+            color: var(--text-secondary);
+            border: 1px solid var(--border-color);
+        }
+
+        .team-state-dormant {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-secondary);
+            border: 1px solid var(--border-color);
+        }
+
+        .team-state-held {
+            background: rgba(245, 158, 11, 0.15);
+            color: var(--accent-amber);
+            border: 1px solid var(--accent-amber);
+        }
+
+        /* Read-Only Terminal Viewer */
+        .terminal-viewer-pane {
+            display: none;
+            flex-direction: column;
+            flex: 1;
+            min-height: 0;
+            background: var(--panel-bg);
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+            overflow: hidden;
+        }
+
+        .terminal-viewer-pane.active {
+            display: flex;
+        }
+
+        .terminal-viewer-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 8px 12px;
+            background: var(--panel-bg2);
+            border-bottom: 1px solid var(--border-color);
+            flex-shrink: 0;
+            min-height: 44px;
+        }
+
+        .terminal-stream-box {
+            flex: 1;
+            background: #050505;
+            color: #d4d4d4;
+            font-family: var(--font-code);
+            font-size: 11px;
+            line-height: 1.4;
+            padding: 10px;
+            margin: 0;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        /* VIEW Overlay */
+        .cmd-view-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: var(--bg-color);
+            z-index: 50;
+            display: none;
+            flex-direction: column;
+        }
+
+        .cmd-view-overlay.active {
+            display: flex;
+        }
+
+        .view-overlay-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 8px 14px;
+            background: var(--panel-bg);
+            border-bottom: 1px solid var(--border-color);
+            min-height: 48px;
+            flex-shrink: 0;
+        }
+
+        .view-overlay-path {
+            font-family: var(--font-code);
+            font-size: 11px;
+            color: var(--text-secondary);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            flex: 1;
+        }
+
+        .view-overlay-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+        }
+
+        #kanban-preview-content {
+            color: var(--text-primary);
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        #kanban-preview-content h1, #kanban-preview-content h2, #kanban-preview-content h3 {
+            color: var(--accent-primary);
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 4px;
+            margin-top: 14px;
+            margin-bottom: 8px;
+        }
+
+        #kanban-preview-content pre {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-family: var(--font-code);
+            font-size: 11px;
+        }
+
+        #kanban-preview-content code {
+            font-family: var(--font-code);
+            background: rgba(255, 255, 255, 0.08);
+            padding: 2px 4px;
+            border-radius: 2px;
+        }
+
+        /* ── Breakpoint 1: Medium Screens (min-width: 600px) ── */
+        @media (min-width: 600px) {
+            .cards-scroll-list {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 10px;
+            }
+            .cmd-header {
+                padding: 10px 20px;
+            }
+            .cmd-view-pane {
+                padding: 16px;
+            }
+        }
+
+        /* ── Breakpoint 2: Tablet Landscape & Desktop (min-width: 900px) ── */
+        @media (min-width: 900px) {
+            .phone-nav-bar {
+                display: none;
+            }
+            .tablet-rail {
+                display: flex;
+            }
+            .cmd-view-pane {
+                padding: 20px;
+            }
+            .dispatch-split-layout {
+                display: grid;
+                grid-template-columns: 1.2fr 0.8fr;
+                gap: 16px;
+                height: 100%;
+            }
+            .dispatch-split-layout .cards-scroll-list {
+                grid-template-columns: 1fr;
+            }
+            .move-split-layout {
+                display: grid;
+                grid-template-columns: 1.2fr 0.8fr;
+                gap: 16px;
+                height: 100%;
+            }
+            .move-split-layout .cards-scroll-list {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="app-root">
+        <!-- Top Header -->
+        <header class="cmd-header">
+            <div class="cmd-header-left">
+                <span class="cmd-logo">Switchboard</span>
+                <select id="workspace-project-select" class="workspace-project-select" aria-label="Select workspace and project"></select>
+            </div>
+        </header>
+
+        <!-- Mission Lock Banner -->
+        <div id="mission-lock-banner" class="mission-lock-banner hidden">
+            <span>⚠️ Mission in flight: <strong id="lock-mission-codename"></strong>. Card actions locked.</span>
+        </div>
+
+        <div class="cmd-main-container">
+            <!-- Tablet Left Rail -->
+            <nav class="tablet-rail" id="tablet-rail" aria-label="Navigation Rail">
+                <div class="tablet-rail-section">
+                    <button class="nav-btn active" data-view="dispatch" title="Dispatch">
+                        <span class="nav-btn-icon">⚡</span>
+                        <span>Dispatch</span>
+                    </button>
+                    <button class="nav-btn" data-view="move" title="Move">
+                        <span class="nav-btn-icon">➔</span>
+                        <span>Move</span>
+                    </button>
+                    <button class="nav-btn" data-view="mission" title="Mission">
+                        <span class="nav-btn-icon">🚀</span>
+                        <span>Mission</span>
+                    </button>
+                </div>
+                <div class="tablet-rail-divider"></div>
+                <div class="tablet-rail-section" id="tablet-teams-rail">
+                    <!-- Team icons inserted here -->
+                </div>
+            </nav>
+
+            <!-- Active View Container -->
+            <main class="cmd-view-container">
+                <!-- 1. Dispatch View -->
+                <section class="cmd-view-pane active" id="view-dispatch">
+                    <div class="dispatch-split-layout">
+                        <div style="display:flex; flex-direction:column; min-height:0; flex:1;">
+                            <div class="list-header-row">
+                                <span style="font-weight:600; font-size:13px; color:var(--text-primary);">READY FOR DISPATCH</span>
+                                <button class="star-filter-btn" id="dispatch-star-toggle">
+                                    <span>★</span>
+                                    <span>Starred only</span>
+                                </button>
+                            </div>
+                            <div class="cards-scroll-list" id="dispatch-cards-list">
+                                <!-- Cards populated by script -->
+                            </div>
+                        </div>
+
+                        <div class="cmd-action-box" id="dispatch-action-box">
+                            <div style="font-size:12px; font-weight:600; color:var(--text-secondary);">SELECTED TARGET</div>
+                            <div id="dispatch-selected-title" style="font-size:14px; font-weight:600; color:var(--text-primary); min-height:20px;">None selected</div>
+                            <div id="dispatch-status-chip" class="status-chip">Select a card</div>
+                            <button class="primary-action-btn" id="btn-dispatch" disabled>
+                                DISPATCH
+                            </button>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 2. Move View -->
+                <section class="cmd-view-pane" id="view-move">
+                    <div class="move-split-layout">
+                        <div style="display:flex; flex-direction:column; min-height:0; flex:1;">
+                            <div class="list-header-row">
+                                <select class="cmd-select" id="move-source-column-select" style="max-width:200px;" aria-label="Source Column"></select>
+                                <button class="star-filter-btn" id="move-star-toggle">
+                                    <span>★</span>
+                                    <span>Starred</span>
+                                </button>
+                            </div>
+                            <div class="cards-scroll-list" id="move-cards-list">
+                                <!-- Move cards populated by script -->
+                            </div>
+                        </div>
+
+                        <div class="cmd-action-box" id="move-action-box">
+                            <div style="font-size:12px; font-weight:600; color:var(--text-secondary);">MOVE CARD</div>
+                            <div id="move-selected-title" style="font-size:14px; font-weight:600; color:var(--text-primary); min-height:20px;">None selected</div>
+                            <div class="action-row">
+                                <label for="move-target-column-select" style="font-size:12px; color:var(--text-secondary);">To Column:</label>
+                                <select class="cmd-select" id="move-target-column-select" aria-label="Target Column"></select>
+                            </div>
+                            <div id="move-status-chip" class="status-chip">Select card and target column</div>
+                            <button class="primary-action-btn" id="btn-move" disabled>
+                                MOVE
+                            </button>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 3. Mission View -->
+                <section class="cmd-view-pane" id="view-mission">
+                    <div style="display:flex; flex-direction:column; gap:12px; max-width:700px; width:100%; margin:0 auto;">
+                        <div class="list-header-row">
+                            <span style="font-weight:600; font-size:14px; color:var(--text-primary);">MISSION CONTROL</span>
+                            <button class="secondary-action-btn" id="btn-new-mission">
+                                + New Mission
+                            </button>
+                        </div>
+
+                        <!-- State A: Not Started / Staging -->
+                        <div id="mission-staging-container" class="cmd-action-box">
+                            <div style="font-size:12px; font-weight:600; color:var(--text-secondary);">STAGED MEMBERS</div>
+                            <div id="mission-members-list" style="display:flex; flex-direction:column; gap:6px; min-height:40px;">
+                                <!-- Staged cards -->
+                            </div>
+
+                            <div style="font-size:12px; font-weight:600; color:var(--text-secondary); margin-top:8px;">ADD MEMBER</div>
+                            <div class="action-row">
+                                <select class="cmd-select" id="mission-add-member-select" aria-label="Add Member"></select>
+                                <button class="secondary-action-btn" id="btn-add-mission-member">Add</button>
+                            </div>
+
+                            <button class="primary-action-btn" id="btn-launch-mission" style="margin-top:10px;">
+                                LAUNCH MISSION
+                            </button>
+                        </div>
+
+                        <!-- State B: In-Flight Progress -->
+                        <div id="mission-progress-container" class="cmd-action-box hidden">
+                            <div style="display:flex; align-items:center; justify-content:space-between;">
+                                <span id="mission-progress-codename" style="font-size:15px; font-weight:700; color:var(--accent-primary);">MISSION ACTIVE</span>
+                                <span class="team-state-badge team-state-held" id="mission-progress-badge">IN FLIGHT</span>
+                            </div>
+                            <div id="mission-progress-elapsed" style="font-size:12px; color:var(--text-secondary); font-family:var(--font-code);">Running for 0s</div>
+                            <div style="font-size:12px; font-weight:600; color:var(--text-secondary); margin-top:8px;">MEMBERS PROGRESS</div>
+                            <div id="mission-progress-members-list" style="display:flex; flex-direction:column; gap:6px;">
+                                <!-- Live status of members -->
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 4. Teams View (Phone Roster) -->
+                <section class="cmd-view-pane" id="view-teams">
+                    <div style="display:flex; flex-direction:column; gap:12px; max-width:700px; width:100%; margin:0 auto; height:100%;">
+                        <div class="list-header-row">
+                            <span style="font-weight:600; font-size:14px; color:var(--text-primary);">TEAM ROSTER</span>
+                        </div>
+                        <div class="teams-roster-list" id="teams-roster-list">
+                            <!-- Team cards populated by script -->
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Read-Only Terminal Viewer Pane -->
+                <section class="terminal-viewer-pane" id="pane-terminal-viewer">
+                    <div class="terminal-viewer-header">
+                        <button class="secondary-action-btn" id="btn-close-terminal">← Back to Teams</button>
+                        <span id="terminal-viewer-title" style="font-size:12px; font-weight:600; color:var(--text-primary);">Terminal Output</span>
+                        <span class="status-chip" id="terminal-ws-status">Live</span>
+                    </div>
+                    <pre class="terminal-stream-box" id="terminal-stream-output"></pre>
+                </section>
+
+                <!-- VIEW Document Preview Overlay -->
+                <div class="cmd-view-overlay" id="view-overlay">
+                    <div class="view-overlay-header">
+                        <button class="secondary-action-btn" id="btn-close-preview">← Back</button>
+                        <span class="view-overlay-path" id="preview-file-path"></span>
+                    </div>
+                    <div class="view-overlay-body">
+                        <div id="kanban-preview-content"></div>
+                    </div>
+                </div>
+            </main>
+        </div>
+
+        <!-- Bottom Sub-Nav Bar (Phone) -->
+        <nav class="phone-nav-bar" id="phone-nav-bar" aria-label="Mobile Navigation">
+            <button class="nav-btn active" data-view="dispatch">
+                <span class="nav-btn-icon">⚡</span>
+                <span>Dispatch</span>
+            </button>
+            <button class="nav-btn" data-view="move">
+                <span class="nav-btn-icon">➔</span>
+                <span>Move</span>
+            </button>
+            <button class="nav-btn" data-view="mission">
+                <span class="nav-btn-icon">🚀</span>
+                <span>Mission</span>
+            </button>
+            <button class="nav-btn" data-view="teams">
+                <span class="nav-btn-icon">👥</span>
+                <span>Teams</span>
+            </button>
+        </nav>
+    </div>
+
+    <!-- SHARED_DEFAULTS_SCRIPT -->
+    <script src="/static/webview/sharedUtils.js" nonce="{{NONCE}}"></script>
+    <script src="/static/webview/command.js" nonce="{{NONCE}}"></script>
+</body>
+</html>

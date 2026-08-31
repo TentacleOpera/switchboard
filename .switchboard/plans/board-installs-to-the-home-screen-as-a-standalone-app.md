@@ -549,3 +549,9 @@ tag's reputation as legacy.
 
 **Ready to execute.** No open decisions and no outstanding research; see *Resolved
 Assumptions*.
+
+## Implementation Summary
+
+Implemented standalone Home Screen installation support for Switchboard on phone and tablet devices. Configured web app manifest (`/manifest.json` and `manifest.webmanifest`) with standalone display mode, dark theme tokens, and square icon assets (180x180, 192x192, 512x512, and 512x512 maskable). Added `apple-mobile-web-app-capable`, `apple-mobile-web-app-status-bar-style`, `apple-touch-icon`, `viewport-fit=cover`, and `manifest-src 'self'` CSP directives across `shell.html` and `headlessPanelHtml.ts`. Updated `LocalApiServer` to map `.webmanifest` MIME type to `application/manifest+json` and route `/manifest.json`, and documented installation via MagicDNS in `docs/REMOTE_ACCESS.md`. Verified with automated contract suite `standalone-pwa-install-contract.test.js`, written over the dynamic set of shell-class policies across webview templates and server generators.
+
+

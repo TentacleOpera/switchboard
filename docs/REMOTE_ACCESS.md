@@ -100,6 +100,22 @@ extension falls back to loopback-only (the editor webview and local agent
 clients keep working) — the extension must not refuse to start, unlike the
 standalone host which exits non-zero.
 
+**Installing to the Home Screen (iOS / iPadOS / Mobile).**
+
+You can install the browser board to your phone or tablet Home Screen as a
+standalone app (own icon, own entry in the app switcher, launching full-screen
+with no address bar or Safari toolbar).
+
+- **Install from the MagicDNS URL** (e.g. `http://<machine-name>:7777/` or its
+  MagicDNS FQDN), **NOT** from the raw tailnet IP address (`http://100.x.y.z:7777/`).
+- **Why**: `start_url` is frozen when the Home Screen icon is created. Installing
+  against the MagicDNS name ensures the shortcut remains valid across tailnet IP
+  changes and server reboots.
+- In Safari, tap Share → **Add to Home Screen**. Full-screen standalone mode is
+  powered by `apple-mobile-web-app-capable` and the web app manifest, complete
+  with square icon assets and safe-area inset adaptation for device notches and
+  home indicators.
+
 ### SSH tunnel (loopback-only, no Tailscale)
 
 If you do not use Tailscale, forward a local port on your client machine to the
