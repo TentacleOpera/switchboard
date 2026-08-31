@@ -204,7 +204,16 @@ space.
 ## Proposed Changes
 
 1. **`switchboard` (bare command) / `switchboard ready [column] [--project <name>] [--json]`** — the primary interactive terminal interface.
-   - **`switchboard`** with no subcommand is the front door: it connects to the running Switchboard server and presents the interactive board console (ready cards in `PLAN REVIEWED` / `CREATED`, short IDs, titles, and an interactive prompt to pick and dispatch).
+   - **`switchboard`** with no subcommand is the front door: it connects to the running Switchboard server and presents the interactive board console.
+   - **UFO ANSI Art Banner:** On TTY interactive launch, renders a compact, glowing cyan UFO ANSI art banner (matching the webview's `switchboard-ufo.svg` brand asset and theme-accent palette). Suppressed when `--no-ansi` is given, under `--json`, or when stdout is not a TTY.
+     ```text
+            .---.
+      _...-'     '-..._       SWITCHBOARD
+    .-~  ●   ●   ●   ●  ~-.   Autonomous Agent Fleet Console
+   (________________________)
+         \   :    :   /
+          \  :    :  /
+     ```
    - If no server is running, it exits cleanly (code 1) with:
      ```text
      No running Switchboard server for this workspace.
