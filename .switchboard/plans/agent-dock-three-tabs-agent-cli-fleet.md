@@ -60,6 +60,14 @@ A pty seat adds nothing: the fleet already spawns terminals, the dock already re
 gets the interactive front door — `switchboard` bare renders a menu, `ready` offers a picker — which
 an exec endpoint could never carry.
 
+## Dependencies
+
+- **Hard prerequisite:** `the-dock-frame-can-drive-the-shell-it-lives-in.md`. A `?dock=1` Terminals
+  document can post `switchPanel` to the shell and repaint the main content area — `transport.js`'s
+  bridge has no dock guard. Retiring the Kanban pane does not fix that; the CLI tab this plan adds
+  is the same `/terminals?…&dock=1` pattern and inherits the same leak. Containment lands first, or
+  this plan ships a new instance of a known bug.
+
 ## Metadata
 
 **Complexity:** 4
