@@ -140,16 +140,25 @@ function run() {
     });
 
     test('board reads unwrap the { success, data } envelope', () => {
-        // /kanban/plans, /kanban/columns and /kanban/plan all answer through
-        // _handleReadEndpoint. Read as bare bodies, the board was empty, the
+        // /kanban/columns and /kanban/plan all answer through
+        // _handleReadEndpoint. Read as bare bodies, the
         // column dropdowns were empty and the preview always said "no content".
-        for (const route of ['/kanban/plans', '/kanban/columns', '/kanban/plan?']) {
+        for (const route of ['/kanban/columns', '/kanban/plan?']) {
             const idx = js.indexOf(route);
             assert.ok(idx > 0, `expected a read of ${route}`);
             const window = js.slice(idx, idx + 900);
             assert.ok(/payload\.data|\.data\s*!==\s*undefined/.test(window),
                 `the read of ${route} must unwrap the { success, data } envelope`);
         }
+    });
+
+    test('command surface issues no board fetch and joins the board push broadcast', () => {
+        assert.ok(!/\/kanban\/plans(?!\/priority)/.test(js), 'command.js must not fetch /kanban/plans board list');
+        assert.ok(js.includes('/kanban/plans/priority'), 'command.js retains priority star write endpoint');
+        assert.ok(!js.includes('fetchBoardCards'), 'command.js must not contain fetchBoardCards');
+        assert.ok(!/\bsetInterval\b/.test(js), 'command.js must not contain setInterval polling');
+        assert.ok(js.includes("window.addEventListener('message'"), 'command.js must subscribe to window message push');
+        assert.ok(js.includes('updateBoard'), 'command.js must handle updateBoard message');
     });
 
     test('no read targets a field its writer does not persist', () => {

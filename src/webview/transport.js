@@ -111,6 +111,7 @@
      */
     const PANEL_SURFACES_MAP = {
         kanban: ['kanban', 'common'],
+        command: ['kanban', 'common'],
         terminals: ['terminals', 'common'],
         planning: ['planning', 'common'],
         design: ['design', 'common'],

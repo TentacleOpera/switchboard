@@ -17,11 +17,15 @@
     let activeView = 'dispatch';
 
     let selectedDispatchCardId = null;
+    let selectedDispatchColumn = '';
     let selectedMoveCardId = null;
     let selectedMoveSourceColumn = '';
     let selectedMoveTargetColumn = '';
     let dispatchStarredOnly = false;
     let moveStarredOnly = false;
+
+    // Feature Subtask Counts Cache
+    const featureSubtaskCounts = new Map();
 
     let activeMission = null;
     let teamRoster = [];
@@ -49,10 +53,11 @@
     };
 
     // Dispatch Elements
+    const dispatchSourceColSelect = document.getElementById('dispatch-source-column-select');
     const dispatchCardsList = document.getElementById('dispatch-cards-list');
     const dispatchStarToggle = document.getElementById('dispatch-star-toggle');
-    const dispatchSelectedTitle = document.getElementById('dispatch-selected-title');
     const dispatchStatusChip = document.getElementById('dispatch-status-chip');
+    const btnDispatchView = document.getElementById('btn-dispatch-view');
     const btnDispatch = document.getElementById('btn-dispatch');
 
     // Move Elements
@@ -60,12 +65,11 @@
     const moveTargetColSelect = document.getElementById('move-target-column-select');
     const moveCardsList = document.getElementById('move-cards-list');
     const moveStarToggle = document.getElementById('move-star-toggle');
-    const moveSelectedTitle = document.getElementById('move-selected-title');
     const moveStatusChip = document.getElementById('move-status-chip');
+    const btnMoveView = document.getElementById('btn-move-view');
     const btnMove = document.getElementById('btn-move');
 
     // Mission Elements
-    const btnNewMission = document.getElementById('btn-new-mission');
     const btnLaunchMission = document.getElementById('btn-launch-mission');
     const missionStagingContainer = document.getElementById('mission-staging-container');
     const missionProgressContainer = document.getElementById('mission-progress-container');
@@ -104,14 +108,63 @@
 
         setupNavigation();
         setupEventHandlers();
+        window.addEventListener('message', handleIncomingMessage);
         refreshAllData();
+    }
 
-        // Periodic background poll
-        setInterval(() => {
-            if (!document.hidden && !activeTerminalWs) {
-                pollBackgroundState();
+    function handleIncomingMessage(event) {
+        let msg = event.data;
+        if (typeof msg === 'string') {
+            try {
+                msg = JSON.parse(msg);
+            } catch {
+                return;
             }
-        }, 5000);
+        }
+        if (!msg || typeof msg !== 'object') return;
+
+        if (msg.type === 'updateBoard') {
+            allCards = Array.isArray(msg.cards) ? msg.cards : [];
+            recomputeSubtaskCounts();
+
+            // Clear optimistic entries that match the incoming server state
+            allCards.forEach(c => {
+                const id = c.planId || c.sessionId || c.id;
+                const cardCol = c.kanbanColumn || c.column;
+                if (pendingMoves.has(id) && pendingMoves.get(id) === cardCol) {
+                    pendingMoves.delete(id);
+                }
+                if (pendingStars.has(id) && Boolean(c.priorityStarred) === Boolean(pendingStars.get(id))) {
+                    pendingStars.delete(id);
+                }
+            });
+
+            extractWorkspaceProjects(allCards);
+            renderActiveView();
+        } else if (msg.type === 'moveCards') {
+            const idsToMove = new Set(Array.isArray(msg.sessionIds) ? msg.sessionIds : []);
+            const targetCol = msg.targetColumn;
+            if (idsToMove.size && targetCol) {
+                allCards = allCards.map(c => {
+                    const id = c.planId || c.sessionId || c.id;
+                    if (idsToMove.has(id) || (c.sessionId && idsToMove.has(c.sessionId)) || (c.planId && idsToMove.has(c.planId))) {
+                        pendingMoves.delete(id);
+                        return { ...c, kanbanColumn: targetCol, column: targetCol };
+                    }
+                    return c;
+                });
+                renderActiveView();
+            }
+        }
+    }
+
+    function recomputeSubtaskCounts() {
+        featureSubtaskCounts.clear();
+        allCards.forEach(c => {
+            if (c.featureId) {
+                featureSubtaskCounts.set(c.featureId, (featureSubtaskCounts.get(c.featureId) || 0) + 1);
+            }
+        });
     }
 
     function setupNavigation() {
@@ -137,11 +190,7 @@
                 viewPanes[name].classList.toggle('active', name === viewName);
             });
 
-            if (viewName === 'teams') {
-                renderTeamsView();
-            } else if (viewName === 'mission') {
-                renderMissionView();
-            }
+            renderActiveView();
         }
 
         phoneNavBtns.forEach(btn => {
@@ -170,6 +219,17 @@
             renderDispatchView();
         });
 
+        dispatchSourceColSelect?.addEventListener('change', () => {
+            selectedDispatchColumn = dispatchSourceColSelect.value;
+            renderDispatchView();
+        });
+
+        btnDispatchView?.addEventListener('click', () => {
+            if (!selectedDispatchCardId) return;
+            const card = allCards.find(c => (c.planId || c.sessionId || c.id) === selectedDispatchCardId);
+            if (card) openDocumentPreview(card.id, card.planFile);
+        });
+
         btnDispatch?.addEventListener('click', executeDispatch);
 
         // Move events
@@ -189,10 +249,15 @@
             updateMoveActionState();
         });
 
+        btnMoveView?.addEventListener('click', () => {
+            if (!selectedMoveCardId) return;
+            const card = allCards.find(c => (c.planId || c.sessionId || c.id) === selectedMoveCardId);
+            if (card) openDocumentPreview(card.id, card.planFile);
+        });
+
         btnMove?.addEventListener('click', executeMove);
 
         // Mission events
-        btnNewMission?.addEventListener('click', createNewMission);
         btnLaunchMission?.addEventListener('click', launchActiveMission);
         btnAddMissionMember?.addEventListener('click', addSelectedMissionMember);
 
@@ -208,20 +273,10 @@
     async function refreshAllData() {
         await Promise.all([
             fetchColumns(),
-            fetchBoardCards(),
             fetchMissionsState(),
             fetchTeamsState()
         ]);
-        renderAllViews();
-    }
-
-    async function pollBackgroundState() {
-        await Promise.all([
-            fetchBoardCards(),
-            fetchMissionsState(),
-            fetchTeamsState()
-        ]);
-        renderAllViews();
+        renderActiveView();
     }
 
     // ── Data Fetching ──────────────────────────────────────────────────
@@ -231,10 +286,6 @@
             const res = await fetch(`/kanban/columns${currentWorkspaceRoot ? `?workspaceRoot=${encodeURIComponent(currentWorkspaceRoot)}` : ''}`);
             if (res.ok) {
                 const payload = await res.json();
-                // Every read endpoint answers { success, data } (_handleReadEndpoint),
-                // and /kanban/columns' data is { builtIn, custom, displayOnly } — not an
-                // array. Reading the body as an array left both column dropdowns empty.
-                // `displayOnly` names no writable column, so it is deliberately excluded.
                 const data = (payload && payload.data !== undefined) ? payload.data : payload;
                 const raw = Array.isArray(data)
                     ? data
@@ -255,13 +306,22 @@
 
     function populateColumnDropdowns() {
         if (!moveSourceColSelect || !moveTargetColSelect) return;
+        const currentDispatch = dispatchSourceColSelect ? dispatchSourceColSelect.value : '';
         const currentSource = moveSourceColSelect.value;
         const currentTarget = moveTargetColSelect.value;
 
+        if (dispatchSourceColSelect) dispatchSourceColSelect.innerHTML = '';
         moveSourceColSelect.innerHTML = '';
         moveTargetColSelect.innerHTML = '';
 
         allColumns.forEach(col => {
+            if (dispatchSourceColSelect) {
+                const opt0 = document.createElement('option');
+                opt0.value = col.id;
+                opt0.textContent = col.label || col.id;
+                dispatchSourceColSelect.appendChild(opt0);
+            }
+
             const opt1 = document.createElement('option');
             opt1.value = col.id;
             opt1.textContent = col.label || col.id;
@@ -272,6 +332,16 @@
             opt2.textContent = col.label || col.id;
             moveTargetColSelect.appendChild(opt2);
         });
+
+        if (dispatchSourceColSelect) {
+            if (currentDispatch && [...dispatchSourceColSelect.options].some(o => o.value === currentDispatch)) {
+                dispatchSourceColSelect.value = currentDispatch;
+            } else if (allColumns.length > 0) {
+                const createdCol = allColumns.find(c => c.id === 'CREATED' || c.id === 'BACKLOG');
+                dispatchSourceColSelect.value = createdCol ? createdCol.id : allColumns[0].id;
+            }
+            selectedDispatchColumn = dispatchSourceColSelect.value;
+        }
 
         if (currentSource && [...moveSourceColSelect.options].some(o => o.value === currentSource)) {
             moveSourceColSelect.value = currentSource;
@@ -288,27 +358,8 @@
         selectedMoveTargetColumn = moveTargetColSelect.value;
     }
 
-    async function fetchBoardCards() {
-        try {
-            const queryRoot = currentWorkspaceRoot ? `?workspaceRoot=${encodeURIComponent(currentWorkspaceRoot)}` : '';
-            const res = await fetch(`/kanban/plans${queryRoot}`);
-            if (res.ok) {
-                const payload = await res.json();
-                // { success, data: [...] } — the same envelope the CLI's board
-                // commands had to be fixed for. Read as a bare array the board
-                // was empty on every view.
-                const data = (payload && payload.data !== undefined) ? payload.data : payload;
-                if (Array.isArray(data)) {
-                    allCards = data;
-                    extractWorkspaceProjects(data);
-                }
-            }
-        } catch (err) {
-            console.warn('[Command] Failed to fetch cards:', err);
-        }
-    }
-
     function extractWorkspaceProjects(cards) {
+        if (!wsSelect) return;
         const wsMap = {};
         cards.forEach(card => {
             const root = card.workspaceRoot || currentWorkspaceRoot;
@@ -383,11 +434,7 @@
                 liveFleet = Array.isArray(fleetData?.terminals) ? fleetData.terminals : [];
             }
 
-            // Team definitions. `GET /terminals/standing-orders` answers
-            // { success, available, orders, definitions } and has NO `groups` key —
-            // reading one left the roster permanently empty. `ptyListAgentGroups` is
-            // the verb the Terminals panel itself uses for this list, and it is one of
-            // the two verbs reachable before the pty host is ready.
+            // Team definitions
             const groupsRes = await fetch('/terminals/verb/ptyListAgentGroups', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -406,18 +453,21 @@
 
     // ── Rendering ─────────────────────────────────────────────────────
 
-    function renderAllViews() {
+    function renderActiveView() {
         updateMissionLock();
-        renderDispatchView();
-        renderMoveView();
-        renderMissionView();
-        renderTeamsView();
+        if (activeView === 'dispatch') {
+            renderDispatchView();
+        } else if (activeView === 'move') {
+            renderMoveView();
+        } else if (activeView === 'mission') {
+            renderMissionView();
+        } else if (activeView === 'teams') {
+            renderTeamsView();
+        }
     }
 
     function isMissionInFlight() {
         if (!activeMission) return false;
-        // `runState` is derived server-side from member state and is the only
-        // in-flight signal a mission record carries.
         return activeMission.runState === 'in-flight';
     }
 
@@ -435,8 +485,9 @@
     }
 
     function getComplexityClass(score) {
+        if (score === null || score === undefined || score === '' || score === 'Unknown') return 'comp-unknown';
         const num = Number(score);
-        if (!num || isNaN(num)) return 'comp-medium';
+        if (isNaN(num)) return 'comp-unknown';
         if (num <= 2) return 'comp-very-low';
         if (num <= 4) return 'comp-low';
         if (num <= 6) return 'comp-medium';
@@ -448,15 +499,28 @@
         const cardId = rawCard.planId || rawCard.sessionId || rawCard.id;
         const optColumn = pendingMoves.get(cardId);
         const optStar = pendingStars.get(cardId);
+        const currentCol = rawCard.kanbanColumn || rawCard.column || '';
         return {
             ...rawCard,
             id: cardId,
-            kanbanColumn: optColumn !== undefined ? optColumn : rawCard.kanbanColumn,
-            priorityStarred: optStar !== undefined ? (optStar ? 1 : 0) : rawCard.priorityStarred,
+            kanbanColumn: optColumn !== undefined ? optColumn : currentCol,
+            column: optColumn !== undefined ? optColumn : currentCol,
+            priorityStarred: optStar !== undefined ? (optStar ? 1 : 0) : (rawCard.priorityStarred ?? 0),
         };
     }
 
     // ── 1. Dispatch View Rendering ─────────────────────────────────────
+
+    function selectDispatchCard(cardId) {
+        selectedDispatchCardId = cardId;
+        if (dispatchCardsList) {
+            const items = dispatchCardsList.querySelectorAll('.cmd-card-row');
+            items.forEach(el => {
+                el.classList.toggle('selected', el.dataset.cardId === cardId);
+            });
+        }
+        updateDispatchActionState();
+    }
 
     function renderDispatchView() {
         if (!dispatchCardsList) return;
@@ -469,15 +533,20 @@
             cards = cards.filter(c => c.project === currentProject);
         }
 
-        // Exclude done/completed
-        cards = cards.filter(c => c.kanbanColumn !== 'done' && c.kanbanColumn !== 'completed' && c.kanbanColumn !== 'archived');
+        // Scope to dispatch source column
+        const dispatchCol = (dispatchSourceColSelect ? dispatchSourceColSelect.value : '') || selectedDispatchColumn;
+        if (dispatchCol) {
+            cards = cards.filter(c => (c.kanbanColumn || c.column) === dispatchCol || c.id === selectedDispatchCardId);
+        }
 
         if (dispatchStarredOnly) {
-            cards = cards.filter(c => Boolean(c.priorityStarred));
+            cards = cards.filter(c => Boolean(c.priorityStarred) || c.id === selectedDispatchCardId);
         }
 
         // Sort starred first, then complexity
         cards.sort((a, b) => {
+            if (a.id === selectedDispatchCardId) return -1;
+            if (b.id === selectedDispatchCardId) return 1;
             const starA = a.priorityStarred ? 1 : 0;
             const starB = b.priorityStarred ? 1 : 0;
             if (starA !== starB) return starB - starA;
@@ -489,7 +558,7 @@
             empty.style.padding = '20px';
             empty.style.color = 'var(--text-secondary)';
             empty.style.textAlign = 'center';
-            empty.textContent = 'No cards ready for dispatch.';
+            empty.textContent = 'No cards ready for dispatch in this column.';
             dispatchCardsList.appendChild(empty);
             updateDispatchActionState();
             return;
@@ -497,8 +566,7 @@
 
         cards.forEach(card => {
             const item = createCardItemElement(card, selectedDispatchCardId === card.id, (selectedCard) => {
-                selectedDispatchCardId = selectedCard.id;
-                renderDispatchView();
+                selectDispatchCard(selectedCard.id);
             });
             dispatchCardsList.appendChild(item);
         });
@@ -510,26 +578,38 @@
         const locked = isMissionInFlight();
         const selectedCard = allCards.find(c => (c.planId || c.sessionId || c.id) === selectedDispatchCardId);
 
+        if (btnDispatchView) {
+            btnDispatchView.disabled = !selectedCard;
+        }
+
         if (selectedCard) {
-            dispatchSelectedTitle.textContent = selectedCard.title || selectedCard.topic || selectedCard.planFile || 'Selected Card';
             if (locked) {
-                dispatchStatusChip.textContent = 'Locked: Mission in flight';
-                dispatchStatusChip.className = 'status-chip unknown';
+                if (dispatchStatusChip) {
+                    dispatchStatusChip.textContent = 'Locked: Mission in flight';
+                    dispatchStatusChip.className = 'status-chip unknown';
+                    dispatchStatusChip.classList.remove('hidden');
+                }
                 btnDispatch.disabled = true;
             } else {
-                dispatchStatusChip.textContent = `Ready (${selectedCard.kanbanColumn || 'staging'})`;
-                dispatchStatusChip.className = 'status-chip success';
                 btnDispatch.disabled = false;
             }
         } else {
-            dispatchSelectedTitle.textContent = 'None selected';
-            dispatchStatusChip.textContent = 'Select a card';
-            dispatchStatusChip.className = 'status-chip';
             btnDispatch.disabled = true;
         }
     }
 
     // ── 2. Move View Rendering ─────────────────────────────────────────
+
+    function selectMoveCard(cardId) {
+        selectedMoveCardId = cardId;
+        if (moveCardsList) {
+            const items = moveCardsList.querySelectorAll('.cmd-card-row');
+            items.forEach(el => {
+                el.classList.toggle('selected', el.dataset.cardId === cardId);
+            });
+        }
+        updateMoveActionState();
+    }
 
     function renderMoveView() {
         if (!moveCardsList) return;
@@ -545,7 +625,7 @@
         // Scope to source column
         const sourceCol = moveSourceColSelect?.value;
         if (sourceCol) {
-            cards = cards.filter(c => c.kanbanColumn === sourceCol || c.id === selectedMoveCardId);
+            cards = cards.filter(c => (c.kanbanColumn || c.column) === sourceCol || c.id === selectedMoveCardId);
         }
 
         if (moveStarredOnly) {
@@ -575,8 +655,7 @@
 
         cards.forEach(card => {
             const item = createCardItemElement(card, selectedMoveCardId === card.id, (selectedCard) => {
-                selectedMoveCardId = selectedCard.id;
-                renderMoveView();
+                selectMoveCard(selectedCard.id);
             });
             moveCardsList.appendChild(item);
         });
@@ -588,22 +667,22 @@
         const locked = isMissionInFlight();
         const selectedCard = allCards.find(c => (c.planId || c.sessionId || c.id) === selectedMoveCardId);
 
+        if (btnMoveView) {
+            btnMoveView.disabled = !selectedCard;
+        }
+
         if (selectedCard) {
-            const effective = getEffectiveCard(selectedCard);
-            moveSelectedTitle.textContent = `${effective.title || effective.topic || 'Card'} (${effective.kanbanColumn})`;
             if (locked) {
-                moveStatusChip.textContent = 'Locked: Mission in flight';
-                moveStatusChip.className = 'status-chip unknown';
+                if (moveStatusChip) {
+                    moveStatusChip.textContent = 'Locked: Mission in flight';
+                    moveStatusChip.className = 'status-chip unknown';
+                    moveStatusChip.classList.remove('hidden');
+                }
                 btnMove.disabled = true;
             } else {
-                moveStatusChip.textContent = `Ready to move -> ${selectedMoveTargetColumn || 'target'}`;
-                moveStatusChip.className = 'status-chip success';
                 btnMove.disabled = false;
             }
         } else {
-            moveSelectedTitle.textContent = 'None selected';
-            moveStatusChip.textContent = 'Select card and target column';
-            moveStatusChip.className = 'status-chip';
             btnMove.disabled = true;
         }
     }
@@ -611,86 +690,65 @@
     // ── Card Item Builder ──────────────────────────────────────────────
 
     function createCardItemElement(card, isSelected, onSelect) {
-        const item = document.createElement('div');
-        item.className = `cmd-card-item${isSelected ? ' selected' : ''}`;
+        const row = document.createElement('div');
+        row.className = `cmd-card-row${isSelected ? ' selected' : ''}`;
+        row.dataset.cardId = card.id;
 
-        const header = document.createElement('div');
-        header.className = 'cmd-card-header';
+        const isStarred = Boolean(card.priorityStarred);
+        const star = document.createElement('span');
+        star.className = `card-star-indicator${isStarred ? ' starred' : ''}`;
+        star.setAttribute('aria-label', isStarred ? 'Starred' : 'Not starred');
+        star.innerHTML = '<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5l2 4.5 5 .4-3.8 3.3 1.2 4.9L8 12l-4.4 2.6 1.2-4.9L1 6.4l5-.4z"/></svg>';
+        star.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            toggleCardStar(card.id, isStarred);
+        });
+        row.appendChild(star);
 
         const title = document.createElement('span');
         title.className = 'cmd-card-title';
         title.textContent = card.title || card.topic || card.planFile || 'Untitled';
-        header.appendChild(title);
+        row.appendChild(title);
 
-        const badges = document.createElement('div');
-        badges.className = 'cmd-card-badges';
+        const meta = document.createElement('div');
+        meta.className = 'cmd-card-meta';
 
-        if (card.complexity) {
+        if (card.complexity !== undefined && card.complexity !== null && card.complexity !== '') {
+            const num = Number(card.complexity);
             const dot = document.createElement('span');
-            dot.className = `complexity-dot ${getComplexityClass(card.complexity)}`;
-            dot.textContent = String(card.complexity);
-            badges.appendChild(dot);
+            if (isNaN(num) || String(card.complexity).toLowerCase() === 'unknown') {
+                dot.className = 'complexity-dot comp-unknown';
+                dot.textContent = '';
+            } else {
+                dot.className = `complexity-dot ${getComplexityClass(num)}`;
+                dot.textContent = String(num);
+            }
+            meta.appendChild(dot);
         }
 
-        // Plan rows carry no `subtaskCount`; the link is the subtask's own
-        // `featureId`, so count the siblings rather than print a hardcoded 0.
         const subtaskCount = card.isFeature
-            ? allCards.filter(c => c.featureId && c.featureId === card.planId).length
+            ? (featureSubtaskCounts.get(card.planId || card.id) || 0)
             : 0;
         if (card.isFeature) {
             const st = document.createElement('span');
             st.className = 'subtask-badge';
             st.textContent = `${subtaskCount} subtask${subtaskCount === 1 ? '' : 's'}`;
-            badges.appendChild(st);
+            meta.appendChild(st);
         }
 
-        if (card.kanbanColumn) {
-            const colBadge = document.createElement('span');
-            colBadge.className = 'column-badge';
-            colBadge.textContent = card.kanbanColumn;
-            badges.appendChild(colBadge);
-        }
+        const kindBadge = document.createElement('span');
+        kindBadge.className = 'kind-badge';
+        kindBadge.textContent = card.isFeature ? 'Feature' : 'Plan';
+        meta.appendChild(kindBadge);
 
-        header.appendChild(badges);
-        item.appendChild(header);
+        row.appendChild(meta);
 
-        const actions = document.createElement('div');
-        actions.className = 'cmd-card-actions';
-
-        const isStarred = Boolean(card.priorityStarred);
-        const starBtn = document.createElement('button');
-        starBtn.className = `btn-card-action${isStarred ? ' starred' : ''}`;
-        starBtn.textContent = isStarred ? '★ Starred' : '☆ Star';
-        starBtn.addEventListener('click', (ev) => {
-            ev.stopPropagation();
-            toggleCardStar(card.id, isStarred);
-        });
-        actions.appendChild(starBtn);
-
-        const viewBtn = document.createElement('button');
-        viewBtn.className = 'btn-card-action';
-        viewBtn.textContent = 'View Plan';
-        viewBtn.addEventListener('click', (ev) => {
-            ev.stopPropagation();
-            openDocumentPreview(card.id, card.planFile);
-        });
-        actions.appendChild(viewBtn);
-
-        item.appendChild(actions);
-
-        item.addEventListener('click', () => onSelect(card));
-        return item;
+        row.addEventListener('click', () => onSelect(card));
+        return row;
     }
 
     // ── 3. Mission View Rendering ──────────────────────────────────────
 
-    /**
-     * A mission record carries `plans: string[]` and `features: string[]` (planIds)
-     * and no `members` array, so every read of a mission `members` array resolved to
-     * undefined and the view always reported "No members staged" — including
-     * straight after a successful member add. Resolve each id against the board so
-     * a member row can show its real title, its seat and its completion.
-     */
     function missionMembers() {
         if (!activeMission) { return []; }
         const ids = [
@@ -698,21 +756,18 @@
             ...(Array.isArray(activeMission.features) ? activeMission.features.map(id => ({ id, kind: 'feature' })) : []),
         ];
         return ids.map(({ id, kind }) => {
-            const card = allCards.find(c => (c.planId || c.sessionId) === id) || null;
+            const card = allCards.find(c => (c.planId || c.sessionId || c.id) === id) || null;
             return {
                 id,
                 kind,
-                title: card ? (card.topic || card.planFile || id) : id,
-                // Both persisted on the plan row; the mission stores neither.
+                title: card ? (card.topic || card.title || card.planFile || id) : id,
                 seat: card ? (card.dispatchedTerminal || '') : '',
                 dispatchedAt: card ? (card.dispatchedAt || null) : null,
-                completed: Boolean(card && card.completedAt),
+                completed: Boolean(card && (card.completedAt || (card.kanbanColumn || card.column) === 'COMPLETED')),
             };
         });
     }
 
-    /** The mission's server-assigned codename lands in `name` (_uniqueCodename);
-     *  there is no `codename` or `title` field on a mission record. */
     function missionLabel(fallback) {
         return (activeMission && activeMission.name) || fallback;
     }
@@ -728,8 +783,6 @@
 
             missionProgressCodename.textContent = missionLabel('OPERATION IN FLIGHT');
             const members = missionMembers();
-            // A mission has no dispatch timestamp of its own; the run started when
-            // its earliest member was dispatched.
             const stamps = members.map(m => m.dispatchedAt).filter(Boolean).map(v => new Date(v).getTime())
                 .filter(n => Number.isFinite(n));
             const startedAt = stamps.length ? Math.min(...stamps) : 0;
@@ -738,15 +791,16 @@
 
             missionProgressMembersList.innerHTML = '';
             if (members.length === 0) {
-                missionProgressMembersList.innerHTML = '<div style="color:var(--text-secondary); font-size:12px;">No members listed.</div>';
+                missionProgressMembersList.innerHTML = '<div style="color:var(--text-secondary); font-size:12px; padding:12px;">No members listed.</div>';
             } else {
                 members.forEach(m => {
                     const row = document.createElement('div');
-                    row.className = 'team-roster-card';
-                    row.style.minHeight = '40px';
+                    row.className = 'cmd-card-row';
+                    row.style.minHeight = '48px';
+                    row.style.height = '48px';
 
                     const name = document.createElement('span');
-                    name.style.fontSize = '12px';
+                    name.className = 'cmd-card-title';
                     name.textContent = m.title;
                     row.appendChild(name);
 
@@ -765,26 +819,28 @@
             missionMembersList.innerHTML = '';
             const members = missionMembers();
             if (members.length === 0) {
-                missionMembersList.innerHTML = '<div style="color:var(--text-secondary); font-size:12px; padding:8px 0;">No members staged. Add candidates below.</div>';
+                missionMembersList.innerHTML = '<div style="color:var(--text-secondary); font-size:12px; padding:12px; text-align:center;">No members staged. Select candidates above.</div>';
             } else {
                 members.forEach(m => {
                     const row = document.createElement('div');
-                    row.style.display = 'flex';
-                    row.style.alignItems = 'center';
-                    row.style.justifyContent = 'space-between';
-                    row.style.padding = '6px 10px';
-                    row.style.background = 'var(--panel-bg2)';
-                    row.style.borderRadius = '4px';
+                    row.className = 'cmd-card-row';
+                    row.style.minHeight = '48px';
+                    row.style.height = '48px';
 
                     const title = document.createElement('span');
-                    title.style.fontSize = '12px';
+                    title.className = 'cmd-card-title';
                     title.textContent = m.title;
                     row.appendChild(title);
 
                     const removeBtn = document.createElement('button');
-                    removeBtn.className = 'btn-card-action';
+                    removeBtn.className = 'secondary-action-btn';
+                    removeBtn.style.minHeight = '32px';
+                    removeBtn.style.padding = '4px 10px';
                     removeBtn.textContent = 'Remove';
-                    removeBtn.addEventListener('click', () => removeMissionMember(m.id));
+                    removeBtn.addEventListener('click', (ev) => {
+                        ev.stopPropagation();
+                        removeMissionMember(m.id);
+                    });
                     row.appendChild(removeBtn);
 
                     missionMembersList.appendChild(row);
@@ -795,11 +851,18 @@
             if (missionAddMemberSelect) {
                 missionAddMemberSelect.innerHTML = '';
                 const memberIds = new Set(members.map(m => m.id));
-                const candidates = allCards.filter(c => !memberIds.has(c.planId || c.sessionId || c.id));
+                let candidates = allCards.filter(c => !memberIds.has(c.planId || c.sessionId || c.id));
+                if (currentProject && currentProject !== '__unassigned__') {
+                    candidates = candidates.filter(c => c.project === currentProject);
+                }
+                candidates = candidates.filter(c => {
+                    const col = (c.kanbanColumn || c.column || '').toUpperCase();
+                    return col !== 'COMPLETED' && col !== 'ARCHIVED';
+                });
                 candidates.forEach(c => {
                     const opt = document.createElement('option');
                     opt.value = c.planId || c.sessionId || c.id;
-                    opt.textContent = `${c.title || c.topic || 'Card'} (${c.kanbanColumn || 'new'})`;
+                    opt.textContent = `${c.title || c.topic || 'Card'} (${c.kanbanColumn || c.column || 'new'})`;
                     opt.dataset.kind = c.isFeature ? 'feature' : 'plan';
                     missionAddMemberSelect.appendChild(opt);
                 });
@@ -814,8 +877,6 @@
         if (tabletTeamsRail) tabletTeamsRail.innerHTML = '';
 
         if (teamRoster.length === 0) {
-            // Never invent teams. A placeholder roster is indistinguishable from
-            // real board state on a phone, and two of them shipped here.
             if (teamsRosterList) {
                 const empty = document.createElement('div');
                 empty.style.padding = '20px';
@@ -832,7 +893,6 @@
         });
     }
 
-    /** Mirror of terminals.js resolveArtForShell — art:/pack:/data: only. */
     function resolveTeamIconUri(value) {
         const v = String(value || '').trim();
         if (!v) { return null; }
@@ -848,27 +908,17 @@
         return null;
     }
 
-    /**
-     * The live head of a declared team. A team definition names a `headRole`, not
-     * a seat name — the seat is whichever live terminal holds that role, which is
-     * the same predicate the Terminals panel's rail uses for its fixed slots. The
-     * fleet projection emits `friendlyName` and `status`; it has no `name` and no
-     * `working`, so both were read as undefined here and every team read DORMANT.
-     */
     function resolveTeamHeadSeat(team) {
         const role = team.headRole || '';
         return liveFleet.find(t => t && t.status !== 'exited'
             && ((role && t.role === role) || (team.head && t.friendlyName === team.head))) || null;
     }
 
-    /** Seats a declared team asks for: its head plus every member's count. */
     function declaredSeatCount(team) {
         const members = Array.isArray(team.members) ? team.members : [];
         return 1 + members.reduce((n, m) => n + (Number(m && m.count) || 0), 0);
     }
 
-    /** Start a dormant team. Same verb and payload the desktop rail's dormant
-     *  slot posts; a dormant row means "seat this team", never "open a terminal". */
     async function seatTeam(team, btn) {
         if (btn) { btn.disabled = true; }
         try {
@@ -880,8 +930,6 @@
             let data = null;
             try { data = await res.json(); } catch { /* ignore */ }
             if (!data || data.success === false) {
-                // The pty host is a real precondition on this route (a host without
-                // node-pty answers here, it does not 503 the page) — state it.
                 setTeamNotice((data && data.error) || 'Could not seat this team');
             } else {
                 setTeamNotice('');
@@ -905,13 +953,9 @@
         const liveSeat = resolveTeamHeadSeat(team);
         const headName = liveSeat ? liveSeat.friendlyName : (team.head || team.name);
         const isDormant = !liveSeat;
-        // A mission holds a team through the mission's own `team` field — mission
-        // records carry `plans`/`features`/`team`, never a `members` array.
         const heldTeam = String(activeMission?.team || '');
         const isHeld = isMissionInFlight() && heldTeam !== ''
             && (heldTeam === team.id || heldTeam === team.name);
-        // A dispatched plan is attributed to its seat, so a head holding a planId
-        // is working. There is no `working` flag on the fleet projection.
         const isWorking = Boolean(liveSeat && liveSeat.planId);
 
         let stateLabel = 'IDLE';
@@ -920,12 +964,14 @@
             stateLabel = 'DORMANT';
             stateClass = 'team-state-dormant';
         } else if (isHeld) {
-            stateLabel = 'HELD BY MISSION';
+            stateLabel = 'HELD';
             stateClass = 'team-state-held';
         } else if (isWorking) {
             stateLabel = 'WORKING';
             stateClass = 'team-state-working';
         }
+
+        const teamIconUri = resolveTeamIconUri(team.icon) || '/static/icons/nav-jet.svg';
 
         // Phone Roster Card
         if (teamsRosterList) {
@@ -937,16 +983,11 @@
 
             const iconBox = document.createElement('div');
             iconBox.className = 'team-icon-box';
-            const teamIconUri = resolveTeamIconUri(team.icon);
-            if (teamIconUri) {
-                const img = document.createElement('img');
-                img.className = 'team-icon-img';
-                img.src = teamIconUri;
-                img.alt = '';
-                iconBox.appendChild(img);
-            } else {
-                iconBox.textContent = (team.name || 'T').charAt(0).toUpperCase();
-            }
+            const img = document.createElement('img');
+            img.className = 'team-icon-img';
+            img.src = teamIconUri;
+            img.alt = '';
+            iconBox.appendChild(img);
             left.appendChild(iconBox);
 
             const info = document.createElement('div');
@@ -960,7 +1001,7 @@
             const seats = document.createElement('span');
             seats.className = 'team-seats-subtitle';
             const seatCount = declaredSeatCount(team);
-            seats.textContent = `${seatCount} seat${seatCount > 1 ? 's' : ''} · Head: ${headName}`;
+            seats.textContent = `${seatCount} seat${seatCount > 1 ? 's' : ''} \u00b7 Head: ${headName}`;
             info.appendChild(seats);
 
             left.appendChild(info);
@@ -982,41 +1023,60 @@
             teamsRosterList.appendChild(card);
         }
 
-        // Tablet Rail Icon
+        // Tablet Rail Team Card
         if (tabletTeamsRail) {
-            const railBtn = document.createElement('button');
-            railBtn.className = `nav-btn${isDormant ? ' is-dormant' : ''}`;
-            railBtn.title = `${team.name} (${stateLabel})`;
-            railBtn.style.width = '48px';
-            railBtn.style.minHeight = '48px';
-            railBtn.style.padding = '4px';
+            const railItem = document.createElement('div');
+            railItem.className = `team-roster-card${isDormant ? ' is-dormant' : ''}`;
+            railItem.style.minHeight = '44px';
+            railItem.style.padding = '6px 8px';
 
-            const railIconUri = resolveTeamIconUri(team.icon);
-            if (railIconUri) {
-                const img = document.createElement('img');
-                img.src = railIconUri;
-                img.style.width = '20px';
-                img.style.height = '20px';
-                img.alt = '';
-                railBtn.appendChild(img);
-            } else {
-                const glyph = document.createElement('span');
-                glyph.textContent = (team.name || 'T').charAt(0).toUpperCase();
-                glyph.style.fontFamily = 'GeistPixel, monospace';
-                glyph.style.fontSize = '14px';
-                glyph.style.color = 'var(--accent-primary)';
-                railBtn.appendChild(glyph);
-            }
+            const left = document.createElement('div');
+            left.className = 'team-roster-left';
 
-            railBtn.addEventListener('click', () => {
+            const iconBox = document.createElement('div');
+            iconBox.className = 'team-icon-box';
+            const img = document.createElement('img');
+            img.className = 'team-icon-img';
+            img.src = teamIconUri;
+            img.alt = '';
+            iconBox.appendChild(img);
+            left.appendChild(iconBox);
+
+            const info = document.createElement('div');
+            info.className = 'team-info-col';
+
+            const name = document.createElement('span');
+            name.className = 'team-name-title';
+            name.style.fontSize = '12px';
+            name.textContent = team.name || headName;
+            info.appendChild(name);
+
+            const seats = document.createElement('span');
+            seats.className = 'team-seats-subtitle';
+            seats.style.fontSize = '10px';
+            const seatCount = declaredSeatCount(team);
+            seats.textContent = `${seatCount} seat${seatCount > 1 ? 's' : ''}`;
+            info.appendChild(seats);
+
+            left.appendChild(info);
+            railItem.appendChild(left);
+
+            const stateBadge = document.createElement('span');
+            stateBadge.className = `team-state-badge ${stateClass}`;
+            stateBadge.style.fontSize = '9px';
+            stateBadge.style.padding = '2px 6px';
+            stateBadge.textContent = stateLabel;
+            railItem.appendChild(stateBadge);
+
+            railItem.addEventListener('click', () => {
                 if (isDormant) {
-                    seatTeam(team, railBtn);
+                    seatTeam(team, null);
                 } else {
                     openTerminalViewer(team, headName);
                 }
             });
 
-            tabletTeamsRail.appendChild(railBtn);
+            tabletTeamsRail.appendChild(railItem);
         }
     }
 
@@ -1047,7 +1107,6 @@
             if (res.ok && result?.success !== false) {
                 dispatchStatusChip.textContent = `Dispatched to ${result?.dispatchedAgent || 'agent'}`;
                 dispatchStatusChip.className = 'status-chip success';
-                await fetchBoardCards();
                 renderDispatchView();
             } else {
                 const errMsg = result?.error || 'Dispatch outcome unknown';
@@ -1088,8 +1147,6 @@
             if (res.ok) {
                 moveStatusChip.textContent = `Moved to ${targetCol}`;
                 moveStatusChip.className = 'status-chip success';
-                pendingMoves.delete(cardId);
-                await fetchBoardCards();
                 renderMoveView();
             } else {
                 pendingMoves.delete(cardId);
@@ -1106,8 +1163,7 @@
     async function toggleCardStar(cardId, currentStarred) {
         const nextStarred = !currentStarred;
         pendingStars.set(cardId, nextStarred);
-        renderDispatchView();
-        renderMoveView();
+        renderActiveView();
 
         try {
             const res = await fetch('/kanban/plans/priority', {
@@ -1118,37 +1174,12 @@
                     starred: nextStarred
                 })
             });
-            if (res.ok) {
+            if (!res.ok) {
                 pendingStars.delete(cardId);
-                await fetchBoardCards();
-                renderDispatchView();
-                renderMoveView();
-            } else {
-                pendingStars.delete(cardId);
+                renderActiveView();
             }
         } catch (err) {
             console.warn('[Command] Star toggle offline:', err);
-        }
-    }
-
-    async function createNewMission() {
-        try {
-            btnNewMission.disabled = true;
-            const res = await fetch('/kanban/mission/create', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    workspaceRoot: currentWorkspaceRoot
-                })
-            });
-            if (res.ok) {
-                await fetchMissionsState();
-                renderMissionView();
-            }
-        } catch (err) {
-            console.warn('[Command] Create mission failed:', err);
-        } finally {
-            btnNewMission.disabled = false;
         }
     }
 
@@ -1213,7 +1244,7 @@
             });
             if (res.ok) {
                 await fetchMissionsState();
-                renderAllViews();
+                renderActiveView();
             }
         } catch (err) {
             console.warn('[Command] Launch failed:', err);

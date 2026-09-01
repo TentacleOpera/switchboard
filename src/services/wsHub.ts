@@ -69,6 +69,7 @@ export type SurfaceType = typeof SURFACES[keyof typeof SURFACES];
  */
 export const PANEL_SURFACES: Record<string, string[]> = {
     kanban: [SURFACES.kanban, SURFACES.common],
+    command: [SURFACES.kanban, SURFACES.common],
     terminals: [SURFACES.terminals, SURFACES.common],
     planning: [SURFACES.planning, SURFACES.common],
     design: [SURFACES.design, SURFACES.common],
