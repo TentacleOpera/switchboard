@@ -5,7 +5,7 @@
 One tab does the whole job: a switch per lane, and a feed showing what the lanes and the fleet
 actually did. Rules also evaluate the moment a seat finishes a turn (not only on the
 minute tick), surface every rule's live verdict in the dock's Fleet tab, and give each rule an
-explicit Arm control so it moves from proposing to acting by a deliberate click.
+explicit per-lane switch that moves it from proposing to acting by a deliberate click.
 
 ### Problem Analysis
 
@@ -26,8 +26,8 @@ already the place the system learns a seat went quiet.
 
 **2. `lastOutcome` is a string in a config blob.** The dry-run trail the sibling plan writes has no
 reader. An operator cannot see which rules matched, which conditions failed, or what would happen
-next — so there is no way to build confidence before arming, which is the entire point of shipping
-dry-run first. The dock's new Fleet tab is already rendering seat state on a poll; rule verdicts
+next — so there is no way to build confidence before switching a lane to *act*, which is the entire
+point of shipping propose-first. The dock's new Fleet tab is already rendering seat state on a poll; rule verdicts
 belong beside them, because a rule's verdict is a statement *about* that fleet.
 
 ### Root Cause
@@ -60,12 +60,17 @@ clock. Nothing needed a host action triggered by a turn ending, so the two never
 
 ## User Review Required
 
-- **Confirm Arm is per-rule, not global.** Proposed: each rule arms independently, so the planner
-  rule can act while the coding rule is still being watched. A single global switch is simpler but
-  forces all-or-nothing trust.
-- **Confirm arming persists across restarts.** Proposed: yes — `armed` is a field on the job, so it
-  survives. The alternative (re-arm every session) is safer but becomes friction the operator
-  routes around.
+None — both settled.
+
+**The propose/act switch is per lane.** Planning can be acting while Coding is still only proposing,
+so trust is built one lane at a time. A single master switch would force all-or-nothing.
+
+**It persists across restarts.** `mode` is a field on the job, so a lane left on *act* is still
+acting after a reload. The counter-argument is real — a persisted *act* resumes unattended dispatch
+on restart without being asked, which rhymes with the autoban complaint — but the alternative resets
+every lane to *propose* on each launch, which means the automation silently stops overnight, exactly
+when it is wanted, and the operator routes around the friction within a week. The safety here is
+that a lane only fires when it is provably idle, not that it forgets.
 
 ## Complexity Audit
 
@@ -97,22 +102,23 @@ clock. Nothing needed a host action triggered by a turn ending, so the two never
 - **Both composition roots.** `notifyTurnEnd` lives on `TaskViewerProvider`, which both hosts
   construct — but the hook from it into the evaluator is a new seam, and a seam wired in one root is
   the documented failure mode.
-- **Arming is a state change with consequences.** Toggling Arm from a browser tab, over a tailnet,
-  starts real work. It routes through the same authenticated verb path as every other board
+- **Switching a lane to *act* is a state change with consequences.** Doing it from a browser tab,
+  over a tailnet, starts real work. It routes through the same authenticated verb path as every other board
   mutation; it does not get a shortcut because it is a checkbox.
 
 ## Edge-Case & Dependency Audit
 
-- **No `confirm()` on Arm.** `CLAUDE.md` is unambiguous, and `window.confirm` is a silent no-op in a
-  VS Code webview. Arm toggles immediately; the dry-run trail is the safety, not a dialog.
-- **A rule armed while its condition already holds** fires on the next trigger, not instantly on the
-  click. Arming is not itself a trigger — otherwise the click is a dispatch button wearing a
+- **No `confirm()` on the propose/act switch.** `CLAUDE.md` is unambiguous, and `window.confirm` is
+  a silent no-op in a VS Code webview. It toggles immediately; the propose trail is the safety, not a
+  dialog.
+- **A lane switched to *act* while it is already free** fires on the next trigger, not instantly on
+  the click. The switch is not itself a trigger — otherwise it is a dispatch button wearing a
   different label.
 - **Fleet tab offline.** Rule verdicts must render as *unknown*, never as *not matched*. The same
   fail-closed rule as the evaluator: an unreachable board is not evidence of an idle fleet.
 - **Verdict staleness.** The Fleet tab polls; a verdict shown is as old as its poll. It carries the
   evaluation timestamp so a stale panel is visibly stale.
-- **A rule whose job was dropped on read** (`DROPPED_SOURCES`) must not appear armed in the dock.
+- **A rule whose job was dropped on read** (`DROPPED_SOURCES`) must not appear as acting in the dock.
   Render from the same filtered list the tick evaluates.
 
 ## Proposed Changes
@@ -130,7 +136,7 @@ one rule in the same window. The interval floor stays as the outer throttle.
 ### 3. Read surface
 
 Expose the evaluated rule set — id, label, conditions in English, verdict, failing reasons,
-`armed`, `lastOutcome`, evaluated-at — through the existing authenticated read path the Fleet tab
+`mode`, `lastOutcome`, evaluated-at — through the existing authenticated read path the Fleet tab
 already uses, so the dock gains no new transport.
 
 ### 4. `src/webview/shell.js` — the Fleet tab, top to bottom
@@ -165,16 +171,17 @@ make a lane dispatch while it is busy. No confirm gate on the mode toggle — `C
 ```
 14:32  ✓ dispatched "Wire the sixteen unwired seams" → Coding-coder-2   (rule: coding lane idle)
 14:31  · reviewer-1 finished "Fix bare switchboard CLI menu"
-14:18  ~ would dispatch "Add an Orders tab" → planner-1   (rule not armed)
+14:18  ~ would dispatch "Add an Orders tab" → planner-1   (lane on propose)
 ```
 
 Three kinds of line, one feed: what a rule did, what the fleet did, and what a rule would have done
-if armed. Session-scoped and in memory — this is a window you watch, not an audit log, so nothing
+if the lane were on *act*. Session-scoped and in memory — this is a window you watch, not an audit log, so nothing
 new is persisted and no store is added. `lastOutcome` on the job remains what survives a restart.
 
-### 5. Arm verb
+### 5. Mode verb
 
-A small authenticated verb setting `when.armed` on one job, wired in **both** composition roots.
+A small authenticated verb setting `keepLaneFed.mode` on one job, wired in **both** composition
+roots.
 
 ## Verification Plan
 
@@ -183,29 +190,29 @@ A small authenticated verb setting `when.armed` on one job, wired in **both** co
 1. **`stalled` and `blocked` do not trigger evaluation; `completed` does.** The wedged-fleet guard.
 2. **Coalescing:** five turn-end events inside the debounce window produce exactly one evaluation
    pass.
-3. **Double-trigger safety:** a tick and a turn-end pass racing on one matched, armed rule produce
+3. **Double-trigger safety:** a tick and a turn-end pass racing on one free lane set to *act* produce
    exactly **one** action. Asserted by counting action-branch invocations, not by observing final
    board state — the state can look correct while two dispatches occurred.
 4. **`notifyTurnEnd` stays non-blocking:** an evaluator that throws, and one that never resolves,
    both leave `notifyTurnEnd`'s own delivery path unaffected.
-5. **Arming does not itself dispatch.** Arm a rule whose condition already holds; assert no action
-   until the next trigger.
+5. **Switching to *act* does not itself dispatch.** Flip a lane that is already free; assert no
+   action until the next trigger.
 6. **Offline renders `unknown`,** never `not matched`.
 7. **No confirm gate** in the dock diff — grep for `confirm(` across the changed webview files, per
    the standing repo rule.
-8. **Both roots wire the turn-end hook and the arm verb.** Source-level, both files.
-9. **Dropped-source jobs never render as armed.**
+8. **Both roots wire the turn-end hook and the mode verb.** Source-level, both files.
+9. **Dropped-source jobs never render as acting.**
 
 ### Goal Invariants
 
 - A completed turn causes re-evaluation within seconds, not on the next minute boundary.
 - Every rule's verdict and reasoning is readable without asking an agent.
-- No rule acts until it has been armed by a click, and arming is per-rule.
+- No lane acts until it has been switched to *act* by a click, and the switch is per lane.
 - Exactly one action per matched rule per interval, across both triggers.
 
 ### Manual
 
-- Run a session with both rules armed. Finish a card; the next dispatch should follow within a few
+- Run a session with both lanes on *act*. Finish a card; the next dispatch should follow within a few
   seconds, and the Fleet tab should show the verdict that caused it.
 - Kill the pty host mid-session; every verdict flips to `unknown` and nothing dispatches.
-- Arm a rule whose conditions already hold; confirm nothing happens until the next completion.
+- Switch a lane that is already free to *act*; confirm nothing happens until the next completion.

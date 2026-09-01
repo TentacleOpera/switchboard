@@ -109,7 +109,7 @@ written against a stub fleet would pass.
   *what* and *where*, and dispatch keeps flowing through `dispatchNextFromQueue` /
   `launchMission`.
 - **Not the turn-end trigger.** Tick-only here; `rule-state-surfaces-in-the-dock-and-arms-to-act.md`
-  adds the state-change trigger and the arming UI.
+  adds the state-change trigger and the propose/act switch.
 - **Not deleting `intervalMinutes`.** A lane switch still respects its job's interval as a floor —
   see the throttle note below.
 - **Not retiring the controller agent.** Only its mechanical loop moves. Judgement — planner-stage
@@ -126,9 +126,12 @@ written against a stub fleet would pass.
 
 ## User Review Required
 
-- **Confirm the role sets.** Proposed: `planning` = `planner`; `coding` and `review` share
-  `lead`, `coder`, `intern`, `reviewer`. A fleet using role names outside this set has lanes that
-  never read as free.
+None — all settled.
+
+**Settled — the role sets are exhaustive.** `planning` = `planner`; `coding` and `review` share
+`lead`, `coder`, `intern`, `reviewer`. These are Switchboard's own role names and the feature
+supports no others, so there is no "unknown role" case to design for. A seat whose role is outside
+the set is not a lane member and does not hold a lane.
 - **Confirm coding and review share one lock.** They write the same tree, so a busy reviewer holds
   both. This matches the rule as originally stated ("if no one is coding **or reviewing**").
   An earlier revision of this plan split them, which was wrong.
@@ -152,7 +155,7 @@ written against a stub fleet would pass.
   reserialising a narrowed object, per `CLAUDE.md`'s migration rule.
 - **`DROPPED_SOURCES` filters on read** (`:502-508`), with a standing comment: *"Do NOT add
   'team-automation'."* The evaluator must run *after* that filter, or a rule can be attached to a
-  job that is about to be dropped and will appear to be armed while never firing.
+  job that is about to be dropped and will appear to be acting while never firing.
 - **Both composition roots must wire the evaluator.** This is the exact trap `CLAUDE.md` names.
   The tick is reached from `TaskViewerProvider.ts:11590` (extension) and from `bootstrap.ts:3567`
   via `restoreAutobanOnStartup` (standalone). If the evaluator is constructed with a
@@ -319,7 +322,7 @@ two roots by hand, as `CLAUDE.md` requires — verb reachability will not show t
 
 The real acceptance test is agreement with the agent it replaces, so run them side by side.
 
-- Leave the controller agent running as it is today, and author both rules unarmed. Over a working
+- Leave the controller agent running as it is today, with both lanes on *propose*. Over a working
   session, compare each `would …` outcome against what the controller actually did. They should
   agree every time. A disagreement is the interesting artifact: either the rule is wrong, or the
   agent was — and the second case is the argument for the whole plan.
@@ -327,7 +330,7 @@ The real acceptance test is agreement with the agent it replaces, so run them si
   `.switchboard/logs/<seat>.md` and `git log` for its *narrative* reports; the rules read board and
   fleet state only. Anything the controller decides from a log tail is judgement that stays with it,
   and should be visible in this comparison as a decision the rules never claim to make.
-- Only arm once the two have agreed across a full session.
+- Only switch a lane to *act* once the two have agreed across a full session.
 
 ### The predicate is not reachable from configuration
 

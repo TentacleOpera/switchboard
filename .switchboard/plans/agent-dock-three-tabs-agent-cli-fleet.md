@@ -89,11 +89,16 @@ the retirement — it is a reason to hurry it.
 
 ## User Review Required
 
-- **Confirm the Kanban pane is retired rather than kept as a fourth tab.** Four labels in a pane
-  whose default width is set by a terminal's minimum is a crowding risk; three is comfortable. If
-  it is kept, the tab strip needs a wrap or overflow behaviour that it does not have today.
-- **Confirm the Fleet poll interval.** 5s is proposed. It is one `ptyListTerminals` round trip per
-  tick and only while the tab is visible.
+None — both settled.
+
+**The Kanban pane is retired, not kept as a fourth tab.** Three labels fit the dock's minimum width;
+four would need wrap or overflow behaviour the tab strip does not have.
+
+**The Fleet poll is 60s**, and only while the tab is visible. It refreshes the *display* — it is not
+what makes rules fire. Rule evaluation runs on the survivor scheduler tick and on the turn-end hook
+(`rule-state-surfaces-in-the-dock-and-arms-to-act.md`), so a finished card still produces a dispatch
+within seconds no matter how slowly the table repaints. A short poll would buy nothing and cost a
+`ptyListTerminals` round trip every few seconds all day.
 
 ## Complexity Audit
 
@@ -136,8 +141,8 @@ the retirement — it is a reason to hurry it.
   empty table reads as "no seats", which is the exact misdiagnosis the Mission Control protocol's
   port-discovery section exists to prevent: *"never report an empty fleet off a resolve that never
   got a 200."*
-- **Polling stops when the tab is hidden**, and on `visibilitychange` for the whole page. A 5s poll
-  running in a background tab all night is a real cost for zero value.
+- **Polling stops when the tab is hidden**, and on `visibilitychange` for the whole page. A poll
+  running in a background tab all night is a real cost for zero value, even at 60s.
 - **Both hosts serve this file.** `getShellHtml` is wired in `bootstrap.ts:3469` *and*
   `TaskViewerProvider.ts:4190`, so the change lands once and reaches both. Any *new endpoint* would
   need both roots — this plan deliberately adds none.
@@ -170,7 +175,7 @@ Mount `/terminals?solo=<cliSeatName>&dock=1` against a dock-owned seat whose sta
 
 ### 4. Fleet tab
 
-Poll the same data `cmdFleet` reads (`ptyListTerminals`) on a 5s interval while visible; render the
+Poll the same data `cmdFleet` reads (`ptyListTerminals`) on a 60s interval while visible; render the
 `SEAT / ROLE / STATUS / CURRENT PLAN` columns. Offline renders the offline guidance. Poll stops on
 tab switch and on page `visibilitychange`.
 

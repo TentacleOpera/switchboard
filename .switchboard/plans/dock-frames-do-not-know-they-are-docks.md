@@ -121,9 +121,11 @@ Two relays were retrofitted with dock guards; nothing enumerated the rest.
 
 ## User Review Required
 
-- **Confirm no dock affordance legitimately needs to switch the main panel.** This plan assumes none
-  does — a side pane changing the whole content area is the surprise being removed. If one does, it
-  needs an explicit opt-in rather than the ambient bridge.
+None.
+
+**No dock affordance needs to switch the main panel.** Confirmed: a side pane changing the whole
+content area is the surprise being removed, not a feature being lost. The guard is therefore
+unconditional — no opt-in, no exception list.
 
 ## Complexity Audit
 
