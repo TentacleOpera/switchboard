@@ -143,9 +143,12 @@ The whole feature is one tab, read top to bottom:
 
 ```
 ☑ Planning   free            → would dispatch "Add an Orders tab"      [ propose ▸ act ]
-☑ Coding     free                                                       [ propose ▸ ACT ]
-☐ Review     busy: reviewer-1 holds "Fix bare switchboard CLI menu"     [ propose ▸ act ]
+☑ Coding     busy: reviewer-1 holds "Fix bare switchboard CLI menu"    [ propose ▸ ACT ]
+☐ Review     busy: reviewer-1 holds "Fix bare switchboard CLI menu"    [ propose ▸ act ]
 ```
+
+Coding and review show the same reason because they share one working tree — a reviewer writes
+source, so it holds both. Planning is independent: a planner writes plan files, not code.
 
 Three switches, one mode each. The user never sees or sets the readiness test — "busy: reviewer-1
 holds …" is the panel *explaining* `laneIsFree`, not a control. There is deliberately no way to

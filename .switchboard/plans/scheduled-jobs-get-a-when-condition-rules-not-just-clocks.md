@@ -126,11 +126,12 @@ written against a stub fleet would pass.
 
 ## User Review Required
 
-- **Confirm the three lanes and their role sets.** Proposed: `planning` = `planner`;
-  `coding` = `lead`, `coder`, `intern`; `review` = `reviewer`. A fleet using role names outside
-  this set has lanes that never read as free.
-- **Confirm lanes gate independently.** A busy reviewer does not hold the coding lane. This is a
-  deliberate correction to the rule as originally stated ("if no one is coding **or reviewing**").
+- **Confirm the role sets.** Proposed: `planning` = `planner`; `coding` and `review` share
+  `lead`, `coder`, `intern`, `reviewer`. A fleet using role names outside this set has lanes that
+  never read as free.
+- **Confirm coding and review share one lock.** They write the same tree, so a busy reviewer holds
+  both. This matches the rule as originally stated ("if no one is coding **or reviewing**").
+  An earlier revision of this plan split them, which was wrong.
 - **Confirm `propose` is the default for a job that gains a lane switch,** including on upgrade.
 
 ## Complexity Audit
@@ -204,20 +205,34 @@ One function, three lanes, no configuration reaching it. A lane is free when **n
 of that lane's roles holds an uncompleted card** — `heldByTeam` (`LocalApiServer.ts:76`) over the
 board, filtered by role:
 
-| Lane | Roles | Source column |
+| Lane | Free when no seat is busy in | Source column |
 | :--- | :--- | :--- |
 | `planning` | `planner` | `CREATED` |
-| `coding` | `lead`, `coder`, `intern` | the queue |
-| `review` | `reviewer` | `*_CODED` |
+| `coding` | `lead`, `coder`, `intern`, **`reviewer`** | the queue |
+| `review` | `lead`, `coder`, `intern`, **`reviewer`** | `*_CODED` |
 
 Takes a snapshot (`{ seats, board, teamMembers }`), not services, so it is unit-testable with no
 host and both roots hand it the same shape. Missing inputs return `unknown`, and `unknown` is never
 treated as free.
 
-**Lanes gate independently.** A reviewer working card A does not block a coder starting card B, so
-`coding` reads coding seats only. This is a deliberate correction to the rule as originally stated
-("if no one is coding **or reviewing**"), which was more conservative than the lanes require and
-would idle the coding lane behind an unrelated review.
+**The lock follows the tree, not the role — reviewers write code.** `coding` and `review` share one
+readiness set because they share one working tree. A reviewer does not only read: it fixes what it
+finds, and those edits land in the same checkout a freshly-dispatched coder would start in.
+
+This is not a precaution, it is a recorded incident. `agent-commits-sweep-the-whole-shared-tree.md`
+documents two coders driven concurrently *"in one shared working tree"* on file-disjoint subtasks —
+the sanctioned pattern — where one finished, ran `git add -A`, and swept its peer's in-flight
+`terminals.html` (57 lines) and `terminals.js` (255 lines) into its own commit. Any seat that writes
+source is an occupant of that tree, and a reviewer is such a seat.
+
+`planning` stays separate because a planner writes plan files under `.switchboard/plans/`, not
+source, so it cannot collide with either.
+
+**Open — worktree scope.** Where a team runs in its own worktree, the collision domain is that
+worktree rather than the repository, and two teams in separate worktrees could both be free at once.
+This plan computes readiness over the shared tree, which is correct-and-conservative: it can idle a
+lane that a worktree would have freed, and it can never dispatch into an occupied checkout. Making
+it worktree-aware is a follow-up, not a prerequisite.
 
 ### 3. `src/services/TaskViewerProvider.ts` — tick integration
 
@@ -240,23 +255,26 @@ two roots by hand, as `CLAUDE.md` requires — verb reachability will not show t
 
 ### Automated Tests
 
-1. **A lane is not free when one of its seats holds an uncompleted card**, with every seat's `status`
+1. **The coding lane is not free while a REVIEWER holds an uncompleted card.** The specific
+   regression this plan was corrected for: a lane model that reads only coding roles dispatches a
+   coder into a tree a reviewer is editing, and every fleet-shaped test still passes.
+2. **A lane is not free when one of its seats holds an uncompleted card**, with every seat's `status`
    set to `'active'`. This is the plan's central defect pinned directly: a status-based
    implementation passes every other test and fails only this one.
-2. **Empty fleet → `unknown` → no fire,** for all three lanes. The dead-pty-host
+3. **Empty fleet → `unknown` → no fire,** for all three lanes. The dead-pty-host
    mass-dispatch guard.
-3. **A job with no `keepLaneFed` is byte-for-byte unchanged in behaviour** — same fire times, same
+4. **A job with no `keepLaneFed` is byte-for-byte unchanged in behaviour** — same fire times, same
    `lastRunAt` advancement. The ~4,000-install regression gate.
-4. **Propose gate:** a free-lane job in `propose` mode records a `would …` outcome and calls **no** action
+5. **Propose gate:** a free-lane job in `propose` mode records a `would …` outcome and calls **no** action
    branch. Asserted by spying on the branch, not by observing absence of side effects.
-5. **Throttle:** a continuously-free lane fires at most once per `intervalMinutes`.
-6. **At most one action per tick** when several rules match.
-7. **Both roots wire the resolver.** A source-level assertion that the seam is set in
+6. **Throttle:** a continuously-free lane fires at most once per `intervalMinutes`.
+7. **At most one action per tick** when several rules match.
+8. **Both roots wire the resolver.** A source-level assertion that the seam is set in
    `TaskViewerProvider.ts` *and* `bootstrap.ts`. This is the only gate that can catch the
    composition-root divergence, and its absence is the documented precedent.
-8. **Unknown-key preservation:** round-trip a `SchedulerConfig` carrying a future key and assert it
+9. **Unknown-key preservation:** round-trip a `SchedulerConfig` carrying a future key and assert it
    survives a write.
-9. **Evaluator runs after `DROPPED_SOURCES` filtering.**
+10. **Evaluator runs after `DROPPED_SOURCES` filtering.**
 
 ### Goal Invariants
 
