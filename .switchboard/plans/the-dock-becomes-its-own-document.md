@@ -65,10 +65,11 @@ reason.
 
 ## User Review Required
 
-- **Confirm one document for all three tabs**, rather than a minimal single-terminal page embedded
-  once per tab. One document means the shell manages one frame and one lifecycle, and the Fleet tab
-  needs no terminal code at all. The cost is that the dock page owns tab switching itself, where
-  today the shell does it.
+None.
+
+**One document for all three tabs**, rather than a minimal single-terminal page embedded once per
+tab. The shell manages one frame and one lifecycle, and the Fleet tab needs no terminal code at all.
+The cost, accepted: the dock page owns tab switching itself, where today the shell does it.
 
 ## Complexity Audit
 
