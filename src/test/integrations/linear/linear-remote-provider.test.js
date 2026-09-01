@@ -57,6 +57,89 @@ async function run() {
     // refreshLocalPlanFromRemote is a no-op for Linear (preserves existing behavior).
     await provider.refreshLocalPlanFromRemote('ISSUE1');
 
+    // Capabilities check
+    assert.strictEqual(provider.capabilities.agentSurface, true, 'Linear declares agentSurface capability');
+    assert.strictEqual(provider.capabilities.agentSessions, true, 'Linear declares agentSessions capability');
+
+    // Assigned issues poll test
+    const assignedPlans = [];
+    const mockDb = {
+        findPlanByLinearIssueId: async (wsId, issueId) => {
+            return assignedPlans.find(p => p.linearIssueId === issueId) || null;
+        }
+    };
+    const linearAppMock = {
+        fetchAssignedIssues: async () => [
+            { id: 'ISSUE_ASSIGNED', identifier: 'ENG-101', title: 'Assigned Task' }
+        ],
+        fetchMentionNotifications: async () => [
+            {
+                id: 'notif-1',
+                type: 'commentMention',
+                comment: {
+                    id: 'c-mention-1',
+                    body: 'Please check this edge case',
+                    issue: { id: 'ISSUE_ASSIGNED', identifier: 'ENG-101' }
+                }
+            }
+        ],
+        archiveNotification: async (id) => {
+            archivedNotifs.push(id);
+            return true;
+        },
+        getOrCreateAgentSession: async (issueId) => `session-${issueId}`,
+        postAgentActivity: async (sessionId, content, ephemeral) => {
+            postedActivities.push({ sessionId, content, ephemeral });
+            return true;
+        }
+    };
+    const archivedNotifs = [];
+    const postedActivities = [];
+    const promptDeliveries = [];
+
+    const appProvider = new LinearRemoteProvider(linearAppMock, {
+        db: mockDb,
+        getWorkspaceId: async () => 'ws-1',
+        terminalVerb: async (verb, payload) => {
+            if (verb === 'ptyListTerminals') {
+                return { terminals: [{ friendlyName: 'seat-1', status: 'active' }] };
+            }
+            if (verb === 'ptySendPrompt') {
+                promptDeliveries.push(payload);
+                return { success: true };
+            }
+            return { success: true };
+        }
+    });
+
+    appProvider.importRemotePlan = async (remoteId) => {
+        const plan = { planId: 'plan-1', linearIssueId: remoteId, dispatchedTerminal: 'seat-1' };
+        assignedPlans.push(plan);
+        return plan;
+    };
+
+    // 1. Poll assigned issues
+    await appProvider.pollAssignedIssues(mockDb, 'ws-1');
+    assert.strictEqual(assignedPlans.length, 1);
+    assert.strictEqual(assignedPlans[0].linearIssueId, 'ISSUE_ASSIGNED');
+
+    // 2. Poll mentions and relay to seat
+    await appProvider.pollMentionsAndRelay(mockDb, 'ws-1');
+    assert.strictEqual(promptDeliveries.length, 1, 'Delivered mention to live seat');
+    assert.strictEqual(promptDeliveries[0].name, 'seat-1');
+    assert.strictEqual(promptDeliveries[0].clearBeforePrompt, false);
+    assert.match(promptDeliveries[0].data, /=== LINEAR MENTION: ENG-101 ===/);
+    assert.match(promptDeliveries[0].data, /Please check this edge case/);
+    assert.strictEqual(archivedNotifs.includes('notif-1'), true, 'Notification archived after delivery');
+
+    // 3. Post agent activity
+    const activityOk = await appProvider.postAgentActivity('ISSUE_ASSIGNED', 'Started implementation', true);
+    assert.strictEqual(activityOk, true);
+    assert.strictEqual(postedActivities.length, 1);
+    assert.strictEqual(postedActivities[0].sessionId, 'session-ISSUE_ASSIGNED');
+    assert.strictEqual(postedActivities[0].content, 'Started implementation');
+    assert.strictEqual(postedActivities[0].ephemeral, true);
+
     console.log('linear-remote-provider tests passed');
 }
 

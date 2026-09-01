@@ -2083,6 +2083,55 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(setLinearTokenDisposable);
 
+    const linearUriHandler = vscode.window.registerUriHandler({
+        async handleUri(uri: vscode.Uri) {
+            if (uri.path === '/linear/callback' || uri.path === '/oauth/linear/callback' || uri.path.endsWith('/callback')) {
+                const query = new URLSearchParams(uri.query || '');
+                const code = query.get('code');
+                const error = query.get('error');
+                if (error) {
+                    vscode.window.showErrorMessage(`Linear OAuth failed: ${error}`);
+                    return;
+                }
+                if (code) {
+                    const workspaceRoot = kanbanProvider?.getCurrentWorkspaceRoot() || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+                    if (workspaceRoot) {
+                        try {
+                            const svc = (kanbanProvider as any)?._getLinearService(workspaceRoot);
+                            if (svc) {
+                                await svc.exchangeOAuthCode(code);
+                                showTemporaryNotification('Linear OAuth connected successfully as App Actor.');
+                                await taskViewerProvider.postSetupPanelState();
+                                await vscode.commands.executeCommand('switchboard.refreshUI');
+                            }
+                        } catch (err: any) {
+                            vscode.window.showErrorMessage(`Linear OAuth exchange error: ${err.message}`);
+                        }
+                    }
+                }
+            }
+        }
+    });
+    context.subscriptions.push(linearUriHandler);
+
+    const connectLinearOAuthDisposable = vscode.commands.registerCommand('switchboard.connectLinearOAuth', async () => {
+        const workspaceRoot = kanbanProvider?.getCurrentWorkspaceRoot() || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceRoot) {
+            vscode.window.showWarningMessage('Please select an active workspace first.');
+            return;
+        }
+        try {
+            const svc = (kanbanProvider as any)?._getLinearService(workspaceRoot);
+            if (!svc) return;
+            const flow = await svc.startOAuthFlow();
+            await vscode.env.openExternal(vscode.Uri.parse(flow.authorizeUrl));
+            showTemporaryNotification('Linear authorization page opened in browser.');
+        } catch (err: any) {
+            vscode.window.showErrorMessage(`Failed to start Linear OAuth: ${err?.message || err}`);
+        }
+    });
+    context.subscriptions.push(connectLinearOAuthDisposable);
+
     const setNotionTokenDisposable = vscode.commands.registerCommand('switchboard.setNotionToken', async () => {
         const token = await vscode.window.showInputBox({
             prompt: 'Enter your Notion integration token',

@@ -1354,6 +1354,30 @@ const TICKETS_VERB_SCHEMAS: Record<string, VerbSchema> = {
             options: { type: 'object' },
         },
     },
+    linearStartOAuth: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            redirectUri: { type: 'string' },
+        },
+    },
+    linearExchangeOAuth: {
+        fields: {
+            code: { type: 'string', required: true },
+            codeVerifier: { type: 'string' },
+            redirectUri: { type: 'string' },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    linearDisconnectOAuth: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    linearCheckAdmin: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+        },
+    },
 };
 
 

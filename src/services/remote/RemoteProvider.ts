@@ -69,6 +69,12 @@ export interface RemoteProviderCapabilities {
     push: boolean;
     /** Provider can archive a card (Linear issueArchive / Notion page archive). */
     archive: boolean;
+    /** Provider supports missions and dependency relations mirroring (Linear). */
+    missions?: boolean;
+    /** Provider supports agent actor surface (Linear). */
+    agentSurface?: boolean;
+    /** Provider supports agent sessions and activities (Linear). */
+    agentSessions?: boolean;
 }
 
 /** Outcome of archiving a single remote card. */
@@ -179,4 +185,19 @@ export interface RemoteProvider {
      * implement this return 'unknown' (the sweep caller skips tombstoning).
      */
     probeRemoteId?(remoteId: string): Promise<'deleted' | 'moved' | 'unknown'>;
+
+    /**
+     * Poll assigned/delegated issues for the app actor (Linear app user).
+     */
+    pollAssignedIssues?(db: KanbanDatabase, workspaceId: string): Promise<void>;
+
+    /**
+     * Poll mention notifications for the app actor and relay to live seats.
+     */
+    pollMentionsAndRelay?(db: KanbanDatabase, workspaceId: string): Promise<void>;
+
+    /**
+     * Post an agent activity into an issue's agent session (Linear).
+     */
+    postAgentActivity?(remoteId: string, content: string, ephemeral?: boolean, signal?: string): Promise<boolean>;
 }

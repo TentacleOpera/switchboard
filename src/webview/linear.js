@@ -213,28 +213,65 @@
         const badge = document.getElementById('linear-auth-badge');
         const desc = document.getElementById('linear-auth-description');
         const tokenInputRow = document.getElementById('linear-token-input-row');
+        const oauthConnectBtn = document.getElementById('btn-linear-oauth-connect');
+        const disconnectBtn = document.getElementById('btn-linear-disconnect-oauth');
+        const adminInfo = document.getElementById('linear-admin-info');
+        const rlInfo = document.getElementById('linear-ratelimit-info');
 
         const hasToken = msg.linearHasToken === true;
         const setupComplete = msg.linearSetupComplete === true;
+        const isOAuth = msg.linearAuthKind === 'oauth' || msg.linearIsAppActor === true;
         _lastLinearConfig = msg.linearState;
 
-        if (hasToken && setupComplete) {
+        if (isOAuth && setupComplete) {
             if (badge) {
-                badge.textContent = 'Connected';
+                badge.textContent = 'Connected (App Actor)';
                 badge.className = 'status-badge is-active';
             }
             if (desc) {
-                desc.textContent = 'Linear integration is configured and authenticated. Project issue sync and comment routing are active.';
+                desc.textContent = 'Linear integration authenticated as Workspace App Actor (actor=app). Assignment delegation, @mentions, and issue sync are active.';
             }
+            if (oauthConnectBtn) { oauthConnectBtn.style.display = 'none'; }
+            if (disconnectBtn) { disconnectBtn.style.display = 'inline-block'; }
+            if (tokenInputRow) { tokenInputRow.style.display = 'none'; }
+        } else if (isOAuth) {
+            if (badge) {
+                badge.textContent = 'App Actor Authenticated';
+                badge.className = 'status-badge is-active';
+            }
+            if (desc) {
+                desc.textContent = 'Connected as App Actor, but status mapping setup is incomplete. Map columns in Tickets → Linear.';
+            }
+            if (oauthConnectBtn) { oauthConnectBtn.style.display = 'none'; }
+            if (disconnectBtn) { disconnectBtn.style.display = 'inline-block'; }
+            if (tokenInputRow) { tokenInputRow.style.display = 'none'; }
+        } else if (hasToken && setupComplete) {
+            if (badge) {
+                badge.textContent = 'Connected (API Key)';
+                badge.className = 'status-badge is-active';
+            }
+            if (desc) {
+                desc.textContent = 'Connected via Personal API Key. Note: App Actor features (issue assignment & @mentions) require OAuth.';
+            }
+            if (oauthConnectBtn) {
+                oauthConnectBtn.textContent = 'Upgrade to App Actor (OAuth)';
+                oauthConnectBtn.style.display = 'inline-block';
+            }
+            if (disconnectBtn) { disconnectBtn.style.display = 'none'; }
             if (tokenInputRow) { tokenInputRow.style.display = 'none'; }
         } else if (hasToken) {
             if (badge) {
-                badge.textContent = 'Token saved';
+                badge.textContent = 'API Key Saved';
                 badge.className = 'status-badge';
             }
             if (desc) {
-                desc.textContent = 'API token is saved, but status mapping setup is incomplete. Select projects and map column statuses in the Tickets panel.';
+                desc.textContent = 'Personal API token saved, but status mapping setup is incomplete.';
             }
+            if (oauthConnectBtn) {
+                oauthConnectBtn.textContent = 'Connect as App Actor (OAuth)';
+                oauthConnectBtn.style.display = 'inline-block';
+            }
+            if (disconnectBtn) { disconnectBtn.style.display = 'none'; }
             if (tokenInputRow) { tokenInputRow.style.display = 'none'; }
         } else {
             if (badge) {
@@ -242,9 +279,37 @@
                 badge.className = 'status-badge';
             }
             if (desc) {
-                desc.textContent = 'No Linear API token found. Enter an API token or configure in Tickets to connect.';
+                desc.textContent = 'No Linear credential found. Connect as an App Actor (requires Linear Admin) or enter a Personal API Key.';
             }
-            if (tokenInputRow) { tokenInputRow.style.display = 'block'; }
+            if (oauthConnectBtn) {
+                oauthConnectBtn.textContent = 'Connect as App Actor (OAuth)';
+                oauthConnectBtn.style.display = 'inline-block';
+            }
+            if (disconnectBtn) { disconnectBtn.style.display = 'none'; }
+            if (tokenInputRow) { tokenInputRow.style.display = 'none'; }
+        }
+
+        if (adminInfo) {
+            if (isOAuth) {
+                adminInfo.textContent = '✓ Workspace App Actor authorized';
+                adminInfo.style.display = 'block';
+            } else {
+                adminInfo.textContent = 'ℹ Notice: Linear requires workspace Admin permissions to authorize an App Actor integration.';
+                adminInfo.style.display = 'block';
+            }
+        }
+
+        if (rlInfo && msg.linearState && msg.linearState.rateLimit) {
+            const rl = msg.linearState.rateLimit;
+            const parts = [];
+            if (rl.requestsRemaining !== undefined) parts.push(`Requests: ${rl.requestsRemaining}/${rl.requestsLimit || '5000'}`);
+            if (rl.complexityRemaining !== undefined) parts.push(`Complexity: ${rl.complexityRemaining}/${rl.complexityLimit || (rl.actorKind === 'app' ? '2M' : '3M')}`);
+            if (parts.length > 0) {
+                rlInfo.textContent = `Rate Limit: ${parts.join(' | ')}`;
+                rlInfo.style.display = 'block';
+            } else {
+                rlInfo.style.display = 'none';
+            }
         }
 
         renderMappingTable(msg.linearState);
@@ -379,6 +444,53 @@
         });
     });
 
+    document.getElementById('btn-linear-oauth-connect')?.addEventListener('click', () => {
+        const wsSel = document.getElementById('linear-workspace');
+        const status = document.getElementById('linear-auth-status');
+        if (status) status.textContent = 'Starting OAuth authorization flow…';
+        vscode.postMessage({
+            type: 'linearStartOAuth',
+            workspaceRoot: (wsSel && wsSel.value) || undefined
+        });
+    });
+
+    document.getElementById('btn-linear-disconnect-oauth')?.addEventListener('click', () => {
+        const wsSel = document.getElementById('linear-workspace');
+        const status = document.getElementById('linear-auth-status');
+        if (status) status.textContent = 'Disconnecting OAuth…';
+        vscode.postMessage({
+            type: 'linearDisconnectOAuth',
+            workspaceRoot: (wsSel && wsSel.value) || undefined
+        });
+    });
+
+    document.getElementById('btn-toggle-code-paste')?.addEventListener('click', () => {
+        const row = document.getElementById('linear-code-paste-row');
+        if (row) row.style.display = row.style.display === 'none' ? 'block' : 'none';
+    });
+
+    document.getElementById('btn-toggle-personal-token')?.addEventListener('click', () => {
+        const row = document.getElementById('linear-token-input-row');
+        if (row) row.style.display = row.style.display === 'none' ? 'block' : 'none';
+    });
+
+    document.getElementById('btn-linear-exchange-code')?.addEventListener('click', () => {
+        const codeInput = document.getElementById('linear-oauth-code');
+        const code = codeInput ? codeInput.value.trim() : '';
+        const status = document.getElementById('linear-auth-status');
+        if (!code) {
+            if (status) status.textContent = 'Please enter authorization code.';
+            return;
+        }
+        if (status) status.textContent = 'Exchanging code for token…';
+        const wsSel = document.getElementById('linear-workspace');
+        vscode.postMessage({
+            type: 'linearExchangeOAuth',
+            code,
+            workspaceRoot: (wsSel && wsSel.value) || undefined
+        });
+    });
+
     // ── Inbound Message Dispatch ─────────────────────────────────────────────
     window.addEventListener('message', (event) => {
         const msg = event.data;
@@ -386,11 +498,6 @@
 
         switch (msg.type) {
             case 'remoteConfig':
-                // The host's remoteConfig message is FLAT — remoteGetConfigPayload
-                // returns { type, config, boardKeys, workspaces, active, capabilities }
-                // with no `payload` wrapper. Passing msg.payload here read undefined,
-                // which silently emptied the workspace dropdown and the board list and
-                // pinned the remote-control button to "Start" forever.
                 renderRemoteConfig(msg.config, msg);
                 break;
             case 'remoteControlState':
@@ -405,6 +512,42 @@
                 break;
             case 'linearAgentSkillText':
                 renderLinearAgentSkill(msg);
+                break;
+            case 'linearStartOAuthResult':
+                if (msg.success && msg.authorizeUrl) {
+                    const status = document.getElementById('linear-auth-status');
+                    if (status) status.textContent = 'Opening Linear authorization page in browser…';
+                    try {
+                        window.open(msg.authorizeUrl, '_blank');
+                    } catch {
+                        vscode.postMessage({ type: 'openExternalUrl', url: msg.authorizeUrl });
+                    }
+                } else {
+                    const status = document.getElementById('linear-auth-status');
+                    if (status) status.textContent = `OAuth start failed: ${msg.error || 'unknown error'}`;
+                }
+                break;
+            case 'linearExchangeOAuthResult':
+                if (msg.success) {
+                    const status = document.getElementById('linear-auth-status');
+                    if (status) status.textContent = 'OAuth connected successfully as App Actor!';
+                    const pasteRow = document.getElementById('linear-code-paste-row');
+                    if (pasteRow) pasteRow.style.display = 'none';
+                    vscode.postMessage({ type: 'getIntegrationSetupStates' });
+                } else {
+                    const status = document.getElementById('linear-auth-status');
+                    if (status) status.textContent = `Exchange failed: ${msg.error || 'unknown error'}`;
+                }
+                break;
+            case 'linearDisconnectOAuthResult':
+                if (msg.success) {
+                    const status = document.getElementById('linear-auth-status');
+                    if (status) status.textContent = 'OAuth disconnected.';
+                    vscode.postMessage({ type: 'getIntegrationSetupStates' });
+                } else {
+                    const status = document.getElementById('linear-auth-status');
+                    if (status) status.textContent = `Disconnect failed: ${msg.error || 'unknown error'}`;
+                }
                 break;
             case 'linearConfigResult':
                 if (msg.success) {

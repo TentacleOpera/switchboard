@@ -23,14 +23,23 @@ interface LinearRemoteProviderDeps {
     getWorkspaceId?: () => Promise<string>;
     getPlansDir?: () => Promise<string>;
     log?: (msg: string) => void;
+    terminalVerb?: (verb: string, payload: any, workspaceRoot?: string, signal?: AbortSignal) => Promise<any>;
 }
 
 export class LinearRemoteProvider implements RemoteProvider {
     public readonly kind = 'linear' as const;
-    public readonly capabilities: RemoteProviderCapabilities = { pull: true, push: true, archive: true };
+    public readonly capabilities: RemoteProviderCapabilities = {
+        pull: true,
+        push: true,
+        archive: true,
+        missions: true,
+        agentSurface: true,
+        agentSessions: true
+    };
     private _linear: LinearSyncService;
     private _deps: LinearRemoteProviderDeps;
     private _stateIdToColumn: Record<string, string> = {};
+    private _mentionFailures = new Map<string, number>();
 
     constructor(linear: LinearSyncService, deps: LinearRemoteProviderDeps = {}) {
         this._linear = linear;
@@ -83,6 +92,18 @@ export class LinearRemoteProvider implements RemoteProvider {
         } catch (e) {
             console.warn('[LinearRemoteProvider] fetchStateDeltas failed:', e);
         }
+
+        if (this._deps.getWorkspaceId) {
+            try {
+                const wsId = await this._deps.getWorkspaceId();
+                if (wsId) {
+                    await this._linear.syncMissionsAndDependencies(wsId);
+                }
+            } catch (e) {
+                this._deps.log?.(`[LinearRemoteProvider] syncMissionsAndDependencies failed: ${e instanceof Error ? e.message : String(e)}`);
+            }
+        }
+
         return { deltas, nextCursor };
     }
 
@@ -321,6 +342,119 @@ export class LinearRemoteProvider implements RemoteProvider {
         } catch (e) {
             this._deps.log?.(`[LinearRemoteProvider] probeRemoteId: ${id} threw (${e instanceof Error ? e.message : String(e)}) — treating as unknown.`);
             return 'unknown';
+        }
+    }
+
+    /**
+     * Poll issues assigned or delegated to the app actor and import them as local plans.
+     */
+    public async pollAssignedIssues(db: KanbanDatabase, workspaceId: string): Promise<void> {
+        try {
+            const assigned = await this._linear.fetchAssignedIssues();
+            for (const issue of assigned) {
+                const existingPlan = await db.findPlanByLinearIssueId(workspaceId, issue.id);
+                if (!existingPlan) {
+                    const imported = await this.importRemotePlan(issue.id);
+                    if (imported) {
+                        this._deps.log?.(`[LinearRemoteProvider] Imported assigned issue ${issue.identifier || issue.id} (${issue.title})`);
+                    }
+                }
+            }
+        } catch (e) {
+            this._deps.log?.(`[LinearRemoteProvider] pollAssignedIssues failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+    }
+
+    /**
+     * Poll @mention notifications for the app actor and relay them into active seats.
+     */
+    public async pollMentionsAndRelay(db: KanbanDatabase, workspaceId: string): Promise<void> {
+        try {
+            const notifications = await this._linear.fetchMentionNotifications();
+            for (const notif of notifications) {
+                const remoteId = notif.issue?.id || notif.comment?.issue?.id;
+                const identifier = notif.issue?.identifier || notif.comment?.issue?.identifier || remoteId || '';
+                const body = String(notif.comment?.body || (notif.issue ? `${notif.issue.title}\n\n${notif.issue.description || ''}` : '')).trim();
+
+                if (!remoteId || !body) {
+                    await this._linear.archiveNotification(notif.id);
+                    continue;
+                }
+
+                const plan = await db.findPlanByLinearIssueId(workspaceId, remoteId);
+                let delivered = false;
+
+                if (plan && plan.dispatchedTerminal && this._deps.terminalVerb) {
+                    try {
+                        const termList = await this._deps.terminalVerb('ptyListTerminals', {});
+                        const activeTerms = Array.isArray(termList?.terminals) ? termList.terminals : [];
+                        const isLive = activeTerms.some((t: any) =>
+                            String(t?.friendlyName || t?.name || '').trim() === plan.dispatchedTerminal && t?.status === 'active'
+                        );
+
+                        if (isLive) {
+                            const promptData =
+                                `=== LINEAR MENTION: ${identifier} ===\n` +
+                                `--- BEGIN MESSAGE (DATA) ---\n` +
+                                `${body}\n` +
+                                `--- END MESSAGE (DATA) ---\n` +
+                                `=== END LINEAR MENTION ===`;
+
+                            const res = await this._deps.terminalVerb('ptySendPrompt', {
+                                name: plan.dispatchedTerminal,
+                                data: promptData,
+                                clearBeforePrompt: false,
+                                standingOrders: false,
+                                kind: 'message'
+                            });
+
+                            if (res && res.success !== false) {
+                                delivered = true;
+                                await this._linear.archiveNotification(notif.id);
+                                this._mentionFailures.delete(notif.id);
+                            }
+                        }
+                    } catch (relayErr) {
+                        this._deps.log?.(`[LinearRemoteProvider] Relay mention error for ${identifier}: ${relayErr instanceof Error ? relayErr.message : String(relayErr)}`);
+                    }
+                }
+
+                if (!delivered) {
+                    const fails = (this._mentionFailures.get(notif.id) || 0) + 1;
+                    this._mentionFailures.set(notif.id, fails);
+                    if (fails >= 5) {
+                        try {
+                            await this.postComment(
+                                remoteId,
+                                `[Switchboard] Mention received on ${identifier}, but could not be delivered to an active agent seat after 5 attempts.`
+                            );
+                        } catch { /* ignore */ }
+                        await this._linear.archiveNotification(notif.id);
+                        this._mentionFailures.delete(notif.id);
+                    }
+                }
+            }
+        } catch (e) {
+            this._deps.log?.(`[LinearRemoteProvider] pollMentionsAndRelay failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+    }
+
+    /**
+     * Post an agent activity into an issue's Linear agent session.
+     */
+    public async postAgentActivity(
+        remoteId: string,
+        content: string,
+        ephemeral = false,
+        signal?: string
+    ): Promise<boolean> {
+        try {
+            const sessionId = await this._linear.getOrCreateAgentSession(remoteId);
+            if (!sessionId) return false;
+            return await this._linear.postAgentActivity(sessionId, content, ephemeral, signal);
+        } catch (e) {
+            this._deps.log?.(`[LinearRemoteProvider] postAgentActivity failed for ${remoteId}: ${e instanceof Error ? e.message : String(e)}`);
+            return false;
         }
     }
 }

@@ -1407,8 +1407,19 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     private _fleetVerb?: (verb: string, payload: any, signal?: AbortSignal) => Promise<any>;
+    private _handlePtyVerb?: (verb: string, payload: any, root?: string, signal?: AbortSignal) => Promise<any>;
     public setFleetVerb(fn: (verb: string, payload: any, signal?: AbortSignal) => Promise<any>): void {
         this._fleetVerb = fn;
+    }
+
+    public async handleTerminalVerb(verb: string, payload: any, root?: string, signal?: AbortSignal): Promise<any> {
+        if (this._handlePtyVerb) {
+            return this._handlePtyVerb(verb, payload, root, signal);
+        }
+        if (this._fleetVerb) {
+            return this._fleetVerb(verb, payload, signal);
+        }
+        return this._ptyHostVerb(verb, payload, signal);
     }
 
     /** Real listening port in BOTH hosts. Never a placeholder — it is interpolated
@@ -3888,7 +3899,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 // Retrieve from VS Code SecretStorage - returns empty string if not set
                 return await this._context.secrets.get('switchboard.apiToken') || '';
             },
-            terminalVerb: (verb: string, payload: any, wsRoot?: string, signal?: AbortSignal) => handlePtyVerb(verb, payload, wsRoot, signal),
+            terminalVerb: (verb: string, payload: any, wsRoot?: string, signal?: AbortSignal) => {
+                this._handlePtyVerb = handlePtyVerb;
+                return handlePtyVerb(verb, payload, wsRoot, signal);
+            },
             allRoots: allRoots,
             getRegisteredTerminals: () => {
                 // Live dispatch targets only — a disposed terminal lingers in the
@@ -4243,13 +4257,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 };
                 const computeIntegrationsConfigured = async () => {
                     try {
-                        const [clickup, linear, notion, stitch] = await Promise.all([
+                        const [clickup, linearKey, linearOAuth, notion, stitch] = await Promise.all([
                             this._context.secrets.get('switchboard.clickup.apiToken').then(t => !!(t && t.trim().length > 0)),
                             this._context.secrets.get('switchboard.linear.apiToken').then(t => !!(t && t.trim().length > 0)),
+                            this._context.secrets.get('switchboard.linear.oauthTokens').then(t => !!(t && t.trim().length > 0)),
                             this._context.secrets.get('switchboard.notion.apiToken').then(t => !!(t && t.trim().length > 0)),
                             this._context.secrets.get('switchboard.stitch.apiKey').then(t => !!(t && t.trim().length > 0)),
                         ]);
-                        return { clickup, linear, notion, stitch };
+                        return { clickup, linear: linearKey || linearOAuth, notion, stitch };
                     } catch { return { clickup: false, linear: false, notion: false, stitch: false }; }
                 };
                 const getTheme = () => {
@@ -8990,16 +9005,31 @@ Each plan file must include:
         notionState?: NotionSetupState;
         clickupHasToken: boolean;
         linearHasToken: boolean;
+        linearAuthKind?: 'oauth' | 'apiKey' | 'none';
+        linearIsAppActor?: boolean;
         notionHasToken: boolean;
     }> {
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
         const folderUri = resolvedRoot ? vscode.Uri.file(resolvedRoot) : undefined;
         // Read token presence from secret storage
-        const [clickupHasToken, linearHasToken, notionHasToken] = await Promise.all([
-            this._context.secrets.get('switchboard.clickup.apiToken').then(t => !!t),
-            this._context.secrets.get('switchboard.linear.apiToken').then(t => !!t),
-            this._context.secrets.get('switchboard.notion.apiToken').then(t => !!t)
+        const [clickupHasToken, linearPersonalToken, linearOAuthTokens, notionHasToken] = await Promise.all([
+            this._context.secrets.get('switchboard.clickup.apiToken').then(t => !!(t && t.trim().length > 0)),
+            this._context.secrets.get('switchboard.linear.apiToken'),
+            this._context.secrets.get('switchboard.linear.oauthTokens'),
+            this._context.secrets.get('switchboard.notion.apiToken').then(t => !!(t && t.trim().length > 0))
         ]);
+        const linearHasPersonal = !!(linearPersonalToken && linearPersonalToken.trim().length > 0);
+        let linearHasOAuth = false;
+        if (linearOAuthTokens) {
+            try {
+                const parsed = JSON.parse(linearOAuthTokens);
+                linearHasOAuth = !!(parsed && parsed.accessToken);
+            } catch {}
+        }
+        const linearHasToken = linearHasOAuth || linearHasPersonal;
+        const linearAuthKind: 'oauth' | 'apiKey' | 'none' = linearHasOAuth ? 'oauth' : (linearHasPersonal ? 'apiKey' : 'none');
+        const linearIsAppActor = linearHasOAuth;
+
         if (!resolvedRoot) {
             return {
                 clickupSetupComplete: false,
@@ -9013,6 +9043,8 @@ Each plan file must include:
                 },
                 clickupHasToken,
                 linearHasToken,
+                linearAuthKind,
+                linearIsAppActor,
                 notionHasToken
             };
         }
@@ -9117,6 +9149,9 @@ Each plan file must include:
                 completeSyncEnabled: linearConfig.completeSyncEnabled !== false,
                 deleteSyncEnabled: linearConfig.deleteSyncEnabled === true,
                 inboundDeleteEnabled: linearConfig.inboundDeleteEnabled === true,
+                authKind: linearAuthKind,
+                isAppActor: linearIsAppActor,
+                rateLimit: this._getLinearService(resolvedRoot).getRateLimitState() || undefined,
                 columns: currentColumns.map((column) => ({
                     columnId: column.id,
                     label: column.label
@@ -9153,6 +9188,8 @@ Each plan file must include:
             notionState,
             clickupHasToken,
             linearHasToken,
+            linearAuthKind,
+            linearIsAppActor,
             notionHasToken
         };
     }
@@ -9345,6 +9382,78 @@ Each plan file must include:
             await this._kanbanProvider?.applyLiveSyncConfig(resolvedRoot);
         }
         return result;
+    }
+
+    public async handleLinearStartOAuth(
+        workspaceRoot?: string,
+        redirectUri?: string
+    ): Promise<{ success: boolean; authorizeUrl?: string; state?: string; codeVerifier?: string; redirectUri?: string; error?: string }> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot) {
+            return { success: false, error: 'No workspace open' };
+        }
+        try {
+            const svc = this._getLinearService(resolvedRoot);
+            const flow = await svc.startOAuthFlow(redirectUri);
+            return { success: true, ...flow };
+        } catch (err: any) {
+            return { success: false, error: err?.message || 'Failed to start Linear OAuth flow' };
+        }
+    }
+
+    public async handleLinearExchangeOAuth(
+        code: string,
+        codeVerifier?: string,
+        redirectUri?: string,
+        workspaceRoot?: string
+    ): Promise<{ success: boolean; error?: string }> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot) {
+            return { success: false, error: 'No workspace open' };
+        }
+        try {
+            const svc = this._getLinearService(resolvedRoot);
+            await svc.exchangeOAuthCode(code, codeVerifier, redirectUri);
+            await this.postSetupPanelState();
+            await this._kanbanProvider?.initializeIntegrationAutoPull();
+            await this._kanbanProvider?.applyLiveSyncConfig(resolvedRoot);
+            return { success: true };
+        } catch (err: any) {
+            return { success: false, error: err?.message || 'Failed to exchange Linear OAuth code' };
+        }
+    }
+
+    public async handleLinearDisconnectOAuth(
+        workspaceRoot?: string
+    ): Promise<{ success: boolean; error?: string }> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot) {
+            return { success: false, error: 'No workspace open' };
+        }
+        try {
+            const svc = this._getLinearService(resolvedRoot);
+            await svc.clearOAuthTokens();
+            await this.postSetupPanelState();
+            return { success: true };
+        } catch (err: any) {
+            return { success: false, error: err?.message || 'Failed to disconnect Linear OAuth' };
+        }
+    }
+
+    public async handleLinearCheckAdmin(
+        workspaceRoot?: string
+    ): Promise<{ success: boolean; isAdmin: boolean | null; role?: string; message?: string; error?: string }> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot) {
+            return { success: false, isAdmin: null, error: 'No workspace open' };
+        }
+        try {
+            const svc = this._getLinearService(resolvedRoot);
+            const status = await svc.checkViewerAdminStatus();
+            return { success: true, ...status };
+        } catch (err: any) {
+            return { success: false, isAdmin: null, error: err?.message || 'Failed to check Linear admin status' };
+        }
     }
 
     /**

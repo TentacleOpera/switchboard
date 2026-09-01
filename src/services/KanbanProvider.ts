@@ -2616,6 +2616,9 @@ export class KanbanProvider implements vscode.Disposable {
         const getWorkspaceId = async () => (await this._getKanbanDb(resolved).getWorkspaceId()) || '';
         const getPlansDir = () => this._getIntegrationImportDir(resolved);
         const log = (m: string) => this._outputChannel?.appendLine(m);
+        const terminalVerb = this._taskViewerProvider
+            ? (verb: string, payload: any, wsRoot?: string, signal?: AbortSignal) => this._taskViewerProvider!.handleTerminalVerb(verb, payload, wsRoot || resolved, signal)
+            : undefined;
         if (plan.clickupTaskId) {
             return new ClickUpRemoteProvider(this._getClickUpService(resolved), {
                 db: this._getKanbanDb(resolved), getWorkspaceId, getPlansDir, log,
@@ -2623,7 +2626,7 @@ export class KanbanProvider implements vscode.Disposable {
         }
         if (plan.linearIssueId) {
             return new LinearRemoteProvider(this._getLinearService(resolved), {
-                db: this._getKanbanDb(resolved), getWorkspaceId, getPlansDir, log,
+                db: this._getKanbanDb(resolved), getWorkspaceId, getPlansDir, log, terminalVerb,
             });
         }
         if (plan.notionPageId) {
@@ -2825,9 +2828,12 @@ export class KanbanProvider implements vscode.Disposable {
                 getWorkspaceId, getPlansDir, log,
             });
         }
+        const terminalVerb = this._taskViewerProvider
+            ? (verb: string, payload: any, wsRoot?: string, signal?: AbortSignal) => this._taskViewerProvider!.handleTerminalVerb(verb, payload, wsRoot || resolved, signal)
+            : undefined;
         return new LinearRemoteProvider(this._getLinearService(resolved), {
             db: this._getKanbanDb(resolved),
-            getWorkspaceId, getPlansDir, log,
+            getWorkspaceId, getPlansDir, log, terminalVerb,
         });
     }
 
@@ -3244,7 +3250,10 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         const service = new LinearAutomationService(
             resolved,
             this._getLinearService(resolved),
-            async () => this._getIntegrationImportDir(resolved)
+            async () => this._getIntegrationImportDir(resolved),
+            this._taskViewerProvider
+                ? (verb, payload, wsRoot, signal) => this._taskViewerProvider!.handleTerminalVerb(verb, payload, wsRoot || resolved, signal)
+                : undefined
         );
         this._linearAutomationServices.set(resolved, service);
         return service;

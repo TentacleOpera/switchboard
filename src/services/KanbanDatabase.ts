@@ -337,6 +337,13 @@ CREATE TABLE IF NOT EXISTS board_move_requests (
     reason      TEXT DEFAULT '',
     timestamp   TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS mission_milestones (
+    mission_id   TEXT PRIMARY KEY,
+    milestone_id TEXT NOT NULL,
+    project_id   TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    synced_at    TEXT NOT NULL
+);
 `;
 
 // Index DDL, one statement per entry so a single failure (e.g. a column not yet
@@ -355,6 +362,7 @@ const SCHEMA_INDEX_STATEMENTS: string[] = [
     `CREATE INDEX IF NOT EXISTS idx_mission_members_mission ON mission_members(mission_id)`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_mission_members_member ON mission_members(member_id)`,
     `CREATE INDEX IF NOT EXISTS idx_missions_workspace ON missions(workspace_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_mission_milestones_workspace ON mission_milestones(workspace_id)`,
 ];
 
 // Migration SQL to add new columns to existing databases
@@ -623,6 +631,12 @@ const MIGRATION_V64_SQL = [
 // V65: UNIQUE(member_id) on mission_members + staged orphan backfill.
 const MIGRATION_V65_SQL = [
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_mission_members_member ON mission_members(member_id)`,
+];
+
+// V66: mission_milestones mapping table.
+const MIGRATION_V66_SQL = [
+    `CREATE TABLE IF NOT EXISTS mission_milestones (mission_id TEXT PRIMARY KEY, milestone_id TEXT NOT NULL, project_id TEXT NOT NULL, workspace_id TEXT NOT NULL, synced_at TEXT NOT NULL)`,
+    `CREATE INDEX IF NOT EXISTS idx_mission_milestones_workspace ON mission_milestones(workspace_id)`,
 ];
 
 
@@ -8772,6 +8786,16 @@ export class KanbanDatabase {
             await this.setMigrationVersion(65);
             console.log('[KanbanDatabase] V65 migration completed: UNIQUE index on mission_members + staged orphan backfill done');
         }
+
+        // V66: mission_milestones mapping table.
+        const v66 = await this.getMigrationVersion();
+        if (v66 < 66) {
+            for (const sql of MIGRATION_V66_SQL) {
+                try { this._db.exec(sql); } catch { /* index or table already exists */ }
+            }
+            await this.setMigrationVersion(66);
+            console.log('[KanbanDatabase] V66 migration completed: mission_milestones table added');
+        }
     }
 
     private async _backfillStagedCardsToMissions(): Promise<void> {
@@ -11668,6 +11692,70 @@ FROM plans
             while (stmt.step()) {
                 const r = stmt.getAsObject();
                 out.push({ memberId: String(r.member_id), kind: (String(r.member_kind) === 'feature' ? 'feature' : 'plan') });
+            }
+        } finally {
+            stmt.free();
+        }
+        return out;
+    }
+
+    public async getMissionMilestone(missionId: string): Promise<{ missionId: string; milestoneId: string; projectId: string; workspaceId: string; syncedAt: string } | null> {
+        if (!(await this.ensureReady()) || !this._db || !missionId) return null;
+        const stmt = this._db.prepare(
+            'SELECT mission_id, milestone_id, project_id, workspace_id, synced_at FROM mission_milestones WHERE mission_id = ?',
+            [missionId]
+        );
+        try {
+            if (stmt.step()) {
+                const r = stmt.getAsObject();
+                return {
+                    missionId: String(r.mission_id),
+                    milestoneId: String(r.milestone_id),
+                    projectId: String(r.project_id),
+                    workspaceId: String(r.workspace_id),
+                    syncedAt: String(r.synced_at)
+                };
+            }
+            return null;
+        } finally {
+            stmt.free();
+        }
+    }
+
+    public async setMissionMilestone(missionId: string, milestoneId: string, projectId: string, workspaceId: string): Promise<boolean> {
+        if (!missionId || !milestoneId) return false;
+        const now = new Date().toISOString();
+        return this._persistedUpdate(
+            'INSERT OR REPLACE INTO mission_milestones (mission_id, milestone_id, project_id, workspace_id, synced_at) VALUES (?, ?, ?, ?, ?)',
+            [missionId, milestoneId, projectId, workspaceId, now]
+        );
+    }
+
+    public async deleteMissionMilestone(missionId: string): Promise<boolean> {
+        if (!missionId) return false;
+        return this._persistedUpdate(
+            'DELETE FROM mission_milestones WHERE mission_id = ?',
+            [missionId]
+        );
+    }
+
+    public async getMissionMilestonesByWorkspace(workspaceId: string): Promise<Array<{ missionId: string; milestoneId: string; projectId: string; workspaceId: string; syncedAt: string }>> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        const stmt = this._db.prepare(
+            'SELECT mission_id, milestone_id, project_id, workspace_id, synced_at FROM mission_milestones WHERE workspace_id = ?',
+            [workspaceId]
+        );
+        const out: Array<{ missionId: string; milestoneId: string; projectId: string; workspaceId: string; syncedAt: string }> = [];
+        try {
+            while (stmt.step()) {
+                const r = stmt.getAsObject();
+                out.push({
+                    missionId: String(r.mission_id),
+                    milestoneId: String(r.milestone_id),
+                    projectId: String(r.project_id),
+                    workspaceId: String(r.workspace_id),
+                    syncedAt: String(r.synced_at)
+                });
             }
         } finally {
             stmt.free();

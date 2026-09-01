@@ -4136,6 +4136,42 @@ export class TicketsPanelProvider {
                 }
                 return { success: true };
             }
+            case 'linearStartOAuth': {
+                const result = await this._taskViewerProvider!.handleLinearStartOAuth(
+                    msg.workspaceRoot,
+                    msg.redirectUri
+                );
+                this._pushTo(targetPanel, 'tickets', { type: 'linearStartOAuthResult', ...result });
+                return result;
+            }
+            case 'linearExchangeOAuth': {
+                const result = await this._taskViewerProvider!.handleLinearExchangeOAuth(
+                    msg.code,
+                    msg.codeVerifier,
+                    msg.redirectUri,
+                    msg.workspaceRoot
+                );
+                this._pushTo(targetPanel, 'tickets', { type: 'linearExchangeOAuthResult', ...result });
+                await this._taskViewerProvider!.postSetupPanelState();
+                await this._seams().commands.executeCommand('switchboard.refreshUI');
+                return result;
+            }
+            case 'linearDisconnectOAuth': {
+                const result = await this._taskViewerProvider!.handleLinearDisconnectOAuth(
+                    msg.workspaceRoot
+                );
+                this._pushTo(targetPanel, 'tickets', { type: 'linearDisconnectOAuthResult', ...result });
+                await this._taskViewerProvider!.postSetupPanelState();
+                await this._seams().commands.executeCommand('switchboard.refreshUI');
+                return result;
+            }
+            case 'linearCheckAdmin': {
+                const result = await this._taskViewerProvider!.handleLinearCheckAdmin(
+                    msg.workspaceRoot
+                );
+                this._pushTo(targetPanel, 'tickets', { type: 'linearCheckAdminResult', ...result });
+                return result;
+            }
             case 'saveLinearAutomation': {
                 const result = await this._taskViewerProvider!.handleSaveLinearAutomation(
                     Array.isArray(msg.automationRules) ? msg.automationRules : []

@@ -8,14 +8,22 @@ export interface ClickUpAutomationRule {
     writeBackOnComplete: boolean;
 }
 
+export type LinearAutomationDestination =
+    | { kind: 'column'; column: string }
+    | { kind: 'team'; team: string }
+    | { kind: 'memo' };
+
 export interface LinearAutomationRule {
     name: string;
     enabled?: boolean;
     triggerLabel: string;
     triggerStates: string[];
-    targetColumn: string;
-    finalColumn: string;
+    destination?: LinearAutomationDestination;
+    targetColumn?: string;
+    targetTeam?: string;
+    finalColumn?: string;
     writeBackOnComplete: boolean;
+    [key: string]: unknown;
 }
 
 function _normalizeString(value: unknown): string {
@@ -109,20 +117,95 @@ export function normalizeLinearAutomationRules(raw: unknown): LinearAutomationRu
         const name = _normalizeString(source.name);
         const triggerLabel = _normalizeString(source.triggerLabel);
         const triggerStates = _normalizeStringArray(source.triggerStates);
-        const targetColumn = _normalizeString(source.targetColumn);
+        const rawTargetColumn = _normalizeString(source.targetColumn);
+        const rawTargetTeam = _normalizeString(source.targetTeam);
         const finalColumn = _normalizeString(source.finalColumn);
 
-        if (!name || !triggerLabel || triggerStates.length === 0 || !targetColumn || !finalColumn) {
+        if (!name || !triggerLabel || triggerStates.length === 0) {
             continue;
         }
 
+        let destination: LinearAutomationDestination | undefined;
+        let resolvedTargetColumn: string | undefined = rawTargetColumn || undefined;
+        let resolvedTargetTeam: string | undefined = rawTargetTeam || undefined;
+
+        if (source.destination && typeof source.destination === 'object' && !Array.isArray(source.destination)) {
+            const dest = source.destination as Record<string, unknown>;
+            const kind = _normalizeString(dest.kind).toLowerCase();
+            if (kind === 'column') {
+                const column = _normalizeString(dest.column || rawTargetColumn);
+                if (!column || rawTargetTeam) {
+                    // Refuse rule if column empty or both column destination and targetTeam set
+                    continue;
+                }
+                destination = { kind: 'column', column };
+                resolvedTargetColumn = column;
+                resolvedTargetTeam = undefined;
+            } else if (kind === 'team') {
+                const team = _normalizeString(dest.team || rawTargetTeam);
+                if (!team || rawTargetColumn) {
+                    // Refuse rule if team empty or both team destination and targetColumn set
+                    continue;
+                }
+                destination = { kind: 'team', team };
+                resolvedTargetTeam = team;
+                resolvedTargetColumn = undefined;
+            } else if (kind === 'memo') {
+                destination = { kind: 'memo' };
+                resolvedTargetColumn = undefined;
+                resolvedTargetTeam = undefined;
+            } else {
+                // Refuse unknown destination kind
+                continue;
+            }
+        } else {
+            // Sibling field check: refuse if both targetColumn and targetTeam are set
+            if (rawTargetColumn && rawTargetTeam) {
+                continue;
+            }
+            if (rawTargetColumn) {
+                destination = { kind: 'column', column: rawTargetColumn };
+                resolvedTargetColumn = rawTargetColumn;
+                resolvedTargetTeam = undefined;
+            } else if (rawTargetTeam) {
+                destination = { kind: 'team', team: rawTargetTeam };
+                resolvedTargetTeam = rawTargetTeam;
+                resolvedTargetColumn = undefined;
+            } else {
+                // Neither column nor team set
+                continue;
+            }
+        }
+
+        // For column destination, targetColumn and finalColumn are required
+        if (destination.kind === 'column' && (!resolvedTargetColumn || !finalColumn)) {
+            continue;
+        }
+
+        // Preserve unknown keys from source
+        const {
+            name: _n,
+            enabled: _e,
+            triggerLabel: _tl,
+            triggerStates: _ts,
+            targetColumn: _tc,
+            targetTeam: _tt,
+            destination: _d,
+            finalColumn: _fc,
+            writeBackOnComplete: _wb,
+            ...unknownKeys
+        } = source;
+
         normalized.push({
+            ...unknownKeys,
             name,
             enabled: source.enabled !== false,
             triggerLabel,
             triggerStates,
-            targetColumn,
-            finalColumn,
+            destination,
+            targetColumn: resolvedTargetColumn,
+            targetTeam: resolvedTargetTeam,
+            finalColumn: finalColumn || undefined,
             writeBackOnComplete: source.writeBackOnComplete === true
         });
     }

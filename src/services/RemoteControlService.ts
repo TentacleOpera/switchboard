@@ -450,6 +450,13 @@ export class RemoteControlService {
             await this._pollComments(db, provider, byRemoteId);
             await this._pollDescriptions(db, provider, byRemoteId, refreshedThisCycle);
 
+            if (provider.pollAssignedIssues) {
+                await provider.pollAssignedIssues(db, workspaceId);
+            }
+            if (provider.pollMentionsAndRelay) {
+                await provider.pollMentionsAndRelay(db, workspaceId);
+            }
+
             // Health: record successful poll.
             this._lastPollAt = new Date().toISOString();
             this._lastPollOk = true;

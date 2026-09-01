@@ -985,13 +985,14 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     };
     const computeIntegrationsConfigured = async () => {
         try {
-            const [clickup, linear, notion, stitch] = await Promise.all([
+            const [clickup, linearKey, linearOAuth, notion, stitch] = await Promise.all([
                 secretStorage.get('switchboard.clickup.apiToken').then((t: string | undefined) => !!(t && t.trim().length > 0)),
                 secretStorage.get('switchboard.linear.apiToken').then((t: string | undefined) => !!(t && t.trim().length > 0)),
+                secretStorage.get('switchboard.linear.oauthTokens').then((t: string | undefined) => !!(t && t.trim().length > 0)),
                 secretStorage.get('switchboard.notion.apiToken').then((t: string | undefined) => !!(t && t.trim().length > 0)),
                 secretStorage.get('switchboard.stitch.apiKey').then((t: string | undefined) => !!(t && t.trim().length > 0)),
             ]);
-            return { clickup, linear, notion, stitch };
+            return { clickup, linear: linearKey || linearOAuth, notion, stitch };
         } catch { return { clickup: false, linear: false, notion: false, stitch: false }; }
     };
     const getStandaloneCaps = async (): Promise<HostCapabilities> => ({

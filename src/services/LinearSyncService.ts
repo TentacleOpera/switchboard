@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as http from 'http';
 import * as https from 'https';
 import * as crypto from 'crypto';
 import { hostInlineImages } from './ImageHostingHelper';
@@ -15,6 +16,48 @@ import {
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { stampMarker, truncateForComment } from './commentMarker';
 import { localizeHttpError } from './errorMessages';
+
+export interface LinearOAuthTokens {
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: number;
+  tokenType?: string;
+  scope?: string[];
+  actor?: 'app' | 'user';
+  createdAt?: number;
+}
+
+export interface LinearOAuthRefreshLease {
+  ownerId: string;
+  expiresAt: number;
+}
+
+export type LinearCredentialKind = 'oauth' | 'apiKey' | 'none';
+
+export interface LinearRateLimitState {
+  requestsLimit?: number;
+  requestsRemaining?: number;
+  requestsReset?: number;
+  complexity?: number;
+  complexityLimit?: number;
+  complexityRemaining?: number;
+  complexityReset?: number;
+  actorKind: 'app' | 'user';
+}
+
+export interface LinearPKCEFlowState {
+  codeVerifier: string;
+  codeChallenge: string;
+  state: string;
+  redirectUri: string;
+  createdAt: number;
+}
+
+export const LINEAR_OAUTH_CLIENT_ID = 'switchboard-linear-oauth';
+export const LINEAR_AUTH_URL = 'https://linear.app/oauth/authorize';
+export const LINEAR_TOKEN_HOST = 'api.linear.app';
+export const LINEAR_TOKEN_PATH = '/oauth/token';
+export const LINEAR_OAUTH_SCOPES = ['read', 'write', 'issues:create', 'comments:create', 'app:assignable', 'app:mentionable'];
 
 
 export interface LinearConfig {
@@ -136,6 +179,12 @@ export class LinearSyncService {
   // Cache service for issue caching
   private _cacheService: import('./PlanningPanelCacheService').PlanningPanelCacheService | null = null;
   private _tokenPresentCache: boolean | null = null;
+
+  // OAuth and Rate Limiting state
+  private _inFlightPKCE: LinearPKCEFlowState | null = null;
+  private _hostId: string = 'host-' + process.pid + '-' + crypto.randomBytes(4).toString('hex');
+  private _lastRateLimitState: LinearRateLimitState | null = null;
+  private _oauthLoopbackServer: http.Server | null = null;
 
   // Reverse map: issueId -> projectId for efficient cache invalidation
   private _issueProjectIndex: Map<string, string> = new Map();
@@ -1887,10 +1936,356 @@ export class LinearSyncService {
     await db.setLinearIssueLink(issueId, planFile);
   }
 
-  // ── Token Management ─────────────────────────────────────────
+  // ── Token & OAuth Management ─────────────────────────────────────────
+
+  async getCredentialKind(): Promise<LinearCredentialKind> {
+    try {
+      const oauthTokens = await this.getOAuthTokens();
+      if (oauthTokens && oauthTokens.accessToken) {
+        return 'oauth';
+      }
+      const apiToken = await this._secretStorage.get('switchboard.linear.apiToken');
+      if (apiToken && apiToken.trim().length > 0) {
+        return 'apiKey';
+      }
+    } catch {}
+    return 'none';
+  }
+
+  async isOAuthAppActor(): Promise<boolean> {
+    return (await this.getCredentialKind()) === 'oauth';
+  }
+
+  async getOAuthTokens(): Promise<LinearOAuthTokens | null> {
+    try {
+      const raw = await this._secretStorage.get('switchboard.linear.oauthTokens');
+      if (!raw) return null;
+      return JSON.parse(raw) as LinearOAuthTokens;
+    } catch {
+      return null;
+    }
+  }
+
+  async saveOAuthTokens(tokens: LinearOAuthTokens): Promise<void> {
+    const payload = JSON.stringify(tokens);
+    // Atomic double-buffered persist: write to temp key first, then primary, then clear temp
+    await this._secretStorage.store('switchboard.linear.oauthTokens.temp', payload);
+    await this._secretStorage.store('switchboard.linear.oauthTokens', payload);
+    await this._secretStorage.delete('switchboard.linear.oauthTokens.temp');
+    this.clearApiTokenCache();
+  }
+
+  async clearOAuthTokens(): Promise<void> {
+    await this._secretStorage.delete('switchboard.linear.oauthTokens');
+    await this._secretStorage.delete('switchboard.linear.oauthTokens.temp');
+    await this._secretStorage.delete('switchboard.linear.oauthLease');
+    this.clearApiTokenCache();
+  }
+
+  async startOAuthFlow(redirectUri?: string): Promise<{ authorizeUrl: string; state: string; codeVerifier: string; redirectUri: string }> {
+    if (this._inFlightPKCE && (Date.now() - this._inFlightPKCE.createdAt < 5 * 60 * 1000)) {
+      const params = new URLSearchParams({
+        response_type: 'code',
+        client_id: LINEAR_OAUTH_CLIENT_ID,
+        redirect_uri: this._inFlightPKCE.redirectUri,
+        scope: LINEAR_OAUTH_SCOPES.join(','),
+        state: this._inFlightPKCE.state,
+        code_challenge: this._inFlightPKCE.codeChallenge,
+        code_challenge_method: 'S256',
+        actor: 'app'
+      });
+      return {
+        authorizeUrl: `${LINEAR_AUTH_URL}?${params.toString()}`,
+        state: this._inFlightPKCE.state,
+        codeVerifier: this._inFlightPKCE.codeVerifier,
+        redirectUri: this._inFlightPKCE.redirectUri
+      };
+    }
+
+    const codeVerifier = crypto.randomBytes(32).toString('base64url');
+    const codeChallenge = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
+    const state = crypto.randomBytes(16).toString('hex');
+    const effectiveRedirectUri = redirectUri || 'http://127.0.0.1:18942/oauth/callback';
+
+    this._inFlightPKCE = {
+      codeVerifier,
+      codeChallenge,
+      state,
+      redirectUri: effectiveRedirectUri,
+      createdAt: Date.now()
+    };
+
+    const params = new URLSearchParams({
+      response_type: 'code',
+      client_id: LINEAR_OAUTH_CLIENT_ID,
+      redirect_uri: effectiveRedirectUri,
+      scope: LINEAR_OAUTH_SCOPES.join(','),
+      state,
+      code_challenge: codeChallenge,
+      code_challenge_method: 'S256',
+      actor: 'app'
+    });
+
+    return {
+      authorizeUrl: `${LINEAR_AUTH_URL}?${params.toString()}`,
+      state,
+      codeVerifier,
+      redirectUri: effectiveRedirectUri
+    };
+  }
+
+  async exchangeOAuthCode(code: string, codeVerifier?: string, redirectUri?: string): Promise<LinearOAuthTokens> {
+    const verifier = codeVerifier || this._inFlightPKCE?.codeVerifier;
+    const uri = redirectUri || this._inFlightPKCE?.redirectUri || 'http://127.0.0.1:18942/oauth/callback';
+    this._inFlightPKCE = null;
+
+    if (!verifier) {
+      throw new Error('Missing PKCE code_verifier for Linear OAuth code exchange');
+    }
+
+    const postData = new URLSearchParams({
+      grant_type: 'authorization_code',
+      client_id: LINEAR_OAUTH_CLIENT_ID,
+      redirect_uri: uri,
+      code: code.trim(),
+      code_verifier: verifier
+    }).toString();
+
+    const response = await this._postOAuthToken(postData);
+    if (response.error || !response.access_token) {
+      throw new Error(`Linear OAuth exchange failed: ${response.error_description || response.error || 'unknown error'}`);
+    }
+
+    const tokens: LinearOAuthTokens = {
+      accessToken: response.access_token,
+      refreshToken: response.refresh_token,
+      expiresAt: Date.now() + ((response.expires_in || 86400) * 1000),
+      tokenType: response.token_type || 'Bearer',
+      scope: Array.isArray(response.scope) ? response.scope : (typeof response.scope === 'string' ? response.scope.split(',') : LINEAR_OAUTH_SCOPES),
+      actor: 'app',
+      createdAt: Date.now()
+    };
+
+    await this.saveOAuthTokens(tokens);
+    return tokens;
+  }
+
+  async refreshOAuthToken(): Promise<string> {
+    const tokens = await this.getOAuthTokens();
+    if (!tokens || !tokens.refreshToken) {
+      throw new Error('No Linear OAuth refresh token available');
+    }
+
+    // Single-writer lease check
+    let leaseRaw: string | undefined;
+    try {
+      leaseRaw = await this._secretStorage.get('switchboard.linear.oauthLease');
+    } catch {}
+
+    if (leaseRaw) {
+      try {
+        const lease = JSON.parse(leaseRaw) as LinearOAuthRefreshLease;
+        if (lease && lease.expiresAt > Date.now() && lease.ownerId !== this._hostId) {
+          // Another host holds the refresh lease — wait and read the refreshed token
+          for (let i = 0; i < 7; i++) {
+            await this.delay(500);
+            const current = await this.getOAuthTokens();
+            if (current && current.expiresAt > Date.now() + 60 * 1000) {
+              return current.accessToken;
+            }
+            const freshLeaseRaw = await this._secretStorage.get('switchboard.linear.oauthLease');
+            if (!freshLeaseRaw) break;
+            const freshLease = JSON.parse(freshLeaseRaw);
+            if (!freshLease || freshLease.expiresAt <= Date.now()) break;
+          }
+        }
+      } catch {}
+    }
+
+    // Acquire lease
+    const lease: LinearOAuthRefreshLease = {
+      ownerId: this._hostId,
+      expiresAt: Date.now() + 30000
+    };
+    await this._secretStorage.store('switchboard.linear.oauthLease', JSON.stringify(lease));
+
+    try {
+      const postData = new URLSearchParams({
+        grant_type: 'refresh_token',
+        client_id: LINEAR_OAUTH_CLIENT_ID,
+        refresh_token: tokens.refreshToken
+      }).toString();
+
+      const response = await this._postOAuthToken(postData);
+      if (response.error || !response.access_token) {
+        if (response.error === 'invalid_grant' || (response.error_description && response.error_description.includes('invalid_grant'))) {
+          // Single-use token invalidated/revoked: clear stored tokens
+          await this.clearOAuthTokens();
+        }
+        throw new Error(`Linear OAuth refresh failed: ${response.error_description || response.error || 'unknown error'}`);
+      }
+
+      const newTokens: LinearOAuthTokens = {
+        accessToken: response.access_token,
+        refreshToken: response.refresh_token,
+        expiresAt: Date.now() + ((response.expires_in || 86400) * 1000),
+        tokenType: response.token_type || 'Bearer',
+        scope: Array.isArray(response.scope) ? response.scope : tokens.scope,
+        actor: 'app',
+        createdAt: Date.now()
+      };
+
+      await this.saveOAuthTokens(newTokens);
+      return newTokens.accessToken;
+    } finally {
+      try {
+        await this._secretStorage.delete('switchboard.linear.oauthLease');
+      } catch {}
+    }
+  }
+
+  private async _postOAuthToken(postData: string): Promise<any> {
+    return new Promise((resolve, reject) => {
+      const req = https.request({
+        hostname: LINEAR_TOKEN_HOST,
+        path: LINEAR_TOKEN_PATH,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'Content-Length': Buffer.byteLength(postData)
+        },
+        timeout: 20000
+      }, (res) => {
+        let raw = '';
+        res.on('data', (chunk) => { raw += chunk.toString(); });
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(raw);
+            resolve(parsed);
+          } catch {
+            reject(new Error(`Failed to parse OAuth token response: ${raw.slice(0, 100)}`));
+          }
+        });
+      });
+      req.on('timeout', () => { req.destroy(); reject(new Error('Linear OAuth token request timed out')); });
+      req.on('error', (err) => reject(err));
+      req.write(postData);
+      req.end();
+    });
+  }
+
+  public async startOAuthLoopbackListener(port = 18942): Promise<{ port: number; close: () => void } | null> {
+    if (this._oauthLoopbackServer) {
+      try { this._oauthLoopbackServer.close(); } catch {}
+      this._oauthLoopbackServer = null;
+    }
+
+    return new Promise((resolve) => {
+      const server = http.createServer(async (req, res) => {
+        try {
+          const reqUrl = new URL(req.url || '/', `http://127.0.0.1:${port}`);
+          if (reqUrl.pathname === '/oauth/callback') {
+            const code = reqUrl.searchParams.get('code');
+            const state = reqUrl.searchParams.get('state');
+            const error = reqUrl.searchParams.get('error');
+
+            if (error) {
+              res.writeHead(400, { 'Content-Type': 'text/html' });
+              res.end(`<html><body style="background:#111;color:#f66;font-family:sans-serif;padding:40px;text-align:center;"><h2>Linear OAuth Failed</h2><p>${error}</p></body></html>`);
+              return;
+            }
+
+            if (code) {
+              if (this._inFlightPKCE && state && this._inFlightPKCE.state !== state) {
+                res.writeHead(400, { 'Content-Type': 'text/html' });
+                res.end(`<html><body style="background:#111;color:#f66;font-family:sans-serif;padding:40px;text-align:center;"><h2>Invalid State Parameter</h2></body></html>`);
+                return;
+              }
+
+              await this.exchangeOAuthCode(code);
+              res.writeHead(200, { 'Content-Type': 'text/html' });
+              res.end(`<html><body style="background:#111;color:#00e5ff;font-family:sans-serif;padding:40px;text-align:center;"><h2>Linear Connected Successfully</h2><p>Switchboard is now connected to Linear as an App Actor. You can close this window.</p></body></html>`);
+              setTimeout(() => {
+                try { server.close(); } catch {}
+              }, 1000);
+              return;
+            }
+          }
+          res.writeHead(404, { 'Content-Type': 'text/plain' });
+          res.end('Not found');
+        } catch (err: any) {
+          res.writeHead(500, { 'Content-Type': 'text/html' });
+          res.end(`<html><body style="background:#111;color:#f66;font-family:sans-serif;padding:40px;text-align:center;"><h2>Exchange Error</h2><p>${err?.message || 'unknown error'}</p></body></html>`);
+        }
+      });
+
+      server.on('error', (err) => {
+        console.warn('[LinearSyncService] Loopback listener failed to bind:', err);
+        resolve(null);
+      });
+
+      server.listen(port, '127.0.0.1', () => {
+        this._oauthLoopbackServer = server;
+        setTimeout(() => {
+          try { server.close(); } catch {}
+          if (this._oauthLoopbackServer === server) this._oauthLoopbackServer = null;
+        }, 5 * 60 * 1000);
+        resolve({ port, close: () => { try { server.close(); } catch {} } });
+      });
+    });
+  }
+
+  public async checkViewerAdminStatus(): Promise<{ isAdmin: boolean | null; role?: string; message?: string }> {
+    try {
+      const token = await this.getApiToken();
+      if (!token) {
+        return {
+          isAdmin: null,
+          message: 'Connecting Linear as an App Actor requires Linear Workspace Admin permissions.'
+        };
+      }
+      const res = await this.graphqlRequest('{ viewer { id admin role } }');
+      const viewer = res?.data?.viewer;
+      if (viewer) {
+        const isAdmin = viewer.admin === true || viewer.role === 'admin';
+        return {
+          isAdmin,
+          role: viewer.role,
+          message: isAdmin
+            ? 'Workspace Admin permissions confirmed.'
+            : 'Notice: Non-admin users cannot authorize OAuth App Actors in Linear.'
+        };
+      }
+    } catch (err: any) {
+      return {
+        isAdmin: null,
+        message: `Could not verify admin status: ${err?.message || 'unknown error'}`
+      };
+    }
+    return { isAdmin: null };
+  }
+
+  public getRateLimitState(): LinearRateLimitState | null {
+    return this._lastRateLimitState;
+  }
 
   async getApiToken(): Promise<string | null> {
     try {
+      const oauthTokens = await this.getOAuthTokens();
+      if (oauthTokens && oauthTokens.accessToken) {
+        if (Date.now() > oauthTokens.expiresAt - 15 * 60 * 1000) {
+          try {
+            const refreshed = await this.refreshOAuthToken();
+            return refreshed;
+          } catch {
+            if (Date.now() < oauthTokens.expiresAt) {
+              return oauthTokens.accessToken;
+            }
+          }
+        } else {
+          return oauthTokens.accessToken;
+        }
+      }
       return await this._secretStorage.get('switchboard.linear.apiToken') || null;
     } catch { return null; }
   }
@@ -1904,6 +2299,36 @@ export class LinearSyncService {
 
   clearApiTokenCache(): void {
     this._tokenPresentCache = null;
+  }
+
+  private _parseRateLimitHeaders(headers: http.IncomingHttpHeaders, isOAuth: boolean): void {
+    const getNum = (name: string): number | undefined => {
+      const val = headers[name];
+      if (val === undefined || val === null) return undefined;
+      const parsed = parseInt(Array.isArray(val) ? val[0] : val, 10);
+      return Number.isNaN(parsed) ? undefined : parsed;
+    };
+
+    const requestsLimit = getNum('x-ratelimit-requests-limit');
+    const requestsRemaining = getNum('x-ratelimit-requests-remaining');
+    const requestsReset = getNum('x-ratelimit-requests-reset');
+    const complexity = getNum('x-complexity');
+    const complexityLimit = getNum('x-ratelimit-complexity-limit');
+    const complexityRemaining = getNum('x-ratelimit-complexity-remaining');
+    const complexityReset = getNum('x-ratelimit-complexity-reset');
+
+    if (requestsLimit !== undefined || complexity !== undefined || requestsRemaining !== undefined) {
+      this._lastRateLimitState = {
+        requestsLimit,
+        requestsRemaining,
+        requestsReset,
+        complexity,
+        complexityLimit,
+        complexityRemaining,
+        complexityReset,
+        actorKind: isOAuth ? 'app' : 'user'
+      };
+    }
   }
 
   // ── GraphQL Client ───────────────────────────────────────────
@@ -1954,9 +2379,34 @@ export class LinearSyncService {
     timeoutMs = 30000,
     signal?: AbortSignal
   ): Promise<{ data: any }> {
+    try {
+      return await this._graphqlRequestAttempt(query, variables, timeoutMs, signal);
+    } catch (err: any) {
+      if (err?.statusCode === 401 && (await this.isOAuthAppActor())) {
+        try {
+          await this.refreshOAuthToken();
+          return await this._graphqlRequestAttempt(query, variables, timeoutMs, signal);
+        } catch {
+          throw err;
+        }
+      }
+      throw err;
+    }
+  }
+
+  private async _graphqlRequestAttempt(
+    query: string,
+    variables?: Record<string, unknown>,
+    timeoutMs = 30000,
+    signal?: AbortSignal
+  ): Promise<{ data: any }> {
     await this._throttle();
     const token = await this.getApiToken();
     if (!token) { throw new Error('Linear API token not configured'); }
+    const isOAuth = await this.isOAuthAppActor();
+    const authHeader = token.startsWith('Bearer ') || token.startsWith('lin_api_')
+      ? token
+      : (isOAuth ? `Bearer ${token}` : token);
 
     return new Promise((resolve, reject) => {
       let settled = false;
@@ -1977,20 +2427,19 @@ export class LinearSyncService {
         path: LINEAR_API_PATH,
         method: 'POST',
         headers: {
-          'Authorization': token,
+          'Authorization': authHeader,
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(payload)
         },
         timeout: timeoutMs
       }, (res) => {
         let raw = '';
-        // Node emits socket errors/aborts on `res` (not `req`) once response
-        // headers have arrived. Without these listeners the Promise orphans
-        // forever on mid-stream failures — the primary hang root cause.
         res.on('error', (err) => safeReject(new Error(`Linear response stream error: ${err.message}`)));
         res.on('aborted', () => safeReject(new Error('Linear response aborted by server')));
         res.on('data', (chunk: Buffer) => { raw += chunk.toString(); });
         res.on('end', () => {
+          this._parseRateLimitHeaders(res.headers, isOAuth);
+
           if (res.statusCode !== 200) {
             const status = res.statusCode ?? 0;
             const err: any = new Error(localizeHttpError(status, 'linear', 'fetch from Linear'));
@@ -2000,7 +2449,15 @@ export class LinearSyncService {
           try {
             const parsed = JSON.parse(raw);
             if (parsed.errors?.length) {
-              return safeReject(new Error(`Linear GraphQL error: ${parsed.errors[0].message}`));
+              const firstErr = parsed.errors[0];
+              const code = firstErr?.extensions?.code;
+              const isRateLimited = code === 'RATELIMITED' || String(firstErr?.message || '').toLowerCase().includes('ratelimit');
+              const err: any = new Error(`Linear GraphQL error: ${firstErr.message}`);
+              if (isRateLimited) {
+                err.code = 'RATELIMITED';
+                err.isRateLimited = true;
+              }
+              return safeReject(err);
             }
             safeResolve({ data: parsed.data });
           } catch {
@@ -3057,5 +3514,658 @@ export class LinearSyncService {
     }
 
     return { unlinked, failed };
+  }
+
+  // ── Mission Milestones & Issue Relations ─────────────────────────
+
+  public async createProjectMilestone(
+    projectId: string,
+    name: string,
+    description?: string,
+    targetDate?: string,
+    sortOrder?: number
+  ): Promise<{ id: string; name: string }> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('Linear not configured');
+    }
+
+    const normalizedProjectId = String(projectId || '').trim();
+    const normalizedName = String(name || '').trim();
+    if (!normalizedProjectId || !normalizedName) {
+      throw new Error('Linear milestone creation requires a project ID and name.');
+    }
+
+    const input: Record<string, any> = {
+      projectId: normalizedProjectId,
+      name: normalizedName
+    };
+    if (description) input.description = description;
+    if (targetDate) input.targetDate = targetDate;
+    if (typeof sortOrder === 'number') input.sortOrder = sortOrder;
+
+    const result = await this.graphqlRequest(`
+      mutation($input: ProjectMilestoneCreateInput!) {
+        projectMilestoneCreate(input: $input) {
+          success
+          projectMilestone { id name }
+        }
+      }
+    `, { input });
+
+    if (!result.data?.projectMilestoneCreate?.success || !result.data?.projectMilestoneCreate?.projectMilestone) {
+      throw new Error(`Linear milestone creation rejected for project ${normalizedProjectId}.`);
+    }
+
+    return {
+      id: result.data.projectMilestoneCreate.projectMilestone.id,
+      name: result.data.projectMilestoneCreate.projectMilestone.name
+    };
+  }
+
+  public async updateProjectMilestone(
+    milestoneId: string,
+    input: { name?: string; description?: string; targetDate?: string | null; sortOrder?: number }
+  ): Promise<void> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('Linear not configured');
+    }
+
+    const normalizedMilestoneId = String(milestoneId || '').trim();
+    if (!normalizedMilestoneId) {
+      throw new Error('Linear milestone update requires a milestone ID.');
+    }
+
+    const result = await this.graphqlRequest(`
+      mutation($id: String!, $input: ProjectMilestoneUpdateInput!) {
+        projectMilestoneUpdate(id: $id, input: $input) { success }
+      }
+    `, { id: normalizedMilestoneId, input });
+
+    if (!result.data?.projectMilestoneUpdate?.success) {
+      throw new Error(`Linear milestone update rejected for ${normalizedMilestoneId}.`);
+    }
+  }
+
+  public async updateIssueMilestone(issueId: string, milestoneId: string | null): Promise<void> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('Linear not configured');
+    }
+
+    const normalizedIssueId = String(issueId || '').trim();
+    if (!normalizedIssueId) {
+      throw new Error('Linear issue milestone update requires an issue ID.');
+    }
+
+    const result = await this.graphqlRequest(`
+      mutation($id: String!, $milestoneId: String) {
+        issueUpdate(id: $id, input: { projectMilestoneId: $milestoneId }) { success }
+      }
+    `, { id: normalizedIssueId, milestoneId: milestoneId || null });
+
+    if (!result.data?.issueUpdate?.success) {
+      throw new Error(`Linear issue ${normalizedIssueId} rejected the requested milestone update.`);
+    }
+
+    if (this._cacheService) {
+      const projectId = this._issueProjectIndex.get(normalizedIssueId);
+      if (projectId) {
+        this._cacheService.invalidateTaskCache('linear', `project:${projectId}`);
+      } else {
+        this._cacheService.invalidateTaskCache('linear');
+      }
+    }
+  }
+
+  public async createIssueRelation(
+    issueId: string,
+    relatedIssueId: string,
+    type: 'blocks' | 'duplicate' | 'related' = 'blocks'
+  ): Promise<{ id: string } | null> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('Linear not configured');
+    }
+
+    const normalizedIssueId = String(issueId || '').trim();
+    const normalizedRelatedIssueId = String(relatedIssueId || '').trim();
+    if (!normalizedIssueId || !normalizedRelatedIssueId) {
+      throw new Error('Linear relation creation requires both issue IDs.');
+    }
+
+    try {
+      const result = await this.graphqlRequest(`
+        mutation($input: IssueRelationCreateInput!) {
+          issueRelationCreate(input: $input) {
+            success
+            issueRelation { id type }
+          }
+        }
+      `, {
+        input: {
+          issueId: normalizedIssueId,
+          relatedIssueId: normalizedRelatedIssueId,
+          type
+        }
+      });
+
+      if (result.data?.issueRelationCreate?.success && result.data.issueRelationCreate.issueRelation) {
+        return { id: result.data.issueRelationCreate.issueRelation.id };
+      }
+      return null;
+    } catch (err: any) {
+      const msg = String(err?.message || '');
+      if (msg.includes('already exists') || msg.includes('duplicate') || msg.includes('ConstraintViolation')) {
+        return null;
+      }
+      throw err;
+    }
+  }
+
+  public async deleteIssueRelation(relationId: string): Promise<void> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('Linear not configured');
+    }
+
+    const normalizedRelationId = String(relationId || '').trim();
+    if (!normalizedRelationId) {
+      throw new Error('Linear relation deletion requires a relation ID.');
+    }
+
+    const result = await this.graphqlRequest(`
+      mutation($id: String!) {
+        issueRelationDelete(id: $id) { success }
+      }
+    `, { id: normalizedRelationId });
+
+    if (!result.data?.issueRelationDelete?.success) {
+      throw new Error(`Linear rejected relation deletion for ${normalizedRelationId}.`);
+    }
+  }
+
+  public async getIssueRelations(issueId: string): Promise<Array<{ id: string; type: string; relatedIssue: { id: string } }>> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('Linear not configured');
+    }
+
+    const normalizedIssueId = String(issueId || '').trim();
+    if (!normalizedIssueId) {
+      throw new Error('Linear relation lookup requires an issue ID.');
+    }
+
+    const result = await this.graphqlRequest(`
+      query($id: String!) {
+        issue(id: $id) {
+          relations {
+            nodes {
+              id
+              type
+              relatedIssue { id }
+            }
+          }
+        }
+      }
+    `, { id: normalizedIssueId });
+
+    const nodes = result.data?.issue?.relations?.nodes || [];
+    return nodes
+      .map((n: any) => ({
+        id: String(n?.id || ''),
+        type: String(n?.type || ''),
+        relatedIssue: { id: String(n?.relatedIssue?.id || '') }
+      }))
+      .filter((n: any) => n.id && n.relatedIssue.id);
+  }
+
+  public async syncMissionsAndDependencies(workspaceId?: string): Promise<{
+    milestonesCreated: number;
+    membersAssigned: number;
+    membersUnassigned: number;
+    relationsCreated: number;
+    relationsDeleted: number;
+  }> {
+    const counts = { milestonesCreated: 0, membersAssigned: 0, membersUnassigned: 0, relationsCreated: 0, relationsDeleted: 0 };
+    const config = await this.loadConfig();
+    if (!config?.setupComplete || !(await this.hasApiToken())) {
+      return counts;
+    }
+
+    const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
+    const wsId = workspaceId || (await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '';
+    if (!wsId) {
+      return counts;
+    }
+
+    let projectId = (await this.resolveSingleIncludeProjectId(config)) || (config as any).projectId;
+
+    // 1. Reconcile Missions -> Project Milestones
+    try {
+      const missions = await db.getMissions(wsId);
+      for (const mission of missions) {
+        const members = await db.getMissionMembers(mission.id);
+        const memberIssueIds: string[] = [];
+        for (const m of members) {
+          const plan = await db.getPlanByPlanId(m.memberId);
+          if (plan?.linearIssueId) {
+            memberIssueIds.push(plan.linearIssueId);
+          }
+        }
+
+        // On demand: only mirror when a mission has at least one synced member in the tracker
+        if (memberIssueIds.length === 0) {
+          continue;
+        }
+
+        // If project ID is not resolved yet, try resolving from first member issue
+        if (!projectId && memberIssueIds.length > 0) {
+          try {
+            const issue = await this.getIssue(memberIssueIds[0]);
+            if (issue?.project?.id) {
+              projectId = issue.project.id;
+            }
+          } catch { /* ignore */ }
+        }
+
+        if (!projectId) {
+          continue;
+        }
+
+        let milestoneMapping = await db.getMissionMilestone(mission.id);
+        let milestoneId = milestoneMapping?.milestoneId;
+
+        if (!milestoneId) {
+          try {
+            const res = await this.createProjectMilestone(projectId, mission.name, mission.goal || undefined);
+            if (res?.id) {
+              milestoneId = res.id;
+              await db.setMissionMilestone(mission.id, milestoneId, projectId, wsId);
+              counts.milestonesCreated++;
+            }
+          } catch (err) {
+            console.warn(`[LinearSyncService] Failed to create milestone for mission ${mission.id}:`, err);
+          }
+        }
+
+        if (milestoneId) {
+          let existingIssueIdsInMilestone: Set<string> = new Set();
+          try {
+            const msRes = await this.graphqlRequest(`
+              query($id: String!) {
+                projectMilestone(id: $id) {
+                  id
+                  issues {
+                    nodes { id }
+                  }
+                }
+              }
+            `, { id: milestoneId });
+            const nodes = msRes?.data?.projectMilestone?.issues?.nodes || [];
+            for (const n of nodes) {
+              if (n?.id) existingIssueIdsInMilestone.add(String(n.id));
+            }
+          } catch {
+            // Fallback: empty set
+          }
+
+          const desiredMemberIssueIdSet = new Set(memberIssueIds);
+
+          // Assign members not yet in milestone
+          for (const issueId of memberIssueIds) {
+            if (!existingIssueIdsInMilestone.has(issueId)) {
+              try {
+                await this.updateIssueMilestone(issueId, milestoneId);
+                counts.membersAssigned++;
+              } catch (err) {
+                console.warn(`[LinearSyncService] Failed to assign issue ${issueId} to milestone ${milestoneId}:`, err);
+              }
+            }
+          }
+
+          // Unassign members that left the mission
+          for (const existingId of existingIssueIdsInMilestone) {
+            if (!desiredMemberIssueIdSet.has(existingId)) {
+              try {
+                await this.updateIssueMilestone(existingId, null);
+                counts.membersUnassigned++;
+              } catch (err) {
+                console.warn(`[LinearSyncService] Failed to unassign issue ${existingId} from milestone ${milestoneId}:`, err);
+              }
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[LinearSyncService] Failed to sync missions to milestones:', err);
+    }
+
+    // 2. Reconcile Plan Dependencies -> Linear 'blocks' Issue Relations
+    try {
+      const localDeps = await db.getAllPlanDependencies(wsId);
+      const desiredEdges: Array<{ blockerIssueId: string; blockedIssueId: string }> = [];
+
+      for (const dep of localDeps) {
+        const blockedPlan = await db.getPlanByPlanId(dep.planId);
+        const blockerPlan = await db.getPlanByPlanId(dep.dependsOnPlanId);
+        if (blockedPlan?.linearIssueId && blockerPlan?.linearIssueId) {
+          desiredEdges.push({
+            blockerIssueId: blockerPlan.linearIssueId,
+            blockedIssueId: blockedPlan.linearIssueId
+          });
+        }
+      }
+
+      // Collect ALL Switchboard-managed Linear issue IDs in this workspace,
+      // not just those in current deps — deleted deps leave stale relations
+      // whose issues are no longer in the dep set but still managed.
+      const allPlans = await db.getAllPlans(wsId);
+      const managedIssueIds = new Set<string>();
+      for (const p of allPlans) {
+        if (p.linearIssueId) {
+          managedIssueIds.add(p.linearIssueId);
+        }
+      }
+
+      const existingLinearBlocks = new Map<string, Array<{ relationId: string; blockedIssueId: string }>>();
+
+      for (const issueId of managedIssueIds) {
+        try {
+          const rels = await this.getIssueRelations(issueId);
+          for (const r of rels) {
+            if (r.type === 'blocks' && r.relatedIssue?.id) {
+              if (!existingLinearBlocks.has(issueId)) {
+                existingLinearBlocks.set(issueId, []);
+              }
+              existingLinearBlocks.get(issueId)!.push({
+                relationId: r.id,
+                blockedIssueId: r.relatedIssue.id
+              });
+            }
+          }
+        } catch (err) {
+          console.warn(`[LinearSyncService] Failed to fetch relations for issue ${issueId}:`, err);
+        }
+      }
+
+      // Create missing desired relations
+      for (const edge of desiredEdges) {
+        const existingList = existingLinearBlocks.get(edge.blockerIssueId) || [];
+        const alreadyExists = existingList.some(e => e.blockedIssueId === edge.blockedIssueId);
+        if (!alreadyExists) {
+          try {
+            const created = await this.createIssueRelation(edge.blockerIssueId, edge.blockedIssueId, 'blocks');
+            if (created) {
+              counts.relationsCreated++;
+            }
+          } catch (err) {
+            console.warn(`[LinearSyncService] Failed to create relation ${edge.blockerIssueId} blocks ${edge.blockedIssueId}:`, err);
+          }
+        }
+      }
+
+      // Remove stale relations between Switchboard-managed issues in this workspace.
+      // A relation is managed if BOTH endpoints are Switchboard-managed issues.
+      // This catches relations whose dep row was deleted — the issues are still
+      // managed (have plans) but no longer have a desired edge.
+      for (const [blockerIssueId, relList] of existingLinearBlocks.entries()) {
+        for (const rel of relList) {
+          const isManagedEdge = managedIssueIds.has(rel.blockedIssueId);
+          if (isManagedEdge) {
+            const isDesired = desiredEdges.some(
+              d => d.blockerIssueId === blockerIssueId && d.blockedIssueId === rel.blockedIssueId
+            );
+            if (!isDesired) {
+              try {
+                await this.deleteIssueRelation(rel.relationId);
+                counts.relationsDeleted++;
+              } catch (err) {
+                console.warn(`[LinearSyncService] Failed to delete relation ${rel.relationId}:`, err);
+              }
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[LinearSyncService] Failed to sync plan dependencies:', err);
+    }
+
+    return counts;
+  }
+
+  // ── Native App User & Agent Session Surface ──────────────────────
+
+  private _agentSessionsByIssue = new Map<string, { sessionId: string; createdAt: number }>();
+
+  public async fetchAssignedIssues(): Promise<Array<{
+    id: string;
+    identifier: string;
+    title: string;
+    description: string;
+    url: string;
+    state?: { id: string; name: string; type: string };
+    parent?: { id: string };
+    project?: { id: string; name: string };
+    updatedAt: string;
+  }>> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete || !(await this.hasApiToken())) {
+      return [];
+    }
+
+    const query = `
+      query {
+        viewer {
+          id
+          assignedIssues(filter: { state: { type: { nin: ["completed", "canceled", "cancelled"] } } }, first: 100) {
+            nodes {
+              id
+              identifier
+              title
+              description
+              url
+              state { id name type }
+              parent { id }
+              project { id name }
+              updatedAt
+            }
+          }
+        }
+      }
+    `;
+
+    try {
+      const resp = await this.graphqlRequest(query, {});
+      const nodes = resp?.data?.viewer?.assignedIssues?.nodes || [];
+      return nodes.map((n: any) => ({
+        id: String(n.id || ''),
+        identifier: String(n.identifier || ''),
+        title: String(n.title || ''),
+        description: String(n.description || ''),
+        url: String(n.url || ''),
+        state: n.state ? { id: String(n.state.id || ''), name: String(n.state.name || ''), type: String(n.state.type || '') } : undefined,
+        parent: n.parent ? { id: String(n.parent.id || '') } : undefined,
+        project: n.project ? { id: String(n.project.id || ''), name: String(n.project.name || '') } : undefined,
+        updatedAt: String(n.updatedAt || '')
+      })).filter((n: any) => n.id);
+    } catch (err) {
+      console.warn('[LinearSyncService] fetchAssignedIssues failed:', err);
+      return [];
+    }
+  }
+
+  public async fetchMentionNotifications(): Promise<Array<{
+    id: string;
+    type: string;
+    createdAt: string;
+    issue?: { id: string; identifier: string; title: string; url: string; description?: string };
+    comment?: { id: string; body: string; createdAt: string; issue?: { id: string; identifier: string; title: string; url: string } };
+  }>> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete || !(await this.hasApiToken())) {
+      return [];
+    }
+
+    const query = `
+      query {
+        viewer {
+          id
+          notifications(filter: { type: { in: ["issueMention", "commentMention"] }, read: { eq: false } }, first: 50) {
+            nodes {
+              id
+              type
+              createdAt
+              issue { id identifier title url description }
+              comment { id body createdAt issue { id identifier title url } }
+            }
+          }
+        }
+      }
+    `;
+
+    try {
+      const resp = await this.graphqlRequest(query, {});
+      const nodes = resp?.data?.viewer?.notifications?.nodes || [];
+      return nodes.map((n: any) => ({
+        id: String(n.id || ''),
+        type: String(n.type || ''),
+        createdAt: String(n.createdAt || ''),
+        issue: n.issue ? {
+          id: String(n.issue.id || ''),
+          identifier: String(n.issue.identifier || ''),
+          title: String(n.issue.title || ''),
+          url: String(n.issue.url || ''),
+          description: String(n.issue.description || '')
+        } : undefined,
+        comment: n.comment ? {
+          id: String(n.comment.id || ''),
+          body: String(n.comment.body || ''),
+          createdAt: String(n.comment.createdAt || ''),
+          issue: n.comment.issue ? {
+            id: String(n.comment.issue.id || ''),
+            identifier: String(n.comment.issue.identifier || ''),
+            title: String(n.comment.issue.title || ''),
+            url: String(n.comment.issue.url || '')
+          } : undefined
+        } : undefined
+      })).filter((n: any) => n.id);
+    } catch (err) {
+      console.warn('[LinearSyncService] fetchMentionNotifications failed:', err);
+      return [];
+    }
+  }
+
+  public async archiveNotification(notificationId: string): Promise<boolean> {
+    const normalizedId = String(notificationId || '').trim();
+    if (!normalizedId) return false;
+
+    try {
+      const result = await this.graphqlRequest(`
+        mutation($id: String!) {
+          notificationArchive(id: $id) {
+            success
+          }
+        }
+      `, { id: normalizedId });
+      return result.data?.notificationArchive?.success === true;
+    } catch (err) {
+      console.warn(`[LinearSyncService] archiveNotification failed for ${normalizedId}:`, err);
+      return false;
+    }
+  }
+
+  public async createAgentSessionOnIssue(issueId: string): Promise<string | null> {
+    const normalizedIssueId = String(issueId || '').trim();
+    if (!normalizedIssueId) return null;
+
+    try {
+      const result = await this.graphqlRequest(`
+        mutation($issueId: String!) {
+          agentSessionCreateOnIssue(issueId: $issueId) {
+            success
+            agentSession { id }
+          }
+        }
+      `, { issueId: normalizedIssueId });
+
+      const sessionId = result.data?.agentSessionCreateOnIssue?.agentSession?.id;
+      if (sessionId) {
+        this._agentSessionsByIssue.set(normalizedIssueId, { sessionId, createdAt: Date.now() });
+        return sessionId;
+      }
+      return null;
+    } catch (err) {
+      console.warn(`[LinearSyncService] createAgentSessionOnIssue failed for ${normalizedIssueId}:`, err);
+      return null;
+    }
+  }
+
+  public async createAgentSessionOnComment(commentId: string): Promise<string | null> {
+    const normalizedCommentId = String(commentId || '').trim();
+    if (!normalizedCommentId) return null;
+
+    try {
+      const result = await this.graphqlRequest(`
+        mutation($commentId: String!) {
+          agentSessionCreateOnComment(commentId: $commentId) {
+            success
+            agentSession { id }
+          }
+        }
+      `, { commentId: normalizedCommentId });
+
+      return result.data?.agentSessionCreateOnComment?.agentSession?.id || null;
+    } catch (err) {
+      console.warn(`[LinearSyncService] createAgentSessionOnComment failed for ${normalizedCommentId}:`, err);
+      return null;
+    }
+  }
+
+  public async getOrCreateAgentSession(issueId: string): Promise<string | null> {
+    const normalizedIssueId = String(issueId || '').trim();
+    if (!normalizedIssueId) return null;
+
+    const existing = this._agentSessionsByIssue.get(normalizedIssueId);
+    // Keep session active for up to 2 hours
+    if (existing && Date.now() - existing.createdAt < 2 * 60 * 60 * 1000) {
+      return existing.sessionId;
+    }
+    return await this.createAgentSessionOnIssue(normalizedIssueId);
+  }
+
+  public async postAgentActivity(
+    agentSessionId: string,
+    content: string,
+    ephemeral = false,
+    signal?: string
+  ): Promise<boolean> {
+    const normalizedSessionId = String(agentSessionId || '').trim();
+    const normalizedContent = String(content || '').trim();
+    if (!normalizedSessionId || !normalizedContent) return false;
+
+    const input: Record<string, any> = {
+      agentSessionId: normalizedSessionId,
+      content: normalizedContent,
+      ephemeral: ephemeral === true
+    };
+    if (signal) input.signal = signal;
+
+    try {
+      const result = await this.graphqlRequest(`
+        mutation($input: AgentActivityCreateInput!) {
+          agentActivityCreate(input: $input) {
+            success
+            agentActivity { id }
+          }
+        }
+      `, { input });
+
+      return result.data?.agentActivityCreate?.success === true;
+    } catch (err) {
+      console.warn(`[LinearSyncService] postAgentActivity failed for session ${normalizedSessionId}:`, err);
+      return false;
+    }
   }
 }

@@ -20,7 +20,7 @@ interface ClickUpRemoteProviderDeps {
 
 export class ClickUpRemoteProvider implements RemoteProvider {
     public readonly kind = 'clickup' as const;
-    public readonly capabilities: RemoteProviderCapabilities = { pull: true, push: true, archive: false };
+    public readonly capabilities: RemoteProviderCapabilities = { pull: true, push: true, archive: false, missions: false };
     private _clickup: ClickUpSyncService;
     private _deps: ClickUpRemoteProviderDeps;
     private _listIdToColumn: Record<string, string> = {};

@@ -4,6 +4,7 @@ import * as path from 'path';
 import { KanbanDatabase } from './KanbanDatabase';
 import { buildLinearIssueFilter, LinearSyncService, type LinearConfig } from './LinearSyncService';
 import {
+    type LinearAutomationDestination,
     type LinearAutomationRule,
     matchesLinearAutomationRule
 } from '../models/PipelineDefinition';
@@ -28,7 +29,9 @@ export interface LinearAutomationCreatedPlan {
     planFile: string;
     linearIssueId: string;
     ruleName: string;
-    targetColumn: string;
+    targetColumn?: string;
+    targetTeam?: string;
+    destination?: LinearAutomationDestination;
 }
 
 export interface LinearAutomationPollResult {
@@ -43,7 +46,8 @@ export class LinearAutomationService {
     constructor(
         private readonly _workspaceRoot: string,
         private readonly _linearService: LinearSyncService,
-        private readonly _resolvePlansDir: () => Promise<string>
+        private readonly _resolvePlansDir: () => Promise<string>,
+        private readonly _terminalVerb?: (verb: string, payload: any, workspaceRoot?: string, signal?: AbortSignal) => Promise<any>
     ) { }
 
     private async _resolveWorkspaceId(db: KanbanDatabase): Promise<string> {
@@ -162,10 +166,14 @@ export class LinearAutomationService {
         rule: LinearAutomationRule
     ): string {
         const reference = issue.identifier || issue.id;
+        const targetTeam = rule.destination?.kind === 'team' ? rule.destination.team : (rule.targetTeam || '');
+        const targetColumn = rule.destination?.kind === 'column' ? rule.destination.column : (rule.targetColumn || '');
         const metadataLines = [
             `> Imported from Linear issue \`${reference}\``,
             `> **Linear Issue ID:** ${issue.id}`,
             `> **Automation Rule:** ${rule.name}`,
+            targetTeam ? `> **Target Team:** ${targetTeam}` : '',
+            targetColumn ? `> **Target Column:** ${targetColumn}` : '',
             issue.identifier ? `> **Identifier:** ${issue.identifier}` : '',
             issue.url ? `> **URL:** ${issue.url}` : ''
         ].filter(Boolean);
@@ -177,6 +185,115 @@ export class LinearAutomationService {
             '',
             issue.description || ''
         ].join('\n');
+    }
+
+    private async _deliverToTeam(
+        issue: LinearAutomationIssueSummary,
+        rule: LinearAutomationRule,
+        teamName: string,
+        db: KanbanDatabase
+    ): Promise<{ delivered: boolean; error?: string }> {
+        const reference = issue.identifier || issue.id;
+        const scopedGroups = await db.getConfigJson('switchboard.prompts.terminals.groups', []) as any[];
+        const legacyGroups = await db.getConfigJson('terminals.groups', []) as any[];
+        const rawGroups = [
+            ...(Array.isArray(scopedGroups) ? scopedGroups : []),
+            ...(Array.isArray(legacyGroups) ? legacyGroups : []),
+        ];
+        const agentGroups = await db.getConfigJson('terminals.agentGroups', []) as any[];
+        const rawAgentGroups = Array.isArray(agentGroups) ? agentGroups : [];
+
+        const matchedDef = rawAgentGroups.find((ag: any) =>
+            ag && (ag.id === teamName || ag.name === teamName)
+        );
+
+        const targetGroupId = 'team_' + encodeURIComponent(teamName).replace(/[^a-zA-Z0-9_]/g, '_');
+        const liveGroup = rawGroups.find((g: any) => {
+            if (!g) return false;
+            if (g.name === teamName || g.id === teamName || g.id === targetGroupId) return true;
+            if (matchedDef && (g.definitionId === matchedDef.id || g.templateId === matchedDef.id || g.name === matchedDef.name)) return true;
+            return false;
+        });
+
+        if (!liveGroup) {
+            const msg = `[Switchboard Automation] Team '${teamName}' is not running. Start the team in Switchboard to enable automated delivery.`;
+            try {
+                await this.writeBackAutomationResult(issue.id, msg, 'comment');
+            } catch (e) {
+                console.warn(`[LinearAutomation] Failed to write unresolved status comment on ${issue.id}:`, e);
+            }
+            return { delivered: false, error: `Team '${teamName}' is not running` };
+        }
+
+        const leadName = typeof liveGroup.head === 'string' && liveGroup.head.length > 0
+            ? liveGroup.head
+            : (Array.isArray(liveGroup.order) && liveGroup.order.length > 0 ? liveGroup.order[0] : (typeof liveGroup.name === 'string' ? liveGroup.name : ''));
+
+        if (!leadName) {
+            const msg = `[Switchboard Automation] Team '${teamName}' has no lead terminal registered.`;
+            try {
+                await this.writeBackAutomationResult(issue.id, msg, 'comment');
+            } catch (e) {
+                console.warn(`[LinearAutomation] Failed to write unresolved status comment on ${issue.id}:`, e);
+            }
+            return { delivered: false, error: `Team '${teamName}' has no lead terminal registered` };
+        }
+
+        if (!this._terminalVerb) {
+            return { delivered: false, error: 'Terminal verb dispatch not available' };
+        }
+
+        const listed = await this._terminalVerb('ptyListTerminals', {}, this._workspaceRoot);
+        const fleet: any[] = [].concat(Array.isArray(listed?.terminals) ? listed.terminals : []);
+        const leadTerminal = fleet.find((t) => t && t.friendlyName === leadName && t.status === 'active');
+        if (!leadTerminal) {
+            const msg = `[Switchboard Automation] Lead terminal '${leadName}' for team '${teamName}' is not active.`;
+            try {
+                await this.writeBackAutomationResult(issue.id, msg, 'comment');
+            } catch (e) {
+                console.warn(`[LinearAutomation] Failed to write unresolved status comment on ${issue.id}:`, e);
+            }
+            return { delivered: false, error: `Lead terminal '${leadName}' for team '${teamName}' is not active` };
+        }
+
+        const prompt = [
+            `=== LINEAR AUTOMATION DISPATCH ===`,
+            `Rule: ${rule.name}`,
+            `Linear Issue: ${issue.title} (${reference})`,
+            issue.url ? `URL: ${issue.url}` : '',
+            `Team: ${teamName}`,
+            '',
+            `--- BEGIN ISSUE BODY (DATA) ---`,
+            issue.description || '(No description provided)',
+            `--- END ISSUE BODY (DATA) ---`,
+            '',
+            `Instruction: You are assigned Linear issue ${reference}. Implement the requested changes. When complete, update the Linear issue and submit your report.`,
+            `=== END LINEAR AUTOMATION DISPATCH ===`
+        ].filter(Boolean).join('\n');
+
+        const deliverResult = await this._terminalVerb('ptySendPrompt', {
+            name: leadName,
+            data: prompt,
+            clearBeforePrompt: false,
+            standingOrders: false,
+            kind: 'message'
+        }, this._workspaceRoot);
+
+        if (!deliverResult || deliverResult.success === false) {
+            const errMsg = deliverResult?.error || `Delivery to lead terminal '${leadName}' failed`;
+            try {
+                await this.writeBackAutomationResult(
+                    issue.id,
+                    `[Switchboard Automation] Failed to deliver issue ${reference} to team '${teamName}' (lead: '${leadName}'): ${errMsg}`,
+                    'comment'
+                );
+            } catch (e) {
+                console.warn(`[LinearAutomation] Failed to write delivery failure comment on ${issue.id}:`, e);
+            }
+            return { delivered: false, error: errMsg };
+        }
+
+        return { delivered: true };
     }
 
     private _resolveStoredRule(
@@ -394,8 +511,21 @@ export class LinearAutomationService {
 
                 if (matchedRules.length > 1) {
                     console.warn(
-                        `[LinearAutomation] Multiple rules matched issue ${normalizedIssueId}; using '${matchedRules[0].name}'.`
+                        `[LinearAutomation] Multiple rules matched issue ${normalizedIssueId}: ${matchedRules.map(r => r.name).join(', ')}`
                     );
+                    const ruleNames = matchedRules.map(r => `'${r.name}'`).join(', ');
+                    const labelNames = matchedRules.map(r => `'${r.triggerLabel}'`).join(', ');
+                    try {
+                        await this.writeBackAutomationResult(
+                            normalizedIssueId,
+                            `[Switchboard Automation] Multiple automation rules matched (${ruleNames}) with labels [${labelNames}]. Refusing delivery to prevent conflicting dispatches. Please remove conflicting labels.`,
+                            'comment'
+                        );
+                    } catch (commentErr) {
+                        console.error(`[LinearAutomation] Failed to post multi-label refusal comment for ${normalizedIssueId}:`, commentErr);
+                    }
+                    result.skipped++;
+                    continue;
                 }
 
                 const matchedRule = matchedRules[0];
@@ -428,6 +558,13 @@ export class LinearAutomationService {
                     stateType
                 };
 
+                const targetTeam = matchedRule.destination?.kind === 'team'
+                    ? matchedRule.destination.team
+                    : (matchedRule.targetTeam || '');
+                const targetColumn = matchedRule.destination?.kind === 'column'
+                    ? matchedRule.destination.column
+                    : (matchedRule.targetColumn || '');
+
                 try {
                     await fs.promises.writeFile(
                         planFile,
@@ -440,8 +577,17 @@ export class LinearAutomationService {
                         planFile,
                         linearIssueId: normalizedIssueId,
                         ruleName: matchedRule.name,
-                        targetColumn: matchedRule.targetColumn
+                        targetColumn: targetColumn || undefined,
+                        targetTeam: targetTeam || undefined,
+                        destination: matchedRule.destination
                     });
+
+                    if (targetTeam) {
+                        const deliveryResult = await this._deliverToTeam(issueSummary, matchedRule, targetTeam, db);
+                        if (!deliveryResult.delivered && deliveryResult.error) {
+                            result.errors.push(`Linear automation delivery to team '${targetTeam}' for issue ${normalizedIssueId}: ${deliveryResult.error}`);
+                        }
+                    }
                 } catch (error) {
                     if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
                         console.log(`[LinearAutomation] Plan file already exists (race): ${planFile}`);
@@ -484,8 +630,15 @@ export class LinearAutomationService {
                     continue;
                 }
 
-                if (String(plan.kanbanColumn || '').trim().toUpperCase() !== String(rule.finalColumn || '').trim().toUpperCase()) {
-                    continue;
+                if (rule.finalColumn) {
+                    if (String(plan.kanbanColumn || '').trim().toUpperCase() !== String(rule.finalColumn).trim().toUpperCase()) {
+                        continue;
+                    }
+                } else if (rule.destination?.kind === 'team' || rule.targetTeam) {
+                    const col = String(plan.kanbanColumn || '').trim().toUpperCase();
+                    if (col !== 'DONE' && col !== 'COMPLETED') {
+                        continue;
+                    }
                 }
 
                 await this.writeBackAutomationResult(

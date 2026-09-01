@@ -6698,25 +6698,65 @@ Instructions:
             stateSelect.size = Math.min(5, Math.max(2, availableStates.length || 2));
             appendLinearStateOptions(stateSelect, availableStates, rule.triggerStates);
 
+            const isTeam = rule.destination?.kind === 'team' || (!!rule.targetTeam && !rule.targetColumn);
+            const destKindSelect = document.createElement('select');
+            destKindSelect.dataset.linearRuleDestKind = 'true';
+            destKindSelect.className = 'modal-input';
+            const optCol = document.createElement('option');
+            optCol.value = 'column';
+            optCol.textContent = 'Kanban Column';
+            const optTeam = document.createElement('option');
+            optTeam.value = 'team';
+            optTeam.textContent = 'Agent Team';
+            destKindSelect.appendChild(optCol);
+            destKindSelect.appendChild(optTeam);
+            destKindSelect.value = isTeam ? 'team' : 'column';
+
             const targetSelect = document.createElement('select');
             targetSelect.dataset.linearRuleTargetColumn = 'true';
             targetSelect.className = 'modal-input';
             appendClickupColumnOptions(targetSelect, availableColumns, rule.targetColumn || '', 'Select start column');
+
+            const teamInput = document.createElement('input');
+            teamInput.dataset.linearRuleTargetTeam = 'true';
+            teamInput.className = 'modal-input';
+            teamInput.placeholder = 'Team name (e.g. backend, frontend)';
+            teamInput.value = rule.destination?.kind === 'team' ? rule.destination.team : (rule.targetTeam || '');
 
             const finalSelect = document.createElement('select');
             finalSelect.dataset.linearRuleFinalColumn = 'true';
             finalSelect.className = 'modal-input';
             appendClickupColumnOptions(finalSelect, availableColumns, rule.finalColumn || '', 'Select final column');
 
-            const columnsRow = document.createElement('div');
-            columnsRow.style.cssText = 'display:flex; gap:8px;';
-
             const targetField = createCompactField('Start column', targetSelect);
             targetField.style.flex = '1';
+            const teamField = createCompactField('Target team', teamInput);
+            teamField.style.flex = '1';
             const finalField = createCompactField('Final column', finalSelect);
             finalField.style.flex = '1';
-            columnsRow.appendChild(targetField);
-            columnsRow.appendChild(finalField);
+
+            const destRow = document.createElement('div');
+            destRow.style.cssText = 'display:flex; gap:8px;';
+
+            const updateDestVisibility = () => {
+                if (destKindSelect.value === 'team') {
+                    targetField.style.display = 'none';
+                    teamField.style.display = 'block';
+                } else {
+                    targetField.style.display = 'block';
+                    teamField.style.display = 'none';
+                }
+            };
+            destKindSelect.addEventListener('change', updateDestVisibility);
+            updateDestVisibility();
+
+            const destKindField = createCompactField('Destination type', destKindSelect);
+            destKindField.style.flex = '1';
+
+            destRow.appendChild(destKindField);
+            destRow.appendChild(targetField);
+            destRow.appendChild(teamField);
+            destRow.appendChild(finalField);
 
             const writeBackLabel = document.createElement('label');
             writeBackLabel.className = 'startup-row';
@@ -6741,7 +6781,7 @@ Instructions:
             card.appendChild(enabledLabel);
             card.appendChild(createCompactField('Trigger label', labelSelect));
             card.appendChild(createCompactField('Trigger states', stateSelect));
-            card.appendChild(columnsRow);
+            card.appendChild(destRow);
             card.appendChild(writeBackLabel);
             card.appendChild(removeBtn);
             rulesEl.appendChild(card);
@@ -6840,21 +6880,41 @@ Instructions:
             const triggerStates = Array.from(card.querySelector('[data-linear-rule-trigger-states="true"]')?.selectedOptions || [])
                 .map(option => option.value.trim())
                 .filter(Boolean);
+            const destKind = card.querySelector('[data-linear-rule-dest-kind="true"]')?.value || 'column';
             const targetColumn = card.querySelector('[data-linear-rule-target-column="true"]')?.value.trim() || '';
+            const targetTeam = card.querySelector('[data-linear-rule-target-team="true"]')?.value.trim() || '';
             const finalColumn = card.querySelector('[data-linear-rule-final-column="true"]')?.value.trim() || '';
             const writeBackOnComplete = card.querySelector('[data-linear-rule-writeback-enabled="true"]')?.checked === true;
-            if (!name || !triggerLabel || triggerStates.length === 0 || !targetColumn || !finalColumn) {
+
+            if (!name || !triggerLabel || triggerStates.length === 0) {
                 return;
             }
-            automationRules.push({
-                name,
-                enabled,
-                triggerLabel,
-                triggerStates,
-                targetColumn,
-                finalColumn,
-                writeBackOnComplete
-            });
+
+            if (destKind === 'team') {
+                if (!targetTeam) return;
+                automationRules.push({
+                    name,
+                    enabled,
+                    triggerLabel,
+                    triggerStates,
+                    destination: { kind: 'team', team: targetTeam },
+                    targetTeam,
+                    finalColumn: finalColumn || undefined,
+                    writeBackOnComplete
+                });
+            } else {
+                if (!targetColumn || !finalColumn) return;
+                automationRules.push({
+                    name,
+                    enabled,
+                    triggerLabel,
+                    triggerStates,
+                    destination: { kind: 'column', column: targetColumn },
+                    targetColumn,
+                    finalColumn,
+                    writeBackOnComplete
+                });
+            }
         });
 
         return { automationRules };
@@ -6875,6 +6935,7 @@ Instructions:
             enabled: true,
             triggerLabel: '',
             triggerStates: [],
+            destination: { kind: 'column', column: defaultTargetColumn },
             targetColumn: defaultTargetColumn,
             finalColumn: defaultFinalColumn,
             writeBackOnComplete: true

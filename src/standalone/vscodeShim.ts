@@ -85,14 +85,29 @@ export class Uri {
     readonly fsPath: string;
     readonly scheme: string;
     readonly path: string;
-    private constructor(scheme: string, fsPath: string) {
+    readonly query: string;
+    private constructor(scheme: string, fsPath: string, query: string = '') {
         this.scheme = scheme;
         this.fsPath = fsPath;
         this.path = fsPath;
+        this.query = query;
     }
     static file(path: string): Uri { return new Uri('file', path); }
-    static parse(_value: string): Uri { return new Uri('file', ''); }
-    with(_component: Partial<Uri>): Uri { return this; }
+    static parse(value: string): Uri {
+        try {
+            const u = new URL(value);
+            return new Uri(u.protocol.replace(':', ''), u.pathname, u.search.replace(/^\?/, ''));
+        } catch {
+            return new Uri('file', String(value || ''), '');
+        }
+    }
+    with(component: Partial<Uri>): Uri {
+        return new Uri(
+            component.scheme ?? this.scheme,
+            component.fsPath ?? this.fsPath,
+            component.query ?? this.query
+        );
+    }
 }
 
 // ─── RelativePattern ────────────────────────────────────────────────────────
@@ -203,6 +218,7 @@ export namespace window {
         return task({ report: () => {} }, { isCancellationRequested: false, onCancellationRequested: () => ({ dispose() {} }) });
     }
     export function showTextDocument(_doc: any): Promise<any> { return Promise.resolve(undefined); }
+    export function registerUriHandler(_handler: any): Disposable { return new Disposable(() => {}); }
 }
 
 // ─── workspace ──────────────────────────────────────────────────────────────

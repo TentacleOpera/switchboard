@@ -320,16 +320,31 @@
                 <span id="linear-auth-badge" class="status-badge">Checking…</span>
             </div>
             <div id="linear-auth-description" style="font-size: 11px; color: var(--text-secondary); line-height: 1.5;">
-                Linear API token manages project issue synchronization and comment updates.
+                Linear integration supports OAuth App Actor (for issue assignment &amp; @mentions) and Personal API Keys.
             </div>
+            <div id="linear-admin-info" style="display: none; margin-top: 6px; font-size: 10px; color: var(--accent-teal);"></div>
+            <div id="linear-ratelimit-info" style="display: none; margin-top: 6px; font-size: 10px; color: var(--text-secondary);"></div>
             <div id="linear-auth-actions" style="margin-top: 10px;">
-                <div id="linear-token-input-row" style="display: none; margin-bottom: 8px;">
+                <button id="btn-linear-oauth-connect" class="btn-action" title="Connect to Linear as an App Actor using PKCE OAuth (requires Linear Admin)">Connect as App Actor (OAuth)</button>
+                <button id="btn-linear-disconnect-oauth" class="btn-action btn-secondary" style="display: none;">Disconnect OAuth</button>
+                <button id="btn-toggle-code-paste" class="btn-action btn-secondary" title="Paste authorization code manually (for headless / remote hosts)">Paste OAuth Code</button>
+                <button id="btn-toggle-personal-token" class="btn-action btn-secondary" title="Use a personal API key instead of OAuth">Use API Token</button>
+
+                <div id="linear-code-paste-row" style="display: none; margin-top: 10px; margin-bottom: 8px;">
+                    <label for="linear-oauth-code">Authorization Code (from browser URL)</label>
+                    <input type="text" id="linear-oauth-code" placeholder="Paste code here..." />
+                    <button id="btn-linear-exchange-code" class="btn-action">Exchange Code</button>
+                </div>
+
+                <div id="linear-token-input-row" style="display: none; margin-top: 10px; margin-bottom: 8px;">
                     <label for="linear-api-token">Linear API Token</label>
                     <input type="password" id="linear-api-token" placeholder="lin_api_..." />
                     <button id="btn-linear-apply-token" class="btn-action">Save Token</button>
                 </div>
-                <button id="btn-switch-to-tickets" class="btn-action btn-secondary" title="Switch to Tickets panel to browse Linear issues and configure status mappings">Browse Linear Issues in Tickets</button>
-                <span id="linear-auth-status" style="margin-left: 8px; font-size: 11px; color: var(--text-secondary);"></span>
+                <div style="margin-top: 8px;">
+                    <button id="btn-switch-to-tickets" class="btn-action btn-secondary" title="Switch to Tickets panel to browse Linear issues and configure status mappings">Browse Linear Issues in Tickets</button>
+                    <span id="linear-auth-status" style="margin-left: 8px; font-size: 11px; color: var(--text-secondary);"></span>
+                </div>
             </div>
         </div>
 
