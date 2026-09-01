@@ -80,6 +80,8 @@ housekeeping stayed in `extension.ts` where it was already working.
 **Complexity:** 4
 **Tags:** backend, reliability, bugfix, devops, infrastructure
 
+## User Review Required
+
 None.
 
 ### Sequencing: the first release only starts tracking
