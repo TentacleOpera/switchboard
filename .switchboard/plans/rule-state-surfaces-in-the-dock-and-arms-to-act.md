@@ -150,9 +150,10 @@ The whole feature is one tab, read top to bottom:
 Coding and review show the same reason because they share one working tree — a reviewer writes
 source, so it holds both. Planning is independent: a planner writes plan files, not code.
 
-The busy reason names the seat *and*, under `feature_worktree_mode: 'per-feature'`, its team — so
-"busy: reviewer-1 (team Coding) holds …" reads as a lane that is free for other teams. Under
-`'none'` there is one tree and no team qualifier, because there is no other lane to be free.
+The busy reason names the seat and its card, with no team qualifier: the fleet shares one tree, so a
+busy seat holds the lane for everyone. Parallel checkouts come from a mission with dependency edges
+and a bounded `maxExtraWorktrees`, never from a scheduler inferring isolation — see
+`retire-the-dead-feature-worktree-mode-config.md`.
 
 Three switches, one mode each. The user never sees or sets the readiness test — "busy: reviewer-1
 holds …" is the panel *explaining* `laneIsFree`, not a control. There is deliberately no way to

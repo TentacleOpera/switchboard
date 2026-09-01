@@ -132,9 +132,9 @@ written against a stub fleet would pass.
 - **Confirm coding and review share one lock.** They write the same tree, so a busy reviewer holds
   both. This matches the rule as originally stated ("if no one is coding **or reviewing**").
   An earlier revision of this plan split them, which was wrong.
-- **Confirm readiness scope follows `feature_worktree_mode`** — global under `'none'`, per team
-  under `'per-feature'` — rather than always locking globally. Always-global is safe but serialises
-  teams that were provisioned to run in parallel.
+- **Confirm the lock is global and `feature_worktree_mode` is not read.** Parallel checkouts come
+  from a mission with dependency edges, never from a scheduler reading a setting. The key is dead
+  state; `retire-the-dead-feature-worktree-mode-config.md` removes it.
 - **Confirm `propose` is the default for a job that gains a lane switch,** including on upgrade.
 
 ## Complexity Audit
@@ -231,34 +231,31 @@ source is an occupant of that tree, and a reviewer is such a seat.
 `planning` stays separate because a planner writes plan files under `.switchboard/plans/`, not
 source, so it cannot collide with either.
 
-**Scope follows the worktree mode — both branches already exist.** The collision domain is a
-checkout, so what counts as "the lane" depends on whether the fleet shares one:
+**The lane lock is global, because the fleet shares one tree.** Worktrees are opt-in, bounded, and
+mission-owned — they are not a per-feature or per-team property the readiness check can assume.
 
-| `feature_worktree_mode` | Collision domain | Readiness scope |
-| :--- | :--- | :--- |
-| `'none'` *(default)* | one shared tree | **global** — any busy code-writing seat holds the lane |
-| `'per-feature'` | one worktree per feature, shared by its subtasks | **per team** — two teams in separate worktrees are both free |
+`stageForQueue` states the settled design (`KanbanProvider.ts:8667`): *"Staging provisions NO
+worktrees. This loop used to cut one integration worktree per staged feature whenever
+`feature_worktree_mode` was `'per-feature'`, and that is the defect… Stage two features and you get
+two sibling branches off the default branch. Neither can see the other's work, and nothing recorded
+that one needed the other… The dependency edges that would have said so are persisted in
+`plan_dependencies` and this path never read them."* Its conclusion: *"Opt-in provisioning belongs
+on the mission (`maxExtraWorktrees`, 0 by default)."*
 
-Neither branch needs new machinery. Per-team in-flight resolution already ships:
-`resolveTeamInFlight(db, teamMemberNames)` (`LocalApiServer.ts:89`) takes the member list, and
-`worktree-models-consolidate-and-a-staging-toggle.md` records the design intent —
-*"the in-flight refusal is per **team**, not per queue, so N leads drain one ordered list
-concurrently."* `laneIsFree` passes either the whole code-writing fleet or one team's members
-depending on the mode; the predicate underneath is the same.
+So parallel checkouts require a **mission** — a curated set with dependency edges and a deliberate
+launch — never a scheduler inferring isolation from a setting. `missions.max_extra_worktrees`
+defaults to `0`, and a mission of type `mission` may never exceed `1`.
 
-Getting this wrong in the safe direction still costs real throughput: a global lock under
-`per-feature` serialises teams that were provisioned specifically to run in parallel, which defeats
-the reason the mode exists. Getting it wrong the other way dispatches into an occupied checkout.
+**Therefore `laneIsFree` computes over the whole code-writing fleet and does not read
+`feature_worktree_mode`.** That key is dead: no UI writes it, its only remaining writer is the
+Mission Control disarm restore (`KanbanProvider.ts:2534`) putting back a value nothing sets, and it
+governs no provisioning. An earlier revision of this plan scoped readiness by it, which would have
+read a legacy value on an old install and freed a lane whose tree was occupied.
 
-**Two cases the mode does not cover, and they must not silently read as free:**
-
-- **`useWorktreesPerPlan`** — a per-role prompt add-on (`sharedDefaults.js:145`) where the *agent*
-  creates its own worktree per plan. Not a board setting and not host-provisioned, so the mode
-  cannot see it. A fleet running it has isolation the readiness check cannot prove; resolve as the
-  mode dictates and do not attempt to infer it.
-- **A card with no feature** under `per-feature` mode has no feature worktree, so it lands in the
-  shared tree even while other work is isolated. Its seat therefore holds the global lane, not a
-  team lane. `plans.worktree_id` (V26) is the field that distinguishes them.
+**Where a mission has provisioned extra worktrees,** the cards in them carry `plans.worktree_id`
+(V26). Readiness may exclude a seat whose card names a different `worktree_id` than the candidate's
+— but this is bounded by the mission's own cap, dependency-gated at pop time, and never inferred.
+Treat it as a refinement to land with mission launch, not as a mode to read.
 
 ### 3. `src/services/TaskViewerProvider.ts` — tick integration
 
@@ -287,12 +284,11 @@ two roots by hand, as `CLAUDE.md` requires — verb reachability will not show t
 2. **A lane is not free when one of its seats holds an uncompleted card**, with every seat's `status`
    set to `'active'`. This is the plan's central defect pinned directly: a status-based
    implementation passes every other test and fails only this one.
-3. **Scope follows the mode.** Under `'per-feature'`, team A busy leaves team B's lane free; under
-   `'none'`, team A busy holds the lane for everyone. Both asserted on the same fixture, since the
-   only difference is the mode — this is the test that stops an always-global implementation from
-   passing, and an always-per-team one too.
-4. **A featureless card under `'per-feature'` holds the global lane,** not just its team's. It has
-   no `worktree_id`, so it is in the shared tree while its neighbours are isolated.
+3. **`LaneReadiness` never reads `feature_worktree_mode`.** Source-level. A legacy `'per-feature'`
+   value left on an old install must not free a lane whose tree is occupied — and since no UI can
+   set that value any more, such installs are the only ones that carry it.
+4. **A busy seat on team A holds the lane for team B.** One tree, one lock. The assertion that
+   stops a per-team implementation from looking correct on a single-team fixture.
 5. **Empty fleet → `unknown` → no fire,** for all three lanes. The dead-pty-host
    mass-dispatch guard.
 6. **A job with no `keepLaneFed` is byte-for-byte unchanged in behaviour** — same fire times, same
