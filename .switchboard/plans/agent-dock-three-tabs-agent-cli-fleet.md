@@ -62,11 +62,13 @@ an exec endpoint could never carry.
 
 ## Dependencies
 
-- **Hard prerequisite:** `the-dock-frame-can-drive-the-shell-it-lives-in.md`. A `?dock=1` Terminals
-  document can post `switchPanel` to the shell and repaint the main content area — `transport.js`'s
-  bridge has no dock guard. Retiring the Kanban pane does not fix that; the CLI tab this plan adds
-  is the same `/terminals?…&dock=1` pattern and inherits the same leak. Containment lands first, or
-  this plan ships a new instance of a known bug.
+- **Hard prerequisite:** `the-dock-kanban-pane-renders-nothing.md`. Three of the four defects it
+  fixes are **not** kanban-specific and survive this plan's retirement of the Kanban pane: the dock
+  reads the main panel's `terminals.*` pane settings, the mode body class lands after first paint so
+  full-panel chrome flashes (this affects `is-solo` — the agent tab, and the CLI tab added here),
+  and a `?dock=1` document can post `switchPanel` to repaint the shell's main content area. The CLI
+  tab is the same `/terminals?…&dock=1` pattern and inherits all three. Containment and paint order
+  land first, or this plan ships new instances of known bugs.
 
 ## Metadata
 
