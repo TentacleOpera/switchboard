@@ -133,6 +133,24 @@ WHERE session_id = '<session_id>'
 LIMIT 1;
 ```
 
+### Get Plan by planId
+
+```sql
+SELECT *
+FROM plans
+WHERE plan_id = '<planId>'
+LIMIT 1;
+```
+
+> **HTTP plan lookups:** use `GET /kanban/plan?planId=<id>` against
+> `http://127.0.0.1:$(cat .switchboard/api-server-port.txt)` (returns one plan
+> plus its file content at `.data.content`, or `''` when the plan file is
+> missing). Do **NOT** use
+> `GET /kanban/plans?planId=<id>` — the `planId` query param is not a server-side
+> filter on that endpoint; it returns the full workspace array. See
+> `.agents/skills/switchboard-orchestration/SKILL.md` section 2 for the full HTTP
+> read-endpoint contract.
+
 
 ### Get Full Board State (All Active Plans)
 

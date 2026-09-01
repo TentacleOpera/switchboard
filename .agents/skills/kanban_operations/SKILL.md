@@ -80,6 +80,35 @@ over this table.
 1. **Preferred** — if the Switchboard extension is running, the move is routed through its local API server (`POST /kanban/move`). The extension performs the move, so it cascades subtasks **and** pushes the feature + every subtask status to Linear/ClickUp — keeping external trackers in exact sync. When the extension is reachable it is authoritative: a refused move (e.g. an invalid transition) fails rather than silently falling back.
 2. **Fallback** — if no extension/API server is reachable, the script writes the kanban DB directly. Subtasks still cascade, but there is **no Linear/ClickUp sync** (the integration token lives in VS Code secret storage, unreachable from a standalone process). If real-time sync is enabled, a direct-DB change may be reconciled away on the next inbound poll. Use the fallback for recovery only.
 
+## Dispatching Cards & Features
+
+`move-card.js` / `POST /kanban/move` only modify card placement in the database — no terminal boots, no prompt is delivered. The primitive that **advances a card AND boots a terminal AND delivers the role prompt** is `POST /kanban/dispatch`. It is the canonical one-call advance-and-dispatch in both hosted and standalone modes (`POST /kanban/move` is unavailable — 503 — on the standalone host).
+
+```bash
+curl -s -X POST "http://127.0.0.1:$(cat .switchboard/api-server-port.txt)/kanban/dispatch" \
+  -H "Content-Type: application/json" -d '{
+  "plan": "<planId | plan-file path>",
+  "targetColumn": "<optional — omitted|\"auto\" routes by complexity>",
+  "workspaceRoot": "<optional — defaults to primary root>",
+  "from": "<optional — caller'"'"'s own terminal name for team routing>"
+}'
+```
+
+- `plan` — the field name may be `plan`, `planId`, `sessionId` or `planFile` (`_handleKanbanDispatch`, LocalApiServer.ts:1870 reads `body?.plan || body?.planId || body?.sessionId || body?.planFile`), but the **value** is resolved by `getPlanByPlanId` then by plan-file path only — a `sessionId` that differs from its `plan_id` 404s, so pass the planId. It does **not** accept `featureId` — dispatching a feature as a whole is not supported; dispatch each subtask.
+- `targetColumn` omitted or `"auto"` → routed by plan complexity through the board's own rule (default bands 1–4 → INTERN CODED, 5–6 → CODER CODED, 7+/unknown → LEAD CODED; custom routing maps + pair-mode bypass honored; decision returned in `routing`). Supply an explicit column only when you want to override.
+- `from` — your own terminal name. Supply it and a role dispatch (e.g. CODE REVIEWED → reviewer) is routed to the member of **your** team rather than the first matching terminal on the board. The response echoes `teamRouting` naming the decision, including when it fell back. **Extension host only:** the standalone host does not wire `resolveKanbanDispatch`, so `gate.role` is absent there and team routing short-circuits — `teamRouting` reads `dispatch role unavailable on this host — fell back to workspace-wide` and `from` has no effect.
+- **Response:** `{ success, planId, sessionId, topic, role, mode, column, moved, dispatched, dispatchedAgent, dispatchedAt, error?, routing?, teamRouting? }`. `success` means "the card is in the target column AND a dispatch was observed" — never just "the request parsed". A `502` with `moved: true, dispatched: false` means the move persisted but no terminal agent picked up — investigate, do not retry blindly.
+
+**Physical board dispatch vs. database-only move:**
+- `POST /kanban/dispatch` — persists the move, fires the column's role prompt, verifies against DB. The execution primitive.
+- `move-card.js` / `POST /kanban/move` — modifies placement only, no terminal boot, no prompt delivery. Recovery/manual override.
+
+**Edge cases:**
+- A dispatch to a column with no configured role returns a 400 error (not a silent no-op). Do not retry blindly — the column has no role seat configured. This pre-flight is **extension-host only**: the standalone host leaves `resolveKanbanDispatch` unwired, the check is skipped, and a role-less column falls through to the move without the loud 400.
+- With no terminal agent registered the call returns `409` before moving anything — the dispatch would have fallen back to the clipboard and nothing would run. Open your agent terminal(s) so they re-register, then retry.
+- `POST /kanban/dispatch` does **not** gate on in-flight status — it moves and dispatches unconditionally. If you dispatch a subtask a seat already holds (no `completed_at`), the move persists and a new dispatch is attempted, overwriting the prior seat's context. To avoid a double-dispatch, check `GET /kanban/plan?planId=<id>` → `dispatchedAt` and `completedAt` first: if `dispatchedAt` is non-null and `completedAt` is null, the card is in-flight — post `POST /kanban/task/complete` before re-dispatching. (The in-flight 409 refusal is a `POST /kanban/queue/next` behavior, not a dispatch behavior — see section 4's queue/next row.)
+- See `.agents/skills/switchboard-orchestration/SKILL.md` section 4 for the full HTTP surface authority, including the `from` team-routing contract and the `routing`/`teamRouting` response fields.
+
 ## Create a Feature
 
 ```bash
