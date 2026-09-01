@@ -468,7 +468,7 @@ disk, or the rules below describe behaviour you cannot perform:
    wake, write it whenever a branch tip is checked.
 
 ## Messaging Leads
-You dispatch work by messaging the team leads that already exist. The delivery path is:
+You communicate with leads or dispatch work by messaging team leads. The delivery path is:
 
 ```bash
 # Resolve BASE (see ## Port Discovery). A failed resolve means the board is
@@ -477,13 +477,16 @@ PORT=$(tr -d '[:space:]' < "${WORKSPACE_ROOT:-$PWD}/.switchboard/api-server-port
 BASE="http://127.0.0.1:$PORT"
 [ -n "$PORT" ] && [ "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/health" 2>/dev/null)" = "200" ] \
   || { echo "Board not answering on port ${PORT:-<none>} — stale port file, board is down."; exit 1; }
+# For messages, questions, and status queries (suppresses standing orders and seat directive blocks):
 curl -s -X POST "$BASE/terminals/verb/ptySendPrompt" -H "Content-Type: application/json" -d '{
   "name": "<lead terminal friendlyName>",
-  "data": "You are leading the <feature name> feature. Your PLAN REVIEWED subtasks are: <list>. Implement each, commit, and report back when done.",
-  "clearBeforePrompt": false
+  "data": "Status query or instruction text",
+  "clearBeforePrompt": false,
+  "kind": "message"
 }'
 ```
 
+- **`kind: "message"` vs `kind: "dispatch"`.** Use `kind: "message"` (primary form; `machineOrigin: true` is accepted as a legacy alias that will be retired once coder standing-order texts are reissued) for questions, status queries, notifications, and instructions where no work is being started. Use `kind: "dispatch"` (or supply a `dispatch` object) when assigning a subtask so the seat receives its safety block, standing orders, and dispatch directives.
 - **`clearBeforePrompt: false` always.** Never omit it (the default wipes the recipient's
   conversation) and never set it to `true`.
 - Discover live terminals with `POST /terminals/verb/ptyListTerminals` (copy `friendlyName`
@@ -495,6 +498,26 @@ curl -s -X POST "$BASE/terminals/verb/ptySendPrompt" -H "Content-Type: applicati
 - A lead's reply may arrive as a report file in `.switchboard/mission-control/reports/`
   rather than as a direct pty response — see Signals. When it does, the file is the
   fact; act on it the same way.
+
+## Clearing Terminals
+When clearing terminals (individual seat or team roster), use the canonical clear endpoint `POST /terminals/clear`. Do NOT send `"/clear"` via `ptySendPrompt` (bare slash commands cannot be sent as prompt data and will be rejected).
+
+```bash
+# Clear a team's terminals (excludes caller and lead automatically; defers busy seats)
+curl -s -X POST "$BASE/terminals/clear" -H "Content-Type: application/json" -d '{
+  "team": "<head terminal friendlyName or teamId>",
+  "from": "<your terminal name>"
+}'
+
+# Clear a single seat
+curl -s -X POST "$BASE/terminals/clear" -H "Content-Type: application/json" -d '{
+  "name": "<terminal friendlyName>",
+  "from": "<your terminal name>"
+}'
+```
+
+- **`from` is required.** The endpoint server-side enforces caller exclusion so you never accidentally clear your own context.
+- Team scope automatically preserves the team lead and defers any seat currently mid-turn.
 
 ## Verify via Git (status of record)
 

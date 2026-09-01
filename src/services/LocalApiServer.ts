@@ -28,6 +28,7 @@ import {
     makeStandingOrderDefinition,
 } from './standingOrders';
 import { plausibleOriginTerminal, describeStandingOrderMigrations, TERMINALS_GROUPS_KEY, mutateTerminalGroups, teamHeadName, installGlobalQueueDoneOrder } from './teamWiring';
+import { computeRosterClearTargets } from './workContextResolver';
 import { instantiateExternalHeadedTeam, resolveExternalTeamTemplate } from './agentGroupInstantiation';
 import { parseComplexityScore, getFallbackRole } from './complexityScale';
 import {
@@ -433,6 +434,11 @@ interface LocalApiServerOptions {
      * headless/test harnesses.
      */
     onTerminalContextCleared?: (terminalName: string) => void;
+    /**
+     * Record deferred clears for a team when terminals are deferred mid-turn.
+     * Optional — absent in headless/test harnesses.
+     */
+    recordDeferredClears?: (teamId: string, terminalNames: string[]) => void;
     /**
      * Fired when a team is released after a task completion post.
      * Optional — absent in headless/test harnesses.
@@ -3485,6 +3491,7 @@ export class LocalApiServer {
                                 data: relayMsg,
                                 clearBeforePrompt: false,
                                 standingOrders: false,
+                                kind: 'message',
                                 machineOrigin: true,
                             }, workspaceRoot);
                             if (relayRes?.success === false) {
@@ -4557,7 +4564,8 @@ export class LocalApiServer {
                 // in the fleet, and the recipient's context is never cleared here
                 // so there is nothing to re-establish. Hardcoded, like the flag
                 // above: a relay has no legitimate reason to carry the block.
-                standingOrders: false
+                standingOrders: false,
+                kind: 'message',
             }, workspaceRoot);
 
             if (!delivered || delivered.success === false) {
@@ -4572,6 +4580,177 @@ export class LocalApiServer {
             console.error('[LocalApiServer] /terminals/relay error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'relay failed' }));
+        }
+    }
+
+    /**
+     * POST /terminals/clear — canonical first-class clear endpoint.
+     *
+     * Scope (exactly one of):
+     *  - { name: "<seat>", from: "<caller>" }
+     *  - { team: "<head terminal name or teamId>", from: "<caller>" }
+     *  - { seats: ["a", "b"], from: "<caller>" }
+     *
+     * Invariants:
+     *  - `from` is REQUIRED (rejects without it).
+     *  - Never clears the caller (`from`).
+     *  - Never clears a head as part of a team scope unless explicitly named in `seats`.
+     *  - Defers a seat that is mid-turn using the roster barrier's liveness policy.
+     *  - Returns { success: true, cleared: [...], deferred: [...], skipped: [{ name, reason }] }.
+     */
+    private async _handleTerminalsClear(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const rawBody = await this._parseJsonBody(req);
+            const body: any = (rawBody && typeof rawBody === 'object') ? rawBody : {};
+            const from = typeof body.from === 'string' ? body.from.trim() : '';
+            if (!from) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: "missing required field 'from'" }));
+                return;
+            }
+
+            const hasName = typeof body.name === 'string' && body.name.trim().length > 0;
+            const hasTeam = typeof body.team === 'string' && body.team.trim().length > 0;
+            const hasSeats = Array.isArray(body.seats) && body.seats.length > 0;
+            const scopeCount = [hasName, hasTeam, hasSeats].filter(Boolean).length;
+            if (scopeCount !== 1) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: false,
+                    error: "exactly one scope ('name', 'team', or 'seats') must be specified"
+                }));
+                return;
+            }
+
+            const workspaceRoot = String(body.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
+
+            const cleared: string[] = [];
+            const deferred: string[] = [];
+            const skipped: Array<{ name: string; reason: string }> = [];
+
+            // Retrieve live PTY terminals for status and liveness check
+            let fleet: any[] = [];
+            if (this._options.terminalVerb) {
+                try {
+                    const listed = await this._options.terminalVerb('ptyListTerminals', {}, workspaceRoot);
+                    fleet = Array.isArray(listed?.terminals) ? listed.terminals : [];
+                } catch { /* best effort */ }
+            }
+
+            const liveActive = new Set<string>(
+                fleet.filter(t => t && t.status === 'active').map(t => t.friendlyName)
+            );
+            const livenessWindowMs = 90000;
+            const nowMs = Date.now();
+            const busySet = new Set<string>(
+                fleet
+                    .filter(t => t && t.status === 'active' && typeof t.lastDataAt === 'number')
+                    .filter(t => t.lastDataAt === 0 || (nowMs - t.lastDataAt) < livenessWindowMs)
+                    .map(t => t.friendlyName)
+            );
+
+            const executeClear = async (targetName: string): Promise<void> => {
+                if (!this._options.clearTerminalContext) {
+                    skipped.push({ name: targetName, reason: 'clearTerminalContext not wired' });
+                    return;
+                }
+                const clr = await this._options.clearTerminalContext(workspaceRoot || '', targetName);
+                if (clr?.cleared) {
+                    cleared.push(targetName);
+                    this._options.onTerminalContextCleared?.(targetName);
+                } else {
+                    skipped.push({ name: targetName, reason: clr?.reason || clr?.error || 'clear failed' });
+                }
+            };
+
+            if (hasName) {
+                const name = body.name.trim();
+                if (name === from) {
+                    skipped.push({ name, reason: 'caller' });
+                } else {
+                    await executeClear(name);
+                }
+            } else if (hasTeam) {
+                const teamArg = body.team.trim();
+                const groups = await this._readRegisteredTeamGroups(workspaceRoot || '');
+                const group = groups.find(g =>
+                    g && (g.id === teamArg || g.head === teamArg || g.name === teamArg ||
+                          (Array.isArray(g.order) && g.order.includes(teamArg)) ||
+                          (Array.isArray(g.members) && g.members.includes(teamArg)))
+                );
+                if (!group) {
+                    res.writeHead(404, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: `Team '${teamArg}' not found` }));
+                    return;
+                }
+                const roster: string[] = (Array.isArray(group.order) && group.order.length > 0)
+                    ? group.order
+                    : (Array.isArray(group.members) ? group.members : []);
+                const head = group.head || teamHeadName(group) || (group.id && group.id.startsWith('team_') ? group.id.slice(5) : '');
+                const teamId = group.id;
+
+                const { toClear, deferred: teamDeferred } = computeRosterClearTargets({
+                    roster,
+                    liveActive,
+                    destination: '',
+                    origin: from,
+                    head,
+                    busySet,
+                });
+
+                for (const member of roster) {
+                    if (member === from) {
+                        skipped.push({ name: member, reason: 'caller' });
+                    } else if (head && member === head) {
+                        skipped.push({ name: member, reason: 'head' });
+                    } else if (!liveActive.has(member)) {
+                        skipped.push({ name: member, reason: 'not active' });
+                    }
+                }
+
+                if (teamDeferred.length > 0) {
+                    for (const name of teamDeferred) {
+                        deferred.push(name);
+                    }
+                    if (teamId) {
+                        this._options.recordDeferredClears?.(teamId, teamDeferred);
+                    }
+                }
+
+                for (const target of toClear) {
+                    await executeClear(target);
+                }
+            } else if (hasSeats) {
+                for (const seatItem of body.seats) {
+                    if (typeof seatItem !== 'string') continue;
+                    const seat = seatItem.trim();
+                    if (!seat) continue;
+                    if (seat === from) {
+                        skipped.push({ name: seat, reason: 'caller' });
+                    } else if (!liveActive.has(seat)) {
+                        skipped.push({ name: seat, reason: 'not active' });
+                    } else if (busySet.has(seat)) {
+                        deferred.push(seat);
+                        const group = await this._resolveTeamGroupForSeat(workspaceRoot || '', seat);
+                        if (group?.id) {
+                            this._options.recordDeferredClears?.(group.id, [seat]);
+                        }
+                    } else {
+                        await executeClear(seat);
+                    }
+                }
+            }
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, cleared, deferred, skipped }));
+        } catch (err) {
+            console.error('[LocalApiServer] /terminals/clear error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'clear failed' }));
         }
     }
 
@@ -5697,6 +5876,7 @@ export class LocalApiServer {
                                 data: relayMsg,
                                 clearBeforePrompt: false,
                                 standingOrders: false,
+                                kind: 'message',
                                 machineOrigin: true,
                             }, workspaceRoot);
                         } catch (relayErr) {
@@ -5730,6 +5910,7 @@ export class LocalApiServer {
                                 name: headName,
                                 data: promptText,
                                 clearBeforePrompt: false,
+                                kind: 'dispatch',
                             }, workspaceRoot);
                             dispatched = !!(delivered && delivered.success !== false);
                         } catch (dispatchErr) {
@@ -8132,6 +8313,8 @@ export class LocalApiServer {
                 await this._handleStandingOrdersWrite(req, res);
             } else if (pathname === '/terminals/relay' && req.method === 'POST') {
                 await this._handleTerminalsRelay(req, res);
+            } else if (pathname === '/terminals/clear' && req.method === 'POST') {
+                await this._handleTerminalsClear(req, res);
             } else if (pathname.startsWith('/terminals/teams/') && (req.method === 'GET' || req.method === 'POST' || req.method === 'DELETE')) {
                 await this._handleTeamQueueRoute(pathname, req, res);
             } else if (pathname.startsWith('/terminals/verb/') && req.method === 'POST') {

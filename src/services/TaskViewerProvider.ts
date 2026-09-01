@@ -616,6 +616,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         let parsedDispatchIdentity: { planIds: string[]; planFiles: string[] } | null = null;
         let parsedDispatchedAt: string | null = null;
         let parsedDispatchRole = '';
+        if (verb === 'ptySendPrompt') {
+            if (payload?.kind === 'orders-refresh') {
+                return { success: false, error: 'Payload kind "orders-refresh" is reserved for after-clear delivery path' };
+            }
+            if (payload?.kind !== undefined && payload?.kind !== 'dispatch' && payload?.kind !== 'message') {
+                return { success: false, error: `Invalid payload kind "${payload.kind}" (must be "dispatch" or "message")` };
+            }
+        }
         if (verb === 'ptySendPrompt' && typeof payload?.data === 'string') {
             const hasDispatch = payload?.dispatch !== undefined && payload?.dispatch !== null;
             // The identity the work-context lifecycle keys off, from EITHER source.
@@ -909,8 +917,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 }
             }
 
-            const applySO = payload?.standingOrders !== false && !payload?.machineOrigin;
-            const applySeatBlock = payload?.addonsComposed !== true && payload?.seatBlock !== false && !payload?.machineOrigin;
+            const isOrientation = payload?.orientationOnly === true;
+            const isMessage = !isOrientation && (payload?.kind === 'message'
+                || payload?.machineOrigin === true
+                || (payload?.kind !== 'dispatch' && !payload?.dispatch && !extractDispatchIdentity(payload?.data || '')));
+            const applySO = payload?.standingOrders !== false && !payload?.machineOrigin && !isMessage;
+            const applySeatBlock = payload?.addonsComposed !== true && payload?.seatBlock !== false && !payload?.machineOrigin && !isMessage;
             if (applySO || applySeatBlock) {
                 try {
                     // The LATCHED fleet root — pinned once per extension-host lifetime
@@ -1068,7 +1080,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         // present so it no-ops, but the mission-control sentinel is not, so a
                         // folded dispatch sent with Mission Control off would pick the
                         // directive back up on the way through this branch.
-                        if (roleTakesDispatchDirectives(role) && !payload?.machineOrigin) {
+                        if (roleTakesDispatchDirectives(role) && !payload?.machineOrigin && !isMessage) {
                             data = ensureDispatchProtocolDirectives(data, this.isOversightAgentRunning());
                         }
                     }
@@ -1272,6 +1284,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     clearBeforePrompt: false,
                     seatBlock: false,
                     orientationOnly: true,
+                    kind: 'dispatch',
                 });
             })().catch(err => console.warn(`[TaskViewerProvider] Startup orientation relay for '${name}' failed:`, err));
         }
@@ -2108,6 +2121,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     // constrain, so the seat block is noise. Stripped at the
                     // HTTP boundary; an HTTP caller cannot set this.
                     seatBlock: false,
+                    kind: 'dispatch',
                 });
                 if (sendRes?.success === false) {
                     console.warn(`[TaskViewerProvider] turn-end delivery to '${recipientName}' failed: ${sendRes.error || 'unknown error'} (seat '${seatName}', ${info.outcome} on ${planFile}).`);
@@ -3847,6 +3861,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             resolveTeamMembers: async (wsRoot, headTerminal) => this.resolveTeamMembers(wsRoot, headTerminal),
             resolveTeamPacing: async (wsRoot, headTerminal) => this.resolveTeamPacing(wsRoot, headTerminal),
             clearTerminalContext: async (wsRoot, terminalName) => this.clearTerminalContext(wsRoot, terminalName),
+            recordDeferredClears: (teamId, names) => {
+                const deferredSet = this._deferredClearsByTeam.get(teamId) || new Set<string>();
+                for (const name of names) { deferredSet.add(name); }
+                this._deferredClearsByTeam.set(teamId, deferredSet);
+            },
             // Roll the terminal log file (session boundary) when a seat's context
             // is cleared via queue/done. The log writer lives in the pty host child
             // process, so the roll is forwarded over the verb boundary.
@@ -11014,12 +11033,24 @@ Each plan file must include:
     ): Promise<{ cleared: boolean; error?: string; reason?: string }> {
         const clearBeforePrompt = vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', true);
         if (!clearBeforePrompt) {
-            return { cleared: false };
+            return { cleared: false, reason: 'disabled' };
         }
         // Drop the work-context entry so the next dispatch doesn't redundantly
         // auto-clear an already-clean terminal (optimization — a redundant
         // clear is harmless but wastes the settle window).
         this._lastWorkContextByTerminal.delete(terminalName);
+        dropDeferredClear(this._deferredClearsByTeam, terminalName);
+        for (const [id, entry] of this._seatBlockCache.entries()) {
+            if (entry.name === terminalName) {
+                this._seatBlockCache.delete(id);
+            }
+        }
+        try {
+            const clearDb = await this._getKanbanDb(workspaceRoot || this._apiServerWorkspaceRoot || this._getWorkspaceRoot() || '');
+            if (clearDb) {
+                await removeReviewerCallbackOrder(clearDb, terminalName);
+            }
+        } catch { /* best effort */ }
         const rawClearDelay = vscode.workspace.getConfiguration('switchboard').get<number>('terminal.clearBeforePromptDelay', 2000);
         const clearDelay = Math.min(Math.max(rawClearDelay, 0), 10000);
         const ptyPolicy = resolvePtyClearPolicy(vscode.workspace.getConfiguration('switchboard'));
@@ -21539,6 +21570,7 @@ Each plan file must include:
                             data: payload,
                             clearBeforePrompt,
                             clearBeforePromptDelayMs: clearDelay,
+                            kind: 'dispatch',
                             // A payload that already IS a rendered standing-orders block must not
                             // be run back through applyStandingOrders on the host — that strips
                             // the block and re-appends one recomputed from the host's own view.

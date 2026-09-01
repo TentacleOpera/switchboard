@@ -73,6 +73,19 @@ export function validateVerbPayload(
             return { ok: false, error: `field '${field}' must be ${accepted.join(' | ')}, got ${actual}` };
         }
     }
+
+    if (provider === 'taskViewer' && verb === 'ptySendPrompt') {
+        if (typeof (body as any)?.data === 'string') {
+            const trimmed = (body as any).data.trim();
+            if (/^\/[a-zA-Z0-9_-]+$/.test(trimmed)) {
+                return {
+                    ok: false,
+                    error: `bare slash command '${trimmed}' cannot be sent as prompt data; use POST /terminals/clear to clear a terminal`,
+                };
+            }
+        }
+    }
+
     return { ok: true };
 }
 
@@ -1403,6 +1416,8 @@ export const TASK_VIEWER_VERB_SCHEMAS: Record<string, VerbSchema> = {
             standingOrders: { type: 'boolean' },
             dispatch: { type: 'object' },
             workspaceRoot: { type: 'string' },
+            kind: { type: 'string' },
+            machineOrigin: { type: 'boolean' },
             // The terminal that REQUESTED the send. The roster barrier excludes
             // it from the clear set so a lead is never cleared by its own
             // dispatch. Declared here rather than left as an undeclared extra:

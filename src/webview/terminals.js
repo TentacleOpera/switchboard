@@ -985,6 +985,9 @@
                         // two empty panes the group already has members to fill.
                         // Same ordering as switchToGroup: layout first, then seat.
                         seatActiveGroupPage();
+                        // Same stranded-flag defect as switchToGroup: consume the
+                        // flags armed by seatActiveGroupPage's renderPaneGrid now.
+                        batchFitVisiblePanes();
                     }
                     saveLayoutSettings();
                 }
@@ -3622,6 +3625,9 @@
         // would inherit the prior group's grid.
         setLayoutMode(layoutForGroupSwitch(group), { keepLock: true });
         seatActiveGroupPage();
+        // Consume the needsRendererResync flags armed by seatActiveGroupPage's
+        // renderPaneGrid; without this they strand until the 5 s fleet poll.
+        batchFitVisiblePanes();
         if (!opts.noSave) {
             saveLayoutSettings();
         }
@@ -11494,7 +11500,12 @@
         + 'and proceed to the next queue item). When a coder reports a subtask finished, note it and '
         + 'dispatch the next subtask to an idle seat that has not already worked on it — do not stack '
         + 'subtasks on the same coder, or it will hit its context limit mid-task. One subtask per '
-        + 'cleared seat before rotation. Do not send anything to the reviewer, and do not write review '
+        + 'cleared seat before rotation. When a coder finishes its turn, the system delivers a '
+        + 'completion prompt into this terminal — you do not need to check, wait, or watch for it. '
+        + 'Do not sleep, poll, loop, or run any timer to find out whether a coder is done. '
+        + 'Dispatch what is dispatchable, close out what is closable, and end your turn. '
+        + 'An idle lead is the correct resting state, not a failure. '
+        + 'Do not send anything to the reviewer, and do not write review '
         + 'instructions — that is not your job. '
         + 'Never move a card backwards to an earlier pipeline stage — only Mission Control may do that. '
         + 'Never move a card to a new column yourself — that is not your role. '

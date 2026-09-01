@@ -137,6 +137,15 @@ function run() {
             'prompt must contain the commit instruction marker');
     });
 
+    // ── 7. Wake guarantee and sleep prohibition ─────────────────────────
+
+    check('the prompt contains the wake guarantee and sleep prohibition', () => {
+        assert.ok(twPrompt.includes('delivers a completion prompt into this terminal'),
+            'prompt must state that a completion prompt is delivered to this terminal');
+        assert.ok(twPrompt.includes('Do not sleep, poll, loop, or run any timer to find out whether a coder is done'),
+            'prompt must forbid sleeping, polling, looping, or running timers');
+    });
+
     console.log(`\n${failures === 0 ? 'ALL PASSED' : `${failures} FAILED`}\n`);
     if (failures > 0) process.exit(1);
 }

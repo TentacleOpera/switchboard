@@ -123,9 +123,10 @@ async function main() {
     // The skill file pointer has been removed.
     assert.ok(!prefix.includes('terminal-coder-dispatch/SKILL.md'), 'enriched prefix must not reference the deleted skill file');
     // The 7 inlined rules are present.
-    for (const rule of ['Every finding cites a plan clause', 'Name the defect, never the mechanism', 'Never issue a git verb', 'You are unattended when no human is demonstrably reading', 'Subtask blocked after escalation']) {
+    for (const rule of ['Every finding cites a plan clause', 'Name the defect, never the mechanism', 'Never issue a git verb', 'You are unattended when no human is demonstrably reading', 'Subtask blocked after escalation', 'COMPLETION WAKE: The system delivers a coder\'s completion into this terminal']) {
         assert.ok(prefix.includes(rule), `enriched prefix must contain inlined rule: ${rule}`);
     }
+    assert.ok(prefix.includes('FEATURE WATCH: Armed by the system. You will be nudged if you go idle with subtasks you have not posted completion for. No action needed — do not wait for it, do not poll for it.'), 'drive prefix must contain extended FEATURE WATCH line');
     assert.ok(!prefix.includes('watchFeature'), 'enriched prefix must not tell the lead to arm a second watch');
 
     // --- Resolved-port case: temp workspace with a port file ---

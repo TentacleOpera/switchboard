@@ -64,6 +64,7 @@ import {
     TerminalGroup,
     rewriteStandingOrdersForRename,
     resolveTeamStanding,
+    removeReviewerCallbackOrder,
 } from '../services/standingOrders';
 import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExternalTeamTemplate } from '../services/agentGroupInstantiation';
 // The pure migrators are deliberately NOT imported here — see the note at the
@@ -2030,6 +2031,12 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     const handle = ptyFleetService.get(payload.name);
                     if (!handle) { return { success: false, error: `No such terminal: ${payload.name}` }; }
                     if (handle.status !== 'active') { return { success: false, error: `Terminal ${payload.name} is not active` }; }
+                    if (payload.kind === 'orders-refresh') {
+                        return { success: false, error: 'Payload kind "orders-refresh" is reserved for after-clear delivery path' };
+                    }
+                    if (payload.kind !== undefined && payload.kind !== 'dispatch' && payload.kind !== 'message') {
+                        return { success: false, error: `Invalid payload kind "${payload.kind}" (must be "dispatch" or "message")` };
+                    }
                     // Strip host-only fields an HTTP caller must not set — same
                     // boundary strip as TaskViewerProvider.handlePtyVerb.
                     // `addonsComposed` and `seatBlock` are host-settable only;
@@ -2278,6 +2285,9 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         const resolvedClear = typeof payload.clearBeforePrompt === 'boolean'
                             ? payload.clearBeforePrompt
                             : (payload.clearBeforePromptFromConfig === true ? deliveryDefaults.clearBeforePrompt : false);
+                        const isMessage = payload.kind === 'message'
+                            || payload.machineOrigin === true
+                            || (payload.kind !== 'dispatch' && !payload.dispatch && !extractDispatchIdentity(payload.data || ''));
                         const receipt = await deliverPrompt(
                             handle,
                             payload.data || '',
@@ -2288,10 +2298,10 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                     : deliveryDefaults.clearBeforePromptDelayMs,
                                 clearReadinessMode: payload.clearReadinessMode || deliveryDefaults.clearReadinessMode,
                             },
-                            payload.standingOrders !== false,
-                            true,
+                            payload.standingOrders !== false && !isMessage,
+                            !isMessage,
                             payload.dispatch,
-                            payload.machineOrigin === true
+                            isMessage
                         );
                         // A CLI that exits during boot aborts delivery — the prompt
                         // was never written. Report an error so the caller knows.
@@ -3196,6 +3206,41 @@ Each plan file must include:
         },
         onTurnEndNotify: (info: any) => {
             handleTurnEndNotify(info);
+        },
+        clearTerminalContext: async (wsRoot: string, terminalName: string) => {
+            const clearEnabled = configProvider.getConfigBoolean('terminal.clearBeforePrompt', true);
+            if (!clearEnabled) {
+                return { cleared: false, reason: 'disabled' };
+            }
+            const handle = ptyFleetService.get(terminalName);
+            if (!handle || handle.status !== 'active') {
+                return { cleared: false, error: `terminal '${terminalName}' not found or exited` };
+            }
+            if (handle.agentInstanceId) {
+                seatBlockCache.delete(handle.agentInstanceId);
+            }
+            lastWorkContextByTerminal.delete(terminalName);
+            dropDeferredClear(deferredClearsByTeam, terminalName);
+            if (db) {
+                try {
+                    await removeReviewerCallbackOrder(db, terminalName);
+                } catch { /* best effort */ }
+            }
+            try {
+                await clearPty(handle);
+            } catch (err: any) {
+                return { cleared: false, error: err instanceof Error ? err.message : String(err) };
+            }
+            relayStartupOrientation([terminalName]);
+            if (terminalLogWriter) {
+                try { terminalLogWriter.onSessionBoundary(terminalName); } catch { /* best effort */ }
+            }
+            return { cleared: true };
+        },
+        recordDeferredClears: (teamId: string, names: string[]) => {
+            const deferredSet = deferredClearsByTeam.get(teamId) || new Set<string>();
+            for (const name of names) { deferredSet.add(name); }
+            deferredClearsByTeam.set(teamId, deferredSet);
         },
         // Roll the terminal log file when a seat's context is cleared via
         // queue/done — a cleared terminal starting fresh work is a new session.
