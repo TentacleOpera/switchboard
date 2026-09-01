@@ -106,6 +106,7 @@ Two relays were retrofitted with dock guards; nothing enumerated the rest.
 
 **Complexity:** 3
 **Tags:** frontend, ui, bugfix, reliability, security
+**Feature:** eb81e078-5849-41b0-a242-e6f718dd4ff9
 
 ## Dependencies
 

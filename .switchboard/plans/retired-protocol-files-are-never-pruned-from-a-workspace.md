@@ -79,6 +79,7 @@ housekeeping stayed in `extension.ts` where it was already working.
 
 **Complexity:** 4
 **Tags:** backend, reliability, bugfix, devops, infrastructure
+**Feature:** 4c6ef359-ef34-4532-afc0-1f95775df89d
 
 ## User Review Required
 

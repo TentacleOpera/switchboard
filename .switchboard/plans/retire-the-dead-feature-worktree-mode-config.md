@@ -94,6 +94,7 @@ freed a lane whose working tree was occupied.
 
 **Complexity:** 3
 **Tags:** backend, cleanup, refactor, reliability
+**Feature:** 4c6ef359-ef34-4532-afc0-1f95775df89d
 
 ## User Review Required
 
