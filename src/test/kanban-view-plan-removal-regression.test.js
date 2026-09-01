@@ -45,10 +45,21 @@ function run() {
         kanbanHtmlSource.includes('${copyLabel}'),
         'Expected the remaining Kanban card actions (review, complete, copy) to stay intact.'
     );
+    // The review/complete click bindings moved from per-card `querySelectorAll(...)
+    // .forEach(btn => btn.addEventListener('click'))` loops to a single delegated
+    // listener per `.column-body` (`handleCardClick`), which dispatches by button
+    // class. What must survive the viewPlan removal is that both buttons still
+    // reach a handler that posts their verb — not the binding mechanism, which is
+    // an implementation detail this assertion must not re-pin.
     assert.ok(
-        kanbanHtmlSource.includes("document.querySelectorAll('.card-btn.review')") &&
-        kanbanHtmlSource.includes("document.querySelectorAll('.card-btn.complete')"),
-        'Expected the review and complete card buttons to keep their click bindings.'
+        kanbanHtmlSource.includes("btn.classList.contains('review')") &&
+        kanbanHtmlSource.includes("btn.classList.contains('complete')"),
+        'Expected the review and complete card buttons to keep their click bindings (delegated via handleCardClick).'
+    );
+    assert.ok(
+        kanbanHtmlSource.includes("type: 'reviewPlan'") &&
+        kanbanHtmlSource.includes("type: 'completePlan'"),
+        'Expected the review and complete card buttons to still post reviewPlan / completePlan.'
     );
 
     assert.ok(

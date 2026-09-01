@@ -320,7 +320,11 @@ check('both new verbs are in the generated allowlist (the browser cockpit rail)'
 
 check('the star control is on the card and does not gate on a confirm', () => {
     assert.ok(/class="card-btn icon-btn star-btn/.test(kanbanHtml), 'createCardHtml must render the star button');
-    const handlerIdx = kanbanHtml.indexOf("document.querySelectorAll('.card-btn.star-btn')");
+    // The star's click binding moved from a per-card `querySelectorAll('.card-btn
+    // .star-btn').forEach(...)` loop to the delegated `handleCardClick` on
+    // `.column-body`, which dispatches by button class. Anchor on the branch, not
+    // on the retired binding loop — the behaviour pinned below is unchanged.
+    const handlerIdx = kanbanHtml.indexOf("btn.classList.contains('star-btn')");
     assert.notStrictEqual(handlerIdx, -1, 'the star button must have a click handler');
     const body = kanbanHtml.slice(handlerIdx, handlerIdx + 700);
     assert.ok(/e\.stopPropagation\(\)/.test(body), 'the star click must not reach the card selection handler');

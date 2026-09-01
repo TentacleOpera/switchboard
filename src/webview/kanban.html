@@ -8572,6 +8572,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             document.querySelectorAll('.column-body').forEach(container => {
                 const col = container.id.replace(/^col-/, '');
+                // Source-side delegation: click, pointerdown (copy button), dragstart,
+                // dragend — bound once here because .column-body persists across
+                // renderBoard (only its innerHTML is replaced). Replaces the ~19,000
+                // per-card listeners that were rebuilt on every render.
+                container.addEventListener('click', handleCardClick);
+                container.addEventListener('pointerdown', handleCardPointerDown);
+                container.addEventListener('dragstart', handleDragStart);
+                container.addEventListener('dragend', handleDragEnd);
                 container.addEventListener('dragover', handleDragOver);
                 container.addEventListener('dragenter', handleDragEnter);
                 container.addEventListener('dragleave', handleDragLeave);
@@ -9251,289 +9259,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             updateStarredCount();
             updateCapLabels();
 
-            // Attach card-level event listeners
-            document.querySelectorAll('.kanban-card').forEach(el => {
-                el.addEventListener('dragstart', handleDragStart);
-                el.addEventListener('dragend', handleDragEnd);
+            // A re-render destroys the dragged card's node. dragend is delegated to
+            // .column-body now, and an event dispatched on a DETACHED node never
+            // propagates there — so the cleanup the old per-card listener performed
+            // on the detached node (clearing .dragging / .drag-over and releasing
+            // draggedSessionId, which gates the BACKLOG toggle) must happen here.
+            if (draggedSessionId !== null) handleDragEnd();
 
-                // Card selection toggle (click on card body, not on buttons)
-                el.addEventListener('click', (e) => {
-                    if (el.classList.contains('mission-card')) {
-                        const root = el.dataset.workspaceRoot || currentWorkspaceRoot;
-                        const launchBtn = e.target.closest('.mission-launch-btn');
-                        if (launchBtn) {
-                            postKanbanMessage({ type: 'mcLaunchMission', missionId: el.dataset.missionId, workspaceRoot: root });
-                            return;
-                        }
-                        postKanbanMessage({ type: 'openSetupPanel', section: 'mission-control', workspaceRoot: root });
-                        return;
-                    }
-                    if (e.target.closest('.card-btn') || e.target.closest('button')) return;
-                    const pid = el.dataset.planId || el.dataset.session || '';
-                    if (!pid) return; // Skip if no valid ID — also prevents empty selectPlan message
-                    if (selectedCards.has(pid)) {
-                        selectedCards.delete(pid);
-                        el.classList.remove('selected');
-                    } else {
-                        const incomingWorkspaceRoot = el.dataset.workspaceRoot || currentWorkspaceRoot;
-
-                        // Cross-workspace guard: the board must never hold plans from two
-                        // different parent workspaces at once — doing so breaks ASSIGN
-                        // ("Cannot assign plans from multiple workspaces at once") and
-                        // silently drops subtasks during PROMOTE/GROUP INTO FEATURE.
-                        // When the incoming card belongs to a different workspace than ANY
-                        // existing selection, clear the prior selection first. This clear
-                        // happens ONLY on selecting a new plan, never on a workspace dropdown
-                        // switch, so the cross-workspace reassign flow (select in A, switch
-                        // dropdown to B, ASSIGN) keeps working.
-                        if (selectedCards.size > 0) {
-                            const hasDifferentWorkspace = Array.from(selectedCards.values()).some(val => {
-                                const existingRoot = val && typeof val === 'object' ? val.workspaceRoot : val;
-                                return existingRoot !== incomingWorkspaceRoot;
-                            });
-                            if (hasDifferentWorkspace) {
-                                selectedCards.clear();
-                                document.querySelectorAll('.kanban-card.selected')
-                                    .forEach(sel => sel.classList.remove('selected'));
-                            }
-                        }
-
-                        const cardData = currentCards.find(c => (c.planId || c.sessionId) === pid);
-                        selectedCards.set(pid, {
-                            workspaceRoot: incomingWorkspaceRoot,
-                            project: el.dataset.project || '',
-                            isFeature: cardData?.isFeature || false,
-                            featureId: cardData?.featureId || ''
-                        });
-                        el.classList.add('selected');
-                        // Sync sidebar dropdown on unmodified single clicks
-                        if (!e.shiftKey && !e.metaKey && !e.ctrlKey) {
-                            postKanbanMessage({ type: 'selectPlan', sessionId: el.dataset.session || '', planId: pid });
-                        }
-                    }
-                    updateReassignButtonVisibility();
-                    updateFeatureActionButton();
-                    recomputeWorktreeIndicator();
-                    updateCreateWorktreeButton();
-                });
-
-                // Re-apply selection state after re-render
-                const pid = el.dataset.planId || el.dataset.session || '';
-                if (pid && selectedCards.has(pid)) {
-                    el.classList.add('selected');
-                }
-            });
-
-            document.querySelectorAll('.card-btn.review').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    const pid = btn.dataset.planId || btn.dataset.session || '';
-                    const cardData = currentCards.find(c => (c.planId || c.sessionId) === pid);
-                    postKanbanMessage({
-                        type: 'reviewPlan',
-                        sessionId: btn.dataset.session || '',
-                        planId: btn.dataset.planId || '',
-                        planFile: btn.dataset.planFile || '',
-                        workspaceRoot: btn.dataset.workspaceRoot,
-                        project: cardData?.project || btn.closest('.kanban-card')?.dataset.project || '',
-                        column: cardData?.column || '',
-                        isFeature: cardData?.isFeature || false
-                    });
-                    // Browser cockpit: panels are iframes inside the shell, so switching to
-                    // the Project panel is a client-side move — the backend deliberately
-                    // does NOT open the editor's Project panel for a browser-originated
-                    // reviewPlan (it would pull focus into VS Code). The helper is defined
-                    // only by the browser transport shim, so this is absent in the webview,
-                    // where the backend opens/reveals the editor panel instead.
-                    if (typeof window.__switchboardSwitchPanel === 'function') {
-                        window.__switchboardSwitchPanel('project');
-                    }
-                });
-            });
-
-            document.querySelectorAll('.card-btn.complete').forEach(btn => {
-                btn.addEventListener('click', (e) => {
-                    const cardEl = e.target.closest('.kanban-card');
-                    if (cardEl) {
-                        // Optimistic UI: Animate out before sending to backend
-                        cardEl.classList.add('card-completing');
-                        setTimeout(() => {
-                            postKanbanMessage({ type: 'completePlan', sessionId: btn.dataset.session || '', planId: btn.dataset.planId || '', workspaceRoot: btn.dataset.workspaceRoot });
-                        }, 350); // Slightly less than the 400ms card-completing EXIT animation.
-                        // KEEP THIS ONE. The two 350ms timers on the drag-drop dispatch paths
-                        // were deleted (the card stays on screen there, and the recentlyDropped
-                        // fence now carries dropPulse across the confirm re-render). This timer
-                        // is a different case: it fences an exit animation on a card that is
-                        // LEAVING the DOM, so the backend removal must not truncate it.
-                    } else {
-                        // Fallback if DOM traversal fails
-                        postKanbanMessage({ type: 'completePlan', sessionId: btn.dataset.session || '', planId: btn.dataset.planId || '', workspaceRoot: btn.dataset.workspaceRoot });
-                    }
-                });
-            });
-
-            // V63: priority star toggle — one click on, one click off, no confirm
-            // gate (project rule). stopPropagation prevents the click from reaching
-            // the card's drag-selection / click-to-open handlers. The backend
-            // refresh re-renders the card with the updated star state.
-            document.querySelectorAll('.card-btn.star-btn').forEach(btn => {
-                btn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    e.preventDefault();
-                    const planId = btn.dataset.planId || btn.dataset.session || '';
-                    const workspaceRoot = btn.dataset.workspaceRoot || '';
-                    const currentlyStarred = btn.dataset.starred === '1';
-                    postKanbanMessage({
-                        type: 'setPriorityStarred',
-                        planId,
-                        sessionId: btn.dataset.session || '',
-                        starred: !currentlyStarred,
-                        workspaceRoot
-                    });
-                });
-            });
-
-            function runCopyPrompt(btn) {
-                const sessionId = btn.dataset.planId || btn.dataset.session || '';
-                // Model first: data-column is a render-time snapshot, and a targeted DOM move
-                // (moveCardElements) relocates the element without regenerating its markup.
-                // Deriving the next column from a stale attribute dispatches the wrong prompt
-                // to the wrong column.
-                const modelColumn = currentCards.find(c => (c.planId || c.sessionId) === sessionId)?.column;
-                const column = modelColumn || btn.dataset.column || btn.closest('.kanban-column')?.dataset?.column;
-                
-                // Optimistic UI: highlight target column and move card immediately
-                let nextCol = null;
-                let backendColumn = column;
-                if (column) {
-                    // Handle coded columns: resolve to last visible coded column before calling getNextColumn
-                    // Pattern matches column header handler (lines 3815-3820) and card rendering (lines 4293-4301)
-                    // CRITICAL: Do NOT resolve to 'CODED_AUTO' — it is not in the `columns` array
-                    let nextColSource = column;
-                    if (CODED_IDS.includes(column) || column === 'CODED_AUTO') {
-                        const visibleCodedIds = CODED_IDS.filter(id => columns.includes(id));
-                        nextColSource = visibleCodedIds[visibleCodedIds.length - 1] || 'CODER CODED';
-                        backendColumn = (column === 'CODED_AUTO') ? (columnDefinitions.find(d => d.kind === 'coded')?.id || 'LEAD CODED') : column;
-                    }
-                    nextCol = getNextColumn(nextColSource);
-
-                    // PLAN REVIEWED and STAGING advances are routed by the BACKEND
-                    // (_partitionByComplexityRoute). The optimistic move must either predict
-                    // that exactly or not move at all — otherwise the backend's moveCards
-                    // delta bounces the card to the real column.
-                    if ((column === 'PLAN REVIEWED' || column === 'STAGING') && dynamicComplexityRoutingEnabled) {
-                        const card = currentCards.find(c => (c.planId || c.sessionId) === sessionId);
-                        const score = parseInt(card?.complexity, 10);
-                        const pairModeActive =
-                            (document.getElementById('pairProgrammingModeSelect')?.value || 'off') !== 'off';
-                        if (isNaN(score) || pairModeActive || score < 1 || score > 10) {
-                            // Not confident the FE prediction matches the BE. Suppress the optimistic
-                            // cross-stage move; the backend moveCards delta is authoritative.
-                            nextCol = null;
-                        } else {
-                            // Confident: mirror the backend's complexity route so there is one clean move.
-                            // Inlined from the deleted resolveCodedAutoTarget — the server's
-                            // _advanceCards is the authority, this is the optimistic prediction.
-                            const roleMap = { lead: 'LEAD CODED', coder: 'CODER CODED', intern: 'INTERN CODED' };
-                            let routedTarget = 'CODER CODED';
-                            for (const [role, scores] of Object.entries(routingMapConfig)) {
-                                if (Array.isArray(scores) && scores.includes(score)) {
-                                    const resolved = roleMap[role] || 'CODER CODED';
-                                    if (resolved === 'INTERN CODED' && !columnDefinitions.some(d => d.id === 'INTERN CODED')) {
-                                        routedTarget = 'CODER CODED';
-                                    } else {
-                                        routedTarget = resolved;
-                                    }
-                                    break;
-                                }
-                            }
-                            nextCol = routedTarget;
-                        }
-                    }
-
-                    if (nextCol) {
-                        const domNextCol = resolveDomColumn(nextCol);
-                        const targetBody = document.getElementById('col-' + domNextCol);
-                        if (targetBody) {
-                            targetBody.classList.add('highlight');
-                            targetBody.addEventListener('animationend', () => targetBody.classList.remove('highlight'), { once: true });
-                        }
-                        moveCardsOptimistically([sessionId], column, nextCol);
-                    }
-                }
-                
-                postKanbanMessage({
-                    type: 'promptSelected',
-                    column: backendColumn,
-                    sessionIds: [sessionId],
-                    workspaceRoot: btn.dataset.workspaceRoot
-                });
-            }
-
-            document.querySelectorAll('.card-btn.copy').forEach(btn => {
-                btn.addEventListener('pointerdown', (e) => {
-                    if (e.button !== 0) return;
-                    try {
-                        btn.setPointerCapture(e.pointerId);
-                    } catch (_) {}
-                    let activePointerId = e.pointerId;
-
-                    const cleanup = () => {
-                        btn.removeEventListener('pointerup', onPointerUp);
-                        btn.removeEventListener('pointercancel', onCleanup);
-                        btn.removeEventListener('lostpointercapture', onCleanup);
-                        try {
-                            if (activePointerId !== null && btn.hasPointerCapture(activePointerId)) {
-                                btn.releasePointerCapture(activePointerId);
-                            }
-                        } catch (_) {}
-                        activePointerId = null;
-                    };
-
-                    const onCleanup = () => {
-                        cleanup();
-                    };
-
-                    const onPointerUp = (upEvt) => {
-                        if (upEvt.pointerId !== activePointerId) return;
-                        const rect = btn.getBoundingClientRect();
-                        const slop = 8;
-                        const inBounds =
-                            upEvt.clientX >= rect.left - slop &&
-                            upEvt.clientX <= rect.right + slop &&
-                            upEvt.clientY >= rect.top - slop &&
-                            upEvt.clientY <= rect.bottom + slop;
-
-                        cleanup();
-                        if (inBounds) {
-                            runCopyPrompt(btn);
-                        }
-                    };
-
-                    btn.addEventListener('pointerup', onPointerUp);
-                    btn.addEventListener('pointercancel', onCleanup);
-                    btn.addEventListener('lostpointercapture', onCleanup);
-                });
-            });
-
-            document.querySelectorAll('.card-btn.recover').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    btn.disabled = true;
-                    btn.textContent = 'Recovering…';
-                    postKanbanMessage({ type: 'recoverSelected', sessionIds: [btn.dataset.session || ''], planIds: [btn.dataset.planId || ''] });
-                });
-            });
-
-            document.querySelectorAll('.send-to-backlog-btn').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    postKanbanMessage({ type: 'sendToBacklog', sessionId: btn.dataset.session || '', planId: btn.dataset.planId || '', workspaceRoot: btn.dataset.workspaceRoot });
-                });
-            });
-
-            document.querySelectorAll('.send-to-new-btn').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    postKanbanMessage({ type: 'sendToNew', sessionId: btn.dataset.session || '', planId: btn.dataset.planId || '', workspaceRoot: btn.dataset.workspaceRoot });
-                });
-            });
+            reapplySelectionState();
 
             requestAnimationFrame(() => restoreBoardViewState(viewState));
             updateReassignButtonVisibility();
@@ -9947,12 +9680,303 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             document.addEventListener('dragend', rearm, true);
         }, true);
 
+        // Delegated card click handler — bound once per .column-body at board init
+        // (renderColumns), replacing the per-card listener attaches that were rebuilt
+        // on every renderBoard. Resolves the target via closest() and the data-
+        // attributes the cards already carry.
+        function handleCardClick(e) {
+            const card = e.target.closest('.kanban-card');
+            if (!card) return;                 // click on empty column space — per-card never saw this
+
+            if (card.classList.contains('mission-card')) {
+                const root = card.dataset.workspaceRoot || currentWorkspaceRoot;
+                const launchBtn = e.target.closest('.mission-launch-btn');
+                if (launchBtn) {
+                    postKanbanMessage({ type: 'mcLaunchMission', missionId: card.dataset.missionId, workspaceRoot: root });
+                    return;
+                }
+                postKanbanMessage({ type: 'openSetupPanel', section: 'mission-control', workspaceRoot: root });
+                return;
+            }
+
+            // Button dispatch — innermost interactive element wins.
+            const btn = e.target.closest('.card-btn, button');
+            if (btn) {
+                // V63: priority star toggle — one click on, one click off, no confirm
+                // gate (project rule). stopPropagation prevents the click from reaching
+                // the card's drag-selection / click-to-open handlers. The backend
+                // refresh re-renders the card with the updated star state.
+                if (btn.classList.contains('star-btn')) {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    const planId = btn.dataset.planId || btn.dataset.session || '';
+                    const workspaceRoot = btn.dataset.workspaceRoot || '';
+                    const currentlyStarred = btn.dataset.starred === '1';
+                    postKanbanMessage({
+                        type: 'setPriorityStarred',
+                        planId,
+                        sessionId: btn.dataset.session || '',
+                        starred: !currentlyStarred,
+                        workspaceRoot
+                    });
+                    return;
+                }
+                if (btn.classList.contains('review')) {
+                    const pid = btn.dataset.planId || btn.dataset.session || '';
+                    const cardData = currentCards.find(c => (c.planId || c.sessionId) === pid);
+                    postKanbanMessage({
+                        type: 'reviewPlan',
+                        sessionId: btn.dataset.session || '',
+                        planId: btn.dataset.planId || '',
+                        planFile: btn.dataset.planFile || '',
+                        workspaceRoot: btn.dataset.workspaceRoot,
+                        project: cardData?.project || btn.closest('.kanban-card')?.dataset.project || '',
+                        column: cardData?.column || '',
+                        isFeature: cardData?.isFeature || false
+                    });
+                    // Browser cockpit: panels are iframes inside the shell, so switching to
+                    // the Project panel is a client-side move — the backend deliberately
+                    // does NOT open the editor's Project panel for a browser-originated
+                    // reviewPlan (it would pull focus into VS Code). The helper is defined
+                    // only by the browser transport shim, so this is absent in the webview,
+                    // where the backend opens/reveals the editor panel instead.
+                    if (typeof window.__switchboardSwitchPanel === 'function') {
+                        window.__switchboardSwitchPanel('project');
+                    }
+                    return;
+                }
+                if (btn.classList.contains('complete')) {
+                    const cardEl = e.target.closest('.kanban-card');
+                    if (cardEl) {
+                        // Optimistic UI: Animate out before sending to backend
+                        cardEl.classList.add('card-completing');
+                        setTimeout(() => {
+                            postKanbanMessage({ type: 'completePlan', sessionId: btn.dataset.session || '', planId: btn.dataset.planId || '', workspaceRoot: btn.dataset.workspaceRoot });
+                        }, 350); // Slightly less than the 400ms card-completing EXIT animation.
+                        // KEEP THIS ONE. The two 350ms timers on the drag-drop dispatch paths
+                        // were deleted (the card stays on screen there, and the recentlyDropped
+                        // fence now carries dropPulse across the confirm re-render). This timer
+                        // is a different case: it fences an exit animation on a card that is
+                        // LEAVING the DOM, so the backend removal must not truncate it.
+                    } else {
+                        // Fallback if DOM traversal fails
+                        postKanbanMessage({ type: 'completePlan', sessionId: btn.dataset.session || '', planId: btn.dataset.planId || '', workspaceRoot: btn.dataset.workspaceRoot });
+                    }
+                    return;
+                }
+                if (btn.classList.contains('recover')) {
+                    btn.disabled = true;
+                    btn.textContent = 'Recovering…';
+                    postKanbanMessage({ type: 'recoverSelected', sessionIds: [btn.dataset.session || ''], planIds: [btn.dataset.planId || ''] });
+                    return;
+                }
+                if (btn.classList.contains('send-to-backlog-btn')) {
+                    postKanbanMessage({ type: 'sendToBacklog', sessionId: btn.dataset.session || '', planId: btn.dataset.planId || '', workspaceRoot: btn.dataset.workspaceRoot });
+                    return;
+                }
+                if (btn.classList.contains('send-to-new-btn')) {
+                    postKanbanMessage({ type: 'sendToNew', sessionId: btn.dataset.session || '', planId: btn.dataset.planId || '', workspaceRoot: btn.dataset.workspaceRoot });
+                    return;
+                }
+                // Unknown button (including .card-btn.copy, which uses pointerdown not click) —
+                // do not select the card. Defense-in-depth, mirroring the old early-return guard.
+                return;
+            }
+
+            // Card selection toggle (click on card body, not on buttons)
+            if (e.target.closest('.card-btn') || e.target.closest('button')) return;
+            const pid = card.dataset.planId || card.dataset.session || '';
+            if (!pid) return; // Skip if no valid ID — also prevents empty selectPlan message
+            if (selectedCards.has(pid)) {
+                selectedCards.delete(pid);
+                card.classList.remove('selected');
+            } else {
+                const incomingWorkspaceRoot = card.dataset.workspaceRoot || currentWorkspaceRoot;
+
+                // Cross-workspace guard: the board must never hold plans from two
+                // different parent workspaces at once — doing so breaks ASSIGN
+                // ("Cannot assign plans from multiple workspaces at once") and
+                // silently drops subtasks during PROMOTE/GROUP INTO FEATURE.
+                // When the incoming card belongs to a different workspace than ANY
+                // existing selection, clear the prior selection first. This clear
+                // happens ONLY on selecting a new plan, never on a workspace dropdown
+                // switch, so the cross-workspace reassign flow (select in A, switch
+                // dropdown to B, ASSIGN) keeps working.
+                if (selectedCards.size > 0) {
+                    const hasDifferentWorkspace = Array.from(selectedCards.values()).some(val => {
+                        const existingRoot = val && typeof val === 'object' ? val.workspaceRoot : val;
+                        return existingRoot !== incomingWorkspaceRoot;
+                    });
+                    if (hasDifferentWorkspace) {
+                        selectedCards.clear();
+                        document.querySelectorAll('.kanban-card.selected')
+                            .forEach(sel => sel.classList.remove('selected'));
+                    }
+                }
+
+                const cardData = currentCards.find(c => (c.planId || c.sessionId) === pid);
+                selectedCards.set(pid, {
+                    workspaceRoot: incomingWorkspaceRoot,
+                    project: card.dataset.project || '',
+                    isFeature: cardData?.isFeature || false,
+                    featureId: cardData?.featureId || ''
+                });
+                card.classList.add('selected');
+                // Sync sidebar dropdown on unmodified single clicks
+                if (!e.shiftKey && !e.metaKey && !e.ctrlKey) {
+                    postKanbanMessage({ type: 'selectPlan', sessionId: card.dataset.session || '', planId: pid });
+                }
+            }
+            updateReassignButtonVisibility();
+            updateFeatureActionButton();
+            recomputeWorktreeIndicator();
+            updateCreateWorktreeButton();
+        }
+
+        // Delegated pointerdown for the copy button — uses pointerdown/pointerup with
+        // setPointerCapture, so it is delegated separately from the click handler.
+        // The pointerup/pointercancel/lostpointercapture listeners are added to the
+        // button inside the handler and stay as-is.
+        function handleCardPointerDown(e) {
+            const btn = e.target.closest('.card-btn.copy');
+            if (!btn) return;
+            if (e.button !== 0) return;
+            try {
+                btn.setPointerCapture(e.pointerId);
+            } catch (_) {}
+            let activePointerId = e.pointerId;
+
+            const cleanup = () => {
+                btn.removeEventListener('pointerup', onPointerUp);
+                btn.removeEventListener('pointercancel', onCleanup);
+                btn.removeEventListener('lostpointercapture', onCleanup);
+                try {
+                    if (activePointerId !== null && btn.hasPointerCapture(activePointerId)) {
+                        btn.releasePointerCapture(activePointerId);
+                    }
+                } catch (_) {}
+                activePointerId = null;
+            };
+
+            const onCleanup = () => {
+                cleanup();
+            };
+
+            const onPointerUp = (upEvt) => {
+                if (upEvt.pointerId !== activePointerId) return;
+                const rect = btn.getBoundingClientRect();
+                const slop = 8;
+                const inBounds =
+                    upEvt.clientX >= rect.left - slop &&
+                    upEvt.clientX <= rect.right + slop &&
+                    upEvt.clientY >= rect.top - slop &&
+                    upEvt.clientY <= rect.bottom + slop;
+
+                cleanup();
+                if (inBounds) {
+                    runCopyPrompt(btn);
+                }
+            };
+
+            btn.addEventListener('pointerup', onPointerUp);
+            btn.addEventListener('pointercancel', onCleanup);
+            btn.addEventListener('lostpointercapture', onCleanup);
+        }
+
+        // Re-apply selection state after re-render. The cards are new DOM nodes, so
+        // the .selected class must be re-added per render — but this is a DOM
+        // read/class toggle, not a listener attach, and is no longer tangled with
+        // listener binding.
+        function reapplySelectionState() {
+            document.querySelectorAll('.kanban-card').forEach(el => {
+                const pid = el.dataset.planId || el.dataset.session || '';
+                if (pid && selectedCards.has(pid)) {
+                    el.classList.add('selected');
+                }
+            });
+        }
+
+        function runCopyPrompt(btn) {
+            const sessionId = btn.dataset.planId || btn.dataset.session || '';
+            // Model first: data-column is a render-time snapshot, and a targeted DOM move
+            // (moveCardElements) relocates the element without regenerating its markup.
+            // Deriving the next column from a stale attribute dispatches the wrong prompt
+            // to the wrong column.
+            const modelColumn = currentCards.find(c => (c.planId || c.sessionId) === sessionId)?.column;
+            const column = modelColumn || btn.dataset.column || btn.closest('.kanban-column')?.dataset?.column;
+
+            // Optimistic UI: highlight target column and move card immediately
+            let nextCol = null;
+            let backendColumn = column;
+            if (column) {
+                // Handle coded columns: resolve to last visible coded column before calling getNextColumn
+                // Pattern matches column header handler (lines 3815-3820) and card rendering (lines 4293-4301)
+                // CRITICAL: Do NOT resolve to 'CODED_AUTO' — it is not in the `columns` array
+                let nextColSource = column;
+                if (CODED_IDS.includes(column) || column === 'CODED_AUTO') {
+                    const visibleCodedIds = CODED_IDS.filter(id => columns.includes(id));
+                    nextColSource = visibleCodedIds[visibleCodedIds.length - 1] || 'CODER CODED';
+                    backendColumn = (column === 'CODED_AUTO') ? (columnDefinitions.find(d => d.kind === 'coded')?.id || 'LEAD CODED') : column;
+                }
+                nextCol = getNextColumn(nextColSource);
+
+                // PLAN REVIEWED and STAGING advances are routed by the BACKEND
+                // (_partitionByComplexityRoute). The optimistic move must either predict
+                // that exactly or not move at all — otherwise the backend's moveCards
+                // delta bounces the card to the real column.
+                if ((column === 'PLAN REVIEWED' || column === 'STAGING') && dynamicComplexityRoutingEnabled) {
+                    const card = currentCards.find(c => (c.planId || c.sessionId) === sessionId);
+                    const score = parseInt(card?.complexity, 10);
+                    const pairModeActive =
+                        (document.getElementById('pairProgrammingModeSelect')?.value || 'off') !== 'off';
+                    if (isNaN(score) || pairModeActive || score < 1 || score > 10) {
+                        // Not confident the FE prediction matches the BE. Suppress the optimistic
+                        // cross-stage move; the backend moveCards delta is authoritative.
+                        nextCol = null;
+                    } else {
+                        // Confident: mirror the backend's complexity route so there is one clean move.
+                        // Inlined from the deleted resolveCodedAutoTarget — the server's
+                        // _advanceCards is the authority, this is the optimistic prediction.
+                        const roleMap = { lead: 'LEAD CODED', coder: 'CODER CODED', intern: 'INTERN CODED' };
+                        let routedTarget = 'CODER CODED';
+                        for (const [role, scores] of Object.entries(routingMapConfig)) {
+                            if (Array.isArray(scores) && scores.includes(score)) {
+                                const resolved = roleMap[role] || 'CODER CODED';
+                                if (resolved === 'INTERN CODED' && !columnDefinitions.some(d => d.id === 'INTERN CODED')) {
+                                    routedTarget = 'CODER CODED';
+                                } else {
+                                    routedTarget = resolved;
+                                }
+                                break;
+                            }
+                        }
+                        nextCol = routedTarget;
+                    }
+                }
+
+                if (nextCol) {
+                    const domNextCol = resolveDomColumn(nextCol);
+                    const targetBody = document.getElementById('col-' + domNextCol);
+                    if (targetBody) {
+                        targetBody.classList.add('highlight');
+                        targetBody.addEventListener('animationend', () => targetBody.classList.remove('highlight'), { once: true });
+                    }
+                    moveCardsOptimistically([sessionId], column, nextCol);
+                }
+            }
+
+            postKanbanMessage({
+                type: 'promptSelected',
+                column: backendColumn,
+                sessionIds: [sessionId],
+                workspaceRoot: btn.dataset.workspaceRoot
+            });
+        }
+
         function handleDragStart(e) {
             if (buttonPressCardEl) { e.preventDefault(); return; }
-            const draggedCardEl =
-                (e.currentTarget && e.currentTarget.classList && e.currentTarget.classList.contains('kanban-card'))
-                    ? e.currentTarget
-                    : e.target.closest('.kanban-card');
+            // Delegated: currentTarget is the column-body; always resolve via closest().
+            const draggedCardEl = e.target.closest('.kanban-card');
             const draggedId = draggedCardEl?.dataset.planId || draggedCardEl?.dataset.session || draggedCardEl?.dataset.missionId;
             if (!draggedCardEl || !draggedId) return;
             draggedSessionId = draggedId;
