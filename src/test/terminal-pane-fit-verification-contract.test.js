@@ -186,5 +186,82 @@ test('the ladder gates on the RENDERED slots, not the padded assignment array', 
     );
 });
 
+/**
+ * The stranded-flag contract: every site that re-seats a locked group must consume
+ * the needsRendererResync flags its own renderPaneGrid armed.
+ *
+ * renderPaneGrid's structural-delta latch arms the flag on any paneAssignments
+ * change but never fits — deliberately, because it is also the 5 s fleet poll's
+ * repaint and an unconditional fit there would repaint every visible pane forever.
+ * Consumption therefore belongs to the CALL SITE. switchToGroup and the layout
+ * picker's keepLock branch both call seatActiveGroupPage() AFTER the only
+ * applyLayoutFloor() in their path, so without a ladder of their own the flags that
+ * matter sit until the next poll — up to five seconds of garbled glyphs, or none at
+ * all if the pane is not isRendered when the poll lands. That is the intermittency.
+ *
+ * Asserted as "the first executable statement after the seat is the batch fit"
+ * rather than a raw line distance, so rewording the intervening comment cannot
+ * fail this suite while deleting the call passes it.
+ */
+function firstStatementAfterSeat(span, label) {
+    const at = span.indexOf('seatActiveGroupPage();');
+    assert.ok(at !== -1, `${label}: no seatActiveGroupPage() call found`);
+    const after = span.slice(at + 'seatActiveGroupPage();'.length);
+    for (const raw of after.split('\n')) {
+        const line = raw.trim();
+        if (!line || line.startsWith('//') || line.startsWith('*') || line.startsWith('/*')) { continue; }
+        return line;
+    }
+    return '';
+}
+
+test('switchToGroup consumes the flags its own re-seat armed', () => {
+    const span = block('function switchToGroup(', 'function seatActiveGroupPage(');
+    assert.strictEqual(
+        firstStatementAfterSeat(span, 'switchToGroup'),
+        'batchFitVisiblePanes();',
+        'switchToGroup must run the fit ladder immediately after seatActiveGroupPage() — the only '
+        + 'applyLayoutFloor() in its path ran BEFORE the re-seat, so nothing else consumes the '
+        + 'needsRendererResync flags the post-seat renderPaneGrid armed'
+    );
+});
+
+test('the layout picker keepLock branch consumes them too', () => {
+    const span = block('const keepLock = !!activeGroupId;', 'function switchToGroup(');
+    assert.strictEqual(
+        firstStatementAfterSeat(span, 'layout picker keepLock'),
+        'batchFitVisiblePanes();',
+        'the picker\'s keepLock branch has the identical ordering to switchToGroup and needs the '
+        + 'identical fit ladder — growing 2h -> 2x2 for a 4-member group re-seats with no consumer'
+    );
+});
+
+test('renderPaneGrid arms the latch and never fits — the latch invariant', () => {
+    const render = block('function renderPaneGrid(', 'function applyPeekClasses(');
+    // Comments stripped before the negative assertions: renderPaneGrid's own prose
+    // NAMES batchFitVisiblePanes (explaining that the structural call sites are what
+    // consume the flags), and a substring match on the commentary would fail this
+    // contract while the code stayed correct.
+    const code = render.replace(/^\s*(\/\/|\*|\/\*).*$/gm, '');
+    // The fix is at the call sites. An unconditional fit inside the render would make
+    // the 5 s fleet poll fire resyncPaneRenderer on every visible pane, forever.
+    assert.ok(!/batchFitVisiblePanes\(/.test(code),
+        'renderPaneGrid must not call batchFitVisiblePanes — the 5 s poll goes through it');
+    assert.ok(!/startFitLadder\(/.test(code),
+        'renderPaneGrid must not start a ladder directly — same perpetual-repaint hazard');
+    // The arming logic itself is load-bearing and untouched by the ordering fix.
+    assert.ok(render.includes('const structureKey = JSON.stringify('),
+        'the structural delta must still be keyed by JSON.stringify, not join()');
+    assert.ok(/if \(structureKey !== lastGridStructureKey\) \{/.test(render),
+        'the delta gate must still compare against lastGridStructureKey');
+    assert.ok(render.includes('lastGridStructureKey = structureKey;'),
+        'the latch must still record the key it armed on');
+    assert.ok(render.includes('entry.needsRendererResync = true;'),
+        'the delta gate must still arm the resync flag');
+    // paneAssignments in the key is what makes a re-seat a structural delta at all.
+    assert.ok(render.includes('paneAssignments.slice(0, slotCount)'),
+        'paneAssignments must stay in the structure key — a re-seat is the trigger this arms for');
+});
+
 console.log(failed === 0 ? '\nAll pane-fit verification contracts passed.' : `\n${failed} contract(s) failed.`);
 process.exit(failed === 0 ? 0 : 1);
