@@ -28,11 +28,24 @@
     const dockKanbanFrame = document.getElementById('dock-kanban-frame');
     const dockTabAgentBtn = document.getElementById('dock-tab-agent');
     const dockTabKanbanBtn = document.getElementById('dock-tab-kanban');
+    const dockTabFleetBtn = document.getElementById('dock-tab-fleet');
     const dockTitleEl = document.getElementById('dock-title');
     const dockCloseBtn = document.getElementById('dock-close');
     const emptyEl = document.getElementById('dock-empty');
     const startBtn = document.getElementById('dock-start');
     const dockEmptyHint = document.getElementById('dock-empty-hint');
+    const dockFleetEl = document.getElementById('dock-fleet');
+    const dockFleetOfflineEl = document.getElementById('dock-fleet-offline');
+    const dockFleetContentEl = document.getElementById('dock-fleet-content');
+    const dockFleetTbody = document.getElementById('dock-fleet-tbody');
+    const dockHopPlanCb = document.getElementById('dock-hop-plan');
+    const dockHopCodeCb = document.getElementById('dock-hop-code');
+    const dockHopReviewCb = document.getElementById('dock-hop-review');
+    const dockHopPlanReason = document.getElementById('dock-hop-plan-reason');
+    const dockHopCodeReason = document.getElementById('dock-hop-code-reason');
+    const dockHopReviewReason = document.getElementById('dock-hop-review-reason');
+    const dockHopsBtn = document.getElementById('dock-hops-btn');
+    const dockFleetFeedEl = document.getElementById('dock-fleet-feed');
 
     const frames = new Map(); // id -> HTMLIFrameElement
     const icons = new Map();  // id -> HTMLButtonElement
@@ -69,7 +82,7 @@
                 open: s.open === true,
                 width: clampDockWidth(Number(s.width) || DOCK_DEFAULT),
                 seat: typeof s.seat === 'string' ? s.seat : null,
-                activeTab: s.activeTab === 'kanban' ? 'kanban' : 'agent',
+                activeTab: (s.activeTab === 'fleet' || s.activeTab === 'kanban') ? s.activeTab : 'agent',
             };
         } catch { return { open: false, width: DOCK_DEFAULT, seat: null, activeTab: 'agent' }; }
     }
@@ -448,8 +461,10 @@
 
     function dockSeatName() { return `dock-${dockRole}`; }
 
+    let fleetPollTimer = null;
+
     function setDockActiveTab(tab) {
-        const activeTab = tab === 'kanban' ? 'kanban' : 'agent';
+        const activeTab = (tab === 'fleet' || tab === 'kanban') ? tab : 'agent';
         writeDockState({ activeTab });
         if (dockTabAgentBtn) {
             dockTabAgentBtn.classList.toggle('is-active', activeTab === 'agent');
@@ -459,16 +474,45 @@
             dockTabKanbanBtn.classList.toggle('is-active', activeTab === 'kanban');
             dockTabKanbanBtn.setAttribute('aria-selected', String(activeTab === 'kanban'));
         }
+        if (dockTabFleetBtn) {
+            dockTabFleetBtn.classList.toggle('is-active', activeTab === 'fleet');
+            dockTabFleetBtn.setAttribute('aria-selected', String(activeTab === 'fleet'));
+        }
         if (activeTab === 'kanban') {
+            stopFleetPoll();
             dockFrame.classList.remove('is-visible');
             dockFrame.hidden = true;
             emptyEl.classList.remove('is-visible');
             emptyEl.hidden = true;
+            if (dockFleetEl) {
+                dockFleetEl.classList.remove('is-visible');
+                dockFleetEl.hidden = true;
+            }
             mountDockKanbanFrame();
-        } else {
+        } else if (activeTab === 'fleet') {
+            dockFrame.classList.remove('is-visible');
+            dockFrame.hidden = true;
+            emptyEl.classList.remove('is-visible');
+            emptyEl.hidden = true;
             if (dockKanbanFrame) {
                 dockKanbanFrame.classList.remove('is-visible');
                 dockKanbanFrame.hidden = true;
+            }
+            if (dockFleetEl) {
+                dockFleetEl.classList.add('is-visible');
+                dockFleetEl.hidden = false;
+            }
+            updateDockTitle();
+            startFleetPoll();
+        } else {
+            stopFleetPoll();
+            if (dockKanbanFrame) {
+                dockKanbanFrame.classList.remove('is-visible');
+                dockKanbanFrame.hidden = true;
+            }
+            if (dockFleetEl) {
+                dockFleetEl.classList.remove('is-visible');
+                dockFleetEl.hidden = true;
             }
             syncDockSeat();
         }
@@ -483,6 +527,204 @@
         dockKanbanFrame.hidden = false;
         dockKanbanFrame.classList.add('is-visible');
         dockTitleEl.textContent = 'Kanban';
+    }
+
+    function startFleetPoll() {
+        stopFleetPoll();
+        void refreshFleetTab();
+        fleetPollTimer = setInterval(() => {
+            if (readDockState().activeTab === 'fleet' && !document.hidden) {
+                void refreshFleetTab();
+            }
+        }, 60000);
+    }
+
+    function stopFleetPoll() {
+        if (fleetPollTimer) {
+            clearInterval(fleetPollTimer);
+            fleetPollTimer = null;
+        }
+    }
+
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+            stopFleetPoll();
+        } else if (dockOpen && readDockState().activeTab === 'fleet') {
+            startFleetPoll();
+        }
+    });
+
+    async function refreshFleetTab() {
+        if (!dockFleetEl) return;
+        try {
+            const [termRes, hopRes] = await Promise.all([
+                fetch('/terminals/verb/ptyListTerminals', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}'
+                }).catch(() => null),
+                fetch('/terminals/verb/getHopState', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: '{}'
+                }).catch(() => null)
+            ]);
+
+            if (!termRes || termRes.status !== 200 || !hopRes || hopRes.status !== 200) {
+                renderFleetOffline();
+                return;
+            }
+
+            const termData = await termRes.json();
+            const hopData = await hopRes.json();
+            renderFleetContent(termData, hopData);
+        } catch {
+            renderFleetOffline();
+        }
+    }
+
+    function renderFleetOffline() {
+        if (dockFleetOfflineEl) dockFleetOfflineEl.hidden = false;
+        if (dockFleetContentEl) dockFleetContentEl.hidden = true;
+        if (dockHopPlanReason) dockHopPlanReason.textContent = 'unknown: offline';
+        if (dockHopCodeReason) dockHopCodeReason.textContent = 'unknown: offline';
+        if (dockHopReviewReason) dockHopReviewReason.textContent = 'unknown: offline';
+    }
+
+    function escapeHtml(str) {
+        if (!str) return '';
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function formatTime(ts) {
+        if (!ts) return '';
+        const d = new Date(ts);
+        const hh = String(d.getHours()).padStart(2, '0');
+        const mm = String(d.getMinutes()).padStart(2, '0');
+        return `${hh}:${mm}`;
+    }
+
+    function renderFleetContent(termData, hopData) {
+        if (dockFleetOfflineEl) dockFleetOfflineEl.hidden = true;
+        if (dockFleetContentEl) dockFleetContentEl.hidden = false;
+
+        // 1. Table
+        let terminals = [];
+        if (Array.isArray(termData)) { terminals = termData; }
+        else if (termData?.terminals && Array.isArray(termData.terminals)) { terminals = termData.terminals; }
+        else if (termData?.result && Array.isArray(termData.result)) { terminals = termData.result; }
+
+        if (dockFleetTbody) {
+            dockFleetTbody.innerHTML = '';
+            if (terminals.length === 0) {
+                const tr = document.createElement('tr');
+                tr.innerHTML = '<td colspan="4" style="color:var(--text-dim); text-align:center; padding:12px;">No active seats in fleet</td>';
+                dockFleetTbody.appendChild(tr);
+            } else {
+                for (const t of terminals) {
+                    const tr = document.createElement('tr');
+                    const name = String(t?.friendlyName || t?.name || t?.terminalName || '?');
+                    const role = String(t?.role || '-');
+                    const status = String(t?.status || (t?.alive || t?.active ? 'active' : 'idle'));
+                    const planLabel = t?.currentPlanTitle || t?.planTitle || t?.topic || '';
+                    const plan = String(planLabel || (t?.planId ? String(t.planId).slice(0, 16) : '') || '-');
+
+                    tr.innerHTML = `
+                        <td>${escapeHtml(name)}</td>
+                        <td>${escapeHtml(role)}</td>
+                        <td>${escapeHtml(status)}</td>
+                        <td title="${escapeHtml(plan)}">${escapeHtml(plan)}</td>
+                    `;
+                    dockFleetTbody.appendChild(tr);
+                }
+            }
+        }
+
+        // 2. Checkboxes
+        if (dockHopPlanCb && hopData.hops) dockHopPlanCb.checked = !!hopData.hops.plan;
+        if (dockHopCodeCb && hopData.hops) dockHopCodeCb.checked = !!hopData.hops.code;
+        if (dockHopReviewCb && hopData.hops) dockHopReviewCb.checked = !!hopData.hops.review;
+
+        // 3. Reasons
+        const resolveReason = (hop) => {
+            const readiness = hopData.readiness?.[hop];
+            if (readiness) {
+                if ('unknown' in readiness) return readiness.unknown;
+                return readiness.reason || (readiness.free ? 'free' : 'busy');
+            }
+            return hopData.reasons?.[hop] || '';
+        };
+
+        if (dockHopPlanReason) dockHopPlanReason.textContent = resolveReason('plan');
+        if (dockHopCodeReason) dockHopCodeReason.textContent = resolveReason('code');
+        if (dockHopReviewReason) dockHopReviewReason.textContent = resolveReason('review');
+
+        // 4. Start / Stop button
+        if (dockHopsBtn) {
+            dockHopsBtn.textContent = hopData.started ? 'Stop' : 'Start';
+            dockHopsBtn.setAttribute('data-started', String(!!hopData.started));
+        }
+
+        // 5. Feed
+        if (dockFleetFeedEl) {
+            dockFleetFeedEl.innerHTML = '';
+            const feed = hopData.feed || [];
+            if (feed.length === 0) {
+                const emptyLine = document.createElement('div');
+                emptyLine.className = 'dock-feed-line';
+                emptyLine.textContent = 'No fleet events recorded this session.';
+                emptyLine.style.color = 'var(--text-dim)';
+                dockFleetFeedEl.appendChild(emptyLine);
+            } else {
+                for (const item of feed) {
+                    const line = document.createElement('div');
+                    line.className = 'dock-feed-line';
+                    const timeSpan = document.createElement('span');
+                    timeSpan.className = 'dock-feed-time';
+                    timeSpan.textContent = formatTime(item.timestamp);
+
+                    const glyphSpan = document.createElement('span');
+                    glyphSpan.className = 'dock-feed-glyph' + (item.kind === 'finish' ? ' is-finish' : '');
+                    glyphSpan.textContent = item.kind === 'dispatch' ? '✓' : '·';
+
+                    const textSpan = document.createElement('span');
+                    textSpan.className = 'dock-feed-text';
+                    textSpan.textContent = item.text;
+                    textSpan.title = item.text;
+
+                    line.appendChild(timeSpan);
+                    line.appendChild(glyphSpan);
+                    line.appendChild(textSpan);
+                    dockFleetFeedEl.appendChild(line);
+                }
+            }
+        }
+    }
+
+    async function toggleHopCheckbox(hop, enabled) {
+        try {
+            const res = await fetch('/terminals/verb/setHopCheckbox', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ hop, enabled })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                if (data && data.success) {
+                    void refreshFleetTab();
+                }
+            }
+        } catch (err) {
+            console.warn('[shell] Failed to toggle hop checkbox:', err);
+        }
     }
 
     function setDockOpen(open) {
@@ -508,6 +750,7 @@
             setDockActiveTab(state.activeTab);
         } else {
             document.documentElement.style.setProperty('--dock-width', '0px');
+            stopFleetPoll();
         }
     }
 
@@ -540,8 +783,13 @@
     }
 
     function updateDockTitle(name) {
-        if (readDockState().activeTab === 'kanban') {
+        const tab = readDockState().activeTab;
+        if (tab === 'kanban') {
             dockTitleEl.textContent = 'Kanban';
+            return;
+        }
+        if (tab === 'fleet') {
+            dockTitleEl.textContent = 'Fleet';
             return;
         }
         if (!name) { dockTitleEl.textContent = ''; return; }
@@ -715,6 +963,47 @@
     }
     if (dockTabKanbanBtn) {
         dockTabKanbanBtn.addEventListener('click', () => setDockActiveTab('kanban'));
+    }
+    if (dockTabFleetBtn) {
+        dockTabFleetBtn.addEventListener('click', () => setDockActiveTab('fleet'));
+    }
+
+    // Dock Fleet hop checkboxes
+    if (dockHopPlanCb) {
+        dockHopPlanCb.addEventListener('change', () => toggleHopCheckbox('plan', dockHopPlanCb.checked));
+    }
+    if (dockHopCodeCb) {
+        dockHopCodeCb.addEventListener('change', () => toggleHopCheckbox('code', dockHopCodeCb.checked));
+    }
+    if (dockHopReviewCb) {
+        dockHopReviewCb.addEventListener('change', () => toggleHopCheckbox('review', dockHopReviewCb.checked));
+    }
+
+    // Dock Fleet hop Start/Stop button
+    if (dockHopsBtn) {
+        dockHopsBtn.addEventListener('click', async () => {
+            const currentStarted = dockHopsBtn.getAttribute('data-started') === 'true';
+            const nextStarted = !currentStarted;
+            dockHopsBtn.disabled = true;
+            try {
+                const res = await fetch('/terminals/verb/setHopsStarted', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ started: nextStarted })
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data && data.success) {
+                        void refreshFleetTab();
+                    }
+                }
+            } catch (err) {
+                console.warn('[shell] Failed to toggle hop start state:', err);
+            } finally {
+                dockHopsBtn.disabled = false;
+            }
+        });
     }
 
 

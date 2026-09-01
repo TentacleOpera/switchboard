@@ -416,6 +416,145 @@
         #dock-kanban-frame { display: none; flex: 1 1 auto; border: none; width: 100%; background: var(--bg); }
         #dock-frame.is-visible,
         #dock-kanban-frame.is-visible { display: block; }
+        #dock-fleet {
+            display: none;
+            flex: 1 1 auto;
+            flex-direction: column;
+            width: 100%;
+            height: 100%;
+            overflow-y: auto;
+            overflow-x: hidden;
+            background: var(--bg);
+            padding: 12px;
+            gap: 16px;
+            font-family: var(--font);
+            font-size: 12px;
+        }
+        #dock-fleet.is-visible { display: flex; }
+        .dock-fleet-content {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            width: 100%;
+        }
+        .dock-fleet-offline {
+            color: var(--text-dim);
+            font-size: 12px;
+            padding: 24px 12px;
+            text-align: center;
+        }
+        .dock-fleet-table-wrap {
+            overflow-x: auto;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: var(--bg-elev);
+        }
+        .dock-fleet-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-family: var(--font-code);
+            font-size: 11px;
+            line-height: 1.4;
+        }
+        .dock-fleet-table th,
+        .dock-fleet-table td {
+            text-align: left;
+            padding: 6px 10px;
+            border-bottom: 1px solid var(--border);
+            white-space: nowrap;
+        }
+        .dock-fleet-table th {
+            color: var(--text-dim);
+            font-weight: 600;
+            background: var(--bg);
+        }
+        .dock-fleet-table tbody tr:last-child td {
+            border-bottom: none;
+        }
+        .dock-fleet-table td:nth-child(4) {
+            max-width: 220px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .dock-hops-section {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 12px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: var(--bg-elev);
+        }
+        .dock-hop-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            font-size: 12px;
+        }
+        .dock-hop-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            color: var(--text);
+        }
+        .dock-hop-checkbox {
+            cursor: pointer;
+            accent-color: var(--accent);
+        }
+        .dock-hop-reason {
+            font-family: var(--font-code);
+            font-size: 11px;
+            color: var(--text-dim);
+            text-align: right;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            max-width: 180px;
+        }
+        .dock-hops-button-row {
+            display: flex;
+            justify-content: flex-end;
+            margin-top: 6px;
+        }
+        .dock-feed-section {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .dock-fleet-feed {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            font-family: var(--font-code);
+            font-size: 11px;
+            color: var(--text-dim);
+            line-height: 1.4;
+        }
+        .dock-feed-line {
+            display: flex;
+            gap: 8px;
+            align-items: baseline;
+        }
+        .dock-feed-time {
+            color: var(--text-dim);
+            opacity: 0.7;
+            flex-shrink: 0;
+        }
+        .dock-feed-glyph {
+            color: var(--accent);
+            flex-shrink: 0;
+        }
+        .dock-feed-glyph.is-finish {
+            color: var(--text-dim);
+        }
+        .dock-feed-text {
+            color: var(--text);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
         #dock-empty {
             display: none;
             flex: 1 1 auto;
@@ -492,6 +631,7 @@
             <div id="dock-tabs" role="tablist" aria-label="Dock tabs">
                 <button id="dock-tab-agent" type="button" class="dock-tab-btn is-active" role="tab" aria-selected="true">Agent</button>
                 <button id="dock-tab-kanban" type="button" class="dock-tab-btn" role="tab" aria-selected="false">Kanban</button>
+                <button id="dock-tab-fleet" type="button" class="dock-tab-btn" role="tab" aria-selected="false">Fleet</button>
             </div>
             <span id="dock-title"></span>
             <button id="dock-close" type="button" class="dock-icon-btn"
@@ -505,6 +645,55 @@
                 allow="clipboard-read; clipboard-write" hidden></iframe>
         <iframe id="dock-kanban-frame" title="Kanban pane"
                 allow="clipboard-read; clipboard-write" hidden></iframe>
+        <div id="dock-fleet" class="dock-fleet-pane" hidden>
+            <div id="dock-fleet-offline" class="dock-fleet-offline" hidden>
+                No running Switchboard instance reachable for this workspace.
+            </div>
+            <div id="dock-fleet-content" class="dock-fleet-content">
+                <div class="dock-fleet-table-wrap">
+                    <table class="dock-fleet-table">
+                        <thead>
+                            <tr>
+                                <th>SEAT</th>
+                                <th>ROLE</th>
+                                <th>STATUS</th>
+                                <th>CURRENT PLAN / TASK</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dock-fleet-tbody"></tbody>
+                    </table>
+                </div>
+                <div class="dock-hops-section">
+                    <div class="dock-hop-row">
+                        <label class="dock-hop-label">
+                            <input type="checkbox" id="dock-hop-plan" class="dock-hop-checkbox" />
+                            <span>Dispatch created plans to the planning team</span>
+                        </label>
+                        <span id="dock-hop-plan-reason" class="dock-hop-reason"></span>
+                    </div>
+                    <div class="dock-hop-row">
+                        <label class="dock-hop-label">
+                            <input type="checkbox" id="dock-hop-code" class="dock-hop-checkbox" />
+                            <span>Dispatch plans to the coding team</span>
+                        </label>
+                        <span id="dock-hop-code-reason" class="dock-hop-reason"></span>
+                    </div>
+                    <div class="dock-hop-row">
+                        <label class="dock-hop-label">
+                            <input type="checkbox" id="dock-hop-review" class="dock-hop-checkbox" />
+                            <span>Dispatch coded plans to the review team</span>
+                        </label>
+                        <span id="dock-hop-review-reason" class="dock-hop-reason"></span>
+                    </div>
+                    <div class="dock-hops-button-row">
+                        <button id="dock-hops-btn" type="button" class="dock-start-btn">Start</button>
+                    </div>
+                </div>
+                <div class="dock-feed-section">
+                    <div id="dock-fleet-feed" class="dock-fleet-feed"></div>
+                </div>
+            </div>
+        </div>
     </aside>
     <div id="top-right-cluster" role="toolbar" aria-label="Quick controls"></div>
     <div id="tooltip-overlay"></div>
