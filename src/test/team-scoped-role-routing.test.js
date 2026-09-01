@@ -830,8 +830,8 @@ async function item9() {
             'delegation render must contain the coder terminal name coder-9');
         assert.ok(prompt.includes('lead-9'),
             'delegation render must contain the origin lead name lead-9');
-        assert.ok(prompt.includes('.switchboard/api-server-port.txt'),
-            'delegation render must contain the port reference');
+        assert.ok(prompt.includes('ptySendPrompt'),
+            'delegation render must contain the ptySendPrompt protocol');
         // Conditional verifyStep covers both paths.
         assert.ok(prompt.includes('If you applied fixes directly'),
             'delegation render must contain the self-fix verifyStep branch');

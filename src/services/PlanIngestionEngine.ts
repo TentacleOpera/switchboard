@@ -1541,8 +1541,8 @@ export class PlanIngestionEngine {
                 const nudgeLines: string[] = [
                     `[switchboard:turn-end] Queue stall (seat pacing) — you have gone idle holding card '${heldCard.planId}' with ${queueCards.length} card(s) staged in the dispatch queue.`,
                     `  You have been silent for ${silentFor}s.`,
-                    `  When you finish the card, POST /kanban/queue/done with {"from":"${pacerSeat}"} against the port in .switchboard/api-server-port.txt.`,
-                    `  If you cannot complete it, call the same endpoint with {"from":"${pacerSeat}","outcome":"failed"} and a one-line reason.`,
+                    `  When you finish the card, run \`node "<cliPath>" done --from "${pacerSeat}"\` (or \`switchboard done --from "${pacerSeat}"\`).`,
+                    `  If you cannot complete it, run \`node "<cliPath>" done --from "${pacerSeat}" --outcome failed\` with a one-line reason.`,
                 ];
                 const nudgeBody = nudgeLines.join('\n');
 
@@ -1776,7 +1776,7 @@ export class PlanIngestionEngine {
                 `[switchboard:turn-end] Queue stall — you have gone idle with ${queueCards.length} card(s) staged in the dispatch queue.`,
                 `  Next card: ${nextCard.planFile} (column ${nextCard.kanbanColumn})`,
                 `  You have been silent for ${silentFor}s.`,
-                `  Make the call: POST /kanban/queue/next with {"from":"${watch.headTerminal}"} against the port in .switchboard/api-server-port.txt.`,
+                `  Make the call: run \`node "<cliPath>" next --from "${watch.headTerminal}"\` (or \`switchboard next --from "${watch.headTerminal}"\`).`,
             ];
             const body = lines.join('\n');
 

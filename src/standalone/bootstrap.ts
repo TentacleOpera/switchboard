@@ -1191,6 +1191,11 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     (kanbanProvider as any)._hostSeams = headlessSeams;
     (kanbanProvider as any)._broadcaster = headlessBroadcaster;
     (kanbanProvider as any)._currentWorkspaceRoot = workspaceRoot;
+    const resolvedCliPath = fs.existsSync(path.join(__dirname, 'cli.js'))
+        ? path.join(__dirname, 'cli.js')
+        : (process.argv[1] && fs.existsSync(process.argv[1]) ? process.argv[1] : path.join(__dirname, 'cli.js'));
+    (kanbanProvider as any)._cliPath = resolvedCliPath;
+    (taskViewerProvider as any)._cliPath = resolvedCliPath;
 
     // Restore the active project filter from the DB config at boot.
     //

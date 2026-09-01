@@ -286,6 +286,8 @@ export interface PromptBuilderOptions {
     gitPushStrategy?: 'noPush' | 'pushWhenDone' | 'notSpecified';
     /** When true, the coder/lead/intern prompt includes a Phone-a-Friend directive telling the agent to POST a notification to the LocalApiServer when the batch is done. */
     phoneAFriendEnabled?: boolean;
+    /** Plumbed path to bundled standalone/cli.js for CLI callback directives. */
+    cliPath?: string;
     /** The LocalApiServer port, interpolated into the Phone-a-Friend directive's curl URL. Plumbed at build time (Option A) so worktree CWDs don't need to read the port file. */
     apiPort?: number;
     /** Terminal name reported by the Phone-a-Friend directive. Falls back to the SWITCHBOARD_TERMINAL env var or 'unknown'. */
@@ -830,13 +832,16 @@ function freshDispatchId(): string {
  * Liveness + port injection for every dispatched agent. An agent that received its
  * prompt FROM Switchboard has already proved the server is up, so the port-discovery
  * and `curl /health` bootstrap the skill files describe is pure waste for it. The
- * clause covers this prompt as well as the skill files: several shared directives
- * (the completion-report POST, the reviewer escalation) hardcode a
- * `.switchboard/api-server-port.txt` reference for the external/no-port case, and the
- * injected port supersedes it rather than being read alongside it.
+/**
+ * Emitted when Switchboard dispatches an agent while the LocalApiServer is live.
+ * Declares the server status and URL so the agent does not attempt port discovery.
  */
 export const SWITCHBOARD_LIVENESS_DIRECTIVE = (port: number) =>
-  `SWITCHBOARD STATUS: Live (port ${port}). You were dispatched by Switchboard — the LocalApiServer is running at http://127.0.0.1:${port}. Skip any port-discovery or health-check steps described in skill files; those are for external agents connecting independently. Use http://127.0.0.1:${port} for any API call — wherever an instruction in this prompt says "against the port in .switchboard/api-server-port.txt", use http://127.0.0.1:${port} and do NOT read that file.`;
+  `SWITCHBOARD STATUS: Live (port ${port}). You were dispatched by Switchboard — the LocalApiServer is running at http://127.0.0.1:${port}. Skip any port-discovery or health-check steps described in skill files; those are for external agents connecting independently. Use http://127.0.0.1:${port} for any direct API calls.`;
+
+export const SWITCHBOARD_CLI_DIRECTIVE = (cliPath: string) =>
+  `SWITCHBOARD CLI: run \`node "${cliPath}" <command>\` for board callbacks. ` +
+  `Do not build HTTP requests by hand.`;
 
 /**
  * `originTerminal` is OMITTED when the builder does not know it, never filled with a
@@ -1088,7 +1093,7 @@ export const STAGGERED_IMPLEMENTATION_DIRECTIVE = `STAGGERED IMPLEMENTATION: Aft
 // treat this as prose, move it before the override application, or remove the post-override
 // placement — the consumers above will break silently (cards never clear, oversight
 // passes time out on work that succeeded).
-export const CODING_COMPLETION_REPORT_DIRECTIVE = `COMPLETION REPORT: When you have finished implementing ALL parts of the plan, POST /kanban/queue/done with {"from":"<your terminal name>"} against the port in .switchboard/api-server-port.txt. This signals task completion to the kanban board — the system clears your card's activity light and notifies your lead. Do NOT post after finishing individual parts — only when ALL work is complete. Also append a brief summary (3-5 sentences) to the END of the original plan file for the record. Do NOT skip the POST.`;
+export const CODING_COMPLETION_REPORT_DIRECTIVE = `COMPLETION REPORT: When you have finished implementing ALL parts of the plan, run \`node "<cliPath>" done --from "<your terminal name>"\` (or \`switchboard done --from "<your terminal name>"\`). This signals task completion to the kanban board — the system clears your card's activity light and notifies your lead. Do NOT report after finishing individual parts — only when ALL work is complete. Also append a brief summary (3-5 sentences) to the END of the original plan file for the record. Do NOT skip the completion report.`;
 
 export const GATE_WIRING_AUDIT_STEP = `Gate-wiring audit: for every automated check named in the plan's
    \`### Automated\` verification subsection, verify it is actually invoked by CI
@@ -1155,9 +1160,9 @@ export const DELEGATION_ANTI_LEAKAGE_STEP = `ANTI-LEAKAGE RULE (delegation) — 
 // scale would lose that distinction while inviting translation errors.
 export const DEFERRED_FINDINGS_SECTION_INSTRUCTION = `Append a \`## Deferred Findings\` section to the plan file listing every finding you chose NOT to fix now, one per line, each carrying its severity (CRITICAL/MAJOR/NIT) and a \`file:line\` reference. If nothing was deferred, write \`None\` under the heading — do not omit the section, so a missing section always means "not answered" and never "nothing found".`;
 
-export const COMPLETION_STEP_FULL = `COMPLETION REPORT: When you have finished ALL parts of the review, POST /kanban/queue/done with {"from":"<your terminal name>"} against the port in .switchboard/api-server-port.txt. This signals task completion to the kanban board — the system clears your card's activity light and notifies your lead. Do NOT post after finishing individual parts — only when ALL work is complete. Also update the original plan file with fixed items, files changed, validation results, and remaining risks. ${DEFERRED_FINDINGS_SECTION_INSTRUCTION} Do NOT truncate, summarize, or delete existing implementation steps. Do NOT skip the POST.`;
+export const COMPLETION_STEP_FULL = `COMPLETION REPORT: When you have finished ALL parts of the review, run \`node "<cliPath>" done --from "<your terminal name>"\` (or \`switchboard done --from "<your terminal name>"\`). This signals task completion to the kanban board — the system clears your card's activity light and notifies your lead. Do NOT report after finishing individual parts — only when ALL work is complete. Also update the original plan file with fixed items, files changed, validation results, and remaining risks. ${DEFERRED_FINDINGS_SECTION_INSTRUCTION} Do NOT truncate, summarize, or delete existing implementation steps. Do NOT skip the completion report.`;
 
-export const COMPLETION_STEP_COMPACT = `COMPLETION REPORT: When you have finished ALL parts of the review, POST /kanban/queue/done with {"from":"<your terminal name>"} against the port in .switchboard/api-server-port.txt. This signals task completion to the kanban board — the system clears your card's activity light and notifies your lead. Do NOT post after finishing individual parts — only when ALL work is complete. Also update the original plan file by appending a brief summary (≤ 5 sentences) under \`## Review Findings\` — list files changed, validation results, and remaining risks. The ≤ 5 sentence budget applies to the \`## Review Findings\` prose summary ONLY and does NOT bound the deferred-findings list. ${DEFERRED_FINDINGS_SECTION_INSTRUCTION} Do NOT reproduce the full implementation steps or copy large blocks of the original plan. Do NOT skip the POST.`;
+export const COMPLETION_STEP_COMPACT = `COMPLETION REPORT: When you have finished ALL parts of the review, run \`node "<cliPath>" done --from "<your terminal name>"\` (or \`switchboard done --from "<your terminal name>"\`). This signals task completion to the kanban board — the system clears your card's activity light and notifies your lead. Do NOT report after finishing individual parts — only when ALL work is complete. Also update the original plan file by appending a brief summary (≤ 5 sentences) under \`## Review Findings\` — list files changed, validation results, and remaining risks. The ≤ 5 sentence budget applies to the \`## Review Findings\` prose summary ONLY and does NOT bound the deferred-findings list. ${DEFERRED_FINDINGS_SECTION_INSTRUCTION} Do NOT reproduce the full implementation steps or copy large blocks of the original plan. Do NOT skip the completion report.`;
 
 /**
  * Idempotent completion-directive guard. Appends CODING_COMPLETION_REPORT_DIRECTIVE to
@@ -1837,6 +1842,9 @@ export function buildKanbanBatchPrompt(
     const livenessBlock = (options?.apiPort && options?.apiPort > 0)
         ? SWITCHBOARD_LIVENESS_DIRECTIVE(options.apiPort)
         : '';
+    const cliBlock = (options?.cliPath)
+        ? SWITCHBOARD_CLI_DIRECTIVE(options.cliPath)
+        : '';
     // Parent-side delegate notice — emitted only when the host co-launched
     // delegate children for this terminal. The children's friendlyNames are
     // interpolated at build time. No port, token, or join protocol — just a
@@ -1871,7 +1879,7 @@ export function buildKanbanBatchPrompt(
     // touching each role branch — same pattern as the §11 remote-mode block.
     const prdBlock = buildPrdReferenceBlock(options, role);
     const dsReferencesBlock = buildDesignSystemReferencesBlockFromRefs(options?.designSystemReferences, role);
-    const dispatchPrefixCore = [dispatchContextBlock, worktreeBlock, livenessBlock, remoteModeBlock, prdBlock, dsReferencesBlock].filter(Boolean).join('\n\n');
+    const dispatchPrefixCore = [dispatchContextBlock, worktreeBlock, livenessBlock, cliBlock, remoteModeBlock, prdBlock, dsReferencesBlock].filter(Boolean).join('\n\n');
     const dispatchContextPrefix = dispatchPrefixCore ? `${dispatchPrefixCore}\n\n` : '';
     // §3 — Feature directive is separated from planList so it can be placed
     // before the PLANS TO PROCESS heading rather than under it.
@@ -2026,11 +2034,9 @@ UNATTENDED IMPROVER CONTRACT:
     if (role === 'reviewer') {
         const { reviewerDelegationMode, reviewerCoderTerminal, reviewerOriginLead, reviewerPreCheckPassed, reviewerPhoneAFriendPassed } = options ?? {};
         const isDelegationActive = Boolean(reviewerDelegationMode && reviewerCoderTerminal && reviewerOriginLead);
-        const portRef = (options?.apiPort && options?.apiPort > 0)
-            ? `http://127.0.0.1:${options.apiPort}`
-            : 'the port in .switchboard/api-server-port.txt';
+        const cliRef = options?.cliPath ? `node "${options.cliPath}"` : 'switchboard';
         const fixStep = isDelegationActive
-            ? `For valid CRITICAL/MAJOR findings: if your diagnosed fix set totals under approximately 100 lines of change, apply the fixes directly yourself. If the set is larger, broad, or parallelisable, send fix instructions to your coder at ${reviewerCoderTerminal} via POST /terminals/verb/ptySendPrompt with {"name":"${reviewerCoderTerminal}","data":"<fix instructions>","clearBeforePrompt":false,"seatBlock":false} against ${portRef}. For each delegated finding: name the file and the issue. For mechanical fixes (compile errors, type issues, missing imports), specify the exact fix — the compiler is a shared oracle. For judgment calls (design decisions, which artifact is wrong, test policy), describe the problem and your reasoning — let the coder choose the fix. You will re-review their diff regardless. Tell the coder to run verification checks (typecheck/tests as applicable) and include results in their report. If the fix set grows beyond ~100 lines during implementation, switch to delegating the remaining fixes to your coder.`
+            ? `For valid CRITICAL/MAJOR findings: if your diagnosed fix set totals under approximately 100 lines of change, apply the fixes directly yourself. If the set is larger, broad, or parallelisable, send fix instructions to your coder at ${reviewerCoderTerminal} via ${cliRef} verb ptySendPrompt '{"name":"${reviewerCoderTerminal}","data":"<fix instructions>","clearBeforePrompt":false,"seatBlock":false}'. For each delegated finding: name the file and the issue. For mechanical fixes (compile errors, type issues, missing imports), specify the exact fix — the compiler is a shared oracle. For judgment calls (design decisions, which artifact is wrong, test policy), describe the problem and your reasoning — let the coder choose the fix. You will re-review their diff regardless. Tell the coder to run verification checks (typecheck/tests as applicable) and include results in their report. If the fix set grows beyond ~100 lines during implementation, switch to delegating the remaining fixes to your coder.`
             : `Apply code fixes for valid CRITICAL/MAJOR findings.`;
         const verifyStep = isDelegationActive
             ? `If you applied fixes directly, run verification checks (typecheck/tests as applicable) and include results. If you delegated to your coder, after the coder reports back, re-review ONLY the coder's git diff (git diff HEAD~<coder's commit count> or git log --oneline -5 to find the coder's commits). Do NOT re-review the entire codebase — scope your re-review to the changed lines only. The coder may have chosen a different fix direction than you would have for judgment calls — evaluate whether the chosen fix resolves the finding, not whether it matches what you would have done. If issues remain in the diff, send another round of fix instructions. Loop until satisfied. If after 5 rounds the same critical issues persist, stop — report to ${reviewerOriginLead} via ptySendPrompt that the plan is badly scoped and a new plan is needed for the remaining work. When review passes, report to ${reviewerOriginLead} via ptySendPrompt that the feature passed review, then update the plan file with your review summary.`
@@ -2064,7 +2070,7 @@ UNATTENDED IMPROVER CONTRACT:
             + `\n\nCRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced synthesis, ${isDelegationActive ? 'the direct fixes or fix instructions to your coder, as applicable' : 'the code fixes'}, and the plan update all in one continuous response.`
             + (reviewerPreCheckPassed ? `\n\nThis plan has passed a mechanical pre-check (compile + diff coverage)${reviewerPhoneAFriendPassed ? ' and a phone-a-friend sanity review' : ''}. Focus your review on deep analysis: call paths, architectural concerns, judgment calls. Do not re-verify compilation.` : '')
             + `\n\nGOAL VERDICT (mandatory — your review is incomplete without it): Assess the change against the plan's stated **goal**, not only its listed steps. State whether the goal is achieved. If the goal is a removal or relocation, name where the thing now is and whether it is gone from where the goal said it should not be. If you changed the destination or approach the plan specified, say so explicitly.`
-            + `\n\nESCALATION ON DESTINATION CHANGE: If you changed where the work lands or reversed the plan's stated goal, you must NOT proceed as if that decision was yours to make. Append a \`### Review Deviations\` section to the end of the plan file — inert prose for the author, never a directive to a future agent — naming what you changed, why the original destination was a blocker, and what the author needs to decide. Then return the card to the author's column via POST /kanban/move with {"planId":"<the plan's id>","targetColumn":"PLAN REVIEWED"} against the port in .switchboard/api-server-port.txt. This is the sanctioned escalation path — the same API a human's click takes. Implementation detail is yours to change freely; a destination or goal named in the plan's Goal or Goal Invariants is the author's decision, however right you are about the blocker.`;
+            + `\n\nESCALATION ON DESTINATION CHANGE: If you changed where the work lands or reversed the plan's stated goal, you must NOT proceed as if that decision was yours to make. Append a \`### Review Deviations\` section to the end of the plan file — inert prose for the author, never a directive to a future agent — naming what you changed, why the original destination was a blocker, and what the author needs to decide. Then return the card to the author's column via ${cliRef} verb moveCard '{"planId":"<the plan\\'s id>","targetColumn":"PLAN REVIEWED"}' (or the kanban_operations skill). This is the sanctioned escalation path — the same API a human's click takes. Implementation detail is yours to change freely; a destination or goal named in the plan's Goal or Goal Invariants is the author's decision, however right you are about the blocker.`;
 
         const planTarget = plans.length <= 1 ? 'this plan' : 'each listed plan';
         // §7 — Merged reviewer framing: intro + short directive in one block.

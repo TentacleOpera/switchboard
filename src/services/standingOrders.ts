@@ -678,9 +678,9 @@ export async function installReviewerCallbackOrder(
     const id = REVIEW_CALLBACK_ID_PREFIX + coderName;
     const instruction =
         `${reviewerName} is your reviewer for this review cycle. When you complete fix instructions from the reviewer, `
-        + `report back to it — POST /terminals/verb/ptySendPrompt with `
-        + `{"name":"${reviewerName}","data":"<your report>","clearBeforePrompt":false} against the port in `
-        + `.switchboard/api-server-port.txt — naming what you changed and the verification results. Do not wait to be asked.`;
+        + `report back to it — node "<cliPath>" verb ptySendPrompt `
+        + `'{"name":"${reviewerName}","data":"<your report>","clearBeforePrompt":false}' (or switchboard verb ptySendPrompt) `
+        + `— naming what you changed and the verification results. Do not wait to be asked.`;
     await mutateStandingOrders(db, async (orders) => {
         const filtered = orders.filter(o => o.id !== id);
         filtered.push({

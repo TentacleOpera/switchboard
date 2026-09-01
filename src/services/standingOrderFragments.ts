@@ -51,14 +51,12 @@ export function buildMemberCompletionFragment(ctx: Pick<StandingOrderComposition
     return 'When you finish a task, route your completion report based on where the work came from.\n'
         + 'These routes are EXCLUSIVE: the first one that succeeds ends your report. Do NOT also take\n'
         + 'the other routes — reporting twice sends duplicate prompts to your lead.\n\n'
-        + '1. If you have a PLAN_ID from your dispatch, call GET /kanban/plan?planId=<your planId>\n'
-        + '   against the port in .switchboard/api-server-port.txt.\n'
+        + '1. If you have a PLAN_ID from your dispatch, check the plan\'s column.\n'
         + '   - If the response shows kanbanColumn is "LEAD CODED", "CODER CODED", or "INTERN CODED",\n'
-        + '     POST /kanban/queue/done with {"from":"<your terminal name>"}.\n'
+        + '     run node "<cliPath>" done --from "<your terminal name>" (or switchboard done --from "<your terminal name>").\n'
         + '     The system will clear your terminal and dispatch the next staged card.\n'
         + '     A response of {"dispatched":null,"reason":"queue empty"} means the run is over — say so and stop.\n'
-        + '     If you cannot complete it, POST /kanban/queue/done with\n'
-        + '     {"from":"<your terminal name>","outcome":"failed"} and a one-line reason.\n'
+        + '     If you cannot complete it, run node "<cliPath>" done --from "<your terminal name>" --outcome failed with a one-line reason.\n'
         + '   - If the response shows any other column, report to your head (step 3).\n\n'
         + '2. If you do not have a PLAN_ID (ad-hoc prompt, file-based queue item),\n'
         + '   POST /terminals/teams/' + ctx.teamId + '/queue/done with {"from":"<your terminal name>"}.\n'
@@ -66,8 +64,7 @@ export function buildMemberCompletionFragment(ctx: Pick<StandingOrderComposition
         + '   and dispatch the next queued item.\n'
         + '   If the POST fails, report to your head directly (step 3).\n\n'
         + '3. Fallback (only when steps 1 and 2 did not apply or failed): report to your head ' + ctx.headName + '\n'
-        + '   via POST /terminals/verb/ptySendPrompt with\n'
-        + '   {"name":"' + ctx.headName + '","data":"<your report>","clearBeforePrompt":false,"machineOrigin":true} —\n'
+        + '   via node "<cliPath>" verb ptySendPrompt \'{"name":"' + ctx.headName + '","data":"<your report>","clearBeforePrompt":false,"machineOrigin":true}\' —\n'
         + '   naming what you changed and what to review. Do not wait to be asked.\n\n'
         + 'Report YOUR task, and only yours. Do not infer that a feature is finished from board\n'
         + 'position: a column advances when work STARTS, not when it finishes, so "every subtask is\n'
@@ -78,8 +75,7 @@ export function buildMemberCompletionFragment(ctx: Pick<StandingOrderComposition
 export function buildHeadCompletionFragment(): string {
     return 'CLOSE OUT EVERY SUBTASK. When a seat reports a subtask finished and you are satisfied '
         + 'with it, POST /kanban/task/complete with {"from":"<your terminal name>","planId":'
-        + '"<that SUBTASK\'s planId>","workspaceRoot":"<your cwd>"} against the port in '
-        + '.switchboard/api-server-port.txt. Post per subtask, with that subtask\'s planId — never '
+        + '"<that SUBTASK\'s planId>","workspaceRoot":"<your cwd>"}. Post per subtask, with that subtask\'s planId — never '
         + 'the feature\'s. Accepting and rejecting are not two different endings: you reject by '
         + 'sending a fix round first, then you post when the subtask is done. Until you post, that '
         + 'seat is not cleared and you cannot be handed the next subtask. Your POST is the only fact '
@@ -88,8 +84,7 @@ export function buildHeadCompletionFragment(): string {
 
 export function buildHeadNextFragment(ctx: Pick<StandingOrderCompositionContext, 'teamId'>): string {
     return 'Then take the next item, routed by where your own work came from:\n'
-        + '- If you hold a card dispatched from the board, POST /kanban/queue/done with '
-        + '{"from":"<your terminal name>"} against the same port. A response of '
+        + '- If you hold a card dispatched from the board, run node "<cliPath>" done --from "<your terminal name>" (or switchboard done --from "<your terminal name>"). A response of '
         + '{"dispatched":null,"reason":"queue empty"} means the run is over — say so and stop.\n'
         + '- Otherwise POST /terminals/teams/' + ctx.teamId + '/queue/done with '
         + '{"from":"<your terminal name>"} to take the next queued item. If there are no more '
@@ -124,19 +119,19 @@ const REVIEW_HEAD_WORK =
     + 'reviewers append their findings to the plan files and report back. When all reviewers report, triage findings into '
     + 'four categories: (1) needs no fixing, (2) fixes needed, (3) follow-ups needed for deferred issues or remaining '
     + 'risks, (4) did not meet intent. Apportion categories 2 and 3 back to the reviewer that reviewed them '
-    + '(file-disjoint where possible) via POST /terminals/verb/ptySendPrompt with {"name":"<reviewer seat>","data":'
+    + '(file-disjoint where possible) via node "<cliPath>" verb ptySendPrompt \'{"name":"<reviewer seat>","data":'
     + '"<fix instructions — name each file, the issue, and the fix needed. Tell the reviewer to run verification checks '
-    + '(typecheck/tests as applicable) and include results in their report.>","clearBeforePrompt":false,"seatBlock":false} '
-    + 'against the port in .switchboard/api-server-port.txt. Do not fix categories 1 or 4. Write one markdown artifact '
+    + '(typecheck/tests as applicable) and include results in their report.>","clearBeforePrompt":false,"seatBlock":false}\'. '
+    + 'Do not fix categories 1 or 4. Write one markdown artifact '
     + 'to the plans folder (.switchboard/plans/) covering deferred items, remaining risks, and intent failures.';
 
 export const GLOBAL_QUEUE_COMPLETION_FRAGMENT_BODY =
-    'When you finish the card you were dispatched, POST /kanban/queue/done with '
-    + '{"from":"<your terminal name>"} against the port in .switchboard/api-server-port.txt. '
-    + 'Do not wait to be asked; there is no head to report to. If you cannot complete it, call the same endpoint with '
-    + '{"from":"<your terminal name>","outcome":"failed"} and a one-line reason. Do not attempt work above your tier '
+    'When you finish the card you were dispatched, run node "<cliPath>" done --from "<your terminal name>" '
+    + '(or switchboard done --from "<your terminal name>"). '
+    + 'Do not wait to be asked; there is no head to report to. If you cannot complete it, call the same command with '
+    + '--outcome failed and a one-line reason. Do not attempt work above your tier '
     + 'and do not report success you cannot evidence. A response of {"dispatched":null,"reason":"queue empty"} means '
-    + 'the run is over — say so and stop. Do not call POST /kanban/queue/next, and do not move cards.';
+    + 'the run is over — say so and stop. Do not call next, and do not move cards.';
 
 export const STANDING_ORDER_FRAGMENTS: ReadonlyArray<StandingOrderFragment> = [
     { id: STANDING_ORDER_FRAGMENT_IDS.memberCompletion, name: 'Route member completion', order: 10, obligation: 'completion', applies: ctx => ctx.inTeam && !ctx.isHead && !ctx.externalHead, body: buildMemberCompletionFragment },

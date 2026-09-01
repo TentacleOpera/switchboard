@@ -9,6 +9,7 @@ import { spawn } from 'child_process';
 import type { HeadlessSwitchboardOptions, HeadlessSwitchboardInstance } from './bootstrap';
 import { DEFAULT_DISPLAY_HOSTNAME, isLoopbackHostname } from '../utils/loopbackHostname';
 import { detectTailnetAddress, resolveMagicDnsNames } from '../utils/tailnetDetect';
+import { isPortFree, resolvePreferredPort, PORT_BASE, PORT_SPAN } from '../utils/portResolver';
 
 function usage(): string {
     return `Usage: npx switchboard                        (interactive front-door menu — default)
@@ -17,6 +18,8 @@ function usage(): string {
        npx switchboard plans [column] [--project <name>] [--search <query>] [--limit N] [--offset N] [--json]
        npx switchboard ready [--project <name>] [--json]
        npx switchboard dispatch <planId|prefix> [column] [--project <name>] [--json]
+       npx switchboard done --from <seat> [--plan <planId>] [--outcome failed] [--json]
+       npx switchboard next --from <seat> [--json]
        npx switchboard clear <terminal|--all> [--json]
        npx switchboard fleet [--json]
        npx switchboard verb <verbName> [jsonPayload] [--json]
@@ -51,6 +54,8 @@ Board commands (drive the board from a terminal):
                       to auto (complexity routing). Exit codes:
                         0 dispatched  1 offline  2 nothing ready  3 refused
                         4 auth failed  5 bad input  6 unavailable
+  done                Signal task completion for a seat (pops next card if queued).
+  next                Pull the next card from the queue for a seat.
   clear               Clear a terminal seat (or --all seats).
   fleet               Show live terminal seats, roles, and assigned plans.
   verb                Call any protocol verb directly: switchboard verb <name> <json>
@@ -415,11 +420,29 @@ async function getHealthJson(port: number, hostname = '127.0.0.1', timeoutMs = 2
 }
 
 async function findRunningInstance(workspaceRoot: string): Promise<number | null> {
+    const targetRoot = path.resolve(workspaceRoot);
+    for (let i = 0; i < PORT_SPAN; i++) {
+        const port = PORT_BASE + i;
+        try {
+            const json = await getHealthJson(port, '127.0.0.1', 500);
+            if (Array.isArray(json.roots)) {
+                const matches = json.roots.some(r => typeof r === 'string' && path.resolve(r) === targetRoot);
+                if (matches) {
+                    return port;
+                }
+            }
+        } catch {
+            // Port not listening, not switchboard, or timed out
+        }
+    }
+
     const portFile = path.join(workspaceRoot, '.switchboard', 'api-server-port.txt');
-    if (!fs.existsSync(portFile)) return null;
-    const port = parseInt(fs.readFileSync(portFile, 'utf8').trim(), 10);
-    if (isNaN(port)) return null;
-    if (await probeHealth(port)) return port;
+    if (fs.existsSync(portFile)) {
+        const port = parseInt(fs.readFileSync(portFile, 'utf8').trim(), 10);
+        if (!isNaN(port)) {
+            if (await probeHealth(port)) return port;
+        }
+    }
     return null;
 }
 
@@ -436,22 +459,6 @@ async function openBrowser(url: string): Promise<void> {
     } catch (err) {
         console.error(`[switchboard] Failed to open browser: ${err}`);
     }
-}
-
-/**
- * Can we bind `port` on loopback right now?
- *
- * Used to choose the listen port before `startHeadlessSwitchboard` builds anything,
- * so a busy default port costs one throwaway socket rather than a half-booted
- * instance that has to be abandoned mid-flight.
- */
-function isPortFree(port: number): Promise<boolean> {
-    return new Promise((resolve) => {
-        const probe = net.createServer();
-        probe.once('error', () => resolve(false));
-        probe.once('listening', () => probe.close(() => resolve(true)));
-        try { probe.listen(port, '127.0.0.1'); } catch { resolve(false); }
-    });
 }
 
 async function waitForHealth(port: number, timeoutMs = 10000): Promise<void> {
@@ -1454,6 +1461,122 @@ async function cmdVerb(workspaceRoot: string, argv: string[]): Promise<void> {
     }
     console.error(`[switchboard] verb '${verbName}' returned ${res.status}: ${res.body}`);
     exitFlushed(1);
+}
+
+/**
+ * `switchboard done --from <seat> [--plan <planId>] [--outcome failed] [--json]`
+ *
+ * Signal task completion for a seat via POST /kanban/queue/done.
+ * The endpoint clears the card's activity light, fires the turn-end notification,
+ * and pops the next card if queued.
+ */
+async function cmdDone(workspaceRoot: string, argv: string[]): Promise<void> {
+    const jsonFlag = argv.includes('--json');
+    if (jsonFlag) { routeLogsToStderr(); }
+
+    let from: string | undefined;
+    let planId: string | undefined;
+    let outcome: string | undefined;
+
+    for (let i = 0; i < argv.length; i++) {
+        const a = argv[i];
+        if (a === '--json') { continue; }
+        if (a === '--from') { from = argv[++i]; continue; }
+        if (a.startsWith('--from=')) { from = a.slice('--from='.length); continue; }
+        if (a === '--plan') { planId = argv[++i]; continue; }
+        if (a.startsWith('--plan=')) { planId = a.slice('--plan='.length); continue; }
+        if (a === '--outcome') { outcome = argv[++i]; continue; }
+        if (a.startsWith('--outcome=')) { outcome = a.slice('--outcome='.length); continue; }
+    }
+
+    if (!from) {
+        if (jsonFlag) { emitJson({ success: false, error: 'Missing required argument: --from <seat>' }); }
+        else { console.error('Usage: npx switchboard done --from <seat> [--plan <planId>] [--outcome failed] [--json]'); }
+        exitFlushed(5);
+    }
+
+    const port = await findRunningInstance(workspaceRoot);
+    if (port === null) {
+        if (jsonFlag) { emitJson({ success: false, error: 'No running Switchboard instance' }); }
+        else { console.error('[switchboard] No running Switchboard instance for this workspace.'); }
+        exitFlushed(1);
+    }
+
+    const body: Record<string, any> = {
+        workspaceRoot,
+        from,
+        outcome: (outcome?.toLowerCase() === 'failed') ? 'failed' : 'finished',
+    };
+    if (planId) {
+        body.planId = planId;
+    }
+
+    const res = await apiPost(port, '/kanban/queue/done', workspaceRoot, body);
+    const code = dispatchExitCode(res.status);
+    const data = res.json();
+    if (jsonFlag) {
+        emitJson({ success: code === 0, status: res.status, exitCode: code, result: data });
+    } else if (code === 0) {
+        console.log(`[switchboard] Done signal recorded for seat '${from}'.`);
+        if (data?.dispatched) {
+            console.log(`  Next card popped: ${data.dispatched.title || data.dispatched.planId || 'dispatched'}`);
+        }
+    } else {
+        const errMsg = String(data?.error || res.body || 'done failed');
+        console.error(`[switchboard] ${errMsg}`);
+    }
+    exitFlushed(code);
+}
+
+/**
+ * `switchboard next --from <seat> [--json]`
+ *
+ * Pull the next card from the queue for a seat via POST /kanban/queue/next.
+ */
+async function cmdNext(workspaceRoot: string, argv: string[]): Promise<void> {
+    const jsonFlag = argv.includes('--json');
+    if (jsonFlag) { routeLogsToStderr(); }
+
+    let from: string | undefined;
+    for (let i = 0; i < argv.length; i++) {
+        const a = argv[i];
+        if (a === '--json') { continue; }
+        if (a === '--from') { from = argv[++i]; continue; }
+        if (a.startsWith('--from=')) { from = a.slice('--from='.length); continue; }
+    }
+
+    if (!from) {
+        if (jsonFlag) { emitJson({ success: false, error: 'Missing required argument: --from <seat>' }); }
+        else { console.error('Usage: npx switchboard next --from <seat> [--json]'); }
+        exitFlushed(5);
+    }
+
+    const port = await findRunningInstance(workspaceRoot);
+    if (port === null) {
+        if (jsonFlag) { emitJson({ success: false, error: 'No running Switchboard instance' }); }
+        else { console.error('[switchboard] No running Switchboard instance for this workspace.'); }
+        exitFlushed(1);
+    }
+
+    const res = await apiPost(port, '/kanban/queue/next', workspaceRoot, {
+        workspaceRoot,
+        from,
+    });
+    const code = dispatchExitCode(res.status);
+    const data = res.json();
+    if (jsonFlag) {
+        emitJson({ success: code === 0, status: res.status, exitCode: code, result: data });
+    } else if (code === 0) {
+        if (data?.dispatched) {
+            console.log(`[switchboard] Next card for '${from}': ${data.dispatched.title || data.dispatched.planId}`);
+        } else {
+            console.log(`[switchboard] Queue empty for seat '${from}'.`);
+        }
+    } else {
+        const errMsg = String(data?.error || res.body || 'next failed');
+        console.error(`[switchboard] ${errMsg}`);
+    }
+    exitFlushed(code);
 }
 
 /**
@@ -2617,6 +2740,16 @@ async function main() {
         await cmdDispatch(workspaceRoot, process.argv.slice(3));
     }
 
+    // ── done ───────────────────────────────────────────────────────
+    if (process.argv[2] === 'done') {
+        await cmdDone(workspaceRoot, process.argv.slice(3));
+    }
+
+    // ── next ───────────────────────────────────────────────────────
+    if (process.argv[2] === 'next') {
+        await cmdNext(workspaceRoot, process.argv.slice(3));
+    }
+
     // ── clear ─────────────────────────────────────────────────────
     if (process.argv[2] === 'clear') {
         await cmdClear(workspaceRoot, process.argv.slice(3));
@@ -2804,8 +2937,14 @@ async function main() {
     // fallback to exactly one boot.
     let listenPort = args.port;
     if (typeof listenPort === 'number' && listenPort > 0 && !(await isPortFree(listenPort))) {
-        console.warn(`[switchboard] Port ${listenPort} is in use, falling back to an ephemeral port.`);
-        listenPort = 0;
+        const resolved = await resolvePreferredPort();
+        if (resolved !== null) {
+            console.log(`[switchboard] Port ${listenPort} is in use, using free port ${resolved}.`);
+            listenPort = resolved;
+        } else {
+            console.warn(`[switchboard] Ports ${PORT_BASE}-${PORT_BASE + PORT_SPAN - 1} are in use, falling back to an ephemeral port (discovery will require api-server-port.txt).`);
+            listenPort = 0;
+        }
     }
     // Loaded here rather than at module scope: every non-serving subcommand
     // (export, import, token, secrets, status, stop, logs) would otherwise pull in

@@ -66,9 +66,9 @@ import { GIT_SAFETY_DIRECTIVE } from './agentPromptBuilder';
  * must be named explicitly here.
  */
 export const AGENT_GROUP_CALLBACK_INSTRUCTION =
-    '{child} is your head agent. When you finish a task, report to it — POST /terminals/verb/ptySendPrompt with '
-    + '{"name":"{child}","data":"<your report>","clearBeforePrompt":false} against the port in '
-    + '.switchboard/api-server-port.txt — naming what you changed and what to review. Do not wait to be asked.';
+    '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
+    + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
+    + '— naming what you changed and what to review. Do not wait to be asked.';
 
 /**
  * Callback instruction for external-headed teams (head is a non-terminal agent
@@ -276,12 +276,12 @@ function LEGACY_CONTEXT_AWARE_COMPLETION_ORDER_BODY_V2(groupId: string, headName
  * import). `stage-marker-commit-contract.test.js` gates both halves.
  */
 export const TEAM_CODER_QUEUE_DONE_INSTRUCTION =
-    'When you have finished ALL parts of the dispatched plan, POST /kanban/queue/done with '
-    + '{"from":"<your terminal name>"} against the port in .switchboard/api-server-port.txt. '
+    'When you have finished ALL parts of the dispatched plan, run node "<cliPath>" done --from "<your terminal name>" '
+    + '(or switchboard done --from "<your terminal name>"). '
     + 'This signals completion — the system clears your activity light and notifies your lead. '
-    + 'Do NOT post after finishing individual parts — only when ALL work is complete. '
-    + 'If you cannot complete it, call the same endpoint with {"from":"<your terminal name>",'
-    + '"outcome":"failed"} and a one-line reason.';
+    + 'Do NOT report after finishing individual parts — only when ALL work is complete. '
+    + 'If you cannot complete it, run node "<cliPath>" done --from "<your terminal name>" '
+    + '--outcome failed with a one-line reason.';
 
 /**
  * The standing-order body installed at `global` scope so a standalone agent
@@ -637,9 +637,9 @@ export const NEW_CODING_HEAD_PROMPT =
     + '— never `git add -A` or `git add .`. Then create a single commit with a '
     + 'descriptive message. '
     + 'POST /kanban/task/complete with {"from":"{head}","planId":"<the subtask\'s planId>","workspaceRoot":'
-    + '"<your current working directory>"} against the port in .switchboard/api-server-port.txt. '
+    + '"<your current working directory>"}. '
     + 'The card stays where it is. Completion is asserted, never inferred from board position. '
-    + 'POST /kanban/queue/next with {"from":"{head}"} against the port in .switchboard/api-server-port.txt; '
+    + 'run node "<cliPath>" next --from "{head}" (or switchboard next --from "{head}"); '
     + 'if it returns a dispatched card, work it; if it returns dispatched: null, report that the queue is '
     + 'empty and stop.';
 
@@ -651,14 +651,13 @@ export const NEW_REVIEW_TEAM_HEAD_PROMPT =
     + 'their findings to the plan files and report back. When all reviewers report, triage findings into four '
     + 'categories: (1) needs no fixing, (2) fixes needed, (3) follow-ups needed for deferred issues or remaining '
     + 'risks, (4) did not meet intent. Apportion categories 2 and 3 back to the reviewer that reviewed them '
-    + '(file-disjoint where possible) via POST /terminals/verb/ptySendPrompt with {"name":"<reviewer seat>","data":"<fix instructions — name each file, the issue, and the fix needed. Tell the reviewer to run verification checks (typecheck/tests as applicable) and include results in their report.>","clearBeforePrompt":false,"seatBlock":false} against the port in .switchboard/api-server-port.txt. '
+    + '(file-disjoint where possible) via node "<cliPath>" verb ptySendPrompt \'{"name":"<reviewer seat>","data":"<fix instructions — name each file, the issue, and the fix needed. Tell the reviewer to run verification checks (typecheck/tests as applicable) and include results in their report.>","clearBeforePrompt":false,"seatBlock":false}\'. '
     + 'Do not fix categories 1 or 4. Write one markdown artifact to the plans '
     + 'folder (.switchboard/plans/) covering deferred items, remaining risks, and intent failures. '
     + 'When review and fixes are complete, stage the files you changed by explicit path '
     + '— never `git add -A` or `git add .`. Then create a single commit with a '
     + 'descriptive message. '
-    + 'When the review passes, POST /kanban/queue/next with {"from":"{head}"} against the port in '
-    + '.switchboard/api-server-port.txt; if it returns a dispatched card, work it; if it returns '
+    + 'When the review passes, run node "<cliPath>" next --from "{head}" (or switchboard next --from "{head}"); if it returns a dispatched card, work it; if it returns '
     + 'dispatched: null, report that the queue is empty and stop.';
 
 /**

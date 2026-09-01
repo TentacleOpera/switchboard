@@ -4773,9 +4773,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     { role: 'researcher', count: 1, scope: 'shared', relationship: 'researcher' }
                 ],
                 purpose: 'Turns tickets and ideas into plans.',
-                prompt: '{child} is your head agent. When you finish a task, report to it — POST /terminals/verb/ptySendPrompt with '
-                    + '{"name":"{child}","data":"<your report>","clearBeforePrompt":false} against the port in '
-                    + '.switchboard/api-server-port.txt — naming what you changed and what to review. Do not wait to be asked.\n'
+                prompt: '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
+                    + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
+                    + '— naming what you changed and what to review. Do not wait to be asked.\n'
                     + 'Research the context for the plan — read the codebase, trace dependencies, and identify root causes. '
                     + 'Report your findings to {child} for synthesis into the plan.\n'
                     + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
@@ -4792,9 +4792,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     { role: 'reviewer', count: 1, scope: 'shared', relationship: 'reports-to-head' }
                 ],
                 purpose: 'Works a feature\'s subtasks one at a time, then sends the whole feature to review via one board dispatch.',
-                prompt: '{child} is your head agent. When you finish a task, report to it — POST /terminals/verb/ptySendPrompt with '
-                    + '{"name":"{child}","data":"<your report>","clearBeforePrompt":false} against the port in '
-                    + '.switchboard/api-server-port.txt — naming what you changed and what to review. Do not wait to be asked.\n'
+                prompt: '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
+                    + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
+                    + '— naming what you changed and what to review. Do not wait to be asked.\n'
                     + 'Work your assigned subtask to completion. The shared reviewer reviews finished work before it ships.\n'
                     + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
                     + 'git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — '
@@ -4827,9 +4827,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     + '— never `git add -A` or `git add .`. Then create a single commit with a '
                     + 'descriptive message. '
                     + 'POST /kanban/task/complete with {"from":"{head}","planId":"<the subtask\'s planId>","workspaceRoot":'
-                    + '"<your current working directory>"} against the port in .switchboard/api-server-port.txt. '
+                    + '"<your current working directory>"}. '
                     + 'The card stays where it is. Completion is asserted, never inferred from board position. '
-                    + 'POST /kanban/queue/next with {"from":"{head}"} against the port in .switchboard/api-server-port.txt; '
+                    + 'run node "<cliPath>" next --from "{head}" (or switchboard next --from "{head}"); '
                     + 'if it returns a dispatched card, work it; if it returns dispatched: null, report that the queue is '
                     + 'empty and stop.'
             },
@@ -4840,9 +4840,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     { role: 'reviewer', count: 3, scope: 'per-team', relationship: 'reports-to-head' }
                 ],
                 purpose: 'Reviews a feature across reviewer seats in read-only batches, triages findings, and fixes only what it reviewed.',
-                prompt: '{child} is your head agent. When you finish a task, report to it — POST /terminals/verb/ptySendPrompt with '
-                    + '{"name":"{child}","data":"<your report>","clearBeforePrompt":false} against the port in '
-                    + '.switchboard/api-server-port.txt — naming what you changed and what to review. Do not wait to be asked.\n'
+                prompt: '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
+                    + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
+                    + '— naming what you changed and what to review. Do not wait to be asked.\n'
                     + 'In the review turn, perform a read-only review of your assigned plans, append your findings under ## Review Findings to the plan files, and report back to {child}. Do not modify code during the review turn.\n'
                     + 'When {child} apportions fixes back to you in the fix turn, implement the fixes for the plans you reviewed, run verification checks, and report back.\n'
                     + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
@@ -4857,14 +4857,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     + 'their findings to the plan files and report back. When all reviewers report, triage findings into four '
                     + 'categories: (1) needs no fixing, (2) fixes needed, (3) follow-ups needed for deferred issues or remaining '
                     + 'risks, (4) did not meet intent. Apportion categories 2 and 3 back to the reviewer that reviewed them '
-                    + '(file-disjoint where possible) via POST /terminals/verb/ptySendPrompt with {"name":"<reviewer seat>","data":"<fix instructions — name each file, the issue, and the fix needed. Tell the reviewer to run verification checks (typecheck/tests as applicable) and include results in their report.>","clearBeforePrompt":false,"seatBlock":false} against the port in .switchboard/api-server-port.txt. '
+                    + '(file-disjoint where possible) via node "<cliPath>" verb ptySendPrompt \'{"name":"<reviewer seat>","data":"<fix instructions — name each file, the issue, and the fix needed. Tell the reviewer to run verification checks (typecheck/tests as applicable) and include results in their report.>","clearBeforePrompt":false,"seatBlock":false}\'. '
                     + 'Do not fix categories 1 or 4. Write one markdown artifact to the plans '
                     + 'folder (.switchboard/plans/) covering deferred items, remaining risks, and intent failures. '
                     + 'When review and fixes are complete, stage the files you changed by explicit path '
                     + '— never `git add -A` or `git add .`. Then create a single commit with a '
                     + 'descriptive message. '
-                    + 'When the review passes, POST /kanban/queue/next with {"from":"{head}"} against the port in '
-                    + '.switchboard/api-server-port.txt; if it returns a dispatched card, work it; if it returns '
+                    + 'When the review passes, run node "<cliPath>" next --from "{head}" (or switchboard next --from "{head}"); if it returns a dispatched card, work it; if it returns '
                     + 'dispatched: null, report that the queue is empty and stop.'
             },
             {
@@ -4877,9 +4876,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 purpose: 'Fan-in investigation: multiple agents research from different angles, then synthesize.',
                 headPrompt: 'You lead this planning team. Synthesize your researchers\' findings into a single plan.'
                     + ' When the plan is complete, stage the plan file by explicit path and create a single commit with a descriptive message.',
-                prompt: '{child} is your head agent. When you finish a task, report to it — POST /terminals/verb/ptySendPrompt with '
-                    + '{"name":"{child}","data":"<your report>","clearBeforePrompt":false} against the port in '
-                    + '.switchboard/api-server-port.txt — naming what you changed and what to review. Do not wait to be asked.\n'
+                prompt: '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
+                    + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
+                    + '— naming what you changed and what to review. Do not wait to be asked.\n'
                     + 'Investigate the problem from your angle — read code, trace dependencies, and identify risks. '
                     + 'Report your findings to {child} for fan-in synthesis into a single plan.\n'
                     + 'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, '
@@ -4897,9 +4896,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 purpose: 'A planner with a general-purpose analyst that handles code search and context-gathering, saving the lead\'s tokens for synthesis.',
                 headPrompt: 'You lead this planning team. Synthesize your analyst\'s findings into a single plan.'
                     + ' When the plan is complete, stage the plan file by explicit path and create a single commit with a descriptive message.',
-                prompt: '{child} is your head agent. When you finish a task, report to it — POST /terminals/verb/ptySendPrompt with '
-                    + '{"name":"{child}","data":"<your report>","clearBeforePrompt":false} against the port in '
-                    + '.switchboard/api-server-port.txt — naming what you changed and what to review. Do not wait to be asked.\n'
+                prompt: '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
+                    + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
+                    + '— naming what you changed and what to review. Do not wait to be asked.\n'
                     + 'You are a general-purpose analyst for the planning lead. Your job is code search, dependency tracing, '
                     + 'and context-gathering: read the codebase, trace imports and call sites, identify root causes, and report '
                     + 'concise findings to {child}. Do not write plans yourself — your reports are input the lead synthesizes into '

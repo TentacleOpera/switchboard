@@ -23,7 +23,7 @@ import {
 import { AgentSkillExporter } from './AgentSkillExporter';
 import { deriveAgentDisplayName } from './cliIdentity';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
-import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, partitionPlansByFeature, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, PHONE_A_FRIEND_DIRECTIVE, SWITCHBOARD_LIVENESS_DIRECTIVE, resolvePlanPathForWorktree, resolveWorkingDirForWorktree, normalizeRetiredWorkflowPath, buildAnalysisScopeLine, SeatDirectiveOptions, STAGE_BY_ROLE, TEAM_BATCH_PLAN_CAP, applyBatchCap } from './agentPromptBuilder';
+import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, partitionPlansByFeature, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, PHONE_A_FRIEND_DIRECTIVE, SWITCHBOARD_LIVENESS_DIRECTIVE, SWITCHBOARD_CLI_DIRECTIVE, resolvePlanPathForWorktree, resolveWorkingDirForWorktree, normalizeRetiredWorkflowPath, buildAnalysisScopeLine, SeatDirectiveOptions, STAGE_BY_ROLE, TEAM_BATCH_PLAN_CAP, applyBatchCap } from './agentPromptBuilder';
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord, type WorktreeRow, type ColumnUpdateOutcome } from './KanbanDatabase';
 import { compareByPrecedence } from './kanbanOrdering';
 import type { FeatureWatchRecord } from './PlanIngestionEngine';
@@ -1284,6 +1284,24 @@ export class KanbanProvider implements vscode.Disposable {
      */
     public getCurrentWorkspaceRoot(): string | null {
         return this._currentWorkspaceRoot;
+    }
+
+    /**
+     * Resolves the absolute path to bundled `dist/standalone/cli.js`.
+     * Plumbed at build time so dispatched agents can invoke the CLI directly.
+     */
+    public getCliPath(): string {
+        if ((this as any)._cliPath) {
+            return (this as any)._cliPath;
+        }
+        const taskViewerCli = this._taskViewerProvider?.getCliPath?.();
+        if (taskViewerCli) {
+            return taskViewerCli;
+        }
+        if (this._extensionUri?.fsPath) {
+            return path.join(this._extensionUri.fsPath, 'dist', 'standalone', 'cli.js');
+        }
+        return path.join(__dirname, 'cli.js');
     }
 
     /**
@@ -5721,15 +5739,20 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         if (!resolved || resolved.members.length === 0) return null;
 
         let portLine = 'read .switchboard/api-server-port.txt';
-        try {
-            const portFilePath = path.join(workspaceRoot, '.switchboard', 'api-server-port.txt');
-            if (fs.existsSync(portFilePath)) {
-                const portRaw = fs.readFileSync(portFilePath, 'utf8').trim();
-                if (portRaw && /^\d+$/.test(portRaw)) {
-                    portLine = `Port is ${portRaw}. BASE="http://127.0.0.1:${portRaw}"`;
+        const apiPort = this._taskViewerProvider?.getLocalApiServerPort() ?? 0;
+        if (apiPort > 0) {
+            portLine = `Port is ${apiPort}. BASE="http://127.0.0.1:${apiPort}"`;
+        } else {
+            try {
+                const portFilePath = path.join(workspaceRoot, '.switchboard', 'api-server-port.txt');
+                if (fs.existsSync(portFilePath)) {
+                    const portRaw = fs.readFileSync(portFilePath, 'utf8').trim();
+                    if (portRaw && /^\d+$/.test(portRaw)) {
+                        portLine = `Port is ${portRaw}. BASE="http://127.0.0.1:${portRaw}"`;
+                    }
                 }
-            }
-        } catch { /* best-effort */ }
+            } catch { /* best-effort */ }
+        }
 
         const rosterLines = resolved.members.map(m => {
             const roleLabel = m.role ? ` (${m.role})` : '';
@@ -6162,6 +6185,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             // Append the directive here (Option A port, same as generateUnifiedPrompt's
             // built-in path) or the checkbox is a dead control.
             const customApiPort = this._taskViewerProvider?.getLocalApiServerPort() ?? 0;
+            const customCliPath = this.getCliPath();
             // Omitted, not placeholdered — see the note on PHONE_A_FRIEND_DIRECTIVE.
             // SWITCHBOARD_TERMINAL is a pty-child env var and is never set in this process.
             const customPhoneAFriendOriginTerminal = (overrides as any)?.originTerminal as string | undefined;
@@ -6172,11 +6196,14 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const customLivenessSuffix = (customApiPort > 0)
                 ? `\n\n${SWITCHBOARD_LIVENESS_DIRECTIVE(customApiPort)}`
                 : '';
+            const customCliSuffix = customCliPath
+                ? `\n\n${SWITCHBOARD_CLI_DIRECTIVE(customCliPath)}`
+                : '';
             if (primaryPlan?.isFeature && mergedAddons.applyFeatureDirectives === true) {
                 const prefix = await this._buildFeatureDirectivePrefix(workspaceRoot, await resolveDrive(), plans);
-                return `${prefix}${customBuilt}${customPhoneSuffix}${customLivenessSuffix}`;
+                return `${prefix}${customBuilt}${customPhoneSuffix}${customLivenessSuffix}${customCliSuffix}`;
             }
-            return `${customBuilt}${customPhoneSuffix}${customLivenessSuffix}`;
+            return `${customBuilt}${customPhoneSuffix}${customLivenessSuffix}${customCliSuffix}`;
         }
 
         // Dispatch-analysis: a read-only parallelism analysis pass dispatched on the
@@ -6244,6 +6271,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             // worktree CWDs don't read the port file (which lives only in the main workspace
             // root's .switchboard/). 0 when the server isn't running → directive omitted.
             apiPort: this._taskViewerProvider?.getLocalApiServerPort() ?? 0,
+            cliPath: this.getCliPath(),
             // §Delegate — plumb the LocalApiServer session token at build time so the
             // delegate directive's curls can authenticate. Empty when no token is set.
             apiToken: await this._taskViewerProvider?.getApiToken() ?? '',

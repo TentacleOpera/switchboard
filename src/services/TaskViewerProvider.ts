@@ -19,6 +19,7 @@ import {
 import { writeMissionControlReport, writeInstruction, bootstrapInstructionsDirectory, ingestJobActivity, migrateLegacyOrchestratorDir } from './ScheduledJobsService';
 import * as vscode from 'vscode';
 import * as path from 'path';
+import { resolvePreferredPort, PORT_BASE, PORT_SPAN } from '../utils/portResolver';
 import { getConstitutionPath } from './constitutionUtils';
 import { buildWorkspaceItems } from './workspaceUtils';
 import { stateFs as fs, stateLockfile as lockfile, getWorkspaceRootFromStatePath } from './stateConfigBridge';
@@ -3785,8 +3786,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             return result;
         };
 
+        const preferredPort = await resolvePreferredPort();
+        if (preferredPort === null) {
+            console.warn(`[TaskViewerProvider] Ports ${PORT_BASE}-${PORT_BASE + PORT_SPAN - 1} are in use, falling back to an ephemeral port.`);
+            this._apiServerDiagnosticsChannel.appendLine(`[TaskViewerProvider] Ports ${PORT_BASE}-${PORT_BASE + PORT_SPAN - 1} are in use, falling back to an ephemeral port.`);
+        }
+
         this._localApiServer = new LocalApiServer({
             workspaceRoot: effectiveRoot,
+            port: preferredPort ?? 0,
             clickupMetadataPath: cacheService['_clickupMetadataPath'],
             linearMetadataPath: cacheService['_linearMetadataPath'],
             getClickUpService: () => this._getClickUpService(effectiveRoot),
@@ -4461,6 +4469,20 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // the Phone-a-Friend and delegate directives.
         const server = this._apiServerForBroadcast ?? this._localApiServer;
         return typeof server?.getPort === 'function' ? (server.getPort() ?? 0) : 0;
+    }
+
+    /**
+     * Resolves the absolute path to bundled `dist/standalone/cli.js`.
+     * Plumbed at build time so dispatched agents can invoke the CLI directly.
+     */
+    public getCliPath(): string {
+        if ((this as any)._cliPath) {
+            return (this as any)._cliPath;
+        }
+        if (this._extensionUri?.fsPath) {
+            return path.join(this._extensionUri.fsPath, 'dist', 'standalone', 'cli.js');
+        }
+        return path.join(__dirname, 'cli.js');
     }
 
     /**

@@ -459,18 +459,17 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
     // feature passed, ...") gated the pop on a report from a seat the coding
     // team no longer waits on, and gating the pop on an inferred verdict is
     // the pattern completion-is-asserted-never-inferred.md removes.
-    const queueNextSentence = 'POST /kanban/queue/next with '
-        + '{"from":"{head}"} against the port in .switchboard/api-server-port.txt; if it returns '
+    const queueNextSentence = 'run node "<cliPath>" next --from "{head}" (or switchboard next --from "{head}"); if it returns '
         + 'a dispatched card, work it; if it returns dispatched: null, report that the queue is '
         + 'empty and stop.';
     assert.ok(
         tsHeadPrompt.includes(queueNextSentence),
-        'NEW_CODING_HEAD_PROMPT must carry the POST /kanban/queue/next standing order — '
+        'NEW_CODING_HEAD_PROMPT must carry the next standing order — '
         + 'without it a lead never asks for the next card after a review pass.'
     );
     assert.ok(
         headPrompt.includes(queueNextSentence),
-        'kanban.html Coding headPrompt must carry the POST /kanban/queue/next standing order '
+        'kanban.html Coding headPrompt must carry the next standing order '
         + 'byte-identically to teamWiring.ts — a gallery-adopted team must pace its own pipeline.'
     );
 

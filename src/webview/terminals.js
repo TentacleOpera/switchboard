@@ -11050,9 +11050,9 @@
             // in the pair-order path (childName = headName for member-receives)
             // and by wireSpawnedTeam directly when building the team prompt.
             template:
-                '{child} is your head agent. When you finish a task, report to it — POST /terminals/verb/ptySendPrompt with ' +
-                '{"name":"{child}","data":"<your report>","clearBeforePrompt":false} against the port in ' +
-                '.switchboard/api-server-port.txt — naming what you changed and what to review. Do not wait to be asked.'
+                '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt ' +
+                '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) ' +
+                '— naming what you changed and what to review. Do not wait to be asked.'
         },
         { id: 'custom', label: 'Custom…', direction: 'head-receives', template: '' }
     ];
@@ -11456,9 +11456,9 @@
      * Mirror of AGENT_GROUP_CALLBACK_INSTRUCTION in teamWiring.ts.
      */
     var POST_REWRITE_CALLBACK_INSTRUCTION =
-        '{child} is your head agent. When you finish a task, report to it — POST /terminals/verb/ptySendPrompt with '
-        + '{"name":"{child}","data":"<your report>","clearBeforePrompt":false} against the port in '
-        + '.switchboard/api-server-port.txt — naming what you changed and what to review. Do not wait to be asked.';
+        '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
+        + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
+        + '— naming what you changed and what to review. Do not wait to be asked.';
 
     /**
      * Git safety directive — mirror of GIT_SAFETY_DIRECTIVE in

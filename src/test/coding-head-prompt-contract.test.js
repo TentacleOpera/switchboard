@@ -125,9 +125,9 @@ function run() {
 
     // ── 5. queue/next instruction ───────────────────────────────────────
 
-    check('the prompt states POST /kanban/queue/next as the "ask for the next card" call', () => {
-        assert.ok(twPrompt.includes('POST /kanban/queue/next with {"from":"{head}"} against the port in .switchboard/api-server-port.txt; if it returns a dispatched card, work it; if it returns dispatched: null, report that the queue is empty and stop.'),
-            'prompt must instruct POST /kanban/queue/next to ask for next card');
+    check('the prompt states next as the "ask for the next card" call', () => {
+        assert.ok(twPrompt.includes('run node "<cliPath>" next --from "{head}" (or switchboard next --from "{head}"); if it returns a dispatched card, work it; if it returns dispatched: null, report that the queue is empty and stop.'),
+            'prompt must instruct next to ask for next card');
     });
 
     // ── 6. Commit instruction marker present ────────────────────────────
