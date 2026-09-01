@@ -36,7 +36,7 @@ launch — never a mode a scheduler can read.
 
 | Survivor | Site | State |
 | :--- | :--- | :--- |
-| The only writer | `KanbanProvider.ts:2534` — Mission Control disarm restore | Writes back a value nothing sets |
+| The only writer | `KanbanProvider.ts:2534` — inside `_drainRetiredWorktreeModeStash` | A one-time migration drain, not a live path |
 | The read | `KanbanProvider.ts:15213` | `normalizeFeatureWorktreeMode(await db.getConfig(...))` |
 | The broadcast | `KanbanProvider.ts:15273` | Ships `featureWorktreeMode` in a payload |
 | The normalizer | `normalizeFeatureWorktreeMode` | Exists to make legacy values render |
@@ -47,9 +47,23 @@ launch — never a mode a scheduler can read.
 built for is gone. `agent-groups-worktree-mode` ("Spawn in own worktree", `kanban.html:3332`) is a
 *team group* setting — `group.worktreeMode === 'auto'` — a different axis with a different owner.
 
+**Its one writer is a migration, and the thing it migrates away from is already gone.**
+`_drainRetiredWorktreeModeStash` (`KanbanProvider.ts:2520`) says so:
+
+> *"One-time drain of the retired Mission Control worktree stash. **Prior versions** forced
+> `feature_worktree_mode = 'per-feature'` while a Mission Control session was armed and parked the
+> user's real value under PRIOR_KEY. A session that ended uncleanly (crash, reload) left the forced
+> value in place. This restores the user's value and consumes the key; once cleared it never fires
+> again, so the cleared key IS the idempotency latch."*
+
+`mission-control_prior_feature_worktree_mode` is its only rider — the sole `_prior_` key in the
+entire source tree. There is no general force-and-restore pattern with other participants; there is
+this one drain, called from two activation sites (`:534`, `:1573`), cleaning up after a behaviour
+that no longer exists.
+
 So the key's entire remaining lifecycle is: a legacy value sits in config, gets normalized, gets
-read, gets broadcast, and — if a Mission Control session arms and disarms — gets written back to
-itself. It governs nothing.
+read, gets broadcast, and — on an install that crashed mid-session years ago — gets restored once by
+a migration into a key nothing acts on. It governs nothing at either end.
 
 ### Root Cause
 
@@ -72,10 +86,9 @@ freed a lane whose working tree was occupied.
 - **Not touching `group.worktreeMode`** (`agent-groups-worktree-mode`). Different axis, live.
 - **Not removing `useWorktreesPerPlan`.** A per-role prompt add-on where the agent creates its own
   worktree; out of scope and separately owned.
-- **Not deleting the Mission Control arm/disarm restore *pattern*** — only this key's participation
-  in it. The pattern exists because forcing and restoring a user setting across a crash was a real
-  defect; if no other key rides it, that is a finding for a follow-up, not a licence to delete it
-  here.
+- **No general restore pattern is being removed, because none exists.**
+  `mission-control_prior_feature_worktree_mode` is the only `_prior_` key in the tree. Deleting it
+  removes one migration, not a mechanism.
 
 ## Metadata
 
@@ -87,11 +100,10 @@ freed a lane whose working tree was occupied.
 - **Confirm nothing consumes the broadcast `featureWorktreeMode`.** It is shipped in a payload
   (`:15273`); a webview reading it would break on removal. The webview grep is clean, but confirm
   no external agent surface reads it before deleting the field.
-- **Confirm the disarm restore has another rider.** If `feature_worktree_mode` is the *only* key
-  `mission-control_prior_*` restores, removing it strands the whole restore path and
-  `worktree-strategy-control-contract.test.js` loses its subject. Establish that before editing the
-  test — the test exists because a crash once left a forced value in place, and that lesson must
-  survive whatever replaces it.
+- **Confirm the drain and the key are deleted together, not in sequence.** Keeping the drain while
+  the key is dropped on read leaves a migration whose only effect is writing a value nothing reads;
+  keeping the key while the drain goes strands an install that crashed mid-session with the forced
+  value still in place. They are one change.
 
 ## Complexity Audit
 
@@ -101,6 +113,14 @@ freed a lane whose working tree was occupied.
 
 ### Complex / Risky
 
+- **Deleting a migration is normally forbidden, and this is the exception — state why.**
+  `CLAUDE.md` requires shipped state to be migrated, never assumed drained. The drain survives here
+  only because its *output* becomes inert in the same commit: it restores a user's
+  `feature_worktree_mode`, and that key stops being read. Restoring a value into a dead key is a
+  no-op, so the migration has nothing left to preserve. Both `feature_worktree_mode` and
+  `mission-control_prior_feature_worktree_mode` are dropped on read so neither lingers as
+  meaningful-looking state. This reasoning belongs in the commit message — a future reader finding a
+  deleted migration needs to see why it was safe.
 - **The contract test asserts by COUNT, deliberately.**
   `worktree-strategy-control-contract.test.js:87-90` counts occurrences of
   `mission-control_prior_feature_worktree_mode` in `KanbanProvider` and fails on a mismatch —
@@ -150,13 +170,15 @@ freed a lane whose working tree was occupied.
    scenario via `feature_worktree_mode`; they now name a mission-provisioned worktree bounded by
    `maxExtraWorktrees`. No `assert` changes.
 2. Delete the read (`:15213`) and the broadcast field (`:15273`).
-3. Delete the disarm restore writer (`:2534`) and its `PRIOR_KEY`, subject to the review question.
+3. Delete `_drainRetiredWorktreeModeStash` (`:2520-2537`), its `PRIOR_KEY`, and both call sites
+   (`:534`, `:1573`). Its output is inert once step 2 lands.
 4. Delete `normalizeFeatureWorktreeMode` once callerless.
 5. Drop `feature_worktree_mode` and `mission-control_prior_feature_worktree_mode` on config read,
    never by destructive write.
-6. Rewrite `worktree-strategy-control-contract.test.js` to pin the surviving lesson — a forced
-   setting is never left in place by a crash — against whatever key still rides that path, or
-   retire it with that lesson recorded if none does.
+6. Retire `worktree-strategy-control-contract.test.js`. Its subject is the drain; with no key to
+   force and no key to restore, the defect it guards is unreachable. Record its lesson — *a forced
+   user setting must never be left in place by a crash* — in the commit message, since the reason it
+   is safe to delete is that nothing forces a setting any more, not that the risk was reassessed.
 
 ## Verification Plan
 
@@ -176,6 +198,8 @@ freed a lane whose working tree was occupied.
 6. **Every guardrail assertion still passes unchanged.** The whole file runs green with only its
    comments edited. If an assertion has to change to accommodate this plan, the plan is wrong.
 6. **Both hosts.** Neither root reads or broadcasts the field after removal.
+7. **No `_prior_` key remains in the source tree.** A grep gate. It is the shape of the whole
+   force-and-restore defect, and after this plan there is no legitimate instance of it.
 
 ### Goal Invariants
 
