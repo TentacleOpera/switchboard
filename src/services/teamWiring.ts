@@ -637,7 +637,7 @@ export const NEW_CODING_HEAD_PROMPT =
     + '— never `git add -A` or `git add .`. Then create a single commit with a '
     + 'descriptive message. '
     + 'POST /kanban/task/complete with {"from":"{head}","planId":"<the subtask\'s planId>","workspaceRoot":'
-    + '"<your current working directory>"}. '
+    + '"<your current working directory>"} against the API base named in your SWITCHBOARD STATUS line. '
     + 'The card stays where it is. Completion is asserted, never inferred from board position. '
     + 'run node "<cliPath>" next --from "{head}" (or switchboard next --from "{head}"); '
     + 'if it returns a dispatched card, work it; if it returns dispatched: null, report that the queue is '

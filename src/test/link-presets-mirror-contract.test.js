@@ -47,6 +47,16 @@ function test(name, fn) {
  * direction (optional in the JS mirror before this change, required after),
  * and template.
  */
+
+// Single-quoted JS string literal, escape-aware. The naive /'([^']*)'/ stops at
+// the first `\'` inside a fragment (the prompt templates embed shell-quoted
+// JSON), which truncates the extracted template differently in each file and
+// makes a byte-identical mirror look like a mismatch.
+const SQ_STRING_SRC = "'((?:[^'\\\\]|\\\\.)*)'";
+function unescapeSq(raw) {
+    return String(raw).replace(/\\(.)/g, '$1');
+}
+
 function extractPresets(src, fileLabel) {
     // Find the array literal between `LINK_PRESETS = [` (or `LINK_PRESETS: ... = [`)
     // and the matching `];`
@@ -66,16 +76,16 @@ function extractPresets(src, fileLabel) {
 
     // Parse each entry: { id: '...', label: '...', direction: '...', template: '...' }
     const entries = [];
-    const entryRegex = /id:\s*'([^']*)'/g;
+    const entryRegex = new RegExp('id:\\s*' + SQ_STRING_SRC, 'g');
     let match;
     while ((match = entryRegex.exec(arrayText)) !== null) {
-        const id = match[1];
+        const id = unescapeSq(match[1]);
         // Find the label for this entry
-        const labelMatch = arrayText.slice(match.index).match(/label:\s*'([^']*)'/);
-        const label = labelMatch ? labelMatch[1] : '';
+        const labelMatch = arrayText.slice(match.index).match(new RegExp('label:\\s*' + SQ_STRING_SRC));
+        const label = labelMatch ? unescapeSq(labelMatch[1]) : '';
         // Find the direction for this entry
-        const directionMatch = arrayText.slice(match.index).match(/direction:\s*'([^']*)'/);
-        const direction = directionMatch ? directionMatch[1] : undefined;
+        const directionMatch = arrayText.slice(match.index).match(new RegExp('direction:\\s*' + SQ_STRING_SRC));
+        const direction = directionMatch ? unescapeSq(directionMatch[1]) : undefined;
         // Find the template — it may be a concatenation of single-quoted strings
         const templateIdx = arrayText.indexOf('template:', match.index);
         if (templateIdx === -1) { entries.push({ id, label, direction, template: '' }); continue; }
@@ -85,7 +95,7 @@ function extractPresets(src, fileLabel) {
         const templateSection = arrayText.slice(templateIdx + 'template:'.length);
         // Collect all single-quoted string fragments
         const fragments = [];
-        const fragRegex = /'([^']*)'/g;
+        const fragRegex = new RegExp(SQ_STRING_SRC, 'g');
         let fragMatch;
         let lastIdx = 0;
         while ((fragMatch = fragRegex.exec(templateSection)) !== null) {
@@ -95,7 +105,7 @@ function extractPresets(src, fileLabel) {
                 if (between.includes('}')) { break; }
                 if (between.includes('id:') && fragMatch.index > 200) { break; }
             }
-            fragments.push(fragMatch[1]);
+            fragments.push(unescapeSq(fragMatch[1]));
             lastIdx = fragMatch.index + fragMatch[0].length;
         }
         entries.push({ id, label, direction, template: fragments.join('') });
@@ -147,10 +157,10 @@ test('reports-to-head template is byte-identical to AGENT_GROUP_CALLBACK_INSTRUC
     assert.ok(instrMatch, 'AGENT_GROUP_CALLBACK_INSTRUCTION not found in teamWiring.ts');
     const instrSection = instrMatch[1];
     const fragments = [];
-    const fragRegex = /'([^']*)'/g;
+    const fragRegex = new RegExp(SQ_STRING_SRC, 'g');
     let fragMatch;
     while ((fragMatch = fragRegex.exec(instrSection)) !== null) {
-        fragments.push(fragMatch[1]);
+        fragments.push(unescapeSq(fragMatch[1]));
     }
     const instruction = fragments.join('');
     assert.strictEqual(

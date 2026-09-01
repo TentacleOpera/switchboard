@@ -15,7 +15,7 @@
  * reconcile preset and the Kanban-side builders share one copy —
  * `KanbanProvider.BOARD_DRIVING_CONTRACT` aliases this constant.
  */
-export const BOARD_DRIVING_CONTRACT = `Move cards on this workspace's board via the sanctioned \`kanban_operations\` skill (\`move-card.js\` / \`node "<cliPath>" verb moveCard\` / \`switchboard verb moveCard\`), NEVER raw SQL. Raw SQL strands cards and bypasses the move-card.js side-effects (cascades, syncs).`;
+export const BOARD_DRIVING_CONTRACT = `Move cards on this workspace's board via the sanctioned \`kanban_operations\` skill (\`move-card.js\` / \`POST /kanban/move\`), NEVER raw SQL. Raw SQL strands cards and bypasses the move-card.js side-effects (cascades, syncs). The API base is the one named in your SWITCHBOARD STATUS line.`;
 
 /**
  * The `fetch-plans` source preset: pull plan files authored on remote branches

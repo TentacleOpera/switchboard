@@ -32,6 +32,7 @@ import type { LinearSyncService } from './LinearSyncService';
 import type { NotionFetchService } from './NotionFetchService';
 import { NotionRemoteProvider } from './remote/NotionRemoteProvider';
 import { loadNotionRemoteSetup } from './remote/notionRemoteConfig';
+import { substituteCliPath } from '../utils/cliPathToken';
 
 // ─── Host seam ──────────────────────────────────────────────────────────────
 
@@ -1544,7 +1545,7 @@ export class PlanIngestionEngine {
                     `  When you finish the card, run \`node "<cliPath>" done --from "${pacerSeat}"\` (or \`switchboard done --from "${pacerSeat}"\`).`,
                     `  If you cannot complete it, run \`node "<cliPath>" done --from "${pacerSeat}" --outcome failed\` with a one-line reason.`,
                 ];
-                const nudgeBody = nudgeLines.join('\n');
+                const nudgeBody = substituteCliPath(nudgeLines.join('\n'));
 
                 try {
                     this._turnEndNotifier({
@@ -1778,7 +1779,7 @@ export class PlanIngestionEngine {
                 `  You have been silent for ${silentFor}s.`,
                 `  Make the call: run \`node "<cliPath>" next --from "${watch.headTerminal}"\` (or \`switchboard next --from "${watch.headTerminal}"\`).`,
             ];
-            const body = lines.join('\n');
+            const body = substituteCliPath(lines.join('\n'));
 
             try {
                 this._turnEndNotifier({

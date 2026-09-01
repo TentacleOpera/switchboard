@@ -747,7 +747,7 @@ function composeAcceptanceInstruction(
     const idPart = planId ? JSON.stringify(planId) : '"<this subtask\'s planId>"';
     return ' When you are done with this subtask, commit, then POST /kanban/task/complete with '
         + `{"from":${JSON.stringify(leadName)},"planId":${idPart},"workspaceRoot":${JSON.stringify(workspaceRoot)}} `
-        + 'against the port in .switchboard/api-server-port.txt. Post every time — you reject by sending '
+        + 'against the API base named in your SWITCHBOARD STATUS line. Post every time — you reject by sending '
         + `a fix round first, not by withholding the post. Until you post, the seat is not cleared and you `
         + 'cannot be handed the next subtask.';
 }

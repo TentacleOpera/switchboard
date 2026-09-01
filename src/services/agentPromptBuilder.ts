@@ -10,6 +10,7 @@ import * as path from 'path';
 import { DefaultPromptOverride, CustomAgentAddons, BUILT_IN_AGENT_LABELS } from './agentConfig';
 import { extractDesignSystemTokens, ExtractedDesignSystem } from './designSystemTokens';
 import { compareByPrecedence } from './kanbanOrdering';
+import { substituteCliPath } from '../utils/cliPathToken';
 
 // One-time diagnostic for the ticket_updater mode collapse. Users who configured
 // 'refine-ticket' or 'research-and-refine' (modes that rewrote ticket descriptions)
@@ -176,6 +177,19 @@ export function resolveWorkingDirForWorktree(
  */
 export function normalizeNewlines(text: string): string {
     return text.replace(/\n{3,}/g, '\n\n');
+}
+
+/**
+ * Final emission seam for every built agent prompt.
+ *
+ * Prompt fragments are module-level constants (with byte-identical webview
+ * mirrors), so they carry the `<cliPath>` token instead of interpolating the
+ * bundled CLI's absolute path. This is where the token becomes a runnable
+ * path — an unsubstituted token hands the agent `node "<cliPath>" done …`,
+ * which cannot run and silently loses the completion signal.
+ */
+function finalizeAgentPrompt(text: string, cliPath?: string): string {
+    return substituteCliPath(normalizeNewlines(text), cliPath);
 }
 
 /**
@@ -831,17 +845,28 @@ function freshDispatchId(): string {
 /**
  * Liveness + port injection for every dispatched agent. An agent that received its
  * prompt FROM Switchboard has already proved the server is up, so the port-discovery
- * and `curl /health` bootstrap the skill files describe is pure waste for it. The
-/**
- * Emitted when Switchboard dispatches an agent while the LocalApiServer is live.
- * Declares the server status and URL so the agent does not attempt port discovery.
+ * and `curl /health` bootstrap the skill files describe is pure waste for it.
+ *
+ * It is also the ONLY address the prompt now carries for the endpoints that have no
+ * CLI subcommand (`/kanban/task/complete`, `/kanban/move`, `GET /kanban/plan`, the
+ * per-team queue routes): the fragment sweep removed every
+ * `.switchboard/api-server-port.txt` reference, so those instructions name "the API
+ * base in your SWITCHBOARD STATUS line" and resolve here.
  */
 export const SWITCHBOARD_LIVENESS_DIRECTIVE = (port: number) =>
   `SWITCHBOARD STATUS: Live (port ${port}). You were dispatched by Switchboard — the LocalApiServer is running at http://127.0.0.1:${port}. Skip any port-discovery or health-check steps described in skill files; those are for external agents connecting independently. Use http://127.0.0.1:${port} for any direct API calls.`;
 
+/**
+ * The bundled CLI's absolute path, injected the way the port is. Sibling to
+ * {@link SWITCHBOARD_LIVENESS_DIRECTIVE} — the two are complementary, not
+ * alternatives: the CLI covers the board callbacks that have subcommands
+ * (`done`, `next`, `verb <name>`), and the liveness line covers the endpoints
+ * that do not.
+ */
 export const SWITCHBOARD_CLI_DIRECTIVE = (cliPath: string) =>
-  `SWITCHBOARD CLI: run \`node "${cliPath}" <command>\` for board callbacks. ` +
-  `Do not build HTTP requests by hand.`;
+  `SWITCHBOARD CLI: run \`node "${cliPath}" <command>\` for board callbacks — ` +
+  `\`done\`, \`next\`, and \`verb <name> '<json>'\`. Use it instead of hand-building those ` +
+  `HTTP requests; endpoints this prompt names explicitly stay on HTTP.`;
 
 /**
  * `originTerminal` is OMITTED when the builder does not know it, never filled with a
@@ -2028,13 +2053,20 @@ UNATTENDED IMPROVER CONTRACT:
 - Write the plan file once, at the end.`;
         }
 
-        return normalizeNewlines(plannerPrompt);
+        return finalizeAgentPrompt(plannerPrompt, options?.cliPath);
     }
 
     if (role === 'reviewer') {
         const { reviewerDelegationMode, reviewerCoderTerminal, reviewerOriginLead, reviewerPreCheckPassed, reviewerPhoneAFriendPassed } = options ?? {};
         const isDelegationActive = Boolean(reviewerDelegationMode && reviewerCoderTerminal && reviewerOriginLead);
         const cliRef = options?.cliPath ? `node "${options.cliPath}"` : 'switchboard';
+        // `/kanban/move` has no verb-rail equivalent (`moveCardForward` /
+        // `moveCardBackwards` take a sessionIds array, not a planId), so the
+        // escalation stays on the REST route. The base comes from the injected
+        // port, never from the port file.
+        const moveRef = (options?.apiPort && options.apiPort > 0)
+            ? `POST http://127.0.0.1:${options.apiPort}/kanban/move`
+            : `POST /kanban/move against the API base named in your SWITCHBOARD STATUS line`;
         const fixStep = isDelegationActive
             ? `For valid CRITICAL/MAJOR findings: if your diagnosed fix set totals under approximately 100 lines of change, apply the fixes directly yourself. If the set is larger, broad, or parallelisable, send fix instructions to your coder at ${reviewerCoderTerminal} via ${cliRef} verb ptySendPrompt '{"name":"${reviewerCoderTerminal}","data":"<fix instructions>","clearBeforePrompt":false,"seatBlock":false}'. For each delegated finding: name the file and the issue. For mechanical fixes (compile errors, type issues, missing imports), specify the exact fix — the compiler is a shared oracle. For judgment calls (design decisions, which artifact is wrong, test policy), describe the problem and your reasoning — let the coder choose the fix. You will re-review their diff regardless. Tell the coder to run verification checks (typecheck/tests as applicable) and include results in their report. If the fix set grows beyond ~100 lines during implementation, switch to delegating the remaining fixes to your coder.`
             : `Apply code fixes for valid CRITICAL/MAJOR findings.`;
@@ -2070,7 +2102,7 @@ UNATTENDED IMPROVER CONTRACT:
             + `\n\nCRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced synthesis, ${isDelegationActive ? 'the direct fixes or fix instructions to your coder, as applicable' : 'the code fixes'}, and the plan update all in one continuous response.`
             + (reviewerPreCheckPassed ? `\n\nThis plan has passed a mechanical pre-check (compile + diff coverage)${reviewerPhoneAFriendPassed ? ' and a phone-a-friend sanity review' : ''}. Focus your review on deep analysis: call paths, architectural concerns, judgment calls. Do not re-verify compilation.` : '')
             + `\n\nGOAL VERDICT (mandatory — your review is incomplete without it): Assess the change against the plan's stated **goal**, not only its listed steps. State whether the goal is achieved. If the goal is a removal or relocation, name where the thing now is and whether it is gone from where the goal said it should not be. If you changed the destination or approach the plan specified, say so explicitly.`
-            + `\n\nESCALATION ON DESTINATION CHANGE: If you changed where the work lands or reversed the plan's stated goal, you must NOT proceed as if that decision was yours to make. Append a \`### Review Deviations\` section to the end of the plan file — inert prose for the author, never a directive to a future agent — naming what you changed, why the original destination was a blocker, and what the author needs to decide. Then return the card to the author's column via ${cliRef} verb moveCard '{"planId":"<the plan\\'s id>","targetColumn":"PLAN REVIEWED"}' (or the kanban_operations skill). This is the sanctioned escalation path — the same API a human's click takes. Implementation detail is yours to change freely; a destination or goal named in the plan's Goal or Goal Invariants is the author's decision, however right you are about the blocker.`;
+            + `\n\nESCALATION ON DESTINATION CHANGE: If you changed where the work lands or reversed the plan's stated goal, you must NOT proceed as if that decision was yours to make. Append a \`### Review Deviations\` section to the end of the plan file — inert prose for the author, never a directive to a future agent — naming what you changed, why the original destination was a blocker, and what the author needs to decide. Then return the card to the author's column via ${moveRef} with {"planId":"<the plan's id>","targetColumn":"PLAN REVIEWED"} (or the kanban_operations skill). This is the sanctioned escalation path — the same API a human's click takes. Implementation detail is yours to change freely; a destination or goal named in the plan's Goal or Goal Invariants is the author's decision, however right you are about the blocker.`;
 
         const planTarget = plans.length <= 1 ? 'this plan' : 'each listed plan';
         // §7 — Merged reviewer framing: intro + short directive in one block.
@@ -2152,7 +2184,7 @@ UNATTENDED IMPROVER CONTRACT:
             reviewerRisksToMemoBlock
         ].filter(Boolean).join('\n\n');
 
-        return normalizeNewlines(promptParts);
+        return finalizeAgentPrompt(promptParts, options?.cliPath);
     }
 
     if (role === 'tester') {
@@ -2222,7 +2254,7 @@ For each plan:
             acceptanceBaselineBlock
         ].filter(Boolean).join('\n\n');
 
-        return normalizeNewlines(promptParts);
+        return finalizeAgentPrompt(promptParts, options?.cliPath);
     }
 
     if (role === 'lead') {
@@ -2286,7 +2318,7 @@ For each plan:
             suppressWalkthroughBlock
         ].filter(Boolean).join('\n\n');
 
-        return normalizeNewlines(promptParts);
+        return finalizeAgentPrompt(promptParts, options?.cliPath);
     }
 
     if (role === 'coder') {
@@ -2377,7 +2409,7 @@ For each plan:
             ].filter(Boolean).join('\n\n');
 
             const coderPrompt = withCoderAccuracyInstruction(normalizeNewlines(promptParts), isDriveMode ? false : accurateCodingEnabled);
-            return normalizeNewlines(coderPrompt);
+            return finalizeAgentPrompt(coderPrompt, options?.cliPath);
         }
 
         // Non-feature coder dispatch — standard per-plan enumeration path.
@@ -2422,7 +2454,7 @@ For each plan:
         ].filter(Boolean).join('\n\n');
 
         const coderPrompt = withCoderAccuracyInstruction(normalizeNewlines(promptParts), accurateCodingEnabled);
-        return normalizeNewlines(coderPrompt);
+        return finalizeAgentPrompt(coderPrompt, options?.cliPath);
     }
 
     if (role === 'intern') {
@@ -2465,7 +2497,7 @@ For each plan:
         ].filter(Boolean).join('\n\n');
 
         const internPrompt = withCoderAccuracyInstruction(normalizeNewlines(promptParts), accurateCodingEnabled);
-        return normalizeNewlines(internPrompt);
+        return finalizeAgentPrompt(internPrompt, options?.cliPath);
     }
 
     if (role === 'analyst') {
@@ -2493,7 +2525,7 @@ For each plan:
             `PLANS TO PROCESS:\n${planList}`
         ].filter(Boolean).join('\n\n');
 
-        return normalizeNewlines(promptParts);
+        return finalizeAgentPrompt(promptParts, options?.cliPath);
     }
 
     if (role === 'ticket_updater') {
@@ -2554,7 +2586,7 @@ fields above, no speculative implementation detail. Comment only.`;
             `PLANS TO PROCESS:\n${planList}`
         ].filter(Boolean).join('\n\n');
 
-        return normalizeNewlines(promptParts);
+        return finalizeAgentPrompt(promptParts, options?.cliPath);
     }
 
     if (role === 'researcher') {
@@ -2605,7 +2637,7 @@ fields above, no speculative implementation detail. Comment only.`;
             `PLANS TO PROCESS:\n${planList}`
         ].filter(Boolean).join('\n\n');
 
-        return normalizeNewlines(promptParts);
+        return finalizeAgentPrompt(promptParts, options?.cliPath);
     }
 
     if (role === 'chat') {
@@ -2640,7 +2672,7 @@ fields above, no speculative implementation detail. Comment only.`;
             chatPrompt += `\n\nPLANS TO DISCUSS:\nNone. General consultation.`;
         }
 
-        return normalizeNewlines(chatPrompt);
+        return finalizeAgentPrompt(chatPrompt, options?.cliPath);
     }
 
     // No fallback — every built-in role must have an explicit template.
@@ -2848,5 +2880,5 @@ export function buildCustomAgentPrompt(
         prompt = ensureDispatchProtocolDirectives(prompt);
     }
 
-    return normalizeNewlines(prompt);
+    return finalizeAgentPrompt(prompt);
 }

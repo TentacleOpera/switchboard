@@ -746,10 +746,37 @@ test('the three delivery chokepoints carry a standingOrders opt-out guard', () =
 //    real assertions about output, not source scans.
 
 const tsc = require('typescript');
+
+// standingOrders.ts imports siblings (./standingOrderFragments) and utils
+// (../utils/cliPathToken). Handing the transpiled source this file's own
+// `require` resolves those specifiers against src/test/, so the module threw
+// MODULE_NOT_FOUND and every assertion below it was unreachable — the gate was
+// green-by-crash for nobody and red-by-crash in CI. Resolve relative specifiers
+// against the importing file's directory instead, transpiling .ts on the way.
+const _tsModuleCache = new Map();
+function requireFrom(baseDir, spec) {
+    if (!spec.startsWith('.')) { return require(spec); }
+    const resolved = path.resolve(baseDir, spec);
+    const file = ['.ts', '.js', '/index.ts', '/index.js']
+        .map(ext => resolved + ext)
+        .find(candidate => fs.existsSync(candidate)) || resolved;
+    if (_tsModuleCache.has(file)) { return _tsModuleCache.get(file).exports; }
+    const mod = { exports: {} };
+    _tsModuleCache.set(file, mod);
+    const compiled = tsc.transpileModule(fs.readFileSync(file, 'utf8'), {
+        compilerOptions: { module: tsc.ModuleKind.CommonJS, target: tsc.ScriptTarget.ES2020 }
+    }).outputText;
+    new Function('exports', 'module', 'require', compiled)(
+        mod.exports, mod, (s) => requireFrom(path.dirname(file), s)
+    );
+    return mod.exports;
+}
+
+const SERVICES_DIR = path.join(__dirname, '..', 'services');
 const resolverModule = { exports: {} };
 new Function('exports', 'module', 'require', tsc.transpileModule(STANDING_ORDERS_SRC, {
     compilerOptions: { module: tsc.ModuleKind.CommonJS, target: tsc.ScriptTarget.ES2020 }
-}).outputText)(resolverModule.exports, resolverModule, require);
+}).outputText)(resolverModule.exports, resolverModule, (s) => requireFrom(SERVICES_DIR, s));
 
 const { applyStandingOrders, renderStandaloneOrdersBlock, validateInstruction, STANDING_ORDERS_MARKER } = resolverModule.exports;
 
@@ -1079,7 +1106,7 @@ const LINK_PRESETS_SRC = fs.readFileSync(
 const linkPresetsModule = { exports: {} };
 new Function('exports', 'module', 'require', tsc.transpileModule(LINK_PRESETS_SRC, {
     compilerOptions: { module: tsc.ModuleKind.CommonJS, target: tsc.ScriptTarget.ES2020 }
-}).outputText)(linkPresetsModule.exports, linkPresetsModule, require);
+}).outputText)(linkPresetsModule.exports, linkPresetsModule, (s) => requireFrom(SERVICES_DIR, s));
 
 // Transpile teamWiring.ts with a custom require that resolves its three
 // relative imports: standingOrders (already transpiled above as resolverModule),
@@ -1094,7 +1121,7 @@ const teamWiringRequire = function (name) {
     if (name === './standingOrders') { return resolverModule.exports; }
     if (name === './linkPresets') { return linkPresetsModule.exports; }
     if (name === './agentPromptBuilder') { return agentPromptBuilderStub; }
-    return require(name);
+    return requireFrom(SERVICES_DIR, name);
 };
 const teamWiringModule = { exports: {} };
 new Function('exports', 'module', 'require', tsc.transpileModule(TEAM_WIRING_SRC, {

@@ -70,8 +70,8 @@ async function runTests() {
     // 2. The context-aware completion order body exists and routes completions.
     test('the context-aware completion order body exists and routes completions', () => {
         const order = CONTEXT_AWARE_COMPLETION_ORDER_BODY('team-review', 'lead-1');
-        assert.ok(order.includes('POST /kanban/queue/done'),
-            'the context-aware order routes to /kanban/queue/done');
+        assert.ok(order.includes('done --from "<your terminal name>"'),
+            'the context-aware order routes completions through the bundled CLI\'s done command');
         assert.ok(order.includes('/terminals/teams/team-review/queue/done'),
             'the context-aware order routes to team queue/done for prompt items');
         // A review team's seats read this same order. The board-position clause

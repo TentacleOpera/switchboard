@@ -51,11 +51,13 @@ export function buildMemberCompletionFragment(ctx: Pick<StandingOrderComposition
     return 'When you finish a task, route your completion report based on where the work came from.\n'
         + 'These routes are EXCLUSIVE: the first one that succeeds ends your report. Do NOT also take\n'
         + 'the other routes — reporting twice sends duplicate prompts to your lead.\n\n'
-        + '1. If you have a PLAN_ID from your dispatch, check the plan\'s column.\n'
+        + '1. If you have a PLAN_ID from your dispatch, call GET /kanban/plan?planId=<your planId>\n'
+        + '   against the API base named in your SWITCHBOARD STATUS line.\n'
         + '   - If the response shows kanbanColumn is "LEAD CODED", "CODER CODED", or "INTERN CODED",\n'
-        + '     run node "<cliPath>" done --from "<your terminal name>" (or switchboard done --from "<your terminal name>").\n'
+        + '     run node "<cliPath>" done --from "<your terminal name>".\n'
         + '     The system will clear your terminal and dispatch the next staged card.\n'
-        + '     A response of {"dispatched":null,"reason":"queue empty"} means the run is over — say so and stop.\n'
+        + '     Output reporting the queue is empty (or, with --json, {"dispatched":null,"reason":"queue empty"})\n'
+        + '     means the run is over — say so and stop.\n'
         + '     If you cannot complete it, run node "<cliPath>" done --from "<your terminal name>" --outcome failed with a one-line reason.\n'
         + '   - If the response shows any other column, report to your head (step 3).\n\n'
         + '2. If you do not have a PLAN_ID (ad-hoc prompt, file-based queue item),\n'
@@ -75,7 +77,8 @@ export function buildMemberCompletionFragment(ctx: Pick<StandingOrderComposition
 export function buildHeadCompletionFragment(): string {
     return 'CLOSE OUT EVERY SUBTASK. When a seat reports a subtask finished and you are satisfied '
         + 'with it, POST /kanban/task/complete with {"from":"<your terminal name>","planId":'
-        + '"<that SUBTASK\'s planId>","workspaceRoot":"<your cwd>"}. Post per subtask, with that subtask\'s planId — never '
+        + '"<that SUBTASK\'s planId>","workspaceRoot":"<your cwd>"} against the API base named in your '
+        + 'SWITCHBOARD STATUS line. Post per subtask, with that subtask\'s planId — never '
         + 'the feature\'s. Accepting and rejecting are not two different endings: you reject by '
         + 'sending a fix round first, then you post when the subtask is done. Until you post, that '
         + 'seat is not cleared and you cannot be handed the next subtask. Your POST is the only fact '
@@ -84,8 +87,8 @@ export function buildHeadCompletionFragment(): string {
 
 export function buildHeadNextFragment(ctx: Pick<StandingOrderCompositionContext, 'teamId'>): string {
     return 'Then take the next item, routed by where your own work came from:\n'
-        + '- If you hold a card dispatched from the board, run node "<cliPath>" done --from "<your terminal name>" (or switchboard done --from "<your terminal name>"). A response of '
-        + '{"dispatched":null,"reason":"queue empty"} means the run is over — say so and stop.\n'
+        + '- If you hold a card dispatched from the board, run node "<cliPath>" done --from "<your terminal name>". '
+        + 'Output reporting the queue is empty means the run is over — say so and stop.\n'
         + '- Otherwise POST /terminals/teams/' + ctx.teamId + '/queue/done with '
         + '{"from":"<your terminal name>"} to take the next queued item. If there are no more '
         + 'items, the team is done with queued work. Do not infer completion from board position: '
@@ -126,12 +129,11 @@ const REVIEW_HEAD_WORK =
     + 'to the plans folder (.switchboard/plans/) covering deferred items, remaining risks, and intent failures.';
 
 export const GLOBAL_QUEUE_COMPLETION_FRAGMENT_BODY =
-    'When you finish the card you were dispatched, run node "<cliPath>" done --from "<your terminal name>" '
-    + '(or switchboard done --from "<your terminal name>"). '
+    'When you finish the card you were dispatched, run node "<cliPath>" done --from "<your terminal name>". '
     + 'Do not wait to be asked; there is no head to report to. If you cannot complete it, call the same command with '
     + '--outcome failed and a one-line reason. Do not attempt work above your tier '
-    + 'and do not report success you cannot evidence. A response of {"dispatched":null,"reason":"queue empty"} means '
-    + 'the run is over — say so and stop. Do not call next, and do not move cards.';
+    + 'and do not report success you cannot evidence. Output reporting the queue is empty means '
+    + 'the run is over — say so and stop. Do not run the `next` command, and do not move cards.';
 
 export const STANDING_ORDER_FRAGMENTS: ReadonlyArray<StandingOrderFragment> = [
     { id: STANDING_ORDER_FRAGMENT_IDS.memberCompletion, name: 'Route member completion', order: 10, obligation: 'completion', applies: ctx => ctx.inTeam && !ctx.isHead && !ctx.externalHead, body: buildMemberCompletionFragment },

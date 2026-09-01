@@ -177,7 +177,8 @@ async function run() {
     await check('context-aware completion order routes to queue/done without mtime guess', async () => {
         const { CONTEXT_AWARE_COMPLETION_ORDER_BODY } = require(path.join(process.cwd(), 'out', 'services', 'teamWiring.js'));
         const body = CONTEXT_AWARE_COMPLETION_ORDER_BODY('test-group', 'lead-1');
-        assert.ok(body.includes('POST /kanban/queue/done'), 'order must instruct coder to call POST /kanban/queue/done');
+        assert.ok(body.includes('done --from "<your terminal name>"'),
+            'order must instruct coder to signal completion with the bundled CLI\'s done command');
         assert.ok(body.includes('/terminals/teams/test-group/queue/done'), 'order must instruct fallback queue/done');
         // Reading `kanbanColumn` to pick an ENDPOINT is routing and is allowed.
         // Reading it to decide that WORK IS FINISHED is the inference this file

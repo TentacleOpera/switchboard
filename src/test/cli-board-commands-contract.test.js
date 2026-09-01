@@ -30,7 +30,7 @@ function readSource(...segments) {
 }
 
 /** The board subcommands this plan added, plus the pre-existing read-only three. */
-const BOARD_SUBCOMMANDS = ['plans', 'ready', 'dispatch', 'clear', 'fleet', 'verb', 'help', 'about', 'version', 'setup'];
+const BOARD_SUBCOMMANDS = ['plans', 'ready', 'dispatch', 'done', 'next', 'clear', 'fleet', 'verb', 'help', 'about', 'version', 'setup'];
 
 function run() {
     const cli = readSource('src', 'standalone', 'cli.ts');
@@ -423,6 +423,33 @@ function run() {
             `${cmd} must call the shared emitOfflineGuidance helper when findRunningInstance returns null.`
         );
     }
+    // ── Every dispatched subcommand is also an ALLOWED subcommand. ───────────
+    // main() answers `process.argv[2] === 'X'` far below the KNOWN_SUBCOMMANDS
+    // gate, so a handler added without a matching allowlist entry is dead: the
+    // gate prints "Unknown subcommand 'X'" and exits 1 before the handler is
+    // reached. `done` and `next` shipped exactly that way — registered in
+    // `usage()` and in the help body, dispatched in main(), and unreachable.
+    // Nothing else can see it: it compiles, it lints, and every other gate is
+    // static text that reads the help output rather than the gate.
+    const known = new Set(
+        Array.from(knownMatch[1].matchAll(/'([^']+)'/g)).map(m => m[1])
+    );
+    const dispatched = new Set(
+        Array.from(cli.matchAll(/process\.argv\[2\] === '([^']+)'/g)).map(m => m[1])
+    );
+    // 'start' is the retired-alias redirect, handled inside the gate itself.
+    dispatched.delete('start');
+    const unreachable = [...dispatched].filter(cmd => !known.has(cmd));
+    assert.deepStrictEqual(
+        unreachable, [],
+        `main() dispatches subcommand(s) missing from KNOWN_SUBCOMMANDS: ${unreachable.join(', ')} — `
+        + 'the gate rejects them before the handler runs.'
+    );
+    for (const cmd of ['done', 'next']) {
+        assert.ok(known.has(cmd), `KNOWN_SUBCOMMANDS must contain '${cmd}'.`);
+        assert.ok(dispatched.has(cmd), `main() must dispatch '${cmd}'.`);
+    }
+
     // The CLI banner tagline is "Agent Fleet Command" (renamed from
     // "Autonomous Agent Fleet Console").
     assert.ok(

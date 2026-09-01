@@ -20,6 +20,7 @@ import { writeMissionControlReport, writeInstruction, bootstrapInstructionsDirec
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { resolvePreferredPort, PORT_BASE, PORT_SPAN } from '../utils/portResolver';
+import { setBundledCliPath } from '../utils/cliPathToken';
 import { getConstitutionPath } from './constitutionUtils';
 import { buildWorkspaceItems } from './workspaceUtils';
 import { stateFs as fs, stateLockfile as lockfile, getWorkspaceRootFromStatePath } from './stateConfigBridge';
@@ -3786,6 +3787,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             return result;
         };
 
+        // Prime the CLI-path seam before anything can build an agent prompt.
+        this.getCliPath();
+
         const preferredPort = await resolvePreferredPort();
         if (preferredPort === null) {
             console.warn(`[TaskViewerProvider] Ports ${PORT_BASE}-${PORT_BASE + PORT_SPAN - 1} are in use, falling back to an ephemeral port.`);
@@ -4476,13 +4480,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * Plumbed at build time so dispatched agents can invoke the CLI directly.
      */
     public getCliPath(): string {
-        if ((this as any)._cliPath) {
-            return (this as any)._cliPath;
-        }
-        if (this._extensionUri?.fsPath) {
-            return path.join(this._extensionUri.fsPath, 'dist', 'standalone', 'cli.js');
-        }
-        return path.join(__dirname, 'cli.js');
+        const resolved = (this as any)._cliPath
+            || (this._extensionUri?.fsPath
+                ? path.join(this._extensionUri.fsPath, 'dist', 'standalone', 'cli.js')
+                : path.join(__dirname, 'standalone', 'cli.js'));
+        // Prime the module-level seam the shared prompt fragments resolve
+        // `<cliPath>` through. Fragments are constants with byte-identical
+        // webview mirrors, so they cannot interpolate the path themselves.
+        setBundledCliPath(resolved);
+        return resolved;
     }
 
     /**

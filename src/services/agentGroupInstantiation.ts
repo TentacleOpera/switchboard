@@ -273,9 +273,10 @@ ${featureId ? `- **Active Feature ID:** \`${featureId}\`\n` : ''}
 ## 2. Team Roster
 ${workerLines || '- (no worker terminals)'}
 
-## 3. Port Discovery & Endpoint Access
-Read the LocalApiServer port from \`.switchboard/api-server-port.txt\` (or \`.switchboard/api-port\`).
-Base URL: \`http://127.0.0.1:<port>\`${apiPort ? ` (default / current port: ${apiPort})` : ''}
+## 3. Endpoint Access
+${apiPort
+    ? `Base URL: \`http://127.0.0.1:${apiPort}\` — resolved at prompt-generation time. Do not read \`.switchboard/api-server-port.txt\`.`
+    : 'Base URL: `http://127.0.0.1:<port>` — probe `GET /health` on ports 7777-7780 and take the one whose `roots` array contains this workspace root. The Switchboard host binds the first free port in that range.'}
 
 ## 4. Work Dispatch & Communication
 - **Dispatch subtask to worker:** \`POST /kanban/dispatch\`

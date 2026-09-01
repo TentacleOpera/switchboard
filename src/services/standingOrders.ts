@@ -4,6 +4,7 @@ import {
     getStandingOrderFragment,
     StandingOrderCompositionContext,
 } from './standingOrderFragments';
+import { substituteCliPath } from '../utils/cliPathToken';
 
 export type StandingOrderScope = 'global' | 'team' | 'pair' | 'team-head' | 'role';
 
@@ -528,7 +529,11 @@ export function renderStandaloneOrdersBlock(
         block += line;
     }
     block += `These apply to everything you do in this terminal until told otherwise.\n`;
-    return block;
+    // Emission seam: fragment text carries the `<cliPath>` token because the
+    // fragments are module constants with byte-identical webview mirrors and
+    // cannot interpolate. Unsubstituted, the agent is handed
+    // `node "<cliPath>" done …` — a command that cannot run.
+    return substituteCliPath(block);
 }
 
 /**
@@ -577,9 +582,9 @@ export function applyStandingOrders(
                 rejected
             );
         }
-        return cleanPrompt;
+        return substituteCliPath(cleanPrompt);
     }
-    return cleanPrompt + block;
+    return substituteCliPath(cleanPrompt) + block;
 }
 
 /** Save-time validation. Returns an error string, or null when acceptable. */

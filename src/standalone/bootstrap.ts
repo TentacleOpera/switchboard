@@ -102,6 +102,7 @@ import { createVscodeHostSeams, type HostSeams } from '../services/hostSeams';
 // is constructed.
 import { __setStandaloneWorkspaceRoot, createStandaloneSecretStorage } from './vscodeShim';
 import { isLoopbackHostname, resolveDisplayHostname, isAllowedHostFor, isTailnetPolicy, LOOPBACK_ONLY_POLICY, type BindPolicy } from '../utils/loopbackHostname';
+import { setBundledCliPath } from '../utils/cliPathToken';
 
 // One JSDOM window for the whole process, reused by every `markdown.api.render`
 // call below. Building a window per render is ~100x slower and the expensive
@@ -1196,6 +1197,10 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         : (process.argv[1] && fs.existsSync(process.argv[1]) ? process.argv[1] : path.join(__dirname, 'cli.js'));
     (kanbanProvider as any)._cliPath = resolvedCliPath;
     (taskViewerProvider as any)._cliPath = resolvedCliPath;
+    // Composition-root seam for the `<cliPath>` token carried by the shared
+    // prompt fragments. Both hosts must call this; the extension root does it
+    // in TaskViewerProvider.getCliPath().
+    setBundledCliPath(resolvedCliPath);
 
     // Restore the active project filter from the DB config at boot.
     //

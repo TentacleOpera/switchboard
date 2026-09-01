@@ -11502,9 +11502,9 @@
         + '— never `git add -A` or `git add .`. Then create a single commit with a '
         + 'descriptive message. '
         + 'POST /kanban/task/complete with {"from":"{head}","planId":"<the subtask\'s planId>","workspaceRoot":'
-        + '"<your current working directory>"} against the port in .switchboard/api-server-port.txt. '
+        + '"<your current working directory>"} against the API base named in your SWITCHBOARD STATUS line. '
         + 'The card stays where it is. Completion is asserted, never inferred from board position. '
-        + 'POST /kanban/queue/next with {"from":"{head}"} against the port in .switchboard/api-server-port.txt; '
+        + 'run node "<cliPath>" next --from "{head}" (or switchboard next --from "{head}"); '
         + 'if it returns a dispatched card, work it; if it returns dispatched: null, report that the queue is '
         + 'empty and stop.';
 

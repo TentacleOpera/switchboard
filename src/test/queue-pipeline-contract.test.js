@@ -456,7 +456,17 @@ async function run() {
         assert.strictEqual(fleetOrders.filter(o => o.id === 'global-queue-done:global').length, 1);
         assert.strictEqual(fleetOrders[0].scope, 'global');
         const rendered = applyStandingOrders('task', 'Unrelated Planner', fleetOrders, new Set(), []);
-        assert.ok(rendered.includes('POST /kanban/queue/done'), 'global completion order must render for every terminal');
+        assert.ok(rendered.includes('done --from "<your terminal name>"'),
+            'global completion order must render for every terminal');
+        // The fragments carry a `<cliPath>` token because they are module
+        // constants with byte-identical webview mirrors. renderStandaloneOrdersBlock
+        // is the emission seam that resolves it — an unsubstituted token hands the
+        // agent `node "<cliPath>" done …`, a command that cannot run, and the
+        // completion signal is lost silently.
+        assert.ok(!rendered.includes('<cliPath>'),
+            'the <cliPath> token must be substituted at the standing-orders emission seam');
+        assert.ok(/node "[^"]*cli\.js" done --from/.test(rendered),
+            'the rendered order must name a concrete cli.js path');
     });
 
     await check('a failed dispatch is passed through and consumes nothing', async () => {

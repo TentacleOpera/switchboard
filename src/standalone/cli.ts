@@ -1511,7 +1511,18 @@ async function cmdDone(workspaceRoot: string, argv: string[]): Promise<void> {
         body.planId = planId;
     }
 
-    const res = await apiPost(port, '/kanban/queue/done', workspaceRoot, body);
+    let res;
+    try {
+        res = await apiPost(port, '/kanban/queue/done', workspaceRoot, body);
+    } catch (err: any) {
+        // The server answered /health a moment ago and is gone now. Report it as
+        // offline rather than letting main()'s catch print a stack trace at an
+        // agent that has to read the outcome.
+        if (jsonFlag) { emitJson({ success: false, error: `Switchboard did not answer: ${err?.message || err}` }); }
+        else { console.error(`[switchboard] Switchboard did not answer on port ${port}: ${err?.message || err}`); }
+        exitFlushed(1);
+        return;
+    }
     const code = dispatchExitCode(res.status);
     const data = res.json();
     if (jsonFlag) {
@@ -1520,6 +1531,10 @@ async function cmdDone(workspaceRoot: string, argv: string[]): Promise<void> {
         console.log(`[switchboard] Done signal recorded for seat '${from}'.`);
         if (data?.dispatched) {
             console.log(`  Next card popped: ${data.dispatched.title || data.dispatched.planId || 'dispatched'}`);
+        } else if (data?.reason === 'queue empty') {
+            // The fragments tell the agent that "queue empty" ends the run. Say it
+            // in the plain output too, or only `--json` callers can see it.
+            console.log('  Queue empty — the run is over.');
         }
     } else {
         const errMsg = String(data?.error || res.body || 'done failed');
@@ -1558,10 +1573,18 @@ async function cmdNext(workspaceRoot: string, argv: string[]): Promise<void> {
         exitFlushed(1);
     }
 
-    const res = await apiPost(port, '/kanban/queue/next', workspaceRoot, {
-        workspaceRoot,
-        from,
-    });
+    let res;
+    try {
+        res = await apiPost(port, '/kanban/queue/next', workspaceRoot, {
+            workspaceRoot,
+            from,
+        });
+    } catch (err: any) {
+        if (jsonFlag) { emitJson({ success: false, error: `Switchboard did not answer: ${err?.message || err}` }); }
+        else { console.error(`[switchboard] Switchboard did not answer on port ${port}: ${err?.message || err}`); }
+        exitFlushed(1);
+        return;
+    }
     const code = dispatchExitCode(res.status);
     const data = res.json();
     if (jsonFlag) {
@@ -1570,7 +1593,7 @@ async function cmdNext(workspaceRoot: string, argv: string[]): Promise<void> {
         if (data?.dispatched) {
             console.log(`[switchboard] Next card for '${from}': ${data.dispatched.title || data.dispatched.planId}`);
         } else {
-            console.log(`[switchboard] Queue empty for seat '${from}'.`);
+            console.log(`[switchboard] Queue empty for seat '${from}' — the run is over.`);
         }
     } else {
         const errMsg = String(data?.error || res.body || 'next failed');
@@ -2007,7 +2030,7 @@ async function main() {
     const KNOWN_SUBCOMMANDS = new Set([
         'local', 'tailnet', 'stop', 'status', 'logs', 'init', 'scaffold',
         'control-plane', 'secrets', 'token', 'export', 'import',
-        'plans', 'ready', 'dispatch', 'clear', 'fleet', 'verb',
+        'plans', 'ready', 'dispatch', 'done', 'next', 'clear', 'fleet', 'verb',
         'help', 'about', 'version', 'setup',
     ]);
     const firstArg = process.argv[2];
@@ -2071,6 +2094,7 @@ async function main() {
         && subcommand !== 'scaffold' && subcommand !== 'control-plane'
         && subcommand !== 'stop' && subcommand !== 'status' && subcommand !== 'logs'
         && subcommand !== 'plans' && subcommand !== 'ready' && subcommand !== 'dispatch'
+        && subcommand !== 'done' && subcommand !== 'next'
         && subcommand !== 'clear' && subcommand !== 'fleet' && subcommand !== 'verb'
         && subcommand !== 'help' && subcommand !== 'about' && subcommand !== 'version'
         && subcommand !== 'setup';

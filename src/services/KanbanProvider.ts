@@ -1309,7 +1309,8 @@ export class KanbanProvider implements vscode.Disposable {
         if (this._extensionUri?.fsPath) {
             return path.join(this._extensionUri.fsPath, 'dist', 'standalone', 'cli.js');
         }
-        return path.join(__dirname, 'cli.js');
+        // Extension bundle: __dirname is dist/, the CLI is dist/standalone/cli.js.
+        return path.join(__dirname, 'standalone', 'cli.js');
     }
 
     /**
@@ -5751,7 +5752,12 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         if (!resolved || resolved.members.length === 0) return null;
 
         let portLine = 'read .switchboard/api-server-port.txt';
-        const apiPort = this._taskViewerProvider?.getLocalApiServerPort() ?? 0;
+        // `?.()` on the METHOD, not just the provider: `_taskViewerProvider` is
+        // set from several roots (and stubbed in the drive-prefix contract test)
+        // with objects that do not carry the full surface. A bare
+        // `provider?.getLocalApiServerPort()` throws TypeError and takes the whole
+        // batch drive prefix down.
+        const apiPort = this._taskViewerProvider?.getLocalApiServerPort?.() ?? 0;
         if (apiPort > 0) {
             portLine = `Port is ${apiPort}. BASE="http://127.0.0.1:${apiPort}"`;
         } else {
