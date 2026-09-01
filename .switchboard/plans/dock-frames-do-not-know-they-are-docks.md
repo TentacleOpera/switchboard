@@ -112,6 +112,12 @@ Two relays were retrofitted with dock guards; nothing enumerated the rest.
 - **Blocks `agent-dock-three-tabs-agent-cli-fleet.md`.** All three defects follow any `?dock=1`
   document, and that plan adds a CLI tab on the same pattern. The paint flash is already on the
   agent tab, which survives. Landing the rework first ships new instances of known bugs.
+- **Partly superseded, later, by `the-dock-becomes-its-own-document.md`.** Defects 1 and 2 —
+  inherited panel settings and the late mode class — cannot occur in a document that has no panel
+  settings and no full-panel chrome to hide. Defect 3 is **not** superseded: `transport.js` is
+  shared by every panel including a future `/dock`, and the shell's missing origin check is a shell
+  bug. This plan still ships first and in full — the dock document is a longer track behind a
+  viewport extraction, and the guards are needed throughout.
 
 ## User Review Required
 
