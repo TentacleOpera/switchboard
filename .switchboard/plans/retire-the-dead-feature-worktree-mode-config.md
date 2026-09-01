@@ -97,13 +97,17 @@ freed a lane whose working tree was occupied.
 
 ## User Review Required
 
-- **Confirm nothing consumes the broadcast `featureWorktreeMode`.** It is shipped in a payload
-  (`:15273`); a webview reading it would break on removal. The webview grep is clean, but confirm
-  no external agent surface reads it before deleting the field.
-- **Confirm the drain and the key are deleted together, not in sequence.** Keeping the drain while
-  the key is dropped on read leaves a migration whose only effect is writing a value nothing reads;
-  keeping the key while the drain goes strands an install that crashed mid-session with the forced
-  value still in place. They are one change.
+None — both prior items are settled.
+
+**The broadcast has no consumer, and cannot acquire one.** `featureWorktreeMode` is a field inside
+`postMessage({ type: 'worktreeConfig', … })` (`KanbanProvider.ts:15268-15277`) — a webview message,
+not an HTTP payload, so no external agent surface can reach it. Zero references in `src/webview/`,
+`.agents/` or `.claude/`. It is a dead field in a live message.
+
+**The drain and the key are deleted in one commit**, per the project convention that a feature is a
+single commit. Either half alone is broken: dropping the key while the drain lives leaves a
+migration whose only effect is writing a value nothing reads; dropping the drain while the key lives
+strands an install that crashed mid-session with the forced value still in place.
 
 ## Complexity Audit
 

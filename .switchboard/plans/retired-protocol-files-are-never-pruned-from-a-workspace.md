@@ -80,17 +80,31 @@ housekeeping stayed in `extension.ts` where it was already working.
 **Complexity:** 4
 **Tags:** backend, reliability, bugfix, devops, infrastructure
 
-## User Review Required
+None.
 
-- **Confirm the first prune of `protocols/` is safe on upgrade.** On the release that adds
-  protocols to the ledger, the *previous* ledger has no protocol entries — so the prune deletes
-  nothing and the reconcile counts every protocol as "extra". That is the correct, safe behaviour
-  (the ledger is seeded, not acted on), but it means the first release only *starts* tracking. Any
-  plan that depends on orphan removal must land at least one release later.
-- **Confirm a user-authored file under `.agents/protocols/` is not collateral.** Someone who added
-  their own protocol directory has a file the bundle never shipped. It is not ledger-tracked, so it
-  is never pruned — but it will be counted as drift in the activation log. Confirm that is
-  acceptable rather than noisy.
+### Sequencing: the first release only starts tracking
+
+This is how the ledger works, not a choice. On the release that adds `protocols/` to
+`currentBundlePaths`, the *previous* ledger holds no protocol entries, so the prune deletes nothing
+and the reconcile counts every protocol as "extra". The ledger is seeded, not acted on.
+
+**Therefore `protocols-as-db-rows-not-scaffolded-files.md` must land at least one release after this
+one.** Shipping them together removes 29 protocols from the bundle while the ledger still has no
+record of them, so nothing is pruned and all 29 strand in every workspace — the outcome this plan
+exists to prevent.
+
+### The stray file under `.agents/protocols/` is agent-written, not user-written
+
+An unshipped file there is never ledger-tracked, so it is never pruned; it surfaces only as drift in
+the activation log. That is the right behaviour, and the drift count is the only thing that would
+ever reveal it.
+
+The author is not a user hand-editing. `protocol-paths-in-agent-instructions-point-nowhere.md`
+records the real case: an agent wrote a new `improve-feature` protocol to
+`.agents/skills/improve-feature/SKILL.md` — a path vacated four days earlier — while a second agent
+edited the canonical copy 96 minutes before, *"two diverged copies of a dispatched protocol, each
+holding one edit the other lacks."* An agent following stale instructions to a stale path is the
+generator of these files, which is why the drift count is worth reading rather than suppressing.
 
 ## Complexity Audit
 
