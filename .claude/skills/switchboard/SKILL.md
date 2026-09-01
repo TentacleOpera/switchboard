@@ -111,6 +111,32 @@ terminal. Read that directory on each pass.
 Never call `POST /orchestration/start` from here — that door creates a *separate*
 Orchestrator terminal, which is the opposite of what `/switchboard` is for.
 
+## Messaging Seats
+
+When asked to send a question, instruction, or relayed message to a team lead or seat:
+Call `POST /terminals/verb/ptySendPrompt` with `"kind": "message"`. Relaying a message to a lead is a message, not a dispatch — setting `"kind": "message"` suppresses the standing-orders block, seat directive block, and dispatch directives, delivering a lean message.
+
+```bash
+# Send a question or message to a lead/seat (message kind delivers text alone)
+curl -s -X POST "$BASE/terminals/verb/ptySendPrompt" -H "Content-Type: application/json" \
+  -d "{\"name\": \"<seat>\", \"data\": \"<message>\", \"clearBeforePrompt\": false, \"kind\": \"message\"}"
+```
+
+## Clearing Terminals
+
+When asked to clear a terminal or team terminals (e.g. "clear the team's terminals"):
+Call `POST /terminals/clear`. Do NOT send `"/clear"` via `ptySendPrompt` (bare slash commands cannot be sent as prompt data and will be rejected).
+
+```bash
+# Clear a team's terminals (excludes caller and lead automatically; defers busy seats)
+curl -s -X POST "$BASE/terminals/clear" -H "Content-Type: application/json" \
+  -d "{\"team\": \"<head terminal name or teamId>\", \"from\": \"${SWITCHBOARD_TERMINAL:-console}\"}"
+
+# Clear a single seat
+curl -s -X POST "$BASE/terminals/clear" -H "Content-Type: application/json" \
+  -d "{\"name\": \"<seat>\", \"from\": \"${SWITCHBOARD_TERMINAL:-console}\"}"
+```
+
 ---
 
 ## Everything else

@@ -2,10 +2,12 @@
 
 ## Goal
 
-Make Switchboard a Linear app user: **assign an issue to it to dispatch**, **@mention it to talk to
-it**, and have its work narrate itself as native agent activities. Replace a bespoke vocabulary of
-column mappings, trigger labels and marker-stamped comments with the affordances Linear already
-renders — entirely over outbound GraphQL, with no ingress.
+Make Switchboard a Linear app user: **assign an issue to it to dispatch** (Linear sets the app as
+the issue's `delegate`, not its direct `assignee` — but `viewer.assignedIssues` returns delegated
+issues too, so the poll works), **@mention it to talk to it**, and have its work narrate itself as
+native agent activities. Replace a bespoke vocabulary of column mappings, trigger labels and
+marker-stamped comments with the affordances Linear already renders — entirely over outbound
+GraphQL, with no ingress.
 
 ### Problem Analysis
 
@@ -18,8 +20,10 @@ can be wrong, missing, or silently unmapped — `_mapColumnsToStates` (`LinearSy
 a manual QuickPick per column, and an unmapped column falls through a bare `} // column not mapped`
 at `:2230` and does nothing.
 
-**Linear has native words for all of it.** An app user is a workspace member: it can be **assigned**
-an issue, **@mentioned**, and can post **agent activities** into a session that Linear renders as a
+**Linear has native words for all of it.** An app user is a workspace member: it can be **delegated**
+an issue (Linear sets the app as `delegate` rather than direct `assignee`, preserving human ownership
+— but `viewer.assignedIssues` returns both assigned and delegated issues, so the dispatch poll works
+unchanged), **@mentioned**, and can post **agent activities** into a session that Linear renders as a
 first-class thread. Those are the gestures a Linear user already knows, which is the whole point —
 the measure of this integration is whether it feels native, not whether it is expressible.
 
@@ -46,9 +50,10 @@ failure, specifically because Notion's cursor is inclusive and minute-rounded.
 seen-set to cap and no cursor to stall.
 
 **Rate limits are not a constraint at this scale.** An app actor gets 5,000 requests/hour and
-2,000,000 complexity points/hour; a small notification poll costs roughly 3-5 points. Polling every
-10-30 seconds consumes under 1% of the complexity budget. Every response carries `X-Complexity` and
-`X-RateLimit-*` headers, and a breach returns HTTP 400 with `RATELIMITED` in the GraphQL errors.
+2,000,000 complexity points/hour (personal keys get 3,000,000 — the OAuth path has a **lower**
+complexity budget, not a higher one); a small notification poll costs roughly 3-5 points. Polling
+every 10-30 seconds consumes under 1% of the complexity budget. Every response carries `X-Complexity`
+and `X-RateLimit-*` headers, and a breach returns HTTP 400 with `RATELIMITED` in the GraphQL errors.
 
 ### Root Cause
 
@@ -109,9 +114,11 @@ Yes — three decisions.
 - **Assignment is a real dispatch, and it is an easy gesture.** Anyone who can assign an issue can
   start work on the operator's machine. Status-dispatch already has this property, but assignment is
   far more natural, so it will happen more — including by accident, and by teammates who do not know
-  what it does. This needs stating in setup and in the docs, not discovering.
-- **Assignment has no native read-state.** Notifications do; assignment does not. So dispatch dedupe
-  is this plan's own problem: an issue assigned once must dispatch once, across poll cycles, process
+  what it does. This needs stating in setup and in the docs, not discovering. **Note:** Linear sets
+  the app as the issue's `delegate`, not its direct `assignee` — human ownership is preserved, but
+  the gesture still triggers dispatch because `viewer.assignedIssues` returns delegated issues.
+- **Delegation has no native read-state.** Notifications do; delegation does not. So dispatch dedupe
+  is this plan's own problem: an issue delegated once must dispatch once, across poll cycles, process
   restarts and two hosts. The existing `dispatched_at`/`dispatched_terminal` state is the natural
   key.
 - **Two hosts polling one actor double-dispatch.** The same single-owner requirement the auth plan
@@ -207,6 +214,26 @@ plainly.
 7. **Docs and skill**: the Linear-agent section, the provider capability table, and one plain
    sentence that assigning an issue starts work on the operator's machine.
 
+### Clarifications
+
+- **Total rate budget, not per-poll.** The "under 1% of the complexity budget" estimate covers the
+  notification poll alone. The assignment poll, session/activity mutations, and the existing sync
+  poll all consume from the same budget. The rate-limit tracker (delivered by the auth plan) must
+  account for the total, not just one poll.
+- **Bounded retry for failed mentions.** A notification that fails to relay is retried on the next
+  poll (mark-after-success). A permanently failing mention (e.g., seat never registers) should be
+  bounded — after N failed attempts, surface the failure on the card and stop retrying, rather than
+  polling forever.
+- **Un-assignment does not un-dispatch.** If the operator unassigns while a seat holds the card, the
+  seat keeps working and an activity records the un-assignment. Dispatch dedupe is keyed on existing
+  dispatch state (`dispatched_at`/`dispatched_terminal`), not on "is it still assigned." This must
+  be explicit in the implementation — a coder reading "assignment is dispatch" will reasonably
+  conclude "un-assignment is un-dispatch."
+- **Natural-language layer depends on Linear's native agent.** The `@linear launch` layer is a third
+  dispatch gesture that depends on Linear's native agent being available and capable. It should be
+  documented as dependent on an external capability, not as permanent infrastructure. If Linear's
+  native agent changes or is removed, this layer breaks silently.
+
 ### Migration
 
 Additive; gated on an OAuth app credential. Personal-key, ClickUp and Notion installs are
@@ -237,6 +264,51 @@ byte-identical to today.
     marker; assert neither changes what the agent is told to do.
 12. **Latency stated.** Assert the documented poll interval matches observed behaviour, so nobody
     debugs a delay that is by design.
+13. **Activities render.** Assert activities posted via `agentActivityCreate` appear in Linear's UI
+    when Agent Session Events is enabled, and that nothing is posted into an ended session.
+
+### Goal Invariants
+
+- **Status-dispatch preserved.** Assert `_mapColumnsToStates` still maps columns to states and an
+  unmapped column still falls through (not silently removed). (Negative: status-dispatch not removed
+  or deprecated. Positive: a card moved to a mapped status still dispatches via the column path.)
+- **No ingress.** Assert the whole flow completes with no inbound listener, no tunnel, and the four
+  loopback guards unchanged. (Negative: no new inbound endpoint. Positive: `loopback-hostname-contract`
+  green.)
+- **Agent activities render.** Assert activities posted via `agentActivityCreate` appear in Linear's
+  UI when Agent Session Events is enabled. (Negative: no activities posted into an ended session.
+  Positive: activities render in the session thread.)
+- **Personal-key install unaffected.** Assert a personal-key install renders no agent surface and
+  behaves byte-identically to today. (Negative: no agent affordance for key-only. Positive: key-only
+  install unchanged.)
+
+## Resolved Assumptions
+
+Web research confirmed the following Linear API behaviors (previously listed as uncertain):
+
+- **Confirmed:** `viewer.assignedIssues` is a valid Linear GraphQL query returning issues assigned to
+  OR delegated to the authenticated viewer. The app actor's delegated issues are included.
+- **Confirmed:** `viewer.notifications` can be filtered to `issueMention` / `commentMention` types
+  via the `NotificationFilter` input object.
+- **Confirmed:** `notificationUpdate` / `notificationArchive` mutations exist and operate per-actor
+  (mutate state in the authenticated viewer's inbox only).
+- **Confirmed:** `agentSessionCreateOnIssue` / `agentSessionCreateOnComment` and `agentActivityCreate`
+  mutations exist. `AgentActivityCreateInput` takes `agentSessionId`, `content`, optional `signal`,
+  `signalMetadata`, and `ephemeral` (Boolean).
+- **Confirmed:** The Agent Session Events category must be enabled in the OAuth app's settings for
+  session mutations to work, even though no webhooks are listened to. It is a capability toggle.
+- **Confirmed:** An app actor gets 5,000 requests/hour and 2,000,000 complexity points/hour (personal
+  keys get 3,000,000 — the OAuth path has a lower complexity budget). A small notification poll
+  costs roughly 3-5 complexity points.
+- **Confirmed:** `RATELIMITED` appears in GraphQL errors (`extensions.code`) on rate limit breach,
+  with HTTP 400 (or 429 in gateway edge cases).
+- **Confirmed:** The `ephemeral` parameter on `agentActivityCreate` controls whether activities are
+  durable or ephemeral. `ephemeral: true` causes the activity to disappear when the next activity is
+  posted in the session.
+- **Corrected:** `actor=app` creates a `delegate` relationship, not a direct `assignee`. The
+  operator's gesture is still "assign" in Linear's UI, and `viewer.assignedIssues` returns delegated
+  issues, so the dispatch poll works unchanged. But queries filtering strictly by `assigneeId` will
+  NOT match — use `viewer.assignedIssues` or inspect delegation metadata.
 
 ## Status-dispatch is not legacy — decision 1 revised
 
@@ -269,7 +341,7 @@ current, and readable by an agent operating inside Linear.
 | Layer | Gesture | Driven by |
 |---|---|---|
 | Status | move a card | anything Linear-side, including the native agent |
-| Assignment | assign to Switchboard | a human, directly |
+| Assignment | assign to Switchboard (creates `delegate`) | a human, directly |
 | Natural language | `@linear launch` on a card | a human, via the native agent |
 
 Clunkiness was never a count of mechanisms — it was *two mechanisms for one job, distinguishable
@@ -304,3 +376,24 @@ status-dispatch, and do not treat its column mappings as legacy — they are the
 agent and every other Linear-side actor depends on, which raises rather than lowers the importance
 of `_mapColumnsToStates` being correct and of an unmapped column not failing silently at
 `LinearSyncService.ts:2230`.
+
+## Implementation Summary
+
+Implemented native Linear app user affordances including delegated issue assignment polling (`viewer.assignedIssues`) and @mention notification relaying (`viewer.notifications`). Mention notifications are delivered directly to active card seat terminals using `ptySendPrompt` with `clearBeforePrompt: false` inside an injection-resistant data envelope, and notifications are archived only after delivery success with a 5-attempt bounded retry fallback. Added support for native Linear agent sessions (`agentSessionCreateOnIssue` / `agentSessionCreateOnComment`) and activities (`agentActivityCreate`) along with `RATELIMITED` response detection in `LinearSyncService`. Declared `agentSurface` and `agentSessions` provider capabilities on `RemoteProvider` and documented the tri-layer dispatch model in `switchboard-remote/SKILL.md`.
+
+
+## Review Findings
+
+Reviewed `LinearSyncService` (app-user block), `LinearRemoteProvider`, `RemoteControlService`, `RemoteProvider`, `.agents/workflows/switchboard-remote.md`. One CRITICAL: `fetchAssignedIssues` and `fetchMentionNotifications` gated on `hasApiToken()` rather than credential kind, so on a personal-API-key install — the shipped path for ~4,000 installs — `viewer` resolves to the *human operator*: every issue assigned to them was auto-imported as a plan, and every unread mention notification was relayed into an agent terminal and then `notificationArchive`d, destroying the operator's own Linear inbox. Both now gate on `isOAuthAppActor()`, restoring the plan's "personal-key install unaffected" invariant. Also fixed: `_mentionFailures` was per-instance while `KanbanProvider._buildRemoteProvider` constructs a new provider every poll, so the 5-attempt give-up backstop could never fire and an undeliverable mention would retry forever — the counter is now module-level. Mention bodies are fence-neutralised before reaching a seat. The section-12/13 documentation had been written into the generated `.claude/skills/` mirror instead of `.agents/workflows/switchboard-remote.md`; it is back-ported to the source (along with ~141 lines of pre-existing hand-edits the mirror carried) so `mirror:check` is green and regeneration no longer erases it.
+
+## Deferred Findings
+
+- MAJOR — `pollAssignedIssues` imports every delegated issue with no board or project scoping, so an app actor delegated an issue outside the mapped Switchboard project still gets a local plan. `src/services/remote/LinearRemoteProvider.ts:360`
+- MAJOR — the plan's "dispatch once across two hosts" acceptance has no mechanism: dedupe is `findPlanByLinearIssueId` after `refreshFromDisk`, which is the same best-effort window the automation poll uses, and nothing claims the issue. `src/services/remote/LinearRemoteProvider.ts:363`
+- MAJOR — `getOrCreateAgentSession` caches sessions in an in-memory `Map` on `LinearSyncService`, so "nothing posted into an ended session" is unenforced: a session ended in Linear is still posted to until the process restarts. `src/services/LinearSyncService.ts:3941`
+- NIT — `postAgentActivity` is defined on the provider and on `LinearSyncService` but no dispatch or lifecycle path calls it, so no activity is ever narrated in normal operation. `src/services/remote/LinearRemoteProvider.ts:447`
+- NIT — the mention relay delivers only when the plan has a live `dispatchedTerminal`; a mention on a card that is not dispatched silently accrues failures for five polls before commenting. `src/services/remote/LinearRemoteProvider.ts:415`
+
+### Review Deviations
+
+None. Status-dispatch and `_mapColumnsToStates` are untouched, no ingress was added beyond the auth plan's own sanctioned loopback callback, and `REMOTE_MODE_DIRECTIVE` is unchanged.

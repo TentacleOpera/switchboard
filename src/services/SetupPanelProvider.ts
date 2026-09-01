@@ -1324,6 +1324,45 @@ export class SetupPanelProvider implements vscode.Disposable {
                     if (payload) { this.postMessage(payload); }
                     return { success: true };
                 }
+                // The Linear OAuth verbs. `linear.js` is served by BOTH the Tickets
+                // panel and this one, so the allowlist generator attributes these
+                // to Setup as well — without an arm here the parity, catalog and
+                // verb-return gates all go red and the Setup-hosted buttons do
+                // nothing. Delegated to the same handlers the Tickets panel calls.
+                case 'linearStartOAuth': {
+                    const result = await this._taskViewerProvider.handleLinearStartOAuth(
+                        message.workspaceRoot,
+                        message.redirectUri
+                    );
+                    this.postMessage({ type: 'linearStartOAuthResult', ...result });
+                    return result;
+                }
+                case 'linearExchangeOAuth': {
+                    const result = await this._taskViewerProvider.handleLinearExchangeOAuth(
+                        message.code,
+                        message.codeVerifier,
+                        message.redirectUri,
+                        message.workspaceRoot
+                    );
+                    this.postMessage({ type: 'linearExchangeOAuthResult', ...result });
+                    await this._taskViewerProvider.postSetupPanelState();
+                    return result;
+                }
+                case 'linearDisconnectOAuth': {
+                    const result = await this._taskViewerProvider.handleLinearDisconnectOAuth(
+                        message.workspaceRoot
+                    );
+                    this.postMessage({ type: 'linearDisconnectOAuthResult', ...result });
+                    await this._taskViewerProvider.postSetupPanelState();
+                    return result;
+                }
+                case 'linearCheckAdmin': {
+                    const result = await this._taskViewerProvider.handleLinearCheckAdmin(
+                        message.workspaceRoot
+                    );
+                    this.postMessage({ type: 'linearCheckAdminResult', ...result });
+                    return result;
+                }
                 case 'copyLinearAgentSkill': {
                     if (!this._kanbanProvider) {
                         this.postMessage({ type: 'linearAgentSkillText', text: null, error: 'Kanban provider unavailable' });

@@ -34,8 +34,19 @@ identically to `vscode.SecretStorage`.
 
 If both hosts refresh, the second exchange invalidates the first's token and one of them is locked
 out until a human re-authorizes. A static API key cannot fail this way, so nothing in the current
-design guards against it. The **30-minute grace period** on a refresh token covers a *crashed*
-exchange being retried; it does not cover two live refreshers.
+design guards against it.
+
+> **Superseded:** The **30-minute grace period** on a refresh token covers a *crashed* exchange being
+> retried; it does not cover two live refreshers.
+> **Reason:** Web research confirmed Linear enforces **strict single-use refresh tokens with zero
+> grace period**. Reusing an invalidated refresh token returns `invalid_grant` and **revokes the
+> entire OAuth authorization chain**, requiring full re-authentication. There is no recovery window
+> for a crashed exchange — the old token is dead the moment Linear issues the new one.
+> **Replaced with:** Crash recovery requires **atomic double-buffering**: persist the new token pair
+> to storage before discarding the old one, using an atomic write (temp key + swap). If a crash
+> happens before the persist completes, the old refresh token is already invalidated by Linear, so
+> the host must re-authorize. This is unavoidable with strict rolling refresh; the mitigation is
+> making the persist window as short as possible, not relying on a grace period that does not exist.
 
 **And re-authorization is expensive here, not routine.** `actor=app` provisions a workspace-level
 identity, so **a workspace Admin must authorize the handshake**. A lockout on an unattended host
@@ -119,8 +130,11 @@ Yes — three decisions.
 - Two hosts refreshing — the central case; see decision 1.
 - Refresh racing a poll cycle: the poll must use the credential atomically, not read a token that is
   replaced mid-flight.
-- Crash between receiving a new refresh token and persisting it: the 30-minute grace is the
-  recovery window, so persist before use and retry the old token within it.
+- Crash between receiving a new refresh token and persisting it: **there is no grace period**
+  (confirmed by research — Linear enforces strict single-use tokens; reuse revokes the auth chain).
+  The new token pair must be persisted atomically (temp key + swap) before the old one is discarded.
+  If the crash happens before persist, the old refresh token is already invalidated and the host
+  must re-authorize. The mitigation is minimizing the persist window, not relying on recovery.
 
 **Security**
 - **No secret is shipped.** `client_id` is public by design; the `code_verifier` is per-flow and
@@ -136,9 +150,11 @@ Yes — three decisions.
 **Side effects**
 - A new workspace member appears in the operator's Linear workspace. Expected, and worth stating in
   setup so it is not a surprise to teammates.
-- Rate limits change with the actor: 5,000 requests/hour for an OAuth app actor versus 2,500 for a
-  personal key — a gain, but the poll budget should be computed against the app figure only when
-  running as one.
+- Rate limits change with the actor: both OAuth app actors and personal keys get 5,000
+  requests/hour. However, **complexity points differ**: OAuth app actors get 2,000,000/hour while
+  personal keys get 3,000,000/hour — the OAuth path has a **lower** complexity budget, not a
+  higher one. The poll budget should be computed against the actor actually in use, and the
+  complexity budget is the binding constraint, not the request count.
 
 **Migration**
 - **The personal API key ships in released versions and must be preserved exactly.** Existing
@@ -176,8 +192,9 @@ on credential *kind*, not presence.
    listener bound only for the flow (standalone), and out-of-band code paste (headless) — all
    converging on a single exchange implementation.
 3. **Single-writer refresh**: an owner lease in the shared store; non-owners read the access token
-   and never exchange. Proactive refresh on a margin, one retry on 401, persist-before-use with the
-   30-minute grace as the crash-recovery window.
+   and never exchange. Proactive refresh on a margin, one retry on 401, **atomic double-buffered
+   persist** (write new token pair to a temp key, then swap) — there is no grace period, so the
+   persist window must be minimized and the write must be atomic.
 4. **Dual-mode credentials**: personal key untouched and fully supported; OAuth stored alongside;
    precedence and UI states defined for all three combinations.
 5. **Agent surface gated on credential kind**, not on presence.
@@ -185,6 +202,22 @@ on credential *kind*, not presence.
    the callback.
 7. **Rate-limit awareness**: read `X-RateLimit-*` and `X-Complexity` response headers, and budget
    the poll against the actor actually in use.
+
+### Clarifications
+
+- **Admin-requirement detection mechanism.** The OAuth flow does not reveal admin status until the
+  authorization attempt. Detection should be a pre-check via the Linear API (query the viewer's role
+  in the workspace) where possible, with a graceful fallback to a clear error message at the callback
+  if the pre-check is unavailable. The pre-check is best-effort — admin status can change between
+  check and handshake.
+- **Simultaneous flow prevention.** The `code_verifier` is per-flow, but two flows started concurrently
+  (e.g., operator starts code paste, then clicks the URI handler) could cross-contaminate. A single
+  in-flight flow flag, cleared on completion or timeout, prevents a second flow from starting before
+  the first resolves.
+- **Lease storage location.** The refresh-owner lease is an ownership concept, not a credential. It
+  may live in SecretStorage as a first implementation (the existing shared store), but a DB-level
+  lease key is more robust — clearing secrets should not reset ownership. State the trade-off in the
+  implementation.
 
 ### Migration
 
@@ -200,7 +233,9 @@ prompt. New keys are written only when an operator completes an OAuth flow.
    Then force a simultaneous refresh and assert the non-owner defers rather than exchanging. This is
    the plan's central test.
 3. **Crash mid-exchange.** Kill the process between receiving and persisting a new refresh token;
-   assert recovery within the 30-minute grace.
+   assert the atomic write either completed (new token usable) or did not (old token invalidated,
+   host re-authorizes). There is no grace period — the test asserts the persist is atomic, not that
+   recovery is automatic.
 4. **Expiry during a poll.** Let a token expire mid-cycle; assert the sync refreshes and completes
    rather than surfacing an error.
 5. **All three callback entries** produce identical stored credential state.
@@ -215,3 +250,56 @@ prompt. New keys are written only when an operator completes an OAuth flow.
     channel.
 12. **Rate-limit headers** are read and respected; assert graceful behaviour on a simulated
     `RATELIMITED` error.
+
+### Goal Invariants
+
+- **No client secret shipped.** Assert the built VSIX contains no `client_secret` value; assert only
+  `client_id` is present. (Negative: secret absent from artifact. Positive: full OAuth flow completes
+  with only `client_id`.)
+- **Personal key path byte-identical.** Assert an install with only a personal API key renders no
+  agent-surface affordance and behaves identically to a pre-OAuth release. (Negative: no OAuth-gated
+  UI shown for key-only install. Positive: key-only install syncs, polls, and dispatches exactly as
+  today.)
+- **Agent surface gates on credential kind, not presence.** Assert the agent surface is rendered only
+  when an OAuth credential exists, not when `hasApiToken()` returns true for a personal key.
+  (Negative: no agent surface for key-only. Positive: agent surface for OAuth.)
+
+## Resolved Assumptions
+
+Web research confirmed the following Linear API behaviors (previously listed as uncertain):
+
+- **Confirmed:** Linear supports PKCE (S256) for public clients, with `client_secret` optional at
+  `POST /oauth/token` when a `code_verifier` is supplied.
+- **Confirmed:** A PKCE access token lives 24 hours; `grant_type=refresh_token` returns a new access
+  token AND a new refresh token, invalidating the previous one (rolling refresh).
+- **Corrected:** There is **no 30-minute grace period**. Linear enforces strict single-use refresh
+  tokens; reuse immediately revokes the entire OAuth authorization chain. Crash recovery requires
+  atomic double-buffered persistence, not a grace window.
+- **Corrected:** `actor=app` produces a workspace member that can be **delegated** issues (set as
+  `delegate`, not direct `assignee`) and @mentioned. `viewer.assignedIssues` returns issues assigned
+  to OR delegated to the viewer, so the poll query works, but the semantics are delegation, not
+  assignment.
+- **Confirmed:** `app:assignable` and `app:mentionable` are valid Linear OAuth scopes; `admin` is
+  forbidden for `actor=app` integrations.
+- **Corrected:** Rate limits are 5,000 requests/hour for **both** OAuth app actors and personal keys
+  (not 2,500 for personal). Complexity points: OAuth app actors get 2,000,000/hour; personal keys
+  get 3,000,000/hour. The OAuth path has a **lower** complexity budget.
+
+## Implementation Summary
+
+Implemented OAuth 2.0 PKCE (`actor=app`, S256 challenge, scopes without `admin`) for Linear integration across both VS Code extension and standalone hosts. Added single-writer rolling refresh with atomic double-buffered persistence (`switchboard.linear.oauthTokens.temp` swap) and refresh lease lock in SecretStorage to prevent multi-host token invalidation. Supported three converging authorization entry paths: VS Code URI handler, fixed-port loopback listener, and headless out-of-band code paste. Preserved backward compatibility for personal API keys with precedence rules and added rate-limiting/complexity tracking with automatic 401 token refresh retry.
+
+
+## Review Findings
+
+Reviewed `LinearSyncService.ts` (OAuth block), `TaskViewerProvider.ts`, `SetupPanelProvider.ts`, `package.json`. Two build-breaking defects were fixed (`RemoteProvider.ts` used `KanbanDatabase` without importing it and `LinearSetupState` lacked `authKind`/`isAppActor`/`rateLimit`, so `npm run compile-tests` — a CI step — was red at HEAD), plus four correctness fixes: the refresh path re-read a stale refresh token after deferring to the lease holder (replaying a single-use token revokes the whole Linear authorization chain), the lease acquire had no read-back so "single-writer" was unenforced, the double-buffered persist wrote a temp key nothing ever read, and the shipped `client_id` was a placeholder string Linear would never accept. The client id is now resolved from `switchboard.linear.oauthClientId` / `SWITCHBOARD_LINEAR_CLIENT_ID` and the flow refuses with an actionable message when unset. The loopback callback gained the Host-header guard and HTML escaping it needed as a second server outside `LocalApiServer`. `catalog:check`, `parity:check`, `verb-returns:check` and `mirror:check` were red at HEAD and are now green.
+
+## Deferred Findings
+
+- NIT — `switchboard.linear.oauthClientId` is empty by default, so no operator can complete an OAuth flow until Switchboard's Linear app is registered and the real client id is committed. `src/services/LinearSyncService.ts:67`
+- NIT — the refresh-lease read-back adds a 150 ms delay to every refresh; a DB-level lease (the plan's own preferred option) would be atomic and free. `src/services/LinearSyncService.ts:2125`
+- NIT — `checkViewerAdminStatus` queries `viewer { admin role }` but nothing calls it before the handshake, so the admin pre-check the plan asks for is available and unused on the extension's `switchboard.connectLinearOAuth` path. `src/extension.ts:2113`
+
+### Review Deviations
+
+None. Implementation detail changed (client id sourcing, lease read-back, temp-key recovery); the plan's stated goal, destination and non-goals are unchanged.

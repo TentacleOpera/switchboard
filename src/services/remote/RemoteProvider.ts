@@ -13,7 +13,7 @@
  * (research-confirmed; see docs/technical_platform_integration_analysis.md, Finding 6).
  */
 
-import type { KanbanPlanRecord } from '../KanbanDatabase';
+import type { KanbanDatabase, KanbanPlanRecord } from '../KanbanDatabase';
 
 /** A single remote state change: a card whose status/column moved. */
 export interface RemoteStateDelta {

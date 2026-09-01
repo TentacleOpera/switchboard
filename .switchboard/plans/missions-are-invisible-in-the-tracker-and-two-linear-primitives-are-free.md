@@ -105,6 +105,14 @@ Yes — three decisions.
   `issueRelationCreate` semantics — including what happens on duplicate relations and on assigning
   an issue to a milestone in a project it does not belong to — must be tested against the real API.
   This plan should not ship a shape that assumes them.
+
+  > **Research update:** APIs verified. `projectMilestoneCreate`/`Update`/`Delete`/`Move` and
+  > `issueRelationCreate` all exist. Duplicate relations return a GraphQL constraint violation
+  > error. **Cross-project milestone constraint confirmed but not a concern here:** assigning an
+  > issue to a milestone in a different project triggers a GraphQL validation error — but missions
+  > are workspace-scoped (`workspace_id TEXT NOT NULL`), the board maps to a single Linear project,
+  > and member issues are plans from that workspace already in that project. The constraint cannot
+  > be triggered by this design.
 - **Membership churn.** Cards enter and leave STAGING; `KanbanDatabase.ts:10226` already clears
   `queue_position` when a card leaves. Milestone assignment must follow membership rather than
   drift, and a card that leaves a mission must be unassigned — a stale milestone is worse than none
@@ -184,6 +192,24 @@ delivery.
 7. **Update `switchboard-remote/SKILL.md`**, whose "what the tracker cannot show you" section
    currently lists missions first and will be wrong for Linear.
 
+### Clarifications
+
+- **Mapping store location.** The mission→milestone mapping is the sync's first non-plan identity.
+  It should be a new table in the existing Kanban DB (e.g., `mission_milestones`), not a JSON file —
+  two-host consistency requires the same `refreshFromDisk` discipline the rest of the sync uses, and
+  a DB table gets that for free.
+- **Staleness window.** Membership is reconciled on each poll cycle. Between polls, a card that left
+  a mission still shows its milestone in Linear. The staleness window is one poll interval (typically
+  30-120 seconds). This should be stated in the docs.
+- **Hand-drawn relations not enforced.** Dependencies are outbound-only to start. A `blocks` relation
+  drawn by hand in Linear will not become a `plan_dependencies` row and will not be enforced by the
+  pop-time gate. This must be stated in the docs so an operator does not expect a hand-drawn block to
+  hold.
+- **Milestone exclusion from ingestion.** Milestones are not issues and will not be picked up by plan
+  ingestion. The "exclude by explicit link" requirement applies to any mission *issues* that might be
+  created (this plan does not create them), not to milestones themselves. If no mission issues are
+  created, no ingestion exclusion is needed beyond confirming milestones are not issues.
+
 ### Migration
 
 Additive. New mapping store only; `plans`, `missions` and `mission_members` are untouched. No
@@ -210,3 +236,57 @@ behaviour change for installs without Linear or with mission sync disabled.
 9. **Two hosts.** Sync one board from two hosts; assert one milestone and no duplicate relations.
 10. **Existing installs.** With mission sync off or no Linear setup, assert byte-identical
     behaviour to today.
+
+### Goal Invariants
+
+- **No parent collision.** Assert a card that is both a feature subtask and a mission member retains
+  its feature parent AND gains a mission milestone. (Negative: feature parent not overwritten by
+  mission milestone. Positive: mission milestone set alongside feature parent.)
+- **No plan table pollution.** Assert the mission→milestone mapping lives in a separate store, not
+  in the `plans`, `missions`, or `mission_members` tables. (Negative: no mission mapping row in plan
+  tables. Positive: mapping resolvable from the separate store.)
+- **Relations follow reality.** Assert a deleted `plan_dependencies` row results in the Linear
+  relation being removed. (Negative: no orphaned relation after dependency row deleted. Positive:
+  relation removed in the same cycle.)
+
+## Resolved Assumptions
+
+Web research confirmed the following Linear API behaviors (previously listed as uncertain):
+
+- **Confirmed:** Linear project milestones support `projectMilestoneCreate`, `projectMilestoneUpdate`,
+  `projectMilestoneDelete`, and `projectMilestoneMove` mutations. Milestones have `sortOrder` (float),
+  `targetDate`, and a calculated `progress` (0.0–1.0).
+- **Confirmed:** `issueRelationCreate` mutation exists, taking `issueId`, `relatedIssueId`, and
+  `type` (`blocks`, `duplicate`, `related`).
+- **Confirmed:** An issue's milestone (`projectMilestoneId`) is entirely orthogonal to its parent
+  (`parentId`). An issue can have a parent, a project, and a milestone simultaneously.
+- **Confirmed:** Milestones are named, ordered (via `sortOrder`), with progress rendered natively in
+  Linear's project detail pages and roadmap views.
+- **Confirmed:** Duplicate relation creation returns a GraphQL constraint violation error. The sync
+  must handle this gracefully (catch and skip, since the relation already exists).
+- **Confirmed:** Assigning an issue to a milestone in a different project than the issue triggers a
+  GraphQL validation error (project scope mismatch). **Not a concern for this design:** missions are
+  workspace-scoped, the board maps to a single Linear project, and member issues are already in that
+  project by construction. The constraint cannot be triggered.
+- **Confirmed:** Issue relations are fully orthogonal to parent, milestone, and workflow state.
+- The plan's first proposed change (verify the APIs) is now satisfied. The design is no longer
+  provisional.
+
+## Implementation Summary
+
+Implemented mission and plan dependency synchronization with Linear primitives. Added `mission_milestones` mapping store with V66 migration and helper accessors in `KanbanDatabase` to decouple mission tracker identity from plan tables. Extended `LinearSyncService` with project milestone management (`createProjectMilestone`, `updateProjectMilestone`, `updateIssueMilestone`) and issue relations (`createIssueRelation`, `deleteIssueRelation`, `getIssueRelations`) alongside `syncMissionsAndDependencies` for on-demand milestone creation, membership tracking, and graph edge syncing. Updated `RemoteProviderCapabilities` and provider implementations to declare `missions` capability honestly across Linear (true), Notion (false), and ClickUp (false), while updating `switchboard-remote/SKILL.md` guidance.
+
+## Review Findings
+
+Reviewed `LinearSyncService.syncMissionsAndDependencies`, `KanbanDatabase` V66, `LinearRemoteProvider`, `RemoteProvider`. The V66 `mission_milestones` table satisfies the "no plan table pollution" invariant, and milestone assignment is orthogonal to `parentId` as designed. The dependency reconciler issued one `getIssueRelations` GraphQL call per managed issue on every Remote Control poll (60s default) — a 100-plan board would spend ~6,000 requests/hour against a 5,000/hour budget and lock the whole Linear integration out, and the plan's "assert batching" verification was unmet; it now batches 50 issues per query and skips the reconciler entirely for workspaces that have neither a dependency row nor a recorded relation. Provider degradation is correct: Notion and ClickUp declare `missions: false` and `RemoteControlService` calls the optional hooks only when present.
+
+## Deferred Findings
+
+- MAJOR — the stale-relation sweep deletes any `blocks` relation between two Switchboard-managed issues that is not in `desiredEdges`, including relations a human drew by hand in Linear; there is no provenance record distinguishing Switchboard-created relations, which would need a mapping table alongside `mission_milestones`. `src/services/LinearSyncService.ts:3925`
+- MAJOR — `syncMissionsAndDependencies` runs inside `fetchStateDeltas` on every poll with no change detection, so milestone membership is re-queried each cycle even when no mission moved. `src/services/remote/LinearRemoteProvider.ts:100`
+- MAJOR — the plan's "mission end marks the milestone complete, not deleted" step is not implemented; there is no `deleteMissionMilestone` caller and no milestone completion path. `src/services/LinearSyncService.ts:3777`
+- NIT — milestone membership is reconciled by listing the milestone's issues and unassigning any not in the mission, which will unassign an issue a human placed under that milestone manually. `src/services/LinearSyncService.ts:3829`
+
+### Review Deviations
+
+None. Milestones and issue relations are the primitives the plan named; the mapping lives in its own table as specified.

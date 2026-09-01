@@ -16,6 +16,17 @@ import {
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { stampMarker, truncateForComment } from './commentMarker';
 import { localizeHttpError } from './errorMessages';
+import { isLoopbackHostHeader } from '../utils/loopbackHostname';
+
+/** Escape untrusted text before it lands in the OAuth callback's HTML response. */
+function _escapeHtml(value: string): string {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 export interface LinearOAuthTokens {
   accessToken: string;
@@ -53,10 +64,42 @@ export interface LinearPKCEFlowState {
   createdAt: number;
 }
 
-export const LINEAR_OAUTH_CLIENT_ID = 'switchboard-linear-oauth';
+/**
+ * Switchboard's published Linear OAuth client id. Public by design — PKCE means
+ * no secret ships — but it is a value Linear ISSUES, not one we choose, so it is
+ * empty until the app is registered and overridable per-install for operators
+ * who register their own app (`switchboard.linear.oauthClientId`, or the
+ * SWITCHBOARD_LINEAR_CLIENT_ID env var for headless hosts).
+ *
+ * `resolveLinearOAuthClientId()` is the only read path: an unset id must REFUSE
+ * the flow with a message the operator can act on, never build an authorize URL
+ * that Linear answers with an opaque `invalid_client`.
+ */
+export const LINEAR_OAUTH_CLIENT_ID = '';
+
+export function resolveLinearOAuthClientId(): string {
+  const fromEnv = String(process.env.SWITCHBOARD_LINEAR_CLIENT_ID || '').trim();
+  if (fromEnv) { return fromEnv; }
+  try {
+    const fromSetting = String(
+      vscode.workspace.getConfiguration('switchboard').get<string>('linear.oauthClientId') || ''
+    ).trim();
+    if (fromSetting) { return fromSetting; }
+  } catch { /* no vscode config in some hosts */ }
+  return LINEAR_OAUTH_CLIENT_ID;
+}
+
+const LINEAR_OAUTH_UNREGISTERED_MESSAGE =
+  'Linear OAuth is not configured: no client id is available. Register a Linear OAuth '
+  + 'application with actor=app and set `switchboard.linear.oauthClientId` (or the '
+  + 'SWITCHBOARD_LINEAR_CLIENT_ID environment variable). The personal API key path is unaffected.';
 export const LINEAR_AUTH_URL = 'https://linear.app/oauth/authorize';
 export const LINEAR_TOKEN_HOST = 'api.linear.app';
 export const LINEAR_TOKEN_PATH = '/oauth/token';
+/** Set once this workspace has created at least one Linear `blocks` relation, so a
+ *  workspace that never uses dependencies skips the reconciler's queries entirely. */
+const LINEAR_RELATIONS_TOUCHED_KEY = 'switchboard.linear.relationsTouched';
+
 export const LINEAR_OAUTH_SCOPES = ['read', 'write', 'issues:create', 'comments:create', 'app:assignable', 'app:mentionable'];
 
 
@@ -372,9 +415,31 @@ export class LinearSyncService {
       throw new Error('Linear must be set up before saving automation settings.');
     }
 
+    // The normalizer DROPS a rule it cannot resolve (both destinations set, an
+    // unknown kind, a column rule with no final column). On the load path that
+    // is the right conservative answer; on the SAVE path it is silent data loss
+    // — the operator's rule disappears from the stored config with no error.
+    // Refuse the whole save instead, which is what "refused at normalization
+    // time" was supposed to mean.
+    const incoming = Array.isArray(automationRules) ? automationRules : [];
+    const normalized = normalizeLinearAutomationRules(incoming);
+    if (normalized.length < incoming.length) {
+      const kept = new Set(normalized.map((r) => r.name));
+      const rejected = incoming
+        .map((r) => String((r as any)?.name || '').trim())
+        .filter((n) => n && !kept.has(n));
+      throw new Error(
+        rejected.length
+          ? `Linear automation rules rejected: ${rejected.map((n) => `'${n}'`).join(', ')}. `
+            + 'A rule needs a name, a trigger label, at least one trigger state, and exactly one '
+            + 'destination (a target column with a final column, or a target team).'
+          : 'One or more Linear automation rules were incomplete and could not be saved.'
+      );
+    }
+
     await this.saveConfig({
       ...config,
-      automationRules: normalizeLinearAutomationRules(automationRules)
+      automationRules: normalized
     });
   }
 
@@ -1959,8 +2024,39 @@ export class LinearSyncService {
   async getOAuthTokens(): Promise<LinearOAuthTokens | null> {
     try {
       const raw = await this._secretStorage.get('switchboard.linear.oauthTokens');
-      if (!raw) return null;
-      return JSON.parse(raw) as LinearOAuthTokens;
+      if (raw) {
+        const parsed = JSON.parse(raw) as LinearOAuthTokens;
+        // Crash-recovery half of the double buffer. A temp copy that survived a
+        // crash is either the SAME pair (write completed, delete didn't) or a
+        // NEWER pair (primary write didn't land) — never older, because temp is
+        // written first. Prefer whichever pair is newer, then clear the temp so
+        // a live refresh token is not left lying in a second secret.
+        const tempRaw = await this._secretStorage.get('switchboard.linear.oauthTokens.temp');
+        if (tempRaw && tempRaw !== raw) {
+          try {
+            const temp = JSON.parse(tempRaw) as LinearOAuthTokens;
+            if (temp?.accessToken && (temp.createdAt || 0) > (parsed?.createdAt || 0)) {
+              await this._secretStorage.store('switchboard.linear.oauthTokens', tempRaw);
+              await this._secretStorage.delete('switchboard.linear.oauthTokens.temp');
+              return temp;
+            }
+          } catch { /* unparseable temp — fall through and drop it */ }
+        }
+        if (tempRaw) {
+          try { await this._secretStorage.delete('switchboard.linear.oauthTokens.temp'); } catch {}
+        }
+        return parsed;
+      }
+      // No primary at all: a crash between the temp write and the primary write.
+      // The old refresh token is already dead Linear-side, so the temp pair is
+      // the only usable credential.
+      const tempOnly = await this._secretStorage.get('switchboard.linear.oauthTokens.temp');
+      if (!tempOnly) return null;
+      const recovered = JSON.parse(tempOnly) as LinearOAuthTokens;
+      if (!recovered?.accessToken) return null;
+      await this._secretStorage.store('switchboard.linear.oauthTokens', tempOnly);
+      await this._secretStorage.delete('switchboard.linear.oauthTokens.temp');
+      return recovered;
     } catch {
       return null;
     }
@@ -1983,10 +2079,12 @@ export class LinearSyncService {
   }
 
   async startOAuthFlow(redirectUri?: string): Promise<{ authorizeUrl: string; state: string; codeVerifier: string; redirectUri: string }> {
+    const clientId = resolveLinearOAuthClientId();
+    if (!clientId) { throw new Error(LINEAR_OAUTH_UNREGISTERED_MESSAGE); }
     if (this._inFlightPKCE && (Date.now() - this._inFlightPKCE.createdAt < 5 * 60 * 1000)) {
       const params = new URLSearchParams({
         response_type: 'code',
-        client_id: LINEAR_OAUTH_CLIENT_ID,
+        client_id: clientId,
         redirect_uri: this._inFlightPKCE.redirectUri,
         scope: LINEAR_OAUTH_SCOPES.join(','),
         state: this._inFlightPKCE.state,
@@ -2017,7 +2115,7 @@ export class LinearSyncService {
 
     const params = new URLSearchParams({
       response_type: 'code',
-      client_id: LINEAR_OAUTH_CLIENT_ID,
+      client_id: clientId,
       redirect_uri: effectiveRedirectUri,
       scope: LINEAR_OAUTH_SCOPES.join(','),
       state,
@@ -2035,6 +2133,8 @@ export class LinearSyncService {
   }
 
   async exchangeOAuthCode(code: string, codeVerifier?: string, redirectUri?: string): Promise<LinearOAuthTokens> {
+    const clientId = resolveLinearOAuthClientId();
+    if (!clientId) { throw new Error(LINEAR_OAUTH_UNREGISTERED_MESSAGE); }
     const verifier = codeVerifier || this._inFlightPKCE?.codeVerifier;
     const uri = redirectUri || this._inFlightPKCE?.redirectUri || 'http://127.0.0.1:18942/oauth/callback';
     this._inFlightPKCE = null;
@@ -2045,7 +2145,7 @@ export class LinearSyncService {
 
     const postData = new URLSearchParams({
       grant_type: 'authorization_code',
-      client_id: LINEAR_OAUTH_CLIENT_ID,
+      client_id: clientId,
       redirect_uri: uri,
       code: code.trim(),
       code_verifier: verifier
@@ -2071,6 +2171,8 @@ export class LinearSyncService {
   }
 
   async refreshOAuthToken(): Promise<string> {
+    const clientId = resolveLinearOAuthClientId();
+    if (!clientId) { throw new Error(LINEAR_OAUTH_UNREGISTERED_MESSAGE); }
     const tokens = await this.getOAuthTokens();
     if (!tokens || !tokens.refreshToken) {
       throw new Error('No Linear OAuth refresh token available');
@@ -2102,18 +2204,51 @@ export class LinearSyncService {
       } catch {}
     }
 
-    // Acquire lease
+    // Acquire lease. SecretStorage has no compare-and-swap, so the write is
+    // followed by a read-back: two hosts that both saw an empty lease will both
+    // store, but only one store lands last, and the loser must NOT exchange.
+    // Without this, "single-writer" is a comment, not a mechanism.
     const lease: LinearOAuthRefreshLease = {
       ownerId: this._hostId,
       expiresAt: Date.now() + 30000
     };
     await this._secretStorage.store('switchboard.linear.oauthLease', JSON.stringify(lease));
+    try {
+      await this.delay(150);
+      const confirmRaw = await this._secretStorage.get('switchboard.linear.oauthLease');
+      const confirmed = confirmRaw ? JSON.parse(confirmRaw) as LinearOAuthRefreshLease : null;
+      if (confirmed && confirmed.ownerId !== this._hostId && confirmed.expiresAt > Date.now()) {
+        // Lost the race. Read the winner's token rather than burning ours — a
+        // second exchange invalidates the winner's refresh token and Linear
+        // revokes the whole authorization chain, which needs an admin to undo.
+        for (let i = 0; i < 7; i++) {
+          await this.delay(500);
+          const current = await this.getOAuthTokens();
+          if (current && current.expiresAt > Date.now() + 60 * 1000) {
+            return current.accessToken;
+          }
+        }
+        throw new Error('Linear OAuth refresh deferred: another host holds the refresh lease');
+      }
+    } catch (err: any) {
+      if (String(err?.message || '').startsWith('Linear OAuth refresh deferred')) { throw err; }
+      // A read-back failure is not proof we lost — fall through and exchange.
+    }
 
     try {
+      // Re-read the pair AFTER the lease is held. `tokens` was captured before
+      // the wait loop above; if the other host refreshed in that window, its
+      // refresh token is single-use and already spent, and replaying it revokes
+      // the entire authorization. The lease makes this read the current truth.
+      const held = await this.getOAuthTokens();
+      const refreshTokenToUse = held?.refreshToken || tokens.refreshToken;
+      if (held && held.expiresAt > Date.now() + 60 * 1000) {
+        return held.accessToken;
+      }
       const postData = new URLSearchParams({
         grant_type: 'refresh_token',
-        client_id: LINEAR_OAUTH_CLIENT_ID,
-        refresh_token: tokens.refreshToken
+        client_id: clientId,
+        refresh_token: refreshTokenToUse
       }).toString();
 
       const response = await this._postOAuthToken(postData);
@@ -2130,7 +2265,7 @@ export class LinearSyncService {
         refreshToken: response.refresh_token,
         expiresAt: Date.now() + ((response.expires_in || 86400) * 1000),
         tokenType: response.token_type || 'Bearer',
-        scope: Array.isArray(response.scope) ? response.scope : tokens.scope,
+        scope: Array.isArray(response.scope) ? response.scope : (held?.scope || tokens.scope),
         actor: 'app',
         createdAt: Date.now()
       };
@@ -2183,6 +2318,16 @@ export class LinearSyncService {
     return new Promise((resolve) => {
       const server = http.createServer(async (req, res) => {
         try {
+          // This listener is a SECOND http server, outside LocalApiServer, so it
+          // does not inherit that server's guards — it has to carry them itself.
+          // Bind is 127.0.0.1 (below); the Host check is the DNS-rebinding half:
+          // without it a page on any origin resolving to loopback can drive the
+          // exchange and log this install into the attacker's Linear workspace.
+          if (!isLoopbackHostHeader(req.headers.host)) {
+            res.writeHead(403, { 'Content-Type': 'text/plain' });
+            res.end('Forbidden');
+            return;
+          }
           const reqUrl = new URL(req.url || '/', `http://127.0.0.1:${port}`);
           if (reqUrl.pathname === '/oauth/callback') {
             const code = reqUrl.searchParams.get('code');
@@ -2191,12 +2336,15 @@ export class LinearSyncService {
 
             if (error) {
               res.writeHead(400, { 'Content-Type': 'text/html' });
-              res.end(`<html><body style="background:#111;color:#f66;font-family:sans-serif;padding:40px;text-align:center;"><h2>Linear OAuth Failed</h2><p>${error}</p></body></html>`);
+              res.end(`<html><body style="background:#111;color:#f66;font-family:sans-serif;padding:40px;text-align:center;"><h2>Linear OAuth Failed</h2><p>${_escapeHtml(error)}</p></body></html>`);
               return;
             }
 
             if (code) {
-              if (this._inFlightPKCE && state && this._inFlightPKCE.state !== state) {
+              // A callback carrying no `state` is refused, not waved through:
+              // the previous `state &&` short-circuit made the CSRF check
+              // optional for exactly the caller that would omit it.
+              if (this._inFlightPKCE && this._inFlightPKCE.state !== state) {
                 res.writeHead(400, { 'Content-Type': 'text/html' });
                 res.end(`<html><body style="background:#111;color:#f66;font-family:sans-serif;padding:40px;text-align:center;"><h2>Invalid State Parameter</h2></body></html>`);
                 return;
@@ -2215,7 +2363,7 @@ export class LinearSyncService {
           res.end('Not found');
         } catch (err: any) {
           res.writeHead(500, { 'Content-Type': 'text/html' });
-          res.end(`<html><body style="background:#111;color:#f66;font-family:sans-serif;padding:40px;text-align:center;"><h2>Exchange Error</h2><p>${err?.message || 'unknown error'}</p></body></html>`);
+          res.end(`<html><body style="background:#111;color:#f66;font-family:sans-serif;padding:40px;text-align:center;"><h2>Exchange Error</h2><p>${_escapeHtml(err?.message || 'unknown error')}</p></body></html>`);
         }
       });
 
@@ -3858,6 +4006,15 @@ export class LinearSyncService {
         }
       }
 
+      // Whole-reconciler skip for the common case. Relations are only ever
+      // created by this method, so a workspace that has neither a dependency row
+      // nor a recorded creation has no relation state to reconcile — and should
+      // spend zero requests discovering that on every 60s poll.
+      const hasEverCreatedRelations = (await db.getConfig(LINEAR_RELATIONS_TOUCHED_KEY)) === '1';
+      if (desiredEdges.length === 0 && !hasEverCreatedRelations) {
+        return counts;
+      }
+
       // Collect ALL Switchboard-managed Linear issue IDs in this workspace,
       // not just those in current deps — deleted deps leave stale relations
       // whose issues are no longer in the dep set but still managed.
@@ -3871,22 +4028,46 @@ export class LinearSyncService {
 
       const existingLinearBlocks = new Map<string, Array<{ relationId: string; blockedIssueId: string }>>();
 
-      for (const issueId of managedIssueIds) {
+      // Batched, NOT one request per managed issue. This reconciler runs inside
+      // every Remote Control poll (60s default), so a per-issue fetch is N
+      // requests a minute: a 100-plan board spends 6,000 requests/hour against a
+      // 5,000/hour budget and locks the whole Linear integration out. Chunks of
+      // 50 keep a 200-plan board at 4 requests per cycle.
+      const managedIdList = Array.from(managedIssueIds);
+      const RELATION_BATCH = 50;
+      for (let i = 0; i < managedIdList.length; i += RELATION_BATCH) {
+        const chunk = managedIdList.slice(i, i + RELATION_BATCH);
         try {
-          const rels = await this.getIssueRelations(issueId);
-          for (const r of rels) {
-            if (r.type === 'blocks' && r.relatedIssue?.id) {
-              if (!existingLinearBlocks.has(issueId)) {
-                existingLinearBlocks.set(issueId, []);
+          const batchRes = await this.graphqlRequest(`
+            query($ids: [ID!]) {
+              issues(filter: { id: { in: $ids } }, first: ${RELATION_BATCH}) {
+                nodes {
+                  id
+                  relations { nodes { id type relatedIssue { id } } }
+                }
               }
-              existingLinearBlocks.get(issueId)!.push({
-                relationId: r.id,
-                blockedIssueId: r.relatedIssue.id
-              });
+            }
+          `, { ids: chunk });
+          const issueNodes = batchRes?.data?.issues?.nodes || [];
+          for (const node of issueNodes) {
+            const issueId = String(node?.id || '');
+            if (!issueId) { continue; }
+            const rels = node?.relations?.nodes || [];
+            for (const r of rels) {
+              const relatedId = String(r?.relatedIssue?.id || '');
+              if (String(r?.type || '') === 'blocks' && relatedId) {
+                if (!existingLinearBlocks.has(issueId)) {
+                  existingLinearBlocks.set(issueId, []);
+                }
+                existingLinearBlocks.get(issueId)!.push({
+                  relationId: String(r.id),
+                  blockedIssueId: relatedId
+                });
+              }
             }
           }
         } catch (err) {
-          console.warn(`[LinearSyncService] Failed to fetch relations for issue ${issueId}:`, err);
+          console.warn(`[LinearSyncService] Failed to fetch relations batch (${chunk.length} issues):`, err);
         }
       }
 
@@ -3899,6 +4080,7 @@ export class LinearSyncService {
             const created = await this.createIssueRelation(edge.blockerIssueId, edge.blockedIssueId, 'blocks');
             if (created) {
               counts.relationsCreated++;
+              await db.setConfig(LINEAR_RELATIONS_TOUCHED_KEY, '1');
             }
           } catch (err) {
             console.warn(`[LinearSyncService] Failed to create relation ${edge.blockerIssueId} blocks ${edge.blockedIssueId}:`, err);
@@ -3951,7 +4133,11 @@ export class LinearSyncService {
     updatedAt: string;
   }>> {
     const config = await this.loadConfig();
-    if (!config?.setupComplete || !(await this.hasApiToken())) {
+    // Gate on credential KIND, not presence. With a personal API key `viewer`
+    // is the HUMAN operator, so this query returns every issue assigned to
+    // them — importing all of it as plans is a board flood, not a dispatch.
+    // The agent surface exists only for the OAuth app actor.
+    if (!config?.setupComplete || !(await this.isOAuthAppActor())) {
       return [];
     }
 
@@ -4004,7 +4190,10 @@ export class LinearSyncService {
     comment?: { id: string; body: string; createdAt: string; issue?: { id: string; identifier: string; title: string; url: string } };
   }>> {
     const config = await this.loadConfig();
-    if (!config?.setupComplete || !(await this.hasApiToken())) {
+    // Same gate as fetchAssignedIssues, and for a sharper reason: on a
+    // personal key these are the operator's OWN unread notifications, and the
+    // relay path archives every one it handles. Never touch a human's inbox.
+    if (!config?.setupComplete || !(await this.isOAuthAppActor())) {
       return [];
     }
 

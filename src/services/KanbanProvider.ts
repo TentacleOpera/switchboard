@@ -3251,9 +3251,17 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             resolved,
             this._getLinearService(resolved),
             async () => this._getIntegrationImportDir(resolved),
-            this._taskViewerProvider
-                ? (verb, payload, wsRoot, signal) => this._taskViewerProvider!.handleTerminalVerb(verb, payload, wsRoot || resolved, signal)
-                : undefined
+            // Resolve the provider at CALL time, not construction time. This
+            // service is cached in _linearAutomationServices, so capturing
+            // `undefined` here (a build that ran before setTaskViewerProvider)
+            // would permanently disable team delivery for the process, and
+            // "never wired" and "no team was running" look identical.
+            async (verb, payload, wsRoot, signal) => {
+                if (!this._taskViewerProvider) {
+                    return { success: false, error: 'Terminal verb dispatch not available' };
+                }
+                return this._taskViewerProvider.handleTerminalVerb(verb, payload, wsRoot || resolved, signal);
+            }
         );
         this._linearAutomationServices.set(resolved, service);
         return service;

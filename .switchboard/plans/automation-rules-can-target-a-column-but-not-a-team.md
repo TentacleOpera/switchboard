@@ -194,6 +194,26 @@ settle the write-back mechanism jointly with the reporting plan before implement
 7. **Docs**: state in the Linear/remote documentation that a team-targeted rule is a path from a
    filed card to an agent editing the repository.
 
+### Clarifications
+
+- **Normalizer is memory-only.** `normalizeLinearAutomationRules` maps a stored `targetColumn` to
+  `{ kind: 'column', column }` in memory on load. The stored config shape is preserved — old installs
+  that downgrade can still read their configs. The normalizer runs on every load; it does not write
+  back.
+- **Claim mechanism.** The plan-creation path is the dedupe key, but between matching and plan
+  creation there is a window where two overlapping polls could both match. The claim should be a
+  DB-level insert-if-absent on the plan row (the existing `refreshFromDisk` + plan creation path),
+  not a separate lock. The plan file's existence is the claim.
+- **Multi-label decision.** A card carrying two team labels matches two rules. Decision: **refuse at
+  delivery time with a comment on the card naming both labels**, rather than delivering to both. Two
+  deliveries into two teams is neither visible nor harmless. The refusal is surfaced on the card so
+  the operator sees the conflict.
+- **Cross-plan dependency on `teamId → issueId` binding.** The completion write-back for a
+  team-addressed card with no plan needs the `teamId → issueId` binding defined in
+  `standing-orders-can-post-a-team-status-report-to-a-card.md`. If that plan has not landed, this
+  plan must define its own binding or block on it. State the dependency explicitly; do not assume it
+  is available.
+
 ### Migration
 
 Additive and optional. Every stored automation rule loads and behaves exactly as it does today
@@ -224,6 +244,20 @@ with `targetTeam` absent. No state, file format or default changes.
    standing-orders marker (`=== STANDING ORDERS ===`), and instruction-shaped text. Assert none
    of it changes what the agent is told to do.
 10. **Two instances.** Poll the same project from two hosts and assert one delivery total.
+
+### Goal Invariants
+
+- **Legacy rules preserved.** Assert a stored rule with `targetColumn` and no `targetTeam` loads,
+  runs, and behaves byte-identically to today. (Negative: no stored rule fails to load due to the
+  destination-kind migration. Positive: legacy `targetColumn` rule creates a plan, honors
+  `finalColumn`, and writes back as before.)
+- **Destination kind exhaustive.** Assert the poll's destination switch is exhaustive — every rule's
+  `destination.kind` is handled, and an unknown kind is refused at normalization. (Negative: no rule
+  with both `targetColumn` and `targetTeam` passes normalization. Positive: each kind has a defined
+  delivery path.)
+- **No re-delivery loop.** Assert a matched card left in its trigger state across multiple polls is
+  delivered exactly once. (Negative: no second delivery after the first. Positive: the plan-creation
+  dedupe key prevents re-match.)
 
 ## The write-back half is already built — revision after review
 
@@ -295,3 +329,24 @@ is straightforward; doing it after `targetTeam` has also shipped means migrating
 The memo destination itself is out of scope here — it needs its own decision about what a captured
 memo contains and where it lands. What this plan owes it is a destination model that does not have
 to be reworked to accommodate it.
+
+## Implementation Summary
+
+Implemented team-targeted destination support for Linear automation rules using a discriminated union `destination: { kind: 'column' | 'team' | 'memo' }`. Added mutual exclusivity checks and legacy migration in `normalizeLinearAutomationRules` while preserving unknown keys. Updated `LinearAutomationService` to resolve live teams and leads, delivering provenance-wrapped data prompts into lead terminals via `ptySendPrompt` with `clearBeforePrompt: false`. Explicit unresolved states (team not running, lead not registered, delivery failure) and multi-rule conflicts are now surfaced directly as comments on Linear cards. Retained local plan creation for dedupe integrity and correlation across polling cycles.
+
+
+## Review Findings
+
+Reviewed `PipelineDefinition.ts`, `LinearAutomationService.ts`, `KanbanProvider.ts`, `linear-automation-service.test.js`. The multi-rule refusal comment ran ahead of the plan-file dedupe and so re-posted on every poll — the exact 30–120s loop the plan is named for, aimed at Linear comments instead of a terminal; it is now keyed on a persisted conflict signature. Three further fixes: a throw from `_deliverToTeam` was caught by the plan-creation handler *after* the dedupe file existed, permanently stranding the card with nothing said on it; the `memo` destination kind fell through to the column path and silently created a board card; and `saveAutomationSettings` persisted the normalizer's output, so a rule the normalizer refuses was silently deleted from the operator's config rather than refused. The issue body is now fence-neutralised before delivery, and `KanbanProvider` resolves `terminalVerb` at call time so the cached automation service cannot capture `undefined`. The four new tests could never pass — they called `ensureReady()` without `createIfMissing()`, so every poll aborted on "Kanban database unavailable"; with that fixed all four pass, including the end-to-end team delivery and the injection-resistance case.
+
+## Deferred Findings
+
+- MAJOR — `_deliverToTeam` resolves the team by head-terminal name, group id, or definition id, but `terminals.groups.name` holds the HEAD's name, not the team's; a rule naming a team template that was spawned without a `definitionId` will not resolve. `src/services/LinearAutomationService.ts:245`
+- MAJOR — write-back "complete" for a team-targeted rule is hardcoded to the `DONE`/`COMPLETED` columns, an invented default the plan left undecided. `src/services/LinearAutomationService.ts:700`
+- NIT — `LinearAutomationRule` gained an `[key: string]: unknown` index signature to carry unknown keys, which disables excess-property checking on every field of the interface. `src/models/PipelineDefinition.ts:26`
+- NIT — an externally-headed team's `head` is a non-terminal agent, so a team rule targeting one always reports "lead terminal is not active". `src/services/LinearAutomationService.ts:262`
+- NIT — `ptyListTerminals` returning `{success:false}` is reported on the card as "lead not active", conflating a dead pty host with an absent lead. `src/services/LinearAutomationService.ts:270`
+
+### Review Deviations
+
+None. The destination model, the relay seam, `clearBeforePrompt: false`, the provenance header and existing column-rule behaviour are all as the plan specified.

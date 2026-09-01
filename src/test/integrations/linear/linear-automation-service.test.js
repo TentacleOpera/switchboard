@@ -105,7 +105,7 @@ function queueIssueUpdate(http, issueId) {
 
 async function testTeamWidePollingOmitsProjectVariable() {
     await withWorkspace('linear-automation-no-project', async ({ workspaceRoot }) => {
-        const { service, automation } = createContext(workspaceRoot, {
+        const { service, automation, KanbanDatabase } = createContext(workspaceRoot, {
             'switchboard.linear.apiToken': 'lin_api_teamwide'
         });
         service.delay = async () => {};
@@ -130,6 +130,10 @@ async function testTeamWidePollingOmitsProjectVariable() {
             pullIntervalMinutes: 60,
             automationRules: [createRule('Bug Summary', 'bug', ['state-started'], 'CREATED', 'COMPLETED', true)]
         });
+
+        const db = KanbanDatabase.forWorkspace(workspaceRoot);
+        await db.createIfMissing();
+        await db.setWorkspaceId('workspace-teamwide');
 
         const http = installHttpsMock();
         try {
@@ -171,7 +175,7 @@ async function testTeamWidePollingOmitsProjectVariable() {
 
 async function testProjectScopedPollingUsesFilterVariable() {
     await withWorkspace('linear-automation-project-scoped', async ({ workspaceRoot }) => {
-        const { service, automation } = createContext(workspaceRoot, {
+        const { service, automation, KanbanDatabase } = createContext(workspaceRoot, {
             'switchboard.linear.apiToken': 'lin_api_project_scoped'
         });
         service.delay = async () => {};
@@ -197,6 +201,10 @@ async function testProjectScopedPollingUsesFilterVariable() {
             pullIntervalMinutes: 60,
             automationRules: [createRule('Bug Summary', 'bug', ['state-started'], 'CREATED', 'COMPLETED', true)]
         });
+
+        const db = KanbanDatabase.forWorkspace(workspaceRoot);
+        await db.createIfMissing();
+        await db.setWorkspaceId('workspace-project-scoped');
 
         const http = installHttpsMock();
         try {
@@ -522,6 +530,7 @@ async function testTeamTargetedAutomationDelivery() {
         service.delay = async () => {};
 
         const db = KanbanDatabase.forWorkspace(workspaceRoot);
+        await db.createIfMissing();
         await db.ensureReady();
         await db.setWorkspaceId('workspace-team');
 
@@ -616,6 +625,7 @@ async function testTeamNotRunningSurfacedOnLinearCard() {
         service.delay = async () => {};
 
         const db = KanbanDatabase.forWorkspace(workspaceRoot);
+        await db.createIfMissing();
         await db.ensureReady();
         await db.setWorkspaceId('workspace-nr');
 
@@ -682,6 +692,7 @@ async function testMultipleRulesConflictRefusal() {
         service.delay = async () => {};
 
         const db = KanbanDatabase.forWorkspace(workspaceRoot);
+        await db.createIfMissing();
         await db.ensureReady();
         await db.setWorkspaceId('workspace-multi');
 
@@ -778,6 +789,7 @@ async function testCardTextDataInjectionResistance() {
         service.delay = async () => {};
 
         const db = KanbanDatabase.forWorkspace(workspaceRoot);
+        await db.createIfMissing();
         await db.ensureReady();
         await db.setWorkspaceId('workspace-safe');
 

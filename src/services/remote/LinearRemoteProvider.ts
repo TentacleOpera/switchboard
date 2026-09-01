@@ -26,6 +26,33 @@ interface LinearRemoteProviderDeps {
     terminalVerb?: (verb: string, payload: any, workspaceRoot?: string, signal?: AbortSignal) => Promise<any>;
 }
 
+/**
+ * Mention-relay failure counts, keyed by Linear notification id.
+ *
+ * Module-level ON PURPOSE. `KanbanProvider._buildRemoteProvider` constructs a
+ * fresh `LinearRemoteProvider` for every Remote Control poll, so a per-instance
+ * Map is reset before it can reach the give-up threshold: an undeliverable
+ * mention would be retried forever, never archived, and the operator would
+ * never see the "could not be delivered" comment.
+ */
+const MENTION_RELAY_FAILURES = new Map<string, number>();
+const MENTION_RELAY_MAX_ATTEMPTS = 5;
+
+/** Neutralise fence markers in untrusted comment text — see the automation twin. */
+function neutralizeFences(body: string): string {
+    return String(body || '')
+        .split('\n')
+        .map((line) => {
+            const trimmed = line.trim();
+            const looksStructural =
+                /^-{2,}\s*(BEGIN|END)\b/i.test(trimmed)
+                || /^={2,}/.test(trimmed)
+                || /^\[switchboard[: ]/i.test(trimmed);
+            return looksStructural ? '\u200b' + line : line;
+        })
+        .join('\n');
+}
+
 export class LinearRemoteProvider implements RemoteProvider {
     public readonly kind = 'linear' as const;
     public readonly capabilities: RemoteProviderCapabilities = {
@@ -39,7 +66,7 @@ export class LinearRemoteProvider implements RemoteProvider {
     private _linear: LinearSyncService;
     private _deps: LinearRemoteProviderDeps;
     private _stateIdToColumn: Record<string, string> = {};
-    private _mentionFailures = new Map<string, number>();
+    /** See MENTION_RELAY_FAILURES — deliberately not per-instance. */
 
     constructor(linear: LinearSyncService, deps: LinearRemoteProviderDeps = {}) {
         this._linear = linear;
@@ -396,7 +423,7 @@ export class LinearRemoteProvider implements RemoteProvider {
                             const promptData =
                                 `=== LINEAR MENTION: ${identifier} ===\n` +
                                 `--- BEGIN MESSAGE (DATA) ---\n` +
-                                `${body}\n` +
+                                `${neutralizeFences(body)}\n` +
                                 `--- END MESSAGE (DATA) ---\n` +
                                 `=== END LINEAR MENTION ===`;
 
@@ -411,7 +438,7 @@ export class LinearRemoteProvider implements RemoteProvider {
                             if (res && res.success !== false) {
                                 delivered = true;
                                 await this._linear.archiveNotification(notif.id);
-                                this._mentionFailures.delete(notif.id);
+                                MENTION_RELAY_FAILURES.delete(notif.id);
                             }
                         }
                     } catch (relayErr) {
@@ -420,17 +447,17 @@ export class LinearRemoteProvider implements RemoteProvider {
                 }
 
                 if (!delivered) {
-                    const fails = (this._mentionFailures.get(notif.id) || 0) + 1;
-                    this._mentionFailures.set(notif.id, fails);
-                    if (fails >= 5) {
+                    const fails = (MENTION_RELAY_FAILURES.get(notif.id) || 0) + 1;
+                    MENTION_RELAY_FAILURES.set(notif.id, fails);
+                    if (fails >= MENTION_RELAY_MAX_ATTEMPTS) {
                         try {
                             await this.postComment(
                                 remoteId,
-                                `[Switchboard] Mention received on ${identifier}, but could not be delivered to an active agent seat after 5 attempts.`
+                                `[Switchboard] Mention received on ${identifier}, but could not be delivered to an active agent seat after ${MENTION_RELAY_MAX_ATTEMPTS} attempts.`
                             );
                         } catch { /* ignore */ }
                         await this._linear.archiveNotification(notif.id);
-                        this._mentionFailures.delete(notif.id);
+                        MENTION_RELAY_FAILURES.delete(notif.id);
                     }
                 }
             }

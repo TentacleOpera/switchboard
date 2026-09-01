@@ -206,6 +206,11 @@
     "configuration": {
       "title": "Switchboard",
       "properties": {
+        "switchboard.linear.oauthClientId": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Linear OAuth application client id used for the `actor=app` PKCE handshake. Public by design \u2014 no client secret is ever shipped or stored. Leave empty to keep using a personal API key; the OAuth connect action refuses rather than starting a flow Linear cannot answer. Headless hosts may set `SWITCHBOARD_LINEAR_CLIENT_ID` instead."
+        },
         "switchboard.defaultMode": {
           "type": "string",
           "enum": [

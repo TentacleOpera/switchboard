@@ -291,10 +291,12 @@ What that means in practice:
 The mirror is faithful for plans, statuses, features and comments. It carries **nothing** for the
 following, so do not offer them, and say plainly that they are desk-only if asked:
 
-- **Missions.** Mission state, membership, launch/stop, and dependency gating are local-only —
-  there is no mission representation in the sync at all. A question like "why hasn't this card
-  moved" may have a mission-gating answer that is invisible from here. Say so rather than
-  guessing.
+- **Missions (Notion & ClickUp).** On Notion and ClickUp, mission state, membership, launch/stop,
+  and dependency gating are local-only (these providers have no milestone primitive). On Linear,
+  missions and their dependency edges ARE mirrored natively (missions as project milestones,
+  dependency edges as `blocks` relations), though runtime launch/stop controls remain host-managed.
+  A question like "why hasn't this card moved" on Notion/ClickUp may have a mission-gating answer
+  that is invisible from there. Say so rather than guessing.
 - **Memo capture.** Local-only. There is no memo surface on the tracker.
 - **Worktree diffs and git state.** Not mirrored. "Did the agent do something sane?" cannot be
   answered from the tracker unless an agent wrote the answer into a comment.
@@ -350,3 +352,33 @@ today's behaviour and are correct as written. A planned change
 card to the seat actually holding it — the card's `dispatched_terminal` — and leaves column routing
 in place for every other card. Until that ships, assume column routing. After it ships, this section
 is what to update.
+
+## 12. Linear Native App User & Agent Surface
+
+When Switchboard connects to Linear via an OAuth App Actor, it operates as a first-class app user:
+
+- **Assign to Dispatch (Delegation):** Assigning an issue to Switchboard in Linear sets Switchboard as the issue's `delegate` (preserving human ownership) and dispatches execution locally.
+  > **Privilege Boundary:** Assigning an issue to Switchboard starts real work on the operator's machine.
+- **@Mention to Seat:** @mentioning `@Switchboard` on an issue or comment routes the message directly into the live seat (`dispatched_terminal`) holding that work.
+- **Agent Sessions & Activities:** Switchboard creates native Linear agent sessions (`agentSessionCreateOnIssue` / `agentSessionCreateOnComment`) and emits durable state transitions and ephemeral progress updates as native activities (`agentActivityCreate`).
+- **Tri-Layer Dispatch:**
+  1. *Status moves:* Driven by board UI, external integrations, or Linear's native agent (`@linear launch`).
+  2. *Assignment (delegation):* Driven directly by human operators.
+  3. *Natural language:* Driven by Linear's native agent executing project playbooks.
+
+**This whole section requires the OAuth app-actor credential.** A personal-API-key install has no
+app user: it cannot be assigned or @mentioned, creates no agent sessions, and shows none of these
+affordances. If the operator is on a personal key, say the surface is unavailable rather than
+describing behaviour they will not see.
+
+## 13. Provider Capabilities Comparison
+
+| Capability | Linear | Notion | ClickUp |
+| :--- | :--- | :--- | :--- |
+| State Pull & Push | Yes | Yes | Yes |
+| Inbound Comments | Yes | Yes | No |
+| Auto-Archive Mirroring | Yes | Yes | No |
+| Mission & Dependency Sync | Yes | No | No |
+| Native App User (Delegation) | Yes (OAuth) | No | No |
+| @Mention Seat Routing | Yes (OAuth) | No | No |
+| Agent Sessions & Activities | Yes (OAuth) | No | No |

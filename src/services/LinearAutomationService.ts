@@ -187,6 +187,60 @@ export class LinearAutomationService {
         ].join('\n');
     }
 
+
+    /** Config key holding `issueId -> conflict signature` for refusals already announced. */
+    private static readonly _CONFLICT_KEY = 'switchboard.linear.automation.reportedConflicts';
+
+    private async _isConflictReported(db: KanbanDatabase, issueId: string, signature: string): Promise<boolean> {
+        try {
+            const map = await db.getConfigJson(LinearAutomationService._CONFLICT_KEY, {} as Record<string, string>);
+            return !!map && map[issueId] === signature;
+        } catch {
+            // A read failure must not turn into comment spam — assume reported.
+            return true;
+        }
+    }
+
+    private async _recordConflictReported(db: KanbanDatabase, issueId: string, signature: string): Promise<void> {
+        try {
+            const map = await db.getConfigJson(LinearAutomationService._CONFLICT_KEY, {} as Record<string, string>);
+            const next: Record<string, string> = (map && typeof map === 'object') ? { ...map } : {};
+            next[issueId] = signature;
+            // Cap the map so a long-lived board cannot grow it without bound.
+            const keys = Object.keys(next);
+            if (keys.length > 200) {
+                for (const k of keys.slice(0, keys.length - 200)) { delete next[k]; }
+            }
+            await db.setConfigJson(LinearAutomationService._CONFLICT_KEY, next);
+        } catch (err) {
+            console.warn('[LinearAutomation] Failed to record conflict report:', err);
+        }
+    }
+
+    /**
+     * Neutralise the data fence inside untrusted card text.
+     *
+     * The delivered prompt wraps the issue body in BEGIN/END markers and puts the
+     * real instruction outside them. A card body that contains those markers —
+     * or a forged standing-orders banner — closes the fence early and everything
+     * after it reads as instruction. Linear cards are authored by anyone with
+     * project access, so the body is data and has to be made unable to say
+     * otherwise.
+     */
+    private static _neutralizeFences(body: string): string {
+        return String(body || '')
+            .split('\n')
+            .map((line) => {
+                const trimmed = line.trim();
+                const looksStructural =
+                    /^-{2,}\s*(BEGIN|END)\b/i.test(trimmed)
+                    || /^={2,}/.test(trimmed)
+                    || /^\[switchboard[: ]/i.test(trimmed);
+                return looksStructural ? '\u200b' + line : line;
+            })
+            .join('\n');
+    }
+
     private async _deliverToTeam(
         issue: LinearAutomationIssueSummary,
         rule: LinearAutomationRule,
@@ -240,6 +294,12 @@ export class LinearAutomationService {
         }
 
         if (!this._terminalVerb) {
+            const msg = `[Switchboard Automation] Issue ${reference} matched team '${teamName}' but this host cannot reach a terminal to deliver it.`;
+            try {
+                await this.writeBackAutomationResult(issue.id, msg, 'comment');
+            } catch (e) {
+                console.warn(`[LinearAutomation] Failed to write unresolved status comment on ${issue.id}:`, e);
+            }
             return { delivered: false, error: 'Terminal verb dispatch not available' };
         }
 
@@ -264,7 +324,7 @@ export class LinearAutomationService {
             `Team: ${teamName}`,
             '',
             `--- BEGIN ISSUE BODY (DATA) ---`,
-            issue.description || '(No description provided)',
+            LinearAutomationService._neutralizeFences(issue.description || '') || '(No description provided)',
             `--- END ISSUE BODY (DATA) ---`,
             '',
             `Instruction: You are assigned Linear issue ${reference}. Implement the requested changes. When complete, update the Linear issue and submit your report.`,
@@ -515,14 +575,27 @@ export class LinearAutomationService {
                     );
                     const ruleNames = matchedRules.map(r => `'${r.name}'`).join(', ');
                     const labelNames = matchedRules.map(r => `'${r.triggerLabel}'`).join(', ');
-                    try {
-                        await this.writeBackAutomationResult(
-                            normalizedIssueId,
-                            `[Switchboard Automation] Multiple automation rules matched (${ruleNames}) with labels [${labelNames}]. Refusing delivery to prevent conflicting dispatches. Please remove conflicting labels.`,
-                            'comment'
-                        );
-                    } catch (commentErr) {
-                        console.error(`[LinearAutomation] Failed to post multi-label refusal comment for ${normalizedIssueId}:`, commentErr);
+                    // A refusal creates no plan, so the plan-file dedupe key that
+                    // protects every other branch does not exist here. Without a
+                    // record of its own, this comment is re-posted on every poll —
+                    // a conflicting card would be commented every 30-120s forever,
+                    // which is the very loop the delivery path is designed to avoid.
+                    // Keyed on the conflict's SIGNATURE so a changed label set is
+                    // reported again, and persisted so a restart or a second host
+                    // does not re-announce it.
+                    const signature = matchedRules.map(r => r.name).sort().join('|');
+                    const alreadyReported = await this._isConflictReported(db, normalizedIssueId, signature);
+                    if (!alreadyReported) {
+                        try {
+                            await this.writeBackAutomationResult(
+                                normalizedIssueId,
+                                `[Switchboard Automation] Multiple automation rules matched (${ruleNames}) with labels [${labelNames}]. Refusing delivery to prevent conflicting dispatches. Please remove conflicting labels.`,
+                                'comment'
+                            );
+                            await this._recordConflictReported(db, normalizedIssueId, signature);
+                        } catch (commentErr) {
+                            console.error(`[LinearAutomation] Failed to post multi-label refusal comment for ${normalizedIssueId}:`, commentErr);
+                        }
                     }
                     result.skipped++;
                     continue;
@@ -565,6 +638,20 @@ export class LinearAutomationService {
                     ? matchedRule.destination.column
                     : (matchedRule.targetColumn || '');
 
+                // Exhaustive destination switch. `memo` is a modelled kind with no
+                // delivery path yet; falling through would create a plan the
+                // operator never asked for and file it under no column at all.
+                if (matchedRule.destination?.kind === 'memo') {
+                    console.log(`[LinearAutomation] Rule '${matchedRule.name}' targets a memo destination, which is not implemented — skipping issue ${normalizedIssueId}.`);
+                    result.skipped++;
+                    continue;
+                }
+                if (!targetTeam && !targetColumn) {
+                    console.warn(`[LinearAutomation] Rule '${matchedRule.name}' resolved to no destination — skipping issue ${normalizedIssueId}.`);
+                    result.skipped++;
+                    continue;
+                }
+
                 try {
                     await fs.promises.writeFile(
                         planFile,
@@ -583,9 +670,28 @@ export class LinearAutomationService {
                     });
 
                     if (targetTeam) {
-                        const deliveryResult = await this._deliverToTeam(issueSummary, matchedRule, targetTeam, db);
-                        if (!deliveryResult.delivered && deliveryResult.error) {
-                            result.errors.push(`Linear automation delivery to team '${targetTeam}' for issue ${normalizedIssueId}: ${deliveryResult.error}`);
+                        // Its own try/catch, deliberately. The plan file above is
+                        // the dedupe key: once it exists the card is never
+                        // reconsidered, so a THROW escaping into the outer catch
+                        // would leave the card permanently undelivered with nothing
+                        // said on it. Every failure has to come back as a value and
+                        // be reported on the card by _deliverToTeam.
+                        try {
+                            const deliveryResult = await this._deliverToTeam(issueSummary, matchedRule, targetTeam, db);
+                            if (!deliveryResult.delivered && deliveryResult.error) {
+                                result.errors.push(`Linear automation delivery to team '${targetTeam}' for issue ${normalizedIssueId}: ${deliveryResult.error}`);
+                            }
+                        } catch (deliveryErr) {
+                            const msg = deliveryErr instanceof Error ? deliveryErr.message : String(deliveryErr);
+                            console.error(`[LinearAutomation] Delivery to team '${targetTeam}' threw for ${normalizedIssueId}:`, deliveryErr);
+                            result.errors.push(`Linear automation delivery to team '${targetTeam}' for issue ${normalizedIssueId}: ${msg}`);
+                            try {
+                                await this.writeBackAutomationResult(
+                                    normalizedIssueId,
+                                    `[Switchboard Automation] Delivery to team '${targetTeam}' failed: ${msg}. The plan was created locally; re-dispatch it from the board.`,
+                                    'comment'
+                                );
+                            } catch { /* the card comment is best-effort */ }
                         }
                     }
                 } catch (error) {

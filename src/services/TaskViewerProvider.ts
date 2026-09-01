@@ -109,7 +109,8 @@ import type {
     LinearApplyOptions,
     LinearAttachment,
     LinearComment,
-    LinearIssue
+    LinearIssue,
+    LinearRateLimitState
 } from './LinearSyncService';
 let LinearSyncServiceClass: any;
 import type { LinearDocsAdapter } from './LinearDocsAdapter';
@@ -308,6 +309,12 @@ type LinearSetupState = {
     completeSyncEnabled: boolean;
     deleteSyncEnabled?: boolean;
     inboundDeleteEnabled?: boolean;
+    /** Which credential the install is actually authenticated with. The agent
+     *  surface gates on `'oauth'` specifically — never on "has a token" — so a
+     *  personal-key install never renders an affordance it cannot use. */
+    authKind?: 'oauth' | 'apiKey' | 'none';
+    isAppActor?: boolean;
+    rateLimit?: LinearRateLimitState;
     columns: LinearSetupColumnState[];
     availableLabels: Array<{ id: string; name: string }>;
     availableStates: Array<{ id: string; name: string; type: string }>;
