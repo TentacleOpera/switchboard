@@ -616,6 +616,7 @@
         if (dockFleetContentEl) dockFleetContentEl.hidden = false;
 
         // 1. Table
+        const seatCards = (hopData && hopData.seatCards) || {};
         let terminals = [];
         if (Array.isArray(termData)) { terminals = termData; }
         else if (termData?.terminals && Array.isArray(termData.terminals)) { terminals = termData.terminals; }
@@ -633,8 +634,13 @@
                     const name = String(t?.friendlyName || t?.name || t?.terminalName || '?');
                     const role = String(t?.role || '-');
                     const status = String(t?.status || (t?.alive || t?.active ? 'active' : 'idle'));
-                    const planLabel = t?.currentPlanTitle || t?.planTitle || t?.topic || '';
-                    const plan = String(planLabel || (t?.planId ? String(t.planId).slice(0, 16) : '') || '-');
+                    // CURRENT PLAN / TASK comes from the hop state's seat→held-card
+                    // map, NOT from the terminal row: ptyListTerminals rows carry no
+                    // plan-shaped field at all, so reading one off `t` renders every
+                    // seat idle while the hop beside it says that seat is working.
+                    // Same source and same rule as the readiness predicate.
+                    const heldCard = seatCards[name];
+                    const plan = String((heldCard && (heldCard.title || heldCard.planId)) || '-');
 
                     tr.innerHTML = `
                         <td>${escapeHtml(name)}</td>

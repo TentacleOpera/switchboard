@@ -98,7 +98,7 @@ let NotionFetchServiceClass: any;
 import type { NotionBackupService } from './NotionBackupService';
 let NotionBackupServiceClass: any;
 import { PLAN_SCANNER_PRESETS, expandFlatGlob, type ResolvedFlatTarget } from './PlanScannerPresets';
-import { teamIsFree, type HopName, type HopSnapshot, type HopReadinessResult, type HopId } from './HopReadiness';
+import { teamIsFree, HOP_SOURCE_COLUMNS, type HopName, type HopSnapshot, type HopReadinessResult, type HopId } from './HopReadiness';
 import type { ClickUpSyncService, ClickUpApplyOptions, ClickUpList, ClickUpMappingSelection, ClickUpTask } from './ClickUpSyncService';
 let ClickUpSyncServiceClass: any;
 import type { ClickUpDocsAdapter } from './ClickUpDocsAdapter';
@@ -27804,6 +27804,23 @@ Each plan file must include:
         }
     }
 
+    /**
+     * Feed-append for the dispatch path. The feed is a cosmetic session window;
+     * a throw from it must never surface as a failed dispatch. `_executeHopDispatch`
+     * appends AFTER the card has already moved, and its body runs inside the
+     * `_queueNextChain` critical section — an uncaught throw there rejects the
+     * chained promise, so a real dispatch is reported as `success: false`,
+     * `_hopLastRunAt` is never stamped, and the interval floor is skipped: the
+     * same hop fires again on the very next tick. Catch here, log, carry on.
+     */
+    private _safeAppendHopFeed(kind: 'dispatch' | 'finish', text: string): void {
+        try {
+            this.appendHopFeed(kind, text);
+        } catch (err) {
+            console.warn('[TaskViewerProvider] hop feed append failed (dispatch unaffected):', err);
+        }
+    }
+
     public getHopFeed(): Array<{ id: string; timestamp: number; kind: 'dispatch' | 'finish'; text: string }> {
         return [...this._hopFeed];
     }
@@ -27869,6 +27886,7 @@ Each plan file must include:
         readiness: Record<HopName, HopReadinessResult>;
         evaluatedAt: number;
         feed: Array<{ id: string; timestamp: number; kind: 'dispatch' | 'finish'; text: string }>;
+        seatCards: Record<string, { planId: string; title: string; column: string }>;
     }> {
         const wsRoot = wsRootOverride || this._getWorkspaceRoot() || this._apiServerWorkspaceRoot || '';
         const snapshot = await this.resolveHopSnapshot(wsRoot);
@@ -27884,7 +27902,38 @@ Each plan file must include:
             readiness,
             evaluatedAt: this._hopLastEvaluatedAt || Date.now(),
             feed: this.getHopFeed(),
+            seatCards: this._buildHopSeatCards(snapshot),
         };
+    }
+
+    /**
+     * The seat → held-card map behind the Fleet tab's CURRENT PLAN / TASK column.
+     *
+     * The column has no other source. `ptyListTerminals` rows carry
+     * `friendlyName, role, status, pid, startTime, worktreePath, cwd, ideName,
+     * purpose, agentInstanceId, parentInstanceId, cliFamily` and nothing
+     * plan-shaped (`ptyFleetService.ts` / the extension's registry mirror), so a
+     * table built from that verb alone renders every seat as idle — while the
+     * hop beside it reports that same seat is holding a card.
+     *
+     * Derived from the SAME snapshot `teamIsFree` reads, and by the same rule:
+     * a card is held when `dispatched_terminal` names the seat and `completed_at`
+     * is NULL. So the column and the reason line can never disagree.
+     */
+    private _buildHopSeatCards(snapshot: HopSnapshot | null | undefined): Record<string, { planId: string; title: string; column: string }> {
+        const held: Record<string, { planId: string; title: string; column: string }> = {};
+        const board = snapshot && Array.isArray(snapshot.board) ? snapshot.board : [];
+        for (const card of board) {
+            if (!card || card.completedAt) continue;
+            const seat = typeof card.dispatchedTerminal === 'string' ? card.dispatchedTerminal.trim() : '';
+            if (!seat || held[seat]) continue;
+            held[seat] = {
+                planId: String(card.planId || ''),
+                title: String(card.topic || card.planId || ''),
+                column: String(card.kanbanColumn || ''),
+            };
+        }
+        return held;
     }
 
     /**
@@ -28001,11 +28050,19 @@ Each plan file must include:
             const wsId = db ? ((await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '') : '';
             const board = freshSnapshot.board || (db ? await db.getBoard?.(wsId) : []) || [];
 
+            // Source-column membership, from the ONE declared table
+            // (`HOP_SOURCE_COLUMNS`). Legacy column ids are normalised first, so
+            // an old install's `CODED` still matches. Subtasks are excluded on
+            // `featureId` exactly as `switchboard ready` and the STAGING
+            // selector do.
+            const inSource = (hop: HopName, p: any): boolean =>
+                !!p
+                && HOP_SOURCE_COLUMNS[hop].includes(this._normalizeLegacyKanbanColumn(p.kanbanColumn))
+                && (!p.featureId || p.featureId === '');
+
             if (hop === 'plan') {
                 // Source column: CREATED, excluding subtasks
-                const candidates = board.filter((p: any) =>
-                    p && p.kanbanColumn === 'CREATED' && (!p.dispatchedAt) && (!p.featureId || p.featureId === '')
-                );
+                const candidates = board.filter((p: any) => inSource('plan', p) && !p.dispatchedAt);
                 if (candidates.length === 0) {
                     return { success: false, detail: 'no eligible cards in CREATED' };
                 }
@@ -28014,7 +28071,7 @@ Each plan file must include:
                     const res = await apiServer.performKanbanDispatch(wsRoot, candidate.planId, 'PLAN REVIEWED');
                     if (res.status === 200) {
                         const title = candidate.topic || candidate.planId;
-                        this.appendHopFeed('dispatch', `"${title}" → planner`);
+                        this._safeAppendHopFeed('dispatch', `"${title}" → planner`);
                     }
                     return {
                         success: res.status === 200,
@@ -28037,7 +28094,7 @@ Each plan file must include:
                         const pop = await apiServer._runQueuePop(wsRoot, headTerminal, undefined);
                         if (pop && pop.status === 200) {
                             const poppedTitle = pop.payload?.planId || pop.payload?.title || 'next staged card';
-                            this.appendHopFeed('dispatch', `"${poppedTitle}" → ${headTerminal}`);
+                            this._safeAppendHopFeed('dispatch', `"${poppedTitle}" → ${headTerminal}`);
                             return { success: true, detail: `popped next staged card to ${headTerminal}` };
                         }
                     }
@@ -28050,9 +28107,7 @@ Each plan file must include:
                 // is the one pop implementation and is the only correct call
                 // from inside the chain.
                 // Fallback: candidate in PLAN REVIEWED
-                const candidates = board.filter((p: any) =>
-                    p && p.kanbanColumn === 'PLAN REVIEWED' && (!p.dispatchedAt) && (!p.featureId || p.featureId === '')
-                );
+                const candidates = board.filter((p: any) => inSource('code', p) && !p.dispatchedAt);
                 if (candidates.length === 0) {
                     return { success: false, detail: 'no eligible cards in PLAN REVIEWED or STAGING' };
                 }
@@ -28061,7 +28116,7 @@ Each plan file must include:
                     const res = await apiServer.performKanbanDispatch(wsRoot, candidate.planId, 'auto');
                     if (res.status === 200) {
                         const title = candidate.topic || candidate.planId;
-                        this.appendHopFeed('dispatch', `"${title}" → coder`);
+                        this._safeAppendHopFeed('dispatch', `"${title}" → coder`);
                     }
                     return {
                         success: res.status === 200,
@@ -28072,14 +28127,11 @@ Each plan file must include:
             }
 
             if (hop === 'review') {
-                // Source columns: LEAD CODED, CODER CODED, INTERN CODED, CODED
-                const isCoded = (col?: string) => {
-                    const c = this._normalizeLegacyKanbanColumn(col);
-                    return c === 'LEAD CODED' || c === 'CODER CODED' || c === 'INTERN CODED' || c === 'CODED';
-                };
-                const candidates = board.filter((p: any) =>
-                    p && isCoded(p.kanbanColumn) && (!p.dispatchedAt || p.kanbanColumn !== 'CODE REVIEWED') && (!p.featureId || p.featureId === '')
-                );
+                // Source columns: LEAD CODED, CODER CODED, INTERN CODED, CODED.
+                // No `dispatchedAt` filter here, unlike the other two hops: a
+                // *_CODED card ALWAYS carries a dispatchedAt (the coder's), so
+                // filtering on it would empty this hop's candidate set entirely.
+                const candidates = board.filter((p: any) => inSource('review', p));
                 if (candidates.length === 0) {
                     return { success: false, detail: 'no eligible cards in *_CODED' };
                 }
@@ -28088,7 +28140,7 @@ Each plan file must include:
                     const res = await apiServer.performKanbanDispatch(wsRoot, candidate.planId, 'CODE REVIEWED');
                     if (res.status === 200) {
                         const title = candidate.topic || candidate.planId;
-                        this.appendHopFeed('dispatch', `"${title}" → reviewer`);
+                        this._safeAppendHopFeed('dispatch', `"${title}" → reviewer`);
                     }
                     return {
                         success: res.status === 200,

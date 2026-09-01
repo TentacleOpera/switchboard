@@ -29,15 +29,15 @@ Its sibling plan gives the hops their readiness predicate and tick integration. 
 missing before that is usable.
 
 **1. Up to sixty seconds of dead air, exactly when the fleet is emptiest.** The survivor timer runs
-on a 60s interval (`TaskViewerProvider.ts:27592`). The moment a hop most wants to fire is the moment
+on a 60s interval (`TaskViewerProvider.ts:27622`). The moment a hop most wants to fire is the moment
 a seat finishes — and on average that is thirty seconds before the next tick. Across a night of
 sequential cards that is a real fraction of the session spent idle, and it is the failure an operator
 notices first, because it looks like the automation is not working.
 
-The signal exists and is precise. `notifyTurnEnd` (`TaskViewerProvider.ts:1966`) fires with
-`{ seatName, planFile, outcome, workspaceRoot }` and is *"derived entirely from the pty stream — no
+The signal exists and is precise. `notifyTurnEnd` (`TaskViewerProvider.ts:1967`) fires with
+`{ seatName, planFile, outcome, workspaceRoot, recipientSeat?, body?, liveDelivery? }` and is *"derived entirely from the pty stream — no
 hooks, no tokens, no agent-side obligation."* It is already where the system learns a seat went
-quiet.
+quiet. The hook uses only `outcome` and `seatName`; the optional fields are irrelevant to it.
 
 **2. The hops have no surface.** Their state lives in memory with no reader — an operator cannot tick
 one, cannot press Start, and cannot see why a hop is not firing. The Fleet tab already polls seat
@@ -61,9 +61,13 @@ turn ending, so the two never met.
 
 ## Metadata
 
-**Complexity:** 4
+**Complexity:** 5
 **Tags:** backend, frontend, ui, reliability, ux
 **Feature:** edbf45a8-8e3e-46f9-a9ee-7ad13fb9b46d
+
+> **Superseded:** Complexity: 4
+> **Reason:** The plan touches 5+ surfaces (`TaskViewerProvider.ts`, `shell.js`, both composition roots, read path, verbs) — not single-file. The debounce/coalescing logic, in-flight claim, and both-roots wiring are moderate, well-scoped risks, which is Mixed (5-6), not Low (4).
+> **Replaced with:** Complexity: 5
 
 ## Dependencies
 
@@ -85,7 +89,7 @@ None.
 
 - **Two triggers, one serialization point.** The tick and the turn-end pass can evaluate within
   milliseconds of each other. Both reach dispatch through `dispatchNextFromQueue` / `launchMission`,
-  behind the module-level promise chain (`LocalApiServer.ts:59-67`) — *"the single serialization
+  behind the module-level promise chain (`LocalApiServer.ts:59-69`) — *"the single serialization
   point."* On top of that the evaluator takes an in-flight claim before acting, released after, so
   two triggers cannot both pass the interval floor in one window. Without it this plan reintroduces
   the double-dispatch the queue's design exists to prevent.
@@ -119,6 +123,14 @@ None.
   store, nothing persisted.
 - **Stop.** Once started, the button becomes Stop; pressing it halts future dispatches and does not
   recall one in flight.
+
+## Adversarial Synthesis
+
+Key risks: tick and turn-end racing on one free hop produce double-dispatch; `notifyTurnEnd` runs on
+the pty stream path and must stay fire-and-forget; `stalled` is not a completion and treating it as
+one dispatches onto a wedged fleet. Mitigations: in-flight claim plus existing promise chain
+serialize dispatch; hook schedules evaluation, never awaits it; only `outcome === 'completed'`
+re-evaluates.
 
 ## Proposed Changes
 
@@ -179,3 +191,34 @@ roots. In-memory — they write nothing to disk.
 - Kill the pty host mid-session: every hop shows *unknown* and nothing dispatches.
 - Press Start while a team is already free: nothing happens until the next completion.
 - Press Stop mid-run: the in-flight card continues, nothing new goes out.
+
+## Implementation Summary
+
+Implemented the Fleet tab dock surface, turn-end evaluation scheduler, and session event feed. Integrated `notifyTurnEnd` in `TaskViewerProvider.ts` and `handleTurnEndNotify` in `bootstrap.ts` to trigger a coalesced 2-second debounced hop evaluation pass upon turn completion while ignoring blocked/stalled events. Added an in-memory session feed tracking seat completions and hop dispatches with full state queries and verb toggles (`getHopState`, `setHopCheckbox`, `setHopsStarted`, `setHopState`) across both extension and standalone hosts. Constructed the Fleet tab UI in `shell.html` and `shell.js` displaying the seat table, three hop checkboxes with reason lines, Start/Stop toggle button, and session activity feed without any confirmation modals. Added comprehensive contract tests in `src/test/the-fleet-tab-runs-the-hops-contract.test.js`.
+
+
+## Review Findings
+
+Files changed in this pass: `src/services/TaskViewerProvider.ts` (`getHopFullState` now returns a
+`seatCards` map built by `_buildHopSeatCards` from the same snapshot and the same held-card rule the
+readiness predicate uses), `src/webview/shell.js` (the seat table's CURRENT PLAN / TASK cell reads
+that map instead of `t.currentPlanTitle || t.planTitle || t.topic` — `ptyListTerminals` rows carry no
+plan-shaped field whatsoever, so the column the plan calls the busy/idle discriminator rendered `-`
+for every seat forever, contradicting the reason line next to it), `package.json` +
+`.github/workflows/integration-tests.yml` (`test:contract:fleet-tab-hops` — the suite existed and was
+invoked by nothing), and the suite itself (item 10 asserted an object literal the test had just
+written and stayed green with the real field initializer deleted; it now reads the initializer from
+source, and new item 11 pins the seatCards path end to end). Validation:
+`compile-tests` 0 errors; `test:contract:fleet-tab-hops` **11/11**; `test:contract:dispatch-hops` 15/15;
+`browser-panel-verb-routing` 16/16, `standalone-fleet-seam` 13/13, `dispatch-view` pass;
+`host-seam-parity:check`, `standalone-parity:check`, `verb-returns:check` pass; eslint 0 errors; no
+`confirm(` in either shell file. Remaining risk: every guard here is behavioural and none of the
+plan's manual steps (finish a card and watch the feed; kill the pty host mid-session) were run in this
+pass, so the end-to-end turn-end→dispatch latency claim is unverified.
+
+## Deferred Findings
+
+- MAJOR `src/webview/shell.js:591` — the Fleet tab renders offline unless BOTH `ptyListTerminals` and `getHopState` return 200. Correct fail-closed behaviour for readiness, but a healthy board with a dead pty host shows nothing at all rather than an empty seat table with three `unknown` hops.
+- NIT `src/test/the-fleet-tab-runs-the-hops-contract.test.js:231` — item 9's both-roots check asserts `extSrc.includes('notifyTurnEnd')`, which is true regardless of hop wiring, and joins the two verb assertions with `||`. The load-bearing half (bootstrap.ts wires `scheduleTurnEndHopEvaluation`) is real; the rest is decoration.
+- NIT `src/services/TaskViewerProvider.ts:27827` — one debounce timer for all workspaces: a turn-end in workspace B replaces a pending pass for workspace A rather than scheduling its own.
+- NIT `src/webview/shell.js:539` — the 60s poll means a reason line can be a minute stale. `evaluatedAt` is served but never rendered, so the panel cannot show that it is stale (the plan's "it carries the evaluation timestamp, so a stale panel is visibly stale").

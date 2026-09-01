@@ -294,3 +294,28 @@ the sidebar `ready` handler in the extension and from `restoreAutobanOnStartup` 
 Not fixed, and not from this work: `catalog:check` is red at HEAD — commit `99d1337f` added the
 `POST /terminals/clear` route without regenerating `protocol-catalog.json`. Left alone rather than
 staging an unrelated regenerated file.
+
+## Review Findings
+
+Second independent review pass. Files changed: `src/services/TaskViewerProvider.ts` (a
+`_safeAppendHopFeed` guard so a cosmetic feed throw can no longer report a real dispatch as failed —
+which skipped the `_hopLastRunAt` stamp and let the same hop fire again on the next tick;
+`HOP_SOURCE_COLUMNS` is now the single source of the three source-column sets, replacing the inline
+duplicates and a dead `kanbanColumn !== 'CODE REVIEWED'` clause), `src/test/three-dispatch-hops-contract.test.js`
+(tests 11 and 13 were RED at HEAD — `this.appendHopFeed is not a function`, because their bare-object
+receivers have no prototype chain, so the two serialization tests died before asserting anything and
+the gated CI step was failing; dummies are now prototype-backed, plus new test 15 for the feed guard).
+The prior pass's "14/14" was not accurate. Validation: `compile-tests` 0 errors;
+`test:contract:dispatch-hops` **15/15**; `test:contract:fleet-tab-hops` 11/11;
+`standalone-fleet-seam`, `browser-panel-verb-routing`, `dispatch-view` pass; `host-seam-parity:check`,
+`standalone-parity:check`, `verb-returns:check`, `kanban-dispatch-callers:check` pass; eslint 0 errors.
+Remaining risk: no automated check exercises a real dispatch end-to-end — the plan's own manual
+acceptance (run the hops beside the controller agent and compare) was not performed in this pass, so
+the verdict on agreement-with-the-controller stays provisional.
+
+## Deferred Findings
+
+- NIT `src/services/TaskViewerProvider.ts:28060` — hop 1 filters `!p.dispatchedAt`, so a CREATED card that was dispatched once and returned to CREATED is skipped forever. Matches the existing STAGING selector at `:12170`, so left as-is.
+- NIT `src/services/HopReadiness.ts:51` — `'CODED'` in the review hop's source list is unreachable once `_normalizeLegacyKanbanColumn` maps it to `'LEAD CODED'`; harmless, and correct if that normalisation ever changes.
+- NIT `src/services/TaskViewerProvider.ts:27827` — `_hopTurnEndDebounceTimer` is not cleared on dispose; a pending 2s timer can outlive teardown. The evaluation itself re-checks `started`, so it is inert.
+- MAJOR (pre-existing, not this work) `protocol-catalog.json` — `catalog:check` is red from `99d1337f`, which added `POST /terminals/clear` without regenerating the catalog. Regenerating rewrites 748 unrelated line-number rows, so it is left for the commit that caused it.

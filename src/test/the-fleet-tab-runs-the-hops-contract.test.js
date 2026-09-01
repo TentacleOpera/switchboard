@@ -259,18 +259,87 @@ async function runTests() {
     });
 
     // 10. A fresh session starts unticked and stopped
+    //
+    // Read the REAL field initializer, not a literal the test wrote itself. The
+    // previous shape of this test built `hopSessionState` by hand on an
+    // Object.create'd instance and then asserted the object it had just
+    // assigned — it stayed green with the class field deleted, which is the one
+    // regression it exists to catch. The initializer is the persisted-default
+    // fact, so assert it at the source and then prove the getter reports it.
     await check('10. A fresh session starts unticked and stopped', async () => {
+        const taskViewerSrc = fs.readFileSync(path.join(__dirname, '..', 'services', 'TaskViewerProvider.ts'), 'utf8');
+        const init = taskViewerSrc.match(/hopSessionState\s*=\s*\{[\s\S]{0,400}?\n {4}\};/);
+        assert.ok(init, 'TaskViewerProvider must declare a hopSessionState field initializer');
+        const initText = init[0].replace(/\s+/g, ' ');
+        assert.ok(
+            /hops:\s*\{\s*plan:\s*false,\s*code:\s*false,\s*review:\s*false,?\s*\}/.test(initText),
+            `All three hops must initialize to false — found: ${initText}`
+        );
+        assert.ok(
+            /started:\s*false/.test(initText),
+            `started must initialize to false — found: ${initText}`
+        );
+
         const { TaskViewerProvider } = require(path.join(__dirname, '..', '..', 'out', 'services', 'TaskViewerProvider.js'));
         const instance = Object.create(TaskViewerProvider.prototype);
-        instance.hopSessionState = {
-            hops: { plan: false, code: false, review: false },
-            started: false,
-        };
+        // Deliberately seeded TRUE: the getter must report what the instance
+        // holds (so a defaults-only assertion cannot hide a broken reader), and
+        // the source assertions above are what pin the defaults themselves.
+        instance.hopSessionState = { hops: { plan: true, code: false, review: true }, started: true };
         const state = instance.getHopSessionState();
-        assert.strictEqual(state.started, false, 'started must be false by default');
-        assert.strictEqual(state.hops.plan, false, 'plan hop must be false by default');
-        assert.strictEqual(state.hops.code, false, 'code hop must be false by default');
-        assert.strictEqual(state.hops.review, false, 'review hop must be false by default');
+        assert.deepStrictEqual(
+            state,
+            { hops: { plan: true, code: false, review: true }, started: true },
+            'getHopSessionState must report the live session state verbatim'
+        );
+        assert.notStrictEqual(state.hops, instance.hopSessionState.hops, 'getHopSessionState must return a copy, not the live object');
+    });
+
+    // 11. CURRENT PLAN / TASK is served from the board, never from the terminal row
+    //
+    // `ptyListTerminals` rows carry friendlyName/role/status/pid/startTime/
+    // worktreePath/cwd/ideName/purpose/agentInstanceId/parentInstanceId/cliFamily
+    // and NOTHING plan-shaped. A table that reads the plan off that row renders
+    // '-' for every seat forever, while the hop beside it reports that same seat
+    // is holding a card — the one column the plan says distinguishes a working
+    // seat from an idle one, permanently blank and permanently wrong.
+    await check('11. CURRENT PLAN / TASK comes from the hop seatCards map, not the terminal row', async () => {
+        const { TaskViewerProvider } = require(path.join(__dirname, '..', '..', 'out', 'services', 'TaskViewerProvider.js'));
+
+        const instance = Object.create(TaskViewerProvider.prototype);
+        instance.hopSessionState = { hops: { plan: false, code: false, review: false }, started: false };
+        instance._hopLastReasons = { plan: '', code: '', review: '' };
+        instance._hopLastEvaluatedAt = 0;
+        instance._hopFeed = [];
+        instance._getWorkspaceRoot = () => '/tmp';
+        instance.resolveHopSnapshot = async () => ({
+            seats: [{ friendlyName: 'reviewer-1', role: 'reviewer', status: 'active' }],
+            board: [
+                { planId: 'p1', topic: 'Fix bare switchboard CLI menu', kanbanColumn: 'CODE REVIEWED', dispatchedTerminal: 'reviewer-1', completedAt: null },
+                { planId: 'p2', topic: 'Already done', kanbanColumn: 'DONE', dispatchedTerminal: 'Coding', completedAt: '2026-09-01T00:00:00Z' },
+                { planId: 'p3', topic: 'Never dispatched', kanbanColumn: 'CREATED', dispatchedTerminal: '', completedAt: null },
+            ],
+        });
+
+        const state = await instance.getHopFullState('/tmp');
+        assert.ok(state.seatCards, 'getHopFullState MUST expose a seatCards map');
+        assert.deepStrictEqual(
+            state.seatCards['reviewer-1'],
+            { planId: 'p1', title: 'Fix bare switchboard CLI menu', column: 'CODE REVIEWED' },
+            'A seat holding an uncompleted card must appear in seatCards'
+        );
+        assert.strictEqual(state.seatCards['Coding'], undefined, 'A completed card must NOT mark its seat as holding one');
+        assert.strictEqual(Object.keys(state.seatCards).length, 1, 'A card with no dispatched_terminal must claim no seat');
+
+        // And the surface must actually read it — a map nothing renders is the
+        // same blank column with more code behind it.
+        const shellJs = fs.readFileSync(path.join(__dirname, '..', 'webview', 'shell.js'), 'utf8');
+        assert.ok(/hopData\s*&&\s*hopData\.seatCards|hopData\??\.seatCards/.test(shellJs), 'shell.js MUST read hopData.seatCards');
+        assert.ok(/seatCards\[\s*name\s*\]/.test(shellJs), 'shell.js MUST look the held card up by seat name');
+        assert.ok(
+            !/t\?\.currentPlanTitle|t\?\.planTitle/.test(shellJs),
+            'shell.js MUST NOT read a plan title off the terminal row — ptyListTerminals sets no such field'
+        );
     });
 
     console.log(`\nTests finished. Failures: ${failures}`);

@@ -263,15 +263,20 @@ async function runTests() {
             },
             performKanbanDispatch: async () => ({ status: 200, payload: { success: true } })
         };
-        const dummyProvider = {
+        const { TaskViewerProvider } = require(path.join(__dirname, '..', '..', 'out', 'services', 'TaskViewerProvider.js'));
+        // Prototype-backed, not a bare object literal: `_executeHopDispatch` calls
+        // sibling methods on `this` (`_safeAppendHopFeed`, `_normalizeLegacyKanbanColumn`).
+        // A plain `{}` receiver makes every one of them a TypeError, which is how this
+        // test silently stopped measuring serialization at all.
+        const dummyProvider = Object.assign(Object.create(TaskViewerProvider.prototype), {
             _localApiServer: dummyApiServer,
+            _hopFeed: [],
             resolveHopSnapshot: async () => ({
                 seats: [{ friendlyName: 'planner-1', role: 'planner', status: 'active' }],
                 board: [{ planId: 'p1', kanbanColumn: 'CREATED' }]
             }),
             _getKanbanDb: async () => undefined,
-        };
-        const { TaskViewerProvider } = require(path.join(__dirname, '..', '..', 'out', 'services', 'TaskViewerProvider.js'));
+        });
         const executeFn = TaskViewerProvider.prototype._executeHopDispatch.bind(dummyProvider);
         const res = await executeFn('plan', '/tmp', {});
         assert.strictEqual(chainCalled, true, 'Hop dispatch MUST run via enqueueOnQueueChain');
@@ -301,7 +306,9 @@ async function runTests() {
         const order = [];
         let inside = 0;
         let maxConcurrent = 0;
-        const makeProvider = (tag) => ({
+        const { TaskViewerProvider } = require(path.join(__dirname, '..', '..', 'out', 'services', 'TaskViewerProvider.js'));
+        const makeProvider = (tag) => Object.assign(Object.create(TaskViewerProvider.prototype), {
+            _hopFeed: [],
             // No enqueueOnQueueChain on the api server: exercises the module-level fallback.
             _localApiServer: {
                 performKanbanDispatch: async () => {
@@ -320,7 +327,6 @@ async function runTests() {
             }),
             _getKanbanDb: async () => undefined,
         });
-        const { TaskViewerProvider } = require(path.join(__dirname, '..', '..', 'out', 'services', 'TaskViewerProvider.js'));
         const execA = TaskViewerProvider.prototype._executeHopDispatch.bind(makeProvider('a'));
         const execB = TaskViewerProvider.prototype._executeHopDispatch.bind(makeProvider('b'));
         const both = Promise.all([execA('plan', '/tmp', {}), execB('plan', '/tmp', {})]);
@@ -347,6 +353,38 @@ async function runTests() {
             '_executeHopDispatch must not call dispatchNextFromQueue (deadlocks inside _queueNextChain); use _runQueuePop'
         );
         assert.ok(body.includes('_runQueuePop'), '_executeHopDispatch must pop via _runQueuePop');
+    });
+
+    // 15. A feed-append throw must NOT turn a real dispatch into a reported failure
+    //
+    // `_executeHopDispatch` appends to the session feed AFTER the card has already
+    // moved, and its body runs inside the `_queueNextChain` critical section. An
+    // uncaught throw there rejects the chained promise, so `tickDispatchHops` sees
+    // `success: false`, never stamps `_hopLastRunAt`, and the interval floor is
+    // skipped — the same hop dispatches AGAIN on the very next tick. The feed is a
+    // cosmetic window; it must never be able to cause a double-dispatch.
+    await check('15. A throwing feed append leaves the dispatch reported as successful', async () => {
+        let dispatches = 0;
+        const dummyApiServer = {
+            enqueueOnQueueChain: async (fn) => await fn(),
+            performKanbanDispatch: async () => { dispatches++; return { status: 200, payload: { success: true } }; }
+        };
+        const { TaskViewerProvider } = require(path.join(__dirname, '..', '..', 'out', 'services', 'TaskViewerProvider.js'));
+        const dummyProvider = Object.assign(Object.create(TaskViewerProvider.prototype), {
+            _localApiServer: dummyApiServer,
+            resolveHopSnapshot: async () => ({
+                seats: [{ friendlyName: 'planner-1', role: 'planner', status: 'active' }],
+                board: [{ planId: 'p1', topic: 'A card', kanbanColumn: 'CREATED' }]
+            }),
+            _getKanbanDb: async () => undefined,
+            // The failure the guard exists for: the feed writer blows up.
+            appendHopFeed: () => { throw new Error('feed exploded'); },
+        });
+        const executeFn = TaskViewerProvider.prototype._executeHopDispatch.bind(dummyProvider);
+
+        const res = await executeFn('plan', '/tmp', {});
+        assert.strictEqual(dispatches, 1, 'the card must have been dispatched exactly once');
+        assert.strictEqual(res.success, true, 'a feed-append throw must not report the dispatch as failed');
     });
 
     console.log(`\nTests finished. Failures: ${failures}`);

@@ -223,6 +223,14 @@ jobs:
         run: npm run test:contract:standalone-fleet-seam
       - name: Three dispatch hops contract (readiness fails closed, one dispatch per tick, chain serialization, both roots)
         run: npm run test:contract:dispatch-hops
+      # The Fleet tab is the ONLY surface the hops have: without it an operator
+      # cannot tick a hop, press Start, or see why one is held. Its guards are
+      # behavioural (stalled/blocked never re-evaluate, five turn-ends coalesce to
+      # one pass, a tick racing a turn-end dispatches once, notifyTurnEnd stays
+      # non-blocking) and none of them throw when broken — they just quietly
+      # dispatch onto a wedged fleet. The suite existed unwired to any gate.
+      - name: Fleet tab hops contract (turn-end trigger, coalescing, double-trigger safety, no confirm)
+        run: npm run test:contract:fleet-tab-hops
       - name: Browser panel verb routing contract (every posted verb reachable on its route)
         run: npm run test:contract:browser-panel-verb-routing
 
