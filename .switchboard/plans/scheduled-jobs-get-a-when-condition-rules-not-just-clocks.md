@@ -1,13 +1,37 @@
-# Scheduled jobs get a `when` condition — rules, not just clocks
+# The controller's mechanical checks become code — a `when` condition on scheduled jobs
 
 ## Goal
 
-Add a declared, evaluated condition to `ScheduledJob` so automation can express **"when the fleet
-looks like this, do that"** rather than only **"every N minutes, do that"**. Ship it dry-run first:
-a job with a `when` evaluates on every tick and records what it *would* have done, and does not act
-until it is armed.
+Take the part of the Mission Control controller that is not judgement — read the fleet, decide
+whether anyone is working, dispatch if not — and make it deterministic code. The mechanism is a
+declared `when` condition on `ScheduledJob`, evaluated against live fleet and board state. Ship it
+dry-run first: a job with a `when` evaluates on every tick and records what it *would* have done,
+and does not act until it is armed.
 
 ### Problem Analysis
+
+**A language model is currently running string comparisons.**
+
+The controller agent's routine loop is three mechanical reads and a comparison. In its own account
+of how it produces a status report: run `switchboard fleet`, tail `.switchboard/logs/<seat>.md`,
+run `git log -n 1`. Then it applies rules a human wrote — *if a planner is free, dispatch; if
+nobody is coding or reviewing, dispatch the top card* — and calls a verb.
+
+Every step of that is deterministic. `switchboard fleet` already emits an aligned table and a
+`--json` projection; the rules are two boolean tests; the action is an existing verb. What the model
+adds to this particular loop is latency, token cost, and the chance of reading the table wrong. It
+is doing work that has a correct answer.
+
+**This is a subtraction, not an addition.** The agent is not replaced — the ~20% that is actually
+judgement stays with it: planner-stage questions, escalation, merge conflicts, advising on what to
+seat and what to group. What moves to code is the ~80% that is a state check followed by a fixed
+consequence. The result is *less* nondeterminism in the dispatch path, not more.
+
+**And it is not the retired clock returning.** `retire-autoban-and-batch-size.md` deleted the
+queue-schedule engine because it was *"still able to dispatch work nobody asked for on a timer"* —
+the defect is the word *unconditional*. A rule that fires only when the fleet is provably idle
+dispatches precisely when the operator would have. An interval with no state test is the thing being
+corrected here, not the thing being rebuilt.
 
 **Switchboard has a scheduler and no rules engine, and the two have been conflated.**
 
@@ -82,6 +106,12 @@ written against a stub fleet would pass.
   adds the state-change trigger and the arming UI.
 - **Not deleting `intervalMinutes`.** A rule with a `when` still respects its interval as a floor —
   see the throttle note below.
+- **Not retiring the controller agent.** Only its mechanical loop moves. Judgement — planner-stage
+  questions, escalation, merge conflicts, what to seat, what to group — stays with the agent, and
+  this plan removes none of it. The controller keeps running; it stops re-deriving facts.
+- **Not replicating the controller's narrative reports.** Its log-tail and `git log` reads produce
+  prose for a human. Rules read board and fleet state and emit a verdict. Anything that needs a
+  log tail to decide is, by that fact, in the 20% that stays.
 
 ## Metadata
 
@@ -214,14 +244,25 @@ two roots by hand, as `CLAUDE.md` requires — verb reachability will not show t
 
 ### Goal Invariants
 
-- Both originally-stated rules are expressible with no code change: *"if free planner team,
-  dispatch work"* → `roleIdle: planner` + `columnNonEmpty: CREATED`; *"if no one is coding or
+- Both rules the controller applies today are expressible with no code change: *"if free planner
+  team, dispatch work"* → `roleIdle: planner` + `columnNonEmpty: CREATED`; *"if no one is coding or
   reviewing, dispatch"* → `noSeatCoding` + `noSeatReviewing`.
 - No rule can dispatch except through `dispatchNextFromQueue` / `launchMission`.
 - No user-authored string is evaluated as code.
+- **Nothing fires on time alone.** A job carrying a `when` acts only when its conditions hold; the
+  interval is a floor on frequency, never a trigger. This is the property that distinguishes the
+  rule from the clock that was deleted, and it is asserted, not asserted-about.
 
-### Manual
+### Manual — does it reproduce the controller?
 
-- Author both rules, leave them unarmed, and watch `lastOutcome` across a working session: it should
-  read `would …` exactly when you would have dispatched by hand, and a failing-reason string
-  otherwise. This is the trust-building step before the sibling plan lets them act.
+The real acceptance test is agreement with the agent it replaces, so run them side by side.
+
+- Leave the controller agent running as it is today, and author both rules unarmed. Over a working
+  session, compare each `would …` outcome against what the controller actually did. They should
+  agree every time. A disagreement is the interesting artifact: either the rule is wrong, or the
+  agent was — and the second case is the argument for the whole plan.
+- Note where they cannot agree by construction. The controller reads
+  `.switchboard/logs/<seat>.md` and `git log` for its *narrative* reports; the rules read board and
+  fleet state only. Anything the controller decides from a log tail is judgement that stays with it,
+  and should be visible in this comparison as a decision the rules never claim to make.
+- Only arm once the two have agreed across a full session.
