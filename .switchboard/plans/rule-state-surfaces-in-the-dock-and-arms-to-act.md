@@ -1,8 +1,9 @@
-# Rules fire on turn-end, and the dock shows what they will do before they do it
+# Checkboxes to set the rules, a feed to watch them — the dock Fleet tab
 
 ## Goal
 
-Complete safe controller mode: evaluate rules the moment a seat finishes a turn (not only on the
+One tab does the whole job: checkboxes to configure each rule, and a feed showing what the rules and
+the fleet actually did. Rules also evaluate the moment a seat finishes a turn (not only on the
 minute tick), surface every rule's live verdict in the dock's Fleet tab, and give each rule an
 explicit Arm control so it moves from proposing to acting by a deliberate click.
 
@@ -40,8 +41,11 @@ clock. Nothing needed a host action triggered by a turn ending, so the two never
 
 - **No new condition kinds.** The sibling plan's closed set is the whole vocabulary.
 - **No second dispatcher.** The turn-end path calls the same evaluator and the same action branches.
-- **Not a rules editor in the dock.** The dock *shows* rules and arms them; authoring stays in the
-  Mission Control Schedules surface.
+- **Not a rules *editor* in the dock — but the checkboxes are here.** Ticking conditions on and off
+  and arming a rule happen in the Fleet tab, because that is where you are watching the fleet those
+  conditions describe. What stays in the Mission Control Schedules surface is creating and deleting
+  jobs, choosing an action, and setting an interval. Splitting the checkboxes away from the fleet
+  they read would mean configuring a rule in one panel and watching it in another.
 
 ## Metadata
 
@@ -129,10 +133,35 @@ Expose the evaluated rule set — id, label, conditions in English, verdict, fai
 `armed`, `lastOutcome`, evaluated-at — through the existing authenticated read path the Fleet tab
 already uses, so the dock gains no new transport.
 
-### 4. `src/webview/shell.js` — Fleet tab rule panel
+### 4. `src/webview/shell.js` — the Fleet tab, top to bottom
 
-Below the seat table: one row per rule showing its English conditions, a verdict chip
-(`matched` / `waiting: <reason>` / `unknown`), its last outcome, and an Arm toggle. No confirm gate.
+The whole feature is one tab, read top to bottom:
+
+**1. Seats** — the `SEAT / ROLE / STATUS / CURRENT PLAN` table, polled (from the sibling dock plan).
+
+**2. Rules — the checkboxes.** One block per rule. Its conditions are checkboxes, ticked or not:
+
+```
+☑ Nothing is coding      ☑ Nothing is reviewing     ☐ Planner idle
+☐ CREATED has cards      ☐ STAGING has cards
+→ waiting: reviewer-1 holds "Fix bare switchboard CLI menu"          [ Arm ]
+```
+
+Ticking a box writes the condition and the panel re-evaluates on the next poll, so you see
+immediately whether the rule you just described is currently true. Arm is a toggle on the same row.
+No confirm gate — `CLAUDE.md`, and `window.confirm` is a silent no-op in a VS Code webview anyway.
+
+**3. Feed — the messages.** A reverse-chronological list under the rules, one line per entry:
+
+```
+14:32  ✓ dispatched "Wire the sixteen unwired seams" → Coding-coder-2   (rule: coding lane idle)
+14:31  · reviewer-1 finished "Fix bare switchboard CLI menu"
+14:18  ~ would dispatch "Add an Orders tab" → planner-1   (rule not armed)
+```
+
+Three kinds of line, one feed: what a rule did, what the fleet did, and what a rule would have done
+if armed. Session-scoped and in memory — this is a window you watch, not an audit log, so nothing
+new is persisted and no store is added. `lastOutcome` on the job remains what survives a restart.
 
 ### 5. Arm verb
 
