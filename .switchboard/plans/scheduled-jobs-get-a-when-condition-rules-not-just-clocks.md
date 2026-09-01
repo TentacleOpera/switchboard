@@ -1,12 +1,13 @@
-# The controller's mechanical checks become code — a `when` condition on scheduled jobs
+# The controller's mechanical checks become code — keep a lane fed, per lane
 
 ## Goal
 
 Take the part of the Mission Control controller that is not judgement — read the fleet, decide
-whether anyone is working, dispatch if not — and make it deterministic code. The mechanism is a
-declared `when` condition on `ScheduledJob`, evaluated against live fleet and board state. Ship it
-dry-run first: a job with a `when` evaluates on every tick and records what it *would* have done,
-and does not act until it is armed.
+whether anyone is working, dispatch if not — and make it deterministic code.
+
+The configuration surface is **one switch per lane**: keep the planning lane fed, keep the coding
+lane fed, keep the review lane fed. Whether a lane is free is decided in code, not by the user.
+Each switch has two positions, propose and act, and starts in propose.
 
 ### Problem Analysis
 
@@ -97,14 +98,19 @@ written against a stub fleet would pass.
 
 ### Non-goals
 
-- **No expression language, no parser, no `eval`.** Conditions are a fixed, closed set of named
-  checks combined with AND. Nothing user-authored is executed.
+- **No condition builder, and no way to switch off a safety check.** "Nothing is coding" is not a
+  preference, it is the definition of *the coding lane is free* — exposing it as a checkbox would
+  let a user configure "dispatch onto busy seats", which is a bug wearing a settings control. The
+  readiness predicate lives in `LaneReadiness.ts` and takes no configuration. What the user chooses
+  is which lanes to keep fed, and whether each proposes or acts.
+- **No expression language, no parser, no `eval`.** Nothing user-authored is executed, because
+  nothing about the predicate is user-authored.
 - **Not a second dispatcher.** Rules select *when*; the existing action branches keep selecting
   *what* and *where*, and dispatch keeps flowing through `dispatchNextFromQueue` /
   `launchMission`.
 - **Not the turn-end trigger.** Tick-only here; `rule-state-surfaces-in-the-dock-and-arms-to-act.md`
   adds the state-change trigger and the arming UI.
-- **Not deleting `intervalMinutes`.** A rule with a `when` still respects its interval as a floor —
+- **Not deleting `intervalMinutes`.** A lane switch still respects its job's interval as a floor —
   see the throttle note below.
 - **Not retiring the controller agent.** Only its mechanical loop moves. Judgement — planner-stage
   questions, escalation, merge conflicts, what to seat, what to group — stays with the agent, and
@@ -115,29 +121,29 @@ written against a stub fleet would pass.
 
 ## Metadata
 
-**Complexity:** 6
+**Complexity:** 4
 **Tags:** backend, reliability, api, feature, devops
 
 ## User Review Required
 
-- **Confirm the initial condition set.** Proposed: `noSeatCoding`, `noSeatReviewing`,
-  `roleIdle: <role>`, `columnNonEmpty: <COLUMN>`, `columnEmpty: <COLUMN>`. The first two plus
-  `roleIdle: planner` cover both rules as originally stated.
-- **Confirm AND-only.** Every ticked condition must hold. No OR, no negation beyond the paired
-  empty/non-empty checks. This keeps the dock's rendering a plain English list.
-- **Confirm dry-run is the default for a job that gains a `when`,** including on upgrade.
+- **Confirm the three lanes and their role sets.** Proposed: `planning` = `planner`;
+  `coding` = `lead`, `coder`, `intern`; `review` = `reviewer`. A fleet using role names outside
+  this set has lanes that never read as free.
+- **Confirm lanes gate independently.** A busy reviewer does not hold the coding lane. This is a
+  deliberate correction to the rule as originally stated ("if no one is coding **or reviewing**").
+- **Confirm `propose` is the default for a job that gains a lane switch,** including on upgrade.
 
 ## Complexity Audit
 
 ### Routine
 
-- Adding an optional field to an interface and threading it through read/write.
-- Rendering condition names as English in a UI list.
+- Adding an optional two-enum field to an interface and threading it through read/write.
+- Rendering three switches and a propose/act toggle.
 
 ### Complex / Risky
 
 - **`SchedulerConfig` is persisted, shipped state on ~4,000 installs.** `schemaVersion` /
-  `SCHEDULER_SCHEMA_VERSION` (`:82-88`) exists as the migration branch point. `when` is optional and
+  `SCHEDULER_SCHEMA_VERSION` (`:82-88`) exists as the migration branch point. `keepLaneFed` is optional and
   additive, so no version bump is needed — but the read path must preserve unknown keys rather than
   reserialising a narrowed object, per `CLAUDE.md`'s migration rule.
 - **`DROPPED_SOURCES` filters on read** (`:502-508`), with a standing comment: *"Do NOT add
@@ -151,13 +157,13 @@ written against a stub fleet would pass.
   precedent, where four seams were extension-only for a month and *"no queue watch was ever armed
   in the standalone host."*
 - **Fleet unavailability must fail closed.** `getFleetLiveness()` returns `[]` when the pty host is
-  down. An empty fleet must evaluate `noSeatCoding` as **unknown → do not fire**, never as **true →
+  down. An empty fleet must resolve `laneIsFree` to **unknown → do not fire**, never to **free →
   fire**. `_runFeatureNudgeSweep` already encodes this lesson (`:924-931`: an empty liveness
   snapshot is *no evidence*, not "every head died"). Getting this backwards means a dead pty host
   dispatches everything at once.
-- **Throttle.** A `when`-driven job whose condition stays true would fire every tick. `lastRunAt`
+- **Throttle.** A lane that stays free would fire every tick. `lastRunAt`
   plus `intervalMinutes` must remain a floor, so a rule fires at most once per interval even while
-  its condition holds continuously.
+  its lane stays free continuously.
 
 ## Edge-Case & Dependency Audit
 
@@ -167,11 +173,11 @@ written against a stub fleet would pass.
   other path reintroduces double-dispatch against a seat's own standing orders.
 - **`heldByTeam` needs the board and a team set.** The evaluator therefore needs a DB handle in
   both hosts, not just fleet liveness. `_getKanbanDb(wsRoot)` is the existing path.
-- **A job with no `when`** behaves exactly as today. Asserted, not assumed — this is what makes the
+- **A job with no `keepLaneFed`** behaves exactly as today. Asserted, not assumed — this is what makes the
   change safe for existing installs.
-- **A job with a `when` and no armed flag** must never call an action branch. The dry-run path has
+- **A job in `propose` mode** must never call an action branch. The propose path has
   to be a hard gate before the switch, not a flag checked inside each branch.
-- **Condition naming a role no seat has.** `roleIdle: planner` with no planner seated is *unknown*,
+- **A lane with no seat of its roles.** A `planning` lane with no planner seated is *unknown*,
   not *idle*. Same fail-closed rule as an empty fleet.
 - **Multiple rules matching on one tick.** Evaluate all, act on at most one per tick, in job order,
   so two rules cannot both dispatch into a fleet that had room for one.
@@ -181,37 +187,47 @@ written against a stub fleet would pass.
 ### 1. `src/services/GlobalIntegrationConfigService.ts` — the field
 
 ```ts
-export type RuleCondition =
-    | { kind: 'noSeatCoding' }
-    | { kind: 'noSeatReviewing' }
-    | { kind: 'roleIdle'; role: string }
-    | { kind: 'columnNonEmpty'; column: string }
-    | { kind: 'columnEmpty'; column: string };
-
 // on ScheduledJob:
-when?: { all: RuleCondition[]; armed: boolean };
+keepLaneFed?: { lane: 'planning' | 'coding' | 'review'; mode: 'propose' | 'act' };
 ```
 
-Optional and additive. Read path preserves unknown keys; no `SCHEDULER_SCHEMA_VERSION` bump.
+Two enums. That is the entire configuration surface. Optional and additive; the read path preserves
+unknown keys and there is no `SCHEDULER_SCHEMA_VERSION` bump.
 
-### 2. New `src/services/RuleEvaluator.ts` — pure and host-agnostic
+### 2. New `src/services/LaneReadiness.ts` — the predicate, in code
 
-`evaluate(conditions, snapshot): { matched: boolean; reasons: string[]; unknown: string[] }`
+```ts
+laneIsFree(lane, snapshot): { free: boolean; reason: string } | { unknown: string }
+```
 
-Takes a **snapshot** (`{ seats, board, teamMembers }`), not services — so it is unit-testable with
-no host, and both roots hand it the same shape. `noSeatCoding` / `noSeatReviewing` are computed
-from `heldByTeam` over the board, filtered by role. Any condition whose inputs are missing lands in
-`unknown`, and a non-empty `unknown` means `matched: false`.
+One function, three lanes, no configuration reaching it. A lane is free when **no seat holding one
+of that lane's roles holds an uncompleted card** — `heldByTeam` (`LocalApiServer.ts:76`) over the
+board, filtered by role:
+
+| Lane | Roles | Source column |
+| :--- | :--- | :--- |
+| `planning` | `planner` | `CREATED` |
+| `coding` | `lead`, `coder`, `intern` | the queue |
+| `review` | `reviewer` | `*_CODED` |
+
+Takes a snapshot (`{ seats, board, teamMembers }`), not services, so it is unit-testable with no
+host and both roots hand it the same shape. Missing inputs return `unknown`, and `unknown` is never
+treated as free.
+
+**Lanes gate independently.** A reviewer working card A does not block a coder starting card B, so
+`coding` reads coding seats only. This is a deliberate correction to the rule as originally stated
+("if no one is coding **or reviewing**"), which was more conservative than the lanes require and
+would idle the coding lane behind an unrelated review.
 
 ### 3. `src/services/TaskViewerProvider.ts` — tick integration
 
 In `_tickSurvivorSchedulerJobs`, before the interval check:
 
-- Job has no `when` → today's path, untouched.
-- Job has a `when` → build the snapshot, evaluate.
-  - Not matched → record `lastOutcome` as the failing reason; do not advance `lastRunAt`.
-  - Matched but `armed: false` → record `lastOutcome: "would <action>: <reasons>"`; do not act.
-  - Matched and armed and interval elapsed → run the existing action branch unchanged.
+- Job has no `keepLaneFed` → today's path, untouched.
+- Job has one → resolve `laneIsFree(job.keepLaneFed.lane, snapshot)`.
+  - Not free, or unknown → record `lastOutcome` as the reason; do not advance `lastRunAt`.
+  - Free, `mode: 'propose'` → record `lastOutcome: "would <action>"`; do not act.
+  - Free, `mode: 'act'`, interval elapsed → run the existing action branch unchanged.
 
 `lastOutcome` is already a persisted field the UI reads, so the dry-run trail needs no new store.
 
@@ -224,16 +240,16 @@ two roots by hand, as `CLAUDE.md` requires — verb reachability will not show t
 
 ### Automated Tests
 
-1. **`noSeatCoding` is false when a seat holds an uncompleted card**, with every seat's `status`
+1. **A lane is not free when one of its seats holds an uncompleted card**, with every seat's `status`
    set to `'active'`. This is the plan's central defect pinned directly: a status-based
    implementation passes every other test and fails only this one.
-2. **Empty fleet → `unknown` → no fire.** Both for `noSeatCoding` and `roleIdle`. The dead-pty-host
+2. **Empty fleet → `unknown` → no fire,** for all three lanes. The dead-pty-host
    mass-dispatch guard.
-3. **A job with no `when` is byte-for-byte unchanged in behaviour** — same fire times, same
+3. **A job with no `keepLaneFed` is byte-for-byte unchanged in behaviour** — same fire times, same
    `lastRunAt` advancement. The ~4,000-install regression gate.
-4. **Dry-run gate:** a matched, unarmed job records a `would …` outcome and calls **no** action
+4. **Propose gate:** a free-lane job in `propose` mode records a `would …` outcome and calls **no** action
    branch. Asserted by spying on the branch, not by observing absence of side effects.
-5. **Throttle:** a continuously-true condition fires at most once per `intervalMinutes`.
+5. **Throttle:** a continuously-free lane fires at most once per `intervalMinutes`.
 6. **At most one action per tick** when several rules match.
 7. **Both roots wire the resolver.** A source-level assertion that the seam is set in
    `TaskViewerProvider.ts` *and* `bootstrap.ts`. This is the only gate that can catch the
@@ -245,11 +261,11 @@ two roots by hand, as `CLAUDE.md` requires — verb reachability will not show t
 ### Goal Invariants
 
 - Both rules the controller applies today are expressible with no code change: *"if free planner
-  team, dispatch work"* → `roleIdle: planner` + `columnNonEmpty: CREATED`; *"if no one is coding or
-  reviewing, dispatch"* → `noSeatCoding` + `noSeatReviewing`.
+  team, dispatch work"* → the `planning` lane switch; *"if no one is coding, dispatch"* → the
+  `coding` lane switch. Neither needs a condition to be authored.
 - No rule can dispatch except through `dispatchNextFromQueue` / `launchMission`.
 - No user-authored string is evaluated as code.
-- **Nothing fires on time alone.** A job carrying a `when` acts only when its conditions hold; the
+- **Nothing fires on time alone.** A job carrying a lane switch acts only while that lane is free; the
   interval is a floor on frequency, never a trigger. This is the property that distinguishes the
   rule from the clock that was deleted, and it is asserted, not asserted-about.
 
@@ -266,3 +282,11 @@ The real acceptance test is agreement with the agent it replaces, so run them si
   fleet state only. Anything the controller decides from a log tail is judgement that stays with it,
   and should be visible in this comparison as a decision the rules never claim to make.
 - Only arm once the two have agreed across a full session.
+
+### The predicate is not reachable from configuration
+
+One assertion earns its own heading because it is the whole reason the surface is two enums rather
+than a checkbox list: **no persisted field can make `laneIsFree` return free for a busy lane.**
+Assert it by round-tripping a `ScheduledJob` carrying arbitrary extra keys and confirming
+`LaneReadiness` reads none of them — its only inputs are the snapshot and the lane name. A user
+cannot configure their way onto a busy seat.
