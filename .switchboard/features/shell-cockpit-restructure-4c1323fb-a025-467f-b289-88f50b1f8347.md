@@ -59,14 +59,14 @@ reach it by two different code paths, only one of which knows what a controller 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [x] [Opening The Dock Starts Mission Control: One Seat, One Path](../plans/opening-the-dock-starts-mission-control.md) — **CODE REVIEWED** — ID: cd083484-32c5-40f5-a771-434ce1c0fcf8
-- [x] [The Agent Dock Grows Tabs, And The Terminals Kanban Pane Becomes One Of Them](../plans/agent-dock-tabs-and-kanban-in-the-dock.md) — **CODE REVIEWED** — ID: 46caa8cd-d582-4dfc-91f6-455fafd0e055
-- [x] [Shell Rail Restructure: A Primary Group, A Cold Group, And No Process List](../plans/shell-rail-restructure-primary-and-cold-groups.md) — **CODE REVIEWED** — ID: 6fe61451-db59-48ba-b56d-e75844dcff9a
-- [x] [One Colour In The Rail: Theme-Accent Team Icons, No Status Palette](../plans/shell-rail-single-colour-state-system.md) — **CODE REVIEWED** — ID: b1ba3477-ed3d-44cb-aebc-ab4bce0c588a
-- [x] [The Team In-Flight Predicate Already Exists — Expose It To The Rail](../plans/team-dispatched-state-reaches-the-rail.md) — **CODE REVIEWED** — ID: 44b85cfd-b57a-48aa-a1c5-0750fefd81bf
-- [x] [A Top-Right Control Cluster For The Shell's Non-Navigational Controls](../plans/shell-top-right-control-cluster.md) — **CODE REVIEWED** — ID: b566e0d0-d066-4c74-a2fa-4e45658a3b70
-- [x] [Three Fixed Team Slots In The Rail, Present Whether Or Not The Team Is Running](../plans/shell-rail-fixed-team-slots.md) — **CODE REVIEWED** — ID: fe50ab48-b936-4099-8396-5be08f7e3e9f
-- [x] [A Linear Panel: Setup, Agent Wiring, And The Instructions To Drive Switchboard From Linear](../plans/linear-gets-its-own-panel.md) — **CODE REVIEWED** — ID: 63ba35d9-2713-4561-8417-166813ee1965
+- [ ] [Opening The Dock Starts Mission Control: One Seat, One Path](../plans/opening-the-dock-starts-mission-control.md) — **PLAN REVIEWED** — ID: cd083484-32c5-40f5-a771-434ce1c0fcf8
+- [ ] [The Agent Dock Grows Tabs, And The Terminals Kanban Pane Becomes One Of Them](../plans/agent-dock-tabs-and-kanban-in-the-dock.md) — **PLAN REVIEWED** — ID: 46caa8cd-d582-4dfc-91f6-455fafd0e055
+- [ ] [Shell Rail Restructure: A Primary Group, A Cold Group, And No Process List](../plans/shell-rail-restructure-primary-and-cold-groups.md) — **PLAN REVIEWED** — ID: 6fe61451-db59-48ba-b56d-e75844dcff9a
+- [ ] [One Colour In The Rail: Theme-Accent Team Icons, No Status Palette](../plans/shell-rail-single-colour-state-system.md) — **PLAN REVIEWED** — ID: b1ba3477-ed3d-44cb-aebc-ab4bce0c588a
+- [ ] [The Team In-Flight Predicate Already Exists — Expose It To The Rail](../plans/team-dispatched-state-reaches-the-rail.md) — **PLAN REVIEWED** — ID: 44b85cfd-b57a-48aa-a1c5-0750fefd81bf
+- [ ] [A Top-Right Control Cluster For The Shell's Non-Navigational Controls](../plans/shell-top-right-control-cluster.md) — **PLAN REVIEWED** — ID: b566e0d0-d066-4c74-a2fa-4e45658a3b70
+- [ ] [Three Fixed Team Slots In The Rail, Present Whether Or Not The Team Is Running](../plans/shell-rail-fixed-team-slots.md) — **PLAN REVIEWED** — ID: fe50ab48-b936-4099-8396-5be08f7e3e9f
+- [ ] [A Linear Panel: Setup, Agent Wiring, And The Instructions To Drive Switchboard From Linear](../plans/linear-gets-its-own-panel.md) — **PLAN REVIEWED** — ID: 63ba35d9-2713-4561-8417-166813ee1965
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

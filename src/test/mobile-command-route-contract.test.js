@@ -167,7 +167,15 @@ function run() {
         // fleet projection is the ptyListTerminals arm.
         const absent = [
             ['priority_starred', 'plan rows persist priorityStarred'],
-            ['.subtaskCount', 'plan rows carry no subtaskCount'],
+            // `.subtaskCount` used to live here, and was correct while the surface read
+            // GET /kanban/plans (KanbanDatabase._readRows persists no such field). The
+            // surface now reads the updateBoard push, whose writer
+            // (KanbanProvider._buildBoardCards) DOES persist subtaskCount — see the
+            // positive assertion below. Two more that moved the same way:
+            // `card.title` and `card.completedAt` are absent from that literal, so the
+            // surface must answer from `topic` and from the column.
+            ['card.title', 'the pushed card projection carries topic, not title'],
+            ['card.completedAt', 'the pushed card projection carries no completedAt'],
             ['activeMission.members', 'mission records carry plans/features, not members'],
             ['activeMission.codename', 'a mission codename is persisted as name'],
             ['t.name === headName', 'the fleet projection emits friendlyName, not name'],
@@ -177,6 +185,39 @@ function run() {
         for (const [needle, why] of absent) {
             assert.ok(!js.includes(needle), `${needle}: ${why}`);
         }
+    });
+
+    test('every card field the surface reads is set by the push writer', () => {
+        // The transport swap changed the writer under this surface: it used to read
+        // KanbanPlanRecord rows over HTTP, it now reads the KanbanCard projection off
+        // the updateBoard push. Anything it reads must appear in THAT object literal.
+        const provider = fs.readFileSync(
+            path.join(__dirname, '..', 'services', 'KanbanProvider.ts'), 'utf8');
+        for (const field of ['subtaskCount', 'dispatchedTerminal', 'dispatchedAt', 'priorityStarred', 'isFeature', 'featureId', 'workspaceRoot', 'project', 'topic', 'complexity']) {
+            assert.ok(
+                new RegExp(`^\\s*${field}:`, 'm').test(provider),
+                `KanbanProvider must persist ${field} on the pushed card — command.js reads it`);
+        }
+        assert.ok(js.includes('card.subtaskCount'),
+            'the surface must use the push\'s workspace-wide subtaskCount, not a tally of the project-filtered card set');
+        assert.ok(js.includes('card.dispatchedTerminal'),
+            'the mission progress row names the seat from the pushed card');
+        // `id` is synthesised by getEffectiveCard for the rendered rows; it is NOT a
+        // field of the pushed card. Reading it off a raw allCards entry sent
+        // planId=undefined to the preview route.
+        assert.ok(!/openDocumentPreview\(\s*card\.id/.test(js),
+            'the preview must be opened with the normalised selection id, not card.id off a raw pushed card');
+    });
+
+    test('the first push cannot render before the column pickers exist', () => {
+        // The pickers arrive over HTTP, the board over the WS push; the push wins that
+        // race on a cold load. Unscoped, the first render builds a row per card for the
+        // whole board and discards them all when the columns land.
+        assert.ok(js.includes('columnsResolved'), 'a columns-resolved gate must exist');
+        assert.ok(/renderDispatchView[\s\S]{0,160}?columnsResolved/.test(js),
+            'renderDispatchView must hold until the columns resolve');
+        assert.ok(/renderMoveView[\s\S]{0,160}?columnsResolved/.test(js),
+            'renderMoveView must hold until the columns resolve');
     });
 
     test('the roster is real, and a dormant team seats on tap', () => {

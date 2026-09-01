@@ -139,6 +139,14 @@ export interface KanbanCard {
     featureId?: string;
     subtaskCount?: number;
     working?: boolean; // true while an agent is dispatched to this card and the 20-min window hasn't elapsed
+    // The seat and the moment of dispatch. `working` is DERIVED from dispatchedAt, so
+    // neither field leaks anything the push did not already carry — but a consumer that
+    // has to NAME the seat ("SEAT: coder-1") or run an elapsed clock cannot recover
+    // either from a boolean. The mobile command surface reads both; it used to get them
+    // from GET /kanban/plans (KanbanDatabase._readRows) and lost them when it moved onto
+    // this push. Empty string / null on a card that was never dispatched.
+    dispatchedTerminal?: string;
+    dispatchedAt?: string | null;
     queuePosition?: number | null; // V60: 1-based STAGING session queue position; NULL = not staged (sorts last)
     columnEnteredAt?: string | null; // V61: when the card entered its current column (board sort key)
     priorityStarred?: number; // V63: 0/1 priority flag; starred cards sort first in every consumer
@@ -2161,6 +2169,8 @@ export class KanbanProvider implements vscode.Disposable {
                 featureId: row.featureId || undefined,
                 subtaskCount: row.isFeature ? (subtaskCountMap.get(row.planId) || 0) : undefined,
                 working: cardState.working,
+                dispatchedTerminal: row.dispatchedTerminal || '',
+                dispatchedAt: row.dispatchedAt ?? null,
                 queuePosition: row.queuePosition ?? null,
                 columnEnteredAt: row.columnEnteredAt ?? null,
                 priorityStarred: row.priorityStarred ?? 0,
@@ -4026,6 +4036,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                         featureId: row.featureId || undefined,
                         subtaskCount: row.isFeature ? (subtaskCountMap2.get(row.planId) || 0) : undefined,
                         working: cardState2.working,
+                        dispatchedTerminal: row.dispatchedTerminal || '',
+                        dispatchedAt: row.dispatchedAt ?? null,
                         queuePosition: row.queuePosition ?? null,
                         columnEnteredAt: row.columnEnteredAt ?? null,
                         priorityStarred: row.priorityStarred ?? 0,

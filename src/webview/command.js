@@ -27,6 +27,16 @@
     // Feature Subtask Counts Cache
     const featureSubtaskCounts = new Map();
 
+    // The column pickers are the whole reason the lists are short. They are filled by
+    // fetchColumns (HTTP), while the board arrives on the WS push — and the push
+    // routinely wins that race on a cold load. With no picker value the column filter
+    // is a no-op, so the very first render would build a row for every card on the
+    // board (thousands) and throw them all away milliseconds later when the columns
+    // land and refreshAllData re-renders. Hold the lists until the pickers exist.
+    // Set on completion, not on success: if the columns read fails there are no columns
+    // to scope by and the unscoped list is the correct fallback, not a blank screen.
+    let columnsResolved = false;
+
     let activeMission = null;
     let teamRoster = [];
     let liveFleet = [];
@@ -221,13 +231,18 @@
 
         dispatchSourceColSelect?.addEventListener('change', () => {
             selectedDispatchColumn = dispatchSourceColSelect.value;
+            clearChip(dispatchStatusChip);
             renderDispatchView();
         });
 
         btnDispatchView?.addEventListener('click', () => {
             if (!selectedDispatchCardId) return;
+            // The pushed card projection has NO `id` — getEffectiveCard synthesises one
+            // from planId/sessionId for the rendered rows, and `selectedDispatchCardId`
+            // already IS that value. Reading `.id` off a raw allCards entry here sent
+            // `planId=undefined` and the preview always failed to load.
             const card = allCards.find(c => (c.planId || c.sessionId || c.id) === selectedDispatchCardId);
-            if (card) openDocumentPreview(card.id, card.planFile);
+            if (card) openDocumentPreview(selectedDispatchCardId, card.planFile);
         });
 
         btnDispatch?.addEventListener('click', executeDispatch);
@@ -241,6 +256,7 @@
 
         moveSourceColSelect?.addEventListener('change', () => {
             selectedMoveSourceColumn = moveSourceColSelect.value;
+            clearChip(moveStatusChip);
             renderMoveView();
         });
 
@@ -251,8 +267,9 @@
 
         btnMoveView?.addEventListener('click', () => {
             if (!selectedMoveCardId) return;
+            // See btnDispatchView: `.id` is not a field of the pushed card.
             const card = allCards.find(c => (c.planId || c.sessionId || c.id) === selectedMoveCardId);
-            if (card) openDocumentPreview(card.id, card.planFile);
+            if (card) openDocumentPreview(selectedMoveCardId, card.planFile);
         });
 
         btnMove?.addEventListener('click', executeMove);
@@ -301,6 +318,8 @@
             }
         } catch (err) {
             console.warn('[Command] Failed to fetch columns:', err);
+        } finally {
+            columnsResolved = true;
         }
     }
 
@@ -511,8 +530,15 @@
 
     // ── 1. Dispatch View Rendering ─────────────────────────────────────
 
+    function clearChip(chip) {
+        if (!chip) return;
+        chip.textContent = '';
+        chip.className = 'status-chip hidden';
+    }
+
     function selectDispatchCard(cardId) {
         selectedDispatchCardId = cardId;
+        clearChip(dispatchStatusChip);
         if (dispatchCardsList) {
             const items = dispatchCardsList.querySelectorAll('.cmd-card-row');
             items.forEach(el => {
@@ -524,6 +550,7 @@
 
     function renderDispatchView() {
         if (!dispatchCardsList) return;
+        if (!columnsResolved) return;
         dispatchCardsList.innerHTML = '';
 
         let cards = allCards.map(getEffectiveCard);
@@ -602,6 +629,7 @@
 
     function selectMoveCard(cardId) {
         selectedMoveCardId = cardId;
+        clearChip(moveStatusChip);
         if (moveCardsList) {
             const items = moveCardsList.querySelectorAll('.cmd-card-row');
             items.forEach(el => {
@@ -613,6 +641,7 @@
 
     function renderMoveView() {
         if (!moveCardsList) return;
+        if (!columnsResolved) return;
         moveCardsList.innerHTML = '';
 
         let cards = allCards.map(getEffectiveCard);
@@ -707,7 +736,7 @@
 
         const title = document.createElement('span');
         title.className = 'cmd-card-title';
-        title.textContent = card.title || card.topic || card.planFile || 'Untitled';
+        title.textContent = card.topic || card.planFile || 'Untitled';
         row.appendChild(title);
 
         const meta = document.createElement('div');
@@ -726,8 +755,17 @@
             meta.appendChild(dot);
         }
 
+        // `subtaskCount` rides the push (KanbanProvider._buildBoardCards), counted
+        // workspace-wide by KanbanDatabase.getSubtaskCountsByFeature. Prefer it: the
+        // pushed `cards` array is already project/repo-scope filtered, so counting
+        // siblings out of it drops every subtask living in another project and renders
+        // "0 subtasks" on features that have plenty — the exact bug that method's
+        // docblock exists to prevent. The local tally is the fallback for a push whose
+        // builder omits the field.
         const subtaskCount = card.isFeature
-            ? (featureSubtaskCounts.get(card.planId || card.id) || 0)
+            ? (typeof card.subtaskCount === 'number'
+                ? card.subtaskCount
+                : (featureSubtaskCounts.get(card.planId || card.id) || 0))
             : 0;
         if (card.isFeature) {
             const st = document.createElement('span');
@@ -760,10 +798,13 @@
             return {
                 id,
                 kind,
-                title: card ? (card.topic || card.title || card.planFile || id) : id,
+                // Every field below is read off the pushed card projection, not off a
+                // KanbanPlanRecord — `title` and `completedAt` are NOT in that literal,
+                // so the topic and the column are what actually answer here.
+                title: card ? (card.topic || card.planFile || id) : id,
                 seat: card ? (card.dispatchedTerminal || '') : '',
                 dispatchedAt: card ? (card.dispatchedAt || null) : null,
-                completed: Boolean(card && (card.completedAt || (card.kanbanColumn || card.column) === 'COMPLETED')),
+                completed: Boolean(card && (card.kanbanColumn || card.column) === 'COMPLETED'),
             };
         });
     }
@@ -862,7 +903,7 @@
                 candidates.forEach(c => {
                     const opt = document.createElement('option');
                     opt.value = c.planId || c.sessionId || c.id;
-                    opt.textContent = `${c.title || c.topic || 'Card'} (${c.kanbanColumn || c.column || 'new'})`;
+                    opt.textContent = `${c.topic || 'Card'} (${c.kanbanColumn || c.column || 'new'})`;
                     opt.dataset.kind = c.isFeature ? 'feature' : 'plan';
                     missionAddMemberSelect.appendChild(opt);
                 });
