@@ -1,9 +1,9 @@
-# Checkboxes to set the rules, a feed to watch them — the dock Fleet tab
+# A switch per lane, a feed to watch them — the dock Fleet tab
 
 ## Goal
 
-One tab does the whole job: checkboxes to configure each rule, and a feed showing what the rules and
-the fleet actually did. Rules also evaluate the moment a seat finishes a turn (not only on the
+One tab does the whole job: a switch per lane, and a feed showing what the lanes and the fleet
+actually did. Rules also evaluate the moment a seat finishes a turn (not only on the
 minute tick), surface every rule's live verdict in the dock's Fleet tab, and give each rule an
 explicit Arm control so it moves from proposing to acting by a deliberate click.
 
@@ -41,11 +41,11 @@ clock. Nothing needed a host action triggered by a turn ending, so the two never
 
 - **No new condition kinds.** The sibling plan's closed set is the whole vocabulary.
 - **No second dispatcher.** The turn-end path calls the same evaluator and the same action branches.
-- **Not a rules *editor* in the dock — but the checkboxes are here.** Ticking conditions on and off
-  and arming a rule happen in the Fleet tab, because that is where you are watching the fleet those
-  conditions describe. What stays in the Mission Control Schedules surface is creating and deleting
-  jobs, choosing an action, and setting an interval. Splitting the checkboxes away from the fleet
-  they read would mean configuring a rule in one panel and watching it in another.
+- **Not a rules editor — there is nothing to author.** The lane switches live in the Fleet tab
+  because that is where you watch the lanes they govern. What stays in the Mission Control
+  Schedules surface is creating and deleting jobs, choosing an action, and setting an interval.
+- **No control over readiness.** The panel explains why a lane is busy; it offers no way to
+  overrule it. That is a `LaneReadiness` decision and it is not reachable from the UI.
 
 ## Metadata
 
@@ -139,17 +139,18 @@ The whole feature is one tab, read top to bottom:
 
 **1. Seats** — the `SEAT / ROLE / STATUS / CURRENT PLAN` table, polled (from the sibling dock plan).
 
-**2. Rules — the checkboxes.** One block per rule. Its conditions are checkboxes, ticked or not:
+**2. Lanes — the switches.** One row per lane. Each is on or off, and propose or act:
 
 ```
-☑ Nothing is coding      ☑ Nothing is reviewing     ☐ Planner idle
-☐ CREATED has cards      ☐ STAGING has cards
-→ waiting: reviewer-1 holds "Fix bare switchboard CLI menu"          [ Arm ]
+☑ Planning   free            → would dispatch "Add an Orders tab"      [ propose ▸ act ]
+☑ Coding     free                                                       [ propose ▸ ACT ]
+☐ Review     busy: reviewer-1 holds "Fix bare switchboard CLI menu"     [ propose ▸ act ]
 ```
 
-Ticking a box writes the condition and the panel re-evaluates on the next poll, so you see
-immediately whether the rule you just described is currently true. Arm is a toggle on the same row.
-No confirm gate — `CLAUDE.md`, and `window.confirm` is a silent no-op in a VS Code webview anyway.
+Three switches, one mode each. The user never sees or sets the readiness test — "busy: reviewer-1
+holds …" is the panel *explaining* `laneIsFree`, not a control. There is deliberately no way to
+make a lane dispatch while it is busy. No confirm gate on the mode toggle — `CLAUDE.md`, and
+`window.confirm` is a silent no-op in a VS Code webview anyway.
 
 **3. Feed — the messages.** A reverse-chronological list under the rules, one line per entry:
 
