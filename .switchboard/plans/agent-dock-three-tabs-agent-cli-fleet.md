@@ -44,8 +44,8 @@ Nothing about that assumption was revisited when the CLI grew a board vocabulary
 
 - **No new execution endpoint.** The CLI tab is a pty seat, not a `POST /cli/exec`. See below.
 - **Not changing the Agent tab.** Its seat resolution, persistence and empty state are untouched.
-- **Not building the rules engine.** The Fleet tab here renders fleet state only; rule state is
-  added by `rule-state-surfaces-in-the-dock-and-arms-to-act.md`.
+- **Not building the automation.** The Fleet tab here renders seat state only; the dispatch hops and
+  their Start button are added by `the-fleet-tab-runs-the-hops.md`.
 
 ### The CLI tab is a pty seat, deliberately
 
@@ -96,7 +96,7 @@ four would need wrap or overflow behaviour the tab strip does not have.
 
 **The Fleet poll is 60s**, and only while the tab is visible. It refreshes the *display* — it is not
 what makes rules fire. Rule evaluation runs on the survivor scheduler tick and on the turn-end hook
-(`rule-state-surfaces-in-the-dock-and-arms-to-act.md`), so a finished card still produces a dispatch
+(`the-fleet-tab-runs-the-hops.md`), so a finished card still produces a dispatch
 within seconds no matter how slowly the table repaints. A short poll would buy nothing and cost a
 `ptyListTerminals` round trip every few seconds all day.
 
