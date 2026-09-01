@@ -150,6 +150,10 @@ The whole feature is one tab, read top to bottom:
 Coding and review show the same reason because they share one working tree — a reviewer writes
 source, so it holds both. Planning is independent: a planner writes plan files, not code.
 
+The busy reason names the seat *and*, under `feature_worktree_mode: 'per-feature'`, its team — so
+"busy: reviewer-1 (team Coding) holds …" reads as a lane that is free for other teams. Under
+`'none'` there is one tree and no team qualifier, because there is no other lane to be free.
+
 Three switches, one mode each. The user never sees or sets the readiness test — "busy: reviewer-1
 holds …" is the panel *explaining* `laneIsFree`, not a control. There is deliberately no way to
 make a lane dispatch while it is busy. No confirm gate on the mode toggle — `CLAUDE.md`, and

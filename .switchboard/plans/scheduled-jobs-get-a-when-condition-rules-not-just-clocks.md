@@ -132,6 +132,9 @@ written against a stub fleet would pass.
 - **Confirm coding and review share one lock.** They write the same tree, so a busy reviewer holds
   both. This matches the rule as originally stated ("if no one is coding **or reviewing**").
   An earlier revision of this plan split them, which was wrong.
+- **Confirm readiness scope follows `feature_worktree_mode`** — global under `'none'`, per team
+  under `'per-feature'` — rather than always locking globally. Always-global is safe but serialises
+  teams that were provisioned to run in parallel.
 - **Confirm `propose` is the default for a job that gains a lane switch,** including on upgrade.
 
 ## Complexity Audit
@@ -228,11 +231,34 @@ source is an occupant of that tree, and a reviewer is such a seat.
 `planning` stays separate because a planner writes plan files under `.switchboard/plans/`, not
 source, so it cannot collide with either.
 
-**Open — worktree scope.** Where a team runs in its own worktree, the collision domain is that
-worktree rather than the repository, and two teams in separate worktrees could both be free at once.
-This plan computes readiness over the shared tree, which is correct-and-conservative: it can idle a
-lane that a worktree would have freed, and it can never dispatch into an occupied checkout. Making
-it worktree-aware is a follow-up, not a prerequisite.
+**Scope follows the worktree mode — both branches already exist.** The collision domain is a
+checkout, so what counts as "the lane" depends on whether the fleet shares one:
+
+| `feature_worktree_mode` | Collision domain | Readiness scope |
+| :--- | :--- | :--- |
+| `'none'` *(default)* | one shared tree | **global** — any busy code-writing seat holds the lane |
+| `'per-feature'` | one worktree per feature, shared by its subtasks | **per team** — two teams in separate worktrees are both free |
+
+Neither branch needs new machinery. Per-team in-flight resolution already ships:
+`resolveTeamInFlight(db, teamMemberNames)` (`LocalApiServer.ts:89`) takes the member list, and
+`worktree-models-consolidate-and-a-staging-toggle.md` records the design intent —
+*"the in-flight refusal is per **team**, not per queue, so N leads drain one ordered list
+concurrently."* `laneIsFree` passes either the whole code-writing fleet or one team's members
+depending on the mode; the predicate underneath is the same.
+
+Getting this wrong in the safe direction still costs real throughput: a global lock under
+`per-feature` serialises teams that were provisioned specifically to run in parallel, which defeats
+the reason the mode exists. Getting it wrong the other way dispatches into an occupied checkout.
+
+**Two cases the mode does not cover, and they must not silently read as free:**
+
+- **`useWorktreesPerPlan`** — a per-role prompt add-on (`sharedDefaults.js:145`) where the *agent*
+  creates its own worktree per plan. Not a board setting and not host-provisioned, so the mode
+  cannot see it. A fleet running it has isolation the readiness check cannot prove; resolve as the
+  mode dictates and do not attempt to infer it.
+- **A card with no feature** under `per-feature` mode has no feature worktree, so it lands in the
+  shared tree even while other work is isolated. Its seat therefore holds the global lane, not a
+  team lane. `plans.worktree_id` (V26) is the field that distinguishes them.
 
 ### 3. `src/services/TaskViewerProvider.ts` — tick integration
 
@@ -261,20 +287,26 @@ two roots by hand, as `CLAUDE.md` requires — verb reachability will not show t
 2. **A lane is not free when one of its seats holds an uncompleted card**, with every seat's `status`
    set to `'active'`. This is the plan's central defect pinned directly: a status-based
    implementation passes every other test and fails only this one.
-3. **Empty fleet → `unknown` → no fire,** for all three lanes. The dead-pty-host
+3. **Scope follows the mode.** Under `'per-feature'`, team A busy leaves team B's lane free; under
+   `'none'`, team A busy holds the lane for everyone. Both asserted on the same fixture, since the
+   only difference is the mode — this is the test that stops an always-global implementation from
+   passing, and an always-per-team one too.
+4. **A featureless card under `'per-feature'` holds the global lane,** not just its team's. It has
+   no `worktree_id`, so it is in the shared tree while its neighbours are isolated.
+5. **Empty fleet → `unknown` → no fire,** for all three lanes. The dead-pty-host
    mass-dispatch guard.
-4. **A job with no `keepLaneFed` is byte-for-byte unchanged in behaviour** — same fire times, same
+6. **A job with no `keepLaneFed` is byte-for-byte unchanged in behaviour** — same fire times, same
    `lastRunAt` advancement. The ~4,000-install regression gate.
-5. **Propose gate:** a free-lane job in `propose` mode records a `would …` outcome and calls **no** action
+7. **Propose gate:** a free-lane job in `propose` mode records a `would …` outcome and calls **no** action
    branch. Asserted by spying on the branch, not by observing absence of side effects.
-6. **Throttle:** a continuously-free lane fires at most once per `intervalMinutes`.
-7. **At most one action per tick** when several rules match.
-8. **Both roots wire the resolver.** A source-level assertion that the seam is set in
+8. **Throttle:** a continuously-free lane fires at most once per `intervalMinutes`.
+9. **At most one action per tick** when several rules match.
+10. **Both roots wire the resolver.** A source-level assertion that the seam is set in
    `TaskViewerProvider.ts` *and* `bootstrap.ts`. This is the only gate that can catch the
    composition-root divergence, and its absence is the documented precedent.
-9. **Unknown-key preservation:** round-trip a `SchedulerConfig` carrying a future key and assert it
+11. **Unknown-key preservation:** round-trip a `SchedulerConfig` carrying a future key and assert it
    survives a write.
-10. **Evaluator runs after `DROPPED_SOURCES` filtering.**
+12. **Evaluator runs after `DROPPED_SOURCES` filtering.**
 
 ### Goal Invariants
 
