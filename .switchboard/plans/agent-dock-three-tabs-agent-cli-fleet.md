@@ -62,13 +62,25 @@ an exec endpoint could never carry.
 
 ## Dependencies
 
-- **Hard prerequisite:** `the-dock-kanban-pane-renders-nothing.md`. Three of the four defects it
-  fixes are **not** kanban-specific and survive this plan's retirement of the Kanban pane: the dock
-  reads the main panel's `terminals.*` pane settings, the mode body class lands after first paint so
-  full-panel chrome flashes (this affects `is-solo` — the agent tab, and the CLI tab added here),
-  and a `?dock=1` document can post `switchPanel` to repaint the shell's main content area. The CLI
-  tab is the same `/terminals?…&dock=1` pattern and inherits all three. Containment and paint order
-  land first, or this plan ships new instances of known bugs.
+- **Hard prerequisite:** `dock-frames-do-not-know-they-are-docks.md`. All three defects it fixes
+  follow any `?dock=1` document, so retiring the Kanban pane does not clear them: the dock reads the
+  main panel's `terminals.*` pane settings, the mode body class lands after first paint so
+  full-panel chrome flashes (already visible on `is-solo` — the agent tab this plan keeps), and a
+  dock document can post `switchPanel` to repaint the shell's main content area. The CLI tab added
+  here is the same pattern and inherits all three.
+
+### The Kanban pane is retired without being repaired
+
+Testing the Kanban tab surfaced a fourth defect that is genuinely kanban-specific: the dock's kanban
+entry paths (`terminals.js:848-856`, `:2228-2233`) set `paneModes = ['kanban']` without seeding
+`kanbanPaneColumn`. Both toggle paths do seed it (`:6549`, `:7646`); the dock path does not, so the
+column is `undefined`, the snap-to-offered logic (`:7142-7145`) cannot repair it — it tests equality
+and `includes()`, both false for `undefined` — and the pane fetches an undefined column and paints
+nothing.
+
+**It is deliberately not fixed.** This plan deletes the pane, so the defect dies with it. Recorded
+here so the diagnosis is not rediscovered, and so nobody reads the broken tab as a reason to delay
+the retirement — it is a reason to hurry it.
 
 ## Metadata
 
