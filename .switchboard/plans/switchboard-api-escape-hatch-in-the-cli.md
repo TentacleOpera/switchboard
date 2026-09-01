@@ -89,11 +89,14 @@ cost is close to zero.
 
 ## User Review Required
 
-- **Confirm the command name.** `api` reads well and no subcommand claims it. `http` and `call`
-  are the alternatives.
-- **Confirm the body-passing shape.** This plan takes the JSON body as a positional argument, to
-  match `switchboard verb <name> <jsonPayload>` which already works that way. A `--data @file`
-  form is proposed as an addition for bodies too large or too quote-hostile for `argv`.
+None.
+
+**The command is `api`.** Nothing else claims it and it reads correctly beside `switchboard verb`.
+
+**Both body forms ship.** Positional JSON is primary, matching `switchboard verb <name>
+<jsonPayload>`; `--data @<file>` is the escape hatch. The file form is not optional polish — an agent
+writing a diagram spec or a ticket description hits shell quoting it cannot debug, and the failure
+looks like a malformed payload rather than a quoting problem.
 
 ## Complexity Audit
 

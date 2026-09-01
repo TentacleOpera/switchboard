@@ -75,9 +75,20 @@ test reads the markdown for transport choice.
 
 ## User Review Required
 
-- **Confirm the two mirrored trees stay mirrored.** `.claude/skills/` carries copies
-  (`manage-features`, `worktree-cleanup`, `switchboard`, `kanban-operations`). They must be migrated
-  in the same change or the two trees teach different transports.
+None.
+
+**Both trees are edited by hand; regeneration is not relied on.** `.claude/skills/` carries copies
+(`manage-features`, `worktree-cleanup`, `switchboard`, `kanban-operations`) which are *derived* today
+by `generateClaudeMirror` — but that runs from `extension.ts:4106` and **nowhere else**, so the
+standalone host never regenerates, and
+`feature_plan_20260827144002_claude-mirror-not-regenerating-on-deletion.md` records that it does not
+always fire where it is wired.
+
+`delete-the-claude-mirror-generator.md` then removes the generator entirely and commits the eight
+files as ordinary bundle assets, after which nothing regenerates them anywhere. Either way the safe
+instruction is the same: **migrate both trees explicitly in this change**, and do not assume a
+regeneration will carry the edit across. A `.claude/` copy left behind keeps teaching curl to
+whichever host reads it.
 
 ### How protocols reach a workspace (settled — no action needed for this plan)
 

@@ -70,13 +70,22 @@ the only thing that knows how to draw a terminal, and every context pays for the
 
 ## User Review Required
 
-- **Confirm the module's boundary is "one terminal", not "a pane".** A pane carries a title bar,
-  plan title, action buttons, drop targets and input-state chips — panel chrome. The module owns the
-  viewport and its stream; the embedder owns the frame around it. If the dock wants pane chrome it
-  builds its own, and that is the intended trade.
-- **Confirm no interim duplication is acceptable.** The panel is the only consumer until the dock
-  document lands, so this ships as a pure refactor with no visible benefit. That is the cost of not
-  duplicating 1,700 lines later.
+None.
+
+**The module is one terminal, not one pane.** A terminal on screen is a box inside a box: the pane
+carries a title bar, plan title, action buttons, a drop target and input-state chips; inside it sits
+the viewport — xterm and its WebSocket. **The module is the inner box.** Whoever embeds it draws its
+own frame.
+
+The dock does not want the outer box. Drop targets exist for dragging terminals around a pane grid,
+which the dock has not got; the popout button pops a pane out of that grid. Bundling them would ship
+the dock chrome it must then switch off with flags — which is exactly how the `isDockFrame` guards
+in `dock-frames-do-not-know-they-are-docks.md` accumulated. Revisit once the boundary is real code
+rather than a paragraph, but start narrow.
+
+**No interim duplication, accepted.** The panel is the module's only consumer until the dock document
+lands, so this ships as a pure refactor with nothing visible to show for it. That is the price of not
+duplicating 1,700 lines of xterm and WebSocket handling later.
 
 ## Complexity Audit
 
