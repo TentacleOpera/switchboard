@@ -10,6 +10,7 @@ import type { HeadlessSwitchboardOptions, HeadlessSwitchboardInstance } from './
 import { DEFAULT_DISPLAY_HOSTNAME, isLoopbackHostname } from '../utils/loopbackHostname';
 import { detectTailnetAddress, resolveMagicDnsNames } from '../utils/tailnetDetect';
 import { isPortFree, resolvePreferredPort, PORT_BASE, PORT_SPAN } from '../utils/portResolver';
+import { BANNER_ART_TRUECOLOR, BANNER_ART_256, BANNER_ART_ASCII } from '../generated/bannerArt';
 
 function usage(): string {
     return `Usage: npx switchboard                        (interactive front-door menu — default)
@@ -909,15 +910,56 @@ function readVersion(): string {
     } catch { return 'unknown'; }
 }
 
-/** The UFO ANSI banner used by `about` and the bare console. */
+/**
+ * Which banner art the current terminal can actually render.
+ *
+ * `ascii` is the safe floor: it carries no escape sequence and no code point
+ * above 0x7E, so it is correct in a pipe, under `NO_COLOR`, and in any locale
+ * that resolves East-Asian-Ambiguous width as wide (which the half-block
+ * glyphs U+2580/U+2584 are). Called once per `banner()`, never per call site.
+ */
+function detectBannerTier(): 'truecolor' | 'x256' | 'ascii' {
+    // NO_COLOR: honoured when present and non-empty (https://no-color.org).
+    if (process.env.NO_COLOR) { return 'ascii'; }
+    // A pipe or redirect must never receive escape codes.
+    if (!process.stdout.isTTY) { return 'ascii'; }
+    // U+2580/U+2584 are East-Asian-Ambiguous width — the same class as the
+    // U+25CF bullet this art replaced. A CJK locale resolves Ambiguous as WIDE, so
+    // the 44-column art would render 88 columns and wrap: the very defect being
+    // fixed, in a different locale. Degrade to ASCII rather than ship a broken
+    // half-render.
+    const locale = (process.env.LC_ALL || process.env.LC_CTYPE || process.env.LANG || '').toLowerCase();
+    if (/^(ja|ko|zh)([_.@]|$)/.test(locale)) { return 'ascii'; }
+    const colorterm = (process.env.COLORTERM || '').toLowerCase();
+    if (colorterm.includes('truecolor') || colorterm.includes('24bit')) { return 'truecolor'; }
+    return 'x256';
+}
+
+/**
+ * The UFO banner used by `about` and the bare console.
+ *
+ * The art is the product's own pixel-art UFO (`icons/switchboard-ufo-static.svg`),
+ * rasterised at build time into `src/generated/bannerArt.ts` by
+ * `npm run banner:generate`. Nothing here parses SVG — it is a static import.
+ *
+ * The art is 44 columns wide, so the text sits BENEATH it rather than beside
+ * it (44 columns of art plus the 44-character URL would exceed 80). Keep
+ * `Agent Fleet Command` on its own line, byte-for-byte: the setup wizard
+ * `.replace()`s that literal, and a contract test asserts it.
+ */
 function banner(version: string): string {
+    const tier = detectBannerTier();
+    const art = tier === 'truecolor' ? BANNER_ART_TRUECOLOR
+        : tier === 'x256' ? BANNER_ART_256
+            : BANNER_ART_ASCII;
     return [
-        '       .---.',
-        " _...-'     '-..._       SWITCHBOARD v" + version,
-        '.-~  ●   ●   ●   ●  ~-.   Agent Fleet Command',
-        '(________________________)',
-        '      \\   :    :   /       https://github.com/TentacleOpera/switchboard',
-        '       \\  :    :  /        Host: Standalone (' + process.platform + ' ' + process.arch + ')',
+        art,
+        '',
+        'SWITCHBOARD v' + version,
+        'Agent Fleet Command',
+        '',
+        'https://github.com/TentacleOpera/switchboard',
+        'Host: Standalone (' + process.platform + ' ' + process.arch + ')',
         '',
     ].join('\n');
 }

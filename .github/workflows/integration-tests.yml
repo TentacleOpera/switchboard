@@ -25,6 +25,9 @@ jobs:
       - name: Protocol catalog + verb allowlist drift check
         run: npm run catalog:check
 
+      - name: CLI banner art drift check
+        run: npm run banner:check
+
       - name: Compile test outputs
         run: npm run compile-tests
 

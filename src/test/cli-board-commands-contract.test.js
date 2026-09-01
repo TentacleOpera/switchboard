@@ -32,6 +32,252 @@ function readSource(...segments) {
 /** The board subcommands this plan added, plus the pre-existing read-only three. */
 const BOARD_SUBCOMMANDS = ['plans', 'ready', 'dispatch', 'done', 'next', 'clear', 'fleet', 'verb', 'help', 'about', 'version', 'setup'];
 
+// ── Banner art ───────────────────────────────────────────────────────────────
+//
+// Plan: .switchboard/plans/cli-banner-saucer-redrawn-to-align-and-render-everywhere.md
+//
+// The banner is no longer hand-typed: it is a build-time render of
+// icons/switchboard-ufo-static.svg. The drift check alone cannot catch a
+// rasteriser that is deterministic but WRONG (it would be happily in sync with
+// its own bad output), so the pixel assertions below name coordinates derived
+// from the SVG. If the SVG changes, these are updated deliberately.
+//
+//   grid origin = the art's bounding box, x=72 y=42, at 4 SVG units per cell
+//   column = (svgX - 72) / 4     pixel row = round((svgY - 42) / 4)
+//
+// The round-half-up snap is exact for every shape except the two y=88 cyan
+// ports (88 -> pixel row 12), which is the generator's one documented
+// judgement call.
+const ESC = '\u001b';
+const SGR = /\u001b\[[0-9;]*m/g;
+
+/** SVG coordinate -> expected raster colour. Derived from <g class="ufo">, not from the generator. */
+const PIXEL_INVARIANTS = [
+    // The six cyan ports (rect x=..,y=..,w=12,h=8, fill #00e5ff, full opacity).
+    { svg: 'port x=96 y=82', row: 10, col: 6, colour: '#00e5ff' },
+    { svg: 'port x=120 y=86', row: 11, col: 12, colour: '#00e5ff' },
+    { svg: 'port x=144 y=88', row: 12, col: 18, colour: '#00e5ff' },
+    { svg: 'port x=168 y=88', row: 12, col: 24, colour: '#00e5ff' },
+    { svg: 'port x=192 y=86', row: 11, col: 30, colour: '#00e5ff' },
+    { svg: 'port x=216 y=82', row: 10, col: 36, colour: '#00e5ff' },
+    // Hull bands.
+    { svg: 'hull rect x=72 y=78 w=176 h=12', row: 9, col: 0, colour: '#1d2323' },
+    { svg: 'hull rect x=88 y=90 w=144 h=8', row: 12, col: 4, colour: '#0b0f0f' },
+    { svg: 'dome highlight rect x=132 y=50 w=56 h=4', row: 2, col: 20, colour: '#a0a6a6' },
+    { svg: 'dome rim rect x=136 y=46 w=48 h=4', row: 1, col: 20, colour: '#5e6666' },
+    // The cockpit's opacity=".55" cyan composited over #0b0f0f — proves alpha is
+    // composed, not dropped and not painted opaque.
+    { svg: 'cockpit rect x=152 y=58 w=24 h=4 opacity=.55', row: 4, col: 20, colour: '#058593' },
+];
+
+/** Pull a JSON-literal export out of the generated module — the real value, not a docblock claim. */
+function readGeneratedLiteral(source, name, multiline) {
+    if (multiline) {
+        const m = source.match(new RegExp(`export const ${name}: readonly string\\[\\] = \\[([\\s\\S]*?)\\n\\];`));
+        assert.ok(m, `src/generated/bannerArt.ts must export ${name}.`);
+        return JSON.parse(`[${m[1].trim().replace(/,$/, '')}]`);
+    }
+    const m = source.match(new RegExp(`export const ${name}(?:: (?:string|readonly string\\[\\]))? = (".*"|\\[.*\\]|\\d+);`));
+    assert.ok(m, `src/generated/bannerArt.ts must export ${name}.`);
+    return JSON.parse(m[1]);
+}
+
+/** Lift a function out of the TS source and make it callable — no build step, real behaviour. */
+function liftFunction(cli, signature, replacement) {
+    const start = cli.indexOf(signature);
+    assert.ok(start > 0, `cli.ts must define ${signature}`);
+    const end = cli.indexOf('\n}', start);
+    assert.ok(end > start, `could not find the end of ${signature}`);
+    return cli.slice(start, end + 2).replace(signature, replacement);
+}
+
+function assertBannerArt(cli) {
+    const { spawnSync } = require('child_process');
+
+    // ── Sync guard: the checked-in module matches the SVG. ───────────────────
+    const drift = spawnSync(process.execPath, ['scripts/generate-banner-art.js'], {
+        cwd: process.cwd(), encoding: 'utf8',
+    });
+    assert.strictEqual(
+        drift.status, 0,
+        'src/generated/bannerArt.ts is out of sync with icons/switchboard-ufo-static.svg — '
+        + `run \`npm run banner:generate\`. Generator said: ${(drift.stderr || '').trim()}`
+    );
+
+    const art = readSource('src', 'generated', 'bannerArt.ts');
+    const palette = readGeneratedLiteral(art, 'BANNER_PALETTE');
+    const pixelRows = readGeneratedLiteral(art, 'BANNER_PIXEL_ROWS', true);
+    const columns = readGeneratedLiteral(art, 'BANNER_ART_COLUMNS');
+    const rows = readGeneratedLiteral(art, 'BANNER_ART_ROWS');
+
+    // ── Rasteriser correctness. ─────────────────────────────────────────────
+    // <g class="ufo"> spans x=72..248 (176 units -> 44 columns) and y=42..106
+    // (64 units -> 16 pixel rows -> 8 terminal rows of half-blocks).
+    assert.strictEqual(columns, 44, 'BANNER_ART_COLUMNS must be 44 (the 176-unit hull at 4 units/cell).');
+    assert.strictEqual(rows, 8, 'BANNER_ART_ROWS must be 8 (16 pixel rows paired into half-blocks).');
+    assert.strictEqual(pixelRows.length, 16, 'BANNER_PIXEL_ROWS must carry 16 pixel rows.');
+    for (const row of pixelRows) {
+        assert.strictEqual(row.length, 44, 'every BANNER_PIXEL_ROWS row must be 44 cells wide.');
+    }
+    for (const inv of PIXEL_INVARIANTS) {
+        const ch = pixelRows[inv.row][inv.col];
+        const actual = ch === '.' ? '(empty)' : palette[parseInt(ch, 36)];
+        assert.strictEqual(
+            actual, inv.colour,
+            `raster cell (row ${inv.row}, col ${inv.col}) should be ${inv.colour} from SVG ${inv.svg}, got ${actual} — `
+            + 'the rasteriser is in sync with itself but wrong.'
+        );
+    }
+    // Every full-opacity #00e5ff cell in the raster, derived from the SVG rects.
+    // Pinning the WHOLE map (not just a sample) is what catches a rasteriser
+    // that is shifted, mirrored, or vertically mis-snapped: a one-cell drift
+    // anywhere moves a span. NOTE the art is not mirror-symmetric — the SVG's
+    // own outer ports sit at x=96 and x=216 against a hull centred on x=160, so
+    // the left port lands one cell further in than the right. That asymmetry is
+    // the source art's, and reproducing it faithfully is the point.
+    const CYAN_SPANS = {
+        10: [[6, 8], [36, 38]],             // rects x=96 / x=216, y=82 h=8 -> rows 10-11
+        11: [[6, 8], [12, 14], [30, 32], [36, 38]],  // + rects x=120 / x=192, y=86 h=8 -> rows 11-12
+        12: [[12, 14], [18, 20], [24, 26], [30, 32]], // + rects x=144 / x=168, y=88 h=8 -> rows 12-13 (the snapped pair)
+        13: [[18, 20], [24, 26]],
+        14: [[21, 22]],                     // tractor emitter rect x=156 y=98 w=8 h=8 -> rows 14-15
+        15: [[21, 22]],
+    };
+    const cyanIndex = palette.indexOf('#00e5ff');
+    assert.ok(cyanIndex >= 0, 'BANNER_PALETTE must contain the product cyan #00e5ff.');
+    const cyanChar = cyanIndex.toString(36);
+    pixelRows.forEach((row, index) => {
+        const spans = [];
+        let start = null;
+        for (let c = 0; c <= row.length; c += 1) {
+            if (row[c] === cyanChar) { if (start === null) { start = c; } }
+            else if (start !== null) { spans.push([start, c - 1]); start = null; }
+        }
+        assert.deepStrictEqual(
+            spans, CYAN_SPANS[index] || [],
+            `pixel row ${index} has the wrong #00e5ff columns — the rasteriser is in sync with itself but wrong.`
+        );
+    });
+
+    // ── Portability: every tier is 8 rows and <= 80 columns. ────────────────
+    const tiers = {
+        BANNER_ART_TRUECOLOR: readGeneratedLiteral(art, 'BANNER_ART_TRUECOLOR'),
+        BANNER_ART_256: readGeneratedLiteral(art, 'BANNER_ART_256'),
+        BANNER_ART_ASCII: readGeneratedLiteral(art, 'BANNER_ART_ASCII'),
+    };
+    for (const [name, text] of Object.entries(tiers)) {
+        const lines = text.split('\n');
+        assert.strictEqual(lines.length, 8, `${name} must be 8 rows tall.`);
+        const widest = Math.max(...lines.map(l => [...l.replace(SGR, '')].length));
+        assert.ok(widest <= 80, `${name} is ${widest} columns wide; the banner must fit an 80-column terminal.`);
+    }
+    assert.ok(!tiers.BANNER_ART_ASCII.includes(ESC), 'BANNER_ART_ASCII must contain no escape sequences.');
+    const highCodePoint = [...tiers.BANNER_ART_ASCII].find(c => c.codePointAt(0) > 0x7e);
+    assert.strictEqual(
+        highCodePoint, undefined,
+        `BANNER_ART_ASCII must be pure ASCII (found U+${(highCodePoint || ' ').codePointAt(0).toString(16)}) — `
+        + 'it is the fallback for terminals that render U+2580/U+2584 as ambiguous-width.'
+    );
+
+    // ── The hand-drawn saucer is gone from cli.ts. ──────────────────────────
+    const bannerBody = liftFunction(cli, 'function banner(version: string): string {', 'function banner(version) {');
+    assert.ok(
+        !bannerBody.includes('●'),
+        'banner() still contains U+25CF (●) — that glyph is East-Asian-Ambiguous width and is what broke '
+        + 'the old art\'s alignment. The art now comes from src/generated/bannerArt.ts.'
+    );
+    for (const constant of ['BANNER_ART_TRUECOLOR', 'BANNER_ART_256', 'BANNER_ART_ASCII']) {
+        assert.ok(
+            new RegExp(`import \\{[^}]*${constant}`).test(cli) || cli.includes(constant),
+            `cli.ts must import ${constant} from the generated module.`
+        );
+    }
+
+    // ── Tier behaviour, executed rather than pattern-matched. ───────────────
+    const detect = liftFunction(
+        cli,
+        "function detectBannerTier(): 'truecolor' | 'x256' | 'ascii' {",
+        'function detectBannerTier() {'
+    );
+    const render = new Function(
+        'process', 'BANNER_ART_TRUECOLOR', 'BANNER_ART_256', 'BANNER_ART_ASCII',
+        `${detect}\n${bannerBody}\nreturn { tier: detectBannerTier(), text: banner('9.9.9') };`
+    );
+    const invoke = (env, isTTY) => render(
+        { env, stdout: { isTTY }, platform: 'linux', arch: 'x64' },
+        tiers.BANNER_ART_TRUECOLOR, tiers.BANNER_ART_256, tiers.BANNER_ART_ASCII
+    );
+
+    // Negative half of the paired invariant: nothing escapes into a pipe.
+    const piped = invoke({ COLORTERM: 'truecolor' }, undefined);
+    assert.strictEqual(piped.tier, 'ascii', 'a non-TTY stdout must select the ascii tier even under COLORTERM=truecolor.');
+    assert.ok(!piped.text.includes(ESC), 'banner() must emit no escape byte when stdout is not a TTY.');
+
+    const noColor = invoke({ NO_COLOR: '1', COLORTERM: 'truecolor' }, true);
+    assert.strictEqual(noColor.tier, 'ascii', 'NO_COLOR must select the ascii tier.');
+    assert.ok(!noColor.text.includes(ESC), 'banner() must emit no escape byte under NO_COLOR.');
+
+    // Positive half: colour IS emitted where the terminal supports it.
+    const truecolor = invoke({ COLORTERM: 'truecolor' }, true);
+    assert.strictEqual(truecolor.tier, 'truecolor', 'COLORTERM=truecolor on a TTY must select the truecolor tier.');
+    assert.ok(
+        truecolor.text.includes(`${ESC}[38;2;`),
+        'the truecolor tier must emit 24-bit SGR sequences — otherwise the gate is "no ESC ever", not "no ESC when piped".'
+    );
+
+    // U+2580/U+2584 are East-Asian-Ambiguous, so a CJK locale must get the ASCII
+    // tier — otherwise the art renders double-width and wraps, which is the same
+    // class of defect as the U+25CF (●) it replaced.
+    for (const locale of ['ja_JP.UTF-8', 'ko_KR.UTF-8', 'zh_CN.UTF-8', 'zh_TW.utf8']) {
+        const cjk = invoke({ LANG: locale, COLORTERM: 'truecolor' }, true);
+        assert.strictEqual(cjk.tier, 'ascii', `LANG=${locale} must degrade to the ascii tier (ambiguous-width terminals).`);
+        assert.ok(!cjk.text.includes(ESC), `banner() must emit no escape byte under LANG=${locale}.`);
+    }
+    for (const variable of ['LC_ALL', 'LC_CTYPE']) {
+        assert.strictEqual(
+            invoke({ [variable]: 'ja_JP.UTF-8', LANG: 'en_US.UTF-8', COLORTERM: 'truecolor' }, true).tier, 'ascii',
+            `${variable} must outrank LANG when deciding ambiguous width.`
+        );
+    }
+    // ...and a Western locale must NOT be degraded — otherwise the check is "always ascii".
+    assert.strictEqual(
+        invoke({ LANG: 'en_US.UTF-8', COLORTERM: 'truecolor' }, true).tier, 'truecolor',
+        'a non-CJK locale must keep the half-block render.'
+    );
+
+    const x256 = invoke({ TERM: 'xterm-256color' }, true);
+    assert.strictEqual(x256.tier, 'x256', 'a TTY without COLORTERM must fall back to the 256-colour tier.');
+    assert.ok(x256.text.includes(`${ESC}[38;5;`), 'the 256-colour tier must emit indexed SGR sequences.');
+    assert.ok(!x256.text.includes(`${ESC}[38;2;`), 'the 256-colour tier must not emit 24-bit SGR sequences.');
+
+    // ── The wizard's replace target survives, on its own line, in every tier. ─
+    for (const rendered of [piped, noColor, truecolor, x256]) {
+        assert.ok(
+            rendered.text.split('\n').includes('Agent Fleet Command'),
+            'every banner tier must carry "Agent Fleet Command" as its own whole line — the setup wizard '
+            + 'does banner(v).replace(\'Agent Fleet Command\', \'Workspace & Scaffolding Wizard\'), which '
+            + 'silently no-ops if the literal moves or gains neighbours.'
+        );
+        assert.ok(rendered.text.includes('SWITCHBOARD v9.9.9'), 'every banner tier must carry the version line.');
+        assert.ok(
+            rendered.text.includes('https://github.com/TentacleOpera/switchboard'),
+            'every banner tier must carry the project URL.'
+        );
+    }
+    // A long semver must not wrap an 80-column terminal.
+    const longest = invoke({ NO_COLOR: '1' }, true).text
+        .replace('9.9.9', '1.7.13-rc.1+build.20260901')
+        .split('\n')
+        .reduce((max, line) => Math.max(max, [...line.replace(SGR, '')].length), 0);
+    assert.ok(longest <= 80, `the banner reaches ${longest} columns with a long version string; it must stay within 80.`);
+
+    // The wizard call site still targets the literal.
+    assert.ok(
+        cli.includes("banner(version).replace('Agent Fleet Command', 'Workspace & Scaffolding Wizard')"),
+        'the setup wizard must still swap the tagline via banner(version).replace(...).'
+    );
+}
+
 function run() {
     const cli = readSource('src', 'standalone', 'cli.ts');
     const db = readSource('src', 'services', 'KanbanDatabase.ts');
@@ -456,6 +702,8 @@ function run() {
         /Agent Fleet Command/.test(cli) && !/Autonomous Agent Fleet Console/.test(cli),
         'cli.ts banner tagline must be "Agent Fleet Command", not "Autonomous Agent Fleet Console".'
     );
+
+    assertBannerArt(cli);
 
     console.log('cli board commands contract test passed');
 }
