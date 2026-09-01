@@ -124,17 +124,31 @@ freed a lane whose working tree was occupied.
   though it meant something; it is dropped on read alongside its subject.
 - **Both composition roots.** The read and broadcast are in `KanbanProvider`, shared by both hosts,
   so removal reaches both — but verify rather than assume, per `CLAUDE.md`.
-- **`feature-worktree-guardrail-contract.test.js:77`** asserts behaviour under
-  `feature_worktree_mode = 'per-feature'` (*"a worktree IS assigned (worktreeActive)"*). If that
-  assertion is still live it contradicts `stageForQueue`'s comment, and one of the two is stale.
-  Resolve which before deleting — this is the one place the removal may be less complete than the
-  comment claims.
+- **`feature-worktree-guardrail-contract.test.js` keeps its assertions; only its prose changes.**
+  Its `worktreeActive` parameter is not the mode — `agentPromptBuilder.ts:1824` derives it as
+  `worktreePaths.length > 0`, true for *any* worktree the agent stands in, whoever cut it. The test
+  asserts that a host-owned worktree selects the **standard** guardrail rather than the narrowed one,
+  which is the regression gate for a disjunct that once *"silently handed `git worktree remove`
+  permission to an agent standing inside a worktree it neither created nor owns."*
+
+  Under the mission rule that invariant is needed **more**, not less: a mission provisions the
+  worktree, the host owns it, and the agent inside it must still not be able to remove it. Deleting
+  the assertion would reopen the hole in precisely the configuration the system is standardising on.
+
+  So: retarget the header docblock (`:10`) and the inline comment (`:77`) from
+  `feature_worktree_mode = 'per-feature'` to *"a mission-provisioned worktree, within
+  `maxExtraWorktrees`"*, and leave every `assert` untouched. The file's `:120` assertion — *"the
+  inert featureWorktreeMode prompt plumbing stays out"* — also stays: it bans the mode from the
+  prompt builder, which this plan's direction reinforces.
+
+  This also resolves the apparent conflict with `stageForQueue`: the test never asserted that
+  provisioning happens, so there was never a contradiction and the removal is complete.
 
 ## Proposed Changes
 
-1. **Establish the truth first.** Read `feature-worktree-guardrail-contract.test.js:77` against
-   `stageForQueue:8667`. If the test still asserts per-feature provisioning, the removal is
-   incomplete and *that* is the bug; this plan's scope grows to finish it.
+1. **Retarget the guardrail test's prose, keep its assertions.** `:10` and `:77` explain the
+   scenario via `feature_worktree_mode`; they now name a mission-provisioned worktree bounded by
+   `maxExtraWorktrees`. No `assert` changes.
 2. Delete the read (`:15213`) and the broadcast field (`:15273`).
 3. Delete the disarm restore writer (`:2534`) and its `PRIOR_KEY`, subject to the review question.
 4. Delete `normalizeFeatureWorktreeMode` once callerless.
@@ -159,11 +173,18 @@ freed a lane whose working tree was occupied.
 4. **`normalizeFeatureWorktreeMode` has no callers.**
 5. **The prompt builder stays clean** — `feature-worktree-guardrail-contract.test.js:120` still
    passes, so the removal does not re-open the plumbing that test bans.
+6. **Every guardrail assertion still passes unchanged.** The whole file runs green with only its
+   comments edited. If an assertion has to change to accommodate this plan, the plan is wrong.
 6. **Both hosts.** Neither root reads or broadcasts the field after removal.
 
 ### Goal Invariants
 
-- Worktrees are provisioned by a mission, bounded by `maxExtraWorktrees`, or not at all.
+- **Worktrees are provisioned by a mission, bounded by `maxExtraWorktrees`, or not at all.** There
+  is no per-feature, per-team or per-plan rule by which the system cuts a checkout on its own —
+  parallel checkouts follow curated dependency edges (`plan_dependencies`) and a deliberate launch.
+- **An agent never owns a worktree it did not create.** A mission-provisioned worktree is host-owned;
+  the agent standing in it gets the standard guardrail and no `git worktree remove`. Pinned by
+  `feature-worktree-guardrail-contract.test.js`, which this plan preserves.
 - No config key describes a worktree strategy the system cannot perform.
 - No scheduler, rule or readiness check can infer checkout isolation from a setting.
 
