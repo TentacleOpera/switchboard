@@ -65,12 +65,26 @@ None — both settled.
 **The propose/act switch is per lane.** Planning can be acting while Coding is still only proposing,
 so trust is built one lane at a time. A single master switch would force all-or-nothing.
 
-**It persists across restarts.** `mode` is a field on the job, so a lane left on *act* is still
-acting after a reload. The counter-argument is real — a persisted *act* resumes unattended dispatch
-on restart without being asked, which rhymes with the autoban complaint — but the alternative resets
-every lane to *propose* on each launch, which means the automation silently stops overnight, exactly
-when it is wanted, and the operator routes around the friction within a week. The safety here is
-that a lane only fires when it is provably idle, not that it forgets.
+**It persists across restarts, and the restart case is already safe by a different mechanism.**
+`mode` is a field on the job, so a lane left on *act* is still acting after a reload — but a restart
+loses the terminals, and an empty fleet resolves `laneIsFree` to **unknown**, which never fires. So
+a persisted *act* lane does nothing on a fresh launch: not because it forgot, but because there is
+nothing to dispatch to. The fail-closed rule the evaluator already needs for a dead pty host covers
+this for free.
+
+**The one case where persistence has teeth is `startOnLoad`.** It is a per-team checkbox
+(`kanban.html:5189`, `group.startOnLoad`) and `startTeamsOnLoad`
+(`TaskViewerProvider.ts:13048`) runs it at boot in both hosts. Such a team re-seats automatically,
+so the fleet is populated again and a persisted *act* lane resumes dispatching unattended.
+
+That is acceptable, and it is the reason to persist rather than reset. Reaching it requires **two
+deliberate switches**: `startOnLoad` ticked on the team, and the lane set to *act*. Together those
+are a description of unattended overnight operation, which is the feature. Resetting every lane to
+*propose* on each launch would break exactly that configuration — the automation would stop
+overnight, which is when it is wanted — and the friction would be routed around within a week.
+
+**Verification owes this case a test** (see below): a `startOnLoad` team plus a persisted *act* lane
+must resume; a restart with no autostart team must not.
 
 ## Complexity Audit
 
@@ -197,11 +211,18 @@ roots.
    both leave `notifyTurnEnd`'s own delivery path unaffected.
 5. **Switching to *act* does not itself dispatch.** Flip a lane that is already free; assert no
    action until the next trigger.
-6. **Offline renders `unknown`,** never `not matched`.
-7. **No confirm gate** in the dock diff — grep for `confirm(` across the changed webview files, per
+6. **Restart with no autostart team dispatches nothing,** even with a lane persisted on *act*: the
+   empty fleet resolves to `unknown` and `unknown` never fires. The case the operator expects to be
+   safe, pinned so a later change to the empty-fleet rule cannot quietly make a persisted lane fire
+   into a fleet that has not booted.
+7. **Restart with a `startOnLoad` team and a persisted *act* lane does resume.** The deliberate
+   configuration, asserted as working rather than left to chance — this is the pair of switches that
+   makes unattended overnight operation the feature rather than an accident.
+8. **Offline renders `unknown`,** never `not matched`.
+9. **No confirm gate** in the dock diff — grep for `confirm(` across the changed webview files, per
    the standing repo rule.
-8. **Both roots wire the turn-end hook and the mode verb.** Source-level, both files.
-9. **Dropped-source jobs never render as acting.**
+10. **Both roots wire the turn-end hook and the mode verb.** Source-level, both files.
+11. **Dropped-source jobs never render as acting.**
 
 ### Goal Invariants
 
