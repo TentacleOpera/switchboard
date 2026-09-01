@@ -99,6 +99,8 @@ express it is a better guarantee than a warning.
 **Invariants, enforced server-side rather than asked of the caller:**
 - **Never clear the caller.** Take `from` and exclude it. Today this is a rule in prose
   (*"Never send it to your own terminal"*) that an agent must remember; make it impossible.
+  **Clarification:** `from` is required, not optional — the endpoint rejects the request
+  without it. An optional `from` reopens the invariant this plan exists to close.
 - **Never clear a head as part of a team scope** unless explicitly named in `seats`. Clearing a
   lead triggers the task-less orders delivery that
   `after-clear-standing-orders-block-is-a-taskless-prompt.md` covers, and a plural "clear the
@@ -126,6 +128,16 @@ Also reconcile the two implementations: `ptyClearTerminal`'s `seatBlockCache` /
 deferred-clear cleanup is real work the host method does not do, so the canonical path must do
 both. `ptyClearTerminal` remains as the low-level host verb the endpoint uses; it stops being
 the thing agents are told to call.
+
+> **Clarification — `sendToTerminal` already handles `/clear` via `writeSlashCommand`.** The
+> `sendToTerminal` verb (`bootstrap.ts:2594`) has a content rule that routes single-line
+> leading-slash text through `writeSlashCommand` (the correct keypress mechanism), and its
+> `/clear` branch drops `seatBlockCache` and deferred-clear records (`bootstrap.ts:2629-2636`).
+> This is the cleanup precedent the canonical path should follow. But `sendToTerminal`'s
+> `/clear` is still the lesser clear — it does not route through `clearTerminalContext`, so it
+> does not honour `terminal.clearBeforePrompt`, does not redeliver standing orders, and does
+> not roll the log session boundary. The new endpoint is needed because `sendToTerminal` with
+> `/clear` solves Root cause 1 (wrong delivery mechanism) but not Root cause 2 (lesser clear).
 
 ### 2. Make the wrong call fail loudly
 
@@ -186,8 +198,107 @@ with an error naming `POST /terminals/clear`.
 10. `npx tsc --noEmit -p tsconfig.json`, plus the verb-payload validation and seat-safeguard
     contract suites.
 
+### Goal Invariants
+
+- **Negative:** `POST /terminals/verb/ptySendPrompt` with `{"data":"/clear"}` is rejected with
+  an HTTP error naming `POST /terminals/clear` — it is not delivered as paste text.
+- **Positive:** `POST /terminals/clear` with `{"name":"<seat>","from":"<caller>"}` returns
+  `{cleared:["<seat>"]}` and the terminal's standing orders are redelivered (the
+  `=== STANDING ORDERS ===` marker appears in the delivered text).
+- **Negative:** No scope exists that clears the caller — `from` is required and the endpoint
+  rejects without it; the caller's name never appears in `cleared`.
+- **Positive:** The caller's terminal name appears in `skipped` with `reason: "caller"` when
+  named in `seats` alongside others.
+- **Negative:** `ptyClearTerminal` does not appear in any agent-facing skill doc or workflow
+  file as the recommended clear method — only the demoted note referencing
+  `POST /terminals/clear` remains.
+- **Positive:** `POST /terminals/clear` routes to `clearTerminalContext` (the same function
+  `TaskViewerProvider.ts:11004` calls for system-initiated clears), performing config-honoured,
+  orders-redelivering, log-boundary-rolling clear — not `ptyClearTerminal` alone.
+
+## Complexity Audit
+
+### Routine
+- Adding a new POST route on `LocalApiServer` beside existing endpoints, behind the same auth.
+- Documenting the endpoint in three agent-facing files (workflow, mission-control skill,
+  orchestration skill).
+- Rejecting bare slash commands in the `ptySendPrompt` path — a validation check alongside the
+  existing `validateVerbPayload` guard.
+
+### Complex / Risky
+- Reconciling two divergent clear implementations (`ptyClearTerminal` vs `clearTerminalContext`)
+  — the canonical path must do both sets of cleanup (seatBlockCache drop + standing-orders
+  redelivery + log boundary roll).
+- Standalone seam dependency: `clearTerminalContext` is not wired in `bootstrap.ts` (verified:
+  only reference is a comment at `:3021`). Without the external dependency fix, the endpoint
+  is inert in standalone.
+- Busy-seat deferral reusing the roster barrier's liveness policy — requires reading
+  `TaskViewerProvider.ts:765-800` to extract the specific `lastDataAt` staleness threshold. The
+  threshold is not stated in this plan; the coder must extract it from the barrier code.
+- Server-enforced caller exclusion (`from` required, validated, never cleared) — a missing or
+  optional `from` reopens the invariant the plan exists to close.
+
+## Edge-Case & Dependency Audit
+
+- **Race Conditions:** A seat going busy between the clear request and execution — the deferral
+  mechanism must handle the transition atomically with the roster barrier's `busySet`.
+- **Security:** No new auth surface — the endpoint sits behind the same auth as other
+  `LocalApiServer` routes. The `from` exclusion prevents a caller from clearing its own context
+  (which would wipe its conversation mid-task).
+- **Side Effects:** Clearing a head triggers the task-less orders delivery owned by
+  `after-clear-standing-orders-block-is-a-taskless-prompt.md`. The endpoint must not clear a
+  head as part of a team scope unless explicitly named in `seats`.
+- **Dependencies & Conflicts:** External dependency on
+  `lead-acceptance-post-silently-releases-no-seat.md` step 1 (wiring `clearTerminalContext` in
+  `bootstrap.ts`). Shared surface with "An agent relaying a message is not a dispatch" on
+  `.agents/workflows/switchboard.md` and the Mission Control `## Messaging Leads` section —
+  land in either order, not simultaneously. Also shares the `ptySendPrompt` case in
+  `bootstrap.ts` with the relayed-message plan (different concerns, same case handler).
+
+## Dependencies
+
+- `lead-acceptance-post-silently-releases-no-seat.md` step 1 — wiring `clearTerminalContext`
+  in `bootstrap.ts` (the standalone composition root). Without it, `POST /terminals/clear` is
+  inert in standalone.
+- `after-clear-standing-orders-block-is-a-taskless-prompt.md` — owns the post-clear orders
+  delivery this endpoint routes through.
+- `feature_plan_20260817091718_clear-the-cli-input-line-before-every-slash-command.md` — owns
+  the Ctrl+U reset that makes `writeSlashCommand` reliable. Depended on, not changed.
+- `feature_plan_20260815140920_proactive-clear-when-a-lead-rests-a-coder-terminal.md` — owns
+  teaching the lead *when* to clear. This plan owns *how* any agent clears.
+
+## Adversarial Synthesis
+
+Key risks: (1) the standalone seam dependency — the endpoint is inert without the external
+wiring fix, and the plan correctly captures this failure first as proof; (2) the liveness
+threshold for busy-seat deferral is deferred to "the same policy the roster barrier uses"
+without stating the number — a coder must extract it from `TaskViewerProvider.ts:765-800`;
+(3) `from` must be required, not optional, or the caller-exclusion invariant is a rule in prose
+rather than an enforcement. Mitigations: capture the standalone failure before shipping, cite
+the specific staleness threshold, make `from` mandatory with a rejection on absence. The
+`ptyClearTerminal` demotion is documentation-only — direct calls are not rejected — but
+`ptyClearTerminal` is a host verb, not an agent-facing verb, and the `ptySendPrompt` rejection
+covers the agent-facing surface where the bug lives.
+
 ## Metadata
 
 **Feature:** 25e6a03f-26a5-444d-8089-43368af27bcd
 **Complexity:** 6
 **Tags:** backend, api, reliability, bugfix
+
+## Implementation Summary
+
+Implemented canonical `POST /terminals/clear` endpoint with single-seat (`name`), team roster (`team`), and explicit set (`seats`) scopes on `LocalApiServer`. Enforced server-side invariants requiring `from`, excluding caller from clears, protecting team heads on team scopes, and deferring mid-turn busy seats using the roster barrier's liveness policy. Reconciled `clearTerminalContext` to drop `seatBlockCache`, clean work-context entries, drop deferred clears, remove reviewer callback overrides, roll session logs, and redeliver standing orders across both the extension and standalone composition roots. Configured `validateVerbPayload` to reject bare slash commands sent via `ptySendPrompt` with an error directing callers to `POST /terminals/clear`. Updated agent-facing workflows and skills documentation accordingly.
+
+
+## Review Findings
+
+Files changed: `src/standalone/bootstrap.ts` (removed the duplicate log-session roll inside `clearTerminalContext`), `protocol-catalog.json` (regenerated — the new endpoint took `apiEndpointCount` from 111 to 112 and left `catalog:check`, the first CI step, red), `src/test/roster-clear-mid-turn-deferral.test.js` (its exhaustive ptySendPrompt payload-shape pin went red the moment the shape gained `kind`; relaxed to its stated intent of asserting `origin` is documented), and a new CI-wired gate `src/test/prompt-payload-kind-contract.test.js` covering the endpoint's server-enforced invariants and the bare-slash rejection. The endpoint itself is sound — `from` required, caller and head excluded server-side, exactly one scope with no "everything" scope, routed through `clearTerminalContext` rather than the lesser `ptyClearTerminal`, deferral reusing `computeRosterClearTargets` and recording through `recordDeferredClears`, which is wired in **both** composition roots. Verification: `tsc --noEmit` clean apart from 5 pre-existing TS2835 errors in untouched files; `pty-route-surface`, `roster-clear-mid-turn` (56/56), `seat-safeguards` (99/0), `queue-done-relay` and the new `prompt-payload-kind` gate all pass; `catalog:check`, `parity:check`, `standalone-parity:check` and `host-seam-parity:check` green. Remaining risk: the endpoint's core mechanism was verified statically and by contract test, not by an end-to-end clear against a live seat in either host — see the deferred standing-orders gap below, which no automated check can currently discriminate.
+
+## Deferred Findings
+
+- MAJOR — Standalone's `clearTerminalContext` calls `relayStartupOrientation` where the extension's calls `_deliverStandingOrdersAfterClear`, so the plan's "standing orders redelivered" acceptance holds in the extension host only. Not fixed here: the post-clear orders delivery is named must-not-touch in the feature file and owned by `after-clear-standing-orders-block-is-a-taskless-prompt.md`. `src/standalone/bootstrap.ts:3285`
+- NIT — `livenessWindowMs` is hardcoded to 90000 in the endpoint while the roster barrier it was told to reuse reads `switchboard.activityLight.livenessWindowMs`. Values agree at the shipped default and diverge the moment an operator tunes the setting; `LocalApiServer` has no config seam to read it through. `src/services/LocalApiServer.ts:4671`
+- NIT — The `{name}` scope performs no busy check, so an explicitly named mid-turn seat is cleared rather than deferred. Defensible for a single named target (the caller asked for that seat), but undocumented in the endpoint's docblock. `src/services/LocalApiServer.ts:4692`
+- NIT — The drive prefix still instructs the lead to `ptyClearTerminal` a stood-down seat, so the lesser clear remains recommended on a lead-facing surface. Outside this plan's Goal Invariant (scoped to skill docs and workflow files, which were demoted correctly) and adjacent to `proactive-clear-when-a-lead-rests-a-coder-terminal.md`, which owns when a lead clears. `src/services/KanbanProvider.ts:5913`
+- NIT — The sidebar's own clear buttons still post `ptyClearTerminal` directly, so an operator's click gets the lesser clear that an agent's call no longer can. Pre-existing; the plan scoped itself to the agent-facing surface. `src/webview/terminals.js:9202`

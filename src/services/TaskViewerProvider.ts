@@ -11138,7 +11138,13 @@ Each plan file must include:
                             // needed: _deliverStandingOrdersAfterClear writes immediately after.
                             clearReadinessMode: 'manual',
                             // Empty payload — this is a pure /clear, no prompt.
-                            addonsComposed: true
+                            addonsComposed: true,
+                            // Declared, not inferred. A clear carries no work, so
+                            // it takes none of the three appends — which is what the
+                            // empty-data default resolves to anyway. Saying it keeps
+                            // this send off the undeclared-payload ratchet and stops
+                            // a future reader reading the silence as an oversight.
+                            kind: 'message'
                         });
                         if (clearRes?.success) {
                             this._deliverStandingOrdersAfterClear(target.friendlyName);
@@ -15386,7 +15392,16 @@ Each plan file must include:
                                         // that reroutes through handlePtyVerb (which injects
                                         // the config default of true when the field is absent).
                                         // Standing orders apply unless the caller opts out.
-                                        const promptPayload: any = { name: target.friendlyName, data: input, clearBeforePrompt: false };
+                                        // kind:'dispatch' keeps the appends this branch has
+                                        // always carried. Without it the payload-kind default
+                                        // (no `dispatch` object, no parseable dispatch identity)
+                                        // classifies every sendToTerminal prompt as a message and
+                                        // suppresses all three appends — silently dropping the
+                                        // standing orders this comment promises, and diverging
+                                        // from the standalone host, whose sendToTerminal calls
+                                        // deliverPrompt directly with applyOrders still true
+                                        // (bootstrap.ts's `sendToTerminal` case).
+                                        const promptPayload: any = { name: target.friendlyName, data: input, clearBeforePrompt: false, kind: 'dispatch' };
                                         if (data.standingOrders === false) { promptPayload.standingOrders = false; }
                                         ptyRes = await this._ptyHostVerb('ptySendPrompt', promptPayload);
                                     }

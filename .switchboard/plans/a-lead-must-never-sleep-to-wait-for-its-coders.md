@@ -79,6 +79,12 @@ Constraints:
   `coding-head-prompt-contract.test.js` reassembles all three and asserts byte-identity.
 - **Preserve every literal** pinned by `stage-marker-commit-contract.test.js:386-400`, and add
   no form of the word "advance" (`!/advanc/i`), no `targetColumn`, no `/kanban/dispatch`.
+  **Clarification — why these are forbidden:** these literals are load-bearing for stage-marker
+  parsing. The `stage-marker-commit-contract` test pins them because they appear in commit
+  trailers and card-movement recognisers; adding them to the head prompt would make the prompt
+  text match a recogniser that could rewrite it, or would confuse the stage-marker parser about
+  whether the prompt is describing a card move. A coder who understands *why* can write the
+  guarantee text naturally without tripping the constraint.
 - **No migration.** `headPrompt` is stored per agent group in the DB
   (`agentGroupInstantiation.ts:136`), so the source constants govern newly created teams only —
   which would normally require a `migrateAgentGroups` step. It does not here: the team/lead
@@ -92,6 +98,34 @@ Constraints:
 neighbours, and extend the existing `FEATURE WATCH: … No action needed.` line so the "no action
 needed" explicitly includes not waiting for it. The drive prefix is composed per dispatch rather than
 stored, so this half needs no team recreation at all — it takes effect on the next run.
+
+> **Clarification — drive prefix test coverage.** The drive prefix IS covered by an automated
+> contract test: `drive-mode-prompt-overhaul-contract.test.js` asserts specific strings in the
+> prefix (including `'FEATURE WATCH: Armed by the system'`). Any new rule added to the `RULES:`
+> list or extension to the `FEATURE WATCH` line must be verified against this test — add
+> assertions for the new text alongside the existing ones.
+
+> **Candidate text — head prompt (step 1).** A starting point for the text to add to
+> `NEW_CODING_HEAD_PROMPT`, in the region covering dispatch and rotation. The coder must verify
+> it against the byte-identity test and the pinned-literal constraints; this is a candidate, not
+> a final draft:
+>
+> *"When a coder finishes its turn, the system delivers a completion prompt into this terminal —
+> you do not need to check, wait, or watch for it. Do not sleep, poll, loop, or run any timer to
+> find out whether a coder is done. Dispatch what is dispatchable, close out what is closable,
+> and end your turn. An idle lead is the correct resting state, not a failure."*
+>
+> **Candidate text — drive prefix rule (step 2).** A rule for the `RULES:` list, in the voice of
+> its neighbours:
+>
+> *"COMPLETION WAKE: The system delivers a coder's completion into this terminal. Do not sleep,
+> poll, or run a timer to wait for it — end your turn after dispatching and the next completion
+> starts a new one."*
+>
+> And the extended `FEATURE WATCH` line:
+>
+> *"FEATURE WATCH: Armed by the system. You will be nudged if you go idle with staged cards. No
+> action needed — do not wait for it, do not poll for it."*
 
 ### 3. Say what to do with the turn instead
 
@@ -121,8 +155,91 @@ confused.
    loop. Check the terminal log for the absence of those calls rather than trusting the lead's
    own account.
 
+### Goal Invariants
+
+- **Positive:** `NEW_CODING_HEAD_PROMPT` in `teamWiring.ts` contains the word "sleep" in a
+  prohibition context (e.g. "do not sleep") — `grep -c 'sleep' teamWiring.ts` on the
+  `NEW_CODING_HEAD_PROMPT` constant returns ≥ 1.
+- **Positive:** `NEW_CODING_HEAD_PROMPT` contains a statement that a coder's completion is
+  delivered to the lead's terminal (e.g. "delivers a completion prompt into this terminal").
+- **Negative:** `NEW_CODING_HEAD_PROMPT` does NOT contain any form of "advance"
+  (`!/advanc/i`), `targetColumn`, or `/kanban/dispatch` — these are forbidden by
+  `stage-marker-commit-contract.test.js`.
+- **Positive:** The three copies of the head prompt (`teamWiring.ts`
+  `NEW_CODING_HEAD_PROMPT`, `terminals.js` `NEW_CODING_HEAD_PROMPT_CLIENT`, `kanban.html`
+  `headPrompt`) are byte-identical — `coding-head-prompt-contract.test.js` passes.
+- **Positive:** `_buildDrivePrefix` output contains a rule prohibiting sleeping/polling/waiting
+  for coder completion — `drive-mode-prompt-overhaul-contract.test.js` passes with the new
+  assertion.
+
+## Complexity Audit
+
+### Routine
+- Adding a paired guarantee + prohibition to a string constant in three byte-identical copies.
+- Extending the drive prefix `RULES:` list and `FEATURE WATCH` line with one rule each.
+- No migration — teams are unreleased dev work, so a clean break applies.
+
+### Complex / Risky
+- **Three byte-identical copies** — `teamWiring.ts`, `terminals.js`, `kanban.html` must all
+  carry the same text. The `coding-head-prompt-contract.test.js` test reassembles all three and
+  asserts byte-identity. A single-byte mismatch in any copy fails the test.
+- **Pinned-literal constraints** — the `stage-marker-commit-contract.test.js` test pins
+  load-bearing literals and forbids `advance`/`targetColumn`/`/kanban/dispatch`. The new text
+  must not trip these recognisers.
+- **Shared surface with `team-lead-escalation-dead-end-recovery-ladder.md`** (not part of this
+  feature) — both edit `NEW_CODING_HEAD_PROMPT` and the same contract test. Coordinate to
+  avoid merge conflicts in the three copies.
+
+## Edge-Case & Dependency Audit
+
+- **Race Conditions:** None — prompt text is static, not stateful.
+- **Security:** None — no new auth surface or data exposure.
+- **Side Effects:** A team created before this change keeps the old prompt (no migration by
+  design). It must not error; recreating the team picks up the new text. The drive prefix
+  change takes effect on the next dispatch (composed per run, not stored).
+- **Dependencies & Conflicts:** `team-lead-escalation-dead-end-recovery-ladder.md` (not part of
+  this feature) also edits `NEW_CODING_HEAD_PROMPT`. Both are clean text edits with no
+  migration, but they share the three byte-identical copies and the same contract test —
+  coordinate them to avoid merge conflicts.
+
+## Dependencies
+
+- `coding-head-prompt-contract.test.js` — asserts three-way byte-identity of the head prompt.
+  Must pass after the text change.
+- `stage-marker-commit-contract.test.js` — pins load-bearing literals and forbids
+  `advance`/`targetColumn`/`/kanban/dispatch` in the head prompt. Has 2 pre-existing failures
+  on an unmodified tree; compare to that baseline.
+- `drive-mode-prompt-overhaul-contract.test.js` — asserts specific strings in the drive prefix.
+  Must pass after the drive-prefix rule addition; add new assertions for the wake rule.
+- `team-lead-escalation-dead-end-recovery-ladder.md` (not part of this feature) — also edits
+  `NEW_CODING_HEAD_PROMPT`. Coordinate to avoid merge conflicts.
+
+## Adversarial Synthesis
+
+Key risks: (1) the three byte-identical copies make a text change trivial in concept but
+miserable in execution — a single-byte mismatch in any copy fails the contract test; (2) the
+pinned-literal constraints could trip on the new text if the coder writes naturally without
+checking against `stage-marker-commit-contract.test.js`; (3) the shared surface with
+`team-lead-escalation-dead-end-recovery-ladder.md` creates a merge-conflict risk in the three
+copies. Mitigations: candidate text is provided for both surfaces, the forbidden literals are
+explained, and the drive-prefix test coverage is identified so the coder knows where to add
+assertions.
+
 ## Metadata
 
 **Feature:** 25e6a03f-26a5-444d-8089-43368af27bcd
 **Complexity:** 3
 **Tags:** backend, reliability, refactor
+
+## Implementation Summary
+
+Added paired wake guarantee and sleep/poll prohibition to `NEW_CODING_HEAD_PROMPT` across all three byte-identical copies (`teamWiring.ts`, `terminals.js`, `kanban.html`). Updated `_buildDrivePrefix` in `KanbanProvider.ts` to include the `COMPLETION WAKE` rule in `RULES:` and extended the `FEATURE WATCH` line to forbid waiting or polling. Added contract assertions in `coding-head-prompt-contract.test.js` and `drive-mode-prompt-overhaul-contract.test.js` verifying the wake guarantee and prohibition across prompts and drive prefixes.
+
+## Review Findings
+
+No code changes were required for this subtask. The paired wake guarantee and sleep/poll prohibition are present in all three byte-identical copies of `NEW_CODING_HEAD_PROMPT` (`src/services/teamWiring.ts:632`, `src/webview/terminals.js:11503`, `src/webview/kanban.html:4822`), the drive prefix carries the matching `COMPLETION WAKE` rule and the extended `FEATURE WATCH` line (`src/services/KanbanProvider.ts:5900`, `:5915`), and step 3's "what to do with the turn instead" is answered in the same breath rather than left open. Both contract suites were extended with real assertions rather than weakened, and no migration code, recogniser or frozen snapshot constant was added — correct, since teams are unreleased dev work. Verification: `test:contract:coding-head-prompt` ALL PASSED including the three-way byte-identity check and the new wake assertion; `test:contract:drive-mode-prompt-overhaul` PASSED with its new `COMPLETION WAKE` and `FEATURE WATCH` assertions; `stage-marker-commit-contract` at its documented 41 passed / 2 failed baseline with no new failures; the negative constraints hold (no `/advanc/i`, no `targetColumn`, no `/kanban/dispatch` in the new text); `tsc --noEmit` clean apart from 5 pre-existing TS2835 errors in untouched files. Remaining risk: the goal is behavioural — whether a lead actually stops setting sleep timers is only observable in a live two-subtask run, which no automated check can discriminate.
+
+## Deferred Findings
+
+- NIT — Step 6's manual verification (run a feature with two subtasks and confirm the lead never issues a sleep, timer or poll loop, checking the terminal log rather than the lead's own account) was not executed in this review pass. The suites that pass assert the prompt TEXT, not the lead's behaviour. `.switchboard/plans/a-lead-must-never-sleep-to-wait-for-its-coders.md:1`
+- NIT — Shared-surface coordination with `team-lead-escalation-dead-end-recovery-ladder.md`, which also edits `NEW_CODING_HEAD_PROMPT`, remains outstanding; both edits touch the same three byte-identical copies and the same contract test. `src/services/teamWiring.ts:629`

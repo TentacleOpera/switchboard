@@ -115,6 +115,13 @@ If you are remote:
     }'
   ```
 - **Send prompt to a worker terminal:**
+  `"kind"` says what the payload IS, and it decides what the host appends.
+  Use `"dispatch"` when the worker is starting work on it — that is what
+  attaches the standing-orders block, the seat directive block (GIT POLICY,
+  subagent policy) and the dispatch directives. Use `"message"` for a fix
+  round, a question, a verdict or a relayed note: the text is delivered alone.
+  Omitting `kind` on a payload that carries no `dispatch` object is read as a
+  message, so a dispatch must say so.
   ```bash
   curl -X POST "$BASE/terminals/verb/ptySendPrompt" \
     -H "Content-Type: application/json" \
@@ -122,7 +129,8 @@ If you are remote:
       "name": "<workerName>",
       "data": "<instructions>",
       "origin": "<your-agent-name>",
-      "clearBeforePrompt": false
+      "clearBeforePrompt": false,
+      "kind": "dispatch"
     }'
   ```
 - **Hand whole feature to review when all subtasks pass — ONLY if your team has a reviewer seat:**

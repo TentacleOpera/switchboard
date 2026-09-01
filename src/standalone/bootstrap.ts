@@ -3283,9 +3283,17 @@ Each plan file must include:
                 return { cleared: false, error: err instanceof Error ? err.message : String(err) };
             }
             relayStartupOrientation([terminalName]);
-            if (terminalLogWriter) {
-                try { terminalLogWriter.onSessionBoundary(terminalName); } catch { /* best effort */ }
-            }
+            // The log session boundary is NOT rolled here. Every caller of this
+            // seam (LocalApiServer's lead-acceptance clear, the queue/done pop,
+            // and POST /terminals/clear) fires `onTerminalContextCleared` right
+            // after a `cleared: true`, and that callback is wired to
+            // `terminalLogWriter.onSessionBoundary` below. Rolling here too
+            // rolled twice per clear — `rollSession` mints a new sessionId, a new
+            // file and a fresh header unconditionally, so the extra roll left a
+            // stranded empty log file behind every standalone clear. The
+            // extension host's `clearTerminalContext` does not roll internally
+            // either; keeping the roll in exactly one place is what stops the two
+            // hosts drifting.
             return { cleared: true };
         },
         recordDeferredClears: (teamId: string, names: string[]) => {

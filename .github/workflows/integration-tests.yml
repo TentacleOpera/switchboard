@@ -290,6 +290,22 @@ jobs:
       - name: Seat safeguards on the fleet prompt path (verbatim block, threaded marker)
         run: npm run test:contract:seat-safeguards
 
+      # Payload kind on the prompt rail, plus POST /terminals/clear. ptySendPrompt
+      # now decides its three appends from what the payload IS rather than who
+      # sent it, and a send that declares nothing defaults to "message" — no
+      # standing orders, no seat directive block. That default is right for an
+      # agent relaying a question and catastrophic for a caller that was relying
+      # on the appends: it loses a seat's GIT POLICY and subagent policy with no
+      # error and nothing red. The ratchet in this suite is the reason it cannot
+      # happen quietly — every send site must SAY what it is sending, and seven
+      # sites were found undeclared the first time it ran. Also pins the
+      # bare-slash-command rejection and the clear endpoint's server-enforced
+      # invariants (`from` required, caller never cleared, head never cleared on
+      # a team scope, canonical clear not the lesser one).
+      # Loads out/ for the behavioural half — must stay AFTER "Compile test outputs".
+      - name: Prompt payload kind + canonical terminal clear
+        run: npm run test:contract:prompt-payload-kind
+
       # Team-scoped reviewer routing. Role→terminal resolution is workspace-wide and
       # team-blind by default, so a card coded by team A lands on team B's reviewer
       # once a second team is live — and every gate stays green while it happens,

@@ -4355,7 +4355,13 @@
                 const dispatchRes = await fetch('/terminals/verb/ptySendPrompt', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: headName, data: promptText, clearBeforePrompt: false }),
+                    // A queue drain is a dispatch: the head is starting work on
+                    // this item. Declared explicitly because the fallback body
+                    // ("Work on plan: <id>") is far too short for the host's
+                    // parse-based dispatch backstop to recognise, and without the
+                    // kind it would land as a message with no standing orders and
+                    // no seat directive block.
+                    body: JSON.stringify({ name: headName, data: promptText, clearBeforePrompt: false, kind: 'dispatch' }),
                     credentials: 'same-origin'
                 });
                 const dispatchData = await dispatchRes.json().catch(() => null);
@@ -6292,6 +6298,14 @@
                             body: JSON.stringify({
                                 name: targetName,
                                 data: promptText,
+                                // A drop IS a dispatch. Stated rather than left to
+                                // the host's parse backstop: promptSelected can
+                                // return a body with no `PLANS TO PROCESS:` block,
+                                // and this path clears the seat first — delivering
+                                // a freshly cleared seat a prompt with no seat
+                                // directive block is the exact regression the
+                                // HTTP-boundary strip exists to prevent.
+                                kind: 'dispatch',
                                 clearBeforePromptFromConfig: true,
                                 operationId: opId
                             })
@@ -11972,7 +11986,11 @@
                         // Link-up instructions must not themselves carry the parent's
                         // standing-orders block, or the agent would see its own orders
                         // quoted back inside the relay message.
-                        standingOrders: false
+                        standingOrders: false,
+                        // An instruction to relay is a message, not work starting.
+                        // Declared rather than left to the default so the intent is
+                        // legible and the send stays off the undeclared-payload ratchet.
+                        kind: 'message'
                     })
                 });
                 const data = await res.json();
@@ -12362,6 +12380,17 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         name,
+                        // kind:'dispatch' is load-bearing, not decoration. The
+                        // whole point of this send is the standing-orders block
+                        // the HOST appends — the notice line is just its carrier.
+                        // Under the message default (no `dispatch` object, no
+                        // parseable dispatch identity) the host would suppress
+                        // every append and this button would deliver one bare
+                        // line, silently doing nothing. `orders-refresh` is the
+                        // semantically right kind but is reserved and rejected
+                        // (after-clear path owns it), so 'dispatch' is the
+                        // append-bearing kind available here.
+                        kind: 'dispatch',
                         data: '[OPERATOR NOTICE] Standing orders updated for team.',
                         clearBeforePrompt: false
                     })

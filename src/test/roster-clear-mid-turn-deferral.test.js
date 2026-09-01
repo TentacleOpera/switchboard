@@ -839,8 +839,15 @@ test('the agent-facing HTTP contract documents `origin` on ptySendPrompt', () =>
         '.agents/protocols/switchboard-mission-control-http/SKILL.md',
     ]) {
         const doc = read(rel);
+        // Assert origin is IN the payload-shape cell, not that the cell equals a
+        // frozen field list. The exhaustive pin this replaces went red the moment
+        // ptySendPrompt gained `kind`/`machineOrigin` — a doc row correctly
+        // gaining a field is not an origin regression, and a gate that cannot
+        // tell those apart trains people to edit the test.
+        const shapeCell = /ptySendPrompt`? \| `\{([^`]*)\}`/.exec(doc);
+        assert.ok(shapeCell, `${rel} must document a ptySendPrompt payload shape`);
         assert.ok(
-            /ptySendPrompt`? \| `\{ name, data, clearBeforePrompt, origin\?, dispatch\? \}`/.test(doc),
+            /\borigin\?/.test(shapeCell[1]) && /\bdispatch\?/.test(shapeCell[1]),
             `${rel} must list origin in the ptySendPrompt payload shape`
         );
         assert.ok(
