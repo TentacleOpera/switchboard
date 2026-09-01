@@ -71,6 +71,23 @@ let _queueNextChain: Promise<unknown> = Promise.resolve();
 const execFileAsync = promisify(execFile);
 
 /**
+ * Enqueues an operation on the single process-wide `_queueNextChain` serialization point.
+ * Every dispatch (including hop dispatches) reaches this chain so select -> in-flight -> dispatch
+ * is serialized atomically.
+ */
+export function enqueueOnQueueChain<T>(fn: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+        _queueNextChain = _queueNextChain.then(async () => {
+            try {
+                resolve(await fn());
+            } catch (err) {
+                reject(err);
+            }
+        });
+    });
+}
+
+/**
  * Shared in-flight predicate: true when card is held by a team member with no completion post.
  * (completed_at is NULL).
  */
@@ -425,7 +442,7 @@ interface LocalApiServerOptions {
      * NOT abort the pop on it. Optional — absent in headless/test harnesses
      * (reported `cleared: false`, pop still proceeds).
      */
-    clearTerminalContext?: (workspaceRoot: string, terminalName: string) => Promise<{ cleared: boolean; error?: string }>;
+    clearTerminalContext?: (workspaceRoot: string, terminalName: string) => Promise<{ cleared: boolean; error?: string; reason?: string }>;
     /**
      * Fired after a seat's terminal context is cleared via `clearTerminalContext`
      * in `_runQueueDone`. The terminal log writer subscribes here to roll the
@@ -2106,6 +2123,13 @@ export class LocalApiServer {
      * re-enqueue on `_queueNextChain` and deadlock). There is exactly one pop
      * implementation; both callers enqueue it.
      */
+    /**
+     * Enqueue an operation on the single process-wide `_queueNextChain` serialization point.
+     */
+    public async enqueueOnQueueChain<T>(fn: () => Promise<T>): Promise<T> {
+        return enqueueOnQueueChain(fn);
+    }
+
     public async dispatchNextFromQueue(args: {
         workspaceRoot: string;
         from: string;            // requesting head's terminal name

@@ -920,6 +920,7 @@
     "test:contract:render-guard": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/kanban-render-guard-contract.test.js",
     "test:contract:kanban-view-plan-removal": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/kanban-view-plan-removal-regression.test.js",
     "test:contract:dispatch-view": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/dispatch-view-contract.test.js",
+    "test:contract:dispatch-hops": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/three-dispatch-hops-contract.test.js",
     "test:contract:batch-move-team-prompt": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/batch-move-team-prompt-contract.test.js",
     "test:contract:staging-column": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/staging-column-contract.test.js",
     "test:contract:drag-confirm-order": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/kanban-drag-confirm-before-dispatch.test.js",

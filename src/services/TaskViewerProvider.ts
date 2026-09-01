@@ -98,6 +98,7 @@ let NotionFetchServiceClass: any;
 import type { NotionBackupService } from './NotionBackupService';
 let NotionBackupServiceClass: any;
 import { PLAN_SCANNER_PRESETS, expandFlatGlob, type ResolvedFlatTarget } from './PlanScannerPresets';
+import { teamIsFree, type HopName, type HopSnapshot, type HopReadinessResult, type HopId } from './HopReadiness';
 import type { ClickUpSyncService, ClickUpApplyOptions, ClickUpList, ClickUpMappingSelection, ClickUpTask } from './ClickUpSyncService';
 let ClickUpSyncServiceClass: any;
 import type { ClickUpDocsAdapter } from './ClickUpDocsAdapter';
@@ -115,7 +116,7 @@ import type { LinearDocsAdapter } from './LinearDocsAdapter';
 let LinearDocsAdapterClass: any;
 import { LocalFolderService } from './LocalFolderService';
 import { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
-import { LocalApiServer } from './LocalApiServer';
+import { LocalApiServer, enqueueOnQueueChain } from './LocalApiServer';
 import { LOOPBACK_ONLY_POLICY, type BindPolicy } from '../utils/loopbackHostname';
 import { detectTailnetAddress, resolveMagicDnsNames } from '../utils/tailnetDetect';
 import { GlobalIntegrationConfigService, AgentGlobalKey, ScheduledJob, SchedulerConfig } from './GlobalIntegrationConfigService';
@@ -1695,6 +1696,30 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     // independent of the schedule engine: it fires with the schedule off, and
     // _stopAutobanEngine never touches it (only dispose / explicit stop do).
     private _survivorJobsTimer?: NodeJS.Timeout;
+    // ─── Dispatch hops state (session-only, in memory, cleared on restart) ───
+    public hopSessionState = {
+        hops: {
+            plan: false,
+            code: false,
+            review: false,
+        },
+        started: false,
+    };
+    private _hopLastRunAt: Record<HopName, number> = {
+        plan: 0,
+        code: 0,
+        review: 0,
+    };
+    private _hopLastReasons: Record<HopName, string> = {
+        plan: '',
+        code: '',
+        review: '',
+    };
+    private _hopSnapshotResolver?: (wsRoot: string) => Promise<HopSnapshot | null>;
+    private _hopTickInFlight = false;
+    private _hopLastEvaluatedAt = 0;
+    private _hopFeed: Array<{ id: string; timestamp: number; kind: 'dispatch' | 'finish'; text: string }> = [];
+    private _hopTurnEndDebounceTimer?: NodeJS.Timeout;
     // _schedulerInFlight guards against re-sending a long-running fetch-plans
     // (or spawning a second terminal for it) on the next survivor tick.
     private _schedulerInFlight = new Map<string, boolean>();
@@ -1979,6 +2004,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * hooks, no tokens, no agent-side obligation.
      */
     public notifyTurnEnd(info: { seatName: string; planFile: string; outcome: 'completed' | 'blocked' | 'stalled'; workspaceRoot: string; recipientSeat?: string; body?: string; liveDelivery?: boolean }): void {
+        // Hops turn-end trigger: completed outcome only (coalesced 2s debounce evaluation pass + feed)
+        if (info.outcome === 'completed') {
+            try {
+                this.appendHopFeed('finish', `${info.seatName} finished "${info.planFile}"`);
+                this.scheduleTurnEndHopEvaluation(info.workspaceRoot);
+            } catch (err) {
+                console.warn('[TaskViewerProvider] turn-end hop scheduling threw:', err);
+            }
+        }
         void (async () => {
             const seatName = info.seatName;
             const planFile = info.planFile;
@@ -3456,6 +3490,30 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 console.log(`[TaskViewerProvider] Team list: ${teams.length} team(s) from '${sourceRoot}' `
                     + `(candidates: ${roots.join(', ')})`);
                 return { success: true, groups: teams, sourceRoot };
+            }
+            if (verb === 'getHopState' || verb === 'ptyGetHopState') {
+                const state = await this.getHopFullState(root || effectiveRoot);
+                return { success: true, ...state };
+            }
+            if (verb === 'setHopCheckbox' || verb === 'ptySetHopCheckbox') {
+                const hop = payload?.hop as HopName;
+                const enabled = !!payload?.enabled;
+                if (hop && (hop === 'plan' || hop === 'code' || hop === 'review')) {
+                    this.setHopSessionState({ hops: { [hop]: enabled } });
+                }
+                const state = await this.getHopFullState(root || effectiveRoot);
+                return { success: true, ...state };
+            }
+            if (verb === 'setHopsStarted' || verb === 'ptySetHopsStarted' || verb === 'startHops' || verb === 'stopHops') {
+                const started = verb === 'startHops' ? true : (verb === 'stopHops' ? false : !!payload?.started);
+                this.setHopSessionState({ started });
+                const state = await this.getHopFullState(root || effectiveRoot);
+                return { success: true, ...state };
+            }
+            if (verb === 'setHopState' || verb === 'ptySetHopState') {
+                this.setHopSessionState(payload || {});
+                const state = await this.getHopFullState(root || effectiveRoot);
+                return { success: true, ...state };
             }
             if (!ptyHostReady()) {
                 return { success: false, error: 'PTY host unavailable on this platform/installation' };
@@ -27720,6 +27778,328 @@ Each plan file must include:
                 console.error(`[Autoban] Survivor scheduler job '${job.source}' tick failed:`, e)
             );
         }
+
+        // Mechanical dispatch hops tick: when started, evaluate ticked hops in order
+        if (this.hopSessionState.started) {
+            void this.tickDispatchHops().catch(e =>
+                console.error('[Autoban] Dispatch hops tick failed:', e)
+            );
+        }
+    }
+
+    public setHopSnapshotResolver(resolver: (wsRoot: string) => Promise<HopSnapshot | null>): void {
+        this._hopSnapshotResolver = resolver;
+    }
+
+    public getHopSnapshotResolver(): ((wsRoot: string) => Promise<HopSnapshot | null>) | undefined {
+        return this._hopSnapshotResolver;
+    }
+
+    public appendHopFeed(kind: 'dispatch' | 'finish', text: string): void {
+        const now = Date.now();
+        const id = `${now}-${Math.random().toString(36).slice(2, 7)}`;
+        this._hopFeed.unshift({ id, timestamp: now, kind, text });
+        if (this._hopFeed.length > 50) {
+            this._hopFeed.pop();
+        }
+    }
+
+    public getHopFeed(): Array<{ id: string; timestamp: number; kind: 'dispatch' | 'finish'; text: string }> {
+        return [...this._hopFeed];
+    }
+
+    public scheduleTurnEndHopEvaluation(wsRoot?: string): void {
+        if (this._hopTurnEndDebounceTimer) {
+            clearTimeout(this._hopTurnEndDebounceTimer);
+            this._hopTurnEndDebounceTimer = undefined;
+        }
+        this._hopTurnEndDebounceTimer = setTimeout(() => {
+            this._hopTurnEndDebounceTimer = undefined;
+            if (this.hopSessionState.started) {
+                void this.tickDispatchHops(wsRoot).catch(e =>
+                    console.error('[TaskViewerProvider] Turn-end dispatch hops evaluation failed:', e)
+                );
+            }
+        }, 2000);
+    }
+
+    public async resolveHopSnapshot(wsRoot?: string): Promise<HopSnapshot> {
+        const root = wsRoot || this._getWorkspaceRoot() || this._apiServerWorkspaceRoot || '';
+        if (this._hopSnapshotResolver) {
+            try {
+                const custom = await this._hopSnapshotResolver(root);
+                if (custom) return custom;
+            } catch (err) {
+                console.warn('[TaskViewerProvider] hopSnapshotResolver failed:', err);
+            }
+        }
+        const seats = this.getFleetLiveness();
+        const db = await this._getKanbanDb(root);
+        const wsId = db ? ((await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '') : '';
+        const board = db ? await db.getBoard?.(wsId) : null;
+        return { seats, board };
+    }
+
+    public getHopSessionState(): { hops: { plan: boolean; code: boolean; review: boolean }; started: boolean } {
+        return {
+            hops: { ...this.hopSessionState.hops },
+            started: this.hopSessionState.started,
+        };
+    }
+
+    public setHopSessionState(state: { hops?: { plan?: boolean; code?: boolean; review?: boolean }; started?: boolean }): void {
+        if (state.hops) {
+            if (typeof state.hops.plan === 'boolean') this.hopSessionState.hops.plan = state.hops.plan;
+            if (typeof state.hops.code === 'boolean') this.hopSessionState.hops.code = state.hops.code;
+            if (typeof state.hops.review === 'boolean') this.hopSessionState.hops.review = state.hops.review;
+        }
+        if (typeof state.started === 'boolean') {
+            this.hopSessionState.started = state.started;
+        }
+    }
+
+    public getHopLastReasons(): Record<HopName, string> {
+        return { ...this._hopLastReasons };
+    }
+
+    public async getHopFullState(wsRootOverride?: string): Promise<{
+        hops: { plan: boolean; code: boolean; review: boolean };
+        started: boolean;
+        reasons: Record<HopName, string>;
+        readiness: Record<HopName, HopReadinessResult>;
+        evaluatedAt: number;
+        feed: Array<{ id: string; timestamp: number; kind: 'dispatch' | 'finish'; text: string }>;
+    }> {
+        const wsRoot = wsRootOverride || this._getWorkspaceRoot() || this._apiServerWorkspaceRoot || '';
+        const snapshot = await this.resolveHopSnapshot(wsRoot);
+        const readiness: Record<HopName, HopReadinessResult> = {
+            plan: teamIsFree('plan', snapshot),
+            code: teamIsFree('code', snapshot),
+            review: teamIsFree('review', snapshot),
+        };
+        return {
+            hops: { ...this.hopSessionState.hops },
+            started: this.hopSessionState.started,
+            reasons: { ...this._hopLastReasons },
+            readiness,
+            evaluatedAt: this._hopLastEvaluatedAt || Date.now(),
+            feed: this.getHopFeed(),
+        };
+    }
+
+    /**
+     * Ticks the dispatch hops if started.
+     * Evaluates ticked hops in order: plan, code, review.
+     * On the first free hop whose interval has elapsed, runs the dispatch and stops (at most 1 dispatch per tick).
+     * Records reasons on all hops.
+     */
+    public async tickDispatchHops(wsRootOverride?: string): Promise<{ dispatchedHop?: HopName; reasons: Record<HopName, string> }> {
+        const reasons: Record<HopName, string> = { plan: '', code: '', review: '' };
+        if (!this.hopSessionState.started) {
+            this._hopLastReasons = {
+                plan: 'not started',
+                code: 'not started',
+                review: 'not started',
+            };
+            return { reasons: this._hopLastReasons };
+        }
+
+        if (this._hopTickInFlight) {
+            return {
+                reasons: {
+                    plan: 'tick in flight',
+                    code: 'tick in flight',
+                    review: 'tick in flight',
+                }
+            };
+        }
+
+        this._hopTickInFlight = true;
+        try {
+            const wsRoot = wsRootOverride || this._getWorkspaceRoot() || this._apiServerWorkspaceRoot || '';
+            const snapshot = await this.resolveHopSnapshot(wsRoot);
+            const now = Date.now();
+            this._hopLastEvaluatedAt = now;
+            const HOP_INTERVAL_MS = 60 * 1000;
+            const hopOrder: HopName[] = ['plan', 'code', 'review'];
+            let dispatchedHop: HopName | undefined;
+
+            for (const hop of hopOrder) {
+                if (!this.hopSessionState.hops[hop]) {
+                    reasons[hop] = 'unticked';
+                    continue;
+                }
+
+                const readiness = teamIsFree(hop, snapshot);
+                // `in` alone is the discriminant. A truthiness test on
+                // `readiness.unknown` widens the type back to the union (an
+                // empty-string `unknown` would fall through as if it were
+                // `{ free, reason }`) — unknown is never free.
+                if ('unknown' in readiness) {
+                    reasons[hop] = readiness.unknown;
+                    continue;
+                }
+
+                if (!readiness.free) {
+                    reasons[hop] = readiness.reason;
+                    continue;
+                }
+
+                // Team is free. Check interval throttle
+                const lastRun = this._hopLastRunAt[hop] || 0;
+                if (lastRun && now - lastRun < HOP_INTERVAL_MS) {
+                    reasons[hop] = 'throttled (interval not elapsed)';
+                    continue;
+                }
+
+                if (dispatchedHop) {
+                    // Another hop already dispatched in this tick (one dispatch per tick invariant)
+                    reasons[hop] = 'deferred (earlier hop dispatched)';
+                    continue;
+                }
+
+                // Attempt dispatch for this hop (serialized on the single _queueNextChain)
+                const outcome = await this._executeHopDispatch(hop, wsRoot, snapshot);
+                if (outcome.success) {
+                    this._hopLastRunAt[hop] = now;
+                    reasons[hop] = `dispatched: ${outcome.detail}`;
+                    dispatchedHop = hop;
+                } else {
+                    reasons[hop] = outcome.detail;
+                }
+            }
+
+            this._hopLastReasons = { ...reasons };
+            return { dispatchedHop, reasons };
+        } finally {
+            this._hopTickInFlight = false;
+        }
+    }
+
+    private async _executeHopDispatch(
+        hop: HopName,
+        wsRoot: string,
+        snapshot: HopSnapshot
+    ): Promise<{ success: boolean; detail: string }> {
+        const apiServer: any = this._localApiServer || this._apiServerForBroadcast;
+        const runOnChain = apiServer && typeof apiServer.enqueueOnQueueChain === 'function'
+            ? (fn: () => Promise<any>) => apiServer.enqueueOnQueueChain(fn)
+            : (fn: () => Promise<any>) => enqueueOnQueueChain(fn);
+
+        return runOnChain(async () => {
+            // Re-read snapshot and re-verify readiness inside the single serialization critical section
+            const freshSnapshot = await this.resolveHopSnapshot(wsRoot);
+            const freshReadiness = teamIsFree(hop, freshSnapshot);
+            if ('unknown' in freshReadiness) {
+                return { success: false, detail: freshReadiness.unknown };
+            }
+            if (!freshReadiness.free) {
+                return { success: false, detail: freshReadiness.reason };
+            }
+
+            const db = await this._getKanbanDb(wsRoot);
+            const wsId = db ? ((await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '') : '';
+            const board = freshSnapshot.board || (db ? await db.getBoard?.(wsId) : []) || [];
+
+            if (hop === 'plan') {
+                // Source column: CREATED, excluding subtasks
+                const candidates = board.filter((p: any) =>
+                    p && p.kanbanColumn === 'CREATED' && (!p.dispatchedAt) && (!p.featureId || p.featureId === '')
+                );
+                if (candidates.length === 0) {
+                    return { success: false, detail: 'no eligible cards in CREATED' };
+                }
+                const candidate = candidates[0];
+                if (apiServer && typeof apiServer.performKanbanDispatch === 'function') {
+                    const res = await apiServer.performKanbanDispatch(wsRoot, candidate.planId, 'PLAN REVIEWED');
+                    if (res.status === 200) {
+                        const title = candidate.topic || candidate.planId;
+                        this.appendHopFeed('dispatch', `"${title}" → planner`);
+                    }
+                    return {
+                        success: res.status === 200,
+                        detail: res.status === 200 ? `plan '${candidate.planId}' dispatched to planner` : (res.payload?.error || 'dispatch failed')
+                    };
+                }
+                return { success: false, detail: 'api server unavailable' };
+            }
+
+            if (hop === 'code') {
+                // Source column: PLAN REVIEWED (or STAGING)
+                // Queue pop first, through `_runQueuePop` (the in-chain pop implementation)
+                if (apiServer && typeof apiServer._runQueuePop === 'function') {
+                    let headTerminal = (await this._kanbanProvider?.resolveCodingHeadFromGroups(wsRoot)) || '';
+                    if (!headTerminal) {
+                        const codingTerminals = this.getAliveCodingTerminalNames();
+                        if (codingTerminals.length > 0) { headTerminal = codingTerminals[0]; }
+                    }
+                    if (headTerminal) {
+                        const pop = await apiServer._runQueuePop(wsRoot, headTerminal, undefined);
+                        if (pop && pop.status === 200) {
+                            const poppedTitle = pop.payload?.planId || pop.payload?.title || 'next staged card';
+                            this.appendHopFeed('dispatch', `"${poppedTitle}" → ${headTerminal}`);
+                            return { success: true, detail: `popped next staged card to ${headTerminal}` };
+                        }
+                    }
+                }
+                // No `dispatchNextFromQueue` fallback here, deliberately. This
+                // body already runs INSIDE the `_queueNextChain` critical
+                // section, and the public method re-enqueues on that same chain
+                // — the documented deadlock (`LocalApiServer.ts`: "which would
+                // re-enqueue on `_queueNextChain` and deadlock"). `_runQueuePop`
+                // is the one pop implementation and is the only correct call
+                // from inside the chain.
+                // Fallback: candidate in PLAN REVIEWED
+                const candidates = board.filter((p: any) =>
+                    p && p.kanbanColumn === 'PLAN REVIEWED' && (!p.dispatchedAt) && (!p.featureId || p.featureId === '')
+                );
+                if (candidates.length === 0) {
+                    return { success: false, detail: 'no eligible cards in PLAN REVIEWED or STAGING' };
+                }
+                const candidate = candidates[0];
+                if (apiServer && typeof apiServer.performKanbanDispatch === 'function') {
+                    const res = await apiServer.performKanbanDispatch(wsRoot, candidate.planId, 'auto');
+                    if (res.status === 200) {
+                        const title = candidate.topic || candidate.planId;
+                        this.appendHopFeed('dispatch', `"${title}" → coder`);
+                    }
+                    return {
+                        success: res.status === 200,
+                        detail: res.status === 200 ? `plan '${candidate.planId}' auto-dispatched to coder` : (res.payload?.error || 'dispatch failed')
+                    };
+                }
+                return { success: false, detail: 'api server unavailable' };
+            }
+
+            if (hop === 'review') {
+                // Source columns: LEAD CODED, CODER CODED, INTERN CODED, CODED
+                const isCoded = (col?: string) => {
+                    const c = this._normalizeLegacyKanbanColumn(col);
+                    return c === 'LEAD CODED' || c === 'CODER CODED' || c === 'INTERN CODED' || c === 'CODED';
+                };
+                const candidates = board.filter((p: any) =>
+                    p && isCoded(p.kanbanColumn) && (!p.dispatchedAt || p.kanbanColumn !== 'CODE REVIEWED') && (!p.featureId || p.featureId === '')
+                );
+                if (candidates.length === 0) {
+                    return { success: false, detail: 'no eligible cards in *_CODED' };
+                }
+                const candidate = candidates[0];
+                if (apiServer && typeof apiServer.performKanbanDispatch === 'function') {
+                    const res = await apiServer.performKanbanDispatch(wsRoot, candidate.planId, 'CODE REVIEWED');
+                    if (res.status === 200) {
+                        const title = candidate.topic || candidate.planId;
+                        this.appendHopFeed('dispatch', `"${title}" → reviewer`);
+                    }
+                    return {
+                        success: res.status === 200,
+                        detail: res.status === 200 ? `plan '${candidate.planId}' dispatched to review` : (res.payload?.error || 'dispatch failed')
+                    };
+                }
+                return { success: false, detail: 'api server unavailable' };
+            }
+
+            return { success: false, detail: `unknown hop '${hop}'` };
+        });
     }
 
     /**

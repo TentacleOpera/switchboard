@@ -1737,6 +1737,40 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     return { success: true, groups, sourceRoot: root };
                 }
 
+                case 'getHopState':
+                case 'ptyGetHopState': {
+                    const state = await taskViewerProvider?.getHopFullState(root || workspaceRoot);
+                    return { success: true, ...(state || {}) };
+                }
+
+                case 'setHopCheckbox':
+                case 'ptySetHopCheckbox': {
+                    const hop = payload?.hop as 'plan' | 'code' | 'review';
+                    const enabled = !!payload?.enabled;
+                    if (hop && (hop === 'plan' || hop === 'code' || hop === 'review')) {
+                        taskViewerProvider?.setHopSessionState({ hops: { [hop]: enabled } });
+                    }
+                    const state = await taskViewerProvider?.getHopFullState(root || workspaceRoot);
+                    return { success: true, ...(state || {}) };
+                }
+
+                case 'setHopsStarted':
+                case 'ptySetHopsStarted':
+                case 'startHops':
+                case 'stopHops': {
+                    const started = verb === 'startHops' ? true : (verb === 'stopHops' ? false : !!payload?.started);
+                    taskViewerProvider?.setHopSessionState({ started });
+                    const state = await taskViewerProvider?.getHopFullState(root || workspaceRoot);
+                    return { success: true, ...(state || {}) };
+                }
+
+                case 'setHopState':
+                case 'ptySetHopState': {
+                    taskViewerProvider?.setHopSessionState(payload || {});
+                    const state = await taskViewerProvider?.getHopFullState(root || workspaceRoot);
+                    return { success: true, ...(state || {}) };
+                }
+
                 case 'ptyStartTeam': {
                     // Explicit team start by id. The definition is HOST-resolved
                     // from `terminals.agentGroups` — never accepted from the wire.
@@ -2853,6 +2887,15 @@ Each plan file must include:
     // line is the fleet-less contract, not a gap.
     ingestionEngine.setTerminalLivenessProvider(() => ptyFleetService.getLiveness());
     taskViewerProvider.setFleetLivenessProvider(() => ptyFleetService.getLiveness());
+    // Dispatch hops snapshot resolver seam (three-dispatch-hops-and-a-start-button):
+    // Resolves the fleet liveness snapshot and the board state for the standalone workspace.
+    taskViewerProvider.setHopSnapshotResolver(async (wsRoot) => {
+        const seats = ptyFleetService.getLiveness();
+        const targetDb = KanbanDatabase.forWorkspace(wsRoot || workspaceRoot);
+        const wsId = targetDb ? ((await targetDb.getWorkspaceId?.()) || (await targetDb.getDominantWorkspaceId?.()) || '') : '';
+        const board = targetDb ? await targetDb.getBoard?.(wsId) : null;
+        return { seats, board };
+    });
     // Turn-end notification seam, wired HERE for the same TDZ reason as the
     // liveness provider above: the closure references `ptyFleetService`, which
     // was constructed just above. Standalone owns the fleet in-process, so
@@ -2873,6 +2916,14 @@ Each plan file must include:
     // deliverPrompt, taskViewerProvider, ptyFleetService, writeMissionControlReport,
     // log, opts — all in scope here.
     const handleTurnEndNotify = (info: any) => {
+        if (info.outcome === 'completed') {
+            try {
+                taskViewerProvider?.appendHopFeed?.('finish', `${info.seatName} finished "${info.planFile}"`);
+                taskViewerProvider?.scheduleTurnEndHopEvaluation?.(info.workspaceRoot);
+            } catch (err) {
+                console.warn('[bootstrap] turn-end hop scheduling threw:', err);
+            }
+        }
         void (async () => {
             const seatName = info.seatName;
             const planFile = info.planFile;

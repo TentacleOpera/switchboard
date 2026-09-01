@@ -221,6 +221,8 @@ jobs:
         run: npm run test:contract:browser-direct-terminal-helpers
       - name: Standalone fleet seam contract (host-agnostic fleet predicate + headless runtime bridge)
         run: npm run test:contract:standalone-fleet-seam
+      - name: Three dispatch hops contract (readiness fails closed, one dispatch per tick, chain serialization, both roots)
+        run: npm run test:contract:dispatch-hops
       - name: Browser panel verb routing contract (every posted verb reachable on its route)
         run: npm run test:contract:browser-panel-verb-routing
 

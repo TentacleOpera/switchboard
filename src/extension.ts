@@ -1097,6 +1097,16 @@ export async function activate(context: vscode.ExtensionContext) {
     globalPlanWatcher.getEngine().setTurnEndNotifier((info) => {
         taskViewerProvider.notifyTurnEnd(info);
     });
+    // Dispatch hops snapshot resolver seam (three-dispatch-hops-and-a-start-button):
+    // Resolves the fleet liveness snapshot and the board state for the active workspace.
+    taskViewerProvider.setHopSnapshotResolver(async (wsRoot) => {
+        const root = wsRoot || workspaceRoot || '';
+        const seats = taskViewerProvider.getFleetLiveness();
+        const db = await (taskViewerProvider as any)._getKanbanDb(root);
+        const wsId = db ? ((await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '') : '';
+        const board = db ? await db.getBoard?.(wsId) : null;
+        return { seats, board };
+    });
     context.subscriptions.push(taskViewerProvider);
     if (workspaceRoot) {
         void taskViewerProvider.deregisterAllTerminals(true).then(() => {

@@ -41,10 +41,10 @@ the defect is the word *unconditional*. A hop that fires only when its destinati
 dispatches precisely when the operator would have.
 
 **There is nowhere to express a hop today.** `ScheduledJob`
-(`GlobalIntegrationConfigService.ts:45-75`) carries `source`, `target`, `intervalMinutes`,
+(`GlobalIntegrationConfigService.ts:45-76`) carries `source`, `target`, `intervalMinutes`,
 `teamTarget`, `advanceWhenReady` — and no condition field of any kind. Every job is unconditional in
 time. Conditions exist only hard-coded inside individual branches: `start-ready-mission`
-(`TaskViewerProvider.ts:27706`) does `m.ready && m.runState !== 'in-flight'`, written in TypeScript,
+(`TaskViewerProvider.ts:27728`) does `m.ready && m.runState !== 'in-flight' && m.runState !== 'completed'`, written in TypeScript,
 inside one branch, unreachable from outside.
 
 ### The three hops
@@ -66,7 +66,7 @@ This is a fact about the tree, not a setting. It never appears on screen.
 ### The predicate's input is card assignment, not seat status — this is load-bearing
 
 The obvious implementation of "is the team free" reads seat `status` from `getFleetLiveness()`
-(`TaskViewerProvider.ts:1604`). **That does not work, and a live `switchboard fleet` capture shows
+(`TaskViewerProvider.ts:1605`). **That does not work, and a live `switchboard fleet` capture shows
 why:**
 
 ```
@@ -77,9 +77,14 @@ reviewer-1      reviewer  active  Fix bare switchboard CLI menu when no server..
 planner-1       planner   active  -
 ```
 
-Every seat reads `active`. `status` is a **liveness** signal — its only consumer,
-`getAliveCodingTerminalNames` (`:2421`), checks nothing but `status === 'exited'`. The column that
+Every seat reads `active`. `status` is a **liveness** signal — its consumer
+`getAliveCodingTerminalNames` (`:2422`) filters out `status === 'exited'` terminals and groups the
+rest by role, but never distinguishes a busy seat from an idle one. The column that
 distinguishes a working seat from an idle one is `CURRENT PLAN / TASK`.
+
+> **Superseded:** `getAliveCodingTerminalNames` (`:2421`), checks nothing but `status === 'exited'`.
+> **Reason:** The function (`:2422-2434`) also filters on truthy `entry`, a defined `friendlyName`, and groups by `role` — it does more than check `status`. But the core argument holds: `status` is used only as a liveness filter (exited vs not), never as a busyness indicator (busy vs idle). The busyness signal is card assignment, which is what `heldByTeam` reads.
+> **Replaced with:** `getAliveCodingTerminalNames` (`:2422`) filters out `status === 'exited'` terminals and groups the rest by role, but never distinguishes a busy seat from an idle one.
 
 The correct predicate exists and is exported: `heldByTeam` (`LocalApiServer.ts:76`) — *"true when
 card is held by a team member with no completion post"*. Busy means **a card names this seat in
@@ -113,9 +118,13 @@ shape was never questioned.
 
 ## Metadata
 
-**Complexity:** 3
+**Complexity:** 4
 **Tags:** backend, reliability, feature, devops
 **Feature:** edbf45a8-8e3e-46f9-a9ee-7ad13fb9b46d
+
+> **Superseded:** Complexity: 3
+> **Reason:** The plan touches 4 files (`HopReadiness.ts`, `TaskViewerProvider.ts`, `extension.ts`, `bootstrap.ts`) — not single-file. The both-roots wiring and fail-closed correctness constraints are moderate, well-scoped risks extending existing patterns, which is Mixed (4-6), not Low (3).
+> **Replaced with:** Complexity: 4
 
 ## User Review Required
 
@@ -131,7 +140,7 @@ None.
 
 - **Fleet unavailability must fail closed.** `getFleetLiveness()` returns `[]` when the pty host is
   down. An empty fleet means **unknown → do not dispatch**, never **free → dispatch**.
-  `_runFeatureNudgeSweep` already encodes this lesson (`PlanIngestionEngine.ts:924-931`: an empty
+  `_runFeatureNudgeSweep` already encodes this lesson (`PlanIngestionEngine.ts:1009-1016`: an empty
   liveness snapshot is *no evidence*, not "every head died"). Backwards, a dead pty host dispatches
   everything at once.
 - **A hop whose destination team has no seat is unknown, not free.** Ticking hop 3 with no reviewer
@@ -147,7 +156,7 @@ None.
 ## Edge-Case & Dependency Audit
 
 - **Serialization.** Every dispatch reaches the module-level promise chain
-  (`LocalApiServer.ts:59-67`) — *"the single serialization point"* — via `dispatchNextFromQueue` /
+  (`LocalApiServer.ts:59-69`) — *"the single serialization point"* — via `dispatchNextFromQueue` /
   `launchMission`. A hop dispatching by any other path reintroduces double-dispatch against a seat's
   own standing orders.
 - **`heldByTeam` needs the board and a team set**, so the evaluator needs a DB handle in both hosts,
@@ -156,6 +165,19 @@ None.
   (`featureId === ''`).
 - **Start with nothing ticked** is a no-op, not an error.
 - **Unticking a hop mid-run** stops future dispatches; it does not recall one in flight.
+
+## Dependencies
+
+None — this is the foundation plan. The Fleet tab plan (`the-fleet-tab-runs-the-hops.md`) depends on
+this for the hops, the predicate, and the tick integration.
+
+## Adversarial Synthesis
+
+Key risks: a status-based predicate passes every test except the one that matters (busy seats read
+`active`); fleet unavailability must fail closed (empty `[]` → unknown, never free); both composition
+roots must wire the snapshot resolver or standalone silently lacks hops. Mitigations: predicate reads
+`heldByTeam` over card assignment, not `status`; `unknown` is never `free`; both-root wiring is
+test #10.
 
 ## Proposed Changes
 
@@ -222,3 +244,53 @@ The acceptance test is agreement with the agent it replaces.
 - Press Start only once they have agreed across a full session.
 - Note where they cannot agree by construction: the controller reads seat logs and `git log` for its
   narrative reports. Anything it decides from a log tail is judgement that stays with it.
+
+## Implementation Summary
+
+Implemented the three mechanical dispatch hops and session state engine in code. Added `src/services/HopReadiness.ts` evaluating team readiness against card assignments via `heldByTeam` with fail-closed semantics for empty or missing fleets. Integrated in-memory session hop state, `_hopTickInFlight` concurrency guard, and `tickDispatchHops` into `TaskViewerProvider._tickSurvivorSchedulerJobs` enforcing at most one dispatch per tick and interval throttling. Routed all hop dispatches through the single `_queueNextChain` serialization point via `enqueueOnQueueChain` in `src/services/LocalApiServer.ts` and `src/services/TaskViewerProvider.ts`. Wired the `setHopSnapshotResolver` seam identically in both the VS Code extension (`src/extension.ts`) and standalone (`src/standalone/bootstrap.ts`) composition roots. Created contract test suite covering all automated test invariants in `src/test/three-dispatch-hops-contract.test.js`.
+
+
+### Review
+
+Reviewed against the plan's Goal Invariants and its ten automated items. The serialization fix is
+correct — `_executeHopDispatch` runs wholly inside the single process-wide `_queueNextChain`, re-reads
+the snapshot and re-verifies readiness *inside* the critical section, and `_hopTickInFlight` keeps two
+ticks from overlapping. Four defects were found and repaired in this pass:
+
+1. **The change did not compile.** `tsc -p tsconfig.test.json` reported six errors in the new code.
+   `'unknown' in readiness && readiness.unknown` is not a discriminant — the truthiness half widened the
+   result back to the union, so `readiness.free`/`.reason` were errors at both readiness sites (an
+   empty-string `unknown` would also have fallen through as if the team were free). Fixed to `'unknown'
+   in readiness` alone. `HopBoardCard.dispatchedAt`/`completedAt` were typed `number | null`, but
+   `KanbanPlanRecord` carries ISO strings — so both composition roots' resolvers failed to typecheck
+   against `HopSnapshot`. Widened to `string | number | null`.
+2. **A deadlock landmine inside the critical section.** The `code` hop's fallback called the *public*
+   `dispatchNextFromQueue`, which re-enqueues on `_queueNextChain` — the deadlock `LocalApiServer`
+   documents in the comment directly above it. Unreachable on a real server (`_runQueuePop` is always
+   present) but live for any seam that is not, and one refactor away from firing. Removed; `_runQueuePop`
+   is the only pop callable from inside the chain. Pinned by new test 14.
+3. **Seven of the twelve tests never ran.** The suite requires `out/services/TaskViewerProvider.js`,
+   which imports `vscode` at module scope — items 5–9, 11 and 12 died with `MODULE_NOT_FOUND` before
+   their first assertion. The repo's `src/test/bootstrap/vscodeStub.js` is now preloaded; all pass.
+4. **The suite was not wired to any gate.** Added `test:contract:dispatch-hops` to `package.json` and a
+   step to `.github/workflows/integration-tests.yml`.
+
+Two tests were added. **13** proves serialization for real: the previous item 11 asserted only that a
+*stub* chain was called, so it would pass with the module chain removed; 13 runs two overlapping hop
+dispatches through the real `_queueNextChain` fallback and asserts they never occupy the critical
+section at once, under a deadlock timeout. **14** statically forbids `dispatchNextFromQueue` inside
+`_executeHopDispatch`.
+
+One unrelated repair was needed to make the gate runnable: `compile-tests` was already red at HEAD
+(`LocalApiServer.ts:4690`) because the `clearTerminalContext` seam type omitted the `reason` field its
+only implementation returns. Widened; `compile-tests` now exits 0.
+
+Verified: `compile-tests` 0 errors; `test:contract:dispatch-hops` 14/14; `dispatch-view`,
+`staging-column`, `standalone-fleet-seam` pass; `host-seam-parity:check`, `standalone-parity:check`,
+`kanban-dispatch-callers:check`, `verb-returns:check` pass; eslint 0 errors on all changed files. The
+hop tick is reachable in both hosts — `_startSurvivorJobsTimer` is armed via `_tryRestoreAutoban` from
+the sidebar `ready` handler in the extension and from `restoreAutobanOnStartup` in `bootstrap.ts`.
+
+Not fixed, and not from this work: `catalog:check` is red at HEAD — commit `99d1337f` added the
+`POST /terminals/clear` route without regenerating `protocol-catalog.json`. Left alone rather than
+staging an unrelated regenerated file.
