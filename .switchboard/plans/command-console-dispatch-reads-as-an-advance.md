@@ -1,214 +1,193 @@
-# The command console can only ever dispatch to a coding seat, so Planner and Researcher are unreachable from the surface
+# The command console never implemented advance — it calls the coding-seat router directly, so every card jumps to a coding column
 
 ## Goal
 
-Let the command console dispatch a card to **any column that has a configured role** — Planner
-and Researcher included — instead of being pinned to the three coding seats. Keep complexity
-auto-routing as one explicitly-labelled option rather than the only reachable behaviour.
+Make the console's primary card action **the same advance the board already performs**: send the
+card and its current column to the backend and let the backend resolve the next stage. Remove
+the console's private routing behaviour entirely.
 
 ### Problem analysis
 
-An operator intended to advance a plan to **Planned** (`PLAN REVIEWED`, role `planner`) and
-pressed **DISPATCH**. The card landed in **Coder** (`CODER CODED`) and a coding agent started
-on it. This was not a mislabelled button — **the console has no gesture that can reach the
-planner column at all.**
+On the board, pressing advance on a card in **New** sends it to **Planned** — the next stage.
+On the command console, the equivalent button sent a card in New straight to **Coder** and
+started a coding agent on it.
 
-The board has 12 columns, 8 of which have a dispatch role and are therefore valid dispatch
-destinations:
+The two surfaces are not two implementations of one rule. **The board implements advance; the
+console implements one stage's routing rule and applies it from every column.**
 
-| Column | Role | Reachable from the console? |
-| --- | --- | --- |
-| `RESEARCHER` | researcher | **no** |
-| `PLAN REVIEWED` (Planned) | planner | **no** |
-| `LEAD CODED` | lead | yes — only if complexity ≥ 7 |
-| `CODER CODED` | coder | yes — only if complexity 5–6 |
-| `INTERN CODED` | intern | yes — only if complexity 1–4 |
-| `CODE REVIEWED` (Reviewed) | reviewer | **no** |
-| `ACCEPTANCE TESTED` | tester | **no** |
-| `TICKET UPDATER` | ticket_updater | **no** |
+Board advance (`src/webview/kanban.html:9973-9978`) posts:
 
-Three of eight, and never by choice — the operator cannot pick which. Evidence from the card
-in question (`fbae8502-7dbf-4089-86ce-bb2f1078d867`, complexity `6`): `routed_to = CODER CODED`,
-`dispatched_agent = coder`, `last_action` empty, and **no `plan_events` row at all**, so in the
-audit trail the move is indistinguishable from a card nobody touched.
+```js
+postKanbanMessage({ type: 'promptSelected', column: backendColumn, sessionIds: [sessionId], workspaceRoot })
+```
+
+`column` is the card's **source** column. The destination is never sent — the backend derives
+it (`KanbanProvider._advanceCards`, `handleServiceVerb('promptSelected')` at
+`src/services/KanbanProvider.ts:11878`). The webview's own `getNextColumn` is used *only* to
+predict the move optimistically, and it walks forward from the current column, skipping
+role-less non-terminal columns. From `CREATED`, the next role-bearing column is
+`PLAN REVIEWED` — Planned. Exactly what the operator expected.
+
+Complexity banding is not part of advance. It applies to **one transition**: leaving
+`PLAN REVIEWED` or `STAGING` for the coding stage, and only when dynamic complexity routing is
+on (`src/webview/kanban.html:9928-9935`). That is where "which coding seat" is a real question.
+
+The console (`src/webview/command.js:1408-1417`) posts to `/kanban/dispatch` with
+`{ plan, workspaceRoot, ack }` and **no column at all** — neither source nor destination. With
+`targetColumn` absent, the handler delegates to `resolveAutoDispatchColumn`
+(`src/services/LocalApiServer.ts:2029-2036` → `src/services/KanbanProvider.ts:9437-9478`),
+whose every return is `INTERN CODED`, `CODER CODED` or `LEAD CODED` — including the
+routing-disabled branch and the unknown-complexity branch. So the console took the
+Planned→coding rule and made it the meaning of its only button, for cards in any column.
+
+The card that prompted this (`fbae8502-…`, complexity `6`) shows the result: `routed_to =
+CODER CODED`, `dispatched_agent = coder`, `last_action` empty, **no `plan_events` row**. Two
+stages skipped and an agent started, from a surface where no other action worked — the Move
+view was already dead on that host (`kanban-move-is-unwired-in-the-standalone-host.md`).
 
 ### Root cause
 
-**The console's only reachable routing function is a coding-seat selector, not a next-column
-router.**
+The console reimplemented the card action instead of calling the existing one. Three
+consequences follow from that single decision:
 
-`executeDispatch` (`src/webview/command.js:1408-1417`) POSTs `{ plan, workspaceRoot, ack }` and
-never a `targetColumn`. With that field absent, `POST /kanban/dispatch` delegates to
-`resolveAutoDispatchColumn` (`src/services/LocalApiServer.ts:2029-2036` →
-`src/services/KanbanProvider.ts:9437-9478`). Every `return` in that function yields one of
-three columns:
+1. **Advance semantics were never ported.** The backend already owns next-stage resolution and
+   already exposes it as the `promptSelected` verb (`KanbanProvider.ts:11878`), reachable
+   through the `kanbanVerb` seam that `LocalApiServerOptions` already declares
+   (`src/services/LocalApiServer.ts:363`) and that `/kanban/dispatch` already uses
+   (`:1940`). Nothing needed to be invented; it needed to be called.
+2. **The one routing rule it did wire is stage-specific.** `resolveAutoDispatchColumn` answers
+   "which coding seat for this complexity?" — a question that is only meaningful for a card
+   leaving Planned. Asked about a card in New, it still answers, because it has no notion of
+   where the card is.
+3. **Neither the source nor the destination is in the request**, so no layer can detect the
+   mismatch. The server cannot tell that a card in New was never meant to reach a coding
+   column, because the console never told it where the card was.
 
-- `dynamicComplexityRoutingEnabled === false` → **`LEAD CODED`**
-- complexity unknown → preferred role `lead` → **`LEAD CODED`**
-- score 1–4 / 5–6 / 7+ → **`INTERN CODED`** / **`CODER CODED`** / **`LEAD CODED`**
-- degradation only ever swaps one coding role for another live coding role
-
-It is structurally incapable of returning `PLAN REVIEWED` or `RESEARCHER`. Its job is to pick
-*which coding seat*, which is the board's Autocode idiom — a legitimate feature that the console
-mistakenly adopted as the meaning of "dispatch".
-
-**The server is already fully capable; only the console is not.** `/kanban/dispatch` accepts an
-explicit `targetColumn` (`src/services/LocalApiServer.ts:1878`), canonicalises it
-(`:2037-2042`), and refuses a role-less column with a clear 400 ("no dispatch role/action
-configured"). Dispatching to the planner over HTTP works today — the surface just never asks.
-
-**The data for the fix is already client-side.** `fetchColumns` keeps whole column objects,
-including `role`, in `allColumns` (`src/webview/command.js:406-410`), and already builds three
-dropdowns from them (`:430-447`). A destination selector needs no new endpoint, no new state,
-and no server change.
-
-Two secondary defects compound it:
-
-- **The resolved destination is reported and then discarded.** The ack payload carries
-  `column` and `routing: 'auto: <reason>'` (`src/services/LocalApiServer.ts:2166-2181`); the
-  console reads only `seat`/`role` (`src/webview/command.js:1424-1425`). An auto-derived
-  destination renders identically to a chosen one.
-- **The view's one column control is a source filter dressed as a destination.**
-  `dispatch-source-column-select` carries `aria-label="Dispatch Column"`
-  (`src/webview/command.html:872`) but only filters which cards are listed
-  (`src/webview/command.js:722-724`).
-
-> **Superseded:** *this plan's first draft proposed relabelling the button "DISPATCH TO CODING",
-> surfacing the chosen column in the chip, and explicitly declined to add a destination
-> selector.*
-> **Reason:** that is a cosmetic fix to a reachability bug. Naming the destination more honestly
-> does not give the operator the planner column, which is the thing they were trying to reach.
-> The "no picker" rule is about not building competing peer modes; it was never a reason to
-> leave 5 of 8 dispatchable columns unreachable.
-> **Replaced with:** a destination selector, with auto-routing demoted to one labelled option.
+> **Superseded (twice):**
+> *Draft 1 proposed relabelling the button "DISPATCH TO CODING" and showing the resolved column
+> in the chip.* **Reason:** cosmetic — it makes a wrong destination legible instead of correct,
+> and still leaves Planned unreachable.
+> *Draft 2 proposed a destination dropdown listing every role-bearing column, with "Auto" as
+> the default.* **Reason:** it invents a third way to choose a column when the board already
+> has one, and puts stage routing in the operator's hands on every single dispatch. The board
+> does not ask; it advances. A dropdown is a fourth reimplementation waiting to drift from
+> `_advanceCards`.
+> **Replaced with:** call the board's verb with the card's current column.
 
 ## Metadata
 
-- **Complexity:** 4
+- **Complexity:** 3
 - **Tags:** ui, ux, frontend, bugfix
 
 ## Complexity Audit (Routine vs Complex/Risky)
 
-**Routine.** One dropdown in an existing view, populated from data the view already holds, sent
-to a server field that already exists and is already validated. No new endpoint, no schema
-change, no routing logic.
+**Routine.** The verb, the next-stage resolution, the complexity banding, the CLI-triggers gate
+and the direction classification all already exist and are already used by the board. This plan
+adds a thin HTTP route over the existing `kanbanVerb` seam and changes what one button posts.
 
-Decisions already made, so no reader has to re-open them:
+Decisions already made:
 
-- **Auto stays, as an explicit option, and stays the default.** Removing it would break the
-  Autocode idiom operators rely on; hiding it is what caused this bug. It appears as
-  "Auto — coding seat by complexity" so it can never be mistaken for "next column".
-- **Destinations are filtered to columns with a `role`.** A role-less column (New, Staging,
-  Backlog, Completed) fires nothing on drop and the server rejects it — offering it would
-  manufacture a 400.
-- **No confirmation step.** DISPATCH still fires on the first click.
-- **Dispatch is not renamed to Advance.** Dispatch = change column *and* fire that column's
-  agent; Move = change column silently. The two views keep that split.
+- **No destination selector, no client-side next-column math.** The console sends the card's
+  current column and nothing else. `getNextColumn` stays a board-local optimistic predictor;
+  the console does not get a copy.
+- **The button is named ADVANCE**, matching the board. "Dispatch" as a distinct console concept
+  is dropped — advancing a card out of Planned dispatches it to a coding seat as a consequence,
+  which is what the board already does.
+- **Complexity routing is not removed or reconfigured.** It keeps applying exactly where the
+  board applies it: leaving Planned/Staging.
 
 ## Edge-Case & Dependency Audit
 
-- **Auto can throw, and that error must survive.** `resolveAutoDispatchColumn` raises
-  `KanbanDispatchError` ("No eligible coding agent is live and visible") when no coding seat is
-  available. That text must reach the chip verbatim; it is the operator's cue to pick an
-  explicit destination instead.
-- **Auto's answer must stay legible after the fact.** When Auto is chosen, the chip must render
-  the returned `column` *and* `routing` reason — the one case where the operator did not pick
-  the destination is the case where it must be reported.
-- **Custom columns.** The role filter is data-driven, so a custom agent column with a role
-  appears automatically; the list must not be hardcoded to the built-in eight.
-- **Complexity `Unknown`.** Auto sends such cards to `LEAD CODED`; with an explicit destination
-  the score is irrelevant. Neither path may present a defaulted score as a real one.
-- **A card already in the destination column.** The server's non-success arm reports "card did
-  not land in '<column>'"; dispatching a card to the column it already occupies must still fire
-  the agent rather than report a phantom failure.
-- **Selection persistence.** The destination must survive a card-selection change and a view
-  switch, like the existing dropdowns do (`:449-470`), and must not silently reset to Auto.
-- **Depends on:** `kanban-move-is-unwired-in-the-standalone-host.md` for the Move view only.
-  The Dispatch changes here are independent and can ship first.
-- **Both hosts.** `src/webview/command.{html,js}` is served by the standalone host and the
-  extension from the same source, so these edits reach both; verification runs on both.
+- **Prompt-mode columns return a payload, not a dispatch.** `RESEARCHER` and `TICKET UPDATER`
+  have `dragDropMode: 'prompt'`, where the board's path copies a prompt to the clipboard rather
+  than driving a CLI (`src/webview/kanban.html:10498`). On a phone there is no board clipboard,
+  so the route must return that prompt text in the response and the console must render it as
+  copyable. This is the one genuinely new surface in the plan and must not be silently dropped —
+  a prompt-mode advance that reports success while producing nothing is the worst outcome.
+- **A card in the last stage has no next column.** `getNextColumn` returns `null` at the end of
+  the list; the route must report "already in the final stage" rather than moving nothing and
+  claiming success.
+- **The CLI-triggers gate stays where it is.** `_advanceCards` applies it internally (moves
+  always, dispatches only when enabled) — the console inherits that instead of re-deciding it.
+- **Optimistic move must predict or abstain.** The console's `pendingMoves` cannot know the
+  backend's choice for a Planned→coding advance. Follow the board's rule: predict only when
+  confident, otherwise show pending and let the authoritative push settle it — never a
+  prediction that bounces.
+- **Both hosts.** The new route needs `kanbanVerb` wired in both composition roots; confirm it
+  is set in `bootstrap.ts` as well as `TaskViewerProvider.ts` before relying on it, since the
+  sibling `moveCard` seam on the same options object is wired in only one
+  (`kanban-move-is-unwired-in-the-standalone-host.md`).
+- **Depends on:** nothing for advance itself. The Move view (silent column change, no agent)
+  remains blocked on plan 1.
+- **Audit gap, out of scope:** that the dispatch write path recorded no `plan_events` row is a
+  real defect and wants its own plan; this plan changes no write path.
 
 ## Proposed Changes
 
-### 1. `src/webview/command.html:868-890` — a destination control, and an honest source label
+### 1. `src/services/LocalApiServer.ts` — a thin `POST /kanban/advance` over the existing seam
 
-```html
-<div class="list-header-row">
-    <!-- was aria-label="Dispatch Column": it filters the LIST, it is not the target -->
-    <select class="cmd-select" id="dispatch-source-column-select" style="max-width:200px;"
-            aria-label="Show cards from column"></select>
-    …
-</div>
-…
-<div class="cmd-action-box" id="dispatch-action-box">
-    <div id="dispatch-status-chip" class="status-chip hidden"></div>
-    <div class="action-row">
-        <select class="cmd-select" id="dispatch-target-select" aria-label="Dispatch to"></select>
-        <button class="secondary-action-btn" id="btn-dispatch-view" disabled>VIEW</button>
-        <button class="primary-action-btn" id="btn-dispatch" disabled>DISPATCH</button>
-    </div>
-</div>
-```
-
-### 2. `src/webview/command.js:420-447` — populate destinations from the roles already loaded
-
-```js
-const dispatchTargetSelect = document.getElementById('dispatch-target-select');
-…
-// Dispatch destinations = columns that actually fire an agent on drop. A column
-// with no role fires nothing and the server rejects it, so never offer one.
-if (dispatchTargetSelect) {
-    const prev = dispatchTargetSelect.value;
-    dispatchTargetSelect.innerHTML = '';
-    const auto = document.createElement('option');
-    auto.value = 'auto';
-    auto.textContent = 'Auto — coding seat by complexity';
-    dispatchTargetSelect.appendChild(auto);
-    allColumns.filter(c => c.role).forEach(col => {
-        const opt = document.createElement('option');
-        opt.value = col.id;
-        opt.textContent = col.label || col.id;
-        dispatchTargetSelect.appendChild(opt);
-    });
-    dispatchTargetSelect.value =
-        [...dispatchTargetSelect.options].some(o => o.value === prev) ? prev : 'auto';
+```ts
+// Advance = the board's own gesture: send the card and the column it is IN.
+// The backend resolves the next stage (_advanceCards), applies complexity
+// banding where it belongs (leaving PLAN REVIEWED / STAGING), and honours the
+// CLI-triggers gate. This route adds no routing logic of its own — by design.
+private async _handleKanbanAdvance(req, res): Promise<void> {
+    const kanbanVerb = this._options.kanbanVerb;
+    if (!kanbanVerb) {
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Advance not available: the kanbanVerb seam is not '
+            + 'wired in this host\'s composition root.', seam: 'kanbanVerb' }));
+        return;
+    }
+    const body = await this._parseJsonBody(req);
+    const planId = String(body?.planId || body?.plan || '').trim();
+    const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+    // The card's CURRENT column, resolved server-side from the record so the
+    // client cannot send a stale one.
+    const record = await this._lookupPlan(planId, workspaceRoot);
+    if (!record) { /* 404 naming the planId */ }
+    const result = await kanbanVerb('promptSelected', {
+        column: record.kanbanColumn, sessionIds: [record.sessionId || record.planId], workspaceRoot
+    }, workspaceRoot);
+    // Prompt-mode columns yield prompt text rather than a dispatch — pass it through.
+    res.end(JSON.stringify({ success: true, from: record.kanbanColumn, ...result }));
 }
 ```
 
-### 3. `src/webview/command.js:1408-1417` — send the destination
+Register it beside `/kanban/move` and `/kanban/dispatch` in the route table (`~:8556`) and add
+it to `/catalog`.
+
+### 2. `src/webview/command.js:1403-1445` — post the advance, drop the private routing
 
 ```js
-const target = dispatchTargetSelect ? dispatchTargetSelect.value : 'auto';
-const res = await fetch('/kanban/dispatch', {
+const res = await fetch('/kanban/advance', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-        plan: cardId,
-        workspaceRoot: currentWorkspaceRoot,
-        // 'auto' is passed through as-is: the server treats absent/'auto' as
-        // complexity routing, so Auto keeps today's behaviour exactly.
-        targetColumn: target,
-        ack: true
-    })
+    body: JSON.stringify({ planId: cardId, workspaceRoot: currentWorkspaceRoot })
 });
-```
-
-### 4. `src/webview/command.js:1424-1440` — report where it went, and why
-
-```js
-if (res.ok && result?.success !== false && result?.phase === 'dispatching') {
-    const seatName = result?.seat || result?.role || 'agent';
-    const dest = result?.column ? ` → ${result.column}` : '';
-    // Only Auto needs its reason shown: it is the one case the operator did not choose.
-    const why = (target === 'auto' && result?.routing) ? ` (${result.routing})` : '';
-    dispatchStatusChip.textContent = `Dispatched${dest} — ${seatName} is receiving the prompt${why}`;
-…
+const result = await res.json().catch(() => null);
+if (res.ok && result?.success) {
+    const to = result.column || result.targetColumn;
+    dispatchStatusChip.textContent = to
+        ? `Advanced ${result.from} → ${to}`
+        : `Advanced from ${result.from}`;
+    if (result.prompt) { showCopyablePrompt(result.prompt); }   // prompt-mode columns
 } else {
-    // 4xx/5xx bodies name the column or the missing seat; don't flatten them.
-    const errMsg = result?.error || `Dispatch failed (HTTP ${res.status})`;
+    dispatchStatusChip.textContent = result?.error || `Advance failed (HTTP ${res.status})`;
+}
 ```
 
-### 5. `src/webview/command.js:1475-1480` — Move must not blame the card for an unwired host
+### 3. `src/webview/command.html:868-890` — one button, honest source label
+
+```html
+<!-- was aria-label="Dispatch Column": it filters the LIST, it is not a target -->
+<select class="cmd-select" id="dispatch-source-column-select" style="max-width:200px;"
+        aria-label="Show cards from column"></select>
+…
+<button class="primary-action-btn" id="btn-dispatch" disabled>ADVANCE</button>
+```
+
+### 4. `src/webview/command.js:1475-1480` — Move must not blame the card for an unwired host
 
 ```js
 const body = await res.json().catch(() => null);
@@ -219,36 +198,29 @@ moveStatusChip.textContent = body?.seam === 'moveCard'
 
 ## Verification Plan
 
-**The bug, on either host:**
-1. Select a card in New, set destination **Planned**, press DISPATCH. The card lands in
-   `PLAN REVIEWED` and the **planner** agent receives the prompt — not a coder. This is the
-   case that is impossible today.
-2. Repeat with **Researcher** — lands in `RESEARCHER`, researcher seat receives the prompt.
+**Parity with the board — the whole point:**
+1. Card in **New**, console ADVANCE → lands in **Planned**, planner receives the prompt. Same
+   card, same starting column, board advance button → same destination. Compare directly.
+2. Card in **Planned**, complexity 6, console ADVANCE → lands in **Coder** (the banding still
+   applies where it should). Board advance on an identical card → same column.
+3. Card in **Planned** with dynamic complexity routing **off** → both surfaces send it to the
+   same column.
+4. Card in the final stage → console reports "already in the final stage"; no move, no agent.
 
-**Auto is preserved exactly:**
-3. Destination **Auto** on a complexity-6 card → `CODER CODED`, chip reads
-   `Dispatched → CODER CODED — <seat> is receiving the prompt (auto: complexity 6 → coder)`.
-4. Destination Auto with `dynamicComplexityRouting` off → `LEAD CODED`, chip names the reason.
-5. Destination Auto with no coding seat live → the chip shows the server's
-   "No eligible coding agent is live and visible" text verbatim.
+**Prompt-mode columns:**
+5. Advance a card into `RESEARCHER` → the response carries prompt text and the console renders
+   it copyable; no silent success with nothing produced.
 
 **Guards:**
-6. The destination list contains Auto plus exactly the role-bearing columns; New, Staging,
-   Backlog and Completed never appear.
-7. A custom agent column with a role appears in the list without a code change.
-8. Changing the card selection or switching views and returning preserves the chosen
-   destination; it does not silently reset to Auto.
-9. The source dropdown's accessible name is "Show cards from column"; changing it re-filters
-   the list and changes no destination.
+6. `grep` the console for coding-column identifiers and complexity-band logic — there must be
+   none left; the console names no column and no role.
+7. `POST /kanban/dispatch` with an explicit `targetColumn` still works unchanged for its
+   existing callers (CLI `dispatch` verb, board drag-drop), on both hosts.
+8. With `kanbanVerb` deliberately unset, `/kanban/advance` returns the 503 naming the seam.
 
-**Advance path (needs plan 1):**
-10. Move view → target `PLAN REVIEWED` → MOVE advances the card and starts **no** agent
-    (`dispatched_agent` stays empty, no new terminal in `GET /health`) — the silent
-    counterpart to step 1.
-11. On a host where the seam is unwired, the Move chip reads "Move unavailable on this host".
-
-**Regression fence:**
-12. `POST /kanban/dispatch` with an explicit `targetColumn` and with it absent both behave as
-    before for existing callers (CLI `dispatch` verb, board drag-drop), on both hosts.
+**Both hosts:**
+9. Steps 1–5 pass on the standalone host and on the installed VSIX.
+10. Confirm `kanbanVerb` is set in both `bootstrap.ts` and `TaskViewerProvider.ts` options
+    objects.
 
 **User Review Required:** None.
