@@ -3,8 +3,9 @@
 ## Goal
 
 Make the console's primary card action **the same advance the board already performs**: send the
-card and its current column to the backend and let the backend resolve the next stage. Remove
-the console's private routing behaviour entirely.
+selected cards and their column to the backend and let the backend resolve the next stage.
+Remove the console's private routing behaviour entirely, and let the console select multiple
+cards the way the board does.
 
 ### Problem analysis
 
@@ -62,6 +63,18 @@ consequences follow from that single decision:
 3. **Neither the source nor the destination is in the request**, so no layer can detect the
    mismatch. The server cannot tell that a card in New was never meant to reach a coding
    column, because the console never told it where the card was.
+4. **Selection is a scalar, so only one card can ever act.** The console holds
+   `selectedDispatchCardId` / `selectedMoveCardId` as single ids
+   (`src/webview/command.js:28-30`), and `selectDispatchCard` overwrites rather than toggles
+   (`:697`). The board holds `selectedCards` as a **Map** and a plain click on the card body
+   toggles membership — add if absent, remove if present, no modifier key, no clearing of the
+   other selections (`src/webview/kanban.html:9794-9798`; shift/meta/ctrl only govern whether
+   the sidebar dropdown syncs at `:9831`). The board then picks `triggerAction` for one card and
+   `triggerBatchAction` for several, both landing in `_advanceCards`. The backend verb has
+   always taken an **array** — `promptSelected` requires `sessionIds` to be a non-empty array
+   (`src/services/KanbanProvider.ts:11880`). So batch is not a new capability to build; the
+   console just never held more than one id. This needs **no new controls**: the card rows are
+   already tappable, and the change is the state behind them.
 
 > **Superseded (twice):**
 > *Draft 1 proposed relabelling the button "DISPATCH TO CODING" and showing the resolved column
@@ -90,6 +103,10 @@ Decisions already made:
 - **No destination selector, no client-side next-column math.** The console sends the card's
   current column and nothing else. `getNextColumn` stays a board-local optimistic predictor;
   the console does not get a copy.
+- **Multi-select is a state change, not a UI addition.** Tap toggles a card in or out of a Set,
+  mirroring the board's Map semantics exactly. No checkboxes, no selection mode, no long-press,
+  no modifier keys — the rows already respond to taps, and a `.selected` class already has to be
+  styled for the single-card case.
 - **The button is named ADVANCE**, matching the board. "Dispatch" as a distinct console concept
   is dropped — advancing a card out of Planned dispatches it to a coding seat as a consequence,
   which is what the board already does.
@@ -119,6 +136,21 @@ Decisions already made:
   claiming success.
 - **The CLI-triggers gate stays where it is.** `_advanceCards` applies it internally (moves
   always, dispatches only when enabled) — the console inherits that instead of re-deciding it.
+- **A batch is M plans to ONE prompt on ONE terminal**, not M agents — that is what
+  `_advanceCards` does for the board, so the console inherits it by calling the same verb. This
+  is correct parity, not a defect to work around, but the chip must say how many cards moved so
+  a batch never looks like a single-card advance.
+- **Mixed source columns in one selection.** The board trusts explicit `sessionIds` without
+  column filtering (`KanbanProvider.ts:11884-11887`), so a selection spanning two columns
+  advances each card from wherever it is. The console must not silently restrict to the
+  filtered column; if the results differ per card, the chip reports the count, not one column.
+- **Selection must clear on workspace switch.** The console already nulls both ids when the
+  workspace dropdown changes (`src/webview/command.js:299-300`); the Set must be cleared at the
+  same point. The board's cross-workspace guard exists for the same reason
+  (`kanban.html:9805-9819`) — a selection spanning two parent workspaces breaks batch verbs.
+- **Empty selection is a no-op.** `promptSelected` refuses an empty array, so the buttons stay
+  disabled while the Set is empty — the existing `!selectedDispatchCardId` gate becomes a size
+  check (`:638-639`).
 - **Optimistic move must predict or abstain.** The console's `pendingMoves` cannot know the
   backend's choice for a Planned→coding advance. Follow the board's rule: predict only when
   confident, otherwise show pending and let the authoritative push settle it — never a
@@ -151,50 +183,103 @@ private async _handleKanbanAdvance(req, res): Promise<void> {
         return;
     }
     const body = await this._parseJsonBody(req);
-    const planId = String(body?.planId || body?.plan || '').trim();
+    // One card or many — the verb underneath has always taken an array, and the
+    // board sends N through the same path. `planId` stays accepted so existing
+    // single-card callers keep working.
+    const ids = Array.isArray(body?.planIds) && body.planIds.length
+        ? body.planIds.map((v: unknown) => String(v).trim()).filter(Boolean)
+        : [String(body?.planId || body?.plan || '').trim()].filter(Boolean);
     const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
-    // The card's CURRENT column, resolved server-side from the record so the
-    // client cannot send a stale one.
-    const record = await this._lookupPlan(planId, workspaceRoot);
-    if (!record) { /* 404 naming the planId */ }
-    const result = await kanbanVerb('promptSelected', {
-        column: record.kanbanColumn, sessionIds: [record.sessionId || record.planId], workspaceRoot
-    }, workspaceRoot);
-    // A prompt-mode next stage produces clipboard text, which this surface cannot use.
-    // Refuse it rather than returning a payload nobody can act on.
-    if (result?.prompt) {
-        res.writeHead(409, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: `The next stage for this card is a prompt-mode column `
-            + `(${result.column || 'unknown'}). Advance it from the board.` }));
-        return;
+    if (ids.length === 0) { /* 400: planIds required */ }
+
+    // Columns are resolved server-side per card so the client cannot send a stale
+    // one, and a selection spanning two columns advances each card from where it is.
+    const records = await this._lookupPlans(ids, workspaceRoot);
+    const missing = ids.filter(id => !records.some(r => (r.planId === id || r.sessionId === id)));
+    if (missing.length) { /* 404 naming the missing ids */ }
+
+    // Group by source column: promptSelected takes one column per call, and the
+    // board's own path is likewise per-column.
+    const byColumn = new Map<string, string[]>();
+    for (const r of records) {
+        const key = r.kanbanColumn;
+        (byColumn.get(key) ?? byColumn.set(key, []).get(key)!).push(r.sessionId || r.planId);
     }
-    res.end(JSON.stringify({ success: true, from: record.kanbanColumn, column: result?.column }));
+
+    const moved: Array<{ from: string; column?: string; count: number }> = [];
+    for (const [column, sessionIds] of byColumn) {
+        const result = await kanbanVerb('promptSelected', { column, sessionIds, workspaceRoot }, workspaceRoot);
+        // A prompt-mode next stage produces clipboard text, which this surface
+        // cannot use. Refuse it rather than returning a payload nobody can act on.
+        if (result?.prompt) {
+            res.writeHead(409, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: `The next stage for cards in ${column} is a `
+                + `prompt-mode column (${result.column || 'unknown'}). Advance them from the board.` }));
+            return;
+        }
+        moved.push({ from: column, column: result?.column, count: sessionIds.length });
+    }
+    res.end(JSON.stringify({ success: true, moved, count: ids.length }));
 }
 ```
+
+`_lookupPlans` is the batch form of the single lookup — one DB read for N ids rather than N
+reads, and it is what lets the route report every missing id at once instead of failing on the
+first.
 
 Register it beside `/kanban/move` and `/kanban/dispatch` in the route table (`~:8556`) and add
 it to `/catalog`.
 
-### 2. `src/webview/command.js:1403-1445` — post the advance, drop the private routing
+### 2. `src/webview/command.js:28-30, 638-639, 697` — selection becomes a Set
+
+Replace the two scalars with Sets and make selection toggle, exactly as the board does. Both
+views share the change; `renderDispatchView` / `renderMoveView` stamp `.selected` per row
+instead of comparing against one id.
 
 ```js
+let selectedDispatchCardIds = new Set();
+let selectedMoveCardIds = new Set();
+
+function selectDispatchCard(cardId) {
+    // Plain tap toggles, like the board's card body click — no modifier, and
+    // selecting one card never clears the others.
+    if (selectedDispatchCardIds.has(cardId)) { selectedDispatchCardIds.delete(cardId); }
+    else { selectedDispatchCardIds.add(cardId); }
+    cancelDispatchPoll();
+    renderDispatchView();
+}
+// :638-639 — gate on size, not on a single id
+btnDispatch.disabled = locked || selectedDispatchCardIds.size === 0;
+btnMove.disabled     = locked || selectedMoveCardIds.size === 0;
+```
+
+Clear both Sets where the workspace switch already nulls the scalars (`:299-300`).
+
+### 3. `src/webview/command.js:1403-1445` — post the advance, drop the private routing
+
+```js
+const planIds = [...selectedDispatchCardIds];
 const res = await fetch('/kanban/advance', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ planId: cardId, workspaceRoot: currentWorkspaceRoot })
+    body: JSON.stringify({ planIds, workspaceRoot: currentWorkspaceRoot })
 });
 const result = await res.json().catch(() => null);
 if (res.ok && result?.success) {
-    const to = result.column || result.targetColumn;
-    dispatchStatusChip.textContent = to
-        ? `Advanced ${result.from} → ${to}`
-        : `Advanced from ${result.from}`;
+    // Always say how many, so a batch never reads like a single-card advance.
+    const legs = result.moved || [];
+    dispatchStatusChip.textContent = legs.length === 1 && legs[0].count === 1
+        ? `Advanced ${legs[0].from} → ${legs[0].column || 'next stage'}`
+        : `Advanced ${result.count} cards — ` +
+          legs.map(l => `${l.count} from ${l.from} → ${l.column || 'next stage'}`).join(', ');
+    selectedDispatchCardIds.clear();
+    renderDispatchView();
 } else {
     dispatchStatusChip.textContent = result?.error || `Advance failed (HTTP ${res.status})`;
 }
 ```
 
-### 3. `src/webview/command.html:868-890` — one button, honest source label
+### 4. `src/webview/command.html:868-890` — one button, honest source label
 
 ```html
 <!-- was aria-label="Dispatch Column": it filters the LIST, it is not a target -->
@@ -204,7 +289,7 @@ if (res.ok && result?.success) {
 <button class="primary-action-btn" id="btn-dispatch" disabled>ADVANCE</button>
 ```
 
-### 4. `src/webview/command.js:1475-1480` — Move must not blame the card for an unwired host
+### 5. `src/webview/command.js:1475-1480` — Move must not blame the card for an unwired host
 
 ```js
 const body = await res.json().catch(() => null);
@@ -232,16 +317,28 @@ moveStatusChip.textContent = body?.seam === 'moveCard'
    HTML and JS for prompt-rendering: there must be no element or handler that displays prompt
    text.
 
+**Multi-card, matching the board:**
+7. Tap three cards in New — all three show selected; tap one again — it deselects and the other
+   two stay. No modifier key involved.
+8. ADVANCE with three selected → all three land in Planned, the chip reads
+   `Advanced 3 cards — 3 from CREATED → PLAN REVIEWED`, and the selection clears. One prompt on
+   one terminal, exactly as the board's batch does.
+9. Select cards spanning New and Planned, ADVANCE → each advances from its own column and the
+   chip names both legs; nothing is silently dropped for being outside the filtered column.
+10. Switch the workspace dropdown with cards selected → the selection clears and both buttons
+    disable.
+11. With nothing selected, both buttons are disabled and no request is sent.
+
 **Guards:**
-7. `grep` the console for coding-column identifiers and complexity-band logic — there must be
+12. `grep` the console for coding-column identifiers and complexity-band logic — there must be
    none left; the console names no column and no role.
-8. `POST /kanban/dispatch` with an explicit `targetColumn` still works unchanged for its
+13. `POST /kanban/dispatch` with an explicit `targetColumn` still works unchanged for its
    existing callers (CLI `dispatch` verb, board drag-drop), on both hosts.
-9. With `kanbanVerb` deliberately unset, `/kanban/advance` returns the 503 naming the seam.
+14. With `kanbanVerb` deliberately unset, `/kanban/advance` returns the 503 naming the seam.
 
 **Both hosts:**
-10. Steps 1–6 pass on the standalone host and on the installed VSIX.
-11. Confirm `kanbanVerb` is set in both `bootstrap.ts` and `TaskViewerProvider.ts` options
+15. Steps 1–11 pass on the standalone host and on the installed VSIX.
+16. Confirm `kanbanVerb` is set in both `bootstrap.ts` and `TaskViewerProvider.ts` options
     objects.
 
 **User Review Required:** None.

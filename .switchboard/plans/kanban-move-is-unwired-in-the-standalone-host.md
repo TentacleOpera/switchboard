@@ -100,6 +100,11 @@ copied.
 - **Key shapes.** The route accepts `sessionId` *or* `planId`, and `move-card.js` may pass a
   plan-file path as the key. The shared helper must resolve all three, exactly as the
   extension does today.
+- **Batch moves.** The console selects multiple cards (see
+  `command-console-dispatch-reads-as-an-advance.md`), so `/kanban/move` should accept `planIds[]`
+  alongside today's single `planId` and move them under one call — the board's `moveSelected`
+  already takes an array of ids. Keep the single-id form working for existing callers, and have
+  the response report the count so a partial batch cannot read as a full one.
 - **`workspaceRoot` contract is unchanged.** The route's documented omitted-vs-supplied
   search behaviour (`LocalApiServer.ts:4005-4016`) lives above the seam and is untouched.
 - **Integration sync on standalone.** Standalone has no VS Code secret storage. Where no
@@ -217,19 +222,21 @@ at the top of the script) to describe one path. Both mirrors of the skill must m
    "Moved to <column>" and the optimistic move is not rolled back.
 4. `node .agents/skills/kanban_operations/move-card.js <plan.md> CREATED` prints `OK`, and
    the move is visible in `GET /kanban/plan` — one path, one outcome.
+5. `POST /kanban/move` with `planIds: [a, b, c]` moves all three and reports `count: 3`; the
+   single-`planId` form still moves one. Move view with three cards selected moves all three.
 
 **Extension host** (installed VSIX):
-5. Repeat 1–4 — all still pass, proving the shared-helper refactor did not regress the
+6. Repeat 1–5 — all still pass, proving the shared-helper refactor did not regress the
    working root.
 
 **Both roots, the audit that would have caught this:**
-6. Diff the two options objects (`TaskViewerProvider.ts:3889…` vs `bootstrap.ts:3592…`) and
+7. Diff the two options objects (`TaskViewerProvider.ts:3889…` vs `bootstrap.ts:3592…`) and
    assert every optional callback declared in `LocalApiServerOptions` is either set in both
    or explicitly justified in a comment naming the other root.
-7. Regression: with the seam deliberately unset, `POST /kanban/move` returns the new 503 body
+8. Regression: with the seam deliberately unset, `POST /kanban/move` returns the new 503 body
    naming `moveCard`, and `move-card.js` exits 1 printing that error — it must **not** succeed
    by another route.
-8. With no host running at all, `move-card.js` exits 1 telling the operator to start the board,
+9. With no host running at all, `move-card.js` exits 1 telling the operator to start the board,
    and the kanban DB is byte-identical afterwards (`md5sum` before/after).
 
 **User Review Required:** None.
