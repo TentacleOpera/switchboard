@@ -2,9 +2,10 @@
 
 ## Goal
 
-Make `POST /kanban/move` work on the standalone/npx host, and make `move-card.js` recover
-when the server answers "not available" instead of hard-failing. After this plan, moving a
-card from the command console, the CLI, or an agent script behaves identically on both hosts.
+Make `POST /kanban/move` work on the standalone/npx host, and reduce card moves to **exactly
+one path** by deleting `move-card.js`'s direct-DB fallback. After this plan, moving a card from
+the command console, the CLI, or an agent script behaves identically on both hosts, and a move
+that cannot go through the board's own code does not happen at all.
 
 ### Problem analysis
 
@@ -30,12 +31,18 @@ Three observed consequences:
    move cards at all. With the advance path dead, the only working action button on the
    surface is DISPATCH — which starts a coding agent (see
    `command-console-dispatch-reads-as-an-advance.md`).
-2. **`move-card.js` hard-fails with no fallback.** The script has a documented direct-DB
-   recovery path, but it is gated on the server being *unreachable*
-   (`.agents/skills/kanban_operations/move-card.js:184-197`). A reachable server that
-   answers 503 takes the `viaExt.reachable` branch and exits 1 — the fallback never runs.
-3. **The only remaining recovery is a raw DB write**, which bypasses the feature→subtask
-   cascade and the integration-sync fan-out the route exists to provide.
+2. **`move-card.js` fails, and it is right to.** The script exits 1 at
+   `.agents/skills/kanban_operations/move-card.js:184-197` rather than reaching its
+   direct-DB path, which is gated on the server being *unreachable*. That gate did its job:
+   it surfaced a wiring defect instead of papering over it.
+3. **The direct-DB fallback should not exist.** It is a second move path with weaker
+   guarantees — no integration-sync fan-out, no board refresh — whose result is
+   *indistinguishable* from a real move once written. That is the `CLAUDE.md` fallback rule
+   violated at the level of a whole code path: nothing afterwards can answer "did this move
+   reach the tracker?". It also contradicts two of this repo's own rules — that agents move
+   cards through "the API path a human's click takes", never SQL — while being exactly a SQL
+   move wearing a helper script's clothes. Widening it to cover the 503 (the obvious
+   reading of this bug) would make every future unwired seam survivable and silent.
 
 ### Root cause
 
@@ -102,9 +109,11 @@ copied.
 - **No new fallback that hides a failure.** The 503 body must name the host and the missing
   seam so an unwired root is diagnosable from the response alone, rather than reading as a
   transient outage.
-- **`move-card.js` must say which path it took.** Its two paths have different guarantees
-  (cascade + sync vs cascade only); after this change the script prints the path it used, so
-  "did this move sync to the tracker?" is answerable after the fact.
+- **One path, no second semantics.** After this change `move-card.js` has a single outcome
+  shape: the API moved the card, or nothing moved and the reason is printed. "Did this move
+  sync to the tracker?" stops being a question, because there is no path where the answer is
+  no. A host that is not running is a host to start, not a reason to write its database
+  behind its back.
 - **Depends on:** nothing. This plan unblocks the Move-view half of
   `command-console-dispatch-reads-as-an-advance.md`.
 
@@ -178,20 +187,25 @@ res.end(JSON.stringify({
 }));
 ```
 
-### 5. `.agents/skills/kanban_operations/move-card.js:184-197` — let 503 fall through, and report the path
+### 5. `.agents/skills/kanban_operations/move-card.js` — delete the direct-DB fallback
+
+Remove `viaDirectDb()` entirely (and the `out/services/KanbanDatabase` require it needs), so the
+script has one path and one outcome shape:
 
 ```js
-  if (viaExt.success) { console.log('OK (via extension — cascade + tracker sync)'); process.exit(0); }
-  // A reachable server that cannot move (unwired seam) is not a reason to give up:
-  // fall through to the DB path, which still cascades. Real refusals stop here.
-  if (viaExt.reachable && !/not available/i.test(viaExt.error || '')) {
-    console.error(`Move via extension failed: ${viaExt.error || 'unknown error'}`);
-    console.log('FAILED'); process.exit(1);
-  }
-  const ok = await viaDirectDb();
-  console.log(ok ? 'OK (via direct DB — cascade only, no tracker sync)' : 'FAILED');
-  process.exit(ok ? 0 : 1);
+  const viaExt = await tryViaExtension();
+  if (viaExt.success) { console.log('OK'); process.exit(0); }
+  console.error(viaExt.reachable
+    ? `Move failed: ${viaExt.error || 'unknown error'}`
+    : 'Move failed: no Switchboard host is reachable. Start the board (or the standalone '
+      + 'host) and retry — a card move goes through the same code path a human click takes.');
+  console.log('FAILED');
+  process.exit(1);
 ```
+
+Update the skill's own docs (`.agents/skills/kanban_operations/SKILL.md`, the two-path preamble
+at the top of the script) to describe one path. Both mirrors of the skill must move together —
+`.claude/skills/` is generated from `.agents/`.
 
 ## Verification Plan
 
@@ -201,8 +215,8 @@ res.end(JSON.stringify({
 2. Move a **feature** card; every subtask cascades to the same column.
 3. Command console → Move view: pick a card, pick a column, press MOVE — the chip settles to
    "Moved to <column>" and the optimistic move is not rolled back.
-4. `node .agents/skills/kanban_operations/move-card.js <plan.md> CREATED` prints
-   `OK (via extension …)`.
+4. `node .agents/skills/kanban_operations/move-card.js <plan.md> CREATED` prints `OK`, and
+   the move is visible in `GET /kanban/plan` — one path, one outcome.
 
 **Extension host** (installed VSIX):
 5. Repeat 1–4 — all still pass, proving the shared-helper refactor did not regress the
@@ -213,7 +227,9 @@ res.end(JSON.stringify({
    assert every optional callback declared in `LocalApiServerOptions` is either set in both
    or explicitly justified in a comment naming the other root.
 7. Regression: with the seam deliberately unset, `POST /kanban/move` returns the new 503 body
-   naming `moveCard`, and `move-card.js` completes via the DB path printing
-   `OK (via direct DB …)`.
+   naming `moveCard`, and `move-card.js` exits 1 printing that error — it must **not** succeed
+   by another route.
+8. With no host running at all, `move-card.js` exits 1 telling the operator to start the board,
+   and the kanban DB is byte-identical afterwards (`md5sum` before/after).
 
 **User Review Required:** None.
