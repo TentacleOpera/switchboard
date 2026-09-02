@@ -62,6 +62,9 @@
     let liveFleet = [];
     let activeTerminalWs = null;
     let terminalOutputDecoder = typeof TextDecoder !== 'undefined' ? new TextDecoder('utf-8') : null;
+    // The live seats for the team currently open in the viewer, so the seat
+    // switcher can re-open the viewer for a different seat without re-resolving.
+    let viewerLiveSeats = [];
 
     // Optimistic Ledger
     const pendingMoves = new Map(); // cardId -> targetColumn
@@ -167,6 +170,7 @@
     const terminalViewerTitle = document.getElementById('terminal-viewer-title');
     const terminalWsStatus = document.getElementById('terminal-ws-status');
     const terminalStreamOutput = document.getElementById('terminal-stream-output');
+    const terminalSeatSwitcher = document.getElementById('terminal-seat-switcher');
 
     // Preview Overlay Elements
     const viewOverlay = document.getElementById('view-overlay');
@@ -664,10 +668,12 @@
         };
     }
 
-    // Project scoping for the command surface. One helper, three call sites
-    // (renderDispatchView, renderMoveView, mission candidate picker). Replaces
-    // the three inline `currentProject !== '__unassigned__'` guards that
-    // overloaded `__unassigned__` as both "no project" and "no filter".
+    // Project scoping for the command surface. One helper, two call sites
+    // (renderDispatchView, renderMoveView). Replaces the inline
+    // `currentProject !== '__unassigned__'` guards that overloaded
+    // `__unassigned__` as both "no project" and "no filter". The mission
+    // candidate picker was a third call site before the mission-composer
+    // plan restructured the Mission view.
     //
     // Contract:
     //   `__all__`        → no filter (widest view)
@@ -1118,30 +1124,128 @@
             return;
         }
 
-        teamRoster.forEach(team => {
-            renderTeamRow(team);
+        // Filter out unstarted seed teams BEFORE the resolution pass so they
+        // never enter the claim pool and cannot steal a seat from a real team.
+        // A seed is hidden only when ALL three hold: its id is one of the three
+        // DEFAULT_TEAM_DEFINITIONS ids, it has no declared members, and no live
+        // seat resolves as its head. A seed the operator has started or added
+        // members to renders normally. Nothing is written to storage.
+        const visibleTeams = teamRoster.filter(team => {
+            if (!SEED_TEAM_IDS.has(team.id)) { return true; }
+            const hasMembers = Array.isArray(team.members) && team.members.length > 0;
+            if (hasMembers) { return true; }
+            // Check whether any live seat matches this team's head name or headRole.
+            // A started seed has a live head; an unstarted one does not.
+            const role = team.headRole || '';
+            const hasLiveSeat = liveFleet.some(t => t && t.status !== 'exited'
+                && ((team.head && t.friendlyName === team.head)
+                    || (role && t.role === role)));
+            return hasLiveSeat;
+        });
+
+        // Single exclusive-claim pass over the fleet — seeds already removed.
+        const resolvedSeats = resolveTeamSeats(visibleTeams, liveFleet);
+
+        visibleTeams.forEach(team => {
+            renderTeamRow(team, resolvedSeats);
         });
     }
 
-    function resolveTeamIconUri(value) {
-        const v = String(value || '').trim();
-        if (!v) { return null; }
-        if (v.startsWith('data:')) { return v; }
-        if (v.startsWith('art:')) {
-            const name = v.slice('art:'.length).trim();
-            return name ? '/static/icons/' + encodeURIComponent(name) + '.png' : null;
+    // Fixed role→art map. `headRole` is persisted operator-controlled data,
+    // so the role arm MUST map through this allow-list and never interpolate
+    // the raw role string into a path — otherwise the static serve route
+    // becomes a traversal vector. An unknown role falls through to nav-jet.
+    const TEAM_ROLE_ART = {
+        lead: '/static/icons/team-lead.png',
+        coder: '/static/icons/team-coder.png',
+        reviewer: '/static/icons/team-reviewer.png',
+        planner: '/static/icons/team-planner.png',
+        intern: '/static/icons/team-intern.png',
+    };
+
+    /**
+     * Resolve a team's icon URI through the full fallback chain:
+     *   1. explicit `data:` / `art:` / `pack:` value → as today,
+     *   2. else `role` through the fixed `TEAM_ROLE_ART` allow-list,
+     *   3. else `/static/icons/nav-jet.svg`.
+     * The role arm is what gives every non-kanban document role-distinct art
+     * without needing the inline `<symbol>` portraits kanban.html owns.
+     */
+    function resolveTeamArt(iconValue, role) {
+        const v = String(iconValue || '').trim();
+        if (v) {
+            if (v.startsWith('data:')) { return v; }
+            if (v.startsWith('art:')) {
+                const name = v.slice('art:'.length).trim();
+                return name ? '/static/icons/' + encodeURIComponent(name) + '.png' : null;
+            }
+            if (v.startsWith('pack:')) {
+                const file = v.slice('pack:'.length).trim();
+                return file ? '/static/icons/' + encodeURIComponent(file) : null;
+            }
         }
-        if (v.startsWith('pack:')) {
-            const file = v.slice('pack:'.length).trim();
-            return file ? '/static/icons/' + encodeURIComponent(file) : null;
-        }
-        return null;
+        const roleArt = TEAM_ROLE_ART[String(role || '').trim()];
+        if (roleArt) { return roleArt; }
+        return '/static/icons/nav-jet.svg';
     }
 
-    function resolveTeamHeadSeat(team) {
-        const role = team.headRole || '';
-        return liveFleet.find(t => t && t.status !== 'exited'
-            && ((role && t.role === role) || (team.head && t.friendlyName === team.head))) || null;
+    // The three DEFAULT_TEAM_DEFINITIONS ids that ship as member-less seeds.
+    // Used to hide unstarted seeds from the roster — never to delete them.
+    const SEED_TEAM_IDS = new Set(['planning-team', 'feature-implementation', 'review-team']);
+
+    /**
+     * Resolve every team's head seat and member seats in a single exclusive
+     * pass over the live fleet. Replaces the old per-team
+     * `resolveTeamHeadSeat`, which matched by role alone and let two
+     * lead-headed teams claim the same live seat.
+     *
+     * Membership is by `parentInstanceId` (the instance chain the rest of the
+     * system already uses), NOT by role. A member seat's `parentInstanceId`
+     * points at its head's `agentInstanceId`.
+     *
+     * Resolution order per team:
+     *   1. A live seat whose `friendlyName` equals `team.head` (explicit name).
+     *   2. A live seat of `team.headRole` not already claimed by an earlier team.
+     *
+     * Claimed seats are removed from the pool as the pass proceeds, so no seat
+     * is ever attributed to two teams. Members are the live seats whose
+     * `parentInstanceId` matches the resolved head's `agentInstanceId`.
+     *
+     * @param teams  The filtered team roster (seeds already removed).
+     * @param fleet  The live fleet from ptyListTerminals.
+     * @returns Map<teamId, { head: fleetEntry|null, members: fleetEntry[] }>
+     */
+    function resolveTeamSeats(teams, fleet) {
+        // Work on a copy so claiming (splicing) does not mutate the caller's array.
+        const pool = fleet.filter(t => t && t.status !== 'exited');
+        const result = new Map();
+        for (const team of teams) {
+            const role = team.headRole || '';
+            // 1. Explicit head name match.
+            let head = null;
+            if (team.head) {
+                const idx = pool.findIndex(t => t.friendlyName === team.head);
+                if (idx !== -1) {
+                    head = pool[idx];
+                    pool.splice(idx, 1);
+                }
+            }
+            // 2. First live seat of headRole not already claimed.
+            if (!head && role) {
+                const idx = pool.findIndex(t => t.role === role);
+                if (idx !== -1) {
+                    head = pool[idx];
+                    pool.splice(idx, 1);
+                }
+            }
+            // Members: live seats whose parentInstanceId matches the head's agentInstanceId.
+            let members = [];
+            if (head && head.agentInstanceId) {
+                members = pool.filter(t => t.parentInstanceId === head.agentInstanceId);
+            }
+            result.set(team.id, { head, members });
+        }
+        return result;
     }
 
     function declaredSeatCount(team) {
@@ -1179,8 +1283,10 @@
         teamsNotice.classList.toggle('hidden', !text);
     }
 
-    function renderTeamRow(team) {
-        const liveSeat = resolveTeamHeadSeat(team);
+    function renderTeamRow(team, resolvedSeats) {
+        const resolved = resolvedSeats?.get(team.id) || { head: null, members: [] };
+        const liveSeat = resolved.head;
+        const memberSeats = resolved.members || [];
         const headName = liveSeat ? liveSeat.friendlyName : (team.head || team.name);
         const isDormant = !liveSeat;
         const heldTeam = String(activeMission?.team || '');
@@ -1201,7 +1307,44 @@
             stateClass = 'team-state-working';
         }
 
-        const teamIconUri = resolveTeamIconUri(team.icon) || '/static/icons/nav-jet.svg';
+        const teamIconUri = resolveTeamArt(team.icon, team.headRole);
+
+        // All live seats for this team (head + members), for the viewer.
+        const allLiveSeats = liveSeat ? [liveSeat, ...memberSeats] : [];
+
+        // Helper: render a tappable seat row (used in both phone and tablet).
+        // stopPropagation so the card-level click (seat team / open viewer) does
+        // not also fire when a specific seat is tapped.
+        function createSeatRow(seat, isHead) {
+            const row = document.createElement('div');
+            row.className = 'team-seat-row';
+            row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:4px 8px;cursor:pointer;'
+                + 'border-top:1px solid var(--border-color);min-height:32px;';
+            const roleLabel = isHead ? 'head' : (seat.role || 'member');
+            // Seat art resolves through the same chain as the team icon, keyed
+            // on the seat's own role — a coder row and an intern row draw
+            // distinct art from their lead's. No explicit `icon` on a seat.
+            const seatIcon = document.createElement('img');
+            seatIcon.src = resolveTeamArt(null, seat.role);
+            seatIcon.alt = '';
+            seatIcon.style.cssText = 'width:18px;height:18px;flex-shrink:0;object-fit:contain;';
+            row.appendChild(seatIcon);
+            const seatLabel = document.createElement('span');
+            seatLabel.style.cssText = 'font-size:11px;color:var(--text-primary);flex:1;';
+            const planTag = seat.planId ? ` · ${seat.planId.length > 12 ? seat.planId.slice(0, 10) + '…' : seat.planId}` : '';
+            seatLabel.textContent = `${roleLabel}: ${seat.friendlyName}${planTag}`;
+            row.appendChild(seatLabel);
+            const stateDot = document.createElement('span');
+            const hasPlan = Boolean(seat.planId);
+            stateDot.style.cssText = 'width:6px;height:6px;border-radius:50%;flex-shrink:0;'
+                + `background:${hasPlan ? 'var(--accent-success, #4caf50)' : 'var(--text-secondary)'}`;
+            row.appendChild(stateDot);
+            row.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openTerminalViewer(team, seat.friendlyName, allLiveSeats);
+            });
+            return row;
+        }
 
         // Phone Roster Card
         if (teamsRosterList) {
@@ -1231,7 +1374,11 @@
             const seats = document.createElement('span');
             seats.className = 'team-seats-subtitle';
             const seatCount = declaredSeatCount(team);
-            seats.textContent = `${seatCount} seat${seatCount > 1 ? 's' : ''} \u00b7 Head: ${headName}`;
+            // Declared seat count stays from the declared roster; the live rows
+            // below show what is actually live. Label the difference so it is
+            // legible rather than confusing.
+            const liveCount = allLiveSeats.length;
+            seats.textContent = `${seatCount} declared \u00b7 ${liveCount} live \u00b7 Head: ${headName}`;
             info.appendChild(seats);
 
             left.appendChild(info);
@@ -1242,11 +1389,19 @@
             stateBadge.textContent = stateLabel;
             card.appendChild(stateBadge);
 
+            // Live seat rows (head first, then members) — only when not dormant.
+            if (liveSeat) {
+                card.appendChild(createSeatRow(liveSeat, true));
+                memberSeats.forEach(seat => {
+                    card.appendChild(createSeatRow(seat, false));
+                });
+            }
+
             card.addEventListener('click', () => {
                 if (isDormant) {
                     seatTeam(team, null);
                 } else {
-                    openTerminalViewer(team, headName);
+                    openTerminalViewer(team, headName, allLiveSeats);
                 }
             });
 
@@ -1285,7 +1440,8 @@
             seats.className = 'team-seats-subtitle';
             seats.style.fontSize = '10px';
             const seatCount = declaredSeatCount(team);
-            seats.textContent = `${seatCount} seat${seatCount > 1 ? 's' : ''}`;
+            const liveCount = allLiveSeats.length;
+            seats.textContent = `${seatCount} declared \u00b7 ${liveCount} live`;
             info.appendChild(seats);
 
             left.appendChild(info);
@@ -1298,11 +1454,19 @@
             stateBadge.textContent = stateLabel;
             railItem.appendChild(stateBadge);
 
+            // Live seat rows on tablet too — head first, then members.
+            if (liveSeat) {
+                railItem.appendChild(createSeatRow(liveSeat, true));
+                memberSeats.forEach(seat => {
+                    railItem.appendChild(createSeatRow(seat, false));
+                });
+            }
+
             railItem.addEventListener('click', () => {
                 if (isDormant) {
                     seatTeam(team, null);
                 } else {
-                    openTerminalViewer(team, headName);
+                    openTerminalViewer(team, headName, allLiveSeats);
                 }
             });
 
@@ -1598,17 +1762,57 @@
 
     // ── 6. Read-Only Terminal Viewer ───────────────────────────────────
 
-    function openTerminalViewer(team, resolvedHead) {
-        const headName = resolvedHead || (resolveTeamHeadSeat(team) || {}).friendlyName || team.name;
-        terminalViewerTitle.textContent = `Terminal: ${headName}`;
+    /**
+     * Open the read-only terminal viewer for a specific seat. Takes a seat
+     * name (not a team + head pair), titles the pane, fetches scrollback, and
+     * opens a solo WebSocket. The optional `seatList` populates the seat
+     * switcher in the viewer header so the operator can switch to any live
+     * seat of the same team — each switch routes back through this function,
+     * which calls closeActiveWs at its top, so the previous socket is closed
+     * BEFORE the new one opens (no brief window of two simultaneous sockets).
+     */
+    function openTerminalViewer(team, seatName, seatList) {
+        const name = seatName || team.name;
+        // Store the live seats for the switcher (head + members).
+        viewerLiveSeats = Array.isArray(seatList) ? seatList : [];
+
+        terminalViewerTitle.textContent = `Terminal: ${name}`;
         terminalStreamOutput.textContent = 'Connecting to terminal stream...\n';
+
+        // Build the seat switcher — one button per live seat, highlighting the
+        // one currently open. Hidden when there is only one seat (or none).
+        if (terminalSeatSwitcher) {
+            terminalSeatSwitcher.innerHTML = '';
+            if (viewerLiveSeats.length > 1) {
+                terminalSeatSwitcher.style.display = 'flex';
+                for (const seat of viewerLiveSeats) {
+                    const btn = document.createElement('button');
+                    const isActive = seat.friendlyName === name;
+                    btn.textContent = seat.friendlyName;
+                    btn.style.cssText = 'font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;'
+                        + 'border:1px solid var(--border-color);background:'
+                        + (isActive ? 'var(--accent-primary, #4a9eff)' : 'var(--panel-bg)')
+                        + ';color:' + (isActive ? '#fff' : 'var(--text-primary)');
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        // Route through this same function — closeActiveWs runs
+                        // at the top, closing the previous socket before the new
+                        // one opens. No separate socket-opening path.
+                        openTerminalViewer(team, seat.friendlyName, viewerLiveSeats);
+                    });
+                    terminalSeatSwitcher.appendChild(btn);
+                }
+            } else {
+                terminalSeatSwitcher.style.display = 'none';
+            }
+        }
 
         // Hide other panes, show viewer
         Object.values(viewPanes).forEach(p => p.classList.remove('active'));
         paneTerminalViewer.classList.add('active');
 
         // Fetch initial scrollback log
-        fetch(`/terminals/${encodeURIComponent(headName)}/log`)
+        fetch(`/terminals/${encodeURIComponent(name)}/log`)
             .then(res => res.text())
             .then(logText => {
                 if (logText) {
@@ -1618,10 +1822,10 @@
             })
             .catch(() => {});
 
-        // Connect WebSocket
+        // Connect WebSocket — closeActiveWs runs FIRST so no socket leak.
         closeActiveWs();
         const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${wsProtocol}//${location.host}/ws/terminal?name=${encodeURIComponent(headName)}&solo=1`;
+        const wsUrl = `${wsProtocol}//${location.host}/ws/terminal?name=${encodeURIComponent(name)}&solo=1`;
 
         try {
             const ws = new WebSocket(wsUrl);
@@ -1685,6 +1889,11 @@
 
     function closeTerminalViewer() {
         closeActiveWs();
+        viewerLiveSeats = [];
+        if (terminalSeatSwitcher) {
+            terminalSeatSwitcher.innerHTML = '';
+            terminalSeatSwitcher.style.display = 'none';
+        }
         paneTerminalViewer.classList.remove('active');
         if (viewPanes[activeView]) {
             viewPanes[activeView].classList.add('active');
