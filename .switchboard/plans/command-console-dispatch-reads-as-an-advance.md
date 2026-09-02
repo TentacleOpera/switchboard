@@ -98,15 +98,17 @@ Decisions already made:
 
 ## Edge-Case & Dependency Audit
 
-- **Prompt-mode columns are not reachable on this board, and the plan must not pretend
-  otherwise.** The two `dragDropMode: 'prompt'` columns are `RESEARCHER` and `TICKET UPDATER`,
-  and both are **disabled** here (`agents.visibleAgents` has `researcher:false`,
-  `ticket_updater:false`), so advance cannot land in either — next-stage resolution skips
-  columns the board does not run. If one is ever enabled, the board's path copies a prompt to
-  the clipboard rather than driving a CLI (`src/webview/kanban.html:10498`), and there is no
-  board clipboard on a phone: the route must then return that prompt text and the console
-  render it copyable. Build the pass-through (two lines), but verify it only behind an enabled
-  prompt-mode column — do not add console UI for a stage this workspace does not run.
+- **The console never produces a prompt.** The two `dragDropMode: 'prompt'` columns are
+  `RESEARCHER` and `TICKET UPDATER`, both **disabled** on this board
+  (`agents.visibleAgents`: `researcher:false`, `ticket_updater:false`), so advance cannot land
+  in either today. Were one enabled, the board's path copies prompt text to the clipboard
+  (`src/webview/kanban.html:10498`) — a desktop gesture with no meaning on this surface, which
+  has no clipboard to copy into and nothing to paste it against. **The route must not return
+  prompt text and the console must not render it.** If the next stage is a prompt-mode column,
+  advance refuses and says to advance that card from the board. Per
+  `mobile-command-surface-is-taps-only`, a control ships here only if taps and selects can
+  drive it end to end; a payload the operator must hand-carry elsewhere is cut, not
+  accommodated.
 - **Stage counts come from the board, not the catalogue.** Of the 8 role-bearing built-in
   columns this board runs **5** — planner, lead, coder, intern, reviewer. Researcher, Ticket
   Updater and Completion Tested are off. `GET /kanban/columns` reports all 8 regardless, which
@@ -158,8 +160,15 @@ private async _handleKanbanAdvance(req, res): Promise<void> {
     const result = await kanbanVerb('promptSelected', {
         column: record.kanbanColumn, sessionIds: [record.sessionId || record.planId], workspaceRoot
     }, workspaceRoot);
-    // Prompt-mode columns yield prompt text rather than a dispatch — pass it through.
-    res.end(JSON.stringify({ success: true, from: record.kanbanColumn, ...result }));
+    // A prompt-mode next stage produces clipboard text, which this surface cannot use.
+    // Refuse it rather than returning a payload nobody can act on.
+    if (result?.prompt) {
+        res.writeHead(409, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: `The next stage for this card is a prompt-mode column `
+            + `(${result.column || 'unknown'}). Advance it from the board.` }));
+        return;
+    }
+    res.end(JSON.stringify({ success: true, from: record.kanbanColumn, column: result?.column }));
 }
 ```
 
@@ -180,7 +189,6 @@ if (res.ok && result?.success) {
     dispatchStatusChip.textContent = to
         ? `Advanced ${result.from} → ${to}`
         : `Advanced from ${result.from}`;
-    if (result.prompt) { showCopyablePrompt(result.prompt); }   // prompt-mode columns
 } else {
     dispatchStatusChip.textContent = result?.error || `Advance failed (HTTP ${res.status})`;
 }
@@ -216,21 +224,24 @@ moveStatusChip.textContent = body?.seam === 'moveCard'
    same column.
 4. Card in the final stage → console reports "already in the final stage"; no move, no agent.
 
-**Prompt-mode columns (only if one is enabled):**
-5. With Researcher enabled in Setup, advance a card into `RESEARCHER` → the response carries
-   prompt text and the console renders it copyable; no silent success with nothing produced.
-   With Researcher disabled (this board's state), advance skips it entirely.
+**Prompt-mode columns are refused, not rendered:**
+5. With Researcher disabled (this board's state), advance skips it entirely — a card in New
+   still lands in Planned.
+6. With Researcher enabled in Setup so that it becomes a card's next stage, console ADVANCE
+   returns 409 and the chip says to advance that card from the board. `grep` the served console
+   HTML and JS for prompt-rendering: there must be no element or handler that displays prompt
+   text.
 
 **Guards:**
-6. `grep` the console for coding-column identifiers and complexity-band logic — there must be
+7. `grep` the console for coding-column identifiers and complexity-band logic — there must be
    none left; the console names no column and no role.
-7. `POST /kanban/dispatch` with an explicit `targetColumn` still works unchanged for its
+8. `POST /kanban/dispatch` with an explicit `targetColumn` still works unchanged for its
    existing callers (CLI `dispatch` verb, board drag-drop), on both hosts.
-8. With `kanbanVerb` deliberately unset, `/kanban/advance` returns the 503 naming the seam.
+9. With `kanbanVerb` deliberately unset, `/kanban/advance` returns the 503 naming the seam.
 
 **Both hosts:**
-9. Steps 1–5 pass on the standalone host and on the installed VSIX.
-10. Confirm `kanbanVerb` is set in both `bootstrap.ts` and `TaskViewerProvider.ts` options
+10. Steps 1–6 pass on the standalone host and on the installed VSIX.
+11. Confirm `kanbanVerb` is set in both `bootstrap.ts` and `TaskViewerProvider.ts` options
     objects.
 
 **User Review Required:** None.
