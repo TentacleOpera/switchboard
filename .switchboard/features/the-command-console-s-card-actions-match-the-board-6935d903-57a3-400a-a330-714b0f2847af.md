@@ -8,11 +8,14 @@ Make the command surface behave like the board it fronts. Today its three card a
 
 ## How the Subtasks Achieve This
 
-- **POST /kanban/move is unwired in the standalone host**: wires the `moveCard` callback in
-  `bootstrap.ts`'s options object, so the route stops answering 503 and the console's Move view
-  works on the host most operators actually run. It also deletes `move-card.js`'s direct-DB
-  fallback, removing the second write path whose result was indistinguishable from a real move.
-  This is what makes a silent column change — the counterpart to advancing — possible at all.
+- **move-card.js's direct-DB fallback must go, and /kanban/move must accept a batch**: deletes
+  the second write path whose result was indistinguishable from a real move, widens the route to
+  take `planIds[]` so one operator gesture is one request, and makes the 503 name the missing
+  seam. **The seam wiring itself is not in this feature** — it is owned by
+  `wire-the-sixteen-unwired-localapiserver-seams-in-standalone.md` (planId
+  `417980bd-e8d9-4465-b301-0857c39ee3d7`, already in PLAN REVIEWED), which covers `moveCard`
+  plus fifteen sibling seams. That plan must land first, or deleting the fallback leaves
+  standalone with no working move at all.
 - **The command console never implemented advance**: replaces the console's private routing with
   a thin `POST /kanban/advance` over the `kanbanVerb` seam the dispatch handler already uses,
   sending the card's current column and letting the backend resolve the next stage exactly as
@@ -41,11 +44,14 @@ parallel. Two soft orderings are worth knowing, and neither blocks a coder:
 
 - The **advance** subtask is independently shippable and delivers the reported bug fix on its
   own; it does not wait on the other two.
-- The **Move view** is only fully verifiable once both the move seam is wired (subtask 1) and
-  the column lists are correct (subtask 3) — its target dropdown is fed by
-  `GET /kanban/columns`. If subtask 3 lands first, Move still offers disabled columns; if
-  subtask 1 lands first, the dropdown is correct but the move fails. Landing either is an
-  improvement; landing both completes it.
+- The **Move view** depends on work partly outside this feature.
+  `wire-the-sixteen-unwired-localapiserver-seams-in-standalone.md` (PLAN REVIEWED, external to
+  this feature) wires the `moveCard` seam; subtask 1 here must land **after** it, never before.
+  Move is then only fully verifiable once the column lists are also correct (subtask 3), since
+  its target dropdown is fed by `GET /kanban/columns`.
+- **Multi-card selection** is delivered by the advance subtask (the console's selection state is
+  shared by both views), while the batch `planIds[]` form for the move route is in subtask 1.
+  Both must land for a batch *move*; a batch *advance* needs only the advance subtask.
 
 Each subtask's verification runs on **both** composition roots — the standalone host and the
 installed VSIX. Subtask 1 exists because those two roots had drifted, so a same-host-only pass

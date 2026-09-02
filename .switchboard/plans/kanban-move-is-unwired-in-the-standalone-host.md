@@ -1,201 +1,104 @@
-# POST /kanban/move is unwired in the standalone host, so every remote card move fails 503 and the only recovery path is a raw DB write
+# move-card.js's direct-DB fallback must go, and /kanban/move must accept a batch — the seam wiring itself is already owned by another plan
+
+> **Scope note.** This plan was originally written to wire the `moveCard` seam in the standalone
+> host. That work is **already owned** by `wire-the-sixteen-unwired-localapiserver-seams-in-standalone.md`
+> (planId `417980bd-e8d9-4465-b301-0857c39ee3d7`, **PLAN REVIEWED**, complexity 6), which found
+> the same defect the same way and covers fifteen sibling seams besides. This plan has been
+> rescoped to what that plan does **not** cover, plus a correction to its line references.
+> The filename is kept so the card's planId and feature membership stay stable.
 
 ## Goal
 
-Make `POST /kanban/move` work on the standalone/npx host, and reduce card moves to **exactly
-one path** by deleting `move-card.js`'s direct-DB fallback. After this plan, moving a card from
-the command console, the CLI, or an agent script behaves identically on both hosts, and a move
-that cannot go through the board's own code does not happen at all.
+Remove the second card-move code path (`move-card.js`'s direct-DB write), make `/kanban/move`
+accept a batch of plan ids, and make its 503 name the missing seam. Wiring `moveCard` itself is
+the other plan's job; this one exists so that fixing it does not leave a silent alternative
+route behind.
 
 ### Problem analysis
 
-On a running standalone host, every card move over HTTP fails:
+`POST /kanban/move` answers `503 {"error":"Kanban move not available"}` on a running standalone
+host while `GET /kanban/board` serves the same board correctly — verified again today against
+`dist/standalone/cli.js tailnet` on port 7777. The cause is that `moveCard` is an optional
+callback on `LocalApiServerOptions` set in only one composition root. **That is the other plan's
+finding and its fix; nothing here duplicates it.**
 
-```
-$ curl -s -X POST "http://127.0.0.1:7777/kanban/move" \
-    -d '{"planId":"fbae8502-…","targetColumn":"CREATED"}'
-{"error":"Kanban move not available"}
-```
+Three things remain unaddressed once that seam is wired:
 
-`GET /health` confirms the host is the standalone CLI (`dist/standalone/cli.js tailnet`), and
-`/kanban/move` **is** listed in `GET /catalog` — so the route exists and answers; only its
-dependency is missing. Reads (`/kanban/board`, `/kanban/columns`, `/kanban/plan`) all work,
-which is what makes the gap invisible until something writes.
+**1. A second move path survives the fix.** `.agents/skills/kanban_operations/move-card.js`
+carries a direct-DB write, gated on the server being *unreachable* (`:184-197`). It has weaker
+guarantees than the route — no integration-sync fan-out, no board refresh — and its result is
+**indistinguishable from a real move** once written, so nothing afterwards can answer "did this
+move reach the tracker?". It also contradicts this repo's own rule that agents move cards
+through the API path a human's click takes and never SQL, while being exactly a SQL move in a
+helper script. The obvious reading of the 503 — widen the fallback so it covers this case — is
+the wrong direction: it would make every future unwired seam survivable and silent. The gate
+that refused was the gate working.
 
-Three observed consequences:
+**2. The route is single-card, by omission rather than design.** The body takes one `planId`
+(`_handleKanbanMove`), but the console selects multiple cards (see
+`command-console-dispatch-reads-as-an-advance.md`), and the board's own `moveSelected` path
+already takes an array of ids. A one-at-a-time loop from the client turns one operator gesture
+into N unsynchronised moves.
 
-1. **The command console's Move view is dead.** `src/webview/command.js:1461` POSTs
-   `/kanban/move`, gets a non-OK response, and lands in the `else` arm at `:1475-1480`:
-   the optimistic `pendingMoves` entry is rolled back and the chip reads "Move failed on
-   server". The operator is told the *server* rejected the move, not that this host cannot
-   move cards at all. With the advance path dead, the only working action button on the
-   surface is DISPATCH — which starts a coding agent (see
-   `command-console-dispatch-reads-as-an-advance.md`).
-2. **`move-card.js` fails, and it is right to.** The script exits 1 at
-   `.agents/skills/kanban_operations/move-card.js:184-197` rather than reaching its
-   direct-DB path, which is gated on the server being *unreachable*. That gate did its job:
-   it surfaced a wiring defect instead of papering over it.
-3. **The direct-DB fallback should not exist.** It is a second move path with weaker
-   guarantees — no integration-sync fan-out, no board refresh — whose result is
-   *indistinguishable* from a real move once written. That is the `CLAUDE.md` fallback rule
-   violated at the level of a whole code path: nothing afterwards can answer "did this move
-   reach the tracker?". It also contradicts two of this repo's own rules — that agents move
-   cards through "the API path a human's click takes", never SQL — while being exactly a SQL
-   move wearing a helper script's clothes. Widening it to cover the 503 (the obvious
-   reading of this bug) would make every future unwired seam survivable and silent.
+**3. The 503 body does not say what is wrong.** "Kanban move not available" reads as a
+transient outage. It is a wiring defect, and the response is the only place a remote caller can
+learn that.
 
-### Root cause
+### Line references — the other plan's are stale
 
-`moveCard` is an **optional callback on the options object** handed to the shared
-`LocalApiServer`, and only one of the two composition roots sets it.
+`wire-the-sixteen-unwired-localapiserver-seams-in-standalone.md` was verified against source on
+2026-08-30 and both files have moved since. Measured today at HEAD:
 
-- Declared optional: `src/services/LocalApiServer.ts:226-232`.
-- Handler early-returns 503 when absent: `src/services/LocalApiServer.ts:4024-4028`.
-- Wired by the extension: `src/services/TaskViewerProvider.ts:3997-4030`, delegating to
-  `this._kanbanProvider.moveCardToColumnWithReason(...)`.
-- **Not wired by standalone:** the options object built at `src/standalone/bootstrap.ts:3592`
-  never sets `moveCard`.
+| What | That plan says | Actual at HEAD |
+| --- | --- | --- |
+| `moveCard` 503 guard | `LocalApiServer.ts:3728` | **`LocalApiServer.ts:4024-4028`** |
+| Extension's `moveCard` callback | `TaskViewerProvider.ts:3827-3864` | **`TaskViewerProvider.ts:3997-4030`** |
+| Option declaration | *(not cited)* | **`LocalApiServer.ts:226-232`** |
+| Standalone options object | *(not cited)* | **`bootstrap.ts:3592`** (constructed), sibling seam `resolveAutoDispatchColumn` wired at **`:3347-3348`** |
 
-This is exactly the composition-root trap named in `CLAUDE.md`: a service seam on an options
-object where "never wired" and "working" are the same value — `undefined`. No gate catches it.
-The verb-reachability audit comes back green because `bootstrap.ts`'s `default:` arm answers
-the verb; the route is in `/catalog`; the handler compiles; the type is `?`-optional so the
-omission is legal TypeScript.
-
-Two details make the gap look deliberate rather than accidental, and both are wrong:
-
-- **The docblock at `LocalApiServer.ts:219-225` says the callback exists to reach "the
-  integration token, which lives in VS Code secret storage" and is "absent in headless/test
-  harnesses."** Read literally, that presents standalone as a host that *should* not have it.
-  But standalone constructs the same `KanbanProvider` class
-  (`src/standalone/bootstrap.ts:1188`), so `moveCardToColumnWithReason` — cascade and all —
-  is available there. The docblock is a stale claim about a shipped seam, not a design
-  constraint.
-- **The neighbouring auto-dispatch seam *is* wired in both roots** —
-  `resolveAutoDispatchColumn` at `src/standalone/bootstrap.ts:3347-3348` and
-  `src/services/TaskViewerProvider.ts:3985-3989`. So the standalone options object already
-  delegates column decisions to its provider; `moveCard` was simply skipped.
+Its **User Review Required #2** asks whether a shared helper is acceptable for the callback's
+planFile/sessionId preamble rather than replicating it inline. **Answer: yes, a shared helper.**
+The preamble is pure resolution logic with no host dependency — key shape in, sessionId plus
+plan file out — and duplicating it is how the two roots drifted in the first place.
 
 ## Metadata
 
-- **Complexity:** 3
+- **Complexity:** 2
 - **Tags:** backend, reliability, bugfix
 
 ## Complexity Audit (Routine vs Complex/Risky)
 
-**Routine.** The provider method already exists, is already used by the extension for the
-identical purpose, and the standalone root already holds a `KanbanProvider` instance and
-already delegates a sibling seam to it. The change is wiring plus two error-path corrections.
+**Routine.** One deletion, one parameter widened, one error string. No new capability.
 
-**The one risky edge** is the plan-file/sessionId resolution the extension does inline before
-calling the provider (`TaskViewerProvider.ts:4007-4019`): a caller may address a card by plan
-file path, plan id, or legacy session id. Duplicating that logic by hand in `bootstrap.ts` is
-how the two roots drift a second time, so it is extracted to a shared helper rather than
-copied.
+The only judgement call is already made: **delete the fallback rather than widen it.** A host
+that is not running is a host to start, not a reason to write its database behind its back.
 
 ## Edge-Case & Dependency Audit
 
-- **Feature cards must still cascade.** `moveCardToColumnWithReason` owns the
-  feature→subtask cascade; calling it (not the DB) preserves that on standalone.
-- **Key shapes.** The route accepts `sessionId` *or* `planId`, and `move-card.js` may pass a
-  plan-file path as the key. The shared helper must resolve all three, exactly as the
-  extension does today.
-- **Batch moves.** The console selects multiple cards (see
-  `command-console-dispatch-reads-as-an-advance.md`), so `/kanban/move` should accept `planIds[]`
-  alongside today's single `planId` and move them under one call — the board's `moveSelected`
-  already takes an array of ids. Keep the single-id form working for existing callers, and have
-  the response report the count so a partial batch cannot read as a full one.
-- **`workspaceRoot` contract is unchanged.** The route's documented omitted-vs-supplied
-  search behaviour (`LocalApiServer.ts:4005-4016`) lives above the seam and is untouched.
-- **Integration sync on standalone.** Standalone has no VS Code secret storage. Where no
-  integration token is reachable, the move must still succeed locally and report that
-  external sync did not run — it must not silently claim a synced move, and it must not fail
-  the local move because sync was unavailable.
-- **No new fallback that hides a failure.** The 503 body must name the host and the missing
-  seam so an unwired root is diagnosable from the response alone, rather than reading as a
-  transient outage.
-- **One path, no second semantics.** After this change `move-card.js` has a single outcome
-  shape: the API moved the card, or nothing moved and the reason is printed. "Did this move
-  sync to the tracker?" stops being a question, because there is no path where the answer is
-  no. A host that is not running is a host to start, not a reason to write its database
-  behind its back.
-- **Depends on:** nothing. This plan unblocks the Move-view half of
-  `command-console-dispatch-reads-as-an-advance.md`.
+- **Depends on** `wire-the-sixteen-unwired-localapiserver-seams-in-standalone.md` for the seam
+  itself. Sequencing: that plan lands first, or the fallback deletion leaves standalone with no
+  working move at all. **Do not delete the fallback before the seam is wired.**
+- **One path, one outcome shape.** After the deletion, `move-card.js` either moved the card
+  through the API or moved nothing and printed why. "Did this sync to the tracker?" stops being
+  a question because no path answers no.
+- **Batch atomicity.** A partial batch must not report success. Either report per-card results
+  with a count, or fail the call naming the cards that did not move — never a bare `success:
+  true` covering a partial move.
+- **Feature cards in a batch** still cascade to their subtasks; batching must not bypass
+  `moveCardToColumnWithReason`'s cascade for any card in the set.
+- **The single-`planId` form stays.** Existing callers (CLI, scripts, the console's current
+  single-select) must keep working unchanged.
+- **Both mirrors of the skill move together** — `.claude/skills/` is generated from `.agents/`,
+  so the doc edit must land in both or drift silently.
+- **Shipped-state check:** `move-card.js` ships in the extension package, so agents on older
+  installs may still hold a copy with the fallback. That is acceptable — it degrades to the
+  behaviour they have today; no migration is needed for a script.
 
 ## Proposed Changes
 
-### 1. `src/services/kanbanMoveTarget.ts` (new) — one resolution, both roots
+### 1. `.agents/skills/kanban_operations/move-card.js` — delete the direct-DB fallback
 
-Extract the extension's inline key resolution so neither root hand-rolls it.
-
-```ts
-// Resolve a caller-supplied move key (plan file path | plan id | legacy session id)
-// to the sessionId the provider expects, plus the plan file to re-stamp afterwards.
-export async function resolveMoveTarget(
-    key: string,
-    planFile: string | undefined,
-    getDb: () => Promise<{ ensureReady(): Promise<boolean>; getWorkspaceId(): Promise<string>;
-                           getDominantWorkspaceId(): Promise<string>;
-                           getPlanByPlanFile(f: string, wsId: string): Promise<any>; } | undefined>
-): Promise<{ sessionId: string; planFile?: string }> {
-    if (!(key.includes('/') || key.endsWith('.md'))) {
-        return { sessionId: key, planFile };
-    }
-    const db = await getDb();
-    if (db && await db.ensureReady()) {
-        const wsId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
-        const plan = await db.getPlanByPlanFile(key, wsId);
-        if (plan) return { sessionId: plan.sessionId || plan.planId, planFile: key };
-    }
-    return { sessionId: key, planFile: key };
-}
-```
-
-### 2. `src/standalone/bootstrap.ts` — wire the seam (next to `resolveAutoDispatchColumn`, ~line 3347)
-
-```ts
-moveCard: async (wsRoot: string, key: string, targetColumn: string, planFile?: string) => {
-    const target = await resolveMoveTarget(key, planFile, () => getKanbanDb(wsRoot));
-    const outcome = await kanbanProvider.moveCardToColumnWithReason(
-        wsRoot, target.sessionId, targetColumn
-    );
-    if (!outcome.ok) {
-        return { success: false, error: outcome.detail, reason: outcome.reason };
-    }
-    if (target.planFile) {
-        const db = await getKanbanDb(wsRoot);
-        if (db && await db.ensureReady()) {
-            await db.updatePlanFile(target.sessionId, target.planFile);
-        }
-    }
-    return { success: true };
-},
-```
-
-### 3. `src/services/TaskViewerProvider.ts:3997-4030` — call the shared helper
-
-Replace the inline resolution block with `resolveMoveTarget(...)`. Behaviour is unchanged;
-the point is that the two roots now share one implementation.
-
-### 4. `src/services/LocalApiServer.ts` — correct the docblock, make the 503 diagnosable
-
-- `:219-225` — drop the "absent in headless harnesses" framing and the secret-storage
-  rationale for *omitting* it; state that both hosts wire it and that external sync is
-  best-effort per host.
-- `:4024-4028` — name the seam and the host:
-
-```ts
-res.end(JSON.stringify({
-    error: 'Kanban move not available: the moveCard seam is not wired in this host\'s '
-         + 'composition root. Reads work; writes do not. This is a wiring defect, not an outage.',
-    seam: 'moveCard'
-}));
-```
-
-### 5. `.agents/skills/kanban_operations/move-card.js` — delete the direct-DB fallback
-
-Remove `viaDirectDb()` entirely (and the `out/services/KanbanDatabase` require it needs), so the
-script has one path and one outcome shape:
+Remove `viaDirectDb()` and its `out/services/KanbanDatabase` require, leaving one path:
 
 ```js
   const viaExt = await tryViaExtension();
@@ -208,35 +111,62 @@ script has one path and one outcome shape:
   process.exit(1);
 ```
 
-Update the skill's own docs (`.agents/skills/kanban_operations/SKILL.md`, the two-path preamble
-at the top of the script) to describe one path. Both mirrors of the skill must move together —
-`.claude/skills/` is generated from `.agents/`.
+Update the script's two-path preamble and `.agents/skills/kanban_operations/SKILL.md` to
+describe one path; regenerate `.claude/skills/`.
+
+### 2. `src/services/LocalApiServer.ts:4024-4028` — name the seam in the 503
+
+```ts
+res.end(JSON.stringify({
+    error: 'Kanban move not available: the moveCard seam is not wired in this host\'s '
+         + 'composition root. Reads work; writes do not. This is a wiring defect, not an outage.',
+    seam: 'moveCard'
+}));
+```
+
+### 3. `src/services/LocalApiServer.ts` — `_handleKanbanMove` accepts `planIds[]`
+
+```ts
+// One card or many. The board's moveSelected already takes an array; the console
+// selects multiple cards, so a single-card route turns one gesture into N moves.
+const ids = Array.isArray(body?.planIds) && body.planIds.length
+    ? body.planIds.map((v: unknown) => String(v).trim()).filter(Boolean)
+    : [String(body?.sessionId || body?.planId || '').trim()].filter(Boolean);
+…
+// Per-card results — a partial batch must never report a bare success.
+const results = [];
+for (const id of ids) { results.push({ id, ...(await moveCard(resolvedRoot, id, targetColumn, planFile)) }); }
+const failed = results.filter(r => !r.success);
+res.writeHead(failed.length ? 207 : 200, { 'Content-Type': 'application/json' });
+res.end(JSON.stringify({ success: failed.length === 0, count: results.length, results }));
+```
 
 ## Verification Plan
 
-**Standalone host** (`node dist/standalone/cli.js tailnet --no-open`):
-1. `POST /kanban/move` with `{planId, targetColumn}` returns `{success:true}`; the card's
-   column changes in `GET /kanban/plan?planId=…`.
-2. Move a **feature** card; every subtask cascades to the same column.
-3. Command console → Move view: pick a card, pick a column, press MOVE — the chip settles to
-   "Moved to <column>" and the optimistic move is not rolled back.
-4. `node .agents/skills/kanban_operations/move-card.js <plan.md> CREATED` prints `OK`, and
-   the move is visible in `GET /kanban/plan` — one path, one outcome.
-5. `POST /kanban/move` with `planIds: [a, b, c]` moves all three and reports `count: 3`; the
-   single-`planId` form still moves one. Move view with three cards selected moves all three.
+**Sequenced after the seam lands:**
+1. `POST /kanban/move` with a single `planId` moves the card on both hosts — unchanged
+   behaviour for existing callers.
+2. `POST /kanban/move` with `planIds: [a,b,c]` moves all three and reports `count: 3` with three
+   per-card results.
+3. A batch where one id is bogus returns **207** with `success: false` and names the failing id;
+   the two valid cards still moved.
+4. A feature card in a batch cascades to its subtasks.
+5. Console Move view with three cards selected moves all three in one request.
 
-**Extension host** (installed VSIX):
-6. Repeat 1–5 — all still pass, proving the shared-helper refactor did not regress the
-   working root.
+**The deletion:**
+6. `node .agents/skills/kanban_operations/move-card.js <plan.md> CREATED` prints `OK`; the move
+   is visible in `GET /kanban/plan`.
+7. With no host reachable, the script exits 1 telling the operator to start the board, and the
+   kanban DB is byte-identical afterwards (`md5sum` before/after).
+8. `grep -r viaDirectDb .agents .claude` returns nothing, and neither skill mirror describes a
+   second path.
 
-**Both roots, the audit that would have caught this:**
-7. Diff the two options objects (`TaskViewerProvider.ts:3889…` vs `bootstrap.ts:3592…`) and
-   assert every optional callback declared in `LocalApiServerOptions` is either set in both
-   or explicitly justified in a comment naming the other root.
-8. Regression: with the seam deliberately unset, `POST /kanban/move` returns the new 503 body
-   naming `moveCard`, and `move-card.js` exits 1 printing that error — it must **not** succeed
-   by another route.
-9. With no host running at all, `move-card.js` exits 1 telling the operator to start the board,
-   and the kanban DB is byte-identical afterwards (`md5sum` before/after).
+**The 503:**
+9. With the seam deliberately unset, `POST /kanban/move` returns the new body carrying
+   `seam: 'moveCard'`, and `move-card.js` exits 1 printing it — it must not succeed by another
+   route.
 
-**User Review Required:** None.
+**Both hosts:** steps 1–6 pass on the standalone host and the installed VSIX.
+
+**User Review Required:** None. (This plan answers the other plan's Review item #2: yes to a
+shared helper.)
