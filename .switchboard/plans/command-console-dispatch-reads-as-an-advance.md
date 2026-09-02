@@ -98,12 +98,20 @@ Decisions already made:
 
 ## Edge-Case & Dependency Audit
 
-- **Prompt-mode columns return a payload, not a dispatch.** `RESEARCHER` and `TICKET UPDATER`
-  have `dragDropMode: 'prompt'`, where the board's path copies a prompt to the clipboard rather
-  than driving a CLI (`src/webview/kanban.html:10498`). On a phone there is no board clipboard,
-  so the route must return that prompt text in the response and the console must render it as
-  copyable. This is the one genuinely new surface in the plan and must not be silently dropped —
-  a prompt-mode advance that reports success while producing nothing is the worst outcome.
+- **Prompt-mode columns are not reachable on this board, and the plan must not pretend
+  otherwise.** The two `dragDropMode: 'prompt'` columns are `RESEARCHER` and `TICKET UPDATER`,
+  and both are **disabled** here (`agents.visibleAgents` has `researcher:false`,
+  `ticket_updater:false`), so advance cannot land in either — next-stage resolution skips
+  columns the board does not run. If one is ever enabled, the board's path copies a prompt to
+  the clipboard rather than driving a CLI (`src/webview/kanban.html:10498`), and there is no
+  board clipboard on a phone: the route must then return that prompt text and the console
+  render it copyable. Build the pass-through (two lines), but verify it only behind an enabled
+  prompt-mode column — do not add console UI for a stage this workspace does not run.
+- **Stage counts come from the board, not the catalogue.** Of the 8 role-bearing built-in
+  columns this board runs **5** — planner, lead, coder, intern, reviewer. Researcher, Ticket
+  Updater and Completion Tested are off. `GET /kanban/columns` reports all 8 regardless, which
+  is its own defect (`column-reads-publish-the-catalogue-not-the-board.md`); advance is immune
+  because it never sends a destination, but the Move view's dropdowns are fed by it.
 - **A card in the last stage has no next column.** `getNextColumn` returns `null` at the end of
   the list; the route must report "already in the final stage" rather than moving nothing and
   claiming success.
@@ -118,7 +126,8 @@ Decisions already made:
   sibling `moveCard` seam on the same options object is wired in only one
   (`kanban-move-is-unwired-in-the-standalone-host.md`).
 - **Depends on:** nothing for advance itself. The Move view (silent column change, no agent)
-  remains blocked on plan 1.
+  remains blocked on `kanban-move-is-unwired-in-the-standalone-host.md`, and its dropdowns are
+  only correct once `column-reads-publish-the-catalogue-not-the-board.md` lands.
 - **Audit gap, out of scope:** that the dispatch write path recorded no `plan_events` row is a
   real defect and wants its own plan; this plan changes no write path.
 
@@ -207,9 +216,10 @@ moveStatusChip.textContent = body?.seam === 'moveCard'
    same column.
 4. Card in the final stage → console reports "already in the final stage"; no move, no agent.
 
-**Prompt-mode columns:**
-5. Advance a card into `RESEARCHER` → the response carries prompt text and the console renders
-   it copyable; no silent success with nothing produced.
+**Prompt-mode columns (only if one is enabled):**
+5. With Researcher enabled in Setup, advance a card into `RESEARCHER` → the response carries
+   prompt text and the console renders it copyable; no silent success with nothing produced.
+   With Researcher disabled (this board's state), advance skips it entirely.
 
 **Guards:**
 6. `grep` the console for coding-column identifiers and complexity-band logic — there must be
