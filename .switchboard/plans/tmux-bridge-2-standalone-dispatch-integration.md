@@ -34,7 +34,7 @@ Wire the Part 1 tmux transport into standalone Switchboard so tmux panes become 
 Three decisions are asserted here as defaults and should be confirmed:
 
 1. **Adoption is explicit, never automatic.** Switchboard will not register a pane just because it exists. The user adopts a pane via a verb (or by titling it to match a configured pattern, which defaults to empty = matches nothing). Rationale: automatic adoption plus a dispatch equals arbitrary command execution in a shell the user was using for something else.
-2. **A bare-shell pane is refused by default.** `tmuxAdoptPane` checks `pane_current_command` against the CLI-agent regex and refuses `bash`/`zsh`/`fish`/`sh` unless `force: true`. This is a guard, not a confirmation dialog — it returns an error the caller can retry with `force`, and there is no prompt.
+2. **A bare-shell pane is refused by default.** `tmuxAdoptPane` checks `pane_current_command` against a **shell blacklist** regex (`/^(bash|zsh|fish|sh|dash|ksh|csh|tcsh)$/`) and refuses unless `force: true`. This is a guard, not a confirmation dialog — it returns an error the caller can retry with `force`, and there is no prompt. Note: the existing `isCliAgent` regex at `terminalUtils.ts:220` (`/\b(copilot|gemini|agy|claude|windsurf|cursor|cortex)\b/i`) tests **terminal names**, not process names — it is not applicable here. The PTY delivery path's `CLI_AGENT_REGEX` was deleted (confirm CR is now unconditional). The bare-shell guard needs its own shell-blacklist regex applied to `pane_current_command` (the foreground process name from `list-panes`), not a repurposed terminal-name regex.
 3. **`triggerAction` never auto-creates a tmux pane.** The PTY path creates a terminal when none matches (`bootstrap.ts:1027-1104`); the tmux path resolves only, unless `switchboard.terminal.tmux.autoCreate` is on (default false). Creating windows in someone's tmux session unprompted is surprising in a way creating a Switchboard-owned PTY is not.
 
 ## Complexity Audit
@@ -282,6 +282,6 @@ Three failure modes are worth pre-empting. **First**, the dispatch pre-flight is
 
 ## Recommendation
 
-**Complexity: 7 → Send to Coder, with review on the safety guards**
+**Complexity: 7 → Send to Lead Coder**
 
 The individual edits are small and the seam absorbs most of the design pressure, but the change is spread across five files and three of the touch points are subtle in ways that fail quietly rather than loudly: the pre-flight union, the reconcile-vs-purge distinction, and resolution precedence. The bare-shell guard and the opt-in default are security-relevant defaults rather than preferences and should be confirmed at review, not adjusted during coding.

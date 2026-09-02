@@ -44,3 +44,57 @@ The other two are independent and can run in parallel with any of the above:
 
 **One decision left open, not scoped here:** `DEFAULT_REMOTE_CONFIG.mode` is `'ingest'`, so a newly configured tracker gives per-card dispatch rather than the bulk-queue model this feature assumes. Flipping it changes behaviour for existing remote-control users, so the safe form is defaulting only for newly configured trackers and never rewriting an existing stored config. Worth its own plan.
 
+**Additional ordering constraint (from reconciliation audit):** the entry-point cleanup + naming subtask should land **last**, after all other subtasks. It settles the vocabulary ("Mission Control" as the primary name) that the other subtasks' code changes should follow. Landing it first and then having later subtasks reference the old name in their diffs creates confusion; landing it last means the other subtasks have already made their code changes using the current names, and this subtask cleans up the remaining stragglers.
+
+## Team Dispatch Instructions
+
+### Remote staging auto-seats the orchestrator, in the one path the code says must hold no judgement — delete the flag, the dead constant, and the stale docblocks
+- **Seat:** Intern
+- **Acceptance:**
+  - Staging cards via the remote path creates no Mission Control terminal.
+  - `queue/next` still drains staged cards in `queue_position` order, unchanged.
+  - Legacy config blob with `queueSequencing: true` plus an unknown sibling key loads without crash; the sibling survives a write.
+  - `onArmQueueWatch` still fires when cards are staged (`_stagedThisCycle` preserved).
+  - Both `#remote-queue-sequencing` (connections.js) and `#linear-queue-sequencing` (linear.html) checkboxes are gone.
+- **Must not touch:** `startMissionControlFromKanban`, `POST /mission-control/start` route, `onStageForQueue`, `onArmQueueWatch`, `_stagedThisCycle`.
+
+### There is no way to ask the orchestrator anything from a tracker — add an instructions column whose cards are messages, not work
+- **Seat:** Coder
+- **Acceptance:**
+  - A note in the instructions column on each provider (Notion, Linear, ClickUp) reaches Mission Control and the reply appears on the originating card.
+  - No plan file is written, no queue position assigned, no coder dispatched for an instructions card.
+  - With no Mission Control running, the reply says so and no terminal is created.
+  - Multiple poll cycles over an answered card produce exactly one reply (seen-set + `authoredBySelf` guards).
+  - An instructions card cannot resolve to a queueable column (`QUEUEABLE_TARGET_COLUMNS` exclusion verified).
+- **Must not touch:** `fetchStateDeltas`, `stateKeyToColumn`, `postManagedComment`, `updateIssueDescription`, the provider factory — these are reused, not modified.
+
+### A tracker comment re-dispatches a column agent — retire the per-card trigger that no longer matches how these tools are used
+- **Seat:** Intern
+- **Acceptance:**
+  - A comment on a tracked Linear or Notion card dispatches no agent and creates no terminal.
+  - Column-move dispatch still fires (`_remoteDispatchColumnAgent` from the column-move path at `:3486` and `:3569`).
+  - If the poll is removed, nothing reads `remote.commentCursor.*` or `remote.commentSeen.*`.
+  - Legacy config with `comments: true` and an unknown sibling loads without crash; the sibling survives a write.
+  - The instructions column is functional before this lands.
+- **Must not touch:** `_remoteDispatchColumnAgent` method itself (only its caller in `_remoteDispatchComment` goes), `authoredBySelf` guard logic, the seen-set infrastructure.
+
+### The standalone clipboard payload is unusable by the hosts it exists for, and the create-race guard is patched in one client instead of the server
+- **Seat:** Coder
+- **Acceptance:**
+  - With no agent CLI configured, the clipboard prompt names a file to read and pins the workspace root — paste it into an agent with no Switchboard skills and it reaches the entry protocol.
+  - The pasted prompt uses the pinned root, not the agent's working directory.
+  - POST `/mission-control/start` twice in rapid succession against the extension host (without going through shell.js) produces exactly one Mission Control terminal and no `mission-control-2`.
+  - With a live seated Mission Control, POST start again redelivers the persona prompt and returns `mode: 'terminal'`.
+  - A dead seat (recorded but terminal killed) recovers — POST start creates a fresh terminal rather than returning an error.
+- **Must not touch:** `startMissionControlFromKanban` behaviour (add the guard at the seam, not inside the method), `MISSION_CONTROL_TERMINAL_NAME` (must stay imported from `autobanState.ts`), shell.js's button-disable pattern.
+
+### Two orchestrator entry points are dead or inconsistent, and one concept has four names — delete, and settle the vocabulary
+- **Seat:** Intern
+- **Acceptance:**
+  - `POST /mission-control/start`, the shell rail icon, and implementation.html's Manage button all still work.
+  - `switchboard.startOrchestrator` is gone from the palette and from `package.json`; `autoban-state-regression.test.js` passes after its command assertions are removed.
+  - `startOrchestrator` and `stopOrchestrator` appear in neither the KanbanProvider handler nor the generated verb allowlist.
+  - No docblock in `TaskViewerProvider.ts` or `LocalApiServer.ts` claims an AUTOMATION-tab caller.
+  - `CLAUDE.md` and `AGENTS.md` reference `switchboard-mission-control` (not `switchboard-orchestrator`) and name the three real entry points.
+- **Must not touch:** `startMissionControlFromKanban`, `POST /mission-control/start` route, `MISSION_CONTROL_TERMINAL_NAME`, the `project_manager` and `mission-control` role keys (document the relationship, do not merge).
+

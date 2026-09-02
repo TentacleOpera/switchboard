@@ -925,19 +925,21 @@
                             <span style="font-weight:700; font-size:13px; color:var(--text-primary); letter-spacing:0.5px;">MISSION</span>
                         </div>
 
-                        <!-- State A: Staging / Candidate selection -->
+                        <!-- State A: Mission selection → members → Launch -->
                         <div id="mission-staging-container" style="display:flex; flex-direction:column; flex:1; min-height:0; gap:8px;">
                             <div class="action-row">
-                                <select class="cmd-select" id="mission-add-member-select" aria-label="Select Mission Candidate"></select>
-                                <button class="secondary-action-btn" id="btn-add-mission-member">Stage</button>
+                                <select class="cmd-select" id="mission-select" aria-label="Select Mission"></select>
                             </div>
                             <div class="cards-scroll-list" id="mission-members-list">
-                                <!-- Staged candidate cards -->
+                                <!-- Selected mission's members (read-only) -->
                             </div>
                             <div class="cmd-action-box">
-                                <button class="primary-action-btn" id="btn-launch-mission">
-                                    LAUNCH MISSION
-                                </button>
+                                <div id="mission-status-chip" class="status-chip hidden"></div>
+                                <div class="action-row">
+                                    <button class="primary-action-btn" id="btn-launch-mission" disabled>
+                                        LAUNCH MISSION
+                                    </button>
+                                </div>
                             </div>
                         </div>
 

@@ -194,3 +194,14 @@ Contract tests in `src/test/wsl-detection-contract.test.js`:
 - **WSL2 localhost forwarding is not guaranteed in all configs.** Some corporate network setups or custom WSL2 configurations break the automatic forwarding. The doc page names `wsl.exe --shutdown` as the first troubleshooting step, and the URL is always printed in the log regardless of whether the browser opens — so the user can reach the board manually.
 - **`cmd.exe` interop can be disabled.** The fallback chain (cmd.exe → wslview → print URL) handles this, but a user with interop off and no `wslview` installed gets a printed URL instead of an opened browser. That is acceptable — it is the same behaviour as a headless server today.
 - **WSL1 node-pty compatibility.** WSL1's translation layer may not match node-pty's Linux prebuilds. This is not a regression — WSL1 users today would have the same issue with any standalone PTY usage. The plan logs the WSL version so the failure is diagnosable, but does not block WSL1 from trying.
+- **Discovery hint depends on Parts 1 and 2.** The Phase 3 discovery hint calls `isTmuxAvailable()` from Part 1 and reads `switchboard.terminal.tmux.enabled` from Part 2. The WSL browser-open fix (Phases 1-2) is genuinely independent, but the discovery hint is not. If Part 3 ships before Parts 1-2, the hint must be deferred or the imports will fail.
+
+## Adversarial Synthesis
+
+Key risks: (1) the discovery hint's hidden dependency on Parts 1-2 contradicts the feature file's parallel-landing claim — the WSL browser fix is independent, the hint is not; (2) WSL2 localhost forwarding can break in corporate configs, but the URL is always printed so the user can reach the board manually; (3) `cmd.exe` interop can be disabled, but the fallback chain handles it. Mitigations: correct the feature file's dependency claim, ship the browser fix independently if needed, and the fallback chain ensures no crash on any WSL config.
+
+## Recommendation
+
+**Complexity: 3 → Send to Intern**
+
+Small, additive changes with no security boundary modifications. The WSL detection is a cached `/proc/version` read, the browser-open fix is one `else if` branch, and the doc is a new file. The only subtlety is the `cmd.exe`/`wslview`/print-URL fallback chain, which is straightforward. The discovery hint dependency on Parts 1-2 is a sequencing note, not a complexity driver.

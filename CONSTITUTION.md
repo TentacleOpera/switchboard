@@ -117,6 +117,30 @@ Two facts shape every decision and override most defaults:
   or Notion must not corrupt local state or crash a panel. Surface the error, preserve local data, and
   allow retry.
 
+- **[INVARIANT] A fallback must never be indistinguishable from a real value.** On any read of
+  **configuration, identity, routing, or membership**, a default that behaves exactly like a
+  configured value converts a loud failure into a quiet wrong answer — and no gate in this repo
+  catches it, because a fallback is a *positive* line of code that passes lint, compile and review
+  while looking like care. Shipped examples, all of which produced reported bugs: `deriveCliIdentity`
+  returning `'unknown'`, which then silently borrows Claude's 8000ms readiness ceiling instead of
+  Devin's 20000ms; `resolveTeamIconUri(team.icon) || '/static/icons/nav-jet.svg'`, which made "no team
+  has an icon" look identical to "every team chose the same icon"; `loadGlobalSync`'s `catch { return {} }`,
+  which reads a *corrupt* config file as an *unconfigured* one; `currentProject !== '__unassigned__'`,
+  where the sentinel for "no project" is implemented as "no filter"; and a four-level startup-command
+  chain (global file → per-IDE globalState → per-workspace db → state.json) in which a stale value from
+  a retired store can win with nothing recording which store answered.
+
+  The rule is **not** "no defaults". It is: on those four kinds of read, either
+  (a) **tag the result** so the caller can tell configured from defaulted (return the source alongside
+  the value, and log it at the point of use), or (b) **fail loudly** — surface the missing/corrupt
+  config rather than substituting a plausible one. Where a default is genuinely unavoidable, pick the
+  value whose failure mode is *visible or safe*, never the one that is merely quiet: an unrecognised
+  CLI waits on the **longest** boot ceiling, because guessing short breaks delivery while guessing long
+  costs seconds.
+
+  Fallbacks on **presentation** paths (a label, a placeholder, an avatar) are fine and stay fine.
+  The distinction is whether a wrong value silently changes *behaviour*.
+
 - **[STANDARD] Plans are self-contained and decisive.** A plan must document its core problem,
   background, and root-cause analysis inside/just below `## Goal`. Do not leave hedged "User Review
   Required" items — decide and state the decision; reserve review items for genuine product calls

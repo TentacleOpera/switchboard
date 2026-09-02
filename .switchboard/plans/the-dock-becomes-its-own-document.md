@@ -117,6 +117,18 @@ The cost, accepted: the dock page owns tab switching itself, where today the she
   the new page must render sanely at that floor.
 - **No `confirm()`**, per `CLAUDE.md`.
 
+## Adversarial Synthesis
+
+Key risks: dual-host composition root divergence (mitigated by hand-diffing both roots per
+`CLAUDE.md`), CSP missing WebSocket `connect-src` for a new document (mitigated by asserting the
+emitted policy), and a missing source-level gate that `dock.js` does not import from `terminals.js` —
+a single import silently re-introduces the 13K-line load the feature exists to eliminate. The
+manifest-panel-vs-own-getter decision is the key design choice to resolve during implementation: ride
+`getPanelHtmlById` by registering `/dock` as a manifest panel with a `dock` ID, or add a
+`getDockHtml` getter wired in both roots. The memory cost of two live xterm instances and two live
+WebSockets is accepted — reattach is the path that carries replay-gap and DEC-mode hazards, so
+keeping both alive is the safer default.
+
 ## Proposed Changes
 
 ### 1. `src/webview/dock.html` + `dock.js`
@@ -126,8 +138,11 @@ Fleet renders the polled table directly — no terminal code on that path.
 
 ### 2. Serve `/dock` from both composition roots
 
-Preferably by riding `getPanelHtmlById` rather than adding a third getter. Whichever is chosen, the
-wiring is diffed by hand across `bootstrap.ts` and `TaskViewerProvider.ts`, per `CLAUDE.md`.
+Two concrete options: (a) register `/dock` as a manifest panel with a `dock` ID, riding
+`getPanelHtmlById` — fewer seams, but requires a manifest entry and panel ID convention; or (b) add a
+`getDockHtml` getter wired in both `bootstrap.ts` and `TaskViewerProvider.ts` — more explicit, but a
+third seam to keep in sync. Prefer (a) if the manifest mechanism supports non-terminal panels;
+otherwise (b). Whichever is chosen, the wiring is diffed by hand across both roots, per `CLAUDE.md`.
 
 ### 3. `shell.js` — one frame
 
@@ -154,8 +169,14 @@ live caller. Remove them in the same change so the panel stops carrying a mode n
 5. **Theme reaches the dock frame** on a switch, with no reload.
 6. **`dock-dragging` covers the frame set** — set-equality, so a later frame cannot be added to one
    list and not the other.
-7. **No `isDockFrame` guard survives with a live caller** in `terminals.js` after step 4.
-8. **`transport.js`'s `switchPanel` guard still applies to the new document** — it is a panel like
+7. **No `isDockFrame` guard survives with a live caller** in `terminals.js` after step 4. The safety
+   case: after this change, no caller passes `dock=1`, therefore `isDockFrame` is always `false`,
+   therefore the guard is dead code — assert no remaining URL in the codebase constructs
+   `/terminals?…&dock=1`.
+8. **`dock.js` does not import from `terminals.js`.** Source-level: no `import … from
+   './terminals.js'` or `require('./terminals.js')` in `dock.js` or `dock.html`. This is the gate
+   that stops the 13K-line load being silently re-introduced.
+9. **`transport.js`'s `switchPanel` guard still applies to the new document** — it is a panel like
    any other, and the containment rule is not re-derived here.
 
 ### Goal Invariants

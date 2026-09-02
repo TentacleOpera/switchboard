@@ -9,7 +9,7 @@ design does not provide.
 
 ### Problem Analysis
 
-**The ack exists specifically to be truthful, and says so.** `RemoteControlService.ts:783-797`
+**The ack exists specifically to be truthful, and says so.** `RemoteControlService.ts:790-810`
 handles a remote move into a queueable column. On success it posts back to the card:
 
 > "Switchboard received this status change and staged it as position N in the session queue. **A
@@ -19,30 +19,29 @@ with a comment above it explaining the wording was chosen with care: "Truthful a
 NOT a dispatched card. The current wording ('dispatched the local agent') would be a lie the user
 acts on. Name the position so the remote user can see the queue depth."
 
-**That promise is true today.** `QUEUEABLE_TARGET_COLUMNS` (`:112`) includes `STAGING`;
-`onStageForQueue` (`KanbanProvider.ts:2687`) calls `stageForQueue`, which appends a `queue_position`
-(V60, `KanbanDatabase.ts:573`); and the queue is drained by Run queue. A card staged from a phone
-does get picked up in order, without the operator returning to the desk.
+**That promise is true today — but only for the self-draining queue.** `QUEUEABLE_TARGET_COLUMNS`
+(`:112`) includes `STAGING`; `onStageForQueue` (`KanbanProvider.ts:2682`) calls `stageForQueue`,
+which appends a `queue_position` (V60, `KanbanDatabase.ts:572-573`) and adds the card to a mission
+via `resolveOrCreateOpenMission` (`KanbanDatabase.ts:11648`). The queue is drained by
+`launchMission` (`KanbanProvider.ts:14943`), which calls `apiServer.dispatchNextFromQueue` to pop
+and dispatch members. A card staged from a phone sits in STAGING until someone launches the mission
+— and if no one does, nothing happens.
 
-**Mission dispatch changes what staging means.** V64 (`KanbanDatabase.ts:633-645`) added `missions`,
-`mission_members` and `plan_dependencies` — described in the migration comment as "mission
-containers for STAGING queue" — and dependency edges are gated at pop time. The launch half is not
-built: `KanbanProvider.ts:9923` returns "Launch is not implemented yet — the mission fan-out (seat
-teams, stage, dispatch stream heads) is unbuilt. **Use Run queue in the STAGING column.**"
+**Mission launch is a manual act, not an automatic drain.** `launchMission` is fully implemented
+(`:14943`) and is triggered by the `mcLaunchMission` webview verb (`:10219`) — a button in the
+Mission Control panel. There is no remote path to it. So the sentence "a coding lead will pick it
+up in order" is false the moment a card is staged into an unlaunched mission: the card will sit
+until the operator returns to the desk and clicks Launch.
 
-So the intended model is that a card moved to STAGING joins a mission that is dispatched
-deliberately, rather than drained automatically. When that lands, the sentence "a coding lead will
-pick it up in order" stops being true — and it is the sentence a remote operator acts on.
-
-**The failure is silent and specifically remote.** At the desk, an un-launched mission is visible on
-the board. From a phone the operator has only the ack: they move the card, read a confirmation that
-something will happen, and put the phone away. Nothing happens. There is no error, no second
+**The failure is silent and specifically remote.** At the desk, an un-launched mission is visible
+on the board. From a phone the operator has only the ack: they move the card, read a confirmation
+that something will happen, and put the phone away. Nothing happens. There is no error, no second
 comment, and nothing that distinguishes "queued and progressing" from "parked pending your launch".
 
-**And a dependency gate makes it worse.** Pop-time gating means a card can be in a mission, the
-mission launched, and the card still not running because a predecessor has not completed. "Position
-N" does not describe that at all, so the ack is wrong in a second way: it implies a linear queue
-where there is a dependency graph.
+**And a dependency gate makes it worse.** Pop-time gating means a card can be in a launched
+mission, the mission in-flight, and the card still not running because a predecessor has not
+completed. "Position N" does not describe that at all, so the ack is wrong in a second way: it
+implies a linear queue where there is a dependency graph.
 
 ### Root Cause
 
@@ -56,7 +55,8 @@ local model gained the distinction, because the local model still falls back to 
 
 - **Not changing what staging does.** This plan does not alter the queue, the mission containers,
   the dependency gating, or the launch design. It changes what the operator is told.
-- **Not implementing mission launch.** That is the mission fan-out work `:9923` names as unbuilt.
+- **Not implementing mission launch.** `launchMission` is fully implemented (`:14943`). This plan
+  is about the ack, not the trigger.
 - **Not adding a notification mechanism.** If the queue-notification bridge lands, this reuses it;
   if not, the ack comment path already exists and is sufficient.
 - **No new remote mode.** Queue mode's anti-stampede purpose is unchanged.
@@ -75,11 +75,13 @@ card is waiting on, and never imply automatic progress it cannot promise.** Thre
 must be able to express:
 
 1. **Queued and self-draining** — today's behaviour. Position N, will be picked up. Current wording
-   is correct and should be kept for this case.
+   is correct and should be kept for this case. This applies when the card is in a mission whose
+   `runState` is `in-flight` (the mission has been launched and the queue is draining).
 2. **In a mission, not launched** — say so plainly and say it needs a launch. This is the state that
-   silently strands a remote operator.
+   silently strands a remote operator. The mission's `runState` is `not-started`.
 3. **In a launched mission, gated** — waiting on a predecessor. Name the blocker rather than a
-   position, because a position is meaningless under a dependency graph.
+   position, because a position is meaningless under a dependency graph. The mission's `runState`
+   is `in-flight` but the card has incomplete dependency edges.
 
 The alternative — a generic "staged" with no promise — is safer than lying but throws away the queue
 depth the original ack deliberately included.
@@ -89,15 +91,27 @@ depth the original ack deliberately included.
 ### Routine
 
 - Branching the ack text on the card's actual post-stage state.
-- Keeping the existing wording for the queue case.
+- Keeping the existing wording for the self-draining / in-flight case.
 
 ### Complex / Risky
 
+- **`onStageForQueue` must be extended to return mission state.** Today it returns only
+  `{ staged, position }` (`KanbanProvider.ts:2694`). `stageForQueue` returns
+  `{ success, staged, refused, error?, missionId? }` (`:8667`) — it HAS the missionId but
+  `onStageForQueue` discards it. To branch the ack, the callback must also return the mission's
+  `runState` and the card's gating status. This means extending the `onStageForQueue` return type
+  in the `RemoteControlDeps` interface (`RemoteControlService.ts:127`) and the implementation
+  (`KanbanProvider.ts:2682-2703`).
+- **Gating state requires a dependency-edge read-back at stage time.** `stageForQueue` does not
+  check dependencies — the gate is at pop time in `launchMission`'s stream resolution. To know
+  whether a staged card is gated, `onStageForQueue` must query `getPlanDependencies` for the staged
+  card and check whether any predecessor is incomplete. This is a new read path, not a reuse of an
+  existing one.
 - **The state must be read after staging, not assumed.** `onStageForQueue` already reads the
   position back from the DB rather than trusting the caller — the comment at
-  `KanbanProvider.ts:2691` notes `stageForQueue` "appends the next position but does not return it".
-  The mission and gating state need the same read-back discipline, not an inference from what was
-  requested.
+  `KanbanProvider.ts:2687` notes `stageForQueue` "appends the next position but does not return it".
+  The mission `runState` and gating state need the same read-back discipline, not an inference from
+  what was requested.
 - **Truthfulness under a race.** A mission can be launched moments after the ack is composed, so an
   ack saying "needs a launch" can be stale on arrival. That is acceptable — understating progress is
   safe, overstating it is the bug — but the wording should not be so absolute that a subsequent
@@ -125,59 +139,85 @@ depth the original ack deliberately included.
 - Operators used to "position N" on every stage will see varied wording. That is the point, and it
   should be noted in the remote skill so an agent reading acks does not treat a mission ack as a
   failure.
-- `switchboard-remote/SKILL.md` describes moving a card to a trigger state as dispatching work.
-  Under missions that becomes conditional and the skill needs the same correction.
+- `switchboard-remote/SKILL.md` section 10 already covers mission visibility on Linear; the ack
+  wording change is consistent with what it says. No additional skill update is required for the ack
+  itself, though the skill's dispatch instructions (which treat moving a card to a trigger state as
+  dispatching work) may need a conditional note under missions.
 
 **Migration**
-- Text and branching only. No stored state, schema, or config changes. The queue path keeps its
-  current wording exactly, so nothing regresses for installs where mission launch is not in use.
+- Interface change: `onStageForQueue` return type extended in `RemoteControlDeps` and its
+  implementation. New read path: dependency-edge query at stage time. No schema migration, no stored
+  state change, no config change. The queue path (mission `in-flight`, no gating) keeps its current
+  wording exactly, so nothing regresses for installs where mission launch is not in use or where
+  cards are not gated.
 
 ## Dependencies
 
-- **Must land with, or before, mission dispatch.** After it, the ack is false. This plan is cheap
-  and its timing is its whole value — it is not worth doing late.
+- **Must land with, or before, the remote mission launch trigger.**
+  `launching-a-mission-should-be-the-gesture-that-already-exists.md` adds the remote launch path;
+  this plan makes the staging ack truthful about whether a launch has happened. After the launch
+  trigger lands, the ack is false without this plan. This plan is cheap and its timing is its whole
+  value — it is not worth doing late.
 - **Reuses** the queue-notification bridge if that lands, for the launch event specifically. Neither
   plan blocks the other.
-- **Related:** `staging-column-replaces-dispatch-view.md` and the mission fan-out work named at
-  `KanbanProvider.ts:9923`.
+- **Related:** `staging-column-replaces-dispatch-view.md` and `launchMission`
+  (`KanbanProvider.ts:14943`).
 
 ## Adversarial Synthesis
 
-Key risks: (1) shipping mission dispatch without touching the ack, leaving a remote operator with a
-confirmation that work is progressing when it is parked — the exact failure the ack's own comment was
-written to prevent; (2) over-correcting to a generic "staged" and discarding the queue depth that
-made the ack actionable; (3) adding a second comment per state change and recreating the noise the
-notification plan avoids; (4) inferring the post-stage state instead of reading it back, so the ack
-describes what was asked for rather than what happened. Mitigations: branch on a read-back state with
-three explicit cases; keep the queue wording verbatim for the queue case; route any launch event to
-the notification bridge rather than a bespoke second comment; and follow the existing read-back
-discipline `onStageForQueue` already uses for position.
+Key risks: (1) shipping the remote mission launch trigger without touching the ack, leaving a remote
+operator with a confirmation that work is progressing when it is parked — the exact failure the
+ack's own comment was written to prevent; (2) over-correcting to a generic "staged" and discarding
+the queue depth that made the ack actionable; (3) adding a second comment per state change and
+recreating the noise the notification plan avoids; (4) inferring the post-stage state instead of
+reading it back, so the ack describes what was asked for rather than what happened; (5) missing the
+`onStageForQueue` return-type extension and the dependency-edge read-back, which are the concrete
+implementation path, not "text and branching only." Mitigations: extend `onStageForQueue` to return
+`{ staged, position, missionId?, missionRunState?, gatedBy? }`; branch on a read-back state with
+three explicit cases; keep the queue wording verbatim for the in-flight/ungated case; route any
+launch event to the notification bridge rather than a bespoke second comment; and follow the
+existing read-back discipline `onStageForQueue` already uses for position.
 
 ## Proposed Changes
 
-1. **Read the card's post-stage state back** — queued, in an unlaunched mission, or gated behind a
-   predecessor — using the same DB read-back `onStageForQueue` already performs for position.
-2. **Branch the ack text** across those three cases, keeping today's wording verbatim for the queue
-   case and naming the blocker rather than a position for the gated case.
-3. **Say plainly when a launch is required**, since that is the state that silently strands a remote
+1. **Extend `onStageForQueue`** (`KanbanProvider.ts:2682-2703`) to return
+   `{ staged, position, missionId?, missionRunState?, gatedBy? }`:
+   - `missionId` — from `stageForQueue`'s return value (`:8667`), currently discarded.
+   - `missionRunState` — read back from the mission via `getMissionById` (`KanbanDatabase.ts:11469`),
+     which hydrates `runState` via `_deriveMissionRunState` (`:11420`).
+   - `gatedBy` — query `getPlanDependencies` for the staged card; if any predecessor is not
+     complete, return the predecessor's name/id; otherwise null.
+2. **Extend the `RemoteControlDeps` interface** (`RemoteControlService.ts:127`) to match the new
+   return type.
+3. **Branch the ack text** (`RemoteControlService.ts:797-804`) across three cases:
+   - `missionRunState === 'in-flight'` and `gatedBy === null` → today's wording verbatim, position
+     included. The queue is draining.
+   - `missionRunState === 'not-started'` → say the card is in a mission that has not been launched,
+     and a launch is required. Do not promise a pickup.
+   - `missionRunState === 'in-flight'` and `gatedBy !== null` → name the blocker rather than a
+     position. The card is gated behind a predecessor.
+4. **Say plainly when a launch is required**, since that is the state that silently strands a remote
    operator.
-4. **Route the launch event to the notification bridge** if it exists; do not add a bespoke second
+5. **Route the launch event to the notification bridge** if it exists; do not add a bespoke second
    comment here.
-5. **Update `switchboard-remote/SKILL.md`**, whose current text treats moving a card to a trigger
-   state as dispatching work.
+6. **Update `switchboard-remote/SKILL.md`** dispatch instructions if they treat moving a card to a
+   trigger state as unconditionally dispatching work — under missions that becomes conditional. (The
+   skill's section 10 already covers mission visibility and needs no change for the ack itself.)
 
 ### Migration
 
-Text and branching only. No schema, config or stored-state changes; the queue path is byte-identical.
+Interface change to `onStageForQueue` return type and `RemoteControlDeps`; new dependency-edge
+read-back at stage time. No schema, config, or stored-state changes. The in-flight/ungated queue
+path is byte-identical to today's wording.
 
 ## Verification Plan
 
-1. **Queue case unchanged.** With mission launch not in use, move a card to a staging status
-   remotely and assert the ack is byte-identical to today's, position included.
-2. **Unlaunched mission.** Stage a card into a mission that has not been launched; assert the ack
-   says a launch is required and does not promise a pickup.
-3. **Gated card.** Stage a card whose predecessor is incomplete; assert the ack names the blocker
-   rather than a position.
+1. **Queue case unchanged.** With a card in an `in-flight` mission and no gating, move a card to a
+   staging status remotely and assert the ack is byte-identical to today's, position included.
+2. **Unlaunched mission.** Stage a card into a mission whose `runState` is `not-started`; assert the
+   ack says a launch is required and does not promise a pickup.
+3. **Gated card.** Stage a card whose predecessor is incomplete into an `in-flight` mission; assert
+   the ack names the blocker rather than a position.
 4. **State is read, not assumed.** Force a divergence between requested and actual outcome; assert
    the ack describes what happened.
 5. **One comment per stage.** Assert no second comment is posted on launch from this path.
@@ -185,4 +225,17 @@ Text and branching only. No schema, config or stored-state changes; the queue pa
    matches its own card.
 7. **Understated, never overstated.** Launch a mission immediately after staging; assert the ack was
    conservative and reads as consistent rather than contradictory.
-8. **All three providers** post the branched text through the existing comment path.
+8. **All three providers** post the branched text through the existing comment path, or the skill
+   states plainly where mission state is unavailable (Notion/ClickUp have no milestone primitive).
+
+### Goal Invariants
+
+- **Positive:** `onStageForQueue` (`KanbanProvider.ts:2682`) returns `missionRunState` in its result
+  object after this plan.
+- **Negative:** the ack string at `RemoteControlService.ts:803` no longer unconditionally contains
+  "A coding lead will pick it up in order" — that phrase appears only when `missionRunState` is
+  `in-flight` and `gatedBy` is null.
+- **Positive:** a card staged into a `not-started` mission receives an ack that names the mission
+  and says a launch is required.
+- **Negative:** no second comment is posted from `RemoteControlService` on mission launch; the
+  launch event goes through the notification bridge, not this path.

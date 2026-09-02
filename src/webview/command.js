@@ -6,10 +6,19 @@
 (function () {
     'use strict';
 
+    // Host capability contract — parsed once at module init, following
+    // mission-control.js:6-9. An unparseable OR missing attribute degrades to
+    // {} (every view available), never to a blank surface. Matches
+    // transport.js:452's early-return on a falsy raw value.
+    const HOST_CAPS = (() => {
+        try { return JSON.parse(document.body.dataset.hostCapabilities || '{}'); }
+        catch { return {}; }
+    })();
+
     // State
     let currentWorkspaceRoot = '';
     let currentWorkspaceId = '';
-    let currentProject = '__unassigned__';
+    let currentProject = '__all__';
     let allCards = [];
     let allColumns = [];
     let workspaceList = [];
@@ -23,6 +32,15 @@
     let selectedMoveTargetColumn = '';
     let dispatchStarredOnly = false;
     let moveStarredOnly = false;
+
+    // In-flight two-phase dispatch poll state. The command surface POSTs
+    // /kanban/dispatch with { ack: true } and gets an ack the moment the
+    // dispatch is committed (gate pre-flighted, move+delivery fired) — well
+    // under a second — then polls /kanban/dispatch/state for prompt delivery.
+    // The button re-enables after the ACK, not after the paced paste. Cancelled
+    // on view switch, card change, and a new dispatch so no stale poll settles a
+    // chip for a card the operator is no longer looking at.
+    let activeDispatchPoll = null; // { planId, since, deadline, timer, stopped }
 
     // Feature Subtask Counts Cache
     const featureSubtaskCounts = new Map();
@@ -38,6 +56,8 @@
     let columnsResolved = false;
 
     let activeMission = null;
+    let missionList = [];
+    let selectedMissionId = null;
     let teamRoster = [];
     let liveFleet = [];
     let activeTerminalWs = null;
@@ -52,15 +72,63 @@
     const lockBanner = document.getElementById('mission-lock-banner');
     const lockMissionCodename = document.getElementById('lock-mission-codename');
 
-    // Nav
-    const phoneNavBtns = document.querySelectorAll('#phone-nav-bar .nav-btn');
-    const tabletNavBtns = document.querySelectorAll('#tablet-rail .nav-btn');
-    const viewPanes = {
-        dispatch: document.getElementById('view-dispatch'),
-        move: document.getElementById('view-move'),
-        mission: document.getElementById('view-mission'),
-        teams: document.getElementById('view-teams'),
-    };
+    // Nav — built from a declared view list, each carrying the host capability
+    // that governs it. A view whose capability is false is dropped from
+    // viewPanes AND its buttons removed from both nav sets, so switchView's
+    // `if (!viewPanes[viewName]) return` guard refuses it — the gated view is
+    // unreachable, not merely CSS-hidden.
+    //
+    // Mission is governed by `automation`, not `mission-control`: the /command
+    // MISSION view drives /kanban/queue/next (the queue pop), which is
+    // orchestration. transport.js:499-508 records that `mission-control`
+    // predates the Mission Control panel and that the panel is gated by
+    // `automation`; the same reasoning applies here. Both hosts set the two
+    // flags identically today (true on the extension, false on standalone), so
+    // the choice is semantic, not behavioural — but guessing `mission-control`
+    // would hide the view on a future host that splits the two.
+    const VIEWS = [
+        { name: 'dispatch', cap: null },
+        { name: 'move', cap: null },
+        { name: 'mission', cap: 'automation' },
+        { name: 'teams', cap: 'terminalFleet' },
+    ];
+
+    function capabilityEnabled(cap) {
+        if (!cap) return true;
+        return HOST_CAPS[cap] !== false;
+    }
+
+    const availableViews = VIEWS.filter(v => capabilityEnabled(v.cap));
+    const availableViewNames = new Set(availableViews.map(v => v.name));
+
+    const viewPanes = {};
+    availableViews.forEach(v => {
+        const pane = document.getElementById(`view-${v.name}`);
+        if (pane) viewPanes[v.name] = pane;
+    });
+
+    // Remove nav buttons for gated views from both nav sets before snapshotting
+    // the survivors — querySelectorAll returns a static NodeList, so removal
+    // must precede the capture.
+    const phoneNavBar = document.getElementById('phone-nav-bar');
+    const tabletRail = document.getElementById('tablet-rail');
+    VIEWS.forEach(v => {
+        if (availableViewNames.has(v.name)) return;
+        phoneNavBar?.querySelectorAll(`.nav-btn[data-view="${v.name}"]`).forEach(btn => btn.remove());
+        tabletRail?.querySelectorAll(`.nav-btn[data-view="${v.name}"]`).forEach(btn => btn.remove());
+    });
+    const phoneNavBtns = Array.from(phoneNavBar?.querySelectorAll('.nav-btn') || []);
+    const tabletNavBtns = Array.from(tabletRail?.querySelectorAll('.nav-btn') || []);
+
+    // If Teams is gated off, drop the tablet rail's teams section (divider +
+    // header + list) too — it only populates when the Teams view renders, and
+    // an orphaned "TEAMS" header over an empty list fails verification 6's
+    // "lays out correctly with two nav entries".
+    if (!availableViewNames.has('teams')) {
+        tabletRail?.querySelector('.tablet-rail-divider')?.remove();
+        tabletRail?.querySelector('.tablet-rail-teams-header')?.remove();
+        document.getElementById('tablet-teams-rail')?.remove();
+    }
 
     // Dispatch Elements
     const dispatchSourceColSelect = document.getElementById('dispatch-source-column-select');
@@ -84,8 +152,8 @@
     const missionStagingContainer = document.getElementById('mission-staging-container');
     const missionProgressContainer = document.getElementById('mission-progress-container');
     const missionMembersList = document.getElementById('mission-members-list');
-    const missionAddMemberSelect = document.getElementById('mission-add-member-select');
-    const btnAddMissionMember = document.getElementById('btn-add-mission-member');
+    const missionSelect = document.getElementById('mission-select');
+    const missionStatusChip = document.getElementById('mission-status-chip');
     const missionProgressCodename = document.getElementById('mission-progress-codename');
     const missionProgressElapsed = document.getElementById('mission-progress-elapsed');
     const missionProgressMembersList = document.getElementById('mission-progress-members-list');
@@ -114,6 +182,13 @@
             } catch {
                 currentWorkspaceRoot = initialRoot;
             }
+        }
+
+        // Assert the default view survived gating. Dispatch is ungated so this
+        // holds, but a future gate or a renamed default could strand the
+        // operator on a blank pane — fall back to the first available view.
+        if (!viewPanes[activeView]) {
+            activeView = availableViews.length > 0 ? availableViews[0].name : activeView;
         }
 
         setupNavigation();
@@ -187,6 +262,10 @@
                 closeTerminalViewer();
             }
 
+            // Leaving the dispatch view cancels its in-flight delivery poll so a
+            // stale poll never settles a chip the operator can no longer see.
+            cancelDispatchPoll();
+
             // Update nav buttons active states
             phoneNavBtns.forEach(btn => {
                 btn.classList.toggle('active', btn.dataset.view === viewName);
@@ -216,9 +295,12 @@
             const opt = wsSelect.selectedOptions?.[0];
             if (!opt) return;
             currentWorkspaceRoot = opt.dataset.workspaceRoot || currentWorkspaceRoot;
-            currentProject = opt.dataset.project || '__unassigned__';
+            currentProject = opt.dataset.project || '__all__';
             selectedDispatchCardId = null;
             selectedMoveCardId = null;
+            // Workspace switch invalidates any in-flight delivery poll — its
+            // planId belongs to the previous workspace's board.
+            cancelDispatchPoll();
             refreshAllData();
         });
 
@@ -276,7 +358,18 @@
 
         // Mission events
         btnLaunchMission?.addEventListener('click', launchActiveMission);
-        btnAddMissionMember?.addEventListener('click', addSelectedMissionMember);
+        missionSelect?.addEventListener('change', () => {
+            selectedMissionId = missionSelect.value || null;
+            clearChip(missionStatusChip);
+            // Selecting a mission sets activeMission locally so the members
+            // list and launch button reflect the operator's choice. The
+            // board push refresh path (updateBoard → renderActiveView) will
+            // re-derive activeMission from fetchMissionsState, but the
+            // operator's selection is preserved via selectedMissionId
+            // round-tripping in renderMissionView.
+            activeMission = missionList.find(m => m.id === selectedMissionId) || activeMission;
+            renderMissionView();
+        });
 
         // Terminal Viewer
         btnCloseTerminal?.addEventListener('click', closeTerminalViewer);
@@ -291,6 +384,7 @@
         await Promise.all([
             fetchColumns(),
             fetchMissionsState(),
+            fetchMissionList(),
             fetchTeamsState()
         ]);
         renderActiveView();
@@ -398,13 +492,28 @@
         }
 
         roots.forEach(root => {
-            const baseOpt = document.createElement('option');
-            baseOpt.value = `${root}|__unassigned__`;
             const label = root.split('/').filter(Boolean).pop() || root;
-            baseOpt.textContent = label;
-            baseOpt.dataset.workspaceRoot = root;
-            baseOpt.dataset.project = '__unassigned__';
-            wsSelect.appendChild(baseOpt);
+
+            // All-projects row — the widest view. Pinned as the cold-start default
+            // below because a surface whose first job is to show you the board
+            // should not narrow on reconnect. The reconnect path that reaches
+            // the default is the `else if` branch at the bottom of this function,
+            // hit on every updateBoard push whose previous selection is gone.
+            const allOpt = document.createElement('option');
+            allOpt.value = `${root}|__all__`;
+            allOpt.textContent = `${label} (all)`;
+            allOpt.dataset.workspaceRoot = root;
+            allOpt.dataset.project = '__all__';
+            wsSelect.appendChild(allOpt);
+
+            // Unassigned row — plans with no project. Distinct from `__all__`
+            // so the workspace name alone stops being a selectable value.
+            const unassignedOpt = document.createElement('option');
+            unassignedOpt.value = `${root}|__unassigned__`;
+            unassignedOpt.textContent = `${label} (unassigned)`;
+            unassignedOpt.dataset.workspaceRoot = root;
+            unassignedOpt.dataset.project = '__unassigned__';
+            wsSelect.appendChild(unassignedOpt);
 
             const projs = Array.from(wsMap[root] || []);
             projs.forEach(proj => {
@@ -420,10 +529,18 @@
         if (currentVal && [...wsSelect.options].some(o => o.value === currentVal)) {
             wsSelect.value = currentVal;
         } else if (wsSelect.options.length > 0) {
-            wsSelect.selectedIndex = 0;
+            // Cold-start default: the `__all__` row for the first root. Pinning
+            // the widest view here keeps the surface from silently narrowing to
+            // unassigned on every reconnect that loses the previous selection.
+            const allOpt = [...wsSelect.options].find(o => o.dataset.project === '__all__');
+            if (allOpt) {
+                wsSelect.value = allOpt.value;
+            } else {
+                wsSelect.selectedIndex = 0;
+            }
             const chosen = wsSelect.selectedOptions[0];
-            currentWorkspaceRoot = chosen.dataset.workspaceRoot || currentWorkspaceRoot;
-            currentProject = chosen.dataset.project || '__unassigned__';
+            currentWorkspaceRoot = chosen?.dataset.workspaceRoot || currentWorkspaceRoot;
+            currentProject = chosen?.dataset.project || '__all__';
         }
     }
 
@@ -437,6 +554,25 @@
             }
         } catch (err) {
             console.warn('[Command] Failed to fetch active mission:', err);
+        }
+    }
+
+    // Fetch the full mission list for the workspace's mission select. Uses
+    // the existing GET /kanban/missions route (NOT /kanban/mission/active,
+    // whose single-mission return shape fetchMissionsState depends on).
+    // The select is populated from this list; selecting one sets
+    // activeMission locally so the members list and launch button reflect
+    // the operator's choice.
+    async function fetchMissionList() {
+        try {
+            const queryRoot = currentWorkspaceRoot ? `?workspaceRoot=${encodeURIComponent(currentWorkspaceRoot)}` : '';
+            const res = await fetch(`/kanban/missions${queryRoot}`);
+            if (res.ok) {
+                const data = await res.json();
+                missionList = Array.isArray(data?.missions) ? data.missions : [];
+            }
+        } catch (err) {
+            console.warn('[Command] Failed to fetch mission list:', err);
         }
     }
 
@@ -528,6 +664,27 @@
         };
     }
 
+    // Project scoping for the command surface. One helper, three call sites
+    // (renderDispatchView, renderMoveView, mission candidate picker). Replaces
+    // the three inline `currentProject !== '__unassigned__'` guards that
+    // overloaded `__unassigned__` as both "no project" and "no filter".
+    //
+    // Contract:
+    //   `__all__`        → no filter (widest view)
+    //   `__unassigned__` → cards whose project is empty in any representation
+    //                      (`''`, `null`, `undefined`, or `'__unassigned__'`),
+    //                      because the WS push projection can present a
+    //                      project-less plan as any of the four depending on
+    //                      which writer last touched the row
+    //   otherwise        → exact project match
+    function filterByProject(cards) {
+        if (!currentProject || currentProject === '__all__') return cards;
+        if (currentProject === '__unassigned__') {
+            return cards.filter(c => !c.project || c.project === '__unassigned__');
+        }
+        return cards.filter(c => c.project === currentProject);
+    }
+
     // ── 1. Dispatch View Rendering ─────────────────────────────────────
 
     function clearChip(chip) {
@@ -538,6 +695,9 @@
 
     function selectDispatchCard(cardId) {
         selectedDispatchCardId = cardId;
+        // Selecting a different card cancels any in-flight delivery poll for the
+        // previous card — its chip would otherwise settle the wrong row.
+        cancelDispatchPoll();
         clearChip(dispatchStatusChip);
         if (dispatchCardsList) {
             const items = dispatchCardsList.querySelectorAll('.cmd-card-row');
@@ -556,9 +716,7 @@
         let cards = allCards.map(getEffectiveCard);
 
         // Project filter
-        if (currentProject && currentProject !== '__unassigned__') {
-            cards = cards.filter(c => c.project === currentProject);
-        }
+        cards = filterByProject(cards);
 
         // Scope to dispatch source column
         const dispatchCol = (dispatchSourceColSelect ? dispatchSourceColSelect.value : '') || selectedDispatchColumn;
@@ -647,9 +805,7 @@
         let cards = allCards.map(getEffectiveCard);
 
         // Project filter
-        if (currentProject && currentProject !== '__unassigned__') {
-            cards = cards.filter(c => c.project === currentProject);
-        }
+        cards = filterByProject(cards);
 
         // Scope to source column
         const sourceCol = moveSourceColSelect?.value;
@@ -857,56 +1013,89 @@
             missionStagingContainer.classList.remove('hidden');
             missionProgressContainer.classList.add('hidden');
 
-            missionMembersList.innerHTML = '';
-            const members = missionMembers();
-            if (members.length === 0) {
-                missionMembersList.innerHTML = '<div style="color:var(--text-secondary); font-size:12px; padding:12px; text-align:center;">No members staged. Select candidates above.</div>';
-            } else {
-                members.forEach(m => {
-                    const row = document.createElement('div');
-                    row.className = 'cmd-card-row';
-                    row.style.minHeight = '48px';
-                    row.style.height = '48px';
+            // ── Mission select ───────────────────────────────────────
+            // Populate from missionList, round-tripping the operator's
+            // selection across board pushes (same pattern as
+            // populateColumnDropdowns). When the list is empty, render an
+            // honest empty state and disable Launch — no enabled dropdown
+            // over nothing, no dead button.
+            if (missionSelect) {
+                const prevValue = selectedMissionId || missionSelect.value;
+                missionSelect.innerHTML = '';
 
-                    const title = document.createElement('span');
-                    title.className = 'cmd-card-title';
-                    title.textContent = m.title;
-                    row.appendChild(title);
-
-                    const removeBtn = document.createElement('button');
-                    removeBtn.className = 'secondary-action-btn';
-                    removeBtn.style.minHeight = '32px';
-                    removeBtn.style.padding = '4px 10px';
-                    removeBtn.textContent = 'Remove';
-                    removeBtn.addEventListener('click', (ev) => {
-                        ev.stopPropagation();
-                        removeMissionMember(m.id);
+                if (missionList.length === 0) {
+                    const empty = document.createElement('option');
+                    empty.value = '';
+                    empty.textContent = 'No missions for this workspace';
+                    empty.disabled = true;
+                    empty.selected = true;
+                    missionSelect.appendChild(empty);
+                    selectedMissionId = null;
+                    activeMission = null;
+                } else {
+                    missionList.forEach(m => {
+                        const opt = document.createElement('option');
+                        opt.value = m.id;
+                        opt.textContent = m.name || m.id;
+                        missionSelect.appendChild(opt);
                     });
-                    row.appendChild(removeBtn);
-
-                    missionMembersList.appendChild(row);
-                });
+                    // Round-trip: keep the previous selection if it still
+                    // exists; otherwise default to the first mission.
+                    if (prevValue && [...missionSelect.options].some(o => o.value === prevValue)) {
+                        missionSelect.value = prevValue;
+                        selectedMissionId = prevValue;
+                    } else {
+                        missionSelect.selectedIndex = 0;
+                        selectedMissionId = missionSelect.value || null;
+                    }
+                    activeMission = missionList.find(m => m.id === selectedMissionId) || null;
+                }
             }
 
-            // Populate member candidate picker
-            if (missionAddMemberSelect) {
-                missionAddMemberSelect.innerHTML = '';
-                const memberIds = new Set(members.map(m => m.id));
-                let candidates = allCards.filter(c => !memberIds.has(c.planId || c.sessionId || c.id));
-                if (currentProject && currentProject !== '__unassigned__') {
-                    candidates = candidates.filter(c => c.project === currentProject);
+            // ── Members list (read-only) ─────────────────────────────
+            missionMembersList.innerHTML = '';
+
+            if (missionList.length === 0) {
+                // No missions exist — name where they are created, not a
+                // dead dropdown. The desktop board is where mission
+                // creation lives (the design study struck out the name
+                // field from this surface).
+                missionMembersList.innerHTML = '<div style="color:var(--text-secondary); font-size:12px; padding:12px; text-align:center;">No missions exist for this workspace. Create one on the desktop board.</div>';
+            } else {
+                const members = missionMembers();
+                if (members.length === 0) {
+                    missionMembersList.innerHTML = '<div style="color:var(--text-secondary); font-size:12px; padding:12px; text-align:center;">This mission has no members.</div>';
+                } else {
+                    members.forEach(m => {
+                        const row = document.createElement('div');
+                        row.className = 'cmd-card-row';
+                        row.style.minHeight = '48px';
+                        row.style.height = '48px';
+
+                        const title = document.createElement('span');
+                        title.className = 'cmd-card-title';
+                        title.textContent = m.title;
+                        row.appendChild(title);
+
+                        const removeBtn = document.createElement('button');
+                        removeBtn.className = 'secondary-action-btn';
+                        removeBtn.style.minHeight = '32px';
+                        removeBtn.style.padding = '4px 10px';
+                        removeBtn.textContent = 'Remove';
+                        removeBtn.addEventListener('click', (ev) => {
+                            ev.stopPropagation();
+                            removeMissionMember(m.id);
+                        });
+                        row.appendChild(removeBtn);
+
+                        missionMembersList.appendChild(row);
+                    });
                 }
-                candidates = candidates.filter(c => {
-                    const col = (c.kanbanColumn || c.column || '').toUpperCase();
-                    return col !== 'COMPLETED' && col !== 'ARCHIVED';
-                });
-                candidates.forEach(c => {
-                    const opt = document.createElement('option');
-                    opt.value = c.planId || c.sessionId || c.id;
-                    opt.textContent = `${c.topic || 'Card'} (${c.kanbanColumn || c.column || 'new'})`;
-                    opt.dataset.kind = c.isFeature ? 'feature' : 'plan';
-                    missionAddMemberSelect.appendChild(opt);
-                });
+            }
+
+            // ── Launch button state ──────────────────────────────────
+            if (btnLaunchMission) {
+                btnLaunchMission.disabled = !activeMission || missionList.length === 0;
             }
         }
     }
@@ -1123,11 +1312,90 @@
 
     // ── 5. Actions Execution ───────────────────────────────────────────
 
+    // Cancel any in-flight dispatch poll. Called on view switch, card change,
+    // and before starting a new dispatch, so a stale poll never settles a chip
+    // for a card the operator is no longer looking at. Leaves the chip as-is —
+    // the caller decides what to show next.
+    function cancelDispatchPoll() {
+        if (activeDispatchPoll) {
+            activeDispatchPoll.stopped = true;
+            if (activeDispatchPoll.timer) {
+                clearTimeout(activeDispatchPoll.timer);
+            }
+            activeDispatchPoll = null;
+        }
+    }
+
+    // Poll /kanban/dispatch/state for the second phase (prompt delivery) of an
+    // acked dispatch. 1s interval, capped at the server-supplied deadline (60s).
+    // Settles the chip to success (delivered) or unknown (deadline passed) and
+    // stops itself. No-op if the poll was cancelled or superseded.
+    function pollDispatchDelivery(planId, since, deadline) {
+        cancelDispatchPoll();
+        const poll = { planId, since, deadline, timer: null, stopped: false };
+        activeDispatchPoll = poll;
+        const DISPATCH_POLL_INTERVAL_MS = 1000;
+
+        const tick = async () => {
+            if (poll.stopped) return;
+            // Deadline passed — settle to unknown and stop. The wording matches
+            // the synchronous 502 vocabulary; "unknown" is a UI timeout, not a
+            // delivery verdict (the prompt may still be pasting).
+            if (Date.now() >= deadline) {
+                if (activeDispatchPoll === poll) {
+                    dispatchStatusChip.textContent = 'Delivery status uncertain — the prompt may still be pasting. Check the terminal agent.';
+                    dispatchStatusChip.className = 'status-chip unknown';
+                    activeDispatchPoll = null;
+                }
+                return;
+            }
+            try {
+                const params = new URLSearchParams({
+                    planId,
+                    since: since === null ? '' : String(since),
+                    deadline: String(deadline)
+                });
+                if (currentWorkspaceRoot) params.set('workspaceRoot', currentWorkspaceRoot);
+                const res = await fetch(`/kanban/dispatch/state?${params.toString()}`);
+                const result = await res.json().catch(() => null);
+                if (poll.stopped || activeDispatchPoll !== poll) return;
+                if (!res.ok || !result) {
+                    // Transient poll error — keep the pending chip and retry.
+                    poll.timer = setTimeout(tick, DISPATCH_POLL_INTERVAL_MS);
+                    return;
+                }
+                if (result.state === 'dispatched') {
+                    activeDispatchPoll = null;
+                    dispatchStatusChip.textContent = `Dispatched to ${result.dispatchedAgent || 'agent'}`;
+                    dispatchStatusChip.className = 'status-chip success';
+                    renderDispatchView();
+                    return;
+                }
+                if (result.state === 'unknown') {
+                    activeDispatchPoll = null;
+                    dispatchStatusChip.textContent = result.error || 'Delivery status uncertain — the prompt may still be pasting. Check the terminal agent.';
+                    dispatchStatusChip.className = 'status-chip unknown';
+                    return;
+                }
+                // 'delivering' — keep the pending chip, poll again.
+                poll.timer = setTimeout(tick, DISPATCH_POLL_INTERVAL_MS);
+            } catch {
+                if (poll.stopped || activeDispatchPoll !== poll) return;
+                poll.timer = setTimeout(tick, DISPATCH_POLL_INTERVAL_MS);
+            }
+        };
+        // Kick the first poll immediately so a fast delivery settles quickly.
+        poll.timer = setTimeout(tick, 0);
+    }
+
     async function executeDispatch() {
         if (!selectedDispatchCardId || isMissionInFlight()) return;
         const cardId = selectedDispatchCardId;
         const card = allCards.find(c => (c.planId || c.sessionId || c.id) === cardId);
         if (!card) return;
+
+        // A new dispatch supersedes any in-flight poll for a previous card.
+        cancelDispatchPoll();
 
         // Apply immediate optimistic state (< 100ms)
         dispatchStatusChip.textContent = 'Dispatching agent...';
@@ -1135,20 +1403,35 @@
         btnDispatch.disabled = true;
 
         try {
+            // ack: true → the server returns as soon as the dispatch is committed
+            // (gate pre-flighted, move+delivery fired), not after the paced paste.
             const res = await fetch('/kanban/dispatch', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     plan: cardId,
-                    workspaceRoot: currentWorkspaceRoot
+                    workspaceRoot: currentWorkspaceRoot,
+                    ack: true
                 })
             });
 
             const result = await res.json().catch(() => null);
-            if (res.ok && result?.success !== false) {
-                dispatchStatusChip.textContent = `Dispatched to ${result?.dispatchedAgent || 'agent'}`;
-                dispatchStatusChip.className = 'status-chip success';
+            // The acked variant returns { success: true, phase: 'dispatching', ... }
+            // for a committed dispatch; 4xx/5xx (gate refusal, no terminals, etc.)
+            // arrive immediately with today's wording and no success chip.
+            if (res.ok && result?.success !== false && result?.phase === 'dispatching') {
+                const seatName = result?.seat || result?.role || 'agent';
+                dispatchStatusChip.textContent = `Dispatched — ${seatName} is receiving the prompt`;
+                dispatchStatusChip.className = 'status-chip pending';
+                // Re-enable the button: the operator is NOT blocked for the paste.
+                btnDispatch.disabled = false;
                 renderDispatchView();
+                // Second phase: poll for prompt delivery, settle to success/unknown.
+                pollDispatchDelivery(
+                    result.planId || cardId,
+                    result.dispatchedAtBefore ?? null,
+                    result.deadline || (Date.now() + 60000)
+                );
             } else {
                 const errMsg = result?.error || 'Dispatch outcome unknown';
                 dispatchStatusChip.textContent = errMsg;
@@ -1224,34 +1507,6 @@
         }
     }
 
-    async function addSelectedMissionMember() {
-        if (!activeMission || !missionAddMemberSelect?.value) return;
-        const memberId = missionAddMemberSelect.value;
-        const selectedOpt = missionAddMemberSelect.selectedOptions?.[0];
-        const kind = selectedOpt?.dataset?.kind || 'plan';
-
-        try {
-            btnAddMissionMember.disabled = true;
-            const res = await fetch('/kanban/mission/member/add', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    missionId: activeMission.id || activeMission.missionId,
-                    memberId,
-                    kind
-                })
-            });
-            if (res.ok) {
-                await fetchMissionsState();
-                renderMissionView();
-            }
-        } catch (err) {
-            console.warn('[Command] Add member failed:', err);
-        } finally {
-            btnAddMissionMember.disabled = false;
-        }
-    }
-
     async function removeMissionMember(memberId) {
         if (!activeMission) return;
         try {
@@ -1264,7 +1519,7 @@
                 })
             });
             if (res.ok) {
-                await fetchMissionsState();
+                await Promise.all([fetchMissionsState(), fetchMissionList()]);
                 renderMissionView();
             }
         } catch (err) {
@@ -1272,10 +1527,23 @@
         }
     }
 
+    // Launch the active mission by popping the next staged card from the
+    // queue. Reads the parsed response body (not just res.ok) and writes a
+    // mission status chip so the operator sees the outcome without going
+    // back to the desktop board.
+    //
+    // Settle timing: the /kanban/queue/next response carries the dispatch
+    // result (which card popped, which seat received it) but NOT the full
+    // updated mission state. So the chip is written from the response body
+    // immediately, and a delayed fetchMissionsState() (500ms) lets the
+    // queue pop settle before re-reading mission state — not a blind
+    // immediate re-fetch (the original bug), and not "from the response"
+    // (which doesn't carry mission state). The board push via updateBoard
+    // is the authoritative refresh path.
     async function launchActiveMission() {
         if (!activeMission) return;
+        if (btnLaunchMission) { btnLaunchMission.disabled = true; }
         try {
-            btnLaunchMission.disabled = true;
             const res = await fetch('/kanban/queue/next', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1283,15 +1551,49 @@
                     workspaceRoot: currentWorkspaceRoot
                 })
             });
-            if (res.ok) {
-                await fetchMissionsState();
-                renderActiveView();
+
+            const body = await res.json().catch(() => null);
+
+            if (res.ok && body?.success !== false) {
+                // Dispatched → card topic + receiving seat
+                if (body?.dispatched) {
+                    const card = body.dispatched;
+                    const topic = card.topic || card.planId || 'card';
+                    const seat = card.dispatchedAgent || 'agent';
+                    setMissionChip(`Dispatched: ${topic} → ${seat}`, 'success');
+                } else if (body?.dispatched === null) {
+                    // Nothing staged / nothing ready — the server's reason
+                    // verbatim (e.g. "queue empty")
+                    const reason = body?.reason || 'Nothing ready';
+                    setMissionChip(reason, 'unknown');
+                } else {
+                    setMissionChip('Launch outcome unknown', 'unknown');
+                }
+            } else {
+                // Refusal (team in flight, no seat on the origin team,
+                // dependency blocked) — the server's human-readable error
+                // text, not a machine code.
+                const errMsg = body?.error || 'Launch refused';
+                setMissionChip(errMsg, 'unknown');
             }
+
+            // Delayed re-fetch: let the queue pop settle before re-reading
+            // mission state. The board push (updateBoard) is the
+            // authoritative refresh path.
+            setTimeout(() => { fetchMissionsState().then(() => renderMissionView()); }, 500);
         } catch (err) {
             console.warn('[Command] Launch failed:', err);
+            setMissionChip('Outcome unknown (connection dropped)', 'unknown');
         } finally {
-            btnLaunchMission.disabled = false;
+            if (btnLaunchMission) { btnLaunchMission.disabled = false; }
         }
+    }
+
+    function setMissionChip(text, cls) {
+        if (!missionStatusChip) return;
+        missionStatusChip.textContent = text;
+        missionStatusChip.className = `status-chip ${cls || 'unknown'}`;
+        missionStatusChip.classList.remove('hidden');
     }
 
     // ── 6. Read-Only Terminal Viewer ───────────────────────────────────

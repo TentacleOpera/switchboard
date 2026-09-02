@@ -164,20 +164,52 @@ shipping. Its absence of a `protocols/` entry says nothing about copying.
   CLI emits its own offline guidance and a distinct exit code. Any skill that branches on the old
   string must be updated, not just retargeted.
 
+## Adversarial Synthesis
+
+Key risks: the "read before deleting" step names two `src/` files but doesn't specify the action,
+leaving a coder to re-derive the verdict; the eight `kanban_operations/*.js` scripts each carry
+their own `httpJson` and the plan doesn't say whether they converge on a shared helper or shell to
+the CLI independently; the Mission Control contract test's transport-vs-protocol assertions are not
+enumerated, risking a trial-and-error edit that deletes coherence checks. Mitigations: step 1 now
+records the verdict and action for each `src/` file; step 2 specifies a shared `_lib/cli-call.js`
+helper; the contract-test note identifies the `cat`-of-port-file assertion as the one that flips.
+
 ## Proposed Changes
 
 Sequenced so each step is independently verifiable.
 
-### 1. Read before deleting
+### 1. Read before deleting — verdict and action
 
-`ClaudeCodeMirrorService.ts` and `terminal-token-transport-contract.test.js` — establish what each
-reference does. Neither is a skill file; both may encode a contract this plan must keep.
+`ClaudeCodeMirrorService.ts` and `terminal-token-transport-contract.test.js` both reference
+`sb_api_call.sh` in `src/`, outside the transport sweep's scope (`.agents/` + `.claude/skills/`).
+Neither encodes a transport contract that breaks on deletion; both carry **documentation** that
+goes stale when the shim is deleted. The verdict and action for each:
+
+- **`ClaudeCodeMirrorService.ts:18`** — invariant comment names `_lib/sb_api_call.sh` as an
+  auxiliary file that is NOT copied into `.claude/`. After deletion, the comment points at a ghost.
+  **Action:** update the comment to name the CLI as the transport (the invariant — "auxiliary files
+  are not copied" — still holds; the example changes). **`ClaudeCodeMirrorService.ts:98-107`** — the
+  `SWITCHBOARD_ALLOW_ENTRIES` comment and list include `Bash(curl *)` and `Bash(source *)` as
+  patterns `sb_api_call.sh` runs. After migration, no mirrored skill invokes `curl` or `source`.
+  **Action:** remove `Bash(curl *)` and `Bash(source *)` from the allow list (dead entries after
+  migration), or retain them if any non-mirrored skill still uses them — verify before removing.
+  These are `src/` documentation/allow-list edits, not swept by the transport gate.
+
+- **`terminal-token-transport-contract.test.js:14,152`** — comments name `sb_api_call.sh` as the
+  thing "the whole skill ecosystem rides" with no token handling. After migration, the ecosystem
+  rides the CLI. **Action:** update the comments to reference the CLI. The test's assertions
+  (terminal token transport, CSP legality, `getAuthToken` not returning the terminal token) are
+  unaffected — they are about the terminal channel, not the HTTP API transport.
 
 ### 2. Migrate the eight `kanban_operations/*.js` scripts
 
-Their CLI invocation contract is fixed by the personas that name them. Change internals only:
-resolve through the CLI (or a shared `_lib` helper that shells to it) so they inherit token
-discovery. Verify `move-card.js` still moves a card end-to-end before touching any markdown.
+Their CLI invocation contract is fixed by the personas that name them. Change internals only.
+**Converge on a shared `_lib/cli-call.js` helper** (beside the existing `_lib/workspace-root.js`)
+that shells out to `switchboard api` and inherits token discovery, offline handling, and exit-code
+mapping from the CLI. Each script's `httpJson` + `findApiPort` is replaced by a call to this helper
+— one place for the transport, not eight. The helper resolves the workspace root via the existing
+`_lib/workspace-root.js`, then invokes `switchboard api <METHOD> <path> [json]` and parses the
+`--json` envelope. Verify `move-card.js` still moves a card end-to-end before touching any markdown.
 
 ### 3. Migrate `.agents/skills/` (bundled)
 
@@ -191,6 +223,21 @@ preamble; replace snippets with CLI invocations.
 
 Seventeen files. The three Mission Control documents are the delicate ones and are done last, with
 the contract gate updated in the same commit.
+
+**Contract-test assertion map (`mission-control-tick-and-reports-contract.test.js`):**
+- **Flips from transport to CLI:** the `## Port Discovery` section assertion (line 182) and the
+  `PORT=$(cat …api-server-port.txt)` negative assertion (line 192) — these check that the persona
+  resolves the port through a health-checked probe. After migration, the persona resolves through
+  the CLI, so the section and the `cat`-of-port-file negative both change shape. The `A port file is
+  not liveness` and `does not mean no terminals exist` assertions (lines 184-190) are **protocol
+  invariants that stay** — the CLI still needs to communicate that a stale port is not liveness.
+- **Protocol invariants — stay untouched:** the ready-to-go query (lines 141-154), the
+  `POST /kanban/dispatch` forbidden-verb assertion (lines 170-179), `ptySendPrompt` (line 176), the
+  `progress.json` / `stallCount` assertion (lines 120-123), the `session.md` / `session-log.md`
+  assertion (lines 133-139), the Hard-Rule scope exclusion (lines 105-118), the self-wake contract
+  (lines 197-252), the handoff decision (lines 254-260), and the Miscellaneous sweep (lines 295-310).
+  These are about meaning, not transport — editing them deletes coherence checks the gate exists to
+  enforce.
 
 ### 6. Mirror `.claude/skills/`
 
@@ -227,3 +274,7 @@ Four files, kept identical to their `.agents/` counterparts.
   diagram generate) and confirm each succeeds where it previously 401'd.
 - Upgrade an existing workspace and confirm `sb_api_call.sh` is archived as `.migrated.bak`, not
   deleted, and that no sibling `_lib` file was lost.
+
+**Complexity: 6 → Send to Coder.** Multi-file migration with one delicate contract-gate edit;
+mechanical in most files, risky in the Mission Control trio. The contract-test assertion map above
+removes the trial-and-error risk.

@@ -166,9 +166,18 @@ unconditional — no opt-in, no exception list.
   This is the regression the guard most plausibly causes.
 - **`saveLayoutSettings` must stay one-way.** Its dock early-return (`:2237`) is what stops the dock
   writing back; the re-clamp must not route through a save.
-- **Both hosts serve these files** — `getShellHtml` is wired in `bootstrap.ts:3469` and
-  `TaskViewerProvider.ts:4190`. No new endpoint, so no composition-root work.
+- **Both hosts serve these files** — `getShellHtml` is wired in `bootstrap.ts:3474` and
+  `src/services/TaskViewerProvider.ts:4198`. No new endpoint, so no composition-root work.
 - **No `confirm()` in this diff**, per `CLAUDE.md`.
+
+## Adversarial Synthesis
+
+Key risks: duplicate `isDockFrame` parser drift between `terminals.js` and `transport.js`; origin
+check semantics in sandboxed iframes (defense-in-depth, not primary fix); unguarded parent-directed
+relays beyond the three known. Mitigations: cross-reference comments between parsers so a change to
+one prompts a check of the other; document the origin check as secondary to the dock guard on the
+sender; enumerate the full parent-directed `postMessage` surface (Proposed Change 4) to catch the
+next unguarded relay.
 
 ## Proposed Changes
 
@@ -184,9 +193,12 @@ Parse the mode parameters once at document scope and apply `is-solo` / `is-kanba
 
 ### 3. `transport.js` + `shell.js` — dock containment
 
-Derive `isDockFrame` in `transport.js`; guard both `switchPanel` senders (`:356`, `:441`) and warn
-rather than fail silently; post with `location.origin`. Add the missing origin check to the shell's
-`switchPanel` arm.
+Derive `isDockFrame` in `transport.js` from `location.search` (mirroring `terminals.js:214`); guard
+both `switchPanel` senders (`:358`, `:441`) and warn rather than fail silently; post with
+`location.origin`. Add the missing origin check to the shell's `switchPanel` arm — this is
+defense-in-depth; the dock guard on the sender is the primary fix. Add a cross-reference comment in
+both parsers (`terminals.js` and `transport.js`) pointing at each other, so a change to one prompts
+a check of the other.
 
 ### 4. Enumerate the parent-directed message surface
 
@@ -217,9 +229,12 @@ remembered.
 
 ### Goal Invariants
 
-- A dock document reads no pane-scoped state belonging to the main panel.
-- A dock document renders in its dock form on first paint, with no full-panel chrome flashing.
-- A dock document can change nothing outside its own frame.
+- A dock document reads no pane-scoped state belonging to the main panel; it renders correctly with
+  dock-local defaults regardless of the main panel's persisted settings.
+- No full-panel chrome (sidebar, toolbar, fallback banner, group tab strip) is visible at any point
+  during dock document load; the dock form is present on first paint.
+- A dock document can change nothing outside its own frame; a non-dock panel can still post
+  `switchPanel` to the shell (linear.js Tickets switch works).
 
 ### Manual
 

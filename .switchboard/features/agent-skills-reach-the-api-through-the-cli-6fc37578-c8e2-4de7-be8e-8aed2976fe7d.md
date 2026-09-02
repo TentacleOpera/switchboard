@@ -4,6 +4,8 @@ description: 'Agent skills reach the API through the CLI'
 
 # Agent skills reach the API through the CLI
 
+**Complexity:** 6
+
 ## Goal
 
 Move every agent-facing protocol, skill and workflow off `curl` / `sb_api_call.sh` and onto the
@@ -29,7 +31,8 @@ reference a CLI subcommand.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] (no subtasks)
+- [ ] [Retire `sb_api_call.sh` — move every agent protocol, skill and workflow onto the CLI](../plans/migrate-agent-protocols-from-curl-to-the-cli.md) — **PLAN REVIEWED** — ID: 59e48bde-7139-4e01-bebd-bd158030b493
+- [ ] [`switchboard api` — one escape hatch so agent skills can leave curl behind](../plans/switchboard-api-escape-hatch-in-the-cli.md) — **PLAN REVIEWED** — ID: 8aa2e928-19cc-46c6-8bce-3c68e7f67e35
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -43,3 +46,27 @@ The migration's own risk is a contract gate.
 runsheets by path and asserts on their content, because *"a persona is executable specification with
 no compiler."* Rewriting them turns it red; adjusting it carelessly deletes the coherence checks it
 exists to enforce. It is edited deliberately, in the same commit.
+
+## Team Dispatch Instructions
+
+### `switchboard api` — one escape hatch so agent skills can leave curl behind
+
+- **Seat:** Intern (complexity 3 — single-file change reusing existing helpers)
+- **Acceptance:**
+  - `switchboard api` is in `KNOWN_SUBCOMMANDS` and excluded from `subcommandTargetsCwd` (reachability gate)
+  - Against a stub server with a token file, the received request carries `Authorization: Bearer <token>`
+  - `PUT`, `DELETE`, and `PATCH` reach the stub with the correct method; `workspaceRoot` is in the body for `PUT` and in the query string for `DELETE`
+  - `--data @<file>` reads the file and sends its contents as the body
+  - Path rejection: `http://evil.example/x` and `//evil.example/x` both exit 5 with no request issued
+- **Must not touch:** `apiGet`/`apiPost` behaviour for their existing five callers (extraction is behaviour-preserving); `cmdVerb`'s verb-rail fallback logic
+
+### Retire `sb_api_call.sh` — move every agent protocol, skill and workflow onto the CLI
+
+- **Seat:** Coder (complexity 6 — multi-file migration with one delicate contract-gate edit)
+- **Acceptance:**
+  - No file under `.agents/` or `.claude/skills/` contains `sb_api_call`, `curl `, or `api-server-port.txt` (transport sweep gate)
+  - `mission-control-tick-and-reports-contract.test.js` stays green with meaning-level assertions intact (Port Discovery section flips; protocol invariants stay)
+  - Every migrated `switchboard …` invocation names a subcommand in `KNOWN_SUBCOMMANDS`
+  - `move-card.js` and `create-feature.js` end-to-end against a stub server, asserting `Authorization` header is present
+  - Bundle manifest: every path in `.switchboard-bundled.json` exists; `sb_api_call.sh` is absent
+- **Must not touch:** Any endpoint, verb, or payload shape (transport rewrite only — method, path, and payload stay identical); protocol prose, personas, and decision rules (except where they describe the transport); the eight `kanban_operations/*.js` scripts' invocation contract (named by personas — internals only)

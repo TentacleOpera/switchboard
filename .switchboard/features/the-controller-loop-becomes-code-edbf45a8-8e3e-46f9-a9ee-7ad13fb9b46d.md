@@ -4,6 +4,8 @@ description: 'The controller loop becomes code'
 
 # The controller loop becomes code
 
+**Complexity:** 5
+
 ## Goal
 
 Replace the part of the Mission Control controller that is not judgement with three checkboxes and
@@ -30,7 +32,8 @@ fixed consequence, which makes the dispatch path *less* nondeterministic, not mo
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] (no subtasks)
+- [ ] [The Fleet tab runs the hops — three checkboxes, a Start button, and a feed](../plans/the-fleet-tab-runs-the-hops.md) — **CODER CODED** — ID: 715f1f3b-a022-4a5b-95e5-45c3b358e601
+- [ ] [Three dispatch hops and a Start button — the controller's mechanical loop becomes code](../plans/three-dispatch-hops-and-a-start-button.md) — **CODER CODED** — ID: 862344fe-6999-4aff-b8cc-19a5f42ca73d
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -41,8 +44,8 @@ which creates the tab it renders into.**
 Two things in these plans are load-bearing and easy to get wrong.
 
 Readiness must read card assignment, not seat `status`. A live `switchboard fleet` capture shows
-every seat reading `active` — `status` is a liveness signal whose only consumer checks nothing but
-`=== 'exited'`. Built on it, a hop fires constantly onto seats that are mid-task, and every test
+every seat reading `active` — `status` is a liveness signal (exited vs not), not a busyness signal
+(busy vs idle). Built on it, a hop fires constantly onto seats that are mid-task, and every test
 written against a stub fleet still passes. It is test #1 in both plans for that reason.
 
 Hops 2 and 3 share a readiness set because they share a working tree: a reviewer writes source into
@@ -52,3 +55,29 @@ the same checkout a freshly-dispatched coder would start in. That is not a prefe
 
 Nothing here persists. The checkboxes and Start are session state and die with the terminals they
 govern; work that must survive a machine sleeping belongs on the remote server.
+
+## Team Dispatch Instructions
+
+### Three dispatch hops and a Start button — the controller's mechanical loop becomes code
+- **Seat:** Coder
+- **Acceptance:**
+  - A team is not free while one of its seats holds an uncompleted card, with every seat's `status` set to `'active'`
+  - Empty fleet → `unknown` → no dispatch, for all three hops
+  - Nothing dispatches before Start, with all three ticked
+  - At most one dispatch per tick with all three ticked and everything idle
+  - Both roots wire the resolver (source-level, both `extension.ts` and `bootstrap.ts`)
+- **Must not touch:** None specified.
+
+### The Fleet tab runs the hops — three checkboxes, a Start button, and a feed
+- **Seat:** Coder
+- **Acceptance:**
+  - `stalled` and `blocked` do not trigger evaluation; `completed` does
+  - Coalescing: five turn-end events inside the debounce window produce exactly one pass
+  - Double-trigger safety: a tick and a turn-end pass racing on one free hop produce exactly one dispatch
+  - `notifyTurnEnd` stays non-blocking: an evaluator that throws or never resolves leaves its delivery path unaffected
+  - No `confirm(` anywhere in the changed webview files
+- **Must not touch:** None specified.
+
+## Completion Summary
+
+Both subtasks implemented and reviewed. Backend (three-dispatch-hops): `HopReadiness.ts` evaluates team readiness via `heldByTeam` over card assignment with fail-closed semantics; `tickDispatchHops` integrates into `_tickSurvivorSchedulerJobs` with one-dispatch-per-tick and interval throttling; serialization enforced through `_queueNextChain` via `enqueueOnQueueChain`; both roots wire `setHopSnapshotResolver`. Fleet tab (the-fleet-tab-runs-the-hops): `notifyTurnEnd` schedules coalesced 2s debounce evaluation on `completed` only; hop verbs (`getHopState`, `setHopCheckbox`, `setHopsStarted`) wired in both roots; shell.html/shell.js render seat table, checkboxes with reasons, Start/Stop, and session feed with 60s visibility-gated polling. No `confirm()` anywhere. Contract tests cover all 10 verification items per plan.

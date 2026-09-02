@@ -135,3 +135,40 @@ Opt-in only; no install is moved without an explicit action. Adoption imports be
   **Consequence:** Turso can issue a cloud agent a queue-only credential; a self-hosted sqld can issue only read-only or read-write. The application-level execution gate in `the-remote-command-vocabulary-is-closed.md` therefore **stays for the sqld target** even where Turso's scoping allows relaxing it, and the Database panel must not present the two targets as equivalent on least-privilege.
   **One sub-claim is deliberately not relied upon.** The same pass asserted that sqld *silently ignores* unrecognised fine-grained claims and defaults to read-write — failing open. That is plausible but was inferred from general `serde` behaviour without quoting the claims struct (whether it carries `deny_unknown_fields` decides it), reported without line-level citation, and not confirmed by the empirical container test that would settle it. **Design around it instead of resolving it:** never offer scoped-credential minting for a sqld target. If the product cannot produce a table-scoped token for sqld, no operator can hold one under a false belief that it is scoped, and the server's unverified behaviour becomes unreachable. That is cheaper than the research and strictly safer than trusting either answer.
 - Should the panel refuse to *offer* a libSQL target when the tier split has not landed, rather than trusting sequencing?
+
+## Settled — do not re-raise
+
+**REJECTED. The operator does not want libSQL, stated plainly on 2026-09-01.** This plan is not
+deferred, not sequenced behind anything, and not a candidate to revisit when other work lands.
+Do not cite it as a prerequisite. Do not propose it as an option in a storage comparison.
+
+Three independent reasons, any one of which is sufficient:
+
+**1. Its own stated niche is a mode that is refused.** This plan's sibling puts it exactly:
+"For a team where people mostly move their own cards, [git] is the better default. **For live
+multi-machine coordination, libSQL is.**" Live multi-machine coordination is remote-board with
+local agents as a second host — refused in
+`switchboard-as-a-local-app-and-a-self-hosted-remote.md`. The niche and the refused mode are the
+same thing.
+
+**2. The cloud-agent justification is served twice over without it.** `RemoteControlService`
+already drives the board through Linear, with `switchboard-remote.md` and the
+`improve-remote-plan` skill built on it; and `BoardSnapshotPublisher` already publishes
+`board.json` to the orphan branch `switchboard/board` for any agent holding a checkout. Neither
+needs a database server.
+
+**3. It asks the operator to run infrastructure to use a kanban board.** Bring-your-own
+credential means standing up sqld or a Turso account, pointing hosts at it, managing the
+credential, and reasoning about a lease model when a write loses. That cost is not proportionate
+to the problem at any team size this product targets.
+
+**What covers the surviving cases:** `git-carried-shared-board-state.md` — a team sharing a
+board through a remote they already trust, and a private board over a public repo. It needs no
+server, no account and no credential beyond the repo's own. That plan is **not** settled and
+retains its own justifications; so does its hard prerequisite,
+`split-shared-board-state-from-machine-local-runtime.md`, which defines what a snapshot may
+contain.
+
+**What would reopen this:** nothing currently foreseen. A future need for live, sub-second,
+multi-writer board coordination would be a new requirement, and would have to justify itself from
+scratch rather than by pointing at this plan.

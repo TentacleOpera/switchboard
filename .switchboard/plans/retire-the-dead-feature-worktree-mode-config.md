@@ -10,7 +10,7 @@ now readable state that describes a capability the system no longer has.
 ### Problem Analysis
 
 **The provisioning was removed, and the code says why in its own words.** `stageForQueue`
-(`KanbanProvider.ts:8667`):
+(`KanbanProvider.ts:8707`):
 
 > *"Staging provisions NO worktrees. This loop used to cut one integration worktree per staged
 > feature whenever `feature_worktree_mode` was `'per-feature'`, and **that is the defect**, not the
@@ -36,9 +36,9 @@ launch — never a mode a scheduler can read.
 
 | Survivor | Site | State |
 | :--- | :--- | :--- |
-| The only writer | `KanbanProvider.ts:2534` — inside `_drainRetiredWorktreeModeStash` | A one-time migration drain, not a live path |
-| The read | `KanbanProvider.ts:15213` | `normalizeFeatureWorktreeMode(await db.getConfig(...))` |
-| The broadcast | `KanbanProvider.ts:15273` | Ships `featureWorktreeMode` in a payload |
+| The only writer | `KanbanProvider.ts:2562` — inside `_drainRetiredWorktreeModeStash` | A one-time migration drain, not a live path |
+| The read | `KanbanProvider.ts:15253` | `normalizeFeatureWorktreeMode(await db.getConfig(...))` |
+| The broadcast | `KanbanProvider.ts:15313` | Ships `featureWorktreeMode` in a payload |
 | The normalizer | `normalizeFeatureWorktreeMode` | Exists to make legacy values render |
 | The contract test | `worktree-strategy-control-contract.test.js` | Pins the restore machinery, by count |
 | Shipped config rows | every install that ever set it | `'per-feature'` on old installs, unreachable now |
@@ -48,7 +48,7 @@ built for is gone. `agent-groups-worktree-mode` ("Spawn in own worktree", `kanba
 *team group* setting — `group.worktreeMode === 'auto'` — a different axis with a different owner.
 
 **Its one writer is a migration, and the thing it migrates away from is already gone.**
-`_drainRetiredWorktreeModeStash` (`KanbanProvider.ts:2520`) says so:
+`_drainRetiredWorktreeModeStash` (`KanbanProvider.ts:2556`) says so:
 
 > *"One-time drain of the retired Mission Control worktree stash. **Prior versions** forced
 > `feature_worktree_mode = 'per-feature'` while a Mission Control session was armed and parked the
@@ -58,7 +58,7 @@ built for is gone. `agent-groups-worktree-mode` ("Spawn in own worktree", `kanba
 
 `mission-control_prior_feature_worktree_mode` is its only rider — the sole `_prior_` key in the
 entire source tree. There is no general force-and-restore pattern with other participants; there is
-this one drain, called from two activation sites (`:534`, `:1573`), cleaning up after a behaviour
+this one drain, called from two activation sites (`:542`, `:1599`), cleaning up after a behaviour
 that no longer exists.
 
 So the key's entire remaining lifecycle is: a legacy value sits in config, gets normalized, gets
@@ -101,7 +101,7 @@ freed a lane whose working tree was occupied.
 None — both prior items are settled.
 
 **The broadcast has no consumer, and cannot acquire one.** `featureWorktreeMode` is a field inside
-`postMessage({ type: 'worktreeConfig', … })` (`KanbanProvider.ts:15268-15277`) — a webview message,
+`postMessage({ type: 'worktreeConfig', … })` (`KanbanProvider.ts:15308-15318`) — a webview message,
 not an HTTP payload, so no external agent surface can reach it. Zero references in `src/webview/`,
 `.agents/` or `.claude/`. It is a dead field in a live message.
 
@@ -127,18 +127,18 @@ strands an install that crashed mid-session with the forced value still in place
   meaningful-looking state. This reasoning belongs in the commit message — a future reader finding a
   deleted migration needs to see why it was safe.
 - **The contract test asserts by COUNT, deliberately.**
-  `worktree-strategy-control-contract.test.js:87-90` counts occurrences of
+  `worktree-strategy-control-contract.test.js:87-91` counts occurrences of
   `mission-control_prior_feature_worktree_mode` in `KanbanProvider` and fails on a mismatch —
   *"asserted by COUNT, not presence, so a left-behind writer fails."* Any edit that removes one of
   the two sites and not the other fails loudly, which is correct and intended. The test is rewritten
   in the same commit, not adjusted until green.
 - **Shipped config rows on ~4,000 installs.** Per `CLAUDE.md`, state that shipped must be migrated,
   not assumed absent. The row is *dropped on read* rather than deleted by a destructive write —
-  the same pattern `GlobalIntegrationConfigService.DROPPED_SOURCES` uses (`:502-508`), which keeps
+  the same pattern `GlobalIntegrationConfigService.DROPPED_SOURCES` uses (`:503-508`), which keeps
   the value inert in storage until the next legitimate write and never rewrites a user's blob to
   remove a key.
-- **`normalizeFeatureWorktreeMode` may have other callers.** `agentPromptBuilder.ts:673` and `:806`
-  reference the mode in comments only, and `feature-worktree-guardrail-contract.test.js:120-124`
+- **`normalizeFeatureWorktreeMode` may have other callers.** `agentPromptBuilder.ts:675` and `:808`
+  reference the mode in comments only, and `feature-worktree-guardrail-contract.test.js:120-125`
   asserts *"the inert featureWorktreeMode prompt plumbing stays out"* — so the prompt builder must
   stay clean of it. Removing the normalizer must not tempt anyone to re-add plumbing that test bans.
 
@@ -150,7 +150,7 @@ strands an install that crashed mid-session with the forced value still in place
 - **Both composition roots.** The read and broadcast are in `KanbanProvider`, shared by both hosts,
   so removal reaches both — but verify rather than assume, per `CLAUDE.md`.
 - **`feature-worktree-guardrail-contract.test.js` keeps its assertions; only its prose changes.**
-  Its `worktreeActive` parameter is not the mode — `agentPromptBuilder.ts:1824` derives it as
+  Its `worktreeActive` parameter is not the mode — `agentPromptBuilder.ts:1829` derives it as
   `worktreePaths.length > 0`, true for *any* worktree the agent stands in, whoever cut it. The test
   asserts that a host-owned worktree selects the **standard** guardrail rather than the narrowed one,
   which is the regression gate for a disjunct that once *"silently handed `git worktree remove`
@@ -169,18 +169,51 @@ strands an install that crashed mid-session with the forced value still in place
   This also resolves the apparent conflict with `stageForQueue`: the test never asserted that
   provisioning happens, so there was never a contradiction and the removal is complete.
 
+## Dependencies
+
+- No implementation dependencies — standalone cleanup. Nothing else must land first.
+- **Contextual:** follows the same diagnosed pattern as
+  `retire-queue-sequencing-auto-orchestrator.md` (removal left the flag, the dep, the constant, and
+  the prose).
+- **Unblocks:** `scheduled-jobs-get-a-when-condition-rules-not-just-clocks.md`, which was drafted
+  scoping its readiness predicate by this dead key. Once the key is gone, that plan's predicate
+  cannot reference it.
+
+## Adversarial Synthesis
+
+Key risks: (1) stale `agentPromptBuilder.ts` docblock comments at `:675` and `:808` survive the
+grep gate because comments are exempt — they describe a dead mode as live, the exact docblock-rot
+the plan's own root-cause analysis warns about, so they must be retargeted alongside the guardrail
+test prose. (2) The plan's step 5 ("drop on read") appeared to be a separate action from step 2
+("delete the read") but is actually the same mechanism — deleting the read makes the key inert by
+absence of a reader; no active filter wrapper is needed. (3) Line numbers had drifted ~40-50 lines
+from the plan's citations to current source; updated. Mitigations: retarget the prompt-builder
+comments (added as Proposed Changes step 2), clarify drop-on-read as a consequence not a separate
+write (step 6), and the grep gate (#1, #7) catches any future re-introduction.
+
 ## Proposed Changes
 
 1. **Retarget the guardrail test's prose, keep its assertions.** `:10` and `:77` explain the
    scenario via `feature_worktree_mode`; they now name a mission-provisioned worktree bounded by
    `maxExtraWorktrees`. No `assert` changes.
-2. Delete the read (`:15213`) and the broadcast field (`:15273`).
-3. Delete `_drainRetiredWorktreeModeStash` (`:2520-2537`), its `PRIOR_KEY`, and both call sites
-   (`:534`, `:1573`). Its output is inert once step 2 lands.
-4. Delete `normalizeFeatureWorktreeMode` once callerless.
-5. Drop `feature_worktree_mode` and `mission-control_prior_feature_worktree_mode` on config read,
-   never by destructive write.
-6. Retire `worktree-strategy-control-contract.test.js`. Its subject is the drain; with no key to
+2. **Retarget the `agentPromptBuilder.ts` docblock comments.** `:675` and `:808` reference
+   `feature_worktree_mode = 'per-feature'` to explain why a host-provisioned worktree keeps the
+   standard guardrail. Retarget both to name a mission-provisioned worktree within
+   `maxExtraWorktrees`, the same substitution as step 1. These are the same stale-docblock failure
+   the plan's root-cause analysis warns about — leaving them would pass the grep gate (comments are
+   exempt) while preserving prose that describes a dead mode as live.
+3. Delete the read (`:15253`) and the broadcast field (`:15313`).
+4. Delete `_drainRetiredWorktreeModeStash` (`:2556-2564`), its `PRIOR_KEY`, and both call sites
+   (`:542`, `:1599`). Its output is inert once step 3 lands.
+5. Delete `normalizeFeatureWorktreeMode` once callerless.
+6. **Drop-on-read is the consequence of step 3, not a separate write.** Once the read at `:15253`
+   is deleted, nothing in the source tree calls `db.getConfig('feature_worktree_mode')` or
+   `db.getConfig('mission-control_prior_feature_worktree_mode')`. The keys sit in storage unread —
+   inert by absence of a reader, the same outcome as `DROPPED_SOURCES` filtering but via a simpler
+   mechanism. No destructive blob rewrite, no active filter wrapper. The value survives in storage
+   until the next legitimate config write naturally ages it out, matching the
+   `GlobalIntegrationConfigService.DROPPED_SOURCES` precedent (`:503-508`).
+7. Retire `worktree-strategy-control-contract.test.js`. Its subject is the drain; with no key to
    force and no key to restore, the defect it guards is unreachable. Record its lesson — *a forced
    user setting must never be left in place by a crash* — in the commit message, since the reason it
    is safe to delete is that nothing forces a setting any more, not that the risk was reassessed.

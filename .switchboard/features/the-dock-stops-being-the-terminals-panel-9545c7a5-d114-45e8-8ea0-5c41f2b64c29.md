@@ -4,6 +4,8 @@ description: 'The dock stops being the Terminals panel'
 
 # The dock stops being the Terminals panel
 
+**Complexity:** 7
+
 ## Goal
 
 Extract the terminal viewport out of `terminals.js` and give the dock its own document, so showing
@@ -30,7 +32,8 @@ dock is a parameterised panel.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] (no subtasks)
+- [ ] [Extract the terminal viewport out of the 13,000-line Terminals panel into a module anything can embed](../plans/extract-the-terminal-viewport-into-a-shared-module.md) — **PLAN REVIEWED** — ID: a3a565fe-cf22-4703-b599-2fecdbc04b27
+- [ ] [The dock becomes its own document — one `/dock` page, three tabs, one iframe](../plans/the-dock-becomes-its-own-document.md) — **PLAN REVIEWED** — ID: 28173753-1079-4144-a86b-475220013545
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -50,3 +53,27 @@ drives the shell rail's `done` light — a gap recorded there reports a finished
 Verification therefore leads with a recorded-stream equivalence test rather than "does it still
 render", and with a source-level gate that the module reads no panel global. A hidden
 `getElementById` survives the move and works fine until a second embedder exists.
+
+## Team Dispatch Instructions
+
+### Extract the terminal viewport out of the 13,000-line Terminals panel into a module anything can embed
+
+- **Seat:** Lead Coder (complexity 7)
+- **Acceptance:**
+  - A recorded pty stream fed through the module produces a byte-identical buffer to the pre-extraction path.
+  - `terminalViewport.js` contains no `document.getElementById` and no reference to panel state names (source-level gate).
+  - Replay gaps are recorded in `terminalReplayGaps`, never in `terminalBadges`.
+  - All four embedding contexts — grid, solo, popout, dock — still render identically.
+  - Both composition roots (`bootstrap.ts`, `TaskViewerProvider.ts`) are untouched by this diff.
+- **Must not touch:** The pty host, the WebSocket protocol, any server route. The sidebar, groups, layout, panes, and kanban rendering stay in `terminals.js` — the module is one terminal, not a smaller panel.
+
+### The dock becomes its own document — one `/dock` page, three tabs, one iframe
+
+- **Seat:** Coder (complexity 6)
+- **Acceptance:**
+  - `/dock` is served by both composition roots — `bootstrap.ts` and `TaskViewerProvider.ts` both wire it.
+  - `dock.js` does not import from `terminals.js` (source-level gate — no `import … from './terminals.js'`).
+  - Both seats (Agent and CLI) stay attached across a tab switch — neither socket is torn down.
+  - The Fleet tab loads no terminal code — no viewport instance is constructed for it.
+  - No `isDockFrame` guard survives with a live caller in `terminals.js`; no remaining URL constructs `/terminals?…&dock=1`.
+- **Must not touch:** Popout terminals (`shell.js` `window.open` path — they have an `opener`, not a `parent`). The Terminals panel keeps its own route and behaviour. No new execution endpoint — the CLI tab remains a pty seat.

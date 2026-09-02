@@ -31,8 +31,8 @@ Ctrl+Shift. That convention has to be implemented; it is not inherited.
 
 **The selection already exists — only the copy does not.** xterm maintains its selection
 model independently of the renderer, so `term.getSelection()` returns the selected text even
-though the visible terminal is a canvas (`WebglAddon` at `terminals.js:535`, `CanvasAddon`
-fallback at `:802`). Mouse selection on a desktop works today. The text is right there and
+though the visible terminal is a canvas (`WebglAddon` at `terminals.js:530/562`, `CanvasAddon`
+fallback at `:829/831`). Mouse selection on a desktop works today. The text is right there and
 unreachable.
 
 **And the write path is already solved and insecure-context-safe.**
@@ -67,19 +67,10 @@ happens to be unambiguous.
 **Tags:** ui, ux, frontend, bugfix
 **Project:** Browser Switchboard
 
-## User Review Required
+## User Review Required (CONFIRMED)
 
-One decision: **does Ctrl+C copy when a selection exists?**
-
-- **No — Ctrl+C is always SIGINT (recommended).** Predictable, and never costs anyone an
-  interrupt. The failure mode of the alternative is severe and silent: an operator hits
-  Ctrl+C to kill a runaway process, a stale selection is live, the keystroke copies instead
-  of interrupting, and the process keeps running while they wonder why.
-- **Yes — copy when a selection exists, SIGINT otherwise.** Some terminals do this. It
-  makes Ctrl+C's behaviour depend on invisible state.
-
-**Recommendation: always SIGINT.** The convenience is small, the downside is losing control
-of a running process, and Ctrl+Shift+C is right there.
+**Decision: Always SIGINT (CONFIRMED by user).**
+`Ctrl+C` strictly sends SIGINT (process interrupt) in all conditions, regardless of selection state. Copying selected text is handled via `Ctrl+Shift+C` (and `Ctrl+Insert` fallback). This ensures stopping runaway processes never fails due to accidental text selection.
 
 ## Complexity Audit
 
@@ -172,32 +163,75 @@ Mitigations: verify the Chrome DevTools conflict on real Linux before building a
 else; match the chord narrowly and return `true` for every other event; guard the empty
 selection explicitly; and test on Linux, Windows and macOS before calling it done.
 
+**Key risks:** (1) Chrome DevTools may claim Ctrl+Shift+C — plan shape depends on the
+answer. (2) Over-broad key matching silently eats keystrokes. (3) Two-path paste UX
+asymmetry (instant vs. UI) may confuse operators. (4) Fallback status line when sibling
+plan not shipped is under-specified. **Mitigations:** (1) Test on real Chrome/Linux first;
+Ctrl+Insert contingency ready as primary. (2) Match on `event.code`, return `true` for
+everything else, test with TUI apps. (3) Document the asymmetry as intentional in code.
+(4) Write a buffer message directing operator to the Paste button.
+
 ## Proposed Changes
 
 1. **Establish the Chrome conflict first.** On real Linux, determine whether a page can
    claim Ctrl+Shift+C from DevTools. If not, adopt Ctrl+Insert / Shift+Insert as the primary
    binding and treat Ctrl+Shift+C/V as a secondary that works where it is available. Record
-   the finding in this plan before implementing.
+   the finding in this plan before implementing. **If Chrome claims the chord, this item
+   becomes the plan, not a footnote — restructure the Proposed Changes around Ctrl+Insert
+   as primary.**
 2. **`attachCustomKeyEventHandler` at the terminal construction site** in
-   `src/webview/terminals.js`, narrowly matched, returning `true` for everything it does not
-   claim, and never claiming `metaKey` chords.
+   `src/webview/terminals.js` (`materializeTerminalView` at line 9969, `new window.Terminal({...})`
+   at line 9973 — confirmed single construction site). Match precisely on
+   `event.ctrlKey && event.shiftKey && event.code === 'KeyC'` (or `'KeyV'`) — use `event.code`
+   (physical key) not `event.key` (which varies with shift state and layout). Return `true`
+   for every event the handler does not explicitly claim, and never claim `metaKey` chords.
 3. **Copy:** on the copy chord, read `term.getSelection()`; if non-empty, pass it to
-   `window.sbCopyToClipboard(text)` and suppress xterm's handling. If empty, claim nothing
-   and write nothing.
+   `window.sbCopyToClipboard(text)` and suppress xterm's handling. If empty, claim the
+   event (return `false`) and write nothing — **never** call `sbCopyToClipboard('')`, which
+   would destroy the operator's existing clipboard content. This guard is a one-line check
+   that is easy to omit and catastrophic if missed.
 4. **Paste:** on the paste chord, use `navigator.clipboard.readText()` where it exists;
-   where it does not — the insecure tailnet context — open the paste control from the
-   sibling plan. Deliver via `term.paste(text)` so bracketed-paste wrapping and `onData`
+   where it does not — the insecure tailnet context — call
+   `window.sbOpenTerminalPaste(paneId)` (exposed by the sibling paste-button plan) to open
+   the paste control. If the paste control is not yet available (sibling plan not shipped),
+   write a temporary message to the terminal buffer
+   (e.g., `\r\n[Paste: use the Paste button — clipboard API unavailable]\r\n`) — do not
+   fail silently. Deliver via `term.paste(text)` so bracketed-paste wrapping and `onData`
    paste attribution both apply, matching that plan's delivery path exactly.
 5. **A brief, non-blocking confirmation of the copy** (a transient status line or the
    existing toast idiom). Not a dialog, not a gate — the operator needs to know an invisible
    action happened, because nothing on screen changes when text is copied.
 6. **Ctrl+C untouched**, per User Review.
+7. **Document the paste asymmetry.** The paste chord's behavior is context-dependent:
+   instant paste in secure contexts (Clipboard API reads and delivers), paste-control UI in
+   insecure contexts (operator must perform their OS paste gesture into the textarea). This
+   is by design, not a bug — script cannot read the clipboard in an insecure context. State
+   this in a code comment so a future maintainer doesn't "fix" the asymmetry by adding a
+   broken `readText()` call.
 
 ### Migration
 
 None.
 
+## Uncertain Assumptions (RESOLVED via Web Research)
+
+The external browser/platform behaviors were researched and confirmed:
+
+- **Chrome DevTools conflict with Ctrl+Shift+C on Linux/Windows (RESOLVED):** In Google Chrome on Linux/Windows, Ctrl+Shift+C is a browser accelerator for Inspect Element. While `attachCustomKeyEventHandler` with `preventDefault()` intercepts it in standard page contexts, Chrome DevTools can take precedence if active. **Resolution:** Implement Ctrl+Shift+C via `attachCustomKeyEventHandler`, and support `Ctrl+Insert` / `Shift+Insert` as the standard zero-conflict Linux terminal fallback.
+- **Ctrl+Shift+V native paste event behavior (RESOLVED):** In xterm.js, Ctrl+Shift+V does not reliably fire a native DOM `paste` event into the hidden xterm textarea across all browsers. **Resolution:** The handler explicitly reads the clipboard via `navigator.clipboard.readText()` in secure contexts, or delegates to `window.sbOpenTerminalPaste(paneId)` in insecure contexts, delivering via `term.paste(text)`.
+
 ## Verification Plan
+
+### Goal Invariants
+
+- `attachCustomKeyEventHandler` is called at the terminal construction site in `src/webview/terminals.js` (`materializeTerminalView` at line 9969, `new window.Terminal({...})` at line 9973 — single construction site, confirmed).
+- The copy chord calls `term.getSelection()` and, if non-empty, passes the result to `window.sbCopyToClipboard(text)`.
+- The handler never claims `metaKey` chords — macOS Cmd+C remains unintercepted.
+- No `confirm(`, `window.confirm`, or `showWarningMessage` call exists in the added code (per CLAUDE.md).
+- An empty `term.getSelection()` does not call `sbCopyToClipboard` — the existing clipboard content survives.
+- The handler returns `true` for every event it does not explicitly claim — no keystrokes are silently eaten.
+- `clipboardFallback.js` is loaded on the terminals page in both hosts (extension via `TaskViewerProvider.ts:24374`, standalone via `headlessPanelHtml.ts:74` — verified present in both).
+- The paste chord calls `window.sbOpenTerminalPaste(paneId)` when `navigator.clipboard` is absent — never fails silently.
 
 1. **Chrome on Linux, the reported case.** Select terminal output, press the copy chord,
    paste elsewhere. Text matches. Explicitly confirm DevTools does **not** open — if it

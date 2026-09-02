@@ -801,6 +801,13 @@ export class LocalApiServer {
     // host and produces a false negative).
     private _isListening: boolean = false;
     private _wsHub: WsHub | null = null;
+    // In-flight acked-dispatch state for GET /kanban/dispatch/state. Keyed by
+    // planId so two dispatches to the same seat (which queue behind each other
+    // in the per-terminal paste queue) are distinguishable. The poll is also
+    // answerable from persisted state alone (dispatched_at advancing) when the
+    // client supplies `since`/`deadline` query params — this map is the
+    // fallback for a bare probe and the source of the seat name mid-delivery.
+    private _ackedDispatchState: Map<string, { since: string | null; deadline: number; seat: string | null }> = new Map();
 
     constructor(options: LocalApiServerOptions) {
         this._options = options;
@@ -1870,9 +1877,21 @@ export class LocalApiServer {
             const ref = String(body?.plan || body?.planId || body?.sessionId || body?.planFile || '').trim();
             const rawColumn = String(body?.targetColumn || body?.column || '').trim();
             const from = String(body?.from || body?.originTerminal || '').trim();
-            const outcome = await this.performKanbanDispatch(
-                workspaceRoot, ref, rawColumn || undefined, { originTerminal: from || undefined }
-            );
+            // Opt-in two-phase dispatch for the command surface: `ack: true`
+            // routes to the acked variant, which returns as soon as the dispatch
+            // is committed (gate pre-flighted, move+delivery fired) and reports
+            // prompt delivery as a second, later signal via
+            // GET /kanban/dispatch/state. Absent, the endpoint behaves exactly
+            // as today — the regression fence for the CLI `dispatch` verb and
+            // the desktop drag-drop path, neither of which sends `ack`.
+            const acked = body?.ack === true;
+            const outcome = acked
+                ? await this.performKanbanDispatchAcked(
+                    workspaceRoot, ref, rawColumn || undefined, { originTerminal: from || undefined }
+                )
+                : await this.performKanbanDispatch(
+                    workspaceRoot, ref, rawColumn || undefined, { originTerminal: from || undefined }
+                );
             res.writeHead(outcome.status, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(outcome.payload));
         } catch (err) {
@@ -1909,97 +1928,11 @@ export class LocalApiServer {
         const fail = (status: number, error: string): { status: number; payload: any } =>
             ({ status, payload: { success: false, error } });
         try {
-            if (!ref) {
-                return fail(400, 'Missing required field: plan (planId | sessionId | plan-file path)');
+            const pre = await this._resolveKanbanDispatchPreDelivery(workspaceRoot, ref, rawColumn, dispatchOptions);
+            if (!pre.ok) {
+                return { status: pre.status, payload: pre.payload };
             }
-            const kanbanVerb = this._options.kanbanVerb;
-            const db = await this._options.getKanbanDatabase?.(workspaceRoot);
-            if (!kanbanVerb || !db) {
-                return fail(503, 'Kanban dispatch not available (extension callbacks missing)');
-            }
-
-            // 1. Resolve the plan — planId first, then plan-file path.
-            let record: any = await db.getPlanByPlanId(ref);
-            if (!record && (ref.includes('/') || ref.endsWith('.md'))) {
-                const wsId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
-                record = await db.getPlanByPlanFile(ref, wsId);
-            }
-            if (!record) {
-                return fail(404, `Plan not found: '${ref}' (tried planId and plan-file path)`);
-            }
-            const sessionId = record.sessionId || record.planId;
-
-            // 2. Resolve the target column. Omitted (or "auto") → route by complexity
-            //    through the board's own rule (default bands 1–4 intern / 5–6 coder /
-            //    7+ lead; honors custom routing maps and the pair-mode bypass).
-            let targetColumn: string | null;
-            let routing: string | undefined;
-            if (!rawColumn || rawColumn.toLowerCase() === 'auto') {
-                if (!this._options.resolveAutoDispatchColumn) {
-                    return fail(400, 'targetColumn is required (auto-routing callback unavailable)');
-                }
-                const auto = await this._options.resolveAutoDispatchColumn(workspaceRoot, record.complexity ?? null);
-                targetColumn = auto.targetColumn;
-                routing = `auto: ${auto.reason}`;
-            } else {
-                targetColumn = await this._canonicalColumnId(rawColumn, workspaceRoot);
-                if (!targetColumn) {
-                    return fail(400, this._unknownColumnError(rawColumn));
-                }
-            }
-
-            // 3. Pre-flight the gates the arm breaks silently on — fail loudly instead.
-            //    (CLI-triggers is NOT checked: that setting gates webview drag-drop
-            //    auto-dispatch; an explicit API dispatch bypasses it via bypassTriggerGate.)
-            let gate: { role: string | null; cliTriggersEnabled: boolean; dragDropMode: string | null; source: string | null } | undefined;
-            if (this._options.resolveKanbanDispatch) {
-                gate = await this._options.resolveKanbanDispatch(workspaceRoot, targetColumn);
-                if (!gate.role) {
-                    return fail(400, `Column '${targetColumn}' has no dispatch role/action configured — a card moved there fires nothing. Pick a coding column with a configured drop action.`);
-                }
-            }
-            const isPromptMode = gate?.dragDropMode === 'prompt';
-            if (!isPromptMode) {
-                let terminals: string[] | undefined;
-                try { terminals = this._options.getRegisteredTerminals?.(); } catch { /* health-style guard */ }
-                if (terminals !== undefined && terminals.length === 0) {
-                    return fail(409, 'No terminal agent is live right now — dispatch would fall back to the clipboard and nothing would run. If you have set up agents before, just open your agent terminal(s) (AGENT SETUP tab / your saved agent grid) so they re-register; run Guided setup only if you have never configured one. API callers can open the saved grid themselves: POST /taskViewer/verb/createAgentGrid (check /health.selectedWorkspaceRoot matches your root first; POST /kanban/verb/selectWorkspace if not).');
-                }
-            }
-
-            // 3b. Team-scoped target: a review handed back to the board belongs to the
-            //     reviewer on the SAME team that produced the work. Role resolution
-            //     downstream is workspace-wide and would pick an arbitrary reviewer once
-            //     a second team is live. Origin precedence: explicit `from` (the head
-            //     naming itself) → the plan's dispatched_terminal → its dispatched_agent
-            //     → none. `unknown`, IDE-shaped names and bare role words are not
-            //     terminal names. `record` is the PRE-move read (step 1): after step 4
-            //     these fields name the reviewer, not the coder.
-            let teamOverride: string | undefined = dispatchOptions?.targetTerminalOverride;
-            let teamRouting: string | undefined;
-            if (!teamOverride && this._options.resolveTeamRoleTerminal) {
-                if (!gate?.role) {
-                    teamRouting = 'team-scoped: dispatch role unavailable on this host — fell back to workspace-wide';
-                } else {
-                    const origin = (dispatchOptions?.originTerminal || '').trim()
-                        || this._plausibleOriginTerminal(record);
-                    if (origin) {
-                        const hit = await this._options.resolveTeamRoleTerminal(workspaceRoot, origin, gate.role);
-                        if (hit) {
-                            teamOverride = hit;
-                            teamRouting = `team-scoped: ${origin} → ${hit}`;
-                        } else if (dispatchOptions?.restrictToOriginTeam) {
-                            // Opt-in (the external-headed queue/next branch): a miss is a
-                            // refusal, never a fall-through to workspace-wide routing.
-                            return fail(409, `No ${gate.role} on ${origin}'s team — the card stays staged. Dispatching workspace-wide would hand this team's card to another team's terminal. Add a ${gate.role} seat to the team, or dispatch the card yourself with an explicit target.`);
-                        } else {
-                            teamRouting = `team-scoped: no ${gate.role} on ${origin}'s team — fell back to workspace-wide`;
-                        }
-                    } else {
-                        teamRouting = 'team-scoped: no origin terminal — fell back to workspace-wide';
-                    }
-                }
-            }
+            const { record, sessionId, targetColumn, gate, isPromptMode, teamOverride, teamRouting, routing, kanbanVerb, db } = pre.ctx;
 
             // 4. Fire the exact arm a webview drag fires: it persists the move FIRST,
             //    then dispatches (the known move↔dispatch coupling order).
@@ -2042,6 +1975,313 @@ export class LocalApiServer {
                 return fail(400, err.message);
             }
             return fail(500, err instanceof Error ? err.message : 'kanbanDispatch failed');
+        }
+    }
+
+    /**
+     * The shared pre-delivery resolution behind `performKanbanDispatch` and
+     * `performKanbanDispatchAcked`: steps 1–3b (resolve plan → resolve column →
+     * gate pre-flight → team-scoped target). Returns the resolved context the
+     * caller needs to fire `triggerAction`, or a `{ status, payload }` failure
+     * for an immediate 4xx/5xx. Extracted — not duplicated — so a fix to one
+     * path reaches both; the existing method's blocking contract is preserved
+     * verbatim by having it continue from this result into delivery + verify.
+     */
+    private async _resolveKanbanDispatchPreDelivery(
+        workspaceRoot: string,
+        ref: string,
+        rawColumn: string | undefined,
+        dispatchOptions: { unattended?: boolean; targetTerminalOverride?: string; originTerminal?: string; restrictToOriginTeam?: boolean } | undefined
+    ): Promise<
+        | { ok: true; ctx: {
+            record: any; sessionId: string; targetColumn: string; gate: { role: string | null; cliTriggersEnabled: boolean; dragDropMode: string | null; source: string | null } | undefined;
+            isPromptMode: boolean; teamOverride: string | undefined; teamRouting: string | undefined; routing: string | undefined; kanbanVerb: any; db: any;
+        } }
+        | { ok: false; status: number; payload: any }
+    > {
+        const fail = (status: number, error: string): { ok: false; status: number; payload: any } =>
+            ({ ok: false, status, payload: { success: false, error } });
+        if (!ref) {
+            return fail(400, 'Missing required field: plan (planId | sessionId | plan-file path)');
+        }
+        const kanbanVerb = this._options.kanbanVerb;
+        const db = await this._options.getKanbanDatabase?.(workspaceRoot);
+        if (!kanbanVerb || !db) {
+            return fail(503, 'Kanban dispatch not available (extension callbacks missing)');
+        }
+
+        // 1. Resolve the plan — planId first, then plan-file path.
+        let record: any = await db.getPlanByPlanId(ref);
+        if (!record && (ref.includes('/') || ref.endsWith('.md'))) {
+            const wsId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+            record = await db.getPlanByPlanFile(ref, wsId);
+        }
+        if (!record) {
+            return fail(404, `Plan not found: '${ref}' (tried planId and plan-file path)`);
+        }
+        const sessionId = record.sessionId || record.planId;
+
+        // 2. Resolve the target column. Omitted (or "auto") → route by complexity
+        //    through the board's own rule (default bands 1–4 intern / 5–6 coder /
+        //    7+ lead; honors custom routing maps and the pair-mode bypass).
+        let targetColumn: string | null;
+        let routing: string | undefined;
+        if (!rawColumn || rawColumn.toLowerCase() === 'auto') {
+            if (!this._options.resolveAutoDispatchColumn) {
+                return fail(400, 'targetColumn is required (auto-routing callback unavailable)');
+            }
+            const auto = await this._options.resolveAutoDispatchColumn(workspaceRoot, record.complexity ?? null);
+            targetColumn = auto.targetColumn;
+            routing = `auto: ${auto.reason}`;
+        } else {
+            targetColumn = await this._canonicalColumnId(rawColumn, workspaceRoot);
+            if (!targetColumn) {
+                return fail(400, this._unknownColumnError(rawColumn));
+            }
+        }
+
+        // 3. Pre-flight the gates the arm breaks silently on — fail loudly instead.
+        //    (CLI-triggers is NOT checked: that setting gates webview drag-drop
+        //    auto-dispatch; an explicit API dispatch bypasses it via bypassTriggerGate.)
+        let gate: { role: string | null; cliTriggersEnabled: boolean; dragDropMode: string | null; source: string | null } | undefined;
+        if (this._options.resolveKanbanDispatch) {
+            gate = await this._options.resolveKanbanDispatch(workspaceRoot, targetColumn);
+            if (!gate.role) {
+                return fail(400, `Column '${targetColumn}' has no dispatch role/action configured — a card moved there fires nothing. Pick a coding column with a configured drop action.`);
+            }
+        }
+        const isPromptMode = gate?.dragDropMode === 'prompt';
+        if (!isPromptMode) {
+            let terminals: string[] | undefined;
+            try { terminals = this._options.getRegisteredTerminals?.(); } catch { /* health-style guard */ }
+            if (terminals !== undefined && terminals.length === 0) {
+                return fail(409, 'No terminal agent is live right now — dispatch would fall back to the clipboard and nothing would run. If you have set up agents before, just open your agent terminal(s) (AGENT SETUP tab / your saved agent grid) so they re-register; run Guided setup only if you have never configured one. API callers can open the saved grid themselves: POST /taskViewer/verb/createAgentGrid (check /health.selectedWorkspaceRoot matches your root first; POST /kanban/verb/selectWorkspace if not).');
+            }
+        }
+
+        // 3b. Team-scoped target: a review handed back to the board belongs to the
+        //     reviewer on the SAME team that produced the work. Role resolution
+        //     downstream is workspace-wide and would pick an arbitrary reviewer once
+        //     a second team is live. Origin precedence: explicit `from` (the head
+        //     naming itself) → the plan's dispatched_terminal → its dispatched_agent
+        //     → none. `unknown`, IDE-shaped names and bare role words are not
+        //     terminal names. `record` is the PRE-move read (step 1): after step 4
+        //     these fields name the reviewer, not the coder.
+        let teamOverride: string | undefined = dispatchOptions?.targetTerminalOverride;
+        let teamRouting: string | undefined;
+        if (!teamOverride && this._options.resolveTeamRoleTerminal) {
+            if (!gate?.role) {
+                teamRouting = 'team-scoped: dispatch role unavailable on this host — fell back to workspace-wide';
+            } else {
+                const origin = (dispatchOptions?.originTerminal || '').trim()
+                    || this._plausibleOriginTerminal(record);
+                if (origin) {
+                    const hit = await this._options.resolveTeamRoleTerminal(workspaceRoot, origin, gate.role);
+                    if (hit) {
+                        teamOverride = hit;
+                        teamRouting = `team-scoped: ${origin} → ${hit}`;
+                    } else if (dispatchOptions?.restrictToOriginTeam) {
+                        // Opt-in (the external-headed queue/next branch): a miss is a
+                        // refusal, never a fall-through to workspace-wide routing.
+                        return fail(409, `No ${gate.role} on ${origin}'s team — the card stays staged. Dispatching workspace-wide would hand this team's card to another team's terminal. Add a ${gate.role} seat to the team, or dispatch the card yourself with an explicit target.`);
+                    } else {
+                        teamRouting = `team-scoped: no ${gate.role} on ${origin}'s team — fell back to workspace-wide`;
+                    }
+                } else {
+                    teamRouting = 'team-scoped: no origin terminal — fell back to workspace-wide';
+                }
+            }
+        }
+
+        return {
+            ok: true,
+            ctx: { record, sessionId, targetColumn: targetColumn!, gate, isPromptMode, teamOverride, teamRouting, routing, kanbanVerb, db }
+        };
+    }
+
+    /**
+     * The acked variant of `performKanbanDispatch` for the command surface. Runs
+     * the same gate pre-flight (so 400/409 refusals still arrive immediately and
+     * loudly — the ack is NEVER sent for a dispatch that is about to fail), then
+     * fires `triggerAction` WITHOUT awaiting the paced prompt paste. Returns an
+     * ack the moment the dispatch is committed, with the pre-move `dispatchedAt`
+     * baseline and a 60s deadline the client echoes back to
+     * `GET /kanban/dispatch/state`.
+     *
+     * The existing `performKanbanDispatch` keeps its blocking contract verbatim
+     * for the five in-process callers (schedule timer, Run queue, handoff,
+     * queue/done, _runQueuePop); this wrapper is additive and reaches the same
+     * `triggerAction` arm, so the move↔dispatch coupling, pair-programming, and
+     * prompt-fallback behaviour are identical. The pacing chokepoints
+     * (CHUNK_SIZE / CHUNK_DELAY_MS / SUBMIT_DELAY_MS) are untouched — this makes
+     * the wait invisible, not shorter.
+     *
+     * The `triggerAction` promise is retained and its rejection recorded (logged
+     * + the in-memory poll entry left to time out to `unknown`), never unhandled.
+     * A rejection does NOT retroactively change the ack: the operator already saw
+     * "receiving the prompt" and the poll reaches `unknown` at the deadline with
+     * the same wording the synchronous 502 uses.
+     */
+    public async performKanbanDispatchAcked(
+        workspaceRoot: string,
+        ref: string,
+        rawColumn?: string,
+        dispatchOptions?: { unattended?: boolean; targetTerminalOverride?: string; originTerminal?: string; restrictToOriginTeam?: boolean }
+    ): Promise<{ status: number; payload: any }> {
+        const fail = (status: number, error: string): { status: number; payload: any } =>
+            ({ status, payload: { success: false, error } });
+        const DISPATCH_STATE_DEADLINE_MS = 60_000;
+        try {
+            const pre = await this._resolveKanbanDispatchPreDelivery(workspaceRoot, ref, rawColumn, dispatchOptions);
+            if (!pre.ok) {
+                return { status: pre.status, payload: pre.payload };
+            }
+            const { record, sessionId, targetColumn, gate, teamOverride, routing, teamRouting, kanbanVerb } = pre.ctx;
+            const dispatchedAtBefore = record.dispatchedAt ?? null;
+            const planId = record.planId;
+            const seat = teamOverride || null;
+
+            // Record the in-flight state BEFORE firing so a fast first poll (the
+            // client issues it ~1s after the ack) never reads as unknown: the
+            // entry is present and the deadline has not passed.
+            this._ackedDispatchState.set(planId, {
+                since: dispatchedAtBefore,
+                deadline: Date.now() + DISPATCH_STATE_DEADLINE_MS,
+                seat
+            });
+
+            // Fire the exact arm a webview drag fires — move FIRST, then deliver —
+            // but do NOT await the paced paste. The move persists as the arm's
+            // first action (a DB write, milliseconds); the prompt delivery is the
+            // slow part this whole split exists to hide from the UI.
+            const delivery = kanbanVerb('triggerAction', { sessionId, targetColumn, workspaceRoot, bypassTriggerGate: true, unattended: !!dispatchOptions?.unattended, targetTerminalOverride: teamOverride, originTerminal: dispatchOptions?.originTerminal }, workspaceRoot);
+            // Retain the promise so a rejection is recorded, never unhandled. A
+            // rejection (e.g. terminal closed mid-chunk) leaves dispatchedAt
+            // unchanged, so the poll times out to `unknown` at the deadline — the
+            // surface does not spin forever.
+            void delivery.catch(err => {
+                console.error('[LocalApiServer] acked dispatch delivery error:', err);
+            });
+
+            return {
+                status: 200,
+                payload: {
+                    success: true,
+                    phase: 'dispatching',
+                    planId,
+                    sessionId,
+                    topic: record.topic,
+                    column: targetColumn,
+                    role: gate?.role ?? null,
+                    seat,
+                    dispatchedAtBefore,
+                    deadline: Date.now() + DISPATCH_STATE_DEADLINE_MS,
+                    ...(routing ? { routing } : {}),
+                    ...(teamRouting ? { teamRouting } : {})
+                }
+            };
+        } catch (err) {
+            console.error('[LocalApiServer] performKanbanDispatchAcked error:', err);
+            if (err instanceof Error && err.name === 'KanbanDispatchError') {
+                return fail(400, err.message);
+            }
+            return fail(500, err instanceof Error ? err.message : 'kanbanDispatch failed');
+        }
+    }
+
+    /**
+     * GET /kanban/dispatch/state?planId=…&since=…&deadline=…&workspaceRoot=…
+     * Auth-gated read of an in-flight acked dispatch's delivery phase. Answers
+     * from persisted state (`dispatched_at` advancing past the client-supplied
+     * `since` baseline) plus a 60s `deadline`; falls back to the in-memory
+     * `_ackedDispatchState` map when the client omits the baseline (e.g. a bare
+     * probe), so a reconnecting phone that lost its in-memory poll can resume.
+     *
+     * States:
+     *   delivering — dispatchedAt unchanged from `since` and the deadline not passed.
+     *   dispatched — dispatchedAt advanced; carries dispatchedAgent/dispatchedAt/seat.
+     *   unknown    — deadline passed without an advance; reuses the synchronous
+     *                502 wording so the operator sees one vocabulary in both paths.
+     *                This is a UI timeout, NOT a delivery verdict: a slow prompt
+     *                may still be pasting. The wording must not imply the dispatch
+     *                failed, only that delivery could not be confirmed in time.
+     */
+    private async _handleKanbanDispatchState(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const url = new URL(req.url || '', `http://${req.headers.host}`);
+            const planId = (url.searchParams.get('planId') || '').trim();
+            if (!planId) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Missing required query param: planId' }));
+                return;
+            }
+            const workspaceRoot = (url.searchParams.get('workspaceRoot') || this._options.workspaceRoot || '').trim();
+            const db = await this._options.getKanbanDatabase?.(workspaceRoot);
+            if (!db) {
+                res.writeHead(503, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Kanban database not available' }));
+                return;
+            }
+            const record: any = await db.getPlanByPlanId(planId);
+            if (!record) {
+                res.writeHead(404, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: `Plan not found: '${planId}'` }));
+                return;
+            }
+
+            // Resolve the baseline + deadline. Client-supplied query params win
+            // (stateless, survives a server restart); the in-memory map is the
+            // fallback for a bare probe and the source of the seat name.
+            const sinceParam = url.searchParams.get('since');
+            const deadlineParam = url.searchParams.get('deadline');
+            const memEntry = this._ackedDispatchState.get(planId);
+            const since = sinceParam !== null ? (sinceParam || null) : (memEntry?.since ?? null);
+            const deadline = deadlineParam !== null ? Number(deadlineParam) : (memEntry?.deadline ?? 0);
+            const seat = memEntry?.seat ?? record.dispatchedTerminal ?? null;
+
+            const currentAt = record.dispatchedAt ?? null;
+            const advanced = !!currentAt && currentAt !== since;
+            if (advanced) {
+                // Delivery confirmed — clear the in-flight entry.
+                this._ackedDispatchState.delete(planId);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: true,
+                    state: 'dispatched',
+                    planId,
+                    dispatchedAgent: record.dispatchedAgent || null,
+                    dispatchedAt: currentAt,
+                    seat: record.dispatchedTerminal || seat
+                }));
+                return;
+            }
+            if (deadline && Date.now() < deadline) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: true,
+                    state: 'delivering',
+                    planId,
+                    seat
+                }));
+                return;
+            }
+            // Deadline passed (or no tracked delivery) — uncertain, not failed.
+            this._ackedDispatchState.delete(planId);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: true,
+                state: 'unknown',
+                planId,
+                error: 'Move persisted but no dispatch was recorded (dispatchedAt unchanged) — delivery status uncertain; the prompt may still be pasting. Check the terminal agent.'
+            }));
+        } catch (err) {
+            console.error('[LocalApiServer] kanbanDispatchState error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'kanbanDispatchState failed' }));
         }
     }
 
@@ -8504,6 +8744,8 @@ export class LocalApiServer {
                 await this._handleGetPlan(req, res);
             } else if (pathname === '/kanban/columns' && req.method === 'GET') {
                 await this._handleGetColumns(req, res);
+            } else if (pathname === '/kanban/dispatch/state' && req.method === 'GET') {
+                await this._handleKanbanDispatchState(req, res);
             } else if (pathname === '/worktree/list' && req.method === 'GET') {
                 await this._handleGetWorktrees(req, res);
             } else if (pathname.startsWith('/worktree/') && pathname.endsWith('/diff') && req.method === 'GET') {

@@ -19,21 +19,21 @@ behaviour is explained, and the insecure-context clipboard fallback
 the board and the board renders.
 
 **Then the operator hits a wall that no document mentions.** Card moves on the board are
-HTML5 drag-and-drop — `draggable="true"` at `kanban.html:9599` and `:9723`, with
+HTML5 drag-and-drop — `draggable="true"` at `kanban.html:9472` and `:9677`, with
 `dragstart`/`dragover`/`drop` handlers and `dataTransfer` payloads. **HTML5 drag events do
 not fire from touch input on iPadOS or iOS at all.** This is not a styling or hit-target
 problem that a pinch-zoom works around: the board is readable and the cards are inert. The
-same is true of terminal pane reordering (`terminals.js:4174`, `:7320`) and the
-structure-reorder rows (`kanban.html:12480`).
+same is true of terminal pane reordering (`terminals.js:4221`, `:7368`) and the
+structure-reorder rows (`kanban.html:12519`).
 
 **The capability the operator is missing is not missing.** Three separate paths already
 move a card, and all three are tap-only:
 
 | Need | Control | Location |
 |---|---|---|
-| Move selection forward one stage | Column-header move button | `kanban.html:8264`, `data-action="moveSelected"` |
-| Move one card to **any** column, including backward | Column badge → `<select>` dropdown | `project.js:1723-1790`, posts `moveKanbanPlanColumn` |
-| Move a card to any column (board, drag-only) | `handleDrop` → `moveCardForward` / `moveCardBackwards` | `kanban.html:10470`, `:10475` |
+| Move selection forward one stage | Column-header move button | `kanban.html:8255`, `data-action="moveSelected"` |
+| Move one card to **any** column, including backward | Column badge → `<select>` dropdown | `project.js:1722-1798`, posts `moveKanbanPlanColumn` |
+| Move a card to any column (board, drag-only) | `handleDrop` → `moveCardForward` / `moveCardBackwards` | `kanban.html:10509`, `:10514` |
 
 The third is the one touch loses. The second is its complete functional replacement, one
 card at a time — and it is buried behind a click on a column badge inside a plan row in a
@@ -75,21 +75,10 @@ own.
 **Tags:** docs, ux, mobile
 **Project:** Browser Switchboard
 
-## User Review Required
+## User Review Required (CONFIRMED)
 
-One decision: **where the operating guide lives.**
-
-- **Option A — a new section inside `docs/REMOTE_ACCESS.md`.** The operator is already
-  reading it to get connected, so the next question is answered in place. Risk: a
-  networking document grows a UI-guide half and its focus blurs.
-- **Option B — a new `docs/TOUCH_ACCESS.md`, cross-linked from the Tailscale section.**
-  Keeps each document single-purpose and gives the touch story room to grow (phone route,
-  paste button, copy limitation). Risk: one more file to keep current, and a link is easier
-  to miss than a heading.
-
-**Recommendation: B**, with a short pointer paragraph at the end of the Tailscale section.
-The touch story already has three moving parts and two pending plans; it will outgrow a
-subsection, and `REMOTE_ACCESS.md` has a clear remit worth protecting.
+**Decision: Option B (CONFIRMED by user).**
+The touch operating guide will live in a dedicated `docs/TOUCH_ACCESS.md`, cross-linked from the Tailscale section in `docs/REMOTE_ACCESS.md`. This keeps networking and UI guidance cleanly separated and provides dedicated space for touch gestures and controls.
 
 ## Complexity Audit
 
@@ -104,21 +93,37 @@ subsection, and `REMOTE_ACCESS.md` has a clear remit worth protecting.
   document's entire value is that the operator trusts it. A guide that says "tap the column
   badge in the Project panel" and is wrong about which element is tappable is worse than no
   guide, because it converts a discoverable problem into a documented dead end. The badge
-  handler is at `project.js:1760-1790` and the dropdown is `display:none` until the badge is
+  handler is at `project.js:1776-1798` and the dropdown is `display:none` until the badge is
   clicked — confirm that toggle actually fires from a tap, not just a mouse click.
 - **Moving a card can dispatch an agent, and the document must say so before it says how
   to move a card.** The column-header move button dispatches when CLI triggers are enabled;
   `handleDrop` routes forward moves through `triggerAction` / `triggerBatchAction`
-  (`kanban.html:10459-10466`). An operator moving a card from a tablet to tidy the board can
+  (`kanban.html:10503-10505`). An operator moving a card from a tablet to tidy the board can
   start a team without meaning to. Name the toggle that turns this off (`toggleCliTriggers`)
   in the same breath, not in a later section.
 - **Forward and backward are not symmetric, and pretending otherwise is a trap.** The
   Project panel's dropdown posts `moveKanbanPlanColumn` (`project.js:1788`), which is a
   different verb from the board's `moveCardForward` / `moveCardBackwards` and is keyed by
-  `planFile` rather than session id. Whether it fires the same dispatch and run-sheet side
-  effects is **not established** and must be checked before the document implies the two
-  routes are equivalent. If they differ, the difference is the single most useful sentence
-  in the guide.
+  `planFile` rather than session id. **The verb asymmetry is now established** (verified in
+  code during plan review): `moveKanbanPlanColumn` routes through
+  `moveCardToColumnByPlanFileWithReason` (`KanbanProvider.ts:8870`), while the board's drag
+  routes through `moveCardToColumnWithReason` (`KanbanProvider.ts:8478`). They differ in
+  three ways:
+  1. **No CLI dispatch.** The Project panel dropdown does NOT trigger agent dispatch, even
+     with `toggleCliTriggers` enabled. Only `moveSelected` (column header button) and
+     `moveCardForward` (board drag) check `_cliTriggersEnabled`. A tablet operator moving a
+     card backward via the dropdown cannot accidentally start an agent. This is good news —
+     state it plainly.
+  2. **No run sheet recorded.** The dropdown path does not call
+     `recordRunSheetForColumnMove`. The move will not appear in the plan_events log. State
+     this as a known limitation, not a feature.
+  3. **No queue position or column order cleanup.** The dropdown path does not clear
+     `queue_position` when leaving STAGING, and does not clear `column_order` on
+     cross-column moves. A card moved via the dropdown carries stale positioning state.
+     This is a latent bug worth its own plan, not a footnote — but the document must not
+     promise the dropdown is a complete functional replacement for drag when it is not.
+
+  The difference is the single most useful sentence in the guide.
 - **Multi-select does not survive the switch.** The board's move button acts on a
   selection; the Project dropdown moves exactly one plan. An operator with six cards to walk
   backwards needs to know it is six operations, not one, before they start.
@@ -172,6 +177,13 @@ work on touch, that it is a platform limitation of HTML5 drag-and-drop, and that
 dropdown is the working substitute. Mitigation for both: write the document with an iPad in
 hand, and have someone who has never used the Project panel follow it end to end.
 
+**Key risks:** (1) iOS tap may not fire the `display:none` → `block` toggle at
+`project.js:2050-2067` — existential gate for the entire document. (2) Verb asymmetry now
+established — document must state three differences (no dispatch, no run sheet, no
+position cleanup). (3) Line number drift in verification items — corrected in this pass.
+**Mitigations:** (1) Verify on real iPad before writing. (2) Document the differences as
+findings. (3) Line references updated to current source.
+
 ## Proposed Changes
 
 1. **New `docs/TOUCH_ACCESS.md`** (subject to the Option A/B decision above), covering:
@@ -196,7 +208,28 @@ hand, and have someone who has never used the Project panel follow it end to end
 
 None. Documentation only; no shipped state, setting, format or behaviour changes.
 
+## Uncertain Assumptions
+
+The following are external platform behaviors not answerable from the codebase.
+The user was advised to run web research to confirm them before implementation.
+
+- **iOS tap-to-toggle for `display:none` → `block`:** The plan assumes that tapping the
+  column badge (`project.js:1776-1798`) fires the click handler that toggles the dropdown
+  `select` from `display:none` to `display:block`, and that the resulting `<select>` opens
+  the native iOS picker. iOS synthesizes click from tap only under conditions that
+  `:hover`-dependent and `display:none`-toggled controls routinely break. If the toggle
+  does not fire from a tap, the entire documented touch operating path is a dead end. This
+  is the existential gate for the document.
+
 ## Verification Plan
+
+### Goal Invariants
+
+- `docs/TOUCH_ACCESS.md` exists and names the Project panel column dropdown (`moveKanbanPlanColumn` at `project.js:1788`) as the touch control for moving a card to any column.
+- `docs/REMOTE_ACCESS.md` contains a pointer paragraph to `TOUCH_ACCESS.md` at the end of its Tailscale section.
+- `git diff --stat` touches only files under `docs/` — no source files modified.
+- The document states plainly that HTML5 card drag does not work on touch and is a platform limitation, not a design choice.
+- The document states the three verb asymmetry differences: the Project panel dropdown does NOT dispatch agents, does NOT record run sheets, and does NOT clear queue positions or column orders (verified in code — `moveKanbanPlanColumn` at `KanbanProvider.ts:8870` vs `moveCardBackwards` at `:10779`).
 
 1. **Follow the document on a real iPad, from a cold start**, over the tailnet URL, without
    touching a desktop. Every instruction executes as written or the instruction is wrong.
@@ -204,11 +237,14 @@ None. Documentation only; no shipped state, setting, format or behaviour changes
    the board that it landed in the intended column and stayed there after a refresh.
 3. **Confirm the dispatch warning is true**, in both directions: with CLI triggers on,
    verify a forward move via the column button fires an agent; with the toggle off, verify
-   it does not. If a *backward* move via the Project dropdown also dispatches, that is a
-   finding — record it and correct the document rather than omitting it.
-4. **Check the verb asymmetry.** Establish whether `moveKanbanPlanColumn` records a run
-   sheet and triggers the same side effects as `moveCardBackwards`
-   (`KanbanProvider.ts:10681`). Document whichever answer is true.
+   it does not. **Established:** a backward move via the Project dropdown does NOT dispatch
+   (verified in code — `moveKanbanPlanColumn` does not check `_cliTriggersEnabled`). The
+   document should state this plainly as a safety property of the dropdown path.
+4. **Check the verb asymmetry.** The verb asymmetry is now established (verified in code
+   during plan review): `moveKanbanPlanColumn` (`KanbanProvider.ts:8870`) does NOT record
+   run sheets, does NOT trigger CLI dispatch, and does NOT clear queue positions or column
+   orders, while `moveCardBackwards` (`KanbanProvider.ts:10779`) does all three via
+   `moveCardToColumnWithReason` (`:8478`). Document all three differences in the guide.
 5. **Confirm the badge tap works**, specifically that the `display:none` → `block` toggle at
    `project.js:2050-2067` fires from a tap and that the resulting `<select>` opens the
    native iOS picker.

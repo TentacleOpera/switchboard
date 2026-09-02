@@ -143,6 +143,20 @@ looks like a malformed payload rather than a quoting problem.
 - **`routeLogsToStderr()` under `--json`.** Every other `--json` command calls it first. Without it,
   a log line corrupts the stdout JSON an agent is parsing.
 
+## Dependencies
+
+None. This is the prerequisite for the sibling migration plan
+(`migrate-agent-protocols-from-curl-to-the-cli.md`), not the dependent.
+
+## Adversarial Synthesis
+
+Key risks: `workspaceRoot` routing diverges across HTTP methods (query for GET, body for POST) and
+the extraction must preserve both paths or reopen the "one board's cards, another board's dispatch"
+bug; the `--data @<file>` form is defended as non-optional but has no test, so a green suite could
+ship a broken file path. Mitigations: specify the `workspaceRoot` split in `apiRequest` (query for
+GET/DELETE, body for POST/PUT/PATCH) and add tests for both the file form and `workspaceRoot`
+presence on a `PUT`.
+
 ## Proposed Changes
 
 ### 1. `src/standalone/cli.ts` — extract a generic request helper
@@ -150,6 +164,13 @@ looks like a malformed payload rather than a quoting problem.
 Introduce `apiRequest(port, method, path, workspaceRoot, body?, query?)` carrying the existing
 token discovery and header assembly. Re-express `apiGet` and `apiPost` as callers so their five
 existing call sites are untouched in behaviour.
+
+**`workspaceRoot` routing (load-bearing — see `apiGet`'s comment block, cli.ts:514-522):**
+`apiGet` injects `workspaceRoot` into the query string; `apiPost` injects it into the JSON body.
+The extraction must preserve both paths. For `apiRequest`, route `workspaceRoot` by method family:
+query param for read-like methods (`GET`, `DELETE`), body field for write-like methods (`POST`,
+`PUT`, `PATCH`). A `PUT` that silently drops `workspaceRoot` from the body reopens the exact
+"list one board's cards, dispatch against another" bug `apiGet`'s comment exists to prevent.
 
 ### 2. `src/standalone/cli.ts` — `cmdApi`
 
@@ -185,17 +206,25 @@ Extend `src/test/cli-board-commands-contract.test.js`, which already gates this 
 2. **Token attachment.** Against a stub server, with a token file present, assert the received
    request carried `Authorization: Bearer <token>`. This is the defect the whole plan exists to
    fix; it must be pinned directly rather than inferred from a 200.
-3. **Method coverage.** `PUT` and `DELETE` reach the stub with the correct method — the regression
-   guard for the `apiGet`/`apiPost`-only extraction.
-4. **`apiGet`/`apiPost` unchanged.** The existing `plans` / `fleet` / `verb` assertions in this
+3. **Method coverage.** `PUT`, `DELETE`, and `PATCH` reach the stub with the correct method — the
+   regression guard for the `apiGet`/`apiPost`-only extraction. `PATCH` is included because the
+   command validates it; an untested verb is an unguarded surface.
+4. **`workspaceRoot` routing on `PUT`.** A `PUT` request carries `workspaceRoot` in the *body*
+   (not the query string), and a `DELETE` carries it in the *query string* — preserving the split
+   `apiGet`/`apiPost` already enforce, so the extraction does not reopen the "one board's cards,
+   another board's dispatch" bug for non-GET/non-POST methods.
+5. **`--data @<file>` form.** `switchboard api POST /comment --data @/tmp/body.json` reads the file
+   and sends its contents as the request body. This form is defended as non-optional (an agent
+   writing a diagram spec hits shell quoting it cannot debug); it must not ship untested.
+6. **`apiGet`/`apiPost` unchanged.** The existing `plans` / `fleet` / `verb` assertions in this
    file must still pass untouched after the extraction.
-5. **Path rejection.** `switchboard api GET http://evil.example/x` and
+7. **Path rejection.** `switchboard api GET http://evil.example/x` and
    `switchboard api GET //evil.example/x` both exit 5 and issue no request.
-6. **Exit codes.** offline → 1; 401 → 4; malformed JSON body → 5; body on GET → 5; 500 → 1.
-7. **`--json` envelope.** Shape-identical to `cmdVerb`'s `{ success, status, result }`, and stdout
+8. **Exit codes.** offline → 1; 401 → 4; malformed JSON body → 5; body on GET → 5; 500 → 1.
+9. **`--json` envelope.** Shape-identical to `cmdVerb`'s `{ success, status, result }`, and stdout
    parses as JSON with a log line forced onto the tick (guards the `routeLogsToStderr` omission).
-8. **Non-JSON body.** A `text/plain` 200 prints the raw body on the human path and a string
-   `result` under `--json`.
+10. **Non-JSON body.** A `text/plain` 200 prints the raw body on the human path and a string
+    `result` under `--json`.
 
 ### Goal Invariants
 
@@ -210,3 +239,6 @@ Extend `src/test/cli-board-commands-contract.test.js`, which already gates this 
 - `switchboard token set X`, then the same command still returns cards — the case that fails today
   through `sb_api_call.sh`.
 - Run from a worktree subdirectory with no `.switchboard/` of its own; the command still resolves.
+
+**Complexity: 3 → Send to Intern.** Single-file change reusing existing helpers; the risks
+(`workspaceRoot` routing, `--data @<file>`) are now pinned by tests.

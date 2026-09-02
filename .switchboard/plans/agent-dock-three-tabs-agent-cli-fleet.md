@@ -144,11 +144,20 @@ within seconds no matter how slowly the table repaints. A short poll would buy n
   got a 200."*
 - **Polling stops when the tab is hidden**, and on `visibilitychange` for the whole page. A poll
   running in a background tab all night is a real cost for zero value, even at 60s.
-- **Both hosts serve this file.** `getShellHtml` is wired in `bootstrap.ts:3469` *and*
-  `TaskViewerProvider.ts:4190`, so the change lands once and reaches both. Any *new endpoint* would
-  need both roots — this plan deliberately adds none.
+- **Both hosts serve this file.** `getShellHtml` is wired in `bootstrap.ts:3474` *and*
+  `src/services/TaskViewerProvider.ts:4198`, so the change lands once and reaches both. Any *new
+  endpoint* would need both roots — this plan deliberately adds none.
 - **Minimum-width guard.** `shell.js:56` disables the dock below a viewport floor rather than
   shrinking it. Three tab labels must fit at the dock's minimum width, not just its default.
+
+## Adversarial Synthesis
+
+Key risks: the N-pane map must handle three different pane types (lazy-mounted iframe, already-mounted
+iframe, plain div) with different show semantics, not a uniform show/hide; the CLI seat needs a
+distinct creation path (startup command `switchboard`) from the controller seat, not just a different
+name; persisted `'kanban'` normalisation must write back the normalised value or the upgrade never
+completes. Mitigations: specify per-tab mount strategy in the pane map; trace CLI seat creation from
+start button through the fleet API; persist normalised `activeTab` on read via `writeDockState`.
 
 ## Proposed Changes
 
@@ -161,8 +170,11 @@ to the `body.dock-dragging` pointer-inert selector list.
 ### 2. `src/webview/shell.js` — tab machinery
 
 - Replace `setDockActiveTab`'s two-branch body with a pane map keyed by tab id; exactly one pane
-  visible by construction.
-- Normalise a persisted unknown/retired `activeTab` (including `'kanban'`) to `'agent'` on read.
+  visible by construction. Each tab entry carries its own show/hide logic: Agent and CLI are
+  lazy-mounted iframes (src set on first show, mirroring `mountDockKanbanFrame`), Fleet is a plain
+  div toggled by display class.
+- Normalise a persisted unknown/retired `activeTab` (including `'kanban'`) to `'agent'` on read,
+  and persist the normalised value via `writeDockState` so the upgrade is complete after one read.
 - Make `syncDockSeat` tab-aware: agent tab resolves the controller seat as today, CLI tab resolves
   the CLI seat.
 - Give `updateDockTitle` a per-tab resolver: controller seat keeps the armed suffix, CLI seat shows
@@ -172,7 +184,10 @@ to the `body.dock-dragging` pointer-inert selector list.
 ### 3. CLI tab
 
 Mount `/terminals?solo=<cliSeatName>&dock=1` against a dock-owned seat whose startup command is
-`switchboard`. Empty state offers a start button, mirroring the agent tab's.
+`switchboard`. The CLI seat name (e.g. `dock-cli`) must differ from the controller's
+(`dock-mission-control`) to avoid collision. Empty state offers a start button, mirroring the agent
+tab's — but the start button creates a seat with `switchboard` as its startup command, a distinct
+creation path from the controller seat's, not just a different seat name.
 
 ### 4. Fleet tab
 

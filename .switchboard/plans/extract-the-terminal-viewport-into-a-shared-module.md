@@ -133,7 +133,30 @@ duplicating 1,700 lines of xterm and WebSocket handling later.
   assume it.
 - **Theme fan-out** posts to dock frames by name (`shell.js:400-410`). The module must accept a theme
   update from its embedder rather than listening globally, or a second embedder gets no theme.
+- **Container timing.** xterm's fit logic reads `clientWidth`/`clientHeight` from the container. If
+  `attach` is called before the container is in the DOM and laid out, the fit vote produces zero
+  dimensions and the WebGL renderer initialises against a zero-cell grid. In the panel this works by
+  accident (the container is already in the DOM when `init()` runs); the dock document creates
+  containers on tab switch. The module must either defer fitting until the container is laid out, or
+  the embedder must guarantee insertion before `attach`.
 - **No `confirm()`**, per `CLAUDE.md`.
+
+## Dependencies
+
+- **Hard prerequisite for:** `the-dock-becomes-its-own-document.md`. Without this extraction, the dock
+  document either duplicates the viewport or does not happen.
+- **References:** `feature_plan_20260804173903_restore-terminal-dec-modes-on-reattach.md` owns the
+  DEC-mode reattach invariant. This plan must preserve it; it does not re-derive it.
+
+## Adversarial Synthesis
+
+Key risks: hidden panel-global dependencies surviving the move (mitigated by the source-level gate in
+verification test #6), WebGL glyph model corruption on resize (mitigated by explicit clear assertion),
+and stale section-map line numbers — the file's own section map says `init()` is at 757–1377 but the
+actual function starts at line 841, so every extraction boundary must be re-verified against the
+current file before moving code. The narrow viewport-only boundary is correct and well-defended. The
+module must isolate renderer-swap state per instance, since the dock document will have two instances
+in the same page — a shared global for renderer ownership will corrupt the second instance's swap.
 
 ## Proposed Changes
 

@@ -8,11 +8,24 @@ composition root, which has never called it.
 
 ### Problem Analysis
 
-`.agents/` is copied into every workspace in full. `ControlPlaneMigrationService.ts:704` runs
+`.agents/` is copied into workspaces via two paths, and only one of them reaches `protocols/`.
+`ControlPlaneMigrationService._bootstrapControlPlaneLayout` (`:704`) runs
 `_copyDirectoryRecursive(bundledAgentDir, <workspace>/.agents, { overwrite: false,
 overwriteIfDiffers: true })` over the entire tree, with a two-entry blocklist
 (`personas/switchboard_operator.md` and the ledger file itself, `:1042-1048`). Protocols are copied
-like everything else.
+like everything else — but this path is only called from `bootstrapControlPlaneLayout` (standalone
+`init` and migration flows), not from extension activation.
+
+The extension activation path (`refreshWorkspaceControlPlane`, `extension.ts:321`) seeds only
+`skills/` and `workflows/` via `seedBundleSurface` (`:344-347`). It does NOT call
+`seedBundleSurface('protocols', ...)` — the function's type signature is `'skills' | 'workflows'` and
+no caller passes `'protocols'`. So on an extension-activated workspace, `.agents/protocols/` files
+arrive only if a prior `bootstrapControlPlaneLayout` copied them, or if they persisted from when
+protocols lived under `.agents/skills/` (before the rename to `.agents/protocols/` on 2026-08-21).
+The code reads `.agents/protocols/<name>/SKILL.md` at runtime with a fallback chain
+(`KanbanProvider.ts:12616` → `.claude/skills/` → hardcoded string), so the extension functions
+without them — but protocols are stale or absent on extension-only workspaces that never ran a
+migration flow.
 
 Deletion does not have the same reach.
 
@@ -23,7 +36,7 @@ same list: `const scopes = ['skills', 'workflows']` (`:1387`), with a comment th
 *"personas/, rules/, scripts/ are out of scope for this reconcile."* `protocols/` is not named in
 that comment at all — it is neither deliberately excluded nor included, it is simply absent.
 
-The call site confirms the ledger can never contain a protocol: `extension.ts:400-401` builds
+The call site confirms the ledger can never contain a protocol: `extension.ts:399-401` builds
 `currentBundlePaths` from exactly two crawls, prefixed `skills/` and `workflows/`.
 
 So a protocol file copied into a workspace stays there permanently. If it is deleted from the
@@ -73,7 +86,9 @@ housekeeping stayed in `extension.ts` where it was already working.
   plan is its prerequisite, not its implementation.
 - **Not extending the prune to `personas/`, `rules/` or `scripts/`.** Those are deliberately out of
   scope per the existing comment and stay that way.
-- **Not changing the copy path.** It already reaches protocols correctly.
+- **Not changing the `bootstrapControlPlaneLayout` copy path.** It already reaches protocols
+  correctly. The extension activation seed path, however, does NOT reach protocols — see Proposed
+  Change #4.
 
 ## Metadata
 
@@ -121,7 +136,7 @@ generator of these files, which is why the drift count is worth reading rather t
   omitted from it on a later run, becomes a deletion in a user's workspace. The existing guards must
   keep holding: the path-traversal check (`abs` must resolve strictly under `agentsDir`), the
   never-delete-a-directory rule, the ledger-self-exclusion, and the content-hash desync warning that
-  catches a rename being mistaken for a retirement (`:1324-1331`).
+  catches a rename being mistaken for a retirement (`:1325-1359`).
 - **Seeding the standalone caller is a first prune on machines that have never pruned.** A
   standalone workspace may carry years of retired skills. The first run there has no prior ledger,
   and `readBundleLedger` returning null must continue to mean *no deletes* — that safe default is
@@ -134,6 +149,14 @@ generator of these files, which is why the drift count is worth reading rather t
   has a differing file, which the copy path overwrites. That is existing behaviour and out of scope,
   but the prune must not compound it by also deleting files during the same pass for unrelated
   reasons.
+- **The extension activation does not seed `protocols/`.** `seedBundleSurface` is typed
+  `'skills' | 'workflows'` and no caller passes `'protocols'`. Adding `protocols/` to
+  `currentBundlePaths` without also seeding them means the ledger tracks protocol paths that may
+  not exist on disk for extension-only users — creating false "missing" drift counts and a prune
+  that vacuously deletes nothing (the files were never copied). The fix is to widen
+  `seedBundleSurface` to accept `'protocols'` and call it from `refreshWorkspaceControlPlane`
+  alongside the skills and workflows seed. This also gives extension users content-hash refresh of
+  protocols on every activation, which they currently lack.
 
 ## Edge-Case & Dependency Audit
 
@@ -141,7 +164,7 @@ generator of these files, which is why the drift count is worth reading rather t
   Shrinking `protocols/` from 32 to 2 leaves 30 empty directories. Harmless, but it should be a
   stated outcome rather than a surprise.
 - **The `improve-plan` / `improve-feature` exception.** Those two are the persisted defaults of
-  user-editable path fields (`kanban.html:3464`, `:3568`, per the db-rows plan). They must never be
+  user-editable path fields (`kanban.html:3431`, `:3535`, per the db-rows plan). They must never be
   pruned while they remain the default values, or every install's planner add-on points at a
   deleted file.
 - **Drift counts are logged and never asserted.** `extension.ts:406-412` writes a line to the output
@@ -149,13 +172,34 @@ generator of these files, which is why the drift count is worth reading rather t
   in a test, not in a log.
 - **A workspace with no `.agents/` at all** — prune must be a no-op, not an error.
 
+## Dependencies
+
+- **Blocks:** `protocols-as-db-rows-not-scaffolded-files.md` — must land at least one release
+  after this one. The first release that adds `protocols/` to `currentBundlePaths` only seeds the
+  ledger; the prune activates on the second run. Shipping both together strands 29 orphans.
+- No other implementation dependencies. The crawl extraction, scope widening, standalone wiring,
+  and `seedBundleSurface` widening are all self-contained.
+
+## Adversarial Synthesis
+
+Key risks: (1) the plan's original claim that `.agents/` is "copied into every workspace in full"
+was inaccurate — the extension activation only seeds skills and workflows, not protocols, so adding
+`protocols/` to the prune scope without also seeding them creates a ledger that tracks files absent
+from disk (false "missing" drift, vacuous prune). Fixed by adding Proposed Change #4: widen
+`seedBundleSurface` to accept `'protocols'` and call it from `refreshWorkspaceControlPlane`. (2) The
+crawl extraction must be a single service method both roots call, not a copy-paste — otherwise this
+plan fixes a divergence by adding one. (3) The `improve-plan` / `improve-feature` guard must be
+tested, not assumed — a later bundle change can silently orphan the two path fields' defaults.
+Mitigations: seed protocols in both roots, extract the crawl, add the guard test, and the
+first-run-no-ledger-deletes-nothing invariant makes standalone wiring non-destructive.
+
 ## Proposed Changes
 
 ### 1. `ControlPlaneMigrationService.ts` — extract the bundle-path crawl
 
 Move the `skills/` + `workflows/` crawl out of `extension.ts:399-401` into a service method that
 both roots call. Add `protocols/` to it and to the `scopes` array at `:1387`. Update the scope
-comment at `:1380-1384` to name `protocols/` as in-scope and to keep `personas/`, `rules/`,
+comment at `:1378-1384` to name `protocols/` as in-scope and to keep `personas/`, `rules/`,
 `scripts/` named as out.
 
 ### 2. `src/standalone/bootstrap.ts` — wire the prune
@@ -169,6 +213,29 @@ throw into the server boot.
 Keep both permanently in the bundle so they are always in `currentBundlePaths` and therefore never
 prune candidates. Add a test asserting it, so a later bundle change cannot silently orphan the two
 path fields' defaults.
+
+### 4. `seedBundleSurface` — widen to accept `'protocols'` and seed in both roots
+
+The extension activation (`refreshWorkspaceControlPlane`, `extension.ts:321`) seeds only `skills/`
+and `workflows/`. Protocols arrive in workspaces only via `bootstrapControlPlaneLayout` (standalone
+init / migration flows), never via activation. Without seeding protocols in the activation path:
+
+- The ledger tracks protocol paths that may not exist on disk for extension-only users, producing
+  false "missing" drift counts.
+- The prune vacuously deletes nothing — the files were never copied.
+- Extension users never get content-hash refresh of protocols on activation, so protocol updates
+  ship only to standalone-init workspaces.
+
+Widen `seedBundleSurface`'s `surface` type to `'skills' | 'workflows' | 'protocols'` and add a
+`seedBundleSurface('protocols', path.join(bundledAgentsPath, 'protocols'), root, ledgerSnapshot)`
+call in `refreshWorkspaceControlPlane` alongside the existing skills and workflows calls. The
+function already constructs the destination path from the `surface` parameter
+(`path.join(workspaceRoot, '.agents', surface, relativePath)`), so no other changes are needed
+inside the function. The `protocolFiles` result feeds into `currentBundlePaths` the same way
+`skillFiles` and `workflowFiles` do. The standalone host's `bootstrapControlPlaneLayout` already
+copies protocols via `_copyDirectoryRecursive`, so no standalone seed change is needed — but the
+standalone server boot should also call the shared crawl + prune (Proposed Change #2), and the
+crawl should include protocols (Proposed Change #1).
 
 ## Verification Plan
 
@@ -188,6 +255,10 @@ path fields' defaults.
    non-deletion, ledger self-exclusion, and the rename-vs-retirement hash warning.
 7. **No `.agents/` directory → no-op, no throw**, on both hosts.
 8. **`personas/`, `rules/`, `scripts/` remain out of scope** — a file under each survives a prune.
+9. **`seedBundleSurface` accepts `'protocols'` and seeds them.** A fresh workspace with no prior
+   `.agents/protocols/` receives the bundled protocol files after `seedBundleSurface('protocols',
+   ...)` runs, and a protocol updated in the bundle is content-hash refreshed on the next
+   activation.
 
 ### Goal Invariants
 

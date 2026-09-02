@@ -75,11 +75,13 @@ load-bearing for two reasons the codebase already documents:
 
 1. **Bracketed paste.** `term.paste()` applies the `\x1b[200~` / `\x1b[201~` wrapping when
    DEC mode 2004 is active. The mode is already tracked and restored on reattach
-   (`terminals.js:10522-10527`). A raw `ws.send` of the payload delivers it as typed input,
+   (`terminals.js:10582-10587`, `REARMABLE_DEC_MODES` at `:9670`). A raw `ws.send` of the payload delivers it as typed input,
    which is precisely the "the whole block echoes instead of collapsing" symptom.
-2. **Paste attribution.** `terminals.js:6082-6088` states it directly: *"term.onData fires
+2. **Paste attribution.** `terminals.js:6131-6134` states it directly: *"term.onData fires
    only for locally typed/pasted input"*, which is why the drag-drop path has to attribute
-   itself explicitly via `attributePasteDispatch`. `term.paste()` routes through `onData`, so
+   itself explicitly via `attributePasteDispatch` (a concept named in comments at line 6134;
+   the actual attribution call is `attributePastedPrompt` via fetch to
+   `/kanban/verb/attributePastedPrompt`). `term.paste()` routes through `onData`, so
    a button built on it inherits the existing attribution for free. A raw write would
    silently bypass it and require a second attribution path.
 
@@ -136,7 +138,7 @@ the only way to obtain clipboard text without the Clipboard API.
 ### Complex / Risky
 
 - **Focus.** The textarea must take focus reliably enough for the OS callout to appear on
-  iOS, then hand focus back to the terminal cleanly. `terminals.js:10137` already tracks a
+  iOS, then hand focus back to the terminal cleanly. `terminals.js:10191` already tracks a
   set of focus-stealing sources (sidebar click, pane-header button, sibling iframe, window
   blur) — a pane-header button that deliberately moves focus is walking straight into
   machinery that exists to prevent exactly that, and must be reconciled with it rather than
@@ -219,14 +221,27 @@ so the thing that makes the feature work on the platform that needs it most is t
 desktop-first implementation will optimise away. The third is delivering via raw `ws.send`
 because it is fewer lines — that silently drops bracketed-paste wrapping and paste
 attribution, and both failures are invisible until someone pastes a multi-line block into a
-root shell or asks why a dispatch was never attributed. Mitigations: one path only; a real,
-visible, editable textarea; `term.paste()` as the sole delivery mechanism; and pane identity
-captured at render time rather than resolved from focus.
+root shell or asks why a dispatch was never attributed. The fourth is leaving the
+cross-subtask interface undefined: the sibling clipboard-keys plan needs to open this
+control programmatically when Ctrl+Shift+V has no clipboard to read, and without an exposed
+entry point the key handler will fail silently — the exact bug this feature exists to fix.
+Mitigations: one path only; a real, visible, editable textarea; `term.paste()` as the sole
+delivery mechanism; pane identity captured at render time rather than resolved from focus;
+and a programmatic entry point (`window.sbOpenTerminalPaste(paneId)`) exposed for the
+sibling plan.
+
+**Key risks:** (1) Cross-subtask interface undefined — key handler can't invoke paste
+control. (2) Linux `paste` event may not fire on the affected setup — blocking prerequisite
+(Verification step 0). (3) iOS paste callout behavior unverified for visible editable
+textareas. (4) Single-open enforcement under-specified. **Mitigations:** (1) Expose
+`window.sbOpenTerminalPaste(paneId)`. (2) Reproduce on affected Linux before building. (3)
+Web research on iOS editable element requirements. (4) Module-level `activePasteControl` +
+`closeActivePasteControl()`.
 
 ## Proposed Changes
 
-1. **Paste control in `.pane-actions`** (`terminals.js:6300`), rendered per pane with its
-   pane identity captured at render time.
+1. **Paste control in `.pane-actions`** (`terminals.js:6347` — confirmed current),
+   rendered per pane with its pane identity captured at render time.
 2. **A real, visible, editable `<textarea>`**, focused on activation, sized and placed so
    iOS offers its Paste callout. Dismissed on blur, on Escape, and after delivery.
 3. **Delivery through `term.paste(text)`** on that pane's terminal — never a raw `ws.send`
@@ -237,16 +252,65 @@ captured at render time rather than resolved from focus.
    silent no-op in the extension host's webview. If the payload is multi-line, it is legible
    before it lands; that is the whole mitigation and it is sufficient.
 5. **Focus restored to the terminal** after delivery, reconciled with the existing
-   focus-stealing tracking at `terminals.js:10137` rather than bypassing it.
-6. **Failure states.** Terminal gone, empty clipboard, and paste-event-never-fired are three
+   focus-stealing tracking at `terminals.js:10191` (the caret-ring sweep that handles
+   "sidebar click, pane-header button, sibling iframe, window blur" — confirmed current).
+   The sweep is idempotent and O(panes), so the textarea focus/blur cycle should be handled
+   correctly — but verify explicitly that the caret ring rebuilds after focus returns to
+   `term.textarea` (the `has-caret` class is re-added on the next `focus` event at line
+   10185). The coder must ensure focus returns to `term.textarea` after delivery, not to
+   the textarea or the button.
+6. **Single-open enforcement.** A module-level `activePasteControl` reference (not a
+   per-pane flag) ensures only one paste textarea is open at a time. Opening a second pane's
+   paste control calls `closeActivePasteControl()` — which blurs the textarea, removes it
+   from the DOM, and nulls the reference — before creating the new one, discarding any
+   un-sent content. This prevents the operator's paste gesture from landing in a pane they
+   are not looking at — the exact failure mode
+   `feature_plan_20260626100852_clipboard_paste_wrong_terminal.md` was written about.
+7. **Failure states.** Terminal gone, empty clipboard, and paste-event-never-fired are three
    distinct outcomes and must read differently. "Nothing happened" is the one unacceptable
    result, because it is indistinguishable from the bug this plan exists to fix.
+8. **Programmatic entry point for the sibling clipboard-keys plan.** Expose
+   `window.sbOpenTerminalPaste(paneId)` (or dispatch a custom event `sb:open-paste` with
+   `{ detail: { paneId } }`) so the Ctrl+Shift+V handler in the sibling plan can open this
+   control when `navigator.clipboard` is absent in an insecure context. Without this, the
+   key handler has no way to route the operator to the paste control and must either
+   duplicate the textarea logic, simulate a button click, or fail silently — the exact
+   failure mode both plans exist to prevent. The function must accept the pane identity
+   (not resolve from focus) and delegate to the same open-paste path the button uses.
 
 ### Migration
 
 None.
 
+## Uncertain Assumptions
+
+The following are external platform/browser behaviors not answerable from the codebase.
+The user was advised to run web research to confirm them before implementation.
+
+- **iOS paste callout for visible editable textareas:** The plan assumes iOS offers a
+  Paste callout for a genuinely visible, editable `<textarea>`. This is widely believed but
+  not verified against the target iOS version. If iOS has a minimum size requirement, a
+  contenteditable preference, or changed behavior in recent versions, the implementation
+  could be correct by spec and still not work on the target device.
+- **Linux `paste` event firing:** The plan assumes the `paste` event fires when the
+  operator's gesture reaches a real, visible textarea on the affected Linux setup. If the
+  failure is upstream (e.g., Wayland clipboard isolation, a compositor-level intercept),
+  this design does not address the Linux case. This is a blocking prerequisite (Verification
+  step 0).
+
 ## Verification Plan
+
+### Goal Invariants
+
+- A paste control element exists within `.pane-actions` in `src/webview/terminals.js` (confirmed at line 6347).
+- The control delivers text via `term.paste(text)`, never via raw `ws.send` — assert no `ws.send` call exists in the paste delivery path.
+- No `navigator.clipboard.readText()` call exists in the added code — the design is single-path by construction.
+- No `confirm(`, `window.confirm`, or `showWarningMessage` call exists in the added code (per CLAUDE.md).
+- The paste textarea is a genuinely visible, editable element (not `display:none`, `opacity:0`, `readonly`, or zero-size) — assert this in a test, because a hidden textarea silently breaks iOS.
+- The control works in both the VS Code extension webview and the standalone/browser host.
+- A programmatic entry point (`window.sbOpenTerminalPaste(paneId)` or equivalent custom event) exists so the sibling clipboard-keys plan can open this control when `navigator.clipboard` is absent.
+
+0. **Reproduce the Linux failure first.** Before building anything, confirm the `paste` event fires when the operator's gesture reaches a real, visible textarea on the affected Linux setup. If it does not (e.g., a Wayland clipboard isolation issue), this design does not address the Linux case and the plan must be revised. This is a blocking prerequisite, not a footnote.
 
 1. **Linux, the reported case.** On the affected setup, paste a command with the button and
    confirm it reaches the shell — including over the tailnet URL, where Ctrl+Shift+V cannot

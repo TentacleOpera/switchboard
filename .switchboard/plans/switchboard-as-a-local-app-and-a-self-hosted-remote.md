@@ -12,16 +12,19 @@ Ship Switchboard as something you launch rather than something you open an IDE t
 
 **Two-machine operation works and is undiscoverable.** Per `standalone-remote-access-story.md`, `ssh -L 7777:127.0.0.1:7777 you@host` then `http://127.0.0.1:7777/?token=…` passes all four guards, streams terminals (`terminals.js:200` derives the WS URL from `location.host`), and serves the API for agent clients on the same port. A reverse proxy works on the same basis given `proxy_set_header Host switchboard.localhost`. That plan's own finding is that the rigour "is real but invisible" — so today the capability exists and nobody can find it, and the two-machine setup is a manual tunnel an operator has to know to build.
 
-**The mode choice is the actual product decision, and it is currently unexpressible.** Two axes — where the Board store lives, and where agents run — give four combinations, and the two worth naming pull in different directions:
+**The mode choice is the actual product decision, and it is currently unexpressible.** Two axes — where the Board store lives, and where agents run — give four combinations. Three are named below; the fourth — **board local, agents remote** — is
+**explicitly refused**, see *Settled* at the end of this plan. The two new modes pull in different
+directions:
 
 - **The controller seat can already be reached remotely without any of this, and that reframes the priority.** `agy` is in the CLI-agent detection regex (`terminalUtils.ts:213`) and mapped to the Antigravity brand icon, so the orchestrator seat can run the Antigravity CLI today. Antigravity shipped Remote Control (21 Aug 2026) — browser access to an Antigravity session on any of your machines — so running the controller on `agy` makes the Switchboard cockpit browser-reachable through the host vendor's feature, while the fleet it dispatches to stays any CLI and any subscription. Phone notifications compose the same way: agents already post completion comments via `postManagedComment`, and Linear's own app pushes them. Neither needs code.
   So the pairing and tunnel work in this plan is **not** the path to a remote loop — that path exists. This plan's value is a board and fleet on infrastructure the operator owns, across hosts that will never share a vendor's remote feature. Sequence it accordingly: below the storage work, and below `remote-control-dispatch-acknowledgment-writeback.md`, which turns the existing Linear push into a dispatch-time notification for complexity 4.
 
 - **Local board, local agents.** Today's shape, and the zero-configuration default. One machine owns everything; nothing is paired; no tunnel exists. This is a named mode, not an unnamed baseline — it must stay reachable with no setup, and no part of the pairing surface may be a precondition for it.
-- **Remote board, local agents.** The board and its sync live on the always-on machine; PTYs and teams run on the laptop you are sitting at. Your board survives the laptop sleeping; your agents use the hardware in front of you, with your local checkouts.
+- **Remote board, local agent _clients_ — already shipped, no work required.** An `ssh -L 7777:127.0.0.1:7777` tunnel and agent CLIs on the laptop talking to the remote board over `http://127.0.0.1:7777`. **One host, one writer, no sync.** This is NOT the mode below and must never be confused with it: nothing here holds a store, spawns a PTY, or writes liveness, so it needs no tier split, no store target and no lease. It works today and is the cheapest useful two-machine shape. It is listed because a matrix that omits it makes the next reader conclude local agents require the storage programme, when the configuration most operators actually want requires nothing at all.
+- **Remote board, local agents (a second _host_).** The board and its sync live on the always-on machine; **PTYs and teams run on the laptop** — which means a second Switchboard host process, and therefore a second writer. Your board survives the laptop sleeping; your agents use the hardware in front of you, with your local checkouts. The PTY ownership is the whole cost: it is what turns the line above into the storage programme.
 - **Remote board, remote agents.** The always-on machine does everything; the laptop is a thin client onto its shell. Agents keep working while the laptop is shut.
 
-**And these two cost very different amounts, which is the sequencing insight.** Remote-board-remote-agents needs *nothing* from the storage programme — the laptop runs no host, holds no store, syncs nothing; it opens the remote's shell through a tunnel. Remote-board-local-agents is the one that needs the store target, the tier split and the sync-owner lease, because two hosts are then live against one board.
+**And these two cost very different amounts, which is the sequencing insight.** Remote-board-remote-agents needs *nothing* from the storage programme — the laptop runs no host, holds no store, syncs nothing; it opens the remote's shell through a tunnel. Remote-board-local-**agents-as-a-second-host** is the one that needs the store target, the tier split and the sync-owner lease, because two hosts are then live against one board. The tunnel-client shape above needs none of them — the distinction is PTY ownership, not agent location.
 
 ### Root Cause
 
@@ -99,7 +102,7 @@ Yes — four decisions.
 - **Hard prerequisite:** `standalone-remote-access-story.md`, especially its durable-session-token subtask and the tunnel-breakage fixes (the absolute-URL asset route). This plan is the productisation of that plan's posture.
 - **Hard prerequisite:** the sidecar plan — without a single owner reachable over HTTP, a second host is a second writer.
 - **Hard prerequisite:** `storage-topology-one-choice-three-stores.md` — decides what a remote holds (Board, Archive if it follows the target, never Runtime).
-- **For remote-board-local-agents only:** the tier split, a store target, and the sync-owner lease. The remote-agents mode needs none of them.
+- **For remote-board-local-agents as a SECOND HOST only:** the tier split, a store target, and the sync-owner lease. The remote-agents mode needs none of them, and neither does the tunnel-client shape (one host, one writer) — do not attach these prerequisites to it.
 - **Requires** `board-read-endpoints-must-survive-the-storage-topology.md` for the mode matrix to be complete for agents, not just for humans.
 
 ## Adversarial Synthesis
@@ -169,7 +172,7 @@ No existing install affected; the VSIX is unchanged and stays a first-class clie
 - Tray launchers are three binaries to sign and notarise. macOS first with others following, or all three at once?
 - For remote-board-local-agents, does the local host reach the remote's *store* (a tunnelled sqld or sidecar) or does that mode effectively require a libSQL target? The first keeps everything self-hosted; the second is simpler to build.
 - Should the remote run the plan scanner against repositories it can see, or is scanning strictly client-side? This decides whether the remote needs access to code at all.
-- Is the fourth combination — board local, agents remote — worth supporting, or explicitly refused? It is coherent (laptop holds the board, the mini executes) but doubles the mode matrix.
+- ~~Is the fourth combination — board local, agents remote — worth supporting, or explicitly refused?~~ **Resolved: refused.** See *Settled — do not re-raise*.
 
 ## Tunnel lifecycle is not this app's job — decisions 2 and 4 revisited
 
@@ -238,3 +241,19 @@ plan's own first draft), mode-transition semantics and per-terminal host labels,
 ownership lock, version-skew refusal, unattended legibility, capability gating, and the credential
 scoping and branch-protection guidance. Sequencing is unchanged — this revision reduces the
 plan's scope; it does not reorder it.
+
+## Settled — do not re-raise
+
+**Board local, agents remote is REFUSED** (operator decision, 2026-09-01). It was carried as an
+open question; this is its answer.
+
+It inverts both axes at once: the board is *inherently* always-on — the plan scanner sweeps every
+10 s, `AutoArchiveService` every 5 minutes, provider sync polls, teams and terminals hold liveness
+— so this combination puts the authoritative, always-on state on the machine that sleeps, changes
+networks and gets closed, while the stable machine holds workers that cannot function without it.
+It is strictly worse than the local/local baseline it resembles, and it doubles the mode matrix to
+buy that.
+
+**The mode matrix is three, and the enumeration is now complete.** Do not "restore" a fourth mode
+on the grounds that two axes give four combinations — the fourth is accounted for here. Do not
+re-open it as an open question; it was one, and it has been answered.

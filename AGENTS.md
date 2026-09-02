@@ -164,6 +164,33 @@ Write the pin as `**Project:** <name>` — plain or as a `- ` list item; both pa
 > **System backstop:** the importer is resolve-only. An unknown pin (or one equal to a workspace name / a literal `<...>` placeholder) leaves the plan unassigned instead of auto-creating a `projects` row. Only the user creates projects (on the board). The protocol above is the first line of defense; the import guard is the non-negotiable backstop.
 <!-- switchboard:agents-protocol:end -->
 
+## A fallback must never be indistinguishable from a real value.
+
+On any read of **configuration, identity, routing, or membership**, a default that behaves exactly
+like a configured value turns a loud failure into a quiet wrong answer. No gate catches this: a
+fallback is a *positive* line of code that passes lint, compile and review while looking like care.
+It is the single largest source of reported bugs in this codebase.
+
+Shipped examples, every one of which became a bug report: `'unknown'` CLI family silently borrowing
+Claude's 8000ms readiness ceiling instead of Devin's 20000ms, so every fix to the Devin timing was
+invisible to the seat that needed it; `|| '/static/icons/nav-jet.svg'`, which made "no team has an
+icon" look identical to "every team picked the same one"; `catch { return {} }` on a config load,
+which reads a *corrupt* file as an *unconfigured* one; and a four-level startup-command lookup where
+a stale value from a retired store wins and nothing records which store answered.
+
+**This is not a ban on defaults.** On those four kinds of read, either:
+
+1. **Tag it** — return the source alongside the value (`{ value, source }`), and log the source where
+   it is used. "Which store answered?" must be answerable after the fact.
+2. **Fail loudly** — surface the missing or corrupt config instead of substituting a plausible one.
+
+Where a default is truly unavoidable, choose the value whose failure is **visible or safe**, never the
+one that is merely quiet — an unrecognised CLI waits on the *longest* boot ceiling, because guessing
+short breaks delivery and guessing long costs seconds.
+
+Fallbacks on **presentation** paths (a label, a placeholder, an avatar) are fine. The test is whether
+a wrong value silently changes *behaviour*.
+
 ## Standalone and the extension MUST NOT diverge. NO EXCEPTIONS.
 
 Switchboard ships **two hosts**: the VS Code extension (`src/extension.ts`) and

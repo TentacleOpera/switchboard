@@ -70,7 +70,7 @@ One design decision is asserted here rather than asked, and should be confirmed 
 
 ### Side Effects
 - `show()` moves the user's tmux focus (`select-pane`/`select-window`). Honour `preserveFocus` by skipping both, matching the `sendRobustText` background-mode contract that focus is never stolen for background work.
-- `paste-buffer -p` only emits bracket codes when the pane's foreground application has *requested* bracketed paste mode. A plain `bash` pane gets no brackets, so a multiline payload submits line-by-line — each line running as a shell command. Delivery must flatten newlines when the target is not a known CLI agent, mirroring the `isCliAgent` flattening at `terminalUtils.ts:173`.
+- `paste-buffer -p` only emits bracket codes when the pane's foreground application has *requested* bracketed paste mode. A plain `bash` pane gets no brackets, so a multiline payload submits line-by-line — each line running as a shell command. Delivery must flatten newlines when `caps.bracketedPaste` is false (tmux < 2.6). The `isCliAgent` flattening at `terminalUtils.ts:220` is a **terminal-name** check for the VS Code clipboard path — it is not applicable here. The PTY delivery path's `CLI_AGENT_REGEX` was deleted (confirm CR is now unconditional); the tmux path bases its flattening on the tmux version capability, not on a name regex.
 
 ### Platform
 - **Windows:** no tmux. `isTmuxAvailable()` returns `false`; nothing else runs.
@@ -208,11 +208,23 @@ Sequence inside the per-pane lock:
      tmux paste-buffer -b switchboard-<pid>-<n> -t %id -d -p
      ```
      `-d` deletes the buffer after pasting; `-p` requests bracket codes. Temp file is the primary route (works on tmux ≥ 1.9); stdin is an optimization on ≥ 3.2. Mode `0600`, unlink in `finally`.
-   - **Fallback (no bracketed paste)** — flatten newlines to spaces when the pane is not a known CLI agent, then chunked `send-keys -l` at 256 bytes / 30 ms, matching the PTY pacing constants.
+   - **Fallback (no bracketed paste)** — when `caps.bracketedPaste` is false (tmux < 2.6, so `paste-buffer -p` is unavailable), flatten newlines to spaces, then chunked `send-keys -l` at 256 bytes / `TMUX_CHUNK_DELAY_MS` (30 ms). The flattening decision is based on the **tmux version capability** (`caps.bracketedPaste`), not on a CLI-agent name regex — the PTY path's `CLI_AGENT_REGEX` was deleted (`pty-prompt-delivery-framing.test.js:357-362` enforces its absence). When `caps.bracketedPaste` is true, the buffer route with `-p` is used and newlines are preserved; if the pane's foreground app did not enable bracketed paste mode, tmux emits no brackets and multiline text submits line-by-line — this is undetectable from outside and documented as a risk below.
 3. Settle 100 ms → `send-keys -t %id Enter`.
-4. If `CLI_AGENT_REGEX` matches the handle's name **or** role: wait 200 ms → a second `Enter`. Same double-confirm the PTY and VS Code paths both need (`ptyPromptDelivery.ts:49-52`, `terminalUtils.ts:197-201`).
+4. Wait 200 ms → a second `Enter`, **unconditionally** (no name/role/regex gate). This matches the PTY path's current unconditional double-confirm (`ptyPromptDelivery.ts:257-259`). The old `CLI_AGENT_REGEX` gate was deleted — see the Superseded callout below.
 
-Also export `clearTmuxPane(handle)` — the step-1 bytes lifted out for a UI button, under the same lock, mirroring `clearPty` (`ptyPromptDelivery.ts:64-70`) including its swallow-on-dead-pane rationale.
+Also export `clearTmuxPane(handle)` — the step-1 bytes lifted out for a UI button, under the same lock, mirroring `clearPty` including its swallow-on-dead-pane rationale.
+
+> **Superseded:** "If `CLI_AGENT_REGEX` matches the handle's name **or** role: wait 200 ms → a second Enter. Same double-confirm the PTY and VS Code paths both need (`ptyPromptDelivery.ts:49-52`, `terminalUtils.ts:197-201`)."
+> **Reason:** `CLI_AGENT_REGEX` was **deleted** from the codebase. The contract test `pty-prompt-delivery-framing.test.js:357-362` asserts it stays deleted — it tested `handle.name`/`handle.role`, which carry no CLI identity for role-named seats, and the confirm CR is now **unconditional**. Gating the second Enter on a deleted regex would fail to submit on non-allowlisted agent CLIs — the exact bug the deletion fixed.
+> **Replaced with:** The second `Enter` is **unconditional** — always send it, no name/role/regex gate. This matches the PTY path's current behaviour (`ptyPromptDelivery.ts:257-259`: unconditional `handle.write('\r')` after `CONFIRM_ENTER_DELAY_MS`). The 200 ms delay between the two Enters is retained.
+
+> **Superseded:** "chunked `send-keys -l` at 256 bytes / 30 ms, matching the PTY pacing constants."
+> **Reason:** The PTY path uses `CHUNK_DELAY_MS = 8` (`ptyPromptDelivery.ts:9`), not 30 ms. The 30 ms value was the old VS Code IPC path. Claiming parity with a number from a different transport is misleading. For tmux, each chunk is a separate `execFile` call (orders of magnitude slower than an fd write), so 8 ms would be too aggressive.
+> **Replaced with:** Chunk at 256 bytes with a **tmux-specific** delay of 30 ms, justified by the per-chunk `execFile` overhead (not by PTY parity). Name the constant `TMUX_CHUNK_DELAY_MS` so it is not confused with the PTY constant.
+
+> **Superseded:** "wait `clearBeforePromptDelayMs ?? 2000`, clamped `0..10000` (identical clamp to `ptyPromptDelivery.ts:30`)."
+> **Reason:** The PTY default is now `DEFAULT_CLEAR_SETTLE_MS = 600` (`ptyPromptDelivery.ts:16`), not 2000, and the PTY path uses a **clear-readiness tracker** (`clearAndAwaitReadinessLocked`) that waits for the CLI's actual re-render signal via `onData`. The tmux path is send-only (no `onData`), so it cannot use the readiness tracker — a fixed delay is the only option. This is a **functional gap**, not a parity claim.
+> **Replaced with:** Use `clearBeforePromptDelayMs ?? 2000` with the same `0..10000` clamp. The 2000 ms default is **tmux-specific** — the `/clear` command goes through `send-keys` (external process) and the pane re-renders without a readiness signal, so a conservative default is warranted. Acknowledge explicitly: the tmux path cannot use the PTY clear-readiness tracker because it has no `onData` stream; a fixed delay is an inherent limitation of the send-only design.
 
 ### Phase 3: `src/test/tmux-backend-contract.test.js` (new)
 
@@ -223,8 +235,8 @@ Contract tests in the style of the existing `pty-*-contract.test.js` files:
 3. **Pane-id validation** — `/^%\d+$/` is enforced before any `-t` argument; feeding `%1; kill-server` is rejected, not passed through.
 4. **`dispose()` never kills** — assert no `kill-pane` on the dispose path, and that `kill()` does issue it.
 5. **Delivery shape** — a mocked `run()` records argv: bracketed-paste path uses both `-p` and `-d`; buffer names are unique across concurrent sends; a temp file created for `load-buffer` is unlinked even when `paste-buffer` throws.
-6. **Newline flattening** — a non-CLI-agent pane with no bracketed paste receives a payload containing no `\n`.
-7. **Submit shape** — a trailing `Enter`, and exactly two for CLI-agent panes. (`review-comment-transport-regression.test.js` pins the analogous `sendText('', true)` shape for VS Code; keep that precedent.)
+6. **Newline flattening** — when `caps.bracketedPaste` is false, the fallback path delivers a payload containing no `\n` (flattened to spaces). When `caps.bracketedPaste` is true, the buffer route preserves newlines.
+7. **Submit shape** — a trailing `Enter`, then exactly **two** Enters **unconditionally** (no name/role/regex gate). This mirrors the PTY path's unconditional double-confirm (`ptyPromptDelivery.ts:257-259`), not the deleted `CLI_AGENT_REGEX` gate.
 
 ## Files Changed
 
@@ -263,6 +275,17 @@ The seven contract tests in Phase 3, run under the existing test harness. All us
 - **`send-keys -l` and control bytes.** Literal mode is specified for printable text; behaviour with embedded ESC varies by version, which is why `write()` routes control bytes through `-H`. If `-H` is unavailable on a target version there is no clean path for raw framing — fall back to the buffer route and accept it.
 - **Temp files carry plan content.** A crash between create and unlink leaves prompt text on disk at `0600`. Acceptable, but the `finally` is load-bearing, not defensive decoration.
 - **Duplicated delivery logic.** `tmuxPromptDelivery.ts` intentionally mirrors `ptyPromptDelivery.ts`. A future fix to the pacing/framing sequence must be applied to both, and nothing enforces that. The contract tests are the only coupling; keep their assertions parallel.
+- **No clear-readiness tracker.** The PTY path uses `clearAndAwaitReadinessLocked` to wait for the CLI's actual re-render signal after `/clear`. The tmux path is send-only (no `onData`), so it cannot use this tracker — a fixed delay is the only option. This is an inherent limitation of the send-only design, not a parity gap that can be closed.
+
+## Adversarial Synthesis
+
+Key risks: (1) stale `CLI_AGENT_REGEX` references that would gate the confirm Enter on a deleted regex — corrected to unconditional; (2) tmux version floors asserted from memory that must be confirmed against the changelog; (3) bracketed paste is the pane's choice and undetectable from outside, so multiline prompts into non-bracketed panes submit line-by-line. Mitigations: unconditional double-confirm CR (matching the PTY path's current behaviour), `caps.bracketedPaste`-based flattening decision, temp-file `finally` cleanup, and contract tests that pin the corrected shapes.
+
+## Uncertain Assumptions
+
+The following are external facts about tmux's version history that cannot be confirmed from the codebase. The user was advised to run web research to confirm them before implementation:
+
+- **tmux version floors:** `load-buffer -` (stdin) requires ≥ 3.2; `paste-buffer -p` requires ≥ 2.6; `send-keys -H` requires ≥ 2.4. These are asserted from memory and must be verified against the tmux changelog. Guessing high strands users on older tmux; guessing low produces cryptic `unknown option` failures.
 
 ## Recommendation
 

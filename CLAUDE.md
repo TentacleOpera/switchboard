@@ -35,6 +35,33 @@ and the queue stall backstop did not exist. Every gate stayed green, because
 the composition root. The two roots had also drifted the *other* way — standalone
 wires two seams the extension does not.
 
+## A fallback must never be indistinguishable from a real value.
+
+On any read of **configuration, identity, routing, or membership**, a default that behaves exactly
+like a configured value turns a loud failure into a quiet wrong answer. No gate catches this: a
+fallback is a *positive* line of code that passes lint, compile and review while looking like care.
+It is the single largest source of reported bugs in this codebase.
+
+Shipped examples, every one of which became a bug report: `'unknown'` CLI family silently borrowing
+Claude's 8000ms readiness ceiling instead of Devin's 20000ms, so every fix to the Devin timing was
+invisible to the seat that needed it; `|| '/static/icons/nav-jet.svg'`, which made "no team has an
+icon" look identical to "every team picked the same one"; `catch { return {} }` on a config load,
+which reads a *corrupt* file as an *unconfigured* one; and a four-level startup-command lookup where
+a stale value from a retired store wins and nothing records which store answered.
+
+**This is not a ban on defaults.** On those four kinds of read, either:
+
+1. **Tag it** — return the source alongside the value (`{ value, source }`), and log the source where
+   it is used. "Which store answered?" must be answerable after the fact.
+2. **Fail loudly** — surface the missing or corrupt config instead of substituting a plausible one.
+
+Where a default is truly unavoidable, choose the value whose failure is **visible or safe**, never the
+one that is merely quiet — an unrecognised CLI waits on the *longest* boot ceiling, because guessing
+short breaks delivery and guessing long costs seconds.
+
+Fallbacks on **presentation** paths (a label, a placeholder, an avatar) are fine. The test is whether
+a wrong value silently changes *behaviour*.
+
 ## Build
 
 - `npm run compile` (webpack) builds to `dist/`, but **`dist/` is NOT used during development or testing**. All testing is done via an installed VSIX — nothing is served from the repo's `dist/` directory. Do NOT audit, check, or flag `dist/` staleness during reviews or verification. Treat `src/` as the source of truth. `npm run compile` is only needed when producing a VSIX for release.
