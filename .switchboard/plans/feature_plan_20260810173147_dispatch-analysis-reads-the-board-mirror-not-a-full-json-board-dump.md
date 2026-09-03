@@ -1,5 +1,9 @@
 # Dispatch-Analysis Reads the Per-Column Board Mirror Instead of Pulling the Whole Board as JSON
 
+<!-- board-collapse-01 -->
+> **RESCOPED 2026-09-04 (Board Collapse 01).** The stated prerequisite `feature_plan_20260811103000_staging-flag-replaces-dispatch-column.md` was **retired and its file deleted** — `DISPATCH` was replaced by a real `STAGING` column in commit `52404992`, so migration V60 and the `plans.staged_at` stamp were never built. Remove the "serialises behind" dependency and the `staged_at` references; anchor on the live STAGING column.
+
+
 ## Goal
 
 Make the dispatch-analysis pass read the board from `.switchboard/kanban-state-<column>.md` — the per-column markdown mirror the extension already writes — instead of `GET /kanban/board`, which returns the entire workspace board as one JSON document. Keep the HTTP endpoint as an explicit, documented fallback for the one case where the mirror is genuinely not there.

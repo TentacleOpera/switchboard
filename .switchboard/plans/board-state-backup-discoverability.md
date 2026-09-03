@@ -1,5 +1,9 @@
 # Board state backup works and nobody knows it exists — document it, and stop telling only git that the state is unrecoverable
 
+<!-- board-collapse-01 -->
+> **RESCOPED 2026-09-04 (Board Collapse 01).** The Database panel **shipped** in commit `7d71ac56` and the Setup tab's DB section is retired. Delete "the Setup-panel copy is interim pending the Database panel plan": the corrected copy belongs in the Database panel now. Do not edit `setup.html`'s retired DB section.
+
+
 ## Goal
 
 Switchboard already protects board state automatically and has done for some time. A user cannot find out. Close the documentation and discoverability gap without adding a nag, and state honestly which failure modes the existing mechanisms do and do not cover.

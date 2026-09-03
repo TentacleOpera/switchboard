@@ -1,5 +1,9 @@
 # Generate channel-declaration text in the Connections tab for the user to paste into a cloud agent
 
+<!-- board-collapse-01b -->
+> **PATH CORRECTION 2026-09-04 (Board Collapse 01).** This file names `.agents/skills/_lib/sb_api_call.sh`, which was **deleted** in commit `96fb16df`. All eight `kanban_operations/*.js` scripts now share `.agents/skills/_lib/cli-call.js`, and `switchboard api` is the shell-side escape hatch. Read every `sb_api_call` reference below as `cli-call.js` / `switchboard api`, and do not restore the shell helper.
+
+
 ## Goal
 
 Add a text generator to the Connections tab that produces a ready-to-paste description of this workspace's routes to Switchboard state. The user copies it and pastes it into their cloud interface's add-skill box. No file emission, no mirroring, no committed artefact.

@@ -1,5 +1,9 @@
 # Ticket detail H1: source the title from the sidebar row, not the detail cache
 
+<!-- board-collapse-01 -->
+> **RESCOPED 2026-09-04 (Board Collapse 01).** Changes 4 and 5 are **already at HEAD** (the `localTicketFileRead` title override, and `renderTicketsTab` on `localTicketFilesListed`) — the file already says do not re-add them. Rewrite the Goal so the remaining scope is the single `resolveTicketTitle` helper and its three call sites.
+
+
 ## Goal
 
 Make the ticket detail pane's H1 render from the same data the sidebar renders, so a title edited on the remote shows up after a refetch instead of staying pinned to whatever was cached the first time the ticket was opened.

@@ -1,5 +1,9 @@
 # The browser board is served unauthenticated by the extension host — reject cross-site state-changing requests in both hosts
 
+<!-- board-collapse-01b -->
+> **PATH CORRECTION 2026-09-04 (Board Collapse 01).** This file names `.agents/skills/_lib/sb_api_call.sh`, which was **deleted** in commit `96fb16df`. All eight `kanban_operations/*.js` scripts now share `.agents/skills/_lib/cli-call.js`, and `switchboard api` is the shell-side escape hatch. Read every `sb_api_call` reference below as `cli-call.js` / `switchboard api`, and do not restore the shell helper.
+
+
 ## Goal
 
 Close a reachable CSRF hole in the board's HTTP surface by rejecting cross-site state-changing requests at the front of `_handleRequest`, in both composition roots, using request metadata (`Sec-Fetch-Site` / `Origin`) rather than a credential. Any web page the user visits while a board is open must not be able to move cards, delete plans, or fire a dispatch.

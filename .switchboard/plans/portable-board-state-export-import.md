@@ -1,5 +1,9 @@
 # Board state cannot survive machine loss without a third-party account — surface the state file as an explicit export/import
 
+<!-- board-collapse-01 -->
+> **RESCOPED 2026-09-04 (Board Collapse 01).** The Database panel **shipped** in commit `7d71ac56` ("add Database panel to the shell rail, retire Setup tab's DB section"). Delete the framing that command-palette entries are the user-facing path "until the Database panel lands": Export and Import land in the Database panel's "This machine" section directly. Palette entries remain only as an additional route.
+
+
 ## Goal
 
 Give every user an account-free way to carry board state to another machine. The serialiser already exists, runs automatically, and covers the state that matters; it is simply written to a gitignored path inside the project, where a reformat takes it with everything else.

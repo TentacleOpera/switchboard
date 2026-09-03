@@ -1,5 +1,9 @@
 # Make standalone the first-class entry point: `/switchboard` launches or attaches instead of demanding an IDE
 
+<!-- board-collapse-02 -->
+> **RESCOPED 2026-09-04 (Board Collapse 02).** The Claude mirror generator is being deleted (*Delete the Claude mirror generator and commit the eight skill files as ordinary bundle assets*). Two consequences for this plan: (1) the rule "edit `.agents/workflows/switchboard.md`, the mirror source, never the generated `.claude/skills/switchboard/SKILL.md`" no longer holds — **edit both files**, they are both committed source; (2) `npm run mirror:check` will not exist. Replace it in the CI-gate list with the drift test that succeeds it.
+
+
 ## Goal
 
 Invert the `/switchboard` entry protocol so its **first** action is to bring a Switchboard server up —

@@ -1,5 +1,9 @@
 # Phone-a-Friend Never Reaches a PTY Fleet Seat — Three Breaks in One Signal Path
 
+<!-- board-collapse-01 -->
+> **RESCOPED 2026-09-04 (Board Collapse 01).** Change "wire `onPhoneAFriend` in `bootstrap.ts`" is **already done** — commit `cf57044b` supplies it in the standalone composition root. Do not re-do it. What remains: the fleet-first lookup in `_dispatchPhoneAFriend` and the `getLocalApiServerPort` fallback so the directive is emitted under standalone.
+
+
 ## Goal
 
 When a coding seat finishes a batch with the Phone-a-Friend add-on enabled, the configured Phone-a-Friend terminal must receive the second-pass prompt — whether that terminal lives in the VS Code terminal panel, in the Terminals cockpit fleet, or in the browser host. Today the signal dies in three separate places and the operator sees nothing at all, with no error on screen.

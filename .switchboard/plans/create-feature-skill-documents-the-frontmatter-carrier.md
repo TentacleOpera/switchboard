@@ -1,5 +1,9 @@
 # The create-feature Skill Documents the Link Mechanism That Works Without the Extension
 
+<!-- board-collapse-02 -->
+> **RESCOPED 2026-09-04 (Board Collapse 02).** Delete the proposed `mirror:generate` npm script and `scripts/generate-claude-mirror.js`. The generator is being removed, not given a second entry point — see *Delete the Claude mirror generator*. Edit `.agents/skills/create-feature/SKILL.md` and its `.claude/` counterpart directly, in the same commit. **The rest of this plan stands and is still wanted**: the two stale sections telling remote agents how to link subtasks via `**Feature:**` frontmatter, and flipping "never commit the feature file" to "commit it in remote sessions".
+
+
 ## Goal
 
 Fix two stale sections in the `create-feature` skill that make an agent produce a feature with no subtasks attached, and that tell it not to commit the file it just wrote. Both were caught by an agent following the skill in a real remote session.

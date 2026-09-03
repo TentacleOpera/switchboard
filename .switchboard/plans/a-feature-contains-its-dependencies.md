@@ -1,5 +1,9 @@
 # A feature contains its dependencies
 
+<!-- board-collapse-02 -->
+> **RESCOPED 2026-09-04 (Board Collapse 02).** Remove `scripts/check-claude-mirror.js` from the touched files and delete the verification line "regenerate the mirror and confirm `mirror:check`" (already marked Superseded in this file). The mirror generator and its check are being deleted by *Delete the Claude mirror generator*; edit the `.claude/` copy of `manage-features/SKILL.md` directly alongside the `.agents/` one. The ten-subtask ceiling and the `Requires` membership rule are unaffected.
+
+
 **Project:** Browser Switchboard
 
 ## Goal

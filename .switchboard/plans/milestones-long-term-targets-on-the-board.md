@@ -1,5 +1,9 @@
 # Milestones — long-term goals that cards belong to, and that a controller agent can read
 
+<!-- board-collapse-01 -->
+> **RESCOPED 2026-09-04 (Board Collapse 01).** **Do not reserve a migration number.** This plan claims V66; V66 is already the `mission_milestones` mapping table and the schema is at **V67**. Use "the next free migration version at implementation time".
+
+
 ## Goal
 
 Add a **milestone**: a long-term goal, defined by the user or an agent, that cards

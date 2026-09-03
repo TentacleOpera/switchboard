@@ -1,5 +1,9 @@
 # Add file-based IPC transport to LocalApiServer for sandboxed agents
 
+<!-- board-collapse-01 -->
+> **RESCOPED 2026-09-04 (Board Collapse 01).** `.agents/skills/_lib/sb_api_call.sh` was **deleted** in commit `96fb16df`; all eight `kanban_operations/*.js` now route through `.agents/skills/_lib/cli-call.js`. Retarget every reference (sections 10 and 12, the `findApiPort`/`httpJson` rework, and the 50+ curl rewrites) to `cli-call.js`. Do not recreate the shell helper.
+
+
 ## Goal
 
 External sandboxed agents (Devin, Cursor, Claude Code, Windsurf) cannot reach the LocalApiServer over TCP loopback (`127.0.0.1`) because their sandboxes block "direct IP access." The current workaround (`BypassSandbox: true`) is a retry-and-workaround pattern that makes users uncomfortable and wastes a round-trip on every launch. Unix domain sockets were investigated and rejected — macOS Seatbelt blocks them by default alongside TCP (see superseded plan `add-unix-domain-socket-transport.md`). Add a file-based IPC transport that uses the workspace filesystem (`.switchboard/ipc/`) as a request/response queue. Any sandbox that permits file writes to the workspace — which all coding agents require to edit code — supports this transport with zero configuration on all platforms (macOS, Linux, Windows).

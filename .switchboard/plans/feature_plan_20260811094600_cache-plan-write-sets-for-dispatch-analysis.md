@@ -1,5 +1,9 @@
 # Cache plan write-sets in kanban.db so dispatch-analysis stops re-reading the whole backlog
 
+<!-- board-collapse-01 -->
+> **RESCOPED 2026-09-04 (Board Collapse 01).** Two corrections. (1) **Do not reserve a migration number.** This plan claims V61; the schema is at **V67**. Use "the next free migration version at implementation time" and delete the "if staging is dropped or reordered, renumber this to V60" instruction. (2) Its stated prerequisite `feature_plan_20260811103000_staging-flag-replaces-dispatch-column.md` was **retired and its file deleted** — `DISPATCH` became a real `STAGING` column in commit `52404992`, so `plans.staged_at` was never built. Remove the dependency and anchor on the live STAGING column.
+
+
 ## Goal
 
 Persist each plan's extracted **write set** (the files it will create or modify, plus its declared plan-level dependencies) in `kanban.db`, keyed on the plan file's mtime and size, so a dispatch-analysis run reads only the plan files that actually changed since the last pass instead of re-reading every candidate from scratch.

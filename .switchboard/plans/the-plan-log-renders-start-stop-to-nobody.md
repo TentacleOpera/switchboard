@@ -1,5 +1,9 @@
 # The Plan Log Renders start/stop To Nobody
 
+<!-- board-collapse-01 -->
+> **RESCOPED 2026-09-04 (Board Collapse 01).** **Do not reserve a migration number.** This plan claims "~V65"; the schema is at **V67**. Use "the next free migration version at implementation time".
+
+
 ## Goal
 
 `plan_events` is 8,565 rows and roughly 40% of a 7.3 MB `kanban.db`. Every one of those rows renders in the UI as `action=start` or `action=stop`, because the renderer branches on an event vocabulary that was never written. Nothing else can read the table: there is no HTTP endpoint, no skill references it, and the Mission Control skill instructs the opposite ("re-read the board and git from scratch and decide from that").

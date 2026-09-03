@@ -1,5 +1,9 @@
 # Feature Subtask Block Goes Invisible on Stale Feature File Read
 
+<!-- board-collapse-01 -->
+> **RESCOPED 2026-09-04 (Board Collapse 01).** Symptom (a), a stale read clearing `feature_id`, is **already closed** — commits `c8798b9c` and `3c5d671d` (unlink pass deleted, parser `/m` fix, `create-feature.js` hard error). Only symptom (b) remains: a subtask correctly linked in the DB but absent from the feature file's block. Rewrite the Goal to symptom (b) alone.
+
+
 ## Metadata
 
 **Complexity:** 6

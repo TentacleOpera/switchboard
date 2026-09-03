@@ -1,5 +1,14 @@
 # Delete the Claude mirror generator and commit the eight skill files as ordinary bundle assets
 
+<!-- board-collapse-02 -->
+> **SCOPE CONFIRMED AND WIDENED 2026-09-04 (Board Collapse 02).** Operator decision: the generator goes. This plan is the winner of decision 5 and now carries the whole mirror question. Two additions inherited from cards deleted alongside it:
+> > 
+> > 1. **The no-frontmatter invariant.** A skill deliberately hidden from Claude Code's slash menu carries no frontmatter in its `.agents/` source; Antigravity registers only `<dir>/SKILL.md` frontmatter, so the absence is the deliberate non-door convention. The drift test that replaces `mirror:check` must assert it, taking over from the deleted *`mirror:check` must assert that a gated skill carries no source frontmatter*.
+> > 2. **Landing removes the CI step.** `npm run mirror:check` is wired at `.github/workflows/integration-tests.yml:71` and `package.json:967`. Deleting the generator deletes that step; the drift test replaces it in the same commit, so CI is never left without a control-plane check.
+> > 
+> > Also note: the manifest has **eight** entries and `.claude/skills/` holds **eight** directories. Verify that count at implementation time rather than trusting the plan's prose.
+
+
 ## Goal
 
 Remove `generateClaudeMirror` and its manifest, commit the eight `.claude/skills/<name>/SKILL.md`

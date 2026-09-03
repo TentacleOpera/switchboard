@@ -43,7 +43,6 @@ Fix the .agents file lifecycle: deletion guard gaps in performSetup and _bootstr
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [.claude/ mirror keeps retired skill until next version bump after .agents/ deletion](../plans/feature_plan_20260827144002_claude-mirror-not-regenerating-on-deletion.md) — **PLAN REVIEWED** — ID: 4044524c-c4c3-442c-986d-027491f67b5b
 - [ ] [Deletion guard and bundle ledger cover all .agents surfaces and all copy paths](../plans/feature_plan_20260827144004_deletion-guard-and-ledger-cover-all-agents-surfaces.md) — **CREATED** — ID: d8c023a3-cbb7-4ee0-a765-9d1831b094a6
 <!-- END SUBTASKS -->
 

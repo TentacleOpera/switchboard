@@ -14,9 +14,9 @@ Correct the text the system hands to agents, on all three surfaces where it is c
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Two skills deliberately hidden from Claude Code's slash menu are still exposed to Antigravity's discovery — strip their source frontmatter](../plans/frontmatter-host-drift-no-user-skills-exposed-on-antigravity.md) — **PLAN REVIEWED** — ID: 33844143-d40b-45d6-91cc-f7c34f7f90a3
-- [ ] [Proactive /clear when a lead rests a coder terminal](../plans/feature_plan_20260815140920_proactive-clear-when-a-lead-rests-a-coder-terminal.md) — **PLAN REVIEWED** — ID: 493a3506-a89a-4f72-984e-583cc346d660
-- [ ] [Feature Prompt — Fix the Worktree Self-Contradiction, Retire Inert `featureWorktreeMode`](../plans/feature-prompt-worktree-contradiction.md) — **PLAN REVIEWED** — ID: 0793195a-d0f2-4217-8305-461301f60d89
+- [ ] [Two skills deliberately hidden from Claude Code's slash menu are still exposed to Antigravity's discovery — strip their source frontmatter](../plans/frontmatter-host-drift-no-user-skills-exposed-on-antigravity.md) — **COMPLETED** — ID: 33844143-d40b-45d6-91cc-f7c34f7f90a3
+- [ ] [Proactive /clear when a lead rests a coder terminal](../plans/feature_plan_20260815140920_proactive-clear-when-a-lead-rests-a-coder-terminal.md) — **COMPLETED** — ID: 493a3506-a89a-4f72-984e-583cc346d660
+- [ ] [Feature Prompt — Fix the Worktree Self-Contradiction, Retire Inert `featureWorktreeMode`](../plans/feature-prompt-worktree-contradiction.md) — **COMPLETED** — ID: 0793195a-d0f2-4217-8305-461301f60d89
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

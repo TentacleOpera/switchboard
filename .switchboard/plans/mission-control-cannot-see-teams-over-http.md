@@ -1,5 +1,9 @@
 # Mission Control cannot see teams over HTTP, so it cannot answer its own pre-flight or read the pacing that routes work
 
+<!-- board-collapse-01 -->
+> **RESCOPED 2026-09-04 (Board Collapse 01).** The appended out-of-scope finding, that standalone does not wire `resolveTeamPacing` / `resolveTeamMembers` into its `LocalApiServer` options, is **no longer true** — commit `cf57044b` wires both. Strike that paragraph; it must not be filed as a separate plan. The `GET /teams` endpoint work is unaffected.
+
+
 ## Goal
 
 Expose the configured team roster — groups, roles, head, and `pacing` — over the local API, so

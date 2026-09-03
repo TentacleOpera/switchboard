@@ -4,7 +4,7 @@
 
 ## Goal
 
-Remove three code paths that serve nothing. A tickets ask-agent verb whose button was removed when collaboration moved to local markdown files; nine file-resolution fallbacks pointing into a singular dot-agent directory at locations that never held the files they name, with the four legitimate migration sites left intact; and a permanent banner announcing the retirement of a mode that was never released. Three pure removals, verifiable the same way.
+Remove two code paths that serve nothing. (Corrected 2026-09-04, Board Collapse 01: this feature described three. The third, *Remove Retired-Mode UI Notices*, was **delivered on 2026-08-24 in commit `a42cad1f`** during the reviewer pass on the Mission Control feature; its card has been detached from this feature and moved to Completed.) A tickets ask-agent verb whose button was removed when collaboration moved to local markdown files; nine file-resolution fallbacks pointing into a singular dot-agent directory at locations that never held the files they name, with the four legitimate migration sites left intact;. Two pure removals, verifiable the same way.
 
 ## How the Subtasks Achieve This
 
@@ -16,7 +16,6 @@ Remove three code paths that serve nothing. A tickets ask-agent verb whose butto
 ## Subtasks
 - [ ] [Delete the dead `.agent/` fallback paths, keep the `.agent/` migration](../plans/remove-dead-agent-singular-fallback-paths.md) — **CREATED** — ID: a7a89fa3-a4d0-43e0-b8d6-2171e1dbfcfe
 - [ ] [Remove the dead tickets ask-agent path](../plans/remove-dead-tickets-ask-agent-path.md) — **CREATED** — ID: bb3d0ad8-7094-40ca-adc2-2ed74ac9f71e
-- [ ] [Remove Retired-Mode UI Notices](../plans/remove-retired-mode-ui-notices.md) — **CREATED** — ID: aa542002-85a7-4d5e-a2c7-df7b198663b8
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

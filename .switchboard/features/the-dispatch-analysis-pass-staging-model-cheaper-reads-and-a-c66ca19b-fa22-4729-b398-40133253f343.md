@@ -1,5 +1,9 @@
 # The Dispatch-Analysis Pass: Staging Model, Cheaper Reads, and a Worktree Escape Hatch
 
+<!-- board-collapse-01c -->
+> **CORRECTED 2026-09-04 (Board Collapse 01).** Two stale facts in this file. (1) It sequences behind a subtask *Staging is a filter, not a column* (`feature_plan_20260811103000_staging-flag-replaces-dispatch-column.md`) that was **retired and its file deleted**: `DISPATCH` was replaced by a real `STAGING` column in commit `52404992`, so migration V60 and the `plans.staged_at` stamp were never built. That plan is not a subtask of this feature and must not be waited on. (2) The migration numbers here are stale — V60 and V61 are taken and the schema head is **V67**. The write-set cache takes "the next free migration version at implementation time"; the instruction "add V60 and V61 only" is void. The rule it rests on stands: never edit a shipped `MIGRATION_Vnn_SQL` body.
+
+
 **Complexity:** 6
 
 ## Goal

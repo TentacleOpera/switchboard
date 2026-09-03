@@ -4,6 +4,10 @@ description: 'Milestones — Long-Term Goals On The Board'
 
 # Milestones — Long-Term Goals On The Board
 
+<!-- board-collapse-01c -->
+> **MIGRATION NUMBER CORRECTED 2026-09-04 (Board Collapse 01).** This feature reserved **V66**. V66 is already the `mission_milestones` mapping table (`KanbanDatabase.ts:636`) and the schema head is **V67**. Both this file and its state subtask now say "the next free migration version at implementation time".
+
+
 **Complexity:** 5
 
 ## Goal
@@ -16,7 +20,7 @@ Milestones are deliberately inert. Adding a card to one runs nothing, and nothin
 
 ## How the Subtasks Achieve This
 
-- **Milestones — long-term goals that cards belong to, and that a controller agent can read**: the state, the API, and agent access. Adds `milestones` + `milestone_members` (V66), mirroring the proven `missions` / `mission_members` membership shape including a `member_kind` for plans versus features. Column status is derived at read time and keyed to whatever columns the board currently has, so a renamed column neither breaks nor silently drops cards; a feature counts once through the feature so co-membership cannot inflate the numbers the controller agent reads. Nine routes mirroring `/kanban/mission/*`, completion as an explicit declaration that never touches a card, and the orchestration skill step that has the controller agent read goals before choosing what to group and dispatch.
+- **Milestones — long-term goals that cards belong to, and that a controller agent can read**: the state, the API, and agent access. Adds `milestones` + `milestone_members` (the next free migration version at implementation time), mirroring the proven `missions` / `mission_members` membership shape including a `member_kind` for plans versus features. Column status is derived at read time and keyed to whatever columns the board currently has, so a renamed column neither breaks nor silently drops cards; a feature counts once through the feature so co-membership cannot inflate the numbers the controller agent reads. Nine routes mirroring `/kanban/mission/*`, completion as an explicit declaration that never touches a card, and the orchestration skill step that has the controller agent read goals before choosing what to group and dispatch.
 
 - **A Milestones tab on the board — goals, their cards, and where those cards are**: the surface. Adds the MILESTONES tab to `kanban.html` using the existing tab seams, showing each goal with the per-column breakdown of its cards rather than a single percentage, plus create, complete/reopen, delete, drag-to-reorder, and an ADD TO MILESTONE action driven from the board's existing card selection that prefers a parent feature over its subtasks. Renders the backend's counts rather than recomputing them, so the tab and the API cannot disagree about how much work a goal contains.
 

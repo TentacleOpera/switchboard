@@ -1,5 +1,9 @@
 # Three skills instruct agents to use POSIX-only tooling — point them at the existing Node equivalents
 
+<!-- board-collapse-01 -->
+> **RESCOPED 2026-09-04 (Board Collapse 01).** `.agents/skills/_lib/sb_api_call.sh` no longer exists (deleted in `96fb16df`); drop the step that marks it POSIX-only. The `sqlite3` and `curl` rewrites in `query-kanban`, `manage-features` and `kanban_operations` still stand — three bare `sqlite3` calls remain in `manage-features/SKILL.md` around lines 172, 212 and 218.
+
+
 ## Goal
 
 Make the control-plane skills executable by an agent on Windows. Three SKILL.md files and one shell library reach for `sqlite3`, `curl` and `jq`; an agent following them verbatim on Windows fails. The Node equivalents already exist for some operations — the instructions simply do not point at them. For operations with no existing Node equivalent, the skill text must be rewritten to use `node -e` one-liners or the HTTP API so no POSIX CLI tool is required.

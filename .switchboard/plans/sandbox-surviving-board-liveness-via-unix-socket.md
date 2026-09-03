@@ -1,5 +1,9 @@
 # Sandbox-Surviving Board Liveness via a Unix Domain Socket
 
+<!-- board-collapse-01 -->
+> **RESCOPED 2026-09-04 (Board Collapse 01).** `.agents/skills/_lib/sb_api_call.sh` was deleted in `96fb16df`; retarget that touched file to `.agents/skills/_lib/cli-call.js`. The socket design is unaffected.
+
+
 ## Goal
 
 Give the `/switchboard` launcher a liveness signal that is accurate inside an agent sandbox, so it can tell "the board is running but I cannot reach it over TCP" apart from "the port file is stale and the board is dead" — and launch in the second case without ever hijacking in the first.

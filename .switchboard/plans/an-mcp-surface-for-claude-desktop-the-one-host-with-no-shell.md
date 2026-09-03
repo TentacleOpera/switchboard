@@ -1,5 +1,9 @@
 # An MCP surface for Claude Desktop — the one host that has no shell, and the one the last attempt never actually tested
 
+<!-- board-collapse-01b -->
+> **PATH CORRECTION 2026-09-04 (Board Collapse 01).** This file names `.agents/skills/_lib/sb_api_call.sh`, which was **deleted** in commit `96fb16df`. All eight `kanban_operations/*.js` scripts now share `.agents/skills/_lib/cli-call.js`, and `switchboard api` is the shell-side escape hatch. Read every `sb_api_call` reference below as `cli-call.js` / `switchboard api`, and do not restore the shell helper.
+
+
 ## Goal
 
 Mount a small MCP surface on `LocalApiServer` so Claude Desktop can drive the board. Desktop is the

@@ -81,7 +81,6 @@ parity gaps.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [`POST /kanban/move` Is Dead in Standalone — and 13 More `LocalApiServer` Options the Bootstrap Never Passes](../plans/standalone-kanban-move-endpoint-not-wired.md) — **PLAN REVIEWED** — ID: 5e8e3600-c011-49a0-aba9-1ad1bf030228
 - [ ] [Hiding a Custom Kanban Column Does Nothing — Three Readers Ignore the Key, and the Write Leaks Into the Machine-Global Role Picker](../plans/custom-column-visibility-toggle-writes-state-no-reader-consults.md) — **PLAN REVIEWED** — ID: 585cfe79-d77a-43a3-a037-fdc3022fce08
 - [ ] [Read Verbs Return a Bare Ack and Ship Their Value Only on the Webview Push — the Opposite of the Documented Contract](../plans/read-verbs-return-bare-ack-violating-documented-http-contract.md) — **PLAN REVIEWED** — ID: 27f87493-2cf8-4fae-992c-d1d521b4a776
 - [ ] [Four Published Doc Pages Still Document Plan Auto-Fetch, Retired and Replaced by the `fetch-plans` Scheduler Source](../plans/docs-still-document-retired-plan-autofetch.md) — **PLAN REVIEWED** — ID: 375edd49-fcf9-40d4-a869-74b0696abc69

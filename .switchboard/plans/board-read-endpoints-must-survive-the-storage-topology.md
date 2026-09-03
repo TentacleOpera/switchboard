@@ -1,5 +1,9 @@
 # The board read endpoints must survive the storage topology, or the SQL-to-endpoints migration lands on endpoints that lie
 
+<!-- board-collapse-01b -->
+> **PATH CORRECTION 2026-09-04 (Board Collapse 01).** This file names `.agents/skills/_lib/sb_api_call.sh`, which was **deleted** in commit `96fb16df`. All eight `kanban_operations/*.js` scripts now share `.agents/skills/_lib/cli-call.js`, and `switchboard api` is the shell-side escape hatch. Read every `sb_api_call` reference below as `cli-call.js` / `switchboard api`, and do not restore the shell helper.
+
+
 ## Goal
 
 Make the board's read endpoints correct under the storage programme: findable across the board window and Archive, honestly distinguishable between "no such card" and "store unreachable", and identical in every deployment mode. The migration off agent SQL is already decided elsewhere; this makes the destination trustworthy.

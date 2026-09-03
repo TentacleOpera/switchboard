@@ -1,5 +1,9 @@
 # The Protocol Path in Our Own Agent Instructions Points Nowhere, and Nothing Stops the Fallout
 
+<!-- board-collapse-02 -->
+> **RESCOPED 2026-09-04 (Board Collapse 02).** The analysis paragraph describing `mirror:check` as regenerating from `MIRROR_MANIFEST` and passing green over extra `.agents/skills/` directories is being overtaken: the generator, the manifest and that gate are all deleted by *Delete the Claude mirror generator*. Rewrite that paragraph against a committed `.claude/skills/` tree. The plan's own contribution is unaffected and still wanted: correcting the seven dead `.switchboard/protocols/` references, and adding the whitelist gate over `.agents/skills/` contents — which becomes **more** valuable, since it is the only structural check left once `mirror:check` is gone.
+
+
 ## Goal
 
 Correct the 7 references in this repo's agent instructions that send agents to `.switchboard/protocols/` — a directory that has not existed since 2026-08-21 — and add a gate on the contents of `.agents/skills/` so a protocol written to the wrong place fails CI instead of shipping. Leave the 12 `.switchboard/protocols/` occurrences in `src/` alone: those are migration keys, and rewriting them breaks the migration.

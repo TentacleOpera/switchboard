@@ -1,5 +1,9 @@
 # `/switchboard` accepts any board on the shared port and adopts the wrong workspace — verify identity on both sides of the adopt call
 
+<!-- board-collapse-01b -->
+> **PATH CORRECTION 2026-09-04 (Board Collapse 01).** This file names `.agents/skills/_lib/sb_api_call.sh`, which was **deleted** in commit `96fb16df`. All eight `kanban_operations/*.js` scripts now share `.agents/skills/_lib/cli-call.js`, and `switchboard api` is the shell-side escape hatch. Read every `sb_api_call` reference below as `cli-call.js` / `switchboard api`, and do not restore the shell helper.
+
+
 ## Goal
 
 Make the `/switchboard` launcher prove that the board answering on the port belongs to **this** workspace before it uses it, and make `POST /mission-control/adopt` reject a workspace root the server does not serve instead of silently substituting its own. Adopting the orchestrator seat for a workspace the user is not in must become impossible, not merely unlikely.

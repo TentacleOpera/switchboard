@@ -1,5 +1,9 @@
 # The CLI is a peer control surface — every board operation with terminal meaning is a named command, for agents and humans alike
 
+<!-- board-collapse-01 -->
+> **RESCOPED 2026-09-04 (Board Collapse 01).** The `switchboard api` escape hatch **landed** in commit `96fb16df`, and all eight `kanban_operations/*.js` now route through `_lib/cli-call.js`. Remove that from the proposed scope. What remains: the named board commands (`advance` as the primary verb), the substitution rule, and the generated docs-site reference.
+
+
 ## Goal
 
 Make the CLI a peer control surface to the browser board: **every board operation with meaning outside the browser is a named CLI command**, with documented arguments and a known bridging status. The CLI is not a subset for agents. It serves a dispatched agent mid-task, a controller agent acting for the operator, and a human driving Switchboard from a terminal, a script or another tool who wants to forgo the browser entirely. The test for inclusion is not *who needs it* but *does it mean anything from a terminal* — asked two ways: what was the person doing when they pressed it, and could a script want it (the CLI has gestures the browser lacks: scheduling, piping, batch) — and where the browser affordance is a picker or a clipboard, the CLI substitutes an argument or stdout rather than dropping the operation. Not ten commands and a passthrough pointed at an internal transport.

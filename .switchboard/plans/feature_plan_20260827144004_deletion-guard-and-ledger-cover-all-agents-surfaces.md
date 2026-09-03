@@ -1,5 +1,9 @@
 # Deletion guard and bundle ledger cover all .agents surfaces and all copy paths
 
+<!-- board-collapse-02 -->
+> **RESCOPED 2026-09-04 (Board Collapse 02).** This plan's stated dependency, *.claude/ mirror keeps retired skill until next version bump*, has been **deleted**: it exists only to re-run `generateClaudeMirror` so its stale-skill cleanup fires, and the generator is being removed. Two consequences: (1) the `deletionSkipped` return value on `seedBundleSurface` is now **this plan's** to add, not something to inherit; (2) drop the mirror-regeneration step entirely — with `.claude/skills/` committed as source, a skill deleted from `.agents/` is deleted from `.claude/` in the same commit and needs no generator pass. The ledger, guard, prune and `protocols/` widening are unaffected.
+
+
 ## Goal
 
 The `.agents/` deletion guard — which prevents a workspace's deliberate file retirement from being silently undone — has two coverage gaps that leave files stranded or resurrected: (1) it only protects the activation seed loop (`seedBundleSurface`), while the two whole-tree copy paths (`performSetup` and `_bootstrapControlPlaneLayout` → `_copyDirectoryRecursive`) copy unconditionally with no ledger check; and (2) it only covers `skills/` and `workflows/`, while the relocated `protocols/` surface (32 files) has no ledger entry, no drift line, and no retirement mechanism. This plan closes both gaps so the ledger, the deletion guard, and the prune/drift reconcile cover every bundle-shipped surface across every copy path.

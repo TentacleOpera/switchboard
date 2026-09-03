@@ -1,5 +1,9 @@
 # No shipped Switchboard client sends an Authorization header — add shared token discovery to sb_api_call.sh and the kanban_operations scripts
 
+<!-- board-collapse-01 -->
+> **RESCOPED 2026-09-04 (Board Collapse 01).** `sb_api_call.sh` was deleted in `96fb16df` and the seven `kanban_operations` scripts already share one transport, `.agents/skills/_lib/cli-call.js`. The proposed `sb_http.js` extraction is therefore already done by other means. This plan shrinks to: add token discovery (env, then token file, then none) and honest 401 reporting to `cli-call.js` alone. It folds into *Out-of-process agents cannot authenticate to the standalone API* and should be dispatched with it.
+
+
 ## Goal
 
 Make every in-tree client of the local API discover and present a credential, via one shared discovery routine per language (bash, Node), so the skills and scripts work identically under both hosts. A 401 must also be reported as a 401 — with the actual remedy — rather than as "the extension isn't running".

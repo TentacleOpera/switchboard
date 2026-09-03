@@ -1,5 +1,9 @@
 # The lead's acceptance post is the only thing that releases a seat, and it silently releases nothing
 
+<!-- board-collapse-01 -->
+> **RESCOPED 2026-09-04 (Board Collapse 01).** Proposed change 1, wiring `clearTerminalContext` into the standalone `LocalApiServerOptions`, is **already done** — commit `cf57044b`. Do not re-do it. What remains: the four silent no-ops inside the accepted-seat clear, and surfacing `cleared:false` / `clearError` instead of dropping them.
+
+
 ## Goal
 
 Make the acceptance post the lead already makes actually release the seat it is supposed to

@@ -1,5 +1,9 @@
 # Tailnet Mode Accepts The Node's Own MagicDNS Names Without Being Told Them
 
+<!-- board-collapse-01 -->
+> **RESCOPED 2026-09-04 (Board Collapse 01).** Proposed changes 1 to 6 are **already implemented and shipped**; the file says so. The remaining work is change 7 only: the IPv6 tailnet listener and its allowlist entry. Rewrite the Goal to that, so a coder does not re-verify six landed changes. This plan is also the first step of the **Tailnet** feature — it populates the bind policy that the CSRF guard's allow-set reads.
+
+
 ## Goal
 
 `switchboard tailnet` should accept the MagicDNS names the machine already answers to, without the operator retyping them as `--hostname`. Populate the bind policy's `magicDnsNames` from `tailscale status --json` at startup, and include the node's IPv6 tailnet address alongside its IPv4 one.

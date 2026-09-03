@@ -1,5 +1,9 @@
 # Document the storage topology, deployment modes and remote loop — clause by clause, as each one ships
 
+<!-- board-collapse-01 -->
+> **RESCOPED 2026-09-04 (Board Collapse 01).** Two corrections. (1) Item 3 documents "the two axes and four combinations"; the mode matrix was settled at **three** on 2026-09-01 — board-local with agents-remote was refused. (2) Delete the mechanism that adds a documentation trigger line to six other storage plans. Documentation follows shipped behaviour; this plan shrinks to the two facts true today, the `agy` controller seat and the notification loop, plus the deployment vocabulary.
+
+
 ## Goal
 
 Give the storage and remote work a documentation home, and a rule for when each part gets written: **when it ships, not when it is planned.** Extend `docs/REMOTE_ACCESS.md` rather than starting a new file, and record the two things that are true *today* and undocumented — the `agy`-as-controller pattern and the Linear notification loop — immediately, since neither waits on any code.

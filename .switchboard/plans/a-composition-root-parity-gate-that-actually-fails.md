@@ -1,5 +1,9 @@
 # A composition-root parity gate that actually fails
 
+<!-- board-collapse-01 -->
+> **INHERITED SCOPE 2026-09-04 (Board Collapse 01).** The plan *`POST /kanban/move` Is Dead in Standalone — and 13 More `LocalApiServer` Options* has been **deleted**: commit `cf57044b` wired `moveCard`, `onPhoneAFriend`, `clearTerminalContext`, `resolveTeamPacing` and `resolveTeamMembers` into the standalone root, closing its defect. Its surviving idea now belongs here: the option-supply parity assertion over the two `LocalApiServer` options literals, with a reasoned `HOST_SPECIFIC` allowlist. Re-measure the extension-only key set at implementation time; the plan's "16 extension-only keys including `moveCard`" is stale.
+
+
 ## Goal
 
 Add a CI gate that compares the **options objects** the two hosts hand to shared services, and fails on any key present in one root and absent from the other unless it is on an explicit, justified allowlist. Today no gate looks at composition roots, which is why the same class of defect has now shipped twice.

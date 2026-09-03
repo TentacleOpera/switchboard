@@ -1,5 +1,9 @@
 # Protocols become database rows injected into prompts, not files scaffolded into every repo
 
+<!-- board-collapse-01b -->
+> **PATH CORRECTION 2026-09-04 (Board Collapse 01).** This file names `.agents/skills/_lib/sb_api_call.sh`, which was **deleted** in commit `96fb16df`. All eight `kanban_operations/*.js` scripts now share `.agents/skills/_lib/cli-call.js`, and `switchboard api` is the shell-side escape hatch. Read every `sb_api_call` reference below as `cli-call.js` / `switchboard api`, and do not restore the shell helper.
+
+
 ## Goal
 
 Move 29 of the 32 protocol definitions into the store, delete one outright, and shrink `.agents/protocols/` to two files. Protocols are UI-triggered instructions the extension delivers; nothing discovers them by scanning the filesystem, so their storage form is a delivery choice rather than a constraint.

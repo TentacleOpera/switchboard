@@ -1,5 +1,9 @@
 # Extract the kanban column-set derivation into a shared webview script
 
+<!-- board-collapse-01 -->
+> **RESCOPED 2026-09-04 (Board Collapse 01).** Steps 5 to 7 are **already built in the working tree** (`kanban.collapseCodersEnabled`, the `toggleCollapseCoders` verb and allowlist entry, the `collapseCodersState` pushes). Only the extraction of `buildDisplayColumns` into `sharedKanbanColumns.js` remains. Rewrite the Goal to the extraction alone, and verify the working-tree state before starting rather than assuming it.
+
+
 ## Goal
 
 Make the terminals kanban pane and the kanban board derive their column list from **one** piece of code, so the pane cannot disagree with the board about which columns exist, what they are called, or what order they appear in.
