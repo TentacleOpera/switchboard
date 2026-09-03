@@ -914,6 +914,7 @@
     "test:contract:html-preview-fluid-width": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/html-preview-fluid-width-regression.test.js",
     "test:contract:tickets-assignee-filter": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/tickets-assignee-filter-regression.test.js",
     "test:contract:panel-revival-retention": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/panel-revival-retention-contract.test.js",
+    "test:contract:status-pane-mode": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/status-pane-mode-contract.test.js",
     "test:contract:terminal-flow-control": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-flow-control-contract.test.js",
     "test:contract:terminal-input-path": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-input-path-contract.test.js",
     "test:contract:terminal-rename-rekey": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-rename-rekey-contract.test.js",

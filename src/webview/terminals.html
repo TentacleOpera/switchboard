@@ -1452,6 +1452,126 @@
             gap: 8px;
         }
 
+        /* ---------------------------------------------------------------------
+           Status pane: a seat rendered as STATE. In flow (not absolute) so
+           .pane-content's min-height:0 governs it the same way it governs the
+           kanban list; the terminal's own .terminal-view-host is display:none
+           here because updatePaneElement drops its .active class.
+           --------------------------------------------------------------------- */
+        .status-pane-card {
+            height: 100%;
+            box-sizing: border-box;
+            overflow-y: auto;
+            padding: 10px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            font-size: 11px;
+            line-height: 1.45;
+            color: var(--text-primary, #e6e6e6);
+            background: var(--term-surface);
+        }
+        .status-pane-identity {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            min-width: 0;
+        }
+        .status-pane-brand {
+            width: 14px;
+            height: 14px;
+            object-fit: contain;
+            flex-shrink: 0;
+        }
+        .status-pane-brand.is-exited { opacity: 0.45; }
+        .status-pane-name {
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .status-pane-crown { display: inline-flex; color: var(--feature-accent, #D4A017); flex-shrink: 0; opacity: 0.95; }
+        .status-pane-role {
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            color: var(--text-secondary);
+            flex-shrink: 0;
+        }
+        .status-pane-plan {
+            font-size: 10px;
+            color: var(--text-secondary);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        /* DECLARED. Given the weight — a border, full-contrast text — because it is
+           the only thing on this card the agent actually said. The host-derived
+           block below is deliberately quieter; the ordering is the feature. */
+        .status-pane-declared {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: baseline;
+            gap: 6px;
+            padding: 6px 8px;
+            border-left: 2px solid var(--border-color);
+            background: color-mix(in srgb, var(--text-primary, #e6e6e6) 5%, transparent);
+        }
+        .status-pane-kind {
+            font-size: 9px;
+            font-weight: 700;
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            padding: 1px 5px;
+            border-radius: 2px;
+            color: var(--term-surface);
+            background: var(--text-secondary);
+        }
+        .status-pane-kind.is-blocked { background: var(--accent-red, #f48771); }
+        .status-pane-kind.is-question { background: var(--accent-gold, #dcdcaa); }
+        .status-pane-kind.is-finished { background: var(--accent-teal); }
+        .status-pane-declared-meta { font-size: 9px; color: var(--text-secondary); }
+        .status-pane-declared-text { flex-basis: 100%; }
+        .status-pane-declared-none { font-size: 10px; font-style: italic; color: var(--text-secondary); }
+        .status-pane-declared-none.is-unreachable { color: var(--accent-red, #f48771); font-style: normal; }
+        /* Host-derived: smaller, dimmer, and labelled. A guess must never be able
+           to read as a declaration. */
+        .status-pane-inferred {
+            margin-top: auto;
+            font-size: 10px;
+            color: var(--text-secondary);
+        }
+        .status-pane-inferred-label {
+            font-size: 8px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            opacity: 0.65;
+            margin-bottom: 2px;
+        }
+        .status-pane-signal { opacity: 0.85; }
+        /* Unreachable. NOT the empty state, and deliberately not styled like one:
+           a pane whose job is telling you what your fleet is doing must not answer
+           a failed read with a blank card. */
+        .status-pane-card.is-unreachable {
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            gap: 6px;
+            border: 1px dashed var(--accent-red, #f48771);
+        }
+        .status-pane-unreachable-label {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 1.4px;
+            text-transform: uppercase;
+            color: var(--accent-red, #f48771);
+        }
+        .status-pane-unreachable-why { font-size: 10px; color: var(--text-secondary); }
+        /* The output toggle reads as engaged while output is off — the pane is in a
+           non-default state and the button is the only thing that says so. */
+        .btn-output-pane.is-status { color: var(--accent-teal); border-color: var(--accent-teal); }
+
         /* Startup / Dispatch curtain. An OVERLAY, not output filtering: xterm keeps rendering
            underneath, so scrollback survives and the operator can scroll back to the
            banner. .pane-content is already position:relative (line 860). */

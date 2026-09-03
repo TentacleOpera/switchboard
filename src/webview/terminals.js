@@ -321,6 +321,14 @@
     // timer or frame id of their own.
     const terminalsMap = new Map();
     let fleetList = [];
+    // The last ptyListTerminals poll did not produce a usable fleet. fleetList is
+    // deliberately left STALE on failure (see fetchTerminalList's tail), which is
+    // right for the sidebar — a dark list during a transient blip is worse than a
+    // slightly old one — and wrong for a status pane, whose entire job is telling
+    // the operator what a seat is doing. A stale row rendered as fact is the
+    // "unreachable store looks like an empty result" hazard; status panes read
+    // this flag and say `unreachable` instead. Cleared on the next good poll.
+    let fleetFetchFailed = false;
     let parentsList = [];
     let heldUnposted = {};
 
@@ -2210,7 +2218,7 @@
             pinnedPanes = savedPins.map(Boolean);
         }
         if (Array.isArray(savedModes)) {
-            paneModes = savedModes.map(m => m === 'kanban' ? 'kanban' : 'terminal');
+            paneModes = savedModes.map(m => m === 'kanban' ? 'kanban' : m === 'status' ? 'status' : 'terminal');
         }
         if (Array.isArray(savedKanbanCols)) {
             kanbanPaneColumn = savedKanbanCols;
@@ -2353,9 +2361,11 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({})
             });
+            if (!res.ok) { fleetFetchFailed = true; }
             if (res.ok) {
                 const data = await res.json();
                 if (data && Array.isArray(data.terminals)) {
+                    fleetFetchFailed = false;
                     hasFetchedList = true;
                     fleetList = data.terminals;
                     parentsList = data.parents || [];
@@ -2399,6 +2409,7 @@
                 }
             }
         } catch (err) {
+            fleetFetchFailed = true;
             console.warn('[Terminals] Failed to fetch terminal list:', err);
         }
         // Reached on a network error, a non-OK response, or an unusable payload. This
@@ -2673,8 +2684,9 @@
         }
         // A pane flipped to kanban mode is showing a board column, not the
         // terminal's output — the signal is meaningless there and would render
-        // over the card list.
-        if (paneModes[paneIndex] === 'kanban') {
+        // over the card list. A status pane is showing agent state, not terminal
+        // output — same reasoning: the overlay would cover the status card.
+        if (paneModes[paneIndex] === 'kanban' || paneModes[paneIndex] === 'status') {
             clearWorkingSilence(name);
             return;
         }
@@ -3034,6 +3046,7 @@
             initialAssignmentDone = true;
             if (!activeGroupId && !paneAssignments.some(name => name !== null)) {
                 paneAssignments[0] = fleetList[0].friendlyName;
+                paneModes[0] = 'terminal';
                 activeTerminalName = fleetList[0].friendlyName;
             }
         }
@@ -5632,6 +5645,16 @@
         if (displacedName && displacedName !== terminalName) { dismissStartupCurtain(displacedName); }
 
         paneAssignments[target] = terminalName;
+        // Seating a terminal into this pane turns its output on, whether the pane
+        // was an unassigned status pane (the free-slot scan admits those) or an
+        // assigned one taken by a displacing click (the displacement scan admits
+        // those too — it excludes only kanban). Same precedent as the kanban flip
+        // in updatePaneElement: the operator deliberately put a terminal here.
+        // NOT conditional on the pane having been free — the displacing branch
+        // reaches here with an occupied target, and leaving that pane in status
+        // mode would seat a terminal the operator asked for behind a card that
+        // never shows its output.
+        paneModes[target] = 'terminal';
         focusedPaneIndex = target;
         activeTerminalName = terminalName;
         if (terminalBadges.has(terminalName)) {
@@ -5748,6 +5771,11 @@
     function refreshInputState(name) {
         const paneIndex = paneAssignments.indexOf(name);
         if (paneIndex < 0) { return; }
+        // A status pane has no socket by design, so every transition this function
+        // exists to report reads as `connecting` there — a chip and a ring
+        // asserting a handshake that will never complete. suspendTerminalStream
+        // calls straight into here, so the guard has to live at this end.
+        if (paneModes[paneIndex] === 'status') { return; }
         const paneEl = paneGridEl.querySelector(`.terminal-pane[data-pane-index="${paneIndex}"]`);
         if (!paneEl) { return; }
         const state = resolveInputState(name);
@@ -5932,6 +5960,20 @@
         while (kanbanPaneColumn.length < getMaxSlotCount()) { kanbanPaneColumn.push(undefined); }
         while (kanbanPaneWorkspace.length < getMaxSlotCount()) { kanbanPaneWorkspace.push(undefined); }
         while (kanbanPaneProject.length < getMaxSlotCount()) { kanbanPaneProject.push(''); }
+
+        // Declared reports are fetched only when something renders them, and from
+        // here rather than from a timer of its own: renderPaneGrid already runs on
+        // every 5 s fleet poll and on every mode toggle, which is exactly the
+        // cadence a status card needs. The fetch is non-blocking — this render
+        // paints whatever the cache holds and the next one picks up the answer.
+        //
+        // The response deliberately does NOT re-render. A completion handler that
+        // called renderPaneGrid would re-enter here, and the in-flight guard would
+        // already have cleared — an unbounded fetch loop at whatever rate the
+        // inbox answers. A declaration therefore appears on the next poll, at most
+        // one poll interval late, which is the same latency every other fact on
+        // this pane already has.
+        if (paneModes.slice(0, slotCount).some(m => m === 'status')) { refreshSeatReports(); }
 
         // Sampled BEFORE any mutation. Both the surplus-pane removal below and the
         // per-pane update can drop the caret (removing or re-parenting the focused
@@ -6493,6 +6535,44 @@
             window.parent.postMessage({ type: 'popoutTerminal', name: targetName }, location.origin);
         });
 
+        // Output toggle. NOT a third entry in a mode picker: status is a terminal
+        // pane with its output turned off, and it is presented as exactly that —
+        // one button on a pane that already has a seat. Kanban stays what it is,
+        // an empty-slot repurposing with its own toggle inside the placeholder.
+        const outputBtn = document.createElement('button');
+        outputBtn.className = 'btn-unassign-pane btn-output-pane';
+        outputBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (!paneAssignments[index]) { return; }
+            if (paneModes[index] === 'kanban') { return; }
+            paneModes[index] = paneModes[index] === 'status' ? 'terminal' : 'status';
+            saveLayoutSettings();
+            renderPaneGrid();
+        });
+
+        // The solo gesture: make THIS the pane you are talking to. Flips every
+        // OTHER seated pane to status; unseated and kanban panes are untouched.
+        // It does not enforce anything — the operator can turn any of them back
+        // on immediately, and two live panes remain a supported arrangement.
+        const soloOutputBtn = document.createElement('button');
+        soloOutputBtn.className = 'btn-unassign-pane btn-solo-output-pane';
+        soloOutputBtn.textContent = 'live';
+        soloOutputBtn.title = 'Make this the live pane — every other seated pane switches to status';
+        soloOutputBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (!paneAssignments[index]) { return; }
+            const rendered = getSlotCount(effectiveLayout);
+            for (let i = 0; i < rendered; i++) {
+                if (i === index) { continue; }
+                if (!paneAssignments[i]) { continue; }
+                if (paneModes[i] === 'kanban') { continue; }
+                paneModes[i] = 'status';
+            }
+            paneModes[index] = 'terminal';
+            saveLayoutSettings();
+            renderPaneGrid();
+        });
+
         actionsEl.appendChild(pinBtn);
         actionsEl.appendChild(peekDismissBtn);
         actionsEl.appendChild(popoutBtn);
@@ -6501,6 +6581,12 @@
         actionsEl.appendChild(unassignBtn);
         actionsEl.appendChild(modeBtn);
         actionsEl.appendChild(paneLogBtn);
+        // APPENDED, never spliced in: updatePaneElement reads these buttons by
+        // index (children[0..7] are documented there), and renderKanbanPane hides
+        // every child but modeBtn by looping. Both survive an append; neither
+        // survives an insert.
+        actionsEl.appendChild(outputBtn);
+        actionsEl.appendChild(soloOutputBtn);
         headerEl.appendChild(titleEl);
         headerEl.appendChild(actionsEl);
         paneEl.appendChild(headerEl);
@@ -6612,6 +6698,14 @@
         // shared setting, so a solo pop-out forcing paneModes[0] = 'terminal' would
         // clobber the cockpit window's kanban choice on its next saveLayoutSettings.
         const isSolo = document.body.classList.contains('is-solo');
+
+        // Status mode: a terminal pane with its output off. Suppressed in solo for
+        // the same reason kanban is — a solo window pins one terminal, offers no
+        // grid choices, and must not write one into the shared persisted paneModes.
+        // Requires a seat: there is no state to render without one, and the
+        // free-slot scans treat an unassigned status pane as free precisely so the
+        // operator's next click fills it.
+        const isStatusPane = paneModes[index] === 'status' && Boolean(assignedName) && !isSolo;
 
         // Kanban-mode pane: render a live kanban column viewer in this slot
         // instead of a terminal viewport. Only on empty slots — a kanban pane
@@ -6742,21 +6836,30 @@
             // the one source of truth the ring and the chip both style off, so
             // they cannot drift apart. Derived live at render time; socket
             // transitions nudge it out-of-band via refreshInputState.
-            const state = resolveInputState(assignedName);
-            paneEl.classList.add(`is-input-${state.key}`);
+            // A status pane holds no socket, so resolveInputState reports
+            // `connecting` for it forever — an amber chip and ring asserting a
+            // handshake that is not happening. The card carries the honest line
+            // ("output off"), so the chip is suppressed rather than restyled.
+            // The DISPATCH chip is not: a dispatch in flight to a watched seat is
+            // exactly what a status pane exists to show.
+            const state = isStatusPane ? null : resolveInputState(assignedName);
+            if (state) { paneEl.classList.add(`is-input-${state.key}`); }
             // Dispatch chip FIRST: syncInputStateChip early-returns while
             // .is-dispatching is set, and panes are reused, so a stale class from a
             // finished dispatch (or from the pane's previous occupant) would
             // suppress the input chip for a whole poll cycle if the order were
             // reversed. DOM order does not matter — the two are mutually exclusive.
             syncDispatchChip(paneEl, titleEl, dispatchInFlight.has(assignedName));
-            syncInputStateChip(paneEl, titleEl, state);
+            if (state) { syncInputStateChip(paneEl, titleEl, state); }
 
             // Guarded like the empty-slot and kanban-mode branches: this runs inside
             // the grid reconcile, so a null here would throw out of renderPaneGrid and
             // strand every pane, not just this one.
             const planEl = paneEl.querySelector('.pane-plan-title');
-            const planTitle = ((fleetItem && fleetItem.planTitle) || '').trim();
+            // Suppressed on a status pane: the status card renders the plan in its
+            // identity block, and a 16px strip repeating it directly above is the
+            // one thing a dense grid has no room for.
+            const planTitle = isStatusPane ? '' : ((fleetItem && fleetItem.planTitle) || '').trim();
             if (planEl && planTitle) {
                 planEl.textContent = planTitle;
                 planEl.title = planTitle;
@@ -6787,7 +6890,8 @@
         // share a class name, so there is no selector that tells them apart, and
         // children[] is the honest read.
         // children[0] = pin, [1] = peek dismiss, [2] = pop out, [3] = clear,
-        // [4] = model, [5] = hide, [6] = mode, [7] = log (order set in createPaneElement).
+        // [4] = model, [5] = hide, [6] = mode, [7] = log, [8] = output toggle,
+        // [9] = solo output (order set in createPaneElement).
         const pinBtn = actionsEl.children[0];
         const peekDismissBtn = actionsEl.children[1];
         const popoutBtn = actionsEl.children[2];
@@ -6796,6 +6900,8 @@
         const hideBtn = actionsEl.children[5];
         const modeBtn = actionsEl.children[6];
         const logBtn = actionsEl.children[7];
+        const outputBtn = actionsEl.children[8];
+        const soloOutputBtn = actionsEl.children[9];
         clearBtn.textContent = 'clear';
         modelBtn.textContent = 'model';
         hideBtn.textContent = 'hide';
@@ -6816,6 +6922,29 @@
         // modeBtn by LOOPING over actionsEl.children, so this restore is what
         // brings the button back on a pane that has been in kanban mode.
         logBtn.style.display = assignedName ? '' : 'none';
+
+        // Output toggle + solo: both need a SEAT (a status pane renders a seat's
+        // state; there is nothing to render without one) and neither belongs in
+        // solo mode, which pins one terminal and offers no grid choices — the same
+        // suppression kanban mode gets, and for the same reason: paneModes is a
+        // shared persisted setting and a solo window must not write grid choices
+        // into it. Restored explicitly here because renderKanbanPane's hide loop
+        // reaches them.
+        const isStatusMode = paneModes[index] === 'status';
+        const statusEligible = Boolean(assignedName) && !isSolo && paneModes[index] !== 'kanban';
+        outputBtn.textContent = isStatusMode ? 'output' : 'status';
+        outputBtn.title = isStatusMode
+            ? 'Turn this pane\'s terminal output back on'
+            : 'Turn this pane\'s terminal output off and show the agent\'s state instead';
+        outputBtn.setAttribute('aria-pressed', isStatusMode ? 'true' : 'false');
+        outputBtn.classList.toggle('is-status', isStatusMode);
+        outputBtn.style.display = statusEligible ? '' : 'none';
+        // Solo is a no-op on the only seated pane, so it is offered only when there
+        // is something else to turn off.
+        const otherSeated = paneAssignments
+            .slice(0, slotCount)
+            .some((n, i) => i !== index && n && paneModes[i] !== 'kanban');
+        soloOutputBtn.style.display = (statusEligible && otherSeated) ? '' : 'none';
 
         // Pin toggle: text labels (not emoji) to match clear/hide treatment; state
         // carried by colour via .btn-pin-pane.is-pinned and by aria-pressed.
@@ -6840,15 +6969,43 @@
         const isSoloPanel = document.body.classList.contains('is-solo');
         if (assignedName) {
             peekDismissBtn.style.display = (peekTerminalName === assignedName && !isSoloPanel) ? '' : 'none';
-            popoutBtn.style.display = (peekTerminalName !== assignedName && !isSoloPanel && paneModes[index] === 'terminal') ? '' : 'none';
+            popoutBtn.style.display = (peekTerminalName !== assignedName && !isSoloPanel && paneModes[index] !== 'kanban') ? '' : 'none';
         } else {
             peekDismissBtn.style.display = 'none';
             popoutBtn.style.display = 'none';
         }
 
-        if (assignedName) {
+        if (isStatusPane) {
             const placeholder = contentEl.querySelector('.pane-empty-slot');
             if (placeholder) { contentEl.removeChild(placeholder); }
+            // A terminal view is NEVER created here. createTerminalView opens the
+            // socket, which is the one thing this mode exists to close — a seat
+            // watched from a fresh page load must not be dialled just to be hung
+            // up. An EXISTING view is kept and suspended: entry.term and its
+            // scrollback survive, so switching output back on replays the gap
+            // rather than starting from a blank screen.
+            const entry = terminalsMap.get(assignedName);
+            if (entry) {
+                entry.container.classList.remove('active');
+                suspendTerminalStream(entry);
+            }
+            // Curtains are opaque terminal-output overlays (z-index 4, inset 0) and
+            // would cover the card completely. Working silence is cleared by
+            // updateWorkingSilence's own status guard, but a pane toggled between
+            // sweeps still has one on screen — clear it here too rather than wait.
+            contentEl.querySelectorAll('.startup-curtain, .terminal-curtain').forEach(el => el.remove());
+            clearWorkingSilence(assignedName);
+            // Rebuilt wholesale. The card is a handful of nodes and its content
+            // changes on every fleet poll; a keyed patch would be more machinery
+            // than the thing it patches.
+            contentEl.querySelectorAll('.status-pane-card').forEach(el => el.remove());
+            renderStatusPane(contentEl, index, assignedName);
+        } else if (assignedName) {
+            const placeholder = contentEl.querySelector('.pane-empty-slot');
+            if (placeholder) { contentEl.removeChild(placeholder); }
+            // A card left by this pane's previous turn in status mode. Panes are
+            // reused, so without this the card sits on top of the terminal.
+            contentEl.querySelectorAll('.status-pane-card').forEach(el => el.remove());
             const entry = terminalsMap.get(assignedName);
             if (!entry) {
                 createTerminalView(assignedName, contentEl);
@@ -6862,6 +7019,11 @@
                     startFitLadder(entry.name);
                 }
                 entry.container.classList.add('active');
+                // Output back on. AFTER `.active`, because resumeTerminalStream
+                // reattaches a renderer and isRendered() reads a real box — a
+                // resume on a display:none host acquires nothing and leaves the
+                // pane on the fallback renderer for the life of the page.
+                if (entry.suspended) { resumeTerminalStream(entry); }
             }
 
             // A curtain left behind by a PREVIOUS occupant of this slot. Panes are
@@ -7112,6 +7274,374 @@
         if (id === AGGREGATE_CODED_ID) { return AGGREGATE_CODED_LABEL; }
         const hit = kanbanColumnsCache.find(c => c.id === id);
         return hit ? hit.label : (id || '—');
+    }
+
+    // ---------------------------------------------------------------------------
+    // Status panes: a pane that renders its seat as STATE instead of as terminal
+    // output. `paneModes[i] === 'status'` is a terminal pane with its output off —
+    // it keeps its assignment, its header and its pop-out; it does not keep a
+    // socket. See suspendTerminalStream / resumeTerminalStream.
+    // ---------------------------------------------------------------------------
+
+    /** Latest DECLARED report per seat name, keyed by friendlyName. Filled by
+     *  refreshSeatReports from the team report inbox — the same files a team head
+     *  reads. Never inferred: a seat with no entry here has declared nothing, and
+     *  the pane says so rather than guessing. */
+    const _seatReports = new Map();
+    let _seatReportsFetchInFlight = false;
+    /** teamId -> did that team's inbox answer on the last poll. PER TEAM, not one
+     *  global flag: with two teams open and one inbox unreachable, a single flag
+     *  either cries wolf across the healthy team or — worse — reports the
+     *  unreachable one's seats as "nothing declared", which is the empty-result-
+     *  looks-like-success hazard on the surface least able to afford it. */
+    const _seatReportTeamOk = new Map();
+
+    /** The spawned team whose inbox would hold `name`'s declarations, or null when
+     *  the seat is in no spawned team. Membership, not role — the same read the
+     *  group tab strip does. */
+    function teamIdForSeat(name) {
+        const group = terminalGroups.find(g => isSpawnedTeamGroup(g)
+            && Array.isArray(g.members) && g.members.includes(name));
+        return group ? group.id : null;
+    }
+
+    /** The declared-report vocabulary. Anything else in a `kind:` field is not a
+     *  declaration this surface knows how to render, and is dropped rather than
+     *  shown under a guessed label. */
+    const SEAT_REPORT_KINDS = ['finished', 'blocked', 'question', 'status'];
+
+    /**
+     * Parse one report file: `---`-delimited frontmatter (from / kind / planId /
+     * created) followed by a one-line body. The writer is the standing-order
+     * fragment in standingOrderFragments.ts, which specifies exactly these keys.
+     * Anything unparseable yields null rather than a half-filled record — a report
+     * card is a declaration, and a declaration with a guessed kind is not one.
+     */
+    function parseSeatReport(filename, content) {
+        if (typeof content !== 'string') { return null; }
+        const text = content.replace(/\r\n/g, '\n');
+        const fm = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/.exec(text);
+        // Frontmatter is required, not optional: `kind` and `from` are what make
+        // the record a declaration rather than a stray markdown file in a directory.
+        if (!fm) { return null; }
+        const fields = {};
+        for (const line of fm[1].split('\n')) {
+            const m = /^([A-Za-z][A-Za-z0-9_]*)\s*:\s*(.*)$/.exec(line.trim());
+            if (m) { fields[m[1]] = m[2].trim(); }
+        }
+        const kind = (fields.kind || '').toLowerCase();
+        if (!fields.from || !SEAT_REPORT_KINDS.includes(kind)) { return null; }
+        const created = Date.parse(fields.created || '');
+        return {
+            filename,
+            from: fields.from,
+            kind,
+            planId: fields.planId || '',
+            // NaN when `created` is missing or malformed. Kept as NaN rather than
+            // defaulted to now(): a report stamped "just now" because its own
+            // timestamp was unreadable is a fabricated fact on a surface whose
+            // whole contract is that it does not fabricate.
+            created,
+            text: fm[2].trim().split('\n').filter(Boolean).join(' ')
+        };
+    }
+
+    /**
+     * Refresh the declared-report cache for every spawned team the panel knows
+     * about. Background and non-blocking, exactly like refreshTeamQueueDepths:
+     * a stale declaration beats a blank pane, and the poll that follows corrects it.
+     *
+     * NOTE the inbox's shape: `GET /teams/<id>/reports` lists UNCLAIMED reports
+     * only — a head that claims a report moves it to `reports/claimed/` and it
+     * leaves this listing. That is the inbox's contract, not a bug here, but it
+     * does mean a claimed declaration stops being shown. The pane falls back to
+     * host-derived signals, which is the correct ordering.
+     *
+     * NOTE the inbox's REACH: only the per-team inbox has a read route. A seat
+     * outside a spawned team writes to `.switchboard/mission-control/reports/`,
+     * which LocalApiServer does not serve, so that seat's declarations cannot be
+     * read here at all. Such a pane shows `nothing declared` — which is honest
+     * about this client's knowledge, not about the seat, and is the reason the
+     * host-derived block is always rendered rather than hidden when a report
+     * exists.
+     */
+    function refreshSeatReports() {
+        if (_seatReportsFetchInFlight || isKanbanDock) { return; }
+        const teamIds = terminalGroups.filter(g => isSpawnedTeamGroup(g)).map(g => g.id);
+        if (teamIds.length === 0) {
+            _seatReports.clear();
+            _seatReportTeamOk.clear();
+            return;
+        }
+        _seatReportsFetchInFlight = true;
+        const nextOk = new Map();
+        const next = new Map();
+        Promise.all(teamIds.map(async (id) => {
+            try {
+                const res = await fetch(`/teams/${encodeURIComponent(id)}/reports`, {
+                    method: 'GET',
+                    credentials: 'same-origin'
+                });
+                if (!res.ok) { nextOk.set(id, false); return; }
+                const data = await res.json();
+                const rows = (data && data.success && Array.isArray(data.data)) ? data.data : null;
+                if (!rows) { nextOk.set(id, false); return; }
+                nextOk.set(id, true);
+                for (const row of rows) {
+                    const report = parseSeatReport(row && row.filename, row && row.content);
+                    if (!report) { continue; }
+                    const prev = next.get(report.from);
+                    // Newest wins. A report with an unreadable `created` never
+                    // displaces one that has a real timestamp — it can only fill
+                    // an empty slot, because there is no honest way to order it.
+                    if (!prev
+                        || (Number.isFinite(report.created)
+                            && (!Number.isFinite(prev.created) || report.created > prev.created))) {
+                        next.set(report.from, report);
+                    }
+                }
+            } catch {
+                // One team's inbox failing must not blank the others — and must
+                // not be silently absorbed either. The team is marked not-ok and
+                // its seats say so.
+                nextOk.set(id, false);
+            }
+        })).then(() => {
+            // Wholesale replacement, deliberately: `next` carries entries only from
+            // teams that ANSWERED, so a team that went unreachable drops out rather
+            // than leaving a stale `blocked` on screen presented as current.
+            _seatReports.clear();
+            for (const [k, v] of next) { _seatReports.set(k, v); }
+            _seatReportTeamOk.clear();
+            for (const [k, v] of nextOk) { _seatReportTeamOk.set(k, v); }
+        }).catch(() => {
+            // Promise.all above never rejects (every arm catches), so this is the
+            // belt on the braces. Nothing is known; say nothing is known.
+            _seatReports.clear();
+            _seatReportTeamOk.clear();
+            for (const id of teamIds) { _seatReportTeamOk.set(id, false); }
+        }).finally(() => {
+            _seatReportsFetchInFlight = false;
+        });
+    }
+
+    /**
+     * THE state-for-a-seat answer, and the only one a status pane is allowed to
+     * read. Every render site goes through here rather than reaching into
+     * fleetList / terminalsMap / terminalBadges inline, so a later plan can answer
+     * for a REMOTE fleet by extending this function alone. That seam is the reason
+     * it exists; the local answer is all it implements today.
+     *
+     * Returns `{ reachable: false, reason }` whenever the state cannot be
+     * established. It never returns an empty-but-plausible record: an unreachable
+     * seat and an idle seat must not look alike.
+     */
+    function resolveSeatState(name) {
+        if (!name) { return { name, reachable: false, reason: 'No seat in this pane.' }; }
+        if (!hasFetchedList) {
+            return { name, reachable: false, reason: 'The fleet has not answered yet.' };
+        }
+        if (fleetFetchFailed) {
+            return { name, reachable: false, reason: 'The last fleet poll failed — this pane is showing nothing rather than a stale guess.' };
+        }
+        const fleetItem = fleetList.find(t => t.friendlyName === name);
+        if (!fleetItem) {
+            return { name, reachable: false, reason: 'This seat is no longer listed by the fleet.' };
+        }
+        const entry = terminalsMap.get(name);
+        const badge = terminalBadges.get(name) || null;
+        return {
+            name,
+            reachable: true,
+            role: fleetItem.role || null,
+            agentLabel: agentLabelForRole(fleetItem.role),
+            planTitle: ((fleetItem.planTitle || '')).trim(),
+            exited: fleetItem.status === 'exited',
+            isHead: isTeamHead(name),
+            // Declared. `null` means either "the inbox answered and this seat has
+            // said nothing" or "no inbox was readable" — reportsSource is what
+            // tells the two apart, and the card renders a different sentence for
+            // each. Collapsing them is exactly the failure this pane must not have.
+            report: _seatReports.get(name) || null,
+            //   'team'  — a spawned team's inbox answered for this seat
+            //   'unreachable' — it exists but did not answer
+            //   'none'  — this seat is in no spawned team, and mission-control's
+            //             inbox has no read route, so nothing can be read at all
+            reportsSource: (() => {
+                const teamId = teamIdForSeat(name);
+                if (!teamId) { return 'none'; }
+                return _seatReportTeamOk.get(teamId) === true ? 'team' : 'unreachable';
+            })(),
+            // Host-derived, and labelled as such wherever it is rendered.
+            signals: {
+                done: badge ? (badge.label || 'DONE') : null,
+                doneStamp: badge ? badge.stamp : 0,
+                // The socket is closed while a pane is in status mode, so this is
+                // the last output THIS CLIENT saw, not the last the pty produced.
+                // Rendered with that wording; never as "silent for N minutes".
+                lastOutputAt: entry ? (entry.lastPrintableAt || entry.firstFrameAt || 0) : 0,
+                listening: Boolean(entry && !entry.suspended && entry.ws && entry.ws.readyState === WebSocket.OPEN),
+                replayGap: terminalReplayGaps.has(name)
+            }
+        };
+    }
+
+    /** "4m ago" / "just now". Returns '' for a missing or unreadable stamp — the
+     *  caller omits the line rather than printing a made-up age. */
+    function relativeStamp(ms) {
+        if (!Number.isFinite(ms) || ms <= 0) { return ''; }
+        const delta = Date.now() - ms;
+        if (delta < 0) { return 'just now'; }
+        const secs = Math.round(delta / 1000);
+        if (secs < 45) { return 'just now'; }
+        const mins = Math.round(secs / 60);
+        if (mins < 60) { return `${mins}m ago`; }
+        const hours = Math.round(mins / 60);
+        if (hours < 24) { return `${hours}h ago`; }
+        return `${Math.round(hours / 24)}d ago`;
+    }
+
+    /**
+     * Render the status card into `contentEl` for the seat in slot `index`.
+     *
+     * Ordering is the contract, not a layout preference: identity, then what the
+     * agent DECLARED, then — visually subordinate — what the host inferred. A
+     * `blocked` the agent wrote is a fact; "no output for 90 seconds" is a guess,
+     * and this codebase has shipped false `blocked` notices derived from exactly
+     * that kind of guess.
+     *
+     * Rebuilt wholesale on each reconcile (the card is small, and a keyed patch
+     * would be more code than the thing it patches). The terminal's container is
+     * left parented but not `.active`, so xterm keeps its scrollback and paints
+     * nothing.
+     */
+    function renderStatusPane(contentEl, index, name) {
+        const state = resolveSeatState(name);
+        const card = document.createElement('div');
+        card.className = 'status-pane-card';
+        card.dataset.terminal = name;
+
+        if (!state.reachable) {
+            card.classList.add('is-unreachable');
+            const label = document.createElement('div');
+            label.className = 'status-pane-unreachable-label';
+            label.textContent = 'unreachable';
+            card.appendChild(label);
+            const why = document.createElement('div');
+            why.className = 'status-pane-unreachable-why';
+            why.textContent = state.reason;
+            card.appendChild(why);
+            contentEl.appendChild(card);
+            return;
+        }
+
+        // --- identity -------------------------------------------------------
+        const idRow = document.createElement('div');
+        idRow.className = 'status-pane-identity';
+        const brandKey = brandIconForCliLabel(state.agentLabel) || 'default';
+        const brandUri = brandIconUri(brandKey) || brandIconUri('default');
+        if (brandUri) {
+            const img = document.createElement('img');
+            img.className = 'status-pane-brand';
+            img.src = brandUri;
+            img.alt = '';
+            img.setAttribute('aria-hidden', 'true');
+            if (state.exited) { img.classList.add('is-exited'); }
+            idRow.appendChild(img);
+        }
+        const idName = document.createElement('span');
+        idName.className = 'status-pane-name';
+        idName.textContent = state.exited ? `${name} (exited)` : name;
+        idRow.appendChild(idName);
+        if (state.isHead) {
+            const crown = document.createElement('span');
+            crown.className = 'status-pane-crown';
+            crown.setAttribute('aria-hidden', 'true');
+            crown.title = 'Team lead';
+            crown.innerHTML = CROWN_SVG;
+            idRow.appendChild(crown);
+        }
+        if (state.agentLabel) {
+            const role = document.createElement('span');
+            role.className = 'status-pane-role';
+            role.textContent = state.agentLabel;
+            idRow.appendChild(role);
+        }
+        card.appendChild(idRow);
+
+        if (state.planTitle) {
+            const plan = document.createElement('div');
+            plan.className = 'status-pane-plan';
+            plan.textContent = state.planTitle;
+            plan.title = state.planTitle;
+            card.appendChild(plan);
+        }
+
+        // --- declared -------------------------------------------------------
+        const declared = document.createElement('div');
+        declared.className = 'status-pane-declared';
+        if (state.report) {
+            const kindEl = document.createElement('span');
+            kindEl.className = `status-pane-kind is-${state.report.kind}`;
+            kindEl.textContent = state.report.kind;
+            declared.appendChild(kindEl);
+            const meta = document.createElement('span');
+            meta.className = 'status-pane-declared-meta';
+            const when = relativeStamp(state.report.created);
+            meta.textContent = when ? `declared by ${state.report.from} · ${when}` : `declared by ${state.report.from}`;
+            declared.appendChild(meta);
+            if (state.report.text) {
+                const body = document.createElement('div');
+                body.className = 'status-pane-declared-text';
+                body.textContent = state.report.text;
+                declared.appendChild(body);
+            }
+        } else {
+            const none = document.createElement('span');
+            none.className = 'status-pane-declared-none';
+            // Three different facts, never collapsed into one sentence: the inbox
+            // said "nothing here"; the inbox did not answer; or there is no inbox
+            // this client can read for this seat. Only the middle one is an
+            // alarm — the last is a known limit, not a failure.
+            if (state.reportsSource === 'team') {
+                none.textContent = 'nothing declared';
+            } else if (state.reportsSource === 'unreachable') {
+                none.textContent = 'declarations unavailable — the report inbox did not answer';
+                none.classList.add('is-unreachable');
+            } else {
+                none.textContent = 'no readable report inbox for this seat';
+            }
+            declared.appendChild(none);
+        }
+        card.appendChild(declared);
+
+        // --- host-derived, subordinate --------------------------------------
+        const inferred = document.createElement('div');
+        inferred.className = 'status-pane-inferred';
+        const inferredLabel = document.createElement('div');
+        inferredLabel.className = 'status-pane-inferred-label';
+        inferredLabel.textContent = 'host-derived';
+        inferred.appendChild(inferredLabel);
+        const lines = [];
+        if (state.signals.done) { lines.push(state.signals.done); }
+        const seen = relativeStamp(state.signals.lastOutputAt);
+        if (seen) {
+            // Deliberately NOT "silent for N minutes". A status pane holds no
+            // socket, so the client stopped hearing output when the pane stopped
+            // listening — the age of what it last SAW is the only honest figure.
+            lines.push(state.signals.listening ? `last output ${seen}` : `last output seen ${seen} (output off)`);
+        }
+        if (state.signals.replayGap) { lines.push('output was evicted while disconnected'); }
+        lines.push(state.signals.listening ? 'receiving output' : 'output off — pop out or switch to output to type');
+        for (const text of lines) {
+            const line = document.createElement('div');
+            line.className = 'status-pane-signal';
+            line.textContent = text;
+            inferred.appendChild(line);
+        }
+        card.appendChild(inferred);
+
+        contentEl.appendChild(card);
     }
 
     /** Render a kanban column viewer into a pane slot (replaces the terminal
@@ -8636,6 +9166,7 @@
             if (next.includes(name)) { continue; }
             while (slot < rendered && (next[slot] || pinnedPanes[slot] || paneModes[slot] === 'kanban')) { slot++; }
             if (slot >= rendered) { break; }
+            paneModes[slot] = 'terminal';
             next[slot++] = name;
         }
         paneAssignments = next;
@@ -9049,6 +9580,7 @@
             // explicit sidebar click with nowhere else to go (see the target scan).
             if (!paneAssignments[i] && paneModes[i] !== 'kanban') {
                 paneAssignments[i] = unseated.shift();
+                paneModes[i] = 'terminal';
                 changed = true;
             }
         }
@@ -9930,6 +10462,7 @@
             jumpScrollHandler: null,
             exited: false,
             disposed: false,
+            suspended: false,
             suppressAnswerback: false,
             awaitingReplayFrame: false,
             pendingModes: null,
@@ -10377,6 +10910,84 @@
         update();
     }
 
+    /**
+     * Suspend a terminal's live socket while keeping its xterm buffer intact.
+     *
+     * Called when a pane enters status mode — the terminal is still assigned but
+     * its output is not rendered. The WebSocket is closed (keeping lastSeq for a
+     * clean resume), the renderer is released (freeing a WebGL context slot),
+     * and batch processing stops. entry.term and its scrollback survive so a
+     * toggle back to terminal mode is instant — the replay ring fills any gap.
+     */
+    function suspendTerminalStream(entry) {
+        if (!entry || entry.disposed) { return; }
+        if (entry.suspended) { return; }
+        entry.suspended = true;
+        // Stop accepting new batches — the rAF drainer skips suspended entries.
+        // The QUEUE itself is dropped, not merely left unflushed: flushBatch's
+        // suspended guard returns without clearing, so anything still queued would
+        // survive the suspension and be written AFTER the resume's replay — which
+        // already contains those same bytes. Skipping is not discarding.
+        pendingBatchEntries.delete(entry);
+        entry.batchQueue = [];
+        // Withdraw the size vote BEFORE closing the socket: releaseSizeVote sends
+        // a resize frame on the OPEN socket, and closing first would make it a
+        // no-op. The gateway's client.reportedSize is sticky, so a vote left
+        // standing clamps the shared pty until the socket closes on its own.
+        releaseSizeVote(entry);
+        // Close the socket but keep lastSeq — the resume reconnects with
+        // ?lastSeq=<entry.lastSeq> and the replay ring fills the gap.
+        if (entry.reconnectTimer) { clearTimeout(entry.reconnectTimer); entry.reconnectTimer = null; }
+        if (entry.ws) {
+            try { entry.ws.onclose = null; } catch { /* ignore */ }
+            try { entry.ws.close(); } catch { /* ignore */ }
+            entry.ws = null;
+        }
+        // Release the renderer — a status pane paints no terminal pixels, and a
+        // WebGL context held by an invisible surface is one the visible panes
+        // cannot get. entry.term is NOT disposed; its buffer survives.
+        cancelRendererRelease(entry);
+        if (entry.rendererAddon) {
+            entry.rendererAddon.release();
+            try {
+                if (entry.rendererAddon.current) { entry.rendererAddon.current.dispose(); }
+            } catch { /* ignore */ }
+            entry.rendererAddon.current = null;
+        }
+        entry.rendererDeferred = false;
+        refreshInputState(entry.name);
+    }
+
+    /**
+     * Resume a suspended terminal's live socket and renderer.
+     *
+     * Called when a pane leaves status mode back to terminal. Reattaches a
+     * renderer, reconnects with ?lastSeq=, and lets the existing replay/gap
+     * machinery handle whatever the ring still holds.
+     */
+    function resumeTerminalStream(entry) {
+        if (!entry || entry.disposed) { return; }
+        if (!entry.suspended) { return; }
+        entry.suspended = false;
+        // Reattach a renderer — the suspend disposed the old one. The container
+        // is display:block again (active class added by updatePaneElement), so
+        // isRendered will pass and WebGL can be acquired if budget allows.
+        if (entry.term && !entry.rendererAddon?.current) {
+            entry.rendererAddon = attachRenderer(entry.term, entry);
+        }
+        // Reconnect with lastSeq — the gateway replays the tail of its ring.
+        // If the ring evicted data while suspended, the hello frame carries
+        // replayGap=true and the existing handler at :10593 calls markReplayGap.
+        connectTerminalSocket(entry);
+        // Re-cast the size vote: the suspend withdrew it, and a pane restored
+        // at its previous size inspects as 'ok' so the ladder alone would not
+        // re-vote (same reasoning as ensureSizeVote).
+        ensureSizeVote(entry);
+        if (entry.container.classList.contains('active')) {
+            startFitLadder(entry.name);
+        }
+    }
+
     function connectTerminalSocket(entry) {
         // A pending backoff timer is obsolete the moment we connect for real. This
         // used to be covered by destroyTerminalView (which clears it) standing
@@ -10714,7 +11325,9 @@
         // exactly the output an operator opens a dead terminal to read. `disposed`
         // means the VIEW is gone (term.dispose() called), which is the only state in
         // which writing is actually unsafe.
-        if (!entry || entry.disposed || !entry.term) { return; }
+        // `suspended` — a status pane's socket is closed; any batch queued before the
+        // suspend landed is stale (the replay on resume supersedes it).
+        if (!entry || entry.disposed || entry.suspended || !entry.term) { return; }
         if (entry.batchQueue.length === 0) { return; }
         const combined = entry.batchQueue.join('');
         entry.batchQueue = [];
@@ -10807,6 +11420,12 @@
                 cols: entry.term ? entry.term.cols : null,
                 rows: entry.term ? entry.term.rows : null,
                 lastSeq: entry.lastSeq,
+                // Socket identity. Verification for status panes reads BOTH: a
+                // suspended pane must show suspended:true AND a closed/absent
+                // socket, and the pair is what distinguishes "output off by
+                // design" from "the socket dropped and nothing noticed".
+                suspended: entry.suspended === true,
+                wsState: entry.ws ? entry.ws.readyState : null,
                 batchQueueLength: entry.batchQueue ? entry.batchQueue.length : 0,
                 pendingAckChars: entry.pendingAckChars || 0,
                 ackSuppressChars: entry.ackSuppressChars || 0,
@@ -11410,6 +12029,7 @@
         if (controller) {
             // Seat the controller terminal into pane 0 so the operator sees it.
             paneAssignments[0] = controller.friendlyName;
+            paneModes[0] = 'terminal';
             initialAssignmentDone = true;
             renderPaneGrid();
         }

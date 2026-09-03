@@ -874,6 +874,16 @@ jobs:
       - name: Terminal input path contract (binary frames, UTF-8/CSI-safe chunking, FIFO pacing)
         run: npm run test:contract:terminal-input-path
 
+      # Status panes. `paneModes` gained a third value and ~23 existing sites
+      # binary-test the mode — a third value inheriting the wrong branch compiles
+      # clean and misbehaves silently, and the pane grid has no runtime harness.
+      # Pins the restore path (a coerced 'status' makes the feature work in-session
+      # and fail across a reload), the seating flips, the kanban flip NOT being
+      # extended to status, the overlays that would cover the card, and the
+      # declared-above-inferred ordering the whole design rests on.
+      - name: Status pane mode contract (paneModes third value, suspend/resume, declared-over-inferred)
+        run: npm run test:contract:status-pane-mode
+
       # Solo pop-out. Every guard here is a silent failure: an unsuppressed saveSetting
       # lets a pop-out rewrite the docked panel's layout; an unpinned pane assignment
       # lets the detach timer destroy the window's own scrollback 15s after an operator
