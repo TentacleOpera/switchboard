@@ -1023,7 +1023,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // passes no availability override.
     // `terminals` is fail-closed in getPanelsManifest (=== true), so gating it on
     // the probe hides the rail tab entirely when node-pty could not load.
-    const getPanelsManifest = () => sharedGetPanelsManifest({ design: true, setup: true, planning: true, tickets: true, terminals: ptyReady, linear: true });
+    const getPanelsManifest = () => sharedGetPanelsManifest({ design: true, setup: true, database: true, planning: true, tickets: true, terminals: ptyReady, linear: true });
     const getPanelHtml = async (id: string): Promise<{ html: string; csp?: string } | null> => {
         const result = sharedGetPanelHtmlById(id, repoRoot, workspaceRoot, await getStandaloneCaps(), getTheme());
         if (!result) { return null; }

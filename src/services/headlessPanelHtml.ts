@@ -563,6 +563,10 @@ export interface PanelManifestEntry {
      */
     group: 'primary' | 'cold';
     /**
+     * Rail placement compatibility property.
+     */
+    placement?: 'top' | 'bottom';
+    /**
      * When true, keeps route and frame but renders no rail icon.
      */
     railHidden?: boolean;
@@ -579,6 +583,7 @@ export interface PanelManifestEntry {
 export interface PanelAvailability {
     design?: boolean;
     setup?: boolean;
+    database?: boolean;
     planning?: boolean;
     terminals?: boolean;
     tickets?: boolean;
@@ -593,6 +598,7 @@ export interface PanelAvailability {
 
 export function getPanelsManifest(availability?: PanelAvailability): PanelManifestEntry[] {
     const setupEnabled = availability?.setup !== false;
+    const databaseEnabled = availability?.database !== false;
     const planningEnabled = availability?.planning !== false;
     const designEnabled = availability?.design !== false;
     const ticketsEnabled = availability?.tickets !== false;
@@ -613,9 +619,35 @@ export function getPanelsManifest(availability?: PanelAvailability): PanelManife
         { id: 'design', label: 'Design', icon: `${iconDir}/nav-design.svg`, route: '/design', enabled: designEnabled, group: 'cold' },
         { id: 'command', label: 'Command', icon: `${iconDir}/nav-command.svg`, route: '/command', enabled: true, group: 'cold' },
         { id: 'memo', label: 'Memo', icon: `${iconDir}/nav-memo.svg`, route: '/memo', enabled: true, group: 'cold', railHidden: true, presentation: 'modal' },
+        { id: 'database', label: 'Database', icon: `${iconDir}/nav-database.svg`, route: '/database', enabled: databaseEnabled, group: 'cold', placement: 'bottom' },
         { id: 'setup', label: 'Setup', icon: `${iconDir}/nav-setup.svg`, route: '/setup', enabled: setupEnabled, group: 'cold', railHidden: true },
         { id: 'connections', label: 'Connections', icon: `${iconDir}/nav-connections.svg`, route: '/connections', enabled: connectionsEnabled, group: 'cold', railHidden: true },
     ];
+}
+
+export function getDatabaseHtml(repoRoot: string, workspaceRoot: string, capabilities?: HostCapabilities, themeClass?: string): PanelHtmlResult {
+    const candidates = [
+        path.join(repoRoot, 'dist', 'webview', 'database.html'),
+        path.join(repoRoot, 'src', 'webview', 'database.html'),
+    ];
+    const htmlPath = findFile(candidates);
+    if (!htmlPath) {
+        return { html: '<html><body>Database panel HTML not found.</body></html>', csp: '' };
+    }
+    let content = fs.readFileSync(htmlPath, 'utf8');
+    const nonce = makeNonce();
+    const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self';`;
+    content = content.replace(/\{\{NONCE\}\}/g, nonce);
+    content = content.replace(/\{\{DATABASE_JS_URI\}\}/g, '/static/webview/database.js');
+    content = content.replace(/<script>/g, `<script nonce="${nonce}">`);
+    content = injectTransportShim(content, nonce, '<!-- SHARED_DEFAULTS_SCRIPT -->', `<script nonce="${nonce}" src="/static/webview/database.js"></script>`, true);
+    content = content.replace(/\{\{HANKEN_FONT_URI\}\}/g, '/static/designs/HankenGrotesk-Variable.woff2');
+    content = content.replace(/\{\{GEIST_PIXEL_FONT_URI\}\}/g, '/static/designs/GeistPixel-Square.woff2');
+    const caps = { ...DEFAULT_HOST_CAPABILITIES, ...capabilities };
+    const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="database" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}"`;
+    content = injectBodyAttributes(content, bodyAttr);
+    content = applyThemeClass(content, themeClass);
+    return { html: content, csp };
 }
 
 export function getPanelHtmlById(id: string, repoRoot: string, workspaceRoot: string, capabilities?: HostCapabilities, themeClass?: string): PanelHtmlResult | null {
@@ -629,6 +661,7 @@ export function getPanelHtmlById(id: string, repoRoot: string, workspaceRoot: st
         case 'planning': return getPlanningHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'design': return getDesignHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'setup': return getSetupHtml(repoRoot, workspaceRoot, capabilities, themeClass);
+        case 'database': return getDatabaseHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'connections': return getConnectionsHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'terminals': return getTerminalsHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'linear': return getLinearHtml(repoRoot, workspaceRoot, capabilities, themeClass);

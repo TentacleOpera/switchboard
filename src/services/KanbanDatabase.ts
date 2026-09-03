@@ -2077,6 +2077,27 @@ export class KanbanDatabase {
         return this._dbPath;
     }
 
+    public checkIntegrity(): string {
+        if (!this._db) {
+            return this._lastInitError || 'Database not initialized';
+        }
+        try {
+            const stmt = this._db.prepare('PRAGMA integrity_check');
+            let result = 'ok';
+            try {
+                if (stmt.step()) {
+                    const row = stmt.getAsObject();
+                    result = String(row.integrity_check ?? 'ok');
+                }
+            } finally {
+                stmt.free();
+            }
+            return result;
+        } catch (e: any) {
+            return e?.message || 'Integrity check failed';
+        }
+    }
+
     public async ensureReady(forceReload: boolean = false): Promise<boolean> {
         // Bump last-access so the idle-eviction sweep sees this instance as active.
         this._lastAccessMs = Date.now();

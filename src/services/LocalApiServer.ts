@@ -1508,6 +1508,171 @@ export class LocalApiServer {
         }
     }
 
+    private async _handleDatabaseStatus(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        const url = new URL(req.url || '', `http://${req.headers.host || '127.0.0.1'}`);
+        const wsRoot = (url.searchParams.get('workspaceRoot') || this._options.workspaceRoot || '').trim();
+        let dbPath = path.join(wsRoot, '.switchboard', 'kanban.db');
+        let db: any = null;
+        let reachable = false;
+        let storeError: string | null = null;
+        let integrity = 'unknown';
+
+        try {
+            db = await this._resolveDbForRoot(wsRoot);
+            if (db) {
+                dbPath = db.dbPath || dbPath;
+                if (typeof db.ensureReady === 'function') {
+                    reachable = await db.ensureReady();
+                } else {
+                    reachable = true;
+                }
+                if (reachable && typeof db.checkIntegrity === 'function') {
+                    integrity = db.checkIntegrity();
+                }
+            } else {
+                storeError = 'No database instance available';
+            }
+        } catch (e: any) {
+            reachable = false;
+            storeError = e?.message || 'Failed to open database';
+            integrity = 'error';
+        }
+
+        // Check local tier file facts
+        let localSizeBytes = 0;
+        let localFileExists = false;
+        let localMtime: number | null = null;
+        try {
+            if (fsSync.existsSync(dbPath)) {
+                const stat = fsSync.statSync(dbPath);
+                localFileExists = true;
+                localSizeBytes = stat.size;
+                localMtime = stat.mtimeMs;
+                if (!reachable && !storeError) {
+                    reachable = true;
+                }
+            } else {
+                if (!storeError) {
+                    storeError = 'Database file does not exist on disk';
+                }
+            }
+        } catch (e: any) {
+            if (!storeError) {
+                storeError = e?.message || 'Failed to access database file';
+            }
+        }
+
+        // Backups list from .switchboard/dbbackup/
+        const backupDir = path.join(wsRoot, '.switchboard', 'dbbackup');
+        const backups: Array<{ filename: string; reason: string; timestamp: number; sizeBytes: number }> = [];
+        let lastVerifiedBackup: { filename: string; timestamp: number; sizeBytes: number } | null = null;
+        try {
+            if (fsSync.existsSync(backupDir)) {
+                const files = fsSync.readdirSync(backupDir).filter(f => f.startsWith('kanban.db.backup.'));
+                for (const file of files) {
+                    try {
+                        const filePath = path.join(backupDir, file);
+                        const stat = fsSync.statSync(filePath);
+                        const parts = file.slice('kanban.db.backup.'.length).split('.');
+                        const tsStr = parts.pop() || '';
+                        const reason = parts.join('.') || 'unknown';
+                        const timestamp = parseInt(tsStr, 10) || stat.mtimeMs;
+                        backups.push({
+                            filename: file,
+                            reason,
+                            timestamp,
+                            sizeBytes: stat.size,
+                        });
+                    } catch { /* ignore individual stat failures */ }
+                }
+                backups.sort((a, b) => b.timestamp - a.timestamp);
+                if (backups.length > 0) {
+                    lastVerifiedBackup = backups[0];
+                }
+            }
+        } catch { /* ignore */ }
+
+        // State backup JSON
+        let stateBackupExists = false;
+        let stateBackupMtime: number | null = null;
+        try {
+            const stateBackupPath = path.join(wsRoot, '.switchboard', 'kanban-state-backup.json');
+            if (fsSync.existsSync(stateBackupPath)) {
+                stateBackupExists = true;
+                stateBackupMtime = fsSync.statSync(stateBackupPath).mtimeMs;
+            }
+        } catch { /* ignore */ }
+
+        // Projections
+        let notionConfigured = false;
+        let linearConfigured = false;
+        let clickupConfigured = false;
+        try {
+            const notionSvc = this._options.getNotionService?.();
+            notionConfigured = !!notionSvc;
+        } catch { /* ignore */ }
+        try {
+            const linearSvc = this._options.getLinearService?.();
+            linearConfigured = !!linearSvc;
+        } catch { /* ignore */ }
+        try {
+            const clickupSvc = this._options.getClickUpService?.();
+            clickupConfigured = !!clickupSvc;
+        } catch { /* ignore */ }
+
+        const payload = {
+            store: {
+                kind: 'local',
+                target: dbPath,
+                fingerprint: dbPath ? path.basename(dbPath) : 'unknown',
+                reachable,
+                error: storeError,
+                syncLagMs: reachable ? 0 : null,
+                arbitration: 'Single-writer SQLite database file with WAL journal and exclusive process locking.',
+                switching: false,
+                source: 'runtime-inspection',
+            },
+            local: {
+                filePath: dbPath,
+                exists: localFileExists,
+                sizeBytes: localSizeBytes,
+                mtime: localMtime,
+                integrity,
+                backups,
+                lastVerifiedBackup,
+                stateBackupExists,
+                stateBackupMtime,
+            },
+            projections: {
+                notion: {
+                    configured: notionConfigured,
+                    enabled: notionConfigured,
+                    lastPush: null,
+                    lastPull: null,
+                },
+                linear: {
+                    configured: linearConfigured,
+                    enabled: linearConfigured,
+                    lastPush: null,
+                    lastPull: null,
+                },
+                clickup: {
+                    configured: clickupConfigured,
+                    enabled: clickupConfigured,
+                    lastPush: null,
+                    lastPull: null,
+                },
+            },
+        };
+
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify(payload, null, 2));
+    }
+
     private async _handleServeManifest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!this._options.serveStatic) {
             res.writeHead(503, { 'Content-Type': 'text/plain' });
@@ -9037,6 +9202,19 @@ export class LocalApiServer {
                         error: `Unknown linear verb '${verb}'.`
                     }));
                 }
+            } else if (pathname.startsWith('/database/verb/') && req.method === 'POST') {
+                const verb = decodeURIComponent(pathname.slice('/database/verb/'.length));
+                if (SETUP_VERBS.has(verb)) {
+                    await this._handleSetupVerb(verb, req, res);
+                } else if (TASKVIEWER_VERBS.has(verb)) {
+                    await this._handleTaskViewerVerb(verb, req, res);
+                } else {
+                    res.writeHead(404, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        success: false,
+                        error: `Unknown database verb '${verb}'.`
+                    }));
+                }
             } else if (pathname.startsWith('/taskViewer/verb/') && req.method === 'POST') {
                 const verb = decodeURIComponent(pathname.slice('/taskViewer/verb/'.length));
                 await this._handleTaskViewerVerb(verb, req, res);
@@ -9151,6 +9329,10 @@ export class LocalApiServer {
                 await this._handleServePanelById('design', req, res);
             } else if ((pathname === '/setup' || pathname === '/setup.html') && req.method === 'GET') {
                 await this._handleServePanelById('setup', req, res);
+            } else if ((pathname === '/database' || pathname === '/database.html') && req.method === 'GET') {
+                await this._handleServePanelById('database', req, res);
+            } else if (pathname === '/database/status' && req.method === 'GET') {
+                await this._handleDatabaseStatus(req, res);
             } else if ((pathname === '/connections' || pathname === '/connections.html') && req.method === 'GET') {
                 await this._handleServePanelById('connections', req, res);
             } else if ((pathname === '/terminals' || pathname === '/terminals.html') && req.method === 'GET') {

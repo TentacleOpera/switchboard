@@ -803,11 +803,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 </div>
                 <div class="db-subsection">
                     <div class="subsection-header">
-                        <span>Databases</span>
+                        <span>Database Operations</span>
                     </div>
-                    <div id="databases-list"></div>
-                    <div id="no-databases-placeholder" class="hidden" style="font-size:11px; color:var(--text-secondary); padding:12px; text-align:center;">
-                        Open a workspace to manage databases.
+                    <div style="font-size:11px; color:var(--text-secondary); padding:8px 0; line-height:1.5;">
+                        Database operations, storage targets, backups, and integrity controls have moved to the dedicated <strong>Database</strong> panel in the shell rail.
                     </div>
                 </div>
             </div>
@@ -1259,114 +1258,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         let workspaceRoot = '';
         let lastPlanIngestionFolder = '';
 
-        function renderSingleDatabaseCard(db, index) {
-            const isMapped = db.isMapped;
-            const mappedBadge = isMapped ? `<span style="font-size:9px; color:var(--accent-orange, #ed8936); margin-left:8px; border:1px solid var(--accent-orange, #ed8936); padding:1px 4px; border-radius:3px;">Mapped</span>` : '';
-            const foldersList = db.workspaceRoots.map(r => `<div style="font-size:10px; color:var(--text-secondary); margin-bottom:2px; word-break:break-all;">${escapeHtml(r)}</div>`).join('');
-            const locationDisabled = isMapped ? 'disabled' : '';
-
-            let selectedValue = 'local';
-            const pathValue = db.dbPath || '';
-            if (pathValue.includes('GoogleDrive') || pathValue.includes('Google Drive')) {
-                selectedValue = 'google-drive';
-            } else if (pathValue.includes('Dropbox')) {
-                selectedValue = 'dropbox';
-            } else if (pathValue.includes('iCloud') || pathValue.includes('com~apple~CloudDocs')) {
-                selectedValue = 'icloud';
-            } else if (pathValue && !pathValue.includes('.switchboard/kanban.db')) {
-                selectedValue = 'custom';
-            }
-
-            return `
-            <div class="db-card" data-db-index="${index}" style="border:1px solid var(--border-color); border-radius:4px; padding:12px; margin-bottom:12px; background:var(--panel-bg2, rgba(255,255,255,0.03));">
-                <div style="font-size:10px; color:var(--accent-teal, #4fd1c5); margin-bottom:6px; word-break:break-all; font-weight:bold;">${escapeHtml(db.dbPath)}${mappedBadge}</div>
-                <div style="margin-bottom:12px; border-left:2px solid var(--border-color); padding-left:8px;">${foldersList}</div>
-
-                <div class="db-subsection" style="margin-top:0; padding-top:0; border-top:none;">
-                    <div class="subsection-header" style="margin-top:0;"><span>Location</span></div>
-                    <div class="db-location-options">
-                        <label class="db-radio-option"><input type="radio" name="db-location-${index}" value="local" ${selectedValue === 'local' ? 'checked' : ''} ${locationDisabled}><span>Local</span></label>
-                        <label class="db-radio-option"><input type="radio" name="db-location-${index}" value="google-drive" ${selectedValue === 'google-drive' ? 'checked' : ''} ${locationDisabled}><span>Google Drive</span></label>
-                        <label class="db-radio-option"><input type="radio" name="db-location-${index}" value="dropbox" ${selectedValue === 'dropbox' ? 'checked' : ''} ${locationDisabled}><span>Dropbox</span></label>
-                        <label class="db-radio-option"><input type="radio" name="db-location-${index}" value="icloud" ${selectedValue === 'icloud' ? 'checked' : ''} ${locationDisabled}><span>iCloud</span></label>
-                        <label class="db-radio-option"><input type="radio" name="db-location-${index}" value="custom" ${selectedValue === 'custom' ? 'checked' : ''} ${locationDisabled}><span>Custom</span></label>
-                    </div>
-                    <input type="text" id="db-custom-path-${index}" class="db-custom-path-input ${selectedValue === 'custom' ? '' : 'hidden'}" placeholder="Enter custom database path..." value="${selectedValue === 'custom' ? escapeHtml(db.dbPath) : ''}" style="width:100%; margin-top:4px;">
-                    <button class="db-update-location-btn db-action-btn w-full" data-db-index="${index}" style="margin-top:8px;" ${locationDisabled ? 'disabled' : ''}>UPDATE LOCATION</button>
-                </div>
-
-                <div class="db-subsection">
-                    <div class="subsection-header"><span>Rebuild</span></div>
-                    <div style="font-size:10px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;">If the database is corrupted, this will delete and recreate it. If a <code>kanban-state-backup.json</code> exists, plan columns and metadata will be restored from it first; any new plan files in <code>.switchboard/plans/</code> will then be imported.</div>
-                    <button class="db-reset-btn db-action-btn danger w-full" data-db-index="${index}">REBUILD DATABASE</button>
-                </div>
-
-                <div class="db-subsection">
-                    <div class="subsection-header"><span>Automatic Backups</span></div>
-                    <div style="font-size:10px; color:var(--text-secondary); line-height:1.5;">
-                        <p style="margin:0 0 6px;">Switchboard writes a rolling backup of the database to <code>.switchboard/dbbackup/</code> when the extension starts (at most one every 30 minutes) and before any bulk change to your plans. The 2 most recent backups of each kind are kept. These can be used to recover from startup-triggered data loss.</p>
-                        <p style="margin:0 0 6px;">For additional protection, consider scheduling a daily copy of <code>.switchboard/kanban.db</code> to a location outside the project — for example using a cron job or a folder sync tool. A <code>.switchboard/dbbackup/</code> subfolder works well as the destination if you want backups co-located with the project.</p>
-                        <p style="margin:0;">Example cron (daily at 2am, keeping 30 days):<br>
-                        <code style="display:block; margin-top:4px; white-space:pre-wrap; word-break:break-all;">0 2 * * * cp /path/to/.switchboard/kanban.db /path/to/.switchboard/dbbackup/kanban.db.$(date +\%Y-\%m-\%d) && ls -t /path/to/.switchboard/dbbackup/kanban.db.* | tail -n +31 | xargs rm -f</code></p>
-                    </div>
-                </div>
-
-                <div class="db-subsection">
-                    <div class="subsection-header"><span>Notion Backup</span></div>
-                    <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
-                        Backup to Notion database. Requires integration token.
-                    </div>
-                    <input type="text" class="notion-db-url-input" data-db-index="${index}" placeholder="https://notion.so/workspace/..." style="width:100%;">
-                    <div style="display:flex; gap:8px; margin-top:8px;">
-                        <button class="notion-backup-btn db-action-btn" data-db-index="${index}" style="flex:1;">BACKUP</button>
-                        <button class="notion-restore-btn db-action-btn" data-db-index="${index}" style="flex:1;">RESTORE</button>
-                    </div>
-                    <button class="notion-auto-setup-btn secondary-btn w-full" data-db-index="${index}" style="margin-top:8px;">AUTO-CREATE NOTION DATABASE</button>
-                </div>
-            </div>
-            `;
-        }
-
         function renderDatabases(databases) {
-            const container = document.getElementById('databases-list');
-            const placeholder = document.getElementById('no-databases-placeholder');
-            if (!container) return;
-
-            if (!databases || databases.length === 0) {
-                container.innerHTML = '';
-                placeholder?.classList.remove('hidden');
-                return;
-            }
-            placeholder?.classList.add('hidden');
-
-            if (selectedDatabaseIndex >= databases.length) {
-                selectedDatabaseIndex = 0;
-            }
-
-            if (databases.length === 1) {
-                selectedDatabaseIndex = 0;
-                container.innerHTML = renderSingleDatabaseCard(databases[0], 0);
-            } else {
-                let selectHtml = `<div style="margin-bottom:12px;">
-                    <div style="font-size:11px; font-weight:bold; color:var(--text-secondary); margin-bottom:6px;">Select Database Workspace:</div>
-                    <select id="db-selector" style="width:100%; box-sizing:border-box; font-size:11px; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; border-radius:4px;">`;
-                
-                databases.forEach((db, index) => {
-                    let label = db.parentFolder;
-                    if (!label && db.workspaceRoots && db.workspaceRoots.length > 0 && db.workspaceRoots[0]) {
-                        label = db.workspaceRoots[0].split(/[\\/]/).pop();
-                    }
-                    if (!label) {
-                        label = "Unknown workspace";
-                    }
-                    const selected = index === selectedDatabaseIndex ? 'selected' : '';
-                    selectHtml += `<option value="${index}" ${selected}>${escapeHtml(label)}</option>`;
-                });
-                
-                selectHtml += `</select></div>`;
-                
-                container.innerHTML = selectHtml + renderSingleDatabaseCard(databases[selectedDatabaseIndex], selectedDatabaseIndex);
-            }
+            // Database operations moved to Database panel in shell rail.
         }
         let lastGitIgnoreConfig = {
             strategy: 'targetedGitignore',
@@ -2469,118 +2362,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (event.key === 'Escape') { closeControlPlaneModal(); }
         });
 
-        document.getElementById('databases-list')?.addEventListener('change', (e) => {
-            const target = e.target;
-            if (target.id === 'db-selector') {
-                selectedDatabaseIndex = parseInt(target.value, 10);
-                renderDatabases(lastAllDbPaths);
-                return;
-            }
-            if (target.classList.contains('notion-db-url-input')) {
-                const index = target.dataset.dbIndex;
-                const db = lastAllDbPaths[index];
-                if (!db) return;
-                vscode.postMessage({ 
-                    type: 'configureNotionBackup', 
-                    databaseUrl: target.value.trim(), 
-                    workspaceRoot: db.workspaceRoots[0] 
-                });
-            }
-        });
-
-        document.getElementById('databases-list')?.addEventListener('click', (e) => {
-            const target = e.target;
-            
-            // Radio button changes (to show/hide custom path input)
-            if (target.matches('input[type="radio"][name^="db-location-"]')) {
-                const index = target.closest('.db-card').dataset.dbIndex;
-                const customPathInput = document.getElementById(`db-custom-path-${index}`);
-                if (customPathInput) {
-                    if (target.value === 'custom') {
-                        customPathInput.classList.remove('hidden');
-                        customPathInput.focus();
-                    } else {
-                        customPathInput.classList.add('hidden');
-                    }
-                }
-            }
-
-            // Update Location button
-            const updateBtn = target.closest('.db-update-location-btn');
-            if (updateBtn) {
-                const index = updateBtn.dataset.dbIndex;
-                const db = lastAllDbPaths[index];
-                if (!db) return;
-                
-                const selectedRadio = document.querySelector(`input[name="db-location-${index}"]:checked`);
-                if (!selectedRadio) return;
-                
-                const location = selectedRadio.value;
-                const targetWorkspaceRoot = db.workspaceRoots[0];
-                
-                if (location === 'custom') {
-                    const customPathInput = document.getElementById(`db-custom-path-${index}`);
-                    const customPath = customPathInput?.value.trim();
-                    if (!customPath) return;
-                    vscode.postMessage({ type: 'setCustomDbPath', path: customPath, targetWorkspaceRoot });
-                } else if (location === 'local') {
-                    vscode.postMessage({ type: 'setLocalDb', targetWorkspaceRoot });
-                } else {
-                    vscode.postMessage({ type: 'setPresetDbPath', preset: location, targetWorkspaceRoot });
-                }
-                return;
-            }
-
-            // Rebuild Database button
-            const resetBtn = target.closest('.db-reset-btn');
-            if (resetBtn) {
-                const index = resetBtn.dataset.dbIndex;
-                const db = lastAllDbPaths[index];
-                if (!db) return;
-                vscode.postMessage({ type: 'resetDatabase', targetWorkspaceRoot: db.workspaceRoots[0] });
-                return;
-            }
-
-            // Notion buttons
-            const notionBackupBtn = target.closest('.notion-backup-btn');
-            if (notionBackupBtn) {
-                const index = notionBackupBtn.dataset.dbIndex;
-                const db = lastAllDbPaths[index];
-                if (!db) return;
-                const urlInput = document.querySelector(`.notion-db-url-input[data-db-index="${index}"]`);
-                const url = urlInput?.value.trim();
-                
-                if (url) {
-                    vscode.postMessage({ type: 'configureNotionBackup', databaseUrl: url, workspaceRoot: db.workspaceRoots[0] });
-                }
-                
-                setButtonBusy(notionBackupBtn, true, 'WORKING…');
-                vscode.postMessage({ type: 'backupToNotion', workspaceRoot: db.workspaceRoots[0] });
-                return;
-            }
-
-            const notionRestoreBtn = target.closest('.notion-restore-btn');
-            if (notionRestoreBtn) {
-                const index = notionRestoreBtn.dataset.dbIndex;
-                const db = lastAllDbPaths[index];
-                if (!db) return;
-                setButtonBusy(notionRestoreBtn, true, 'WORKING…');
-                vscode.postMessage({ type: 'restoreFromNotion', workspaceRoot: db.workspaceRoots[0] });
-                return;
-            }
-
-            const notionAutoSetupBtn = target.closest('.notion-auto-setup-btn');
-            if (notionAutoSetupBtn) {
-                const index = notionAutoSetupBtn.dataset.dbIndex;
-                const db = lastAllDbPaths[index];
-                if (!db) return;
-                setButtonBusy(notionAutoSetupBtn, true, 'WORKING…');
-                vscode.postMessage({ type: 'autoCreateNotionDatabase', workspaceRoot: db.workspaceRoots[0] });
-                return;
-            }
-        });
-
-        // Initialize tabs (replaces bindAccordion calls)
+        // Database Operations listeners retired — operations moved to Database panel in shell rail.
         initTabs();
 
         // Workspace database mapping handlers

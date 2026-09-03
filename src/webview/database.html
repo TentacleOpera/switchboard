@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Database</title>
+    <style>
+        @font-face {
+            font-family: 'GeistPixel';
+            src: url('{{GEIST_PIXEL_FONT_URI}}') format('woff2');
+            font-weight: normal;
+            font-style: normal;
+        }
+        @font-face {
+            font-family: 'Hanken Grotesk';
+            src: url('{{HANKEN_FONT_URI}}') format('woff2');
+            font-weight: 100 900;
+            font-display: swap;
+        }
+        :root {
+            color-scheme: dark;
+
+            --bg-color: #000000;
+            --panel-bg: #000000;
+            --panel-bg2: #0a0a0a;
+            --card-bg: #0d0d0d;
+            --border-color: #333333;
+            --border-bright: #444444;
+            --text-primary: #e0e0e0;
+            --text-secondary: #8C8C8C;
+            --accent-primary: #00e5ff;
+            --accent-teal: var(--accent-primary);
+            --accent-green: #38a169;
+            --accent-red: #e53e3e;
+            --accent-orange: #ed8936;
+            --font-family: 'Hanken Grotesk', Menlo, Consolas, sans-serif;
+            --display-font: 'GeistPixel';
+            --font-code: Menlo, Consolas, monospace;
+            --display-letter-spacing: -0.05em;
+        }
+
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-corner {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: var(--vscode-scrollbarSlider-background, var(--border-color));
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--vscode-scrollbarSlider-hoverBackground, var(--text-secondary));
+        }
+        @supports not selector(::-webkit-scrollbar) {
+            :root {
+                scrollbar-width: thin;
+                scrollbar-color: var(--border-color) transparent;
+            }
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            font-family: var(--font-family);
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+            box-sizing: border-box;
+        }
+
+        .header {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: var(--panel-bg);
+            flex: 0 0 auto;
+        }
+
+        .header-title {
+            font-family: var(--display-font);
+            font-size: 14px;
+            letter-spacing: var(--display-letter-spacing);
+            text-transform: uppercase;
+            color: var(--accent-primary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .shared-tab-bar {
+            display: flex;
+            background: #181818;
+            border-bottom: 1px solid var(--border-color);
+            padding: 0 8px;
+            gap: 4px;
+            flex: 0 0 auto;
+        }
+
+        .shared-tab-btn {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            padding: 8px 12px;
+            font-family: var(--display-font), var(--font-family);
+            letter-spacing: var(--display-letter-spacing);
+            font-size: 11px;
+            text-transform: uppercase;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.15s ease;
+        }
+
+        .shared-tab-btn:hover {
+            color: var(--text-primary);
+        }
+
+        .shared-tab-btn.active {
+            color: var(--accent-primary);
+            border-bottom-color: var(--accent-primary);
+        }
+
+        .tab-viewport {
+            flex: 1 1 auto;
+            overflow-y: auto;
+            padding: 16px;
+        }
+
+        .shared-tab-content {
+            display: none;
+            max-width: 860px;
+            margin: 0 auto;
+        }
+
+        .shared-tab-content.active {
+            display: block;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .card-title {
+            font-size: 12px;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-weight: 500;
+            text-transform: uppercase;
+        }
+        .badge.reachable {
+            background: rgba(56, 161, 105, 0.2);
+            color: var(--accent-green);
+            border: 1px solid rgba(56, 161, 105, 0.4);
+        }
+        .badge.unreachable {
+            background: rgba(229, 62, 62, 0.2);
+            color: var(--accent-red);
+            border: 1px solid rgba(229, 62, 62, 0.4);
+        }
+        .badge.info {
+            background: rgba(0, 229, 255, 0.15);
+            color: var(--accent-primary);
+            border: 1px solid rgba(0, 229, 255, 0.3);
+        }
+        .badge.neutral {
+            background: rgba(140, 140, 140, 0.15);
+            color: var(--text-secondary);
+            border: 1px solid var(--border-color);
+        }
+
+        .prop-grid {
+            display: grid;
+            grid-template-columns: 140px 1fr;
+            row-gap: 8px;
+            column-gap: 12px;
+            font-size: 11px;
+            margin-bottom: 12px;
+        }
+
+        .prop-label {
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+
+        .prop-value {
+            color: var(--text-primary);
+            word-break: break-all;
+            font-family: var(--font-code);
+        }
+
+        .btn {
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            padding: 6px 12px;
+            font-size: 11px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-family: var(--font-family);
+            transition: all 0.15s ease;
+        }
+        .btn:hover {
+            background: #1a1a1a;
+            border-color: var(--border-bright);
+        }
+        .btn.primary {
+            background: rgba(0, 229, 255, 0.15);
+            border-color: var(--accent-primary);
+            color: var(--accent-primary);
+            font-weight: bold;
+        }
+        .btn.primary:hover {
+            background: rgba(0, 229, 255, 0.25);
+        }
+        .btn.danger {
+            background: rgba(229, 62, 62, 0.15);
+            border-color: var(--accent-red);
+            color: var(--accent-red);
+        }
+        .btn.danger:hover {
+            background: rgba(229, 62, 62, 0.25);
+        }
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-row {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+            flex-wrap: wrap;
+        }
+
+        .input-text {
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 6px 8px;
+            font-size: 11px;
+            font-family: var(--font-code);
+            border-radius: 3px;
+            box-sizing: border-box;
+            width: 100%;
+        }
+        .input-text:focus {
+            outline: none;
+            border-color: var(--accent-primary);
+        }
+
+        .banner {
+            padding: 10px 12px;
+            border-radius: 4px;
+            font-size: 11px;
+            margin-bottom: 12px;
+            line-height: 1.4;
+        }
+        .banner.warning {
+            background: rgba(237, 137, 54, 0.12);
+            border: 1px solid rgba(237, 137, 54, 0.4);
+            color: var(--accent-orange);
+        }
+        .banner.danger {
+            background: rgba(229, 62, 62, 0.12);
+            border: 1px solid rgba(229, 62, 62, 0.4);
+            color: #fc8181;
+        }
+        .banner.info {
+            background: rgba(0, 229, 255, 0.08);
+            border: 1px solid rgba(0, 229, 255, 0.3);
+            color: var(--text-primary);
+        }
+
+        .flow-container {
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 12px;
+            margin-top: 12px;
+        }
+        .flow-step {
+            margin-bottom: 12px;
+        }
+        .flow-step:last-child {
+            margin-bottom: 0;
+        }
+        .flow-title {
+            font-size: 11px;
+            font-weight: bold;
+            color: var(--accent-primary);
+            margin-bottom: 6px;
+            text-transform: uppercase;
+        }
+
+        .backup-list {
+            margin-top: 8px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            max-height: 180px;
+            overflow-y: auto;
+            background: var(--panel-bg2);
+        }
+        .backup-item {
+            padding: 8px 10px;
+            font-size: 11px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .backup-item:last-child {
+            border-bottom: none;
+        }
+        .backup-meta {
+            color: var(--text-secondary);
+            font-size: 10px;
+            font-family: var(--font-code);
+        }
+
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-title">
+            <span>Database Storage Console</span>
+        </div>
+        <div class="header-actions">
+            <button id="btn-refresh" class="btn">Refresh Status</button>
+        </div>
+    </div>
+
+    <div class="shared-tab-bar">
+        <button class="shared-tab-btn active" data-tab="store">Store</button>
+        <button class="shared-tab-btn" data-tab="machine">This Machine</button>
+        <button class="shared-tab-btn" data-tab="projections">Projections</button>
+    </div>
+
+    <div class="tab-viewport">
+        <!-- ==================== TAB 1: STORE ==================== -->
+        <div class="shared-tab-content active" data-tab-content="store">
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <span>Authoritative Store</span>
+                    </div>
+                    <div id="store-badge-container">
+                        <span id="store-reachable-badge" class="badge neutral">Checking…</span>
+                    </div>
+                </div>
+
+                <div id="store-error-banner" class="banner danger hidden"></div>
+
+                <div class="prop-grid">
+                    <div class="prop-label">Store Kind:</div>
+                    <div id="store-kind" class="prop-value">—</div>
+
+                    <div class="prop-label">Target Location:</div>
+                    <div id="store-target" class="prop-value">—</div>
+
+                    <div class="prop-label">Fingerprint:</div>
+                    <div id="store-fingerprint" class="prop-value">—</div>
+
+                    <div class="prop-label">Sync Lag:</div>
+                    <div id="store-sync-lag" class="prop-value">—</div>
+
+                    <div class="prop-label">Arbitration:</div>
+                    <div id="store-arbitration" class="prop-value" style="font-family: var(--font-family);">—</div>
+                </div>
+
+                <div class="btn-row">
+                    <button id="btn-test-connection" class="btn">Test Connection</button>
+                    <button id="btn-toggle-switch-flow" class="btn primary">Switch Target Flow</button>
+                </div>
+
+                <!-- Multi-step Switch Target Flow (No confirm()!) -->
+                <div id="switch-flow-panel" class="flow-container hidden">
+                    <div class="flow-title">Switch Authoritative Target</div>
+                    <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 10px;">
+                        Step-by-step target selection. Review before activation.
+                    </div>
+
+                    <!-- Step 1: Target Type -->
+                    <div class="flow-step">
+                        <label style="font-size: 11px; display: block; margin-bottom: 4px; color: var(--text-secondary);">1. Choose Target Store Type:</label>
+                        <select id="switch-target-kind-select" class="input-text" style="cursor: pointer;">
+                            <option value="local-default">Local Default (.switchboard/kanban.db)</option>
+                            <option value="local-custom">Local Custom File Path</option>
+                            <option value="libsql">libSQL / Turso Cloud (Staged Target)</option>
+                            <option value="git">Git-carried Branch (Staged Target)</option>
+                        </select>
+                    </div>
+
+                    <!-- Step 2: Parameters -->
+                    <div id="switch-step-params" class="flow-step">
+                        <div id="param-group-local-custom" class="hidden">
+                            <label style="font-size: 10px; display: block; margin-bottom: 2px; color: var(--text-secondary);">Custom SQLite DB File Path:</label>
+                            <input id="switch-custom-path-input" type="text" class="input-text" placeholder="/path/to/custom-kanban.db">
+                        </div>
+                        <div id="param-group-libsql" class="hidden">
+                            <label style="font-size: 10px; display: block; margin-bottom: 2px; color: var(--text-secondary);">libSQL / Turso Database URL:</label>
+                            <input id="switch-libsql-url-input" type="text" class="input-text" placeholder="libsql://your-db.turso.io">
+                            <label style="font-size: 10px; display: block; margin-top: 6px; margin-bottom: 2px; color: var(--text-secondary);">Auth Token (Saved to Secure Storage):</label>
+                            <input id="switch-libsql-token-input" type="password" class="input-text" placeholder="Turso JWT Auth Token">
+                        </div>
+                        <div id="param-group-git" class="hidden">
+                            <label style="font-size: 10px; display: block; margin-bottom: 2px; color: var(--text-secondary);">Git Branch for Board State:</label>
+                            <input id="switch-git-branch-input" type="text" class="input-text" placeholder="switchboard-data">
+                        </div>
+                    </div>
+
+                    <!-- Step 3: Review & Explicit Action Button -->
+                    <div class="flow-step" style="border-top: 1px solid var(--border-color); padding-top: 8px;">
+                        <div style="font-size: 11px; margin-bottom: 6px;">
+                            Target to activate: <strong id="switch-target-summary-label" style="color: var(--accent-primary);">Local Default (.switchboard/kanban.db)</strong>
+                        </div>
+                        <div class="btn-row">
+                            <button id="btn-execute-switch" class="btn primary">CONFIRM & SWITCH AUTHORITATIVE STORE</button>
+                            <button id="btn-cancel-switch" class="btn">Cancel</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== TAB 2: THIS MACHINE ==================== -->
+        <div class="shared-tab-content" data-tab-content="machine">
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">Local Runtime Tier</div>
+                    <span id="local-integrity-badge" class="badge neutral">Checking…</span>
+                </div>
+
+                <div class="prop-grid">
+                    <div class="prop-label">Local File:</div>
+                    <div id="local-file-path" class="prop-value">—</div>
+
+                    <div class="prop-label">File Size:</div>
+                    <div id="local-file-size" class="prop-value">—</div>
+
+                    <div class="prop-label">Last Modified:</div>
+                    <div id="local-mtime" class="prop-value">—</div>
+
+                    <div class="prop-label">Integrity Status:</div>
+                    <div id="local-integrity-value" class="prop-value">—</div>
+
+                    <div class="prop-label">State Backup JSON:</div>
+                    <div id="local-state-backup-status" class="prop-value">—</div>
+                </div>
+
+                <div class="btn-row">
+                    <button id="btn-check-integrity" class="btn">Run PRAGMA Integrity Check</button>
+                    <button id="btn-edit-db-path" class="btn">Edit Path (VS Code Input)</button>
+                    <button id="btn-use-local-db" class="btn">Reset to Default Local DB</button>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">Automatic Rolling Backups</div>
+                    <span id="backup-count-badge" class="badge neutral">0 backups</span>
+                </div>
+                <div style="font-size: 11px; color: var(--text-secondary); line-height: 1.4; margin-bottom: 8px;">
+                    Switchboard maintains rolling snapshots in <code>.switchboard/dbbackup/</code> prior to bulk changes and at extension startup.
+                </div>
+                <div id="backups-container" class="backup-list">
+                    <div style="padding: 12px; text-align: center; color: var(--text-secondary); font-size: 11px;">No backups found in .switchboard/dbbackup/</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">Rebuild & Recovery</div>
+                </div>
+                <div class="banner warning">
+                    If the database file is corrupted, rebuilding deletes and reinitializes it. Existing state is restored from <code>kanban-state-backup.json</code> and plan files are re-imported.
+                </div>
+                <div id="rebuild-flow-controls">
+                    <button id="btn-start-rebuild-flow" class="btn danger">REBUILD DATABASE…</button>
+                    <div id="rebuild-confirm-box" class="flow-container hidden" style="margin-top: 10px;">
+                        <div style="color: var(--accent-red); font-size: 11px; font-weight: bold; margin-bottom: 6px;">
+                            Confirm Rebuild Operation
+                        </div>
+                        <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 8px;">
+                            This will recreate <code>kanban.db</code> from backups and markdown plan files.
+                        </div>
+                        <div class="btn-row">
+                            <button id="btn-confirm-rebuild" class="btn danger">I UNDERSTAND — REBUILD DATABASE NOW</button>
+                            <button id="btn-cancel-rebuild" class="btn">Cancel</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== TAB 3: PROJECTIONS ==================== -->
+        <div class="shared-tab-content" data-tab-content="projections">
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">Notion Projection</div>
+                    <span id="notion-status-badge" class="badge neutral">Checking…</span>
+                </div>
+
+                <div class="prop-grid">
+                    <div class="prop-label">Projection State:</div>
+                    <div id="notion-configured-val" class="prop-value">—</div>
+
+                    <div class="prop-label">Last Push:</div>
+                    <div id="notion-last-push-val" class="prop-value">Never</div>
+
+                    <div class="prop-label">Last Pull:</div>
+                    <div id="notion-last-pull-val" class="prop-value">Never</div>
+                </div>
+
+                <div style="margin-bottom: 12px;">
+                    <label style="font-size: 10px; display: block; margin-bottom: 4px; color: var(--text-secondary);">Notion Database URL:</label>
+                    <input id="notion-db-url-input" type="text" class="input-text" placeholder="https://notion.so/workspace/...">
+                </div>
+
+                <div class="btn-row">
+                    <button id="btn-notion-backup" class="btn">Backup to Notion</button>
+                    <button id="btn-notion-auto-setup" class="btn">Auto-create Notion Database</button>
+                </div>
+
+                <!-- Break-glass Restore Control -->
+                <div style="margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border-color);">
+                    <div style="font-size: 11px; font-weight: bold; color: var(--accent-orange); margin-bottom: 4px;">
+                        Break-Glass Notion Restore
+                    </div>
+                    <div class="banner warning" style="margin-bottom: 8px;">
+                        <strong>Warning:</strong> Break-glass restore pulls snapshots from Notion and OVERWRITES the authoritative database on this machine.
+                    </div>
+                    <button id="btn-notion-restore-breakglass" class="btn danger">BREAK-GLASS RESTORE FROM NOTION</button>
+                    <div id="notion-restore-confirm-box" class="flow-container hidden" style="margin-top: 8px;">
+                        <div style="font-size: 11px; color: var(--text-primary); margin-bottom: 6px;">
+                            Confirm: Overwrite authoritative database from Notion?
+                        </div>
+                        <div class="btn-row">
+                            <button id="btn-confirm-notion-restore" class="btn danger">CONFIRM BREAK-GLASS RESTORE</button>
+                            <button id="btn-cancel-notion-restore" class="btn">Cancel</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">Linear Projection</div>
+                    <span id="linear-status-badge" class="badge neutral">Checking…</span>
+                </div>
+                <div class="prop-grid">
+                    <div class="prop-label">Configured:</div>
+                    <div id="linear-configured-val" class="prop-value">—</div>
+
+                    <div class="prop-label">Last Push:</div>
+                    <div id="linear-last-push-val" class="prop-value">Never</div>
+
+                    <div class="prop-label">Last Pull:</div>
+                    <div id="linear-last-pull-val" class="prop-value">Never</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">ClickUp Projection</div>
+                    <span id="clickup-status-badge" class="badge neutral">Checking…</span>
+                </div>
+                <div class="prop-grid">
+                    <div class="prop-label">Configured:</div>
+                    <div id="clickup-configured-val" class="prop-value">—</div>
+
+                    <div class="prop-label">Last Push:</div>
+                    <div id="clickup-last-push-val" class="prop-value">Never</div>
+
+                    <div class="prop-label">Last Pull:</div>
+                    <div id="clickup-last-pull-val" class="prop-value">Never</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- SHARED_DEFAULTS_SCRIPT -->
+    <script src="{{DATABASE_JS_URI}}"></script>
+</body>
+</html>

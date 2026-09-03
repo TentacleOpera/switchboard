@@ -1,5 +1,7 @@
 # Database Tab Dropdown Redesign
 
+> **SUPERSEDED & CLOSED:** Superseded by `database-panel-in-the-shell-rail.md` (PLAN_ID `3e1f6644-9398-424f-99b3-c8995d1adbb6`). Storage operations have moved out of Setup into the dedicated Database shell rail panel.
+
 ## Goal
 Redesign the database tab in setup.html to use a dropdown selector when multiple databases exist, instead of repeating all database controls down the page. This reduces visual clutter and improves usability for workspaces with multiple databases.
 

@@ -171,6 +171,7 @@ function run() {
         // while this gate said dead.
         { file: 'connections.js', reachable: new Set([...SETUP_VERBS, ...PLANNING_VERBS, ...TASKVIEWER_VERBS]) },
         { file: 'linear.js', reachable: new Set([...SETUP_VERBS, ...TICKETS_VERBS, ...TASKVIEWER_VERBS]) },
+        { file: 'database.js', reachable: new Set([...SETUP_VERBS, ...TASKVIEWER_VERBS]) },
     ];
 
     for (const p of panels) {
@@ -226,6 +227,12 @@ function run() {
         assert.match(apiServerSource, /pathname\.startsWith\('\/mission-control\/verb\/'\)/,
             'LocalApiServer must route /mission-control/verb/* — transport.js derives the route from '
             + 'data-panel, so without this arm every mc* verb 404s while every other gate stays green.');
+    });
+
+    test('the database panel has a verb route at all', () => {
+        assert.match(apiServerSource, /pathname\.startsWith\('\/database\/verb\/'\)/,
+            'LocalApiServer must route /database/verb/* — transport.js derives the route from '
+            + 'data-panel, so without this arm every database verb 404s.');
     });
 
     test('the unbuilt-automation ratchet holds at exactly three verbs', () => {

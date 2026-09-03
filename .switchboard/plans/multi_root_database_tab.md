@@ -1,5 +1,7 @@
 # Update Database Tab for Multi-Root Workspace Support
 
+> **SUPERSEDED & CLOSED:** Superseded by `database-panel-in-the-shell-rail.md` (PLAN_ID `3e1f6644-9398-424f-99b3-c8995d1adbb6`). Storage operations have moved out of Setup into the dedicated Database shell rail panel.
+
 ## Goal
 
 Update the **Database** tab in `setup.html` to enumerate all active databases across a multi-root VS Code: workspace, showing per-database actions (change location, rebuild, Notion backup) while accounting for `workspaceDatabaseMappings` that cause multiple roots to share a single database.

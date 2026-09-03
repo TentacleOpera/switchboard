@@ -1,5 +1,7 @@
 # Workspace Database Mapping UI Redesign
 
+> **SUPERSEDED & CLOSED:** Superseded by `database-panel-in-the-shell-rail.md` (PLAN_ID `3e1f6644-9398-424f-99b3-c8995d1adbb6`). Storage operations have moved out of Setup into the dedicated Database shell rail panel.
+
 ## Goal
 
 Redesign the workspace database mapping UI so that creating a new local `.switchboard/kanban.db` and connecting to an existing shared database are explicitly distinct workflows, each with appropriate field visibility, validation, and backend handling.

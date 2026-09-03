@@ -4326,7 +4326,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         return sharedGetProjectHtml(repoRoot, currentWsRoot(), caps, getTheme());
                     },
                     getShellHtml: async () => sharedGetShellHtml(repoRoot, getTheme()),
-                    getPanelsManifest: () => sharedGetPanelsManifest({ design: true, setup: true, planning: true, tickets: true, terminals: ptyHostReady(), linear: true }),
+                    getPanelsManifest: () => sharedGetPanelsManifest({ design: true, setup: true, database: true, planning: true, tickets: true, terminals: ptyHostReady(), linear: true }),
                     getPanelHtml: async (id: string) => {
                         const caps = {
                             ...baseHostCapabilities,

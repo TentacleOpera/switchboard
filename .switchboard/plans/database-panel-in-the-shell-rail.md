@@ -123,3 +123,8 @@ No panel-owned state. The removal of the Setup block is ordered after the new pa
 
 - Should the panel surface cross-workspace storage facts (total size, per-workspace row counts) once one global database holds every workspace, or does that belong to the retention plan's measurement surface?
 - Does the VS Code sidebar get this as a view, or does it link out to the browser shell?
+
+## Completion Summary
+
+Implemented the dedicated Database panel in the shell rail, including its manifest entry (`placement: 'bottom'`, `group: 'cold'`), nav icon (`icons/nav-database.svg`), HTML/JS webview files (`src/webview/database.html`, `database.js`), and server routing/status endpoints (`/database`, `/database/status`, `/database/verb/*`). The webview exposes the authoritative store topology, local machine storage metrics and integrity inspection, and external projections (Notion, Linear, ClickUp) with break-glass restore guards and multi-step store switching without any `confirm()` dialogs. Retired the legacy Database Operations section and its click/change listeners from `setup.html`, re-routing all surviving verbs to the new operational surface, and marked the three superseded plans as closed. Both host composition roots (`TaskViewerProvider.ts` and `bootstrap.ts`) and contract routing tests were updated and verified.
+
