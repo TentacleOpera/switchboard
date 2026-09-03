@@ -6,6 +6,8 @@ Move cards and query kanban state by running the provided scripts.
 
 ## Resolving Plan IDs (do this FIRST — offline, no script)
 
+Every op below is keyed on a **`planId`** (a UUID), but you should not need UUIDs for most ops. Resolve a plan the cheap way when needed, or use the path/slug-addressed APIs below so the server resolves it:
+
 - **Per-column index (fastest, offline):** `.switchboard/kanban-state-<column>.md`. Every plan line ends with `<!-- planId:<uuid> … -->`; subtasks also carry `subtask-of:"<feature>"` and feature cards carry `feature`. One `grep` gives you the ID **and** its feature membership:
   ```bash
   grep -i "my-plan-slug-or-title" .switchboard/kanban-state-*.md

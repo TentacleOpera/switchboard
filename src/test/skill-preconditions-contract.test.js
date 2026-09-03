@@ -142,15 +142,26 @@ test('skill descriptions name their environmental dependency', () => {
 });
 
 test('the LocalApiServer probe is referenced, not reinvented', () => {
-    // manage-features is the canonical probe (port file → health check → fall
-    // back). Other skills must point at it or use the same /health check — never
-    // a different liveness path that can drift.
+    // manage-features is the canonical probe. Other skills must point at it or
+    // at the same /health check — never a different liveness path that can drift.
+    //
+    // The port-source half of this check used to demand
+    // `.switchboard/api-server-port.txt` by name. That was correct while each
+    // skill resolved the port itself; it is now the opposite of the contract.
+    // The CLI owns port discovery, the /health probe, token attachment and the
+    // offline message, and a skill that still names the port file is
+    // reimplementing findRunningInstance() in markdown — the drift this whole
+    // feature exists to end. The invariant is unchanged ("say how you reach the
+    // board, do not invent a liveness path"); only the answer moved.
+    // Plan: .switchboard/plans/migrate-agent-protocols-from-curl-to-the-cli.md
     for (const s of SKILLS.filter((x) => x.dir !== 'manage-features')) {
         const body = sourceBody(s);
         assert.ok(/manage-features/.test(body) || /\/health/.test(body),
             `${s.dir}/SKILL.md invents its own reachability check — reuse the manage-features probe or the /health endpoint`);
-        assert.ok(/api-server-port\.txt/.test(body),
-            `${s.dir}/SKILL.md must name .switchboard/api-server-port.txt as the port source`);
+        assert.ok(/switchboard api\b/.test(body),
+            `${s.dir}/SKILL.md must reach the board through \`switchboard api\` — the CLI is the one transport that carries the auth token`);
+        assert.ok(!/api-server-port\.txt/.test(body),
+            `${s.dir}/SKILL.md still names .switchboard/api-server-port.txt — hand-rolled port discovery was retired with sb_api_call.sh`);
     }
 });
 

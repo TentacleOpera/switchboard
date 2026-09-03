@@ -24,7 +24,7 @@ function usage(): string {
        npx switchboard clear <terminal|--all> [--json]
        npx switchboard fleet [--json]
        npx switchboard verb <verbName> [jsonPayload] [--json]
-       npx switchboard api <METHOD> <path> [jsonBody] [--json] [--data @<file>]
+       npx switchboard api <METHOD> <path> [jsonBody] [--json] [--data @<file>] [--timeout <ms>]
        npx switchboard setup [init|scaffold|control-plane] [options]
        npx switchboard stop
        npx switchboard status [--json]
@@ -521,7 +521,8 @@ function apiRequest(
     pathname: string,
     workspaceRoot: string,
     payload?: unknown,
-    query?: Record<string, string>
+    query?: Record<string, string>,
+    timeoutMs: number = 15000
 ): Promise<ApiResponse> {
     const token = discoverAuthToken(workspaceRoot);
     const upperMethod = (method || 'GET').toUpperCase();
@@ -572,7 +573,7 @@ function apiRequest(
             });
         });
         req.on('error', reject);
-        req.setTimeout(15000, () => { try { req.destroy(); } catch { /* */ } reject(new Error('Request timed out')); });
+        req.setTimeout(timeoutMs, () => { try { req.destroy(); } catch { /* */ } reject(new Error('Request timed out')); });
         if (bodyStr) { req.write(bodyStr); }
         req.end();
     });
@@ -646,7 +647,13 @@ function dispatchExitCode(status: number): number {
         case 400: return 5;
         case 404: return 5;
         case 503: return 6;
-        default: return 1; // 500 or unknown → offline/broke
+        // 500 is explicit even though `default` already returns 1: the contract
+        // gate asserts every status `performKanbanDispatch` can `fail(...)` with
+        // has a case here, and 500 is one of them. Leaving it to `default` made
+        // the whole cli-board-commands gate red, which in turn meant every
+        // assertion below the exit-code table never ran.
+        case 500: return 1;
+        default: return 1; // unknown → offline/broke
     }
 }
 
@@ -1524,23 +1531,42 @@ async function cmdVerb(workspaceRoot: string, argv: string[]): Promise<void> {
 }
 
 /**
- * `switchboard api <METHOD> <path> [jsonBody] [--json] [--data @<file>]`
+ * `switchboard api <METHOD> <path> [jsonBody] [--json] [--data @<file>] [--timeout <ms>]`
  *
  * Direct CLI access to any LocalApiServer route with authentication.
+ *
+ * `--timeout` exists because this command is the transport for the
+ * `kanban_operations` scripts, whose cascading feature operations previously ran
+ * with NO request timeout at all. A fixed 15s ceiling would report a slow-but-
+ * successful cascade as a failure, and a retried cascade is a double-applied one.
  */
 async function cmdApi(workspaceRoot: string, argv: string[]): Promise<void> {
     const jsonFlag = argv.includes('--json');
     if (jsonFlag) { routeLogsToStderr(); }
 
     let dataArg: string | undefined;
+    let timeoutArg: string | undefined;
     const positional: string[] = [];
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
         if (a === '--json') { continue; }
         if (a === '--data') { dataArg = argv[++i]; continue; }
         if (a.startsWith('--data=')) { dataArg = a.slice('--data='.length); continue; }
+        if (a === '--timeout') { timeoutArg = argv[++i]; continue; }
+        if (a.startsWith('--timeout=')) { timeoutArg = a.slice('--timeout='.length); continue; }
         if (a.startsWith('-')) { continue; }
         positional.push(a);
+    }
+
+    let timeoutMs = 15000;
+    if (timeoutArg !== undefined) {
+        const parsedTimeout = Number(timeoutArg);
+        if (!Number.isFinite(parsedTimeout) || parsedTimeout <= 0) {
+            if (jsonFlag) { emitJson({ success: false, error: `Invalid --timeout '${timeoutArg}': expected a positive number of milliseconds` }); }
+            else { console.error(`[switchboard] Invalid --timeout '${timeoutArg}': expected a positive number of milliseconds.`); }
+            exitFlushed(5);
+        }
+        timeoutMs = parsedTimeout;
     }
 
     const rawMethod = positional[0];
@@ -1614,7 +1640,7 @@ async function cmdApi(workspaceRoot: string, argv: string[]): Promise<void> {
 
     let res: ApiResponse;
     try {
-        res = await apiRequest(port, upperMethod, rawPath, workspaceRoot, parsedBody);
+        res = await apiRequest(port, upperMethod, rawPath, workspaceRoot, parsedBody, undefined, timeoutMs);
     } catch (err: any) {
         if (jsonFlag) { emitJson({ success: false, error: err?.message || 'Request failed' }); }
         else { console.error(`[switchboard] Request failed: ${err?.message || err}`); }

@@ -672,6 +672,12 @@ function run() {
 
     // ── 12. Generic apiRequest helper & switchboard api escape hatch ──────────
     // Plan: .switchboard/plans/switchboard-api-escape-hatch-in-the-cli.md
+    //
+    // Static half only. The behavioural half (token attachment, method
+    // coverage, workspaceRoot routing, --data @file, exit codes) is asserted
+    // against a stub server in runRuntimeChecks() below — a source grep for a
+    // method name matches the ALLOWED_METHODS literal itself and discriminates
+    // nothing.
     assert.match(
         cli,
         /function apiRequest\(\s*port: number,\s*method: string,\s*pathname: string,\s*workspaceRoot: string,/,
@@ -679,26 +685,21 @@ function run() {
     );
     assert.match(
         cli,
-        /function apiGet\(port: number, pathname: string, workspaceRoot: string, query\?: Record<string, string>\): Promise<ApiResponse> \{\s*return apiRequest\(port, 'GET', pathname, workspaceRoot, undefined, query\);\s*\}/,
+        /function apiGet\(port: number, pathname: string, workspaceRoot: string, query\?: Record<string, string>[^)]*\): Promise<ApiResponse> \{\s*return apiRequest\(port, 'GET', pathname, workspaceRoot, undefined, query\)/,
         'apiGet must delegate to apiRequest.'
     );
     assert.match(
         cli,
-        /function apiPost\(port: number, pathname: string, workspaceRoot: string, payload: unknown\): Promise<ApiResponse> \{\s*return apiRequest\(port, 'POST', pathname, workspaceRoot, payload\);\s*\}/,
+        /function apiPost\(port: number, pathname: string, workspaceRoot: string, payload: unknown[^)]*\): Promise<ApiResponse> \{\s*return apiRequest\(port, 'POST', pathname, workspaceRoot, payload\)/,
         'apiPost must delegate to apiRequest.'
     );
 
-    // Method coverage & validation in cmdApi.
     const apiStart = cli.indexOf('async function cmdApi(');
     assert.ok(apiStart > 0, 'cli.ts must define cmdApi.');
     const apiEnd = cli.indexOf('async function cmdDone(');
     const apiBody = cli.slice(apiStart, apiEnd > 0 ? apiEnd : undefined);
 
-    for (const m of ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']) {
-        assert.ok(apiBody.includes(m), `cmdApi must support and validate ${m} method.`);
-    }
-
-    // Path validation: must start with / and not contain scheme / authority.
+    // Path validation: must start with / and carry no scheme / authority.
     assert.match(
         apiBody,
         /!rawPath\.startsWith\('\/'\)\s*\|\|\s*rawPath\.startsWith\('\/\/'\)/,
@@ -712,39 +713,96 @@ function run() {
         'cmdApi must reject a body on GET requests.'
     );
 
-    // Auth error handling (401 -> exit 4).
-    assert.match(
-        apiBody,
-        /res\.status === 401[\s\S]{0,300}?exitFlushed\(4\)/,
+    // 401 → exit 4. Asserted on ORDER, not on a fixed character distance: the
+    // original window was 300 chars and the arm is longer than that, so the
+    // assertion could only ever have passed by accident.
+    const four01 = apiBody.indexOf('res.status === 401');
+    assert.ok(four01 > 0, 'cmdApi must branch on a 401 response.');
+    assert.ok(
+        /exitFlushed\(4\)/.test(apiBody.slice(four01, apiBody.indexOf('\n\n', four01) + 2 || undefined).slice(0, 800)),
         'cmdApi must exit 4 on 401 response.'
     );
 
-    // JSON envelope { success, status, result }.
+    // --json envelope { success, status, result } — shape-identical to cmdVerb.
     assert.match(
         apiBody,
         /emitJson\(\{\s*success:\s*ok,\s*status:\s*res\.status,\s*result\s*\}\)/,
         'cmdApi must emit { success, status, result } under --json.'
     );
 
-    // Verify 11 target agent-facing REST paths are documented and valid for cmdApi invocation.
-    const TARGET_REST_ROUTES = [
-        'GET /metadata/clickup',
-        'GET /metadata/linear',
-        'GET /task/clickup/',
-        'GET /task/linear/',
-        'POST /api/clickup',
-        'POST /api/linear',
-        'POST /comment',
-        'POST /diagram/generate',
-        'POST /doc/clickup',
-        'POST /task/clickup',
-        'POST /worktree/cleanup',
+    // workspaceRoot routing is method-family based, in apiRequest — the guard
+    // against reopening "list one board's cards, dispatch against another" for
+    // the methods apiGet/apiPost never covered.
+    const reqStart = cli.indexOf('function apiRequest(');
+    const reqBody = cli.slice(reqStart, cli.indexOf('function apiGet(', reqStart));
+    assert.match(
+        reqBody,
+        /const isReadLike = upperMethod === 'GET' \|\| upperMethod === 'DELETE'/,
+        'apiRequest must classify GET/DELETE as read-like for workspaceRoot routing.'
+    );
+    assert.ok(
+        /finalPayload = \{ workspaceRoot, \.\.\.\(payload as Record<string, any>\) \}/.test(reqBody),
+        'apiRequest must inject workspaceRoot into the BODY for write-like methods (caller-supplied value still wins).'
+    );
+
+    // ── 13. Transport sweep: the agent layer has ONE transport. ──────────────
+    // Plan: .switchboard/plans/migrate-agent-protocols-from-curl-to-the-cli.md
+    //
+    // This is the gate whose absence let the CLI and the agent layer drift into
+    // two independent clients of the same server for a whole release — one of
+    // which never sent an Authorization header. No compile, lint or verb audit
+    // reads markdown for transport choice.
+    const TRANSPORT_ROOTS = ['.agents', path.join('.claude', 'skills')];
+    const BANNED_TRANSPORT = [
+        ['sb_api_call', 'the retired curl shim'],
+        ['curl ', 'raw curl — it cannot attach the auth token'],
+        ['api-server-port.txt', 'hand-rolled port discovery — findRunningInstance() reimplemented in markdown'],
     ];
-    for (const route of TARGET_REST_ROUTES) {
-        const [method, pathname] = route.split(' ');
-        assert.ok(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method), `Route method ${method} must be in allowed set.`);
-        assert.ok(pathname.startsWith('/'), `Route path ${pathname} must start with /.`);
-    }
+    const offenders = [];
+    const switchboardInvocations = new Set();
+    const crawl = (dir) => {
+        let entries;
+        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+        for (const entry of entries) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) { crawl(full); continue; }
+            if (!entry.isFile()) continue;
+            if (/\.(png|jpe?g|gif|svg|ico|db|sqlite3?)$/i.test(entry.name)) continue;
+            let text;
+            try { text = fs.readFileSync(full, 'utf8'); } catch { continue; }
+            for (const [needle, why] of BANNED_TRANSPORT) {
+                if (text.includes(needle)) { offenders.push(`${full}: '${needle}' — ${why}`); }
+            }
+            // Only COMMAND positions count: start of a line (optionally after a
+            // `$ ` prompt), inside inline backticks, or after `npx`. Matching a
+            // bare `switchboard` anywhere also matches prose ("not a switchboard
+            // workspace") and turns the gate into noise.
+            for (const m of text.matchAll(/(?:^[ \t]*(?:\$ )?|`|\bnpx )switchboard[ \t]+([a-z][a-z-]*)/gm)) {
+                switchboardInvocations.add(m[1]);
+            }
+        }
+    };
+    for (const root of TRANSPORT_ROOTS) { crawl(path.join(process.cwd(), root)); }
+    assert.ok(
+        offenders.length === 0,
+        'Agent-facing files must reach the API through the switchboard CLI only:\n  ' + offenders.join('\n  ')
+    );
+
+    // Every `switchboard <word>` an agent is told to run must be a real
+    // subcommand. A typo is otherwise invisible until an agent runs it at 3am.
+    const knownSubcommands = new Set(
+        Array.from(knownMatch[1].matchAll(/'([^']+)'/g)).map(m => m[1])
+    );
+    const unknownInvocations = [...switchboardInvocations].filter(w => !knownSubcommands.has(w));
+    assert.deepStrictEqual(
+        unknownInvocations, [],
+        `Agent-facing files invoke switchboard subcommand(s) that KNOWN_SUBCOMMANDS does not contain: ${unknownInvocations.join(', ')}`
+    );
+    assert.ok(
+        switchboardInvocations.has('api'),
+        'The migration is the point: agent-facing files must actually invoke `switchboard api`.'
+    );
+
 
     // ── Every dispatched subcommand is also an ALLOWED subcommand. ───────────
     // main() answers `process.argv[2] === 'X'` far below the KNOWN_SUBCOMMANDS
@@ -785,9 +843,251 @@ function run() {
     console.log('cli board commands contract test passed');
 }
 
-try {
-    run();
-} catch (error) {
-    console.error('cli board commands contract test failed:', error);
-    process.exit(1);
+// ── Runtime: `switchboard api` against a stub server. ────────────────────────
+//
+// The escape hatch exists to fix ONE defect — the agent layer never sent an
+// Authorization header. That cannot be asserted by reading cli.ts: a grep for
+// "Authorization" matches the line that would also be there if the header were
+// attached to the wrong request, and a grep for 'PUT' matches the
+// ALLOWED_METHODS literal itself. These run the real binary and read what the
+// server actually received.
+//
+// Plan: .switchboard/plans/switchboard-api-escape-hatch-in-the-cli.md
+//       ("Automated Tests" 2-5, 7-10)
+const os = require('os');
+const http = require('http');
+const { execFile } = require('child_process');
+
+const CLI_DIST = path.join(process.cwd(), 'dist', 'standalone', 'cli.js');
+const TOKEN = 'stub-token-9f3a';
+
+/**
+ * ASYNC on purpose. The stub server lives in THIS process, so a synchronous
+ * spawn blocks the event loop that has to answer the CLI's /health probe — the
+ * CLI then times out and reports "No running Switchboard instance" for every
+ * case, and the suite passes or fails for a reason that has nothing to do with
+ * the code under test.
+ */
+function runNode(scriptArgs, cwd, env) {
+    return new Promise((resolve) => {
+        execFile(process.execPath, scriptArgs, {
+            cwd, encoding: 'utf8', timeout: 30000,
+            env: { ...process.env, ...(env || {}) },
+        }, (err, stdout, stderr) => {
+            resolve({ code: err ? (err.code ?? 1) : 0, stdout: stdout || '', stderr: stderr || '' });
+        });
+    });
 }
+
+function runCli(cwd, args) {
+    return runNode([CLI_DIST, ...args], cwd);
+}
+
+async function runRuntimeChecks() {
+    if (!fs.existsSync(CLI_DIST)) {
+        // Loud, never silent: CI compiles before contract tests, so a missing
+        // bundle there is a real hole and must fail rather than skip.
+        assert.ok(
+            !process.env.CI,
+            'dist/standalone/cli.js is missing in CI — the runtime `switchboard api` checks cannot run.'
+        );
+        console.warn('[cli board commands] RUNTIME CHECKS SKIPPED — dist/standalone/cli.js not built (run `npm run compile`).');
+        return;
+    }
+
+    const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-api-contract-'));
+    const sbDir = path.join(ws, '.switchboard');
+    fs.mkdirSync(sbDir, { recursive: true });
+    fs.writeFileSync(path.join(sbDir, 'api-server-token.txt'), TOKEN, 'utf8');
+    // _lib/workspace-root.js requires a REAL root marker; without one the
+    // kanban_operations scripts exit before they ever reach the transport.
+    fs.writeFileSync(path.join(sbDir, 'workspace-id'), 'contract-ws', 'utf8');
+
+    let received = null;
+    let reply = { status: 200, type: 'application/json', body: '{"ok":true}' };
+
+    const server = http.createServer((req, res) => {
+        let body = '';
+        req.on('data', c => body += c);
+        req.on('end', () => {
+            if (req.url.startsWith('/health')) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    service: 'switchboard', status: 'ok',
+                    port: server.address().port, pid: process.pid, roots: [ws],
+                }));
+                return;
+            }
+            received = { method: req.method, url: req.url, headers: req.headers, body };
+            res.writeHead(reply.status, { 'Content-Type': reply.type });
+            res.end(reply.body);
+        });
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    const port = server.address().port;
+    fs.writeFileSync(path.join(sbDir, 'api-server-port.txt'), String(port), 'utf8');
+
+    const q = (url) => new URL(url, 'http://x').searchParams;
+
+    try {
+        // 1. Token attachment — the defect the whole feature exists to fix.
+        received = null;
+        let r = await runCli(ws, ['api', 'GET', '/echo', '--json']);
+        assert.strictEqual(r.code, 0, `GET should exit 0, got ${r.code}: ${r.stderr}`);
+        assert.ok(received, 'stub server received no request for GET.');
+        assert.strictEqual(
+            received.headers.authorization, `Bearer ${TOKEN}`,
+            'switchboard api must attach Authorization: Bearer <token> — this is the entire point of retiring sb_api_call.sh.'
+        );
+        assert.strictEqual(q(received.url).get('workspaceRoot'), ws, 'GET must carry workspaceRoot in the query string.');
+        const envelope = JSON.parse(r.stdout);
+        assert.deepStrictEqual(
+            Object.keys(envelope).sort(), ['result', 'status', 'success'],
+            '--json must emit the cmdVerb envelope { success, status, result }.'
+        );
+
+        // 2-4. Method coverage + workspaceRoot routing by method family.
+        received = null;
+        r = await runCli(ws, ['api', 'PUT', '/echo', '{"a":1}', '--json']);
+        assert.strictEqual(r.code, 0, `PUT should exit 0: ${r.stderr}`);
+        assert.strictEqual(received.method, 'PUT', 'PUT must reach the server as PUT.');
+        assert.deepStrictEqual(
+            JSON.parse(received.body), { workspaceRoot: ws, a: 1 },
+            'PUT must carry workspaceRoot in the BODY — dropping it reopens "list one board\'s cards, dispatch against another".'
+        );
+        assert.strictEqual(q(received.url).get('workspaceRoot'), null, 'PUT must NOT also put workspaceRoot in the query string.');
+
+        received = null;
+        r = await runCli(ws, ['api', 'DELETE', '/echo', '--json']);
+        assert.strictEqual(received.method, 'DELETE', 'DELETE must reach the server as DELETE.');
+        assert.strictEqual(q(received.url).get('workspaceRoot'), ws, 'DELETE must carry workspaceRoot in the QUERY STRING.');
+        assert.strictEqual(received.body, '', 'DELETE must send no body.');
+
+        received = null;
+        r = await runCli(ws, ['api', 'PATCH', '/echo', '{"b":2}', '--json']);
+        assert.strictEqual(received.method, 'PATCH', 'PATCH must reach the server as PATCH.');
+        assert.deepStrictEqual(JSON.parse(received.body), { workspaceRoot: ws, b: 2 }, 'PATCH must carry workspaceRoot in the body.');
+
+        // 5. `--data @<file>` — defended in the plan as non-optional (an agent
+        //    writing a diagram spec hits shell quoting it cannot debug).
+        received = null;
+        const bodyFile = path.join(ws, 'payload.json');
+        fs.writeFileSync(bodyFile, JSON.stringify({ spec: 'graph TD; A-->B', nested: { x: [1, 2] } }), 'utf8');
+        r = await runCli(ws, ['api', 'POST', '/echo', '--data', `@${bodyFile}`, '--json']);
+        assert.strictEqual(r.code, 0, `--data @file should exit 0: ${r.stderr}`);
+        assert.deepStrictEqual(
+            JSON.parse(received.body),
+            { workspaceRoot: ws, spec: 'graph TD; A-->B', nested: { x: [1, 2] } },
+            '--data @<file> must send the file contents as the request body.'
+        );
+        assert.strictEqual(received.headers.authorization, `Bearer ${TOKEN}`, '--data @file path must also carry the token.');
+
+        // 6. A caller-supplied workspaceRoot still wins over the injected one.
+        received = null;
+        await runCli(ws, ['api', 'POST', '/echo', '{"workspaceRoot":"/elsewhere"}', '--json']);
+        assert.strictEqual(
+            JSON.parse(received.body).workspaceRoot, '/elsewhere',
+            'An explicit workspaceRoot in the payload must not be overwritten by the injected default.'
+        );
+
+        // 7. Exit codes: 401 → 4, 5xx → 1, non-2xx JSON envelope still parses.
+        reply = { status: 401, type: 'application/json', body: '{"error":"unauthorized"}' };
+        r = await runCli(ws, ['api', 'GET', '/echo']);
+        assert.strictEqual(r.code, 4, 'A 401 must exit 4 so a skill can branch on the code, not the prose.');
+
+        reply = { status: 500, type: 'application/json', body: '{"error":"boom"}' };
+        r = await runCli(ws, ['api', 'GET', '/echo', '--json']);
+        assert.strictEqual(r.code, 1, 'A 500 must exit 1.');
+        assert.strictEqual(JSON.parse(r.stdout).success, false, 'A 500 must emit success:false under --json.');
+
+        // 8. Non-JSON response body: raw on the human path, a string under --json.
+        reply = { status: 200, type: 'text/plain', body: 'plain text answer' };
+        r = await runCli(ws, ['api', 'GET', '/echo']);
+        assert.strictEqual(r.code, 0, 'A text/plain 200 must exit 0.');
+        assert.ok(/plain text answer/.test(r.stdout), 'A non-JSON body must be printed raw, not swallowed by a parse failure.');
+        r = await runCli(ws, ['api', 'GET', '/echo', '--json']);
+        assert.strictEqual(
+            JSON.parse(r.stdout).result, 'plain text answer',
+            'Under --json a non-JSON body must be wrapped as a string, never emitted as invalid JSON.'
+        );
+
+        // 9. Path rejection issues NO request.
+        reply = { status: 200, type: 'application/json', body: '{"ok":true}' };
+        for (const bad of ['http://evil.example/x', '//evil.example/x']) {
+            received = null;
+            r = await runCli(ws, ['api', 'GET', bad]);
+            assert.strictEqual(r.code, 5, `'${bad}' must exit 5.`);
+            assert.strictEqual(received, null, `'${bad}' must issue no request at all.`);
+        }
+        r = await runCli(ws, ['api', 'GET', '/echo', '{"a":1}']);
+        assert.strictEqual(r.code, 5, 'A body on GET must exit 5.');
+        r = await runCli(ws, ['api', 'POST', '/echo', 'not json']);
+        assert.strictEqual(r.code, 5, 'A malformed JSON body must exit 5.');
+
+        // 10. `--timeout` is honoured. The kanban_operations scripts pass it
+        //     because their cascading feature operations used to run with NO
+        //     request timeout; a fixed ceiling reports a slow-but-successful
+        //     cascade as a failure, and a retried cascade is double-applied.
+        r = await runCli(ws, ['api', 'GET', '/echo', '--timeout', 'soon']);
+        assert.strictEqual(r.code, 5, 'A non-numeric --timeout must exit 5.');
+        received = null;
+        r = await runCli(ws, ['api', 'GET', '/echo', '--timeout', '60000', '--json']);
+        assert.strictEqual(r.code, 0, `--timeout <ms> must be accepted: ${r.stderr}`);
+        assert.ok(received, '--timeout must not swallow the request.');
+        assert.strictEqual(
+            q(received.url).get('timeout'), null,
+            '--timeout is a CLI flag, not a query parameter — it must never reach the server.'
+        );
+
+        // 11. Offline → exit 1 with the shared guidance, not a stack trace.
+        const emptyWs = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-api-offline-'));
+        fs.mkdirSync(path.join(emptyWs, '.switchboard'), { recursive: true });
+        r = await runCli(emptyWs, ['api', 'GET', '/echo', '--json']);
+        assert.strictEqual(r.code, 1, 'Offline must exit 1.');
+        assert.strictEqual(
+            JSON.parse(r.stdout).error, 'No running Switchboard instance',
+            'Offline must emit the shared emitOfflineGuidance envelope — .agents/skills/_lib/cli-call.js keys its reachable/offline split on this exact string.'
+        );
+        // 12. The kanban_operations scripts ride the same authenticated
+        //     transport. Before the migration they opened their own sockets off
+        //     the port file and sent NO Authorization header — the defect the
+        //     whole feature exists to close. Asserted on the wire, per script,
+        //     because a shared helper is only shared where it is actually called.
+        //     Plan: .switchboard/plans/migrate-agent-protocols-from-curl-to-the-cli.md
+        reply = { status: 200, type: 'application/json', body: '{"success":true,"featurePlanId":"f-1"}' };
+        const SCRIPTS = [
+            { file: 'move-card.js', argv: ['plan-abc', 'CODE REVIEWED', '', ws], route: '/kanban/move' },
+            { file: 'create-feature.js', argv: ['A feature', JSON.stringify(['p-1']), ws], route: '/kanban/feature' },
+        ];
+        for (const spec of SCRIPTS) {
+            received = null;
+            const script = path.join(process.cwd(), '.agents', 'skills', 'kanban_operations', spec.file);
+            assert.ok(fs.existsSync(script), `${spec.file} must exist — the personas name it by path.`);
+            await runNode([script, ...spec.argv], ws, { SWITCHBOARD_CLI_PATH: CLI_DIST });
+            assert.ok(received, `${spec.file} issued no request — it no longer reaches the API at all.`);
+            assert.strictEqual(received.method, 'POST', `${spec.file} must POST.`);
+            assert.ok(
+                received.url.startsWith(spec.route),
+                `${spec.file} must keep its endpoint (${spec.route}), got ${received.url} — this migration is transport-only.`
+            );
+            assert.strictEqual(
+                received.headers.authorization, `Bearer ${TOKEN}`,
+                `${spec.file} must send Authorization: Bearer <token> — it did not before the CLI migration, and that is the defect.`
+            );
+        }
+    } finally {
+        server.close();
+    }
+
+    console.log('cli api runtime checks passed');
+}
+
+(async () => {
+    try {
+        run();
+        await runRuntimeChecks();
+    } catch (error) {
+        console.error('cli board commands contract test failed:', error);
+        process.exit(1);
+    }
+})();

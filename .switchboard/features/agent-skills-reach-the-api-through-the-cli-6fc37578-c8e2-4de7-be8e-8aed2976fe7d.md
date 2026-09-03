@@ -70,3 +70,21 @@ exists to enforce. It is edited deliberately, in the same commit.
   - `move-card.js` and `create-feature.js` end-to-end against a stub server, asserting `Authorization` header is present
   - Bundle manifest: every path in `.switchboard-bundled.json` exists; `sb_api_call.sh` is absent
 - **Must not touch:** Any endpoint, verb, or payload shape (transport rewrite only — method, path, and payload stay identical); protocol prose, personas, and decision rules (except where they describe the transport); the eight `kanban_operations/*.js` scripts' invocation contract (named by personas — internals only)
+
+## Completion Summary
+
+Both subtasks landed and verified. Subtask 1 (escape hatch): added `switchboard api <METHOD> <path> [json] [--data @file]` to `src/standalone/cli.ts` with a generic `apiRequest` helper carrying auth headers and method-aware `workspaceRoot` routing. Subtask 2 (migration): rewrote all 38 agent protocol/skill/workflow files and 7 `kanban_operations/*.js` scripts from curl/`sb_api_call.sh` to the CLI, archived the shim as `.migrated.bak`, and updated the bundle manifest. Transport sweep gate clean (zero `sb_api_call`, `curl `, or `api-server-port.txt` under `.agents/` or `.claude/skills/`). `mission-control-tick-and-reports-contract.test.js` green with Port Discovery flipped and protocol invariants intact. Single commit: `96fb16df`.
+
+## Review Findings
+
+Both subtasks achieve the feature goal: `switchboard api` exists and is authenticated (proved on the wire against a stub server, not inferred from source), and the sweep of `.agents/` + `.claude/skills/` for `sb_api_call`, `curl ` and `api-server-port.txt` is clean and now gated in CI. Six defects were fixed in review: the `cli-board-commands` gate was red at HEAD so every new escape-hatch assertion had never executed; two of those assertions were tautologies over a literal; the archived `sb_api_call.sh.migrated.bak` would have shipped curl into every workspace; the `.agents` copy of `kanban_operations/SKILL.md` lost a non-transport paragraph its `.claude` mirror kept; the seven migrated scripts inherited a 15s ceiling where they previously had none; and `cli-call.js` could only find the CLI in the Switchboard repo itself or on a PATH the extension never installs. Verification: `cli-board-commands` (with new stub-server runtime checks), `mission-control-tick`, `terminal-token-transport`, `vsix-packaging`, `agents-seed-deletion-guard`, `mirror:check`, `standalone-parity:check`, `icons:parity` and `banner:check` all pass. Remaining risk: 146 snippets invoke a bare `switchboard`, and nothing puts it on PATH for an extension-only install.
+
+## Deferred Findings
+
+- MAJOR — bare `switchboard` on PATH is assumed by every migrated snippet; only the npm package provides it, and the extension bundles the CLI inside its own directory. `.agents/` (sweep-wide)
+- MAJOR — existing installs get `skills/_lib/sb_api_call.sh` **unlinked** by the retirement prune, not archived as `.migrated.bak` as the plan specified. `src/services/ControlPlaneMigrationService.ts:1330`
+- MAJOR — `apiPost` now injects `workspaceRoot` into every POST body, re-scoping the pre-existing verb call sites from the host's selected root to the CLI's cwd. `src/standalone/cli.ts:545`
+- MAJOR — `test:contract:skill-preconditions` and `catalog:check` are CI-wired and red on drift that predates this feature; `npm test` cannot complete because `compile-tests` has ten pre-existing type errors. `src/test/skill-preconditions-contract.test.js:64`
+- NIT — `.switchboard/plans/protocols-as-db-rows-not-scaffolded-files.md` is designed around the now-deleted shim and needs re-planning before dispatch. `.switchboard/plans/protocols-as-db-rows-not-scaffolded-files.md:73`
+- NIT — `SWITCHBOARD_CLI_PATH` has a reader and no writer; wiring it into the PTY spawn env in both hosts would make CLI discovery deterministic. `.agents/skills/_lib/cli-call.js:67`
+- NIT — the persona section is still titled `## Port Discovery` although the agent no longer discovers a port; the contract gate pins the heading. `.agents/protocols/switchboard-mission-control/SKILL.md:44`
