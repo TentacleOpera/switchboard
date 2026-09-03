@@ -16,7 +16,11 @@ Add `scripts/check-dispatch-surface.js`, wire it as `npm run dispatch-surface:ch
 
 **Verified against the working tree on 2026-08-14.** This plan previously specified a guard asserting *zero* occurrences of **both** `apiOriginated` **and** `allowPtyFleet` outside three allowlisted lines. That specification is wrong and a guard written to it fails on the unmodified tree — the plan's own verification item 3 contradicts its Proposed Changes.
 
-`allowPtyFleet` is a **live, load-bearing, intentional API** on the terminal-pool resolver. It survives at four non-test source sites, all deliberate:
+`allowPtyFleet` is a **live, load-bearing, intentional API** on the terminal-pool resolver. It must never be pinned to zero.
+
+> **Baseline is measured, not written down (2026-09-04, Board Collapse 05, decision 14).** Do not pin the literal count below. `route-agent-terminals-to-the-active-surface.md` threads the flag into two further call sites and lands **before** this ratchet, so the four sites listed here become six. Take the per-file count from HEAD at the moment this gate lands, and record a reason beside each site the way the other parity gates keep their allowlists. The table below is the 2026-08-14 measurement, kept as the shape of the reasoning, not as the number to assert.
+
+It survived at four non-test source sites when last measured, all deliberate:
 
 | Site | What it is |
 |---|---|

@@ -52,7 +52,7 @@ Move to Backlog, each with a one-line note naming the prerequisite:
 
 These are not cancelled. They are unreachable until step 1 lands, and leaving them in Planned invites a coder to start one.
 
-*Global settings are a JSON file two boards can both write* moves the other way — Backlog to Planned — behind step 1 only, per decision 12.
+*Global settings are a JSON file two boards can both write* is **not** parked. Correction made 2026-09-04 while executing Board Collapse 05: it sits in **New**, not Backlog as this plan first assumed, so there is no column move to make. Decision 12 changed its prerequisite from the single global database to the sidecar's real SQLite binding, which is one step earlier in the programme; that edit has already landed in the plan file. Leave it in New and do not park it — it is unblocked as soon as step 1 lands.
 
 ### 3. Merge the backup designs, four into two
 

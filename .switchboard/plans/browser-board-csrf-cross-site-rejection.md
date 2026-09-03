@@ -72,7 +72,32 @@ This is the CLAUDE.md composition-root divergence pattern again. Both hosts wire
 
 1. **Add a cross-site rejection guard to `_handleRequest`** (`src/services/LocalApiServer.ts`), immediately after the `Host` guard at `:7291` and before the CORS mirroring at `:7295`. Reject with 403 when either signal indicates a cross-site request:
    - `Sec-Fetch-Site` is present and its value is `cross-site` or `same-site`.
-   - `Origin` is present and `_isLocalhostOrigin(origin)` is false.
+   - `Origin` is present and its host is **not in the trusted-origin set** (see step 1a).
+
+**1a. The trusted-origin set is loopback plus the tailnet bind policy's hosts — not loopback alone.**
+This is a correction of record, made 2026-09-04 (Board Collapse 05, decision 7), and it is
+load-bearing: as originally written this guard rejects every request from the tailnet board.
+
+A page served at the machine's MagicDNS name sends that name as its `Origin` on every `fetch`. It is
+not loopback, so an `_isLocalhostOrigin`-only rule returns 403 for every verb the operator triggers
+from the one remote surface that works — and it fails *invisibly*, because a verb `POST` currently
+has no timeout and a rejected request is indistinguishable from a hung one
+(`a-verb-post-can-hang-forever-with-no-timeout-and-no-feedback.md`).
+
+The server already maintains the set of names it may legitimately be reached by: the tailnet bind
+policy's `magicDnsNames` and tailnet addresses, which the existing Host-header guard consults
+(`isAllowedHostFor`). Read the same set here. One list, two guards, no second copy to drift.
+
+- Accept when the `Origin` host is loopback (`_isLocalhostOrigin`) **or** is in the bind policy's
+  allowed hosts.
+- Reject otherwise. A hostile page's origin is in neither set, so the protection is unchanged.
+- **Bracket IPv6 literals** when comparing: an `Origin` header carries `http://[fd7a:...]:7777`
+  while the policy stores the bare address. Normalise both sides before matching.
+- When no tailnet policy is configured, the set is loopback only and behaviour is exactly as this
+  plan originally described.
+
+**Sequencing.** `tailnet-accepts-the-nodes-own-magicdns-names.md` is what populates that policy with
+the node's own names, so it lands **first**. Both plans are subtasks of the **Tailnet** feature.
 
    Both conditions are evaluated; either one rejects. Absence of both headers is *allowed* — that is the local-script/`curl` case, and it is the reason this change breaks nothing.
 
@@ -82,7 +107,7 @@ This is the CLAUDE.md composition-root divergence pattern again. Both hosts wire
 
 4. **Audit the route table for side-effecting `GET` endpoints** and record the result in the plan's completion report. If any mutating `GET` exists it is a separate bug; note it, do not fix it here.
 
-5. **Exempt `/health` from the guard.** It is the port-discovery probe used by `sb_api_call.sh`, the `kanban_operations` scripts and `cli.ts`'s `probeHealth`/`waitForHealth`. Those callers send no `Origin`, so they pass the guard anyway — but exempting it explicitly keeps discovery working even from a browser context and documents the intent.
+5. **Exempt `/health` from the guard.** It is the port-discovery probe used by `_lib/cli-call.js`, the `kanban_operations` scripts and `cli.ts`'s `probeHealth`/`waitForHealth`. Those callers send no `Origin`, so they pass the guard anyway — but exempting it explicitly keeps discovery working even from a browser context and documents the intent.
 
 6. **Verify the WebSocket upgrade path is unaffected.** `wsHub.ts:220` calls `authorizeWsUpgrade` on the upgrade event, which does not pass through `_handleRequest`. Either extend the same origin check to `wsUpgradeAuth.ts` (a cross-site page can open a WebSocket — `WebSocket` is not subject to CORS) or document why the existing check suffices. **A cross-site `WebSocket` handshake is a real vector and must not be left unexamined.**
 

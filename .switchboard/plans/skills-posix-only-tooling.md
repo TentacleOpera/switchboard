@@ -97,3 +97,13 @@ None. Instruction text only.
 ## Outstanding Questions
 
 None.
+
+## Inherited scope: narrow the sqlite3 permission (2026-09-04, Board Collapse 05, decision 11)
+
+*SQL Write Guardrail — Prevent Agents from Writing to kanban.db Directly* has been **deleted**. Three of its four layers were already closed or void: `move-card.js` no longer carries a direct-database fallback (it routes through `_lib/cli-call.js` as of `96fb16df`); its layer-1 `-readonly` sweep targets the same three bare `sqlite3` calls in `manage-features/SKILL.md` that this plan rewrites away entirely; and its layer-3 warning lived inside `KanbanDatabase._reloadIfStale`, which `sidecar-owned-db-real-sqlite-binding.md` deletes outright — a single owner over HTTP makes an external writer impossible by construction, so the warning is either premature or wrong.
+
+Its one surviving idea lands here, as a single step:
+
+- **Narrow the Claude Code permission** from `Bash(sqlite3 *)` to `Bash(sqlite3 -readonly *)` in `.claude/settings.json` (`:7`) and in its source list `SWITCHBOARD_ALLOW_ENTRIES` in `src/services/ClaudeCodeMirrorService.ts` (`:103`). Both are committed source — the mirror generator is being deleted — so edit them in the same commit.
+
+Do **not** write the deleted plan's "sql.js silently overwrites external writes" wording into any skill file. That premise dies with `_reloadIfStale`, and four skills would have carried a sentence that stops being true.

@@ -489,3 +489,51 @@ that CI never invokes is not a gate.
 
 **Recommendation: Send to Lead Coder** (complexity 7). Land after the sibling openExternal plan, which
 owns the browser notice surface `reportCommandFailure` delivers through.
+
+
+## Inherited from the deleted throw-based plan (2026-09-04, Board Collapse 05, decision 3)
+
+*The headless host answers `success: true` for commands it never runs* proposed the opposite fix —
+throwing `HeadlessUnimplementedCommandError` from the seam. It was **deleted**. Reasons, recorded so
+the decision is not re-litigated: the 196 call sites were written against a seam that never throws
+and almost none sit in a `try`, so throwing converts a silently skipped step into an unhandled
+rejection mid-verb (a handler that saves state and *then* calls a command fails after the save, half
+done); its `SWITCHBOARD_HEADLESS_LENIENT=1` escape hatch restored the silent fallback, which the
+project's fallback rule forbids; its inventory (126 sites / 38 ids, by grep) is short of this plan's
+compiler walk (196 sites / 77 ids); and its claim that no other plan touches this code was false.
+
+Two artefacts from it are worth keeping and are inherited here.
+
+**1. Candidate bridge list — the `dead` ids whose subsystem exists headlessly.** Verify each against
+HEAD before use; the counts are as it measured them.
+
+| Command | Sites | Dropped effect |
+| :-- | :-- | :-- |
+| `resetKanbanDb` | 4 | database reset |
+| `reconcileKanbanDbs` | 4 | database reconcile |
+| `fullSync` | 4 | tracker sync |
+| `kanbanForwardMove` / `kanbanBackwardMove` | 3 | card column moves |
+| `restorePlanFromKanban` | 2 | plan restore |
+| `initiatePlan` | 2 | plan authoring flow |
+| `completePlanFromKanban` | 1 | plan completion |
+| `syncImportedPlans` | 1 | imported-plan sync |
+| `importUnclaimedPlans` | 1 | unclaimed-plan import |
+| `batchDispatchLow` | 1 | low-complexity batch dispatch |
+| `setPairProgrammingModeFromKanban` | 1 | mode change |
+| `analystMapFromKanban` | 1 | analyst map |
+| `addCoderTerminalFromKanban` | 1 | seat creation |
+
+Its own judgement, which this plan adopts: **do not bridge the destructive database commands**
+(`resetKanbanDb`, `reconcileKanbanDbs`) and do not bridge `kanbanForwardMove` /
+`kanbanBackwardMove`, because card moves carry board-state implications and must not race the
+system's automatic column transitions. Those stay classified `dead` with that reason recorded.
+
+**2. The explicit inert set.** Commands that are correctly no-ops headlessly because there is no
+panel to open and no state to change. In this plan's vocabulary these are the **editor-only** class,
+and the classification file records them with that reason rather than as failures:
+`openConnectionsPanel`, `openDesignPanel`, `openInBrowser`, `openKanban`, `openPlan`,
+`openPlanningPanel`, `openProjectPanel`, `openSetupPanel`, and `refreshUI` (already bridged).
+
+The deleted plan also recorded a caller-side symptom worth carrying into the audit's evidence:
+`KanbanProvider.ts:12780` (`case 'createPlan'`) ensures the database exists, calls
+`executeCommand('switchboard.initiatePlan')`, and returns success regardless of whether anything ran.
