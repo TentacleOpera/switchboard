@@ -1,5 +1,11 @@
 # The Priority Star Applies Optimistically, Like Every Other Board Action
 
+<!-- board-collapse-03 -->
+> **RESCOPED 2026-09-04 (Board Collapse 03, decision 16).** **Delete** the proposed same-column repositioning routine that mirrors `renderBoard`'s comparator. That would be the third copy of "where does this card go": `moveCardElements` already has two rules of its own, and the sibling plan *Kanban card jumps to middle on copy-prompt advance* extracts one shared comparator for render and every optimistic move. Use it.
+> > 
+> > **Keep** the `pendingStars` ledger, its clearing on a matching `updateBoard` push rather than the 2 s optimistic guard, and failure option (a): a generic toast, no per-card revert, no backend change.
+
+
 ## Goal
 
 Make the kanban board's priority star update the moment it is clicked, instead of waiting for a host round trip and a board re-render. Moves on the same board are already optimistic; the star is the outlier, and on a remote Switchboard the delay is long enough to read as a dead button.

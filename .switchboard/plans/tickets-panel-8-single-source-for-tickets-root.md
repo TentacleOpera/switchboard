@@ -1,5 +1,13 @@
 # Give `tickets.root` a single source of truth: wire the host push, then drop the local mirror
 
+<!-- board-collapse-03 -->
+> **MERGE TARGET 2026-09-04 (Board Collapse 03, decision 15).** *Tickets Tab Source Selection Not Sticky Across Restarts in Browser/Standalone* has been **merged into this plan and deleted**. It fixed the same broken `restoredTabState` push and the same `persistTabState` arm from a different feature.
+> > 
+> > Carry these two points from it: (1) **embed the restore payload in the `rootsFetched` HTTP body** as well as pushing `restoredTabState`, so the standalone browser path restores without depending on a separate push; (2) that leaves **three** entry points to keep in step — the `restoredTabState` push, the embedded body, and the pre-existing tab-state read — so route them through **one** shared restore helper in `tickets.js` rather than three call sites.
+> > 
+> > This plan is also the prerequisite for *Wire the Tickets sidebar collapse toggle*, which now persists through the host store rather than `vscode.setState`.
+
+
 ## Goal
 
 Make the host-side panel state store the sole authority for the Tickets panel's remembered workspace root. Wire `TicketsPanelProvider` to push `restoredTabState`, fix the provider's `persistTabState` arm so root-scoped writes are actually stored root-scoped, then remove the webview-local `vscode.setState` mirror that currently shadows the host value. **Order matters and is the whole point of this plan** — reversed, it regresses persistence.

@@ -17,11 +17,22 @@ Make the board's own state internally consistent, and make the agent-facing inst
 - [ ] [Feature Creation Can Produce a Column-Mixed Feature — Propagate the Column to the Subtasks, Not Just the Feature Card](../plans/feature_plan_20260814110809_feature-creation-produces-column-mixed-features.md) — **PLAN REVIEWED** — ID: 3b1e22b2-8e09-483a-8fee-a836c380902c
 - [ ] [`improve-feature` Tells Agents Plan Deletion Hard-Deletes the Card. It Soft-Deletes, and the Card Stays.](../plans/fix-improve-feature-plan-deletion-instruction.md) — **PLAN REVIEWED** — ID: ac839ce1-730b-4b05-801b-cc465acccaa7
 - [ ] [A Reconciliation Skill for When the Board and Disk Disagree](../plans/add-board-disk-reconciliation-skill.md) — **PLAN REVIEWED** — ID: 24dd7d7c-d15e-4ed4-a33e-55f4e8ac148e
+- [ ] [Auto-Column Feature-Scoped Subtasks to PLAN REVIEWED on Import](../plans/auto-column-feature-subtasks-to-plan-reviewed-on-import.md) — **PLAN REVIEWED** — ID: e78bf396-2548-454d-8a74-3cfce8d3d798
 - [ ] [Every Feature Move Carries Its Subtasks](../plans/every-feature-move-carries-its-subtasks.md) — **PLAN REVIEWED** — ID: fda2bd88-0e50-47b7-a889-faabd45e0988
 - [ ] [A Subtask's Column Is Its Feature's Column](../plans/a-subtask-column-is-its-features-column.md) — **PLAN REVIEWED** — ID: 6f858db8-9e7e-4dea-9c9f-f067d1271bff
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
+
+**Column containment: one rule, one reconcile, four doors (settled 2026-09-04, Board Collapse 03, decision 6).**
+A subtask's column is its feature's column. Land in this order:
+
+1. **Every Feature Move Carries Its Subtasks** — the cascade becomes the only way a feature row's column changes, and it owns the **single** startup reconcile, aligning subtasks *to* the feature. The sibling plans' own reconcile passes have been deleted so there is exactly one.
+2. **A Subtask's Column Is Its Feature's Column** — the predicate, the handler-layer refusal in both hosts, and the loose-work exclusions.
+3. **Feature Creation Can Produce a Column-Mixed Feature** — creation-time resolution at the create, assign and split doors, and refusal of a grouping that spans the coding boundary.
+4. **Auto-Column Feature-Scoped Subtasks on Import** (moved into this feature) — a newly linked subtask adopts its feature's **current** column, never a named one. The common case is a plan reviewer adding a subtask to a Planned feature, which must start in Planned beside it.
+
+Never reintroduce a second reconcile: the demote-to-earliest and align-to-feature rules disagree on a mixed feature, and demoting can move a feature already in a coding column back to New.
 
 - The wording fix and the reconciliation skill are **independent** — either order. The wording fix tells an agent that a remote `git rm` strands the card; the skill is what cleans up after one. They complete each other, but neither blocks.
 - **Intra-feature file conflict, must be sequenced.** The wording fix edits `.agents/skills/improve-feature/SKILL.md` at lines 19 and 67; the column-propagation subtask edits line 51 of the same file. Both must regenerate the `.claude/` mirror. Land the wording fix first — it is three lines — and let the column work build on the corrected file.

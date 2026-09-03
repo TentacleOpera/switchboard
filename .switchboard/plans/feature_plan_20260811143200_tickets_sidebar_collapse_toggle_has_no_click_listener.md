@@ -1,5 +1,13 @@
 # Wire the Tickets sidebar collapse toggle — the « button has markup and CSS but no click listener
 
+<!-- board-collapse-03 -->
+> **RESCOPED 2026-09-04 (Board Collapse 03, decision 15).** Signed: **one state mechanism, the host store, wired once.**
+> > 
+> > **Delete** the `vscode.setState`/`getState` persistence and the instruction forbidding a `persistTab` write "for later". Both were written against a gap that *Give `tickets.root` a single source of truth* now closes: it wires the `restoredTabState` push and fixes the root-scoped `persistTabState` arm.
+> > 
+> > **New shape:** wire the missing click handler, and persist the collapsed state through the host store, per workspace root, like every other panel preference. **Land after** the `tickets.root` plan; that ordering is not optional, because this plan's persistence depends on the push it wires.
+
+
 ## Goal
 
 Make the `«` collapse toggle in the Tickets sidebar actually collapse and expand the ticket list pane, flip its glyph to `»` while collapsed, and remember the state across panel reloads — on both the editor panel and the browser cockpit.

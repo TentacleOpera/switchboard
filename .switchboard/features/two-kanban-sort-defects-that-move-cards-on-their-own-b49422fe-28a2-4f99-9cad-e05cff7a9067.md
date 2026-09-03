@@ -21,5 +21,7 @@ Fix the two reasons a card changes position without anyone moving it. The Create
 
 No ordering constraint between the two; both are sort-key corrections and can be done in one pass.
 
-**Sequencing note against a plan outside this feature.** *A priority star and manual ordering in every column* is in CREATED and so is not a subtask here, but manual ordering has to be layered over a stable base sort. Both of these fixes should land before that plan is coded, or it will be implemented against a sort that is about to change.
+**Sequencing (corrected 2026-09-04, Board Collapse 03, decision 16).** The two subtasks are **not** independent: extract one shared column comparator first, in *Kanban card jumps to middle on copy-prompt advance*, then land the Created-column ordering change on top of it. `moveCardElements` currently carries its own insertion rules and would otherwise place a card by a key the column is not sorted on.
+
+The former note here — that both fixes must land before *A priority star and manual ordering in every column* is coded — is **void**: that work shipped in `4df54319` and `c0ea0b26`. The live consequence runs the other way: the comparator must account for the shipped priority order-by mode and the star, and the loose plan *The Priority Star Applies Optimistically* consumes the same extracted comparator instead of adding a third repositioning routine.
 

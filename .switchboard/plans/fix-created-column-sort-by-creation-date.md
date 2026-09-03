@@ -1,5 +1,9 @@
 # Fix Created Column Sort — Use createdAt, Not columnEnteredAt/lastActivity
 
+<!-- board-collapse-03 -->
+> **RESCOPED 2026-09-04 (Board Collapse 03, decision 16).** Scope narrows to **the comparator only**. Do not add a matching insertion rule: the sibling *Kanban card jumps to middle on copy-prompt advance* extracts the shared comparator and points `moveCardElements` at it, so this plan's ordering change is honoured by optimistic moves automatically. Land the extraction first.
+
+
 ## Goal
 
 The CREATED column ("New") on the Kanban board should sort cards by **creation date** (newest first), so the order is stable and doesn't change when agents edit plan files. Currently it sorts by `columnEnteredAt` DESC (falling back to `lastActivity` when `columnEnteredAt` is NULL), which means any plan file edit that bumps `updated_at` reshuffles the column.

@@ -1,5 +1,13 @@
 # The column label→id mapping is hand-copied into a skill, and it has drifted from the code three ways
 
+<!-- board-collapse-03 -->
+> **RESCOPED AND SEQUENCED 2026-09-04 (Board Collapse 03, decision 13).** A correction first: this plan pins the **label-to-id table**, not a SQL table. Every agent needs that table whichever way it reads the board — the per-column exports, the endpoint responses and the database all speak storage ids while the operator speaks labels — so the table and its contract test are **kept**.
+> > 
+> > **Sequencing:** *Three skills instruct agents to use POSIX-only tooling* lands **first** and removes this skill's SQL templates in favour of the Node helper and the board endpoint. Re-anchor this plan on the rewritten file at implementation time; its current line citations will be stale.
+> > 
+> > **Edit:** delete any wording that presents the storage ids as values for a SQL `WHERE` clause. Keep the three drift fixes (the `DISPATCH` row that should read `STAGING`, the stale nine-column valid list, the wrong label), keep deleting the duplicate valid-columns list so there is one table not two, and keep the pointer to `GET /kanban/columns` as the authority for custom columns. Edit the `.agents/` and `.claude/` copies directly — the mirror generator is being deleted.
+
+
 ## Goal
 
 Stop maintaining the column label→id mapping by hand. `agentConfig.ts` is the source of truth and

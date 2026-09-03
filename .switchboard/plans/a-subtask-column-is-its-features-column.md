@@ -1,5 +1,11 @@
 # A Subtask's Column Is Its Feature's Column
 
+<!-- board-collapse-03 -->
+> **RESCOPED 2026-09-04 (Board Collapse 03, decision 6).** **Keep** the exported `isFeatureSubtask` predicate, the handler-layer refusal of a lone subtask move in both hosts (naming detach as the escape hatch), and the exclusion of subtasks from every loose-work set — dispatch, queue pop, column-keyed candidate reads.
+> > 
+> > **Delete** change 5, "reconcile before enforcing". The single startup reconcile is owned by the sibling *Every Feature Move Carries Its Subtasks*, which must land first; this plan's own pass is a third copy of the same repair.
+
+
 ## Goal
 
 Make feature containment an invariant rather than a convention. A subtask's

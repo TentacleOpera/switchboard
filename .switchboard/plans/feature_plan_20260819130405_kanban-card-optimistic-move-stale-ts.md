@@ -1,5 +1,13 @@
 # Kanban card jumps to middle on copy-prompt advance, then to top on paste
 
+<!-- board-collapse-03 -->
+> **RESCOPED 2026-09-04 (Board Collapse 03, decision 16).** Signed: **one comparator for render and for every optimistic move.**
+> > 
+> > **Keep** the timestamp bump before the DOM move — still needed so the card's data matches the backend's `updated_at = NOW` and the position signature changes for the right reason.
+> > 
+> > **Replace** the insert-by-timestamp walk in `moveCardElements` with a call to the same column comparator `renderBoard` uses. Verified at HEAD: that function already carries a second hand-rolled rule — queue position when the target is `STAGING`, timestamp everywhere else — and it knows nothing of the priority order-by shipped in `4df54319`, the star, or the creation-date ordering its sibling adds. A card dragged back into New would otherwise be inserted by a key that column is not sorted on. Extract the comparator once; the sibling sort plan and the optimistic star plan both consume it.
+
+
 ## Goal
 
 ### Problem

@@ -1,5 +1,13 @@
 # Feature Creation Can Produce a Column-Mixed Feature — Propagate the Column to the Subtasks, Not Just the Feature Card
 
+<!-- board-collapse-03 -->
+> **RESCOPED 2026-09-04 (Board Collapse 03, decision 6).** Signed rule: **a subtask's column is its feature's column**, with exactly one startup reconcile, owned by the sibling *Every Feature Move Carries Its Subtasks*.
+> > 
+> > **Keep** this plan's creation-time work: `createFeatureFromPlanIds` and the assign/split doors resolve one earliest-ordinal column and write it to every subtask, and a grouping spanning the coding boundary is refused.
+> > 
+> > **Delete** change 3, the one-shot startup reconcile pass and its `feature_column_reconcile_v1` DB flag. It duplicates the sibling's reconcile with the **opposite** resolution rule — this plan demotes the feature to its earliest subtask, the sibling aligns subtasks to the feature — so on a mixed feature the two produce different end columns, and both run at startup. Only the align-to-feature direction survives, because demoting can move a feature already in a coding column back to New.
+
+
 ## Goal
 
 Make it impossible for `createFeatureFromPlanIds` to leave a feature whose subtasks sit in
