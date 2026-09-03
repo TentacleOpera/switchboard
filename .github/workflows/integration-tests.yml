@@ -855,6 +855,20 @@ jobs:
       - name: Terminal flow control + view lifecycle contract (ack credit, page-level drain, WebGL cap)
         run: npm run test:contract:terminal-flow-control
 
+      # permessage-deflate on the terminal WebSocket. Both failure modes here are
+      # silent. Deleting the one constructor literal, or "hardening" it with the
+      # reflexive serverNoContextTakeover: true, compiles and passes every other
+      # suite while throwing away most of the ratio on the largest traffic class
+      # Switchboard produces — nothing on the wire tells an operator. And
+      # serverNoContextTakeover: false does not downgrade a client that offers
+      # server_no_context_takeover, it aborts the upgrade with HTTP 400; that cost
+      # is pinned below so it stays a deliberate trade rather than a mystery
+      # connection failure. The behavioural checks build a real WebSocketServer
+      # from the options literal parsed out of the gateway source, so a `ws` bump
+      # that changes the threshold/context-takeover interaction breaks the build.
+      - name: Terminal WebSocket compression contract (deflate negotiated, context takeover retained, 400 cost pinned)
+        run: npm run test:contract:terminal-ws-deflate
+
       # GPU renderer lifecycle. The failure mode is SILENT SUCCESS: WebglAddon.dispose()
       # leaves the live WebGL2 context to the garbage collector, and the browser charges
       # its ~16-per-renderer-process ceiling against the live context — so a release path

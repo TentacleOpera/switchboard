@@ -390,7 +390,44 @@ interface ClientState {
 }
 
 export class TerminalWsGateway {
-    private wss = new WebSocketServer({ noServer: true });
+    // permessage-deflate. Terminal output is the largest and most repetitive
+    // traffic Switchboard produces (box borders, status lines, repainted rows),
+    // and a retained deflate window is where most of the ratio comes from:
+    // measured on this exact options object, a repeated 4096-byte frame goes out
+    // in ~20 wire bytes.
+    //
+    // `serverNoContextTakeover: false` is NOT the same as omitting the option,
+    // and the difference is not "context takeover on vs. off" — context takeover
+    // is on either way. `false` means ws REFUSES any client offer that carries
+    // `server_no_context_takeover`, and a refused extension offer aborts the
+    // whole upgrade with HTTP 400 (websocket-server.js completeUpgrade), not a
+    // graceful downgrade. That is acceptable here only because every client of
+    // this gateway is a browser (terminals.js, command.js) and no browser offers
+    // that parameter — Chrome offers `client_max_window_bits`, Firefox/Safari
+    // offer bare `permessage-deflate`, both verified against these options. A
+    // future non-browser client that asks to bound server memory would be
+    // rejected outright; dropping this line (leaving it undefined) is the fix if
+    // that ever happens, at the cost of that client's compression ratio.
+    //
+    // The `threshold` option is deliberately absent: ws only applies it when
+    // `server_no_context_takeover` is in the negotiated params (sender.js), so
+    // under context takeover it is dead config that would tell a future reader
+    // small frames bypass zlib. They do not — a 2-byte keystroke echo is
+    // compressed and goes out as 4 wire bytes. Sub-millisecond CPU, two bytes of
+    // enlargement; not perceptible on any link slow enough to want compression.
+    //
+    // concurrencyLimit is a module-level global in ws, shared by every
+    // connection in the process (not per-terminal), and the first
+    // PerMessageDeflate instance to initialize wins. 10 is adequate for typical
+    // multi-seat usage.
+    private wss = new WebSocketServer({
+        noServer: true,
+        perMessageDeflate: {
+            zlibDeflateOptions: { level: 6, memLevel: 8 },
+            concurrencyLimit: 10,
+            serverNoContextTakeover: false,
+        },
+    });
     private fleetService: PtyFleetService;
     private getAuthToken: () => Promise<string | undefined>;
     // Third arg is the WS surface tag (see SURFACES in services/wsHub.ts). Typed
@@ -1033,6 +1070,17 @@ export class TerminalWsGateway {
         const now = Date.now();
 
         for (const client of targetClients) {
+            // With permessage-deflate on, `bufferedAmount` is a MIX, not a count of
+            // pty bytes: ws returns socket._writableState.length (post-compression)
+            // plus sender._bufferedBytes (pre-compression, only while a message is
+            // in the deflate queue). Steady-state backlog on a slow client is
+            // therefore compressed, so the byte marks below correspond to several
+            // times their nominal volume of terminal output. The uncompressed
+            // signal is `unackedChars`, which deflate does not touch and which
+            // trips (100k chars) long before 1 MB of compressed bytes accumulates —
+            // it, not the byte marks, is what actually paces the pty. Do not
+            // "correct" the byte marks for the ratio; they are a memory bound on
+            // the socket buffer and that is still exactly what they measure.
             const buffered = client.ws.bufferedAmount;
             if (buffered > maxBuffered) {
                 maxBuffered = buffered;
