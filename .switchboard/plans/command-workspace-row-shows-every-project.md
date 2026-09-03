@@ -115,3 +115,15 @@ When the previous selection cannot be restored, select the `__all__` row for tha
 ## Implementation Summary
 
 Split the overloaded `__unassigned__` sentinel in `src/webview/command.js`. Added `filterByProject(cards)` helper near `getEffectiveCard` with a three-way contract: `__all__` returns cards unchanged, `__unassigned__` returns only empty-project cards (accepting `''`/`null`/`undefined`/`'__unassigned__'`), otherwise exact project match. Replaced the three inline `currentProject !== '__unassigned__'` guards in `renderDispatchView`, `renderMoveView`, and the mission candidate picker with calls to the helper. `extractWorkspaceProjects` now emits an explicit `__all__` option labelled `<folder> (all)` plus a separate `__unassigned__` option labelled `<folder> (unassigned)` per root, so the workspace name alone is no longer a selectable value. Cold-start default pinned to the `__all__` row with a comment naming the reconnect path that reaches it. Initial `currentProject` and both fallback sites updated from `__unassigned__` to `__all__`. No standalone divergence — command.js is a static webview asset served by the shared LocalApiServer route.
+
+## Verification Note
+
+Re-verified on 2026-09-02: all goal invariants hold. `filterByProject` exists (line 682) and is called from `renderDispatchView` (line 721) and `renderMoveView` (line 810). Zero inline `currentProject !== '__unassigned__'` guards remain. `extractWorkspaceProjects` emits both `__all__` and `__unassigned__` options. The third call site (mission candidate picker) no longer exists — the mission-composer plan restructured the Mission view and removed it. Updated the `filterByProject` comment from "three call sites" to "two call sites" to reflect this.
+
+## Review Findings
+
+Reviewed at HEAD + the fixes in this pass; no changes were needed to this subtask. All four goal invariants hold: `filterByProject` exists as a named function in `src/webview/command.js` and is called from `renderDispatchView` and `renderMoveView`, with zero inline `currentProject !== '__unassigned__'` guards remaining in code (the one textual hit is inside the explanatory comment). `extractWorkspaceProjects` emits distinct `__all__` and `__unassigned__` options per root, the workspace name alone is no longer selectable, and the cold-start default is pinned to `__all__` with the reconnect path named. The four-representation unassigned predicate (`''`/`null`/`undefined`/`'__unassigned__'`) is correct against the WS push projection. Verification: `tsc -p tsconfig.test.json` clean, `eslint` 0 errors, `npm test` (standalone-parity, catalog, icons:parity, banner) green.
+
+## Deferred Findings
+
+- NIT — when `currentVal` round-trips successfully, `extractWorkspaceProjects` sets `wsSelect.value` but does not re-sync `currentProject`/`currentWorkspaceRoot`; benign today because they already agree, but it makes the two the only source of truth in different branches (`src/webview/command.js:544`).

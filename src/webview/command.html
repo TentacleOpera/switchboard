@@ -581,16 +581,28 @@
             overflow-y: auto;
         }
 
+        /* The card STACKS: a head line, then one row per live seat. It used to
+           be the head line itself (a flex row), which laid the seat rows out
+           beside the icon and the state badge instead of under them. Padding
+           and min-height moved onto .team-roster-headline so the seat rows sit
+           flush against the card edge. */
         .team-roster-card {
             background: var(--panel-bg);
             border: 1px solid var(--border-color);
             border-radius: 2px;
-            padding: 10px 12px;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+            cursor: pointer;
+        }
+
+        .team-roster-headline {
             display: flex;
             align-items: center;
             justify-content: space-between;
             gap: 10px;
-            cursor: pointer;
+            padding: 10px 12px;
             min-height: 52px;
         }
 

@@ -2141,6 +2141,17 @@ export class LocalApiServer {
             const planId = record.planId;
             const seat = teamOverride || null;
 
+            // Drop entries whose deadline has passed. Entries are otherwise
+            // removed only by a poll that reaches `dispatched`/`unknown`, so a
+            // client that closes the page mid-delivery (a phone locking its
+            // screen is the normal case) would leave its entry for the life of
+            // the process. Pruning on insert keeps the map bounded by the
+            // number of dispatches inside one deadline window.
+            const nowMs = Date.now();
+            for (const [key, entry] of this._ackedDispatchState) {
+                if (entry.deadline <= nowMs) { this._ackedDispatchState.delete(key); }
+            }
+
             // Record the in-flight state BEFORE firing so a fast first poll (the
             // client issues it ~1s after the ack) never reads as unknown: the
             // entry is present and the deadline has not passed.
@@ -2159,7 +2170,7 @@ export class LocalApiServer {
             // rejection (e.g. terminal closed mid-chunk) leaves dispatchedAt
             // unchanged, so the poll times out to `unknown` at the deadline — the
             // surface does not spin forever.
-            void delivery.catch(err => {
+            void delivery.catch((err: unknown) => {
                 console.error('[LocalApiServer] acked dispatch delivery error:', err);
             });
 
@@ -2241,7 +2252,13 @@ export class LocalApiServer {
             const memEntry = this._ackedDispatchState.get(planId);
             const since = sinceParam !== null ? (sinceParam || null) : (memEntry?.since ?? null);
             const deadline = deadlineParam !== null ? Number(deadlineParam) : (memEntry?.deadline ?? 0);
-            const seat = memEntry?.seat ?? record.dispatchedTerminal ?? null;
+            // Only the ack-time team-scoped override is a seat name for a
+            // delivery still in flight. `record.dispatchedTerminal` is the
+            // PRE-move value here, so on a re-dispatch it names the PREVIOUS
+            // run's terminal — reported as `delivering`'s seat it is a
+            // confident wrong answer. The `dispatched` branch below reads it
+            // only once `dispatched_at` has advanced, when it is current.
+            const seat = memEntry?.seat ?? null;
 
             const currentAt = record.dispatchedAt ?? null;
             const advanced = !!currentAt && currentAt !== since;

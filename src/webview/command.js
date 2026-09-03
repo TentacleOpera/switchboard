@@ -1124,27 +1124,35 @@
             return;
         }
 
-        // Filter out unstarted seed teams BEFORE the resolution pass so they
-        // never enter the claim pool and cannot steal a seat from a real team.
-        // A seed is hidden only when ALL three hold: its id is one of the three
-        // DEFAULT_TEAM_DEFINITIONS ids, it has no declared members, and no live
-        // seat resolves as its head. A seed the operator has started or added
-        // members to renders normally. Nothing is written to storage.
+        // ORDERING, not pre-filtering, is what stops a seed stealing a real
+        // team's seat. `resolveTeamSeats` claims in the order it is handed, and
+        // stored order alone decides who wins a headRole: KanbanProvider PUSHES
+        // any missing default into the persisted array (`:4961`), so on a
+        // workspace that already had the operator's team the seeds come last,
+        // but on a fresh install the seeds are seeded FIRST and the operator's
+        // later team is appended behind them. Sort non-seeds ahead of seeds so
+        // attribution does not depend on which existed first. The sort is
+        // stable, so real teams keep their stored order among themselves.
+        const claimOrder = teamRoster
+            .map((team, i) => ({ team, i, seed: SEED_TEAM_IDS.has(team.id) ? 1 : 0 }))
+            .sort((a, b) => (a.seed - b.seed) || (a.i - b.i))
+            .map(entry => entry.team);
+        const resolvedSeats = resolveTeamSeats(claimOrder, liveFleet);
+
+        // Hide unstarted seeds: a seed id with no declared members AND no
+        // RESOLVED head. Resolution runs FIRST (above) precisely so this test
+        // is "did a live seat actually fall to this team" and not "does some
+        // seat of this role exist anywhere in the fleet". The latter is the role
+        // match this plan exists to delete — it made the `feature-implementation`
+        // seed render as a second "Lead team" row on every workspace with a live
+        // lead, which is the duplicate row that was reported. A seed the
+        // operator started or added members to renders normally, and it claims
+        // its seat above. Nothing is written to storage.
         const visibleTeams = teamRoster.filter(team => {
             if (!SEED_TEAM_IDS.has(team.id)) { return true; }
-            const hasMembers = Array.isArray(team.members) && team.members.length > 0;
-            if (hasMembers) { return true; }
-            // Check whether any live seat matches this team's head name or headRole.
-            // A started seed has a live head; an unstarted one does not.
-            const role = team.headRole || '';
-            const hasLiveSeat = liveFleet.some(t => t && t.status !== 'exited'
-                && ((team.head && t.friendlyName === team.head)
-                    || (role && t.role === role)));
-            return hasLiveSeat;
+            if (Array.isArray(team.members) && team.members.length > 0) { return true; }
+            return Boolean(resolvedSeats.get(team.id)?.head);
         });
-
-        // Single exclusive-claim pass over the fleet — seeds already removed.
-        const resolvedSeats = resolveTeamSeats(visibleTeams, liveFleet);
 
         visibleTeams.forEach(team => {
             renderTeamRow(team, resolvedSeats);
@@ -1199,19 +1207,33 @@
      * `resolveTeamHeadSeat`, which matched by role alone and let two
      * lead-headed teams claim the same live seat.
      *
-     * Membership is by `parentInstanceId` (the instance chain the rest of the
-     * system already uses), NOT by role. A member seat's `parentInstanceId`
-     * points at its head's `agentInstanceId`.
+     * MEMBER membership is by `parentInstanceId` (the instance chain the rest
+     * of the system already uses), NOT by role: a member seat's
+     * `parentInstanceId` points at its head's `agentInstanceId`.
+     *
+     * HEAD attribution is still role-based, with exclusive claim. Arm 1 below
+     * is a defensive path that this data source cannot currently reach:
+     * `ptyListAgentGroups` serves `terminals.agentGroups`
+     * (`KanbanProvider.peekAgentGroups`), and the only writer of that key —
+     * the TEAMS-tab save literal in `kanban.html` — emits
+     * `{id, name, headRole, members, prompt?, headPrompt?, icon?, …}` and NO
+     * `head`. `head` is stamped by `wireSpawnedTeam` into a DIFFERENT key,
+     * `switchboard.prompts.terminals.groups`, which no webview verb exposes.
+     * So in practice every head resolves through arm 2, and WHICH team wins a
+     * shared headRole is decided by the order this function is handed (see
+     * `renderTeamsView`'s claimOrder). Making head attribution genuinely
+     * membership-based needs the live-groups key on the wire.
      *
      * Resolution order per team:
-     *   1. A live seat whose `friendlyName` equals `team.head` (explicit name).
+     *   1. A live seat whose `friendlyName` equals `team.head` — defensive
+     *      only; `team.head` is absent from this data source (see above).
      *   2. A live seat of `team.headRole` not already claimed by an earlier team.
      *
      * Claimed seats are removed from the pool as the pass proceeds, so no seat
      * is ever attributed to two teams. Members are the live seats whose
      * `parentInstanceId` matches the resolved head's `agentInstanceId`.
      *
-     * @param teams  The filtered team roster (seeds already removed).
+     * @param teams  The team roster in claim order (non-seeds first).
      * @param fleet  The live fleet from ptyListTerminals.
      * @returns Map<teamId, { head: fleetEntry|null, members: fleetEntry[] }>
      */
@@ -1350,6 +1372,11 @@
         if (teamsRosterList) {
             const card = document.createElement('div');
             card.className = `team-roster-card${isDormant ? ' is-dormant' : ''}`;
+            // Head line wrapper: the card stacks (head line, then seat rows), so
+            // the row-level flex layout lives here, not on the card.
+            const headline = document.createElement('div');
+            headline.className = 'team-roster-headline';
+            card.appendChild(headline);
 
             const left = document.createElement('div');
             left.className = 'team-roster-left';
@@ -1382,12 +1409,12 @@
             info.appendChild(seats);
 
             left.appendChild(info);
-            card.appendChild(left);
+            headline.appendChild(left);
 
             const stateBadge = document.createElement('span');
             stateBadge.className = `team-state-badge ${stateClass}`;
             stateBadge.textContent = stateLabel;
-            card.appendChild(stateBadge);
+            headline.appendChild(stateBadge);
 
             // Live seat rows (head first, then members) — only when not dormant.
             if (liveSeat) {
@@ -1412,8 +1439,14 @@
         if (tabletTeamsRail) {
             const railItem = document.createElement('div');
             railItem.className = `team-roster-card${isDormant ? ' is-dormant' : ''}`;
-            railItem.style.minHeight = '44px';
-            railItem.style.padding = '6px 8px';
+            // Same stacking as the phone card. The tighter rail metrics belong
+            // to the head line, not the card — on the card they would also
+            // indent every seat row.
+            const railHeadline = document.createElement('div');
+            railHeadline.className = 'team-roster-headline';
+            railHeadline.style.minHeight = '44px';
+            railHeadline.style.padding = '6px 8px';
+            railItem.appendChild(railHeadline);
 
             const left = document.createElement('div');
             left.className = 'team-roster-left';
@@ -1445,14 +1478,14 @@
             info.appendChild(seats);
 
             left.appendChild(info);
-            railItem.appendChild(left);
+            railHeadline.appendChild(left);
 
             const stateBadge = document.createElement('span');
             stateBadge.className = `team-state-badge ${stateClass}`;
             stateBadge.style.fontSize = '9px';
             stateBadge.style.padding = '2px 6px';
             stateBadge.textContent = stateLabel;
-            railItem.appendChild(stateBadge);
+            railHeadline.appendChild(stateBadge);
 
             // Live seat rows on tablet too — head first, then members.
             if (liveSeat) {
@@ -1530,7 +1563,10 @@
                 }
                 if (result.state === 'dispatched') {
                     activeDispatchPoll = null;
-                    dispatchStatusChip.textContent = `Dispatched to ${result.dispatchedAgent || 'agent'}`;
+                    // `seat` is the receiving terminal's name; `dispatchedAgent`
+                    // can be 'unknown', an IDE-shaped string or a bare role
+                    // word, so prefer the seat.
+                    dispatchStatusChip.textContent = `Dispatched to ${result.seat || result.dispatchedAgent || 'agent'}`;
                     dispatchStatusChip.className = 'status-chip success';
                     renderDispatchView();
                     return;
@@ -1541,7 +1577,13 @@
                     dispatchStatusChip.className = 'status-chip unknown';
                     return;
                 }
-                // 'delivering' — keep the pending chip, poll again.
+                // 'delivering' — poll again. Upgrade the chip the first time the
+                // server can name the receiving seat (the ack could not when
+                // routing had no origin terminal).
+                if (result.seat) {
+                    dispatchStatusChip.textContent = `Dispatched — ${result.seat} is receiving the prompt`;
+                    dispatchStatusChip.className = 'status-chip pending';
+                }
                 poll.timer = setTimeout(tick, DISPATCH_POLL_INTERVAL_MS);
             } catch {
                 if (poll.stopped || activeDispatchPoll !== poll) return;
@@ -1584,8 +1626,17 @@
             // for a committed dispatch; 4xx/5xx (gate refusal, no terminals, etc.)
             // arrive immediately with today's wording and no success chip.
             if (res.ok && result?.success !== false && result?.phase === 'dispatching') {
-                const seatName = result?.seat || result?.role || 'agent';
-                dispatchStatusChip.textContent = `Dispatched — ${seatName} is receiving the prompt`;
+                // The ack carries a SEAT name only when team-scoped routing
+                // resolved one (`teamOverride`); a plain dispatch from this
+                // surface has no origin terminal, so the receiving terminal is
+                // chosen downstream and is not known yet. Say "the <role> seat"
+                // in that case — putting the role in the seat's slot would make
+                // a fallback read exactly like a resolved seat name. The poll
+                // upgrades the chip once the real name lands.
+                const seatName = result?.seat || '';
+                dispatchStatusChip.textContent = seatName
+                    ? `Dispatched — ${seatName} is receiving the prompt`
+                    : `Dispatched — the ${result?.role || 'agent'} seat is receiving the prompt`;
                 dispatchStatusChip.className = 'status-chip pending';
                 // Re-enable the button: the operator is NOT blocked for the paste.
                 btnDispatch.disabled = false;
@@ -1691,6 +1742,38 @@
         }
     }
 
+    // The `from` for POST /kanban/queue/next — the terminal whose team the pop
+    // resolves membership from, and the origin its team-scoped routing and
+    // one-in-one-out in-flight predicate both key on.
+    //
+    // The route REQUIRES it: `dispatchNextFromQueue` returns
+    // 400 "Missing required field: from (the requesting head's terminal name)"
+    // when it is absent. This surface has always posted `workspaceRoot` alone,
+    // which is why LAUNCH MISSION has never dispatched a card — the button was
+    // not merely unreported, it was refused before it reached the queue.
+    //
+    // Precedence mirrors the desktop Run-queue button (KanbanProvider resolves
+    // the coding head, then falls back to any live coding terminal, and treats
+    // "no live seat" as an error rather than an auto-start): the selected
+    // mission's own team head first, then any live lead, then any live coder.
+    // Returns '' when nothing is live so the caller can say so instead of
+    // posting a request that cannot succeed.
+    function resolveLaunchOriginSeat() {
+        const live = liveFleet.filter(t => t && t.status !== 'exited' && t.friendlyName);
+        if (live.length === 0) { return ''; }
+        const missionTeam = String(activeMission?.team || '').trim();
+        if (missionTeam) {
+            const team = teamRoster.find(t => t && (t.id === missionTeam || t.name === missionTeam));
+            if (team) {
+                const head = resolveTeamSeats([team], live).get(team.id)?.head;
+                if (head?.friendlyName) { return head.friendlyName; }
+            }
+        }
+        return live.find(t => t.role === 'lead')?.friendlyName
+            || live.find(t => t.role === 'coder')?.friendlyName
+            || '';
+    }
+
     // Launch the active mission by popping the next staged card from the
     // queue. Reads the parsed response body (not just res.ok) and writes a
     // mission status chip so the operator sees the outcome without going
@@ -1706,13 +1789,19 @@
     // is the authoritative refresh path.
     async function launchActiveMission() {
         if (!activeMission) return;
+        const from = resolveLaunchOriginSeat();
+        if (!from) {
+            setMissionChip('No agent terminal is live — open a lead or coder seat before launching.', 'unknown');
+            return;
+        }
         if (btnLaunchMission) { btnLaunchMission.disabled = true; }
         try {
             const res = await fetch('/kanban/queue/next', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    workspaceRoot: currentWorkspaceRoot
+                    workspaceRoot: currentWorkspaceRoot,
+                    from
                 })
             });
 
@@ -1768,8 +1857,10 @@
      * opens a solo WebSocket. The optional `seatList` populates the seat
      * switcher in the viewer header so the operator can switch to any live
      * seat of the same team — each switch routes back through this function,
-     * which calls closeActiveWs at its top, so the previous socket is closed
-     * BEFORE the new one opens (no brief window of two simultaneous sockets).
+     * which calls closeActiveWs immediately before opening the new socket, so
+     * the previous one is closed first and there is never a window with two
+     * simultaneous sockets. Nothing between re-entry and that call opens a
+     * socket (the scrollback fetch is plain HTTP), so one switch is one socket.
      */
     function openTerminalViewer(team, seatName, seatList) {
         const name = seatName || team.name;
@@ -1795,9 +1886,9 @@
                         + ';color:' + (isActive ? '#fff' : 'var(--text-primary)');
                     btn.addEventListener('click', (e) => {
                         e.stopPropagation();
-                        // Route through this same function — closeActiveWs runs
-                        // at the top, closing the previous socket before the new
-                        // one opens. No separate socket-opening path.
+                        // Route through this same function — it closes the
+                        // previous socket immediately before opening the new
+                        // one. No separate socket-opening path.
                         openTerminalViewer(team, seat.friendlyName, viewerLiveSeats);
                     });
                     terminalSeatSwitcher.appendChild(btn);

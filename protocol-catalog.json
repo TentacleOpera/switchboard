@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-09-01T12:00:18.646Z",
+  "generatedAt": "2026-09-03T01:02:26.342Z",
   "summary": {
     "totalArms": 650,
     "totalVerbs": 557,
@@ -14,7 +14,7 @@
       "TaskViewer": 104,
       "Setup": 105
     },
-    "apiEndpointCount": 112,
+    "apiEndpointCount": 113,
     "manualReviewCount": 7
   },
   "providers": {
@@ -20132,7 +20132,7 @@
       "verb": "missionControlArmed",
       "direction": "push",
       "file": "src/webview/terminals.js",
-      "line": 1386,
+      "line": 1394,
       "receiver": "window.parent",
       "payloadKeys": [
         "type",
@@ -20143,7 +20143,7 @@
       "verb": "terminalFleetState",
       "direction": "push",
       "file": "src/webview/terminals.js",
-      "line": 1695,
+      "line": 1703,
       "receiver": "window.parent",
       "payloadKeys": [
         "type",
@@ -20155,7 +20155,7 @@
       "verb": "popoutTerminal",
       "direction": "push",
       "file": "src/webview/terminals.js",
-      "line": 6493,
+      "line": 6535,
       "receiver": "window.parent",
       "payloadKeys": [
         "type",
@@ -28498,6 +28498,11 @@
     },
     {
       "path": "/kanban/columns",
+      "method": "GET",
+      "prefix": false
+    },
+    {
+      "path": "/kanban/dispatch/state",
       "method": "GET",
       "prefix": false
     },
