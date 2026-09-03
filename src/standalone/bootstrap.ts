@@ -84,7 +84,7 @@ import { TransferBundleService } from '../services/TransferBundleService';
 import { DesignPanelProvider } from '../services/DesignPanelProvider';
 import { SetupPanelProvider } from '../services/SetupPanelProvider';
 import { TicketsPanelProvider } from '../services/TicketsPanelProvider';
-import { TaskViewerProvider } from '../services/TaskViewerProvider';
+import { TaskViewerProvider, resolveAndMoveCard } from '../services/TaskViewerProvider';
 import { KanbanProvider } from '../services/KanbanProvider';
 import { PlanningPanelProvider } from '../services/PlanningPanelProvider';
 import { ResearchImportService } from '../services/ResearchImportService';
@@ -3270,6 +3270,7 @@ Each plan file must include:
         getSelectedWorkspaceRoot: () => workspaceRoot,
         allRoots: [workspaceRoot],
         getKanbanDatabase: async () => db,
+        getFleetOrdersDatabase: async () => db,
         kanbanVerb,
         // Completion-callback parity with the file-watcher path. The API-based
         // queue/done path fires these so a seat reporting done via POST reaches
@@ -3352,12 +3353,30 @@ Each plan file must include:
             try { await ingestionEngine.armQueueWatch(wsRoot, headTerminal, armOpts); }
             catch (e) { log(opts, `armQueueWatch failed: ${e instanceof Error ? e.message : String(e)}`); }
         },
+        notifyOperator: (_wsRoot: string, message: string) => {
+            log(opts, `[operator notification] ${message}`);
+            try {
+                server?.broadcastWs('showStatusMessage', { message, isError: false }, SURFACES.common);
+            } catch { /* best-effort */ }
+        },
+        resolveKanbanDispatch: async (wsRoot: string, targetColumn: string) => {
+            if (!kanbanProvider) {
+                return { role: null, cliTriggersEnabled: false, dragDropMode: null, source: null };
+            }
+            return kanbanProvider.resolveDispatchForApi(wsRoot, targetColumn);
+        },
+        resolveTeamMembers: async (wsRoot: string, headTerminal: string) => {
+            return taskViewerProvider
+                ? taskViewerProvider.resolveTeamMembers(wsRoot, headTerminal)
+                : null;
+        },
+        resolveTeamPacing: async (wsRoot: string, headTerminal: string) => {
+            try { return await kanbanProvider.resolveTeamPacing(wsRoot, headTerminal); }
+            catch { return 'head' as const; }
+        },
         // Team-scoped reviewer routing for POST /kanban/dispatch. The helper is
         // pure over (db, liveTerminals) so the standalone host needs no
-        // TaskViewerProvider — it supplies the pty fleet directly. Note this still
-        // short-circuits on the missing gate.role (resolveKanbanDispatch is not
-        // wired on standalone) until that one-line follow-up lands; wire the
-        // callback anyway so that follow-up is a one-line change.
+        // TaskViewerProvider — it supplies the pty fleet directly.
         resolveTeamRoleTerminal: async (_wsRoot: string, originTerminal: string, role: string) => {
             try {
                 // Standalone is single-root: `db` is the only KanbanDatabase. The
@@ -3413,6 +3432,59 @@ Each plan file must include:
         allowSecretWritesOverHttp: true,
         taskViewerVerb: (verb: string, payload: any, workspaceRootArg?: string) =>
             taskViewerProvider.handleServiceVerb(verb, { ...payload, workspaceRoot: workspaceRootArg || payload?.workspaceRoot || workspaceRoot }),
+        onPhoneAFriend: async (planFile: string, originRole?: string, originTerminal?: string, dispatchId?: string, mode?: 'pre-review' | 'post-batch') => {
+            try {
+                const target = await taskViewerProvider?.resolvePhoneAFriendTarget(originRole || 'coder', originTerminal);
+                const active = ptyFleetService.listActive();
+                const agentName = target?.agentName;
+                const targetKey = target?.targetKey;
+                const originKey = originTerminal?.toLowerCase();
+                if (targetKey && originKey && targetKey === originKey) {
+                    return;
+                }
+                const handle = active.find(t =>
+                    (agentName && t.friendlyName === agentName) ||
+                    (targetKey && t.friendlyName?.toLowerCase() === targetKey.toLowerCase()) ||
+                    t.friendlyName === 'Phone-a-Friend' ||
+                    t.role === 'phone-a-friend'
+                );
+                if (!handle || handle.status !== 'active') {
+                    return;
+                }
+                const ptyHandle = ptyFleetService.get(handle.friendlyName);
+                if (!ptyHandle || ptyHandle.status !== 'active') {
+                    return;
+                }
+                const basePrompt = mode === 'pre-review'
+                    ? `Pre-review check for plan ${planFile}. Read the plan file and the coder's git diff (git diff HEAD~<commit count> or git log --oneline -5 to find the coder's commits). Answer two questions: (1) Does the diff implement what the plan describes, or is it a stub/empty/partial? (2) Are there any obvious gaps a plan reader would catch? Report PASS or FAIL with specific findings in your completion report to the lead. Do NOT do deep analysis — that's the next stage. Focus on: did they implement it at all, and does it look like a real implementation? GIT POLICY: stay on the current branch — do not switch or create branches, do not push to shared branches, and do not force-push.`
+                    : `Read ${planFile} — this plan was just coded by another agent (origin role: ${originRole || 'coder'}, originTerminal: ${originTerminal || 'unknown'}, dispatch: ${dispatchId || 'none'}). Assume the implementation contains hidden bugs. Check the code against the plan, find and fix any issues you discover. Do NOT append a Stage Complete marker — you are a second-pass continuation, not a stage transition. GIT POLICY: stay on the current branch — do not switch or create branches, do not push to shared branches, and do not force-push. When done, summarize the bugs you found and the fixes you applied.`;
+                await deliverPrompt(ptyHandle, basePrompt, getPromptDeliveryOptions());
+            } catch (err) {
+                log(opts, `onPhoneAFriend failed: ${err}`);
+            }
+        },
+        onPhoneAFriendDone: (target: string, planFile?: string, result?: 'PASS' | 'FAIL', findings?: string) => {
+            taskViewerProvider?.handlePhoneAFriendDone(target, planFile, result, findings);
+        },
+        onDispatchResearch: async (_workspaceRoot: string, prompt: string) => {
+            const active = ptyFleetService.listActive();
+            const researcher = active.find(t => t.role === 'researcher' || t.friendlyName?.toLowerCase() === 'researcher');
+            if (!researcher || researcher.status !== 'active') {
+                return { dispatched: false, reason: 'no researcher agent configured' };
+            }
+            const handle = ptyFleetService.get(researcher.friendlyName);
+            if (!handle || handle.status !== 'active') {
+                return { dispatched: false, reason: 'researcher agent is not live' };
+            }
+            const savePath = configProvider.getConfigString('research.localFolderPaths[0]', '.switchboard/docs/') || '.switchboard/docs/';
+            const fullPrompt = `${prompt}\n\nIMPORTANT: After completing the research, save the results to ${savePath} using the write_to_file tool so the plan author can review them later.`;
+            try {
+                await deliverPrompt(handle, fullPrompt, getPromptDeliveryOptions());
+                return { dispatched: true, researcher: researcher.friendlyName, savePath };
+            } catch (err: any) {
+                return { dispatched: false, reason: err instanceof Error ? err.message : String(err) };
+            }
+        },
         // POST /mission-control/stop — disarm Mission Control, clear the seat,
         // persist, broadcast, and archive the session file. The method is
         // public on TaskViewerProvider and needs no VS Code APIs, so the
@@ -3501,6 +3573,27 @@ Each plan file must include:
             // 5. Clipboard fallback: NO terminal created.
             return { success: true, mode: 'clipboard', prompt: 'Run /switchboard workflow to start Mission Control' };
         },
+        missionControlConfirm: async (wsRoot?: string) => {
+            if (!taskViewerProvider) {
+                return { success: false, error: 'TaskViewerProvider not available' };
+            }
+            return await taskViewerProvider.confirmMissionControlSession(wsRoot || workspaceRoot);
+        },
+        missionControlHandoff: async (args: {
+            workspaceRoot?: string;
+            headTerminal: string;
+            stagedCount?: number;
+            firstCardPlanId?: string;
+            summary: string;
+        }) => {
+            if (!taskViewerProvider) {
+                return { success: false, error: 'TaskViewerProvider not available' };
+            }
+            return await taskViewerProvider.handoffMissionControlSession({
+                ...args,
+                workspaceRoot: args.workspaceRoot || workspaceRoot,
+            });
+        },
         createExternalTeam: async (wsRoot: string, template: string, headName: string, featureId?: string) => {
             // Standalone is single-root: `db` (module scope) is the only
             // KanbanDatabase. `wsRoot` is accepted for interface parity with the
@@ -3561,6 +3654,42 @@ Each plan file must include:
             }
             return result;
         },
+        moveCard: async (wsRoot: string, sessionId: string, targetColumn: string, planFile?: string) => {
+            return resolveAndMoveCard(kanbanProvider, async () => db, wsRoot, sessionId, targetColumn, planFile);
+        },
+        resolvePlanRoots: async (key: string, { candidates, stopAtFirst }: { candidates: string[]; stopAtFirst: boolean }) => {
+            const matched: string[] = [];
+            const searched: string[] = [];
+            const keyIsPathShaped = key.includes('/') || key.includes('\\') || key.endsWith('.md');
+            const seen = new Set<string>();
+            for (const candidate of candidates) {
+                const effective = kanbanProvider?.resolveEffectiveWorkspaceRoot(candidate) || path.resolve(candidate);
+                if (seen.has(effective)) { continue; }
+                seen.add(effective);
+                try {
+                    const candidateDb = KanbanDatabase.forWorkspace(effective);
+                    if (!await candidateDb.ensureReady()) {
+                        searched.push(candidate);
+                        continue;
+                    }
+                    searched.push(candidate);
+                    let hit: boolean;
+                    if (keyIsPathShaped) {
+                        const wsId = await candidateDb.getWorkspaceId() || await candidateDb.getDominantWorkspaceId() || '';
+                        hit = await candidateDb.hasPlanByPlanFile(key, wsId);
+                    } else {
+                        hit = await candidateDb.hasPlan(key);
+                    }
+                    if (hit) {
+                        matched.push(candidate);
+                        if (stopAtFirst) { return { matched, searched }; }
+                    }
+                } catch {
+                    searched.push(candidate);
+                }
+            }
+            return { matched, searched };
+        },
         createFeature: async (wsRoot: string, name: string, planIds: string[], description?: string) => {
             try {
                 return await kanbanProvider.createFeatureFromPlanIds(wsRoot, name, planIds, description);
@@ -3599,6 +3728,26 @@ Each plan file must include:
         reconcileFeatures: async (wsRoot: string, manifest: any) => {
             try {
                 return await kanbanProvider.reconcileFeatures(wsRoot, manifest);
+            } catch (err) {
+                return { success: false, error: err instanceof Error ? err.message : String(err) };
+            }
+        },
+        cleanupWorktree: async (wsRoot: string, worktreeId: string | number) => {
+            if (!kanbanProvider) {
+                return { success: false, error: 'Kanban provider not available' };
+            }
+            try {
+                return await kanbanProvider.cleanupWorktree(wsRoot, worktreeId);
+            } catch (err) {
+                return { success: false, error: err instanceof Error ? err.message : String(err) };
+            }
+        },
+        mergeWorktree: async (wsRoot: string, worktreeId: string | number) => {
+            if (!kanbanProvider) {
+                return { success: false, error: 'Kanban provider not available' };
+            }
+            try {
+                return await kanbanProvider.getWorktreeMergePrompt(wsRoot, worktreeId);
             } catch (err) {
                 return { success: false, error: err instanceof Error ? err.message : String(err) };
             }

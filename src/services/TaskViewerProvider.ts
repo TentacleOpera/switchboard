@@ -451,6 +451,54 @@ export interface PmDeliveryResult {
     message: string;
 }
 
+/**
+ * Shared moveCard preamble helper for LocalApiServer composition roots
+ * (TaskViewerProvider and standalone bootstrap.ts).
+ * Resolves planFile-shaped sessionId, workspace ID, performs the move via
+ * kanbanProvider, and updates the planFile in the DB if needed.
+ */
+export async function resolveAndMoveCard(
+    kanbanProvider: any,
+    getDb: (wsRoot: string) => Promise<any>,
+    wsRoot: string,
+    sessionId: string,
+    targetColumn: string,
+    planFile?: string
+): Promise<{ success: boolean; error?: string; reason?: string }> {
+    if (!kanbanProvider) {
+        return { success: false, error: 'Kanban provider not available' };
+    }
+    try {
+        let targetSessionId = sessionId;
+        let targetPlanFile = planFile;
+        if (sessionId.includes('/') || sessionId.endsWith('.md')) {
+            targetPlanFile = sessionId;
+            const db = await getDb(wsRoot);
+            if (db && await db.ensureReady()) {
+                // getPlanByPlanFile requires the DB workspace_id (a UUID), NOT the
+                // workspace root path. Resolve it from the DB before querying.
+                const wsId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+                const plan = await db.getPlanByPlanFile(sessionId, wsId);
+                if (plan) {
+                    targetSessionId = plan.sessionId || plan.planId;
+                }
+            }
+        }
+        const outcome = await kanbanProvider.moveCardToColumnWithReason(wsRoot, targetSessionId, targetColumn);
+        if (outcome.ok && targetPlanFile) {
+            const db = await getDb(wsRoot);
+            if (db && await db.ensureReady()) {
+                await db.updatePlanFile(targetSessionId, targetPlanFile);
+            }
+        }
+        return outcome.ok
+            ? { success: true }
+            : { success: false, error: outcome.detail, reason: outcome.reason };
+    } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+}
+
 export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     private async _handleMessage(message: any): Promise<any> {
@@ -4009,38 +4057,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 // provider so it inherits the feature cascade, integration-sync fan-out,
                 // and board refresh — the script's direct-DB path can't sync to
                 // Linear/ClickUp (the token lives in secret storage).
-                if (!this._kanbanProvider) {
-                    return { success: false, error: 'Kanban provider not available' };
-                }
-                try {
-                    let targetSessionId = sessionId;
-                    let targetPlanFile = planFile;
-                    if (sessionId.includes('/') || sessionId.endsWith('.md')) {
-                        targetPlanFile = sessionId;
-                        const db = await this._getKanbanDb(wsRoot);
-                        if (db && await db.ensureReady()) {
-                            // getPlanByPlanFile requires the DB workspace_id (a UUID), NOT the
-                            // workspace root path. Resolve it from the DB before querying.
-                            const wsId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
-                            const plan = await db.getPlanByPlanFile(sessionId, wsId);
-                            if (plan) {
-                                targetSessionId = plan.sessionId || plan.planId;
-                            }
-                        }
-                    }
-                    const outcome = await this._kanbanProvider.moveCardToColumnWithReason(wsRoot, targetSessionId, targetColumn);
-                    if (outcome.ok && targetPlanFile) {
-                        const db = await this._getKanbanDb(wsRoot);
-                        if (db && await db.ensureReady()) {
-                            await db.updatePlanFile(targetSessionId, targetPlanFile);
-                        }
-                    }
-                    return outcome.ok
-                        ? { success: true }
-                        : { success: false, error: outcome.detail, reason: outcome.reason };
-                } catch (err) {
-                    return { success: false, error: err instanceof Error ? err.message : String(err) };
-                }
+                return resolveAndMoveCard(this._kanbanProvider, (r) => this._getKanbanDb(r), wsRoot, sessionId, targetColumn, planFile);
             },
             resolvePlanRoots: async (key, { candidates, stopAtFirst }) => {
                 // Read-only cross-root plan probe. Used ONLY when the caller omitted

@@ -76,7 +76,7 @@ host forks the UI. Adding a panel means: a getter there, a route in `LocalApiSer
 | `TicketsPanelProvider.ts` | Tickets panel host — ClickUp/Linear ticket CRUD, sync, comments, attachments. |
 | `ConnectionsPanelProvider.ts` | Thin forwarder — routes Connections-panel verbs to Setup/Planning providers. Owns no arms. |
 | `KanbanDatabase.ts` | `sql.js` database layer — `kanban.db`, plans, worktrees, features, config table. (~10.7k lines) |
-| `LocalApiServer.ts` | The localhost HTTP server exposing verbs (`/kanban/verb/*`, `/terminals/verb/*`), `/panels` manifest, kanban moves, terminal relay. The browser-host surface. |
+| `LocalApiServer.ts` | The localhost HTTP server exposing verbs (`/kanban/verb/*`, `/terminals/verb/*`), `/panels` manifest, kanban moves, terminal relay. The browser-host surface. Joined at two composition roots: `TaskViewerProvider.ts:3899` (extension) and `bootstrap.ts:3259` (standalone). |
 | `ClickUpSyncService.ts` / `LinearSyncService.ts` | Two-way ticket sync with ClickUp / Linear. |
 | `ContinuousSyncService.ts` | Debounced continuous (live) sync loop. |
 | `NotionBackupService.ts` / `NotionFetchService.ts` / `NotionBrowseService.ts` | Notion backup/restore and browse. |
