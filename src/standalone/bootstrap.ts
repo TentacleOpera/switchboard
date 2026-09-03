@@ -1002,9 +1002,17 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         integrationsConfigured: await computeIntegrationsConfigured(),
     });
 
-    const getBoardHtml = async () => sharedGetBoardHtml(repoRoot, workspaceRoot, await getStandaloneCaps(), getThemeBodyClass(configProvider));
-    const getProjectHtml = async () => sharedGetProjectHtml(repoRoot, workspaceRoot, await getStandaloneCaps(), getThemeBodyClass(configProvider));
-    const getShellHtml = async () => sharedGetShellHtml(repoRoot, getThemeBodyClass(configProvider));
+    // First-paint theme class, resolved at serve time so a panel never flashes
+    // Afterburner before `switchboardThemeChanged` arrives. Guarded exactly as
+    // the extension host guards its own `getTheme()`: a theme read is decoration,
+    // and a throw here must not turn an HTML route into a 500.
+    const getTheme = (): string => {
+        try { return getThemeBodyClass(configProvider); }
+        catch { return 'cyber-theme-enabled'; }
+    };
+    const getBoardHtml = async () => sharedGetBoardHtml(repoRoot, workspaceRoot, await getStandaloneCaps(), getTheme());
+    const getProjectHtml = async () => sharedGetProjectHtml(repoRoot, workspaceRoot, await getStandaloneCaps(), getTheme());
+    const getShellHtml = async () => sharedGetShellHtml(repoRoot, getTheme());
 
     // Standalone now wires the Design/Setup/TaskViewer/Planning verb routers
     // (B1) — their `/verb/*` endpoints serve results instead of 503. Mark
@@ -1017,8 +1025,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // the probe hides the rail tab entirely when node-pty could not load.
     const getPanelsManifest = () => sharedGetPanelsManifest({ design: true, setup: true, planning: true, tickets: true, terminals: ptyReady, linear: true });
     const getPanelHtml = async (id: string): Promise<{ html: string; csp?: string } | null> => {
-        const themeClass = getThemeBodyClass(configProvider);
-        const result = sharedGetPanelHtmlById(id, repoRoot, workspaceRoot, await getStandaloneCaps(), themeClass);
+        const result = sharedGetPanelHtmlById(id, repoRoot, workspaceRoot, await getStandaloneCaps(), getTheme());
         if (!result) { return null; }
         if (id === 'terminals' && terminalSessionToken) {
             // The terminal WS channel is RCE-grade and keeps its own credential,
@@ -1834,7 +1841,13 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     delete payload.startupCommand;
                     const terminal = await ptyFleetService.create(payload.role || 'coder', payload.name, targetCwd, payload.worktreePath, payload.parentInstanceId, undefined, {
                         // HOST-resolved, never from the wire — see CreateOptions.
-                        claudeInlineRendering: configProvider.getConfigBoolean('terminal.claudeInlineRendering', true)
+                        claudeInlineRendering: configProvider.getConfigBoolean('terminal.claudeInlineRendering', true),
+                        // Wire-supplied and safe to be: `hidden` is a RENDERING flag, not
+                        // an authorisation one. A hidden seat runs, is prompted and is
+                        // routable exactly like any other; it is only kept out of the
+                        // sidebar and rail lists. The shell's agent dock is the one caller
+                        // that sets it, because that seat belongs to the dock alone.
+                        hidden: payload.hidden === true
                     });
                     const rawDelegates = Array.isArray(payload.delegates) ? payload.delegates : [];
                     const spawned = rawDelegates.length > 0
@@ -1920,6 +1933,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         // The extension host's handlePtyVerb reads this in
                         // headless mode to arm the boot-phase curtain.
                         promptCount: t.promptCount,
+                        hidden: t.hidden === true,
                     }));
                     const liveTerminals = projectTerminals(all);
                     // `terminals` stays EXACTLY the live-handle projection it has
@@ -1958,15 +1972,28 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     } catch (e) {
                         console.error('[bootstrap] plan attribution for ptyListTerminals failed:', e);
                     }
-                    const terminals = rawTerminals.map(t => ({
+                    const projected = rawTerminals.map(t => ({
                         ...t,
                         parentRoot: parentMap.get(t.cwd) ?? null,
                         planId: planMap.get(t.friendlyName)?.planId ?? null,
                         planTitle: planMap.get(t.friendlyName)?.planTitle ?? null,
                     }));
+                    // `terminals` is the RENDERED list — terminals.js assigns
+                    // `fleetList = data.terminals` unfiltered and the rail's fleet
+                    // section is built from that same relay, so a surface-owned seat
+                    // (the shell's agent dock) is carried on the sibling
+                    // `hiddenTerminals` key instead of being filtered in the UI. A
+                    // UI-layer filter is the wrong seam here: the only stable
+                    // discriminator a webview has is the friendlyName, and
+                    // PtyFleetService drops the requested name on collision, so a
+                    // name-prefix test is a guess. This split is the server telling
+                    // the truth about which surface owns the seat.
+                    const terminals = projected.filter(t => t.hidden !== true);
+                    const hiddenTerminals = projected.filter(t => t.hidden === true);
                     return {
                         success: true,
                         terminals,
+                        hiddenTerminals,
                         parents,
                         liveness: ptyFleetService.getLiveness(),
                     };

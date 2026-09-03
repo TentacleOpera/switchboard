@@ -3835,7 +3835,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 this._relayStartupOrientation(result.created.map((c: any) => c?.friendlyName).filter(Boolean));
             }
             if (verb === 'ptyListTerminals' && result && result.success !== false && Array.isArray(result.terminals)) {
-                this._ptyTerminalNames = (result.terminals || [])
+                // Routing registry, NOT a render list — it must include seats the
+                // sidebar does not draw. `hidden` is a rendering flag: a hidden
+                // seat is still prompted, still addressed by name and role, and
+                // dropping it here would make the dock's controller unroutable.
+                this._ptyTerminalNames = [...(result.terminals || []), ...(result.hiddenTerminals || [])]
                     .filter((t: any) => t.status === 'active')
                     .map((t: any) => t.friendlyName);
                 const fallback = root || effectiveRoot;
@@ -3850,7 +3854,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 // The other seven getMappingsFromIndex consumers are
                 // intentionally left on the unscoped accessor.
                 const cfg = getScopedMappingsForBoard(fallback);
-                const { parents, parentMap } = resolveParentsForTerminals(cfg, fallback, result.terminals);
+                const allRows = [...result.terminals, ...(Array.isArray(result.hiddenTerminals) ? result.hiddenTerminals : [])];
+                const { parents, parentMap } = resolveParentsForTerminals(cfg, fallback, allRows);
                 let planMap = new Map<string, TerminalPlanAttribution>();
                 try {
                     const db = await this._getKanbanDb(fallback);
@@ -3859,7 +3864,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         planMap = attributePlansToTerminals(
                             await db.getLiveDispatchAttribution(wsId),
                             await db.getWorktrees(),
-                            result.terminals
+                            allRows
                         );
                     }
                 } catch (e) {
@@ -3873,6 +3878,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     planTitle: planMap.get(t.friendlyName)?.planTitle ?? null,
                 }));
                 result.terminals = plan(result.terminals);
+                if (Array.isArray(result.hiddenTerminals)) {
+                    // Hidden seats get the same parent/plan attribution as visible
+                    // ones — the flag governs rendering, not enrichment.
+                    result.hiddenTerminals = plan(result.hiddenTerminals);
+                }
             }
             return result;
         };
@@ -11613,9 +11623,12 @@ Each plan file must include:
             .filter(([, info]) => this._normalizeAgentKey((info as any)?.role) === normalizedRole)
             .filter(([, info]) => !this._isAutobanBackupTerminalInfo(info))
             // Teams are PTY-only: a VS Code registry row is never an eligible seat here.
-            // (There is deliberately no `!info.hidden` filter — nothing in the codebase
-            // writes a `hidden` flag onto a terminal registry row, so such a filter would
-            // be inert while reading as if operator intent were being honoured.)
+            // (There is deliberately no `!info.hidden` filter here. The pty FLEET row
+            // does now carry a `hidden` flag — the shell's agent dock sets it so its seat
+            // is not DRAWN in the terminals sidebar or the rail — but the autoban terminal
+            // REGISTRY is a different record and nothing writes the flag onto it, so a
+            // filter here would be inert while reading as if operator intent were being
+            // honoured. `hidden` governs rendering, never eligibility.)
             .filter(([, info]) => this._isFleetTerminalInfo(info))
             .sort(([a], [b]) => a.localeCompare(b));
 

@@ -840,19 +840,40 @@
         dockEmptyHint.innerHTML = '';
         dockTitleEl.textContent = '';
         if (dockCliInput) {
-            try {
-                const res = await fetch('/kanban/verb/getStartupCommands', {
-                    method: 'POST', credentials: 'same-origin',
-                    headers: { 'Content-Type': 'application/json' }, body: '{}'
-                });
-                if (res.ok) {
-                    const data = await res.json();
-                    const cmds = data.commands || {};
-                    dockCliInput.value = cmds['project_manager'] || cmds['mission-control'] || '';
-                }
-            } catch { /* ignore */ }
+            await prefillDockCliInput();
             startBtn.disabled = !dockCliInput.value.trim();
         }
+    }
+
+    // Pre-fill the CLI input from the configured startup command — ONCE, and
+    // never over text the operator has typed.
+    //
+    // showDockEmptyState() runs again on every `terminalFleetState` push (the
+    // terminals panel polls the fleet every 5s), so an unconditional assignment
+    // here wipes a half-typed command out from under the operator every five
+    // seconds, and re-hits /kanban/verb/getStartupCommands — which fans out to
+    // agent names, visible agents and two DB reads — for a value that has not
+    // changed. Both are avoided by latching: the fetch happens on the first
+    // empty-state render, and the value is only written into an untouched input.
+    let dockCliPrefilled = false;
+    async function prefillDockCliInput() {
+        if (!dockCliInput || dockCliPrefilled) { return; }
+        dockCliPrefilled = true;
+        try {
+            const res = await fetch('/kanban/verb/getStartupCommands', {
+                method: 'POST', credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' }, body: '{}'
+            });
+            if (res.ok) {
+                const data = await res.json();
+                const cmds = data.commands || {};
+                // Only fill an input the operator has not typed into.
+                if (!dockCliInput.value.trim()) {
+                    dockCliInput.value = cmds['project_manager'] || cmds['mission-control'] || '';
+                }
+            }
+        } catch { /* a missing pre-fill leaves an empty input, which is honest */ }
+        if (startBtn) { startBtn.disabled = !dockCliInput.value.trim(); }
     }
 
     function renderDockClipboardPrompt(promptText) {

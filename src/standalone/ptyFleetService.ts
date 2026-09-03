@@ -108,6 +108,16 @@ export interface ExtendedTerminalHandle extends TerminalHandle {
      * cannot distinguish "booted, never prompted" from "prompted and active."
      */
     promptCount: number;
+    /**
+     * UI-visibility flag. `true` means this seat is owned by a single surface
+     * (today: the shell's agent dock) and must not be RENDERED by the terminals
+     * sidebar or the rail fleet section. It is a rendering flag and nothing
+     * else — a hidden seat is a normal fleet member in every other respect: it
+     * runs, it receives prompts, it is routable by name and by role, and it
+     * appears in `ptyListTerminals` under the sibling `hiddenTerminals` key.
+     * Never a security control.
+     */
+    hidden?: boolean;
 }
 
 /** Liveness snapshot entry returned by {@link PtyFleetService.getLiveness}. */
@@ -141,6 +151,16 @@ export interface CreateOptions {
      * child process, which has no vscode API and no configProvider.
      */
     claudeInlineRendering?: boolean;
+    /**
+     * Marks the new seat as owned by one surface and not to be rendered by the
+     * terminals sidebar or the rail. See {@link ExtendedTerminalHandle.hidden}.
+     *
+     * Applied ONLY to a freshly-spawned handle. A create that returns an
+     * EXISTING singleton (the live-controller path in `create()`) must never
+     * have this stamped on it, or opening the dock while Mission Control is
+     * running would erase the operator's own controller from the sidebar.
+     */
+    hidden?: boolean;
 }
 
 export type FleetChangeEvent = 
@@ -449,6 +469,9 @@ export class PtyFleetService {
             worktreePath: worktreePath || undefined,
             cwd: effectiveCwd,
             _isTeamMember: opts?._isTeamMember === true,
+            // Rendering-only flag, stamped here — on the NEW handle — and never
+            // on the `return existing` singleton path above.
+            hidden: opts?.hidden === true,
             // Recorded so spawnDelegates can hand each team member the SAME decision the
             // head spawned under. Delegates are ordinary PTY seats in the same cockpit
             // grid, so a head rendering inline while its children sit on the alternate

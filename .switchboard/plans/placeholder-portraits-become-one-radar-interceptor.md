@@ -331,3 +331,16 @@ a CSS rule on `.teams-flow-node` (see Proposed Changes).
 ---
 
 **Recommendation:** Complexity 4 → Send to Coder.
+
+### Implementation Summary
+Replaced the role-specific placeholder portraits and the shell rail's bare-letter team fallback with the unified radar-console interceptor silhouette (`nav-jet.svg`). In `kanban.html`, deleted the four legacy role symbols, updated `portrait-agent` with the crisp pixel jet geometry filled with `currentColor`, and mapped `teamsTabPortraitId` directly to `portrait-agent` while styling `.teams-card-portrait` and `.teams-flow-node` with `var(--accent)`. Updated the fallback preview label to `'Default icon'` in the team icon picker. In `shell.js` and `shell.html`, wired `buildMaskedGlyph('/static/icons/nav-jet.svg')` with `.strip-team-glyph` styled to 22px in `var(--accent)` for unassigned team buttons on the rail. Updated `shell-terminal-strip.test.js` to assert the jet glyph fallback and guard against role letters and head brand mark regressions.
+
+## Review Findings
+
+Verified correct on both surfaces and no code fix was needed. `src/webview/kanban.html` deletes `portrait-planner`/`-lead`/`-coder`/`-reviewer`, rewrites `portrait-agent` as the flat `afc-jet` rect union under `fill="currentColor"` with a source comment, reduces `teamsTabPortraitId()` to a single return while keeping its `role` seam, adds `color: var(--accent)` to both `.teams-card-portrait` and `.teams-flow-node`, and relabels the picker fallback to `'Default icon'`; `src/webview/shell.js:1188` swaps the bare-letter arm for `buildMaskedGlyph('/static/icons/nav-jet.svg')` with `.strip-team-glyph` sized 22px in the accent, and `shell-terminal-strip.test.js` swaps the assertion while preserving the load-bearing `!/headTerm\.iconUri/` guard verbatim and adding a negative `roleChar` assertion. Verification: `npm run test:contract:shell-terminal-strip` (66 passed, 0 failed), `npm run icons:parity` (pass), grep confirms zero `#00e5ff`/`#7ff3ff`/`#00b8cc` survive in the `<defs>` block and zero orphaned references to the four deleted symbol ids remain anywhere in `src/`. Remaining risk: the accent colour, the exited/dimmed treatment and the 20px flow-node legibility are visual properties no automated check can discriminate, and this pass did not run the manual browser verification.
+
+## Deferred Findings
+
+- NIT — the plan's instruction to extend `.strip-team-btn.strip-term-exited .strip-team-icon` to the new glyph is moot: `strip-term-exited` no longer exists anywhere in the codebase (removed by `8a77aa1f`), so exited team buttons have no fade/grey treatment for either the `<img>` or the glyph. `src/webview/shell.html:293`
+- NIT — the plan's Goal Invariant names an absolute path from another machine (`/Users/patrickvuleta/...`); `icons/nav-jet.svg` exists repo-relative and predates this commit (`bd980104`), so "new file" was already false when the plan was written. `icons/nav-jet.svg:1`
+- NIT — `portrait-glow` remains defined and referenced by nothing; the plan deliberately scoped its removal out. `src/webview/kanban.html:3299`

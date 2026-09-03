@@ -105,7 +105,11 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                         // Boolean off the wire, resolved by whichever host proxied us.
                         // Defaults to true if absent so a caller that predates this
                         // field still gets the fixed behaviour.
-                        claudeInlineRendering: payload.claudeInlineRendering !== false
+                        claudeInlineRendering: payload.claudeInlineRendering !== false,
+                        // RENDERING flag only — see CreateOptions.hidden. Safe off the
+                        // wire: a hidden seat runs, is prompted and is routable like any
+                        // other; it is only kept out of the sidebar and rail lists.
+                        hidden: payload.hidden === true
                     }
                     // No `startupCommand` from the wire. The per-child command is an
                     // arbitrary shell line the host executes in the user's tree; it
@@ -181,10 +185,18 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                     // The extension host's curtain reads this to arm the boot-phase
                     // curtain for a first dispatch to a fresh pool terminal.
                     promptCount: t.promptCount,
+                    hidden: t.hidden === true,
                 }));
+                // Split, not filtered in the UI: terminals.js assigns
+                // `fleetList = data.terminals` unfiltered and the rail's fleet section
+                // is built from that same relay. A surface-owned seat (the shell's
+                // agent dock) rides the sibling `hiddenTerminals` key. Kept identical
+                // to the standalone host's arm — the two must not diverge.
+                const projected = project(all);
                 return {
                     success: true,
-                    terminals: project(all),
+                    terminals: projected.filter(t => t.hidden !== true),
+                    hiddenTerminals: projected.filter(t => t.hidden === true),
                     liveness: fleet.getLiveness(),
                 };
             }

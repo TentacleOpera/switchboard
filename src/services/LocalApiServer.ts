@@ -5015,8 +5015,13 @@ export class LocalApiServer {
             // is what ptyListTerminals returns.
             const workspaceRoot = String(this._options.workspaceRoot || '').trim() || undefined;
             const listed = await terminalVerb('ptyListTerminals', {}, workspaceRoot);
+            // Routing validation, not rendering: `hiddenTerminals` holds seats a
+            // surface owns and the sidebar does not draw (the shell's agent dock).
+            // They are live fleet members and must be addressable as sender and
+            // recipient, or the dock's own controller cannot use /message.
             const fleet: any[] = []
-                .concat(Array.isArray(listed?.terminals) ? listed.terminals : []);
+                .concat(Array.isArray(listed?.terminals) ? listed.terminals : [])
+                .concat(Array.isArray(listed?.hiddenTerminals) ? listed.hiddenTerminals : []);
             const isActive = (name: string) => fleet.some(t => t && t.friendlyName === name && t.status === 'active');
             if (!isActive(from)) {
                 res.writeHead(404, { 'Content-Type': 'application/json' });
@@ -5124,7 +5129,11 @@ export class LocalApiServer {
             if (this._options.terminalVerb) {
                 try {
                     const listed = await this._options.terminalVerb('ptyListTerminals', {}, workspaceRoot);
-                    fleet = Array.isArray(listed?.terminals) ? listed.terminals : [];
+                    // Liveness, not rendering — hidden seats are live fleet members.
+                    fleet = [
+                        ...(Array.isArray(listed?.terminals) ? listed.terminals : []),
+                        ...(Array.isArray(listed?.hiddenTerminals) ? listed.hiddenTerminals : []),
+                    ];
                 } catch { /* best effort */ }
             }
 

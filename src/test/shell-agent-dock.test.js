@@ -29,6 +29,9 @@ const assert = require('assert');
 
 const shellJs = fs.readFileSync(path.join(__dirname, '../webview/shell.js'), 'utf8');
 const shellHtml = fs.readFileSync(path.join(__dirname, '../webview/shell.html'), 'utf8');
+const bootstrapTs = fs.readFileSync(path.join(__dirname, '../standalone/bootstrap.ts'), 'utf8');
+const ptyHostTs = fs.readFileSync(path.join(__dirname, '../standalone/ptyHost.ts'), 'utf8');
+const ptyFleetTs = fs.readFileSync(path.join(__dirname, '../standalone/ptyFleetService.ts'), 'utf8');
 const terminalsJs = fs.readFileSync(path.join(__dirname, '../webview/terminals.js'), 'utf8');
 
 let passed = 0;
@@ -223,12 +226,70 @@ test('checkDockLiveness reads hiddenTerminals from ptyListTerminals', () => {
         'checkDockLiveness must read hiddenTerminals from response');
 });
 
-test('showDockEmptyState calls /kanban/verb/getStartupCommands', () => {
+test('the dock empty state pre-fills the CLI input from /kanban/verb/getStartupCommands', () => {
     const emptyFn = shellJs.match(/async\s+function\s+showDockEmptyState\(\)\s*\{([\s\S]*?)\n\s{4}\}/);
     assert.ok(emptyFn, 'showDockEmptyState function must exist in shell.js');
-    const body = emptyFn[1];
+    assert.ok(emptyFn[1].includes('prefillDockCliInput'),
+        'showDockEmptyState must pre-fill the CLI input');
+
+    const prefillFn = shellJs.match(/async\s+function\s+prefillDockCliInput\(\)\s*\{([\s\S]*?)\n\s{4}\}/);
+    assert.ok(prefillFn, 'prefillDockCliInput function must exist in shell.js');
+    const body = prefillFn[1];
     assert.ok(body.includes('/kanban/verb/getStartupCommands'),
-        'showDockEmptyState must call /kanban/verb/getStartupCommands');
+        'the pre-fill must read /kanban/verb/getStartupCommands (kanban verb — the setup verb returns no commands in its HTTP body)');
+    assert.ok(!body.includes('/setup/verb/getStartupCommands'),
+        'the setup verb returns { success: true } only; its commands go out by postMessage the dock iframe cannot receive');
+
+    // showDockEmptyState re-runs on every terminalFleetState push (5s fleet
+    // poll). Without a latch, the operator's half-typed command is wiped every
+    // five seconds and the verb — which fans out to agent names, visible agents
+    // and two DB reads — is re-hit for an unchanged value.
+    assert.ok(/dockCliPrefilled/.test(body) && /if\s*\(!dockCliInput\.value\.trim\(\)\)/.test(body),
+        'the pre-fill must latch and must never overwrite text the operator typed');
+});
+
+// ── The hidden-seat mechanism must exist SERVER-side in BOTH hosts ──
+//
+// The dock's `hidden: true` and `checkDockLiveness`'s `hiddenTerminals` read
+// were both shipped once against a mechanism that did not exist: no host read
+// `payload.hidden`, PtyFleetService had no such field, and no ptyListTerminals
+// arm ever emitted `hiddenTerminals`. Every client-side assertion above still
+// went green, because a string match on shell.js cannot tell an implemented
+// flag from an inert one. These are the gates that can.
+
+test('PtyFleetService carries a hidden flag and stamps it on new handles only', () => {
+    assert.ok(/hidden\?:\s*boolean/.test(ptyFleetTs),
+        'CreateOptions/ExtendedTerminalHandle must declare `hidden?: boolean`');
+    assert.ok(ptyFleetTs.includes('hidden: opts?.hidden === true'),
+        'create() must stamp `hidden` on the handle literal it builds');
+    // The live-singleton arm returns an EXISTING handle. Stamping hidden there
+    // would erase a running Mission Control from the sidebar the moment the
+    // dock is opened.
+    const singletonArm = ptyFleetTs.slice(
+        ptyFleetTs.indexOf('const identity = singletonIdentityForRole(role);'),
+        ptyFleetTs.indexOf('const handle: ExtendedTerminalHandle = {')
+    );
+    assert.ok(singletonArm.length > 0, 'the singleton guard must precede the handle literal');
+    assert.ok(!/hidden/.test(singletonArm),
+        'the singleton return/reclaim path must never assign `hidden`');
+});
+
+test('both hosts read payload.hidden on ptyCreateTerminal', () => {
+    assert.ok(bootstrapTs.includes('hidden: payload.hidden === true'),
+        'standalone bootstrap.ts ptyCreateTerminal must forward payload.hidden');
+    assert.ok(ptyHostTs.includes('hidden: payload.hidden === true'),
+        'ptyHost.ts ptyCreateTerminal must forward payload.hidden');
+});
+
+test('both hosts emit hiddenTerminals from ptyListTerminals', () => {
+    for (const [label, src] of [['bootstrap.ts', bootstrapTs], ['ptyHost.ts', ptyHostTs]]) {
+        assert.ok(src.includes('hiddenTerminals'),
+            `${label} ptyListTerminals must return a hiddenTerminals array`);
+        assert.ok(src.includes("t.hidden !== true"),
+            `${label} must exclude hidden seats from the rendered terminals array`);
+        assert.ok(src.includes("t.hidden === true"),
+            `${label} must collect hidden seats into hiddenTerminals`);
+    }
 });
 
 test('dockSeatName loses its parameter in shell.js', () => {

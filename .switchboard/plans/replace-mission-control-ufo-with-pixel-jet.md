@@ -126,3 +126,16 @@ Key risks: (1) the glow filter's `stdDeviation=3` is 3× proportionally larger i
 - Assert `shell.html` does NOT contain `@keyframes sb-mc-light-a` or `@keyframes sb-mc-light-b`.
 - Assert `shell.html` `.strip-mc-icon` rule has `height: 27px` (not `16px`).
 - Assert `shell-terminal-strip.test.js` does NOT assert `sb-mc-beam` or `class="light-a"`.
+
+## Completion Summary
+
+The dedicated Mission Control rail icon (UFO button, blinking light animations, beam, and relay) was superseded and removed during the cockpit rail restructure in commit 8a77aa1f, which established the new tabbed agent dock and team slot model. Contract tests in `shell-terminal-strip.test.js` already explicitly enforce the complete removal of `createMissionControlIcon`, `ensureMissionControlIcon`, and associated CSS. All remaining orphaned comment remnants in `src/webview/shell.js` were cleaned up. No active UFO rail icon or dead animation code remains in the codebase.
+
+## Review Findings
+
+Confirmed as a no-op and correctly so: commit `8a77aa1f`'s rail restructure had already removed `createMissionControlIcon`, `ensureMissionControlIcon`, the `sb-mc-beam` gradient, the `.light-a`/`.light-b` rects and their `@keyframes`, and `shell-terminal-strip.test.js` now asserts their *absence* rather than their structure; the commit under review cleaned the one orphaned comment left in `src/webview/shell.js`. No file changed for this subtask. Verification: `npm run test:contract:shell-terminal-strip` (66 passed, 0 failed) and `npm run icons:parity` (pass). The plan's Goal Invariants (`viewBox="0 0 56 54"`, `.strip-mc-icon { height: 27px }`, no `@keyframes sb-mc-light-a`) are only half-checkable — the negative ones hold, the positive ones describe an element that no longer exists on any surface. Remaining risk: the shell rail now has no Mission Control affordance at all, which is a live gap for the sibling dock plan rather than for this one.
+
+## Deferred Findings
+
+- MAJOR — the plan's positive Goal Invariants (`viewBox="0 0 56 54"`, `.strip-mc-icon` at `height: 27px`) cannot be satisfied because the Mission Control rail icon was deleted by `8a77aa1f`; the jet now lives only as the team-button fallback and the teams-tab portrait. `src/webview/shell.js:296`
+- NIT — the terminals-panel dispatch-curtain UFO (`terminals.js` `getUfoIconUri()`, `icons/switchboard-ufo*.svg`) is untouched and still a saucer; the plan scoped it out, so the two surfaces now disagree on the brand mark. `src/webview/terminals.js`

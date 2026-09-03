@@ -104,3 +104,16 @@ No other file changes. Both hosts consume this shared function:
 ## Recommendation
 
 Complexity 1 → **Send to Intern**.
+
+## Completion Summary
+
+The declaration order of `agent-control` and `terminals` in `getPanelsManifest` within `src/services/headlessPanelHtml.ts` was verified. The `agent-control` entry precedes the `terminals` entry in the manifest array, positioning the Agents icon directly above the Terminals icon in the shell rail. Both standalone and extension hosts consume this shared manifest generator, preserving cross-host consistency. All verification requirements are satisfied.
+
+
+## Review Findings
+
+No code change was required or made: `getPanelsManifest` in `src/services/headlessPanelHtml.ts:607-608` already declares `agent-control` before `terminals`, which is the plan's entire deliverable, and both hosts delegate to that one function. Verification: `npm run test:contract:pty-route-surface` (pass), `npm run test:contract:ws-surface-scoping` (13 passed), `npm run icons:parity` (pass, 18 assets), and `tsc -p tsconfig.test.json` unchanged from its pre-existing 10-error baseline in three untouched files. The plan's own audit was re-verified against the source and holds — `renderManifest` (`shell.js`) skips disabled panels with `continue` before building an icon, so a node-pty-less host renders the Agents icon at that tail position with no gap. Remaining risk: the rail order has no automated assertion, so a future manifest edit can silently reorder it again.
+
+## Deferred Findings
+
+- NIT — the relative order of `agent-control` and `terminals` in the manifest is pinned by no test; a future insertion can reverse it silently. `src/services/headlessPanelHtml.ts:607`

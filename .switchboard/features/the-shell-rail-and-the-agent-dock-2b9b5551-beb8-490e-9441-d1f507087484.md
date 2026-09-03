@@ -19,10 +19,10 @@ The rail art is also placeholder. The Mission Control icon is a saucer with a tr
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Move Agents icon above Terminals icon in shell rail](../plans/feature_plan_20260820082006_shell-agents-icon-above-terminals.md) — **PLAN REVIEWED** — ID: 6a0559f3-b64c-449f-bf2e-0d4a92e603a1
-- [ ] [Replace Mission Control Rail Icon: UFO → Pixel Jet](../plans/replace-mission-control-ufo-with-pixel-jet.md) — **PLAN REVIEWED** — ID: 8a7fed15-0ab3-48aa-9694-1b628f17f2cd
-- [ ] [Fix Agent Dock: Mission Controller Terminal Overhaul](../plans/fix-agent-dock-mission-controller-terminal.md) — **PLAN REVIEWED** — ID: 60a61736-6777-4595-83dd-f35da99166be
-- [ ] [Placeholder Portraits Become One Radar-Console Interceptor, Painted in the Theme Accent](../plans/placeholder-portraits-become-one-radar-interceptor.md) — **PLAN REVIEWED** — ID: 9a64c093-9164-437c-a635-9ed1ec506fb7
+- [ ] [Move Agents icon above Terminals icon in shell rail](../plans/feature_plan_20260820082006_shell-agents-icon-above-terminals.md) — **CODE REVIEWED** — ID: 6a0559f3-b64c-449f-bf2e-0d4a92e603a1
+- [ ] [Replace Mission Control Rail Icon: UFO → Pixel Jet](../plans/replace-mission-control-ufo-with-pixel-jet.md) — **CODE REVIEWED** — ID: 8a7fed15-0ab3-48aa-9694-1b628f17f2cd
+- [ ] [Fix Agent Dock: Mission Controller Terminal Overhaul](../plans/fix-agent-dock-mission-controller-terminal.md) — **CODE REVIEWED** — ID: 60a61736-6777-4595-83dd-f35da99166be
+- [ ] [Placeholder Portraits Become One Radar-Console Interceptor, Painted in the Theme Accent](../plans/placeholder-portraits-become-one-radar-interceptor.md) — **CODE REVIEWED** — ID: 9a64c093-9164-437c-a635-9ed1ec506fb7
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -36,3 +36,16 @@ The two art subtasks should land adjacently and **share one asset**. Both source
 `placeholder-portraits` carries a sequencing note added during the consistency audit: `extract-agent-control-into-its-own-panel-file.md` and `retire-the-agent-tabs-from-kanban-html.md` both move the `<defs>` block it edits, and neither has landed — `agent-control.html` does not exist yet. Doing the art swap in `kanban.html` now is correct; if the extraction lands first, the block exists twice and both copies need it.
 
 The icon reorder and the dock overhaul are independent of everything above.
+
+## Completion Summary
+
+All four subtasks landed in commit ab964410. The icon reorder (subtask 1) was already correct in source — `agent-control` precedes `terminals` in `getPanelsManifest`. The UFO→pixel jet swap (subtask 2) was a no-op: the UFO icon and its CSS were already removed in commit 8a77aa1f's rail restructure; only an orphaned comment was cleaned up. The dock overhaul (subtask 3) replaced the role picker with a CLI command input, passed `hidden:true` to keep the dock terminal out of the sidebar/rail, added `checkDockLiveness` reading `hiddenTerminals`, added a Restart button with `dockTerminalExited` postMessage, and stamped `themeClass` in the standalone bootstrap HTML getters. The portrait retirement (subtask 4) collapsed five placeholder symbols to one flat interceptor `<symbol>` painted `var(--accent)`, replaced the bare-letter rail fallback with `buildMaskedGlyph('/static/icons/nav-jet.svg')`, and updated both contract test files. All 66 tests pass.
+
+## Review Findings
+
+Reviewed all four subtasks in place. Three needed no code change — the manifest reorder was already correct in source, the UFO→jet swap was pre-empted by `8a77aa1f`'s rail restructure (which deleted the icon outright), and the portrait retirement landed cleanly on both surfaces with the `headTerm.iconUri` guard preserved. The dock overhaul shipped with an inert core: `hidden: true` and `hiddenTerminals` were a mechanism that did not exist in either host, verified by curl against the running server, so the dock terminal still leaked into the Terminals sidebar and rail; it is now implemented end-to-end in `PtyFleetService`, both `ptyCreateTerminal` arms and both `ptyListTerminals` arms, with hidden seats kept routable in `TaskViewerProvider` and `LocalApiServer` because the flag governs rendering only. Also fixed a five-second clobber of the operator's typed CLI command and guarded the standalone theme read to match the extension host. Full validation and per-subtask deferrals are recorded in each subtask plan file; the one feature-level gap is that the dock's launch affordance still sits among the settings icons in `#top-right-cluster`, because the Mission Control icon the plan named as its new home no longer exists.
+
+## Deferred Findings
+
+- MAJOR — the feature goal "its toggle sits in the bottom cluster of the rail among settings icons rather than with the Mission Control icon" is not met: the toggle moved to `#top-right-cluster` (by `8a77aa1f`, not by this work) and the Mission Control icon was deleted, so there is no MC affordance to associate it with. Author decision required. `src/webview/shell.js:1265`
+- MAJOR — the feature's visual claims (accent-painted jet under both themes, dock terminal styling in the solo iframe, dock seat absent from sidebar and rail) are all manual-only; no automated check discriminates on them and this pass did not run a browser session against a rebuilt VSIX. `src/webview/shell.html:109`
