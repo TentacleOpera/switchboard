@@ -1,5 +1,11 @@
 # Replace the Mission Control persona with a run sheet that asks what you want and loads only that protocol
 
+<!-- board-collapse-04 -->
+> **RESCOPED 2026-09-04 (Board Collapse 04, decision 9).** Confirmed: **delete the Tick and the context-clearing apparatus** from the interview path. The interval loop they serve does not run, and an agent-held multi-hour loop is not a durable mechanism in this system — supervision is the wake-on-transition path in *A supervised mission has no supervision*.
+> > 
+> > **Add one rung to the resume branch**, as prose, inherited from the deleted *Mission Control's hard-skip escalation*: when a team lead reports a subtask blocked, re-dispatch once with a bounded budget rather than skipping it permanently, and un-skip an awaiting-input card when the answer arrives. No **new** budget schema. To be precise about what stays and what goes: the **interview** prompt loses `## The Tick`, `## Merge-Back` and `stallCount`, as this plan already specifies. The **resume** prompt keeps the contract it documents today, including its existing `progress.json` stall counter — that is the pre-existing unattended-improver loop and this decision does not touch it. What is refused is *new* recovery-budget machinery layered on a tick, which is why the hard-skip plan was deleted. The full recovery ladder belongs to the team lead — see *Team lead escalation must exhaust cheap recovery*.
+
+
 ## Goal
 
 Turn `/switchboard` step 2 from "become an unattended overnight dispatcher" into "ask the operator

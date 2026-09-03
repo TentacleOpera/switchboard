@@ -1,5 +1,13 @@
 # A column move orphans the dispatch holder, and the seat can never release it
 
+<!-- board-collapse-04 -->
+> **RESCOPED 2026-09-04 (Board Collapse 04, decision 8).** This plan keeps its **server-side fix** and loses its prompt edits.
+> > 
+> > **Keep:** `_runQueueDone` releases on `dispatched_terminal === from` alone. Today it also requires `dispatchedAt`, which a column move nulls while leaving `dispatched_terminal` set, so a seat can never let the card go — 571 stranded rows measured. This is the whole defect and it repairs live state, so it lands **early** in the seat-release feature.
+> > 
+> > **Delete** the edits adding `"planId"` to the four completion directives in `agentPromptBuilder.ts` and to the standing-order fragment. The sibling *Completion Directive Becomes a Standing Order* owns that text and now carries the planId instruction itself; the plan id already reaches the seat as a header line in its dispatch prompt, so nothing needs to be added to a per-terminal standing order to make it available. Two plans must not edit those four copies.
+
+
 ## Goal
 
 Make `POST /kanban/queue/done` able to release the card its seat actually holds, regardless of
@@ -81,7 +89,7 @@ empty, sitting in `CODE REVIEWED`. Its `plan_events` trail:
 2026-08-29T22:34  move-to-code-reviewed     ← dispatched_at nulled here, holder kept
 ```
 
-**The compounding defect: the prompts name an endpoint that cannot write the release fact.**
+**Context (not this plan's work): the prompts name an endpoint that cannot write the release fact.**
 Every completion directive in `agentPromptBuilder.ts` tells the agent the same thing —
 `CODING_COMPLETION_REPORT_DIRECTIVE` (`:1087`), `COMPLETION_STEP_FULL` (`:1154`),
 `COMPLETION_STEP_COMPACT` (`:1156`), and by reference `STAGGERED_IMPLEMENTATION_DIRECTIVE`
@@ -147,10 +155,16 @@ post. Ship order between the two plans does not matter.
    existing mismatch guard at `LocalApiServer.ts:3272` already refuses another seat's card and is
    kept). When it does not, fall back to the ordering from step 1.
 
-3. **Teach the directives to send it.** Add `"planId":"<the PLAN_ID from your dispatch>"` to the
-   POST body in the four directives and the standing-order fragment, and delete the sentence
-   claiming `queue/done` "signals task completion" — it releases the seat's hold and asks for the
-   next item, which is what the seat wants and what the endpoint does.
+3. ~~**Teach the directives to send it.**~~ **REMOVED 2026-09-04 (Board Collapse 04, decision 8).**
+   This step edited the four completion directives in `agentPromptBuilder.ts` and the
+   standing-order fragment. That text is owned by *Completion Directive Becomes a Standing Order*,
+   which now carries the `planId` instruction itself along with the rest of the completion
+   protocol. Two plans must not edit those five copies. **This plan makes no prompt change.**
+
+   The release fix in step 2 does not depend on it: `planId` only disambiguates when a seat holds
+   more than one card, and the release already keys on `dispatched_terminal === from`. If the
+   directive work lands later, the disambiguation improves; if it never lands, the release is
+   still correct.
 
 4. **Pin the agreement in a test.** The two `WHERE` clauses drifting apart is the whole bug and
    nothing detected it. Assert that the fields the release path matches on are a superset of the

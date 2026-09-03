@@ -1,5 +1,15 @@
 # Team lead escalation must exhaust cheap recovery before declaring a subtask blocked
 
+<!-- board-collapse-04 -->
+> **RESCOPED 2026-09-04 (Board Collapse 04, decision 9).** This is now the **single recovery ladder** for the whole system. *Mission Control's hard-skip escalation must spend a bounded recovery budget first* has been deleted: its premise was the overnight tick loop with cleared context, and no surviving plan builds on that loop.
+> > 
+> > **Add a first rung: verify the block before acting.** Read the seat's own log (`GET /terminals/<name>/log`) and confirm the seat is actually stuck before spending a recovery attempt. A `blocked` turn-end notice is frequently false — the backstop compares against state that predates the arming registration — so acting on one without checking burns an attempt on a working seat.
+> > 
+> > **Add the Mission Control hand-off:** when the ladder is exhausted and the lead records a subtask blocked, that is what wakes the controller through the transition path in *A supervised mission has no supervision*. Mission Control does not run its own ladder; it re-dispatches once with a bounded budget and can un-skip an awaiting-input card when the answer lands, as text in the run sheet's resume branch.
+> > 
+> > **This plan owns the single edit** to the KanbanProvider drive-block wording ("context preserved / ptyClearTerminal is stand-down only"), so it does not race *The lead's acceptance post*. Both are in the seat-release feature; this one lands first.
+
+
 ## Goal
 
 Replace the terminal branch in the coding-team head prompt's escalation clause with an

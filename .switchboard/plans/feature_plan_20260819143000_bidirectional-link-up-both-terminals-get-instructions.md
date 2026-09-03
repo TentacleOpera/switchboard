@@ -1,5 +1,13 @@
 # Bidirectional Link-Up — Both Terminals Get Instructions
 
+<!-- board-collapse-04 -->
+> **RESCOPED 2026-09-04 (Board Collapse 04, decision 2).** Link-Up now has **one mode**: standing orders. *Delete Link-Up's "Instant" Mode* removes the `#link-mode` selector, the `linkMode` variable, its `loadLayoutSettings` read, `buildLinkPrompt` and `syncModeAvailability`.
+> > 
+> > **Drop the instant arm** of this plan — the "two `ptySendPrompt` calls in instant mode" half. What remains and is still wanted: `complementaryTemplate` on all seven presets in both mirror copies, `resolveComplementaryPreset()` / `presetDirection()`, the argument swap for `member-receives` matching `wireSpawnedTeam`, and **two independent standing orders** per link so deleting one does not delete the other.
+> > 
+> > **Land after** the delete-instant plan; this plan's line citations for `sendLinkMessage` and `buildLinkPrompt` will move.
+
+
 ## Metadata
 
 **Complexity:** 5

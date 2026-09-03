@@ -1,5 +1,11 @@
 # Completion Directive Becomes a Standing Order, Not a Prompt-Injected Section
 
+<!-- board-collapse-04 -->
+> **SCOPE CONFIRMED 2026-09-04 (Board Collapse 04, decision 8).** This plan owns the `COMPLETION REPORT` directive text outright. One addition inherited from *A column move orphans the dispatch holder*, which has been rescoped to its server-side fix: the standing order also instructs the seat to **report the planId it was dispatched**. That is an instruction, so it belongs here with the rest of the completion protocol; the plan id itself is data and already reaches the seat as a header line in the dispatch prompt, so the role-scoped order needs no per-dispatch interpolation to support it.
+> > 
+> > **Lands last** in the seat-release feature: its stated prerequisite, the gate stopping lead-dispatched coders receiving the directive twice, does not exist at HEAD.
+
+
 ## Goal
 
 The `COMPLETION REPORT` directive — the instruction telling agents to `POST /kanban/queue/done` when they finish — is currently baked into every code-touching prompt via `ensureDispatchProtocolDirectives` inside `buildKanbanBatchPrompt`. This is the wrong layer. Copy-prompt buttons exist to produce prompts for **any** agent, including external cloud agents that have no access to the Switchboard API. Injecting a directive that says "POST to our local API server" into those prompts is noise at best and misleading at worst — a cloud agent reading "against the port in .switchboard/api-server-port.txt" has no such file and no such server.

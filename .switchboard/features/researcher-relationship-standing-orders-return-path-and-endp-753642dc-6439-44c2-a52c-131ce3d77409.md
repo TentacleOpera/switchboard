@@ -1,5 +1,12 @@
 # Researcher Relationship: Standing Orders, Return Path and Endpoint Retirement
 
+<!-- board-collapse-04 -->
+> **UPDATED 2026-09-04 (Board Collapse 04, decision 2).** Subtask *Link-Up Role Presets Fire Through The Relay Path* has been **deleted**. It derived the Link-Up mode from whether a preset carried an instruction body, to stop a preset being relayed verbatim and inverting who it addresses. Link-Up now has only one mode — standing orders — so that inversion cannot occur and the plan's goal is met by the deletion of Instant mode.
+> 
+> The feature's other two subtasks are unchanged and still wanted: the researcher return path, and retiring `/research/dispatch`.
+> 
+> **Scope note for the return path.** *Multi-Agent Planning Team — Fan-Out Head Prompt and Peer-Planner Roster* replaces this team type's researcher and analyst seats with three planner seats on a `reports-to-head` relationship. After that lands, no shipped team type installs the `researcher` relationship, so the `memberTemplate` return path serves researchers created through the Link-Up modal and through custom teams. That is still worth building; it is a narrower population than the feature file implies.
+
 **Complexity:** 4
 
 ## Goal
@@ -15,7 +22,6 @@ Make the researcher relationship work as a durable standing order with a closed 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
 - [ ] [Retire /research/dispatch And The Researcher Hand-Off Prompt Directive](../plans/feature_plan_20260812170000_research-dispatch-blind-to-pty-fleet.md) — **PLAN REVIEWED** — ID: b8a23c2e-3d44-4aec-a003-51aa17ef61f7
-- [ ] [Link-Up Role Presets Fire Through The Relay Path, Inverting Who The Instruction Is Addressed To](../plans/feature_plan_20260812171500_link-up-presets-fire-through-relay-not-standing-orders.md) — **PLAN REVIEWED** — ID: 7898eb69-9643-4217-a190-db3da672a6c7
 - [ ] [The Researcher Relationship Has No Return Path](../plans/feature_plan_20260813060000_researcher-relationship-has-no-return-path.md) — **PLAN REVIEWED** — ID: 25aff7ca-5b2a-49ce-b2b3-f2fc048021b8
 <!-- END SUBTASKS -->
 
