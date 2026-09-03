@@ -19,65 +19,26 @@ plans, running passes — belongs to the **board** (open it in a browser) and th
 
 ## Step 1 — ensure a board is running
 
-A port file is not liveness. `.switchboard/api-server-port.txt` survives a crashed
-extension, and **every workspace's port file holds the same port**, so its presence
-proves nothing about *this* workspace. Read the port, call `GET /health`, and treat
-**only a 200** as "a board is running".
+A port file is not liveness. The CLI checks `GET /health` and treats only a 200 as "a board is running". If a board is running, use it. Otherwise, launch `npx switchboard`.
 
 ```bash
-ROOT="$PWD"
-PORT_FILE="$ROOT/.switchboard/api-server-port.txt"
-
-if [ -f "$PORT_FILE" ]; then
-  PORT=$(tr -d '[:space:]' < "$PORT_FILE")
-  HEALTH=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT/health" 2>/dev/null)
+if switchboard api GET /health >/dev/null 2>&1; then
+  echo "Switchboard is already running (200). Using the existing board."
 else
-  HEALTH="000"
-  PORT=""
-fi
-
-if [ "$HEALTH" = "200" ]; then
-  echo "Switchboard is already running (port $PORT). Using the existing board."
-elif [ -n "$PORT" ]; then
-  # curl could not confirm liveness (returned $HEALTH), but a port file
-  # exists — the board may be running but unreachable from this sandbox
-  # (loopback blocked), or the port file may be stale (board crashed).
-  # FAIL SAFE: do NOT spawn a second server. Spawning overwrites the port
-  # file and hijacks the active session if the board IS alive. The cost of
-  # not spawning when the board is actually dead is recoverable (delete the
-  # port file and re-run); the cost of spawning when the board is alive is
-  # destructive (session hijack).
-  echo "Health check returned $HEALTH for port $PORT, but a port file exists."
-  echo "The board may be running but unreachable from this sandbox (loopback blocked),"
-  echo "or the port file may be stale (board crashed without cleanup)."
-  echo "Using the existing port. If the board is NOT running, delete"
-  echo "  $PORT_FILE"
-  echo "and re-run /switchboard."
-else
-  # No port file — no board was ever started (or was cleaned up). Launch.
   echo "No board answering. Starting npx switchboard..."
   npx switchboard &
   for i in 1 2 3 4 5 6 7 8 9 10; do
     sleep 1
-    if [ -f "$PORT_FILE" ]; then
-      PORT=$(tr -d '[:space:]' < "$PORT_FILE")
-      HEALTH=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT/health" 2>/dev/null)
-      if [ "$HEALTH" = "200" ]; then
-        echo "Switchboard is up (port $PORT). Board URL: http://127.0.0.1:$PORT"
-        break
-      fi
+    if switchboard api GET /health >/dev/null 2>&1; then
+      echo "Switchboard is up (200)."
+      break
     fi
   done
-  if [ "$HEALTH" != "200" ]; then
-    echo "Switchboard did not come up within 10s. Check npx output above."
-  fi
 fi
 ```
 
-- **No file** → launch (no board was ever started, or was cleaned up on shutdown).
-- **Non-200 with port file** → fail safe: do not launch (sandbox may block loopback curl, or port file is stale). Use existing port and warn user.
-- **200** → use the existing board. A running VS Code extension already serves it;
-  a second instance must not be started.
+- **Health check passes (200)** → use the existing board. A running VS Code extension or standalone host already serves it; a second instance must not be started.
+- **Health check fails** → start `npx switchboard`.
 
 ---
 
@@ -87,13 +48,9 @@ fi
 run the pre-flight here, in this conversation.
 
 ```bash
-PORT=$(cat "$ROOT/.switchboard/api-server-port.txt")
-BASE="http://127.0.0.1:$PORT"
-
 # SWITCHBOARD_TERMINAL is set for Switchboard-managed fleet seats. Unset elsewhere —
 # send it empty rather than guessing a name.
-curl -s -X POST "$BASE/mission-control/adopt" -H "Content-Type: application/json" \
-  -d "{\"terminalName\": \"${SWITCHBOARD_TERMINAL:-}\"}"
+switchboard api POST /mission-control/adopt "{\"terminalName\": \"${SWITCHBOARD_TERMINAL:-}\"}"
 ```
 
 The response carries `prompt` — the pre-flight instruction. **Follow it in this
@@ -118,8 +75,7 @@ Call `POST /terminals/verb/ptySendPrompt` with `"kind": "message"`. Relaying a m
 
 ```bash
 # Send a question or message to a lead/seat (message kind delivers text alone)
-curl -s -X POST "$BASE/terminals/verb/ptySendPrompt" -H "Content-Type: application/json" \
-  -d "{\"name\": \"<seat>\", \"data\": \"<message>\", \"clearBeforePrompt\": false, \"kind\": \"message\"}"
+switchboard api POST /terminals/verb/ptySendPrompt "{\"name\": \"<seat>\", \"data\": \"<message>\", \"clearBeforePrompt\": false, \"kind\": \"message\"}"
 ```
 
 ## Clearing Terminals
@@ -129,12 +85,10 @@ Call `POST /terminals/clear`. Do NOT send `"/clear"` via `ptySendPrompt` (bare s
 
 ```bash
 # Clear a team's terminals (excludes caller and lead automatically; defers busy seats)
-curl -s -X POST "$BASE/terminals/clear" -H "Content-Type: application/json" \
-  -d "{\"team\": \"<head terminal name or teamId>\", \"from\": \"${SWITCHBOARD_TERMINAL:-console}\"}"
+switchboard api POST /terminals/clear "{\"team\": \"<head terminal name or teamId>\", \"from\": \"${SWITCHBOARD_TERMINAL:-console}\"}"
 
 # Clear a single seat
-curl -s -X POST "$BASE/terminals/clear" -H "Content-Type: application/json" \
-  -d "{\"name\": \"<seat>\", \"from\": \"${SWITCHBOARD_TERMINAL:-console}\"}"
+switchboard api POST /terminals/clear "{\"name\": \"<seat>\", \"from\": \"${SWITCHBOARD_TERMINAL:-console}\"}"
 ```
 
 ---

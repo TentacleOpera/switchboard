@@ -9,23 +9,17 @@ VS Code setting `switchboard.apiToken` must be configured with your API token.
 
 ## Usage
 ```bash
-CUR="$PWD"
-while [ "$CUR" != "/" ] && [ ! -d "$CUR/.agents/skills" ]; do CUR=$(dirname "$CUR"); done
-source "$CUR/.agents/skills/_lib/sb_api_call.sh"
-
-sb_api_call POST /task/clickup \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Task name",
-    "listId": "list123",
-    "description": "Task description",
-    "assignees": [12345],
-    "dueDate": "2025-12-31",
-    "subtasks": [
-      {"name": "Subtask 1"},
-      {"name": "Subtask 2", "description": "Details"}
-    ]
-  }'
+switchboard api POST /task/clickup '{
+  "name": "Task name",
+  "listId": "list123",
+  "description": "Task description",
+  "assignees": [12345],
+  "dueDate": "2025-12-31",
+  "subtasks": [
+    {"name": "Subtask 1"},
+    {"name": "Subtask 2", "description": "Details"}
+  ]
+}'
 ```
 
 ## Parameters

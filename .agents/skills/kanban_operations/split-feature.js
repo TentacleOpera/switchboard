@@ -56,77 +56,22 @@ if (!Array.isArray(keptPlanIds) || keptPlanIds.length === 0 || !keptPlanIds.ever
   process.exit(1);
 }
 
-function findApiPort(startDir) {
-  let cur = path.resolve(startDir);
-  while (true) {
-    const portFile = path.join(cur, '.switchboard', 'api-server-port.txt');
-    try {
-      if (fs.existsSync(portFile)) {
-        const port = fs.readFileSync(portFile, 'utf8').trim();
-        if (port) return port;
-      }
-    } catch { /* ignore and keep walking */ }
-    const next = path.dirname(cur);
-    if (next === cur) return null;
-    cur = next;
-  }
-}
-
-function httpJson(method, port, urlPath, bodyObj, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    const payload = bodyObj ? JSON.stringify(bodyObj) : '';
-    const req = http.request(
-      {
-        host: '127.0.0.1',
-        port: Number(port),
-        path: urlPath,
-        method,
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(payload)
-        }
-      },
-      (res) => {
-        let data = '';
-        res.on('data', (c) => { data += c; });
-        res.on('end', () => resolve({ status: res.statusCode, body: data }));
-      }
-    );
-    req.on('error', reject);
-    if (timeoutMs) { req.setTimeout(timeoutMs, () => req.destroy(new Error('timeout'))); }
-    if (payload) req.write(payload);
-    req.end();
-  });
-}
+const { cliApiCall } = require('../_lib/cli-call');
 
 async function tryViaExtension() {
-  const port = findApiPort(workspaceRoot) || findApiPort(process.cwd());
-  if (!port) return { reachable: false };
-
-  try {
-    const health = await httpJson('GET', port, '/health', null, 2000);
-    if (!health || health.status !== 200) return { reachable: false };
-  } catch {
-    return { reachable: false };
+  const resp = await cliApiCall('POST', '/kanban/feature/split', {
+    workspaceRoot,
+    featurePlanId,
+    keptPlanIds,
+    firstFeatureName,
+    secondFeatureName
+  }, workspaceRoot);
+  if (!resp.reachable) return { reachable: false };
+  const res = resp.result || {};
+  if (resp.success && res.success !== false) {
+    return { reachable: true, success: true, firstFeaturePlanId: res.firstFeaturePlanId, secondFeaturePlanId: res.secondFeaturePlanId };
   }
-
-  try {
-    const resp = await httpJson('POST', port, '/kanban/feature/split', {
-      workspaceRoot,
-      featurePlanId,
-      keptPlanIds,
-      firstFeatureName,
-      secondFeatureName
-    }, 30000);
-    let parsed = {};
-    try { parsed = JSON.parse(resp.body); } catch { /* non-JSON body */ }
-    if (resp.status >= 200 && resp.status < 300 && parsed.success) {
-      return { reachable: true, success: true, firstFeaturePlanId: parsed.firstFeaturePlanId, secondFeaturePlanId: parsed.secondFeaturePlanId };
-    }
-    return { reachable: true, success: false, error: parsed.error || `HTTP ${resp.status}` };
-  } catch (err) {
-    return { reachable: true, success: false, error: err.message };
-  }
+  return { reachable: true, success: false, error: resp.error || res.error || (resp.status ? `HTTP ${resp.status}` : undefined) };
 }
 
 (async () => {

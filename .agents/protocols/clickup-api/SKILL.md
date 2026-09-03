@@ -6,18 +6,12 @@
 
 ## Usage
 ```bash
-CUR="$PWD"
-while [ "$CUR" != "/" ] && [ ! -d "$CUR/.agents/skills" ]; do CUR=$(dirname "$CUR"); done
-source "$CUR/.agents/skills/_lib/sb_api_call.sh"
-
-sb_api_call POST /api/clickup \
-  -H "Content-Type: application/json" \
-  -d '{
-    "method": "GET",
-    "endpoint": "/v2/task/12345",
-    "query": {},
-    "body": null
-  }'
+switchboard api POST /api/clickup '{
+  "method": "GET",
+  "endpoint": "/v2/task/12345",
+  "query": {},
+  "body": null
+}'
 ```
 
 ## Parameters
@@ -36,14 +30,12 @@ shift: v2 "team" = v3 "workspace".
 
 ## Example — v3 move task
 ```bash
-sb_api_call POST /api/clickup \
-  -H "Content-Type: application/json" \
-  -d '{
-    "method": "PUT",
-    "endpoint": "/v3/workspaces/WORKSPACE_ID/tasks/TASK_ID/home_list/LIST_ID",
-    "query": {},
-    "body": { "move_custom_fields": true }
-  }'
+switchboard api POST /api/clickup '{
+  "method": "PUT",
+  "endpoint": "/v3/workspaces/WORKSPACE_ID/tasks/TASK_ID/home_list/LIST_ID",
+  "query": {},
+  "body": { "move_custom_fields": true }
+}'
 ```
 
 ## Response
@@ -55,13 +47,11 @@ proxy call. The host adds the hidden `<!-- switchboard -->` self-marker so the i
 comment loop skips your own comment. The token stays host-side.
 
 ```bash
-sb_api_call POST /comment \
-  -H "Content-Type: application/json" \
-  -d '{
-    "provider": "clickup",
-    "id": "<ClickUp Task ID from the plan metadata>",
-    "body": "Your comment text here."
-  }'
+switchboard api POST /comment '{
+  "provider": "clickup",
+  "id": "<ClickUp Task ID from the plan metadata>",
+  "body": "Your comment text here."
+}'
 ```
 
 - **provider**: "clickup"

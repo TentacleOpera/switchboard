@@ -26,24 +26,17 @@ of truth; the UI is just one view of it.
 
 ## 1. Bootstrap
 
-> **If your prompt includes a `SWITCHBOARD STATUS: Live` line, skip this port-discovery/health-check section — you already know the port and that the server is up. Use the port from that line directly. This section is for external agents connecting independently.**
-
+Verify Switchboard is up before anything else:
 ```bash
-# The port is written to a file at extension startup.
-PORT=$(cat .switchboard/api-server-port.txt)
-BASE="http://127.0.0.1:$PORT"
-
-# Confirm Switchboard is up before anything else.
-curl -s "$BASE/health"     # -> { status: 'ok', port, roots: [...] }
+switchboard api GET /health     # -> { status: 'ok', port, roots: [...] }
 ```
 
-If `.switchboard/api-server-port.txt` is missing or `/health` fails, Switchboard is **not running** —
-tell the user to open the workspace in VS Code with the Switchboard extension active. Do not fall
+If `switchboard api` fails with server not running, Switchboard is **not running** —
+tell the user to open the workspace in VS Code with the Switchboard extension active (or run the standalone host). Do not fall
 back to editing `kanban.db` directly.
 
 **Auth.** All endpoints sit behind the localhost boundary. If a token is set in VS Code
-(`Switchboard: Api Token`), pass `Authorization: Bearer <token>`; if none is set, any localhost
-request is accepted.
+(`Switchboard: Api Token`), the CLI handles auth automatically.
 
 **Multi-root.** `/health` returns `roots`. DB-backed endpoints accept an optional
 `?workspaceRoot=<root>` (GET) or `"workspaceRoot"` body field (POST/PUT/DELETE); omit it to use the
@@ -72,11 +65,11 @@ primary workspace.
 | `GET /mission-control/session-log` | Mission Control's session file — `.switchboard/mission-control/session.md` when it exists, falling back to the legacy `.switchboard/mission-control/session-log.md` (markdown string, `''` when neither exists) |
 
 ```bash
-curl -s "$BASE/kanban/board"
-curl -s "$BASE/kanban/plans?column=PLAN%20REVIEWED"
-curl -s "$BASE/kanban/plan?planId=a1b2c3d4"      # includes .data.content (the .md file)
-curl -s "$BASE/kanban/features"
-curl -s "$BASE/worktree/list"
+switchboard api GET /kanban/board
+switchboard api GET "/kanban/plans?column=PLAN%20REVIEWED"
+switchboard api GET "/kanban/plan?planId=a1b2c3d4"      # includes .data.content (the .md file)
+switchboard api GET /kanban/features
+switchboard api GET /worktree/list
 ```
 
 > **⚠ `planId` is NOT a valid query filter on `GET /kanban/plans`.** The handler
@@ -122,21 +115,19 @@ board or an active pair mode would make it wrong.
 
 ```bash
 # Create — returns { success:true, planId, planFile, slug }
-curl -s -X POST "$BASE/kanban/plans" -H "Content-Type: application/json" -d '{
+switchboard api POST /kanban/plans '{
   "title": "Add rate limiting to the API",
   "complexity": "5",
   "tags": "backend, api",
   "body": "Add token-bucket rate limiting to the public endpoints."
 }'
 
-curl -s -X PUT "$BASE/kanban/plans/project" -H "Content-Type: application/json" \
-  -d '{"planId":"a1b2c3d4","project":"Platform"}'
+switchboard api PUT /kanban/plans/project '{"planId":"a1b2c3d4","project":"Platform"}'
 
-curl -s -X PUT "$BASE/kanban/plans/priority" -H "Content-Type: application/json" \
-  -d '{"planId":"a1b2c3d4","starred":true}'
+switchboard api PUT /kanban/plans/priority '{"planId":"a1b2c3d4","starred":true}'
 
-curl -s -X DELETE "$BASE/kanban/plans?planId=a1b2c3d4"                    # DB row only
-curl -s -X DELETE "$BASE/kanban/plans?planId=a1b2c3d4&deleteFile=true"    # also remove the file
+switchboard api DELETE "/kanban/plans?planId=a1b2c3d4"                    # DB row only
+switchboard api DELETE "/kanban/plans?planId=a1b2c3d4&deleteFile=true"    # also remove the file
 ```
 
 > **`workspaceRoot` validation:** `POST /kanban/plans` and `POST /kanban/plans/import` require `workspaceRoot`
@@ -172,11 +163,9 @@ curl -s -X DELETE "$BASE/kanban/plans?planId=a1b2c3d4&deleteFile=true"    # also
 ```bash
 # Column vocabulary: CREATED | PLAN REVIEWED | LEAD CODED | CODER CODED | INTERN CODED
 #                    | CODE REVIEWED | ACCEPTANCE TESTED | COMPLETED   (see GET /kanban/columns)
-curl -s -X POST "$BASE/kanban/move" -H "Content-Type: application/json" \
-  -d '{"planId":"a1b2c3d4","targetColumn":"CODE REVIEWED"}'
+switchboard api POST /kanban/move '{"planId":"a1b2c3d4","targetColumn":"CODE REVIEWED"}'
 
-curl -s -X POST "$BASE/kanban/feature" -H "Content-Type: application/json" \
-  -d '{"name":"Auth Refactor","planIds":["id1","id2"],"description":"Group the auth work."}'
+switchboard api POST /kanban/feature '{"name":"Auth Refactor","planIds":["id1","id2"],"description":"Group the auth work."}'
 ```
 
 ---
@@ -261,12 +250,10 @@ server with an error directing callers to `POST /terminals/clear`.
 
 ```bash
 # Clear a single seat
-curl -s -X POST "$BASE/terminals/clear" -H "Content-Type: application/json" \
-  -d '{"name":"<terminal friendlyName>","from":"<your terminal name>"}'
+switchboard api POST /terminals/clear '{"name":"<terminal friendlyName>","from":"<your terminal name>"}'
 
 # Clear team terminals
-curl -s -X POST "$BASE/terminals/clear" -H "Content-Type: application/json" \
-  -d '{"team":"<head terminal friendlyName or teamId>","from":"<your terminal name>"}'
+switchboard api POST /terminals/clear '{"team":"<head terminal friendlyName or teamId>","from":"<your terminal name>"}'
 ```
 
 **Rules:**
@@ -303,10 +290,8 @@ agent via `ptySendPrompt` (installed as a standing order on every team member). 
 have a chat channel to Mission Control; you use HTTP for board reads.
 
 ```bash
-PORT=$(cat .switchboard/api-server-port.txt); BASE="http://127.0.0.1:$PORT"
-
 # 1. Find your plan (its planId is in your dispatch prompt) and read its full spec.
-curl -s "$BASE/kanban/plan?planId=$PLAN_ID" | jq -r '.data.content'
+switchboard api GET "/kanban/plan?planId=$PLAN_ID" --json | jq -r '.result.data.content'
 
 # 2. Do the work in this worktree. Commit as you go (Mission Control verifies via git, not chat).
 
@@ -324,18 +309,15 @@ You are an external agent acting as Mission Control. Mirror the in-VS-Code perso
 (`switchboard-mission-control`): coding + code-review only; planner-stage questions escalate to the human.
 
 ```bash
-PORT=$(cat .switchboard/api-server-port.txt); BASE="http://127.0.0.1:$PORT"
-
 # 1. Read the whole board on each wake.
-curl -s "$BASE/kanban/board" | jq '.data'
+switchboard api GET /kanban/board --json | jq '.result.data'
 
 # 2. Group loose plans into features (the external equivalent of group-into-features).
-curl -s -X POST "$BASE/kanban/feature" -H "Content-Type: application/json" \
-  -d '{"name":"Checkout v2","planIds":["id1","id2","id3"]}'
+switchboard api POST /kanban/feature '{"name":"Checkout v2","planIds":["id1","id2","id3"]}'
 
 # 3. For each feature, read its subtasks + message the team leads (or dispatch to your own agents).
-curl -s "$BASE/kanban/plans?featureId=$FEATURE_ID" | jq '.data'
-curl -s -X POST "$BASE/terminals/verb/ptySendPrompt" -H "Content-Type: application/json" -d "{
+switchboard api GET "/kanban/plans?featureId=$FEATURE_ID" --json | jq '.result.data'
+switchboard api POST /terminals/verb/ptySendPrompt "{
   \"name\":\"<lead terminal friendlyName>\",
   \"data\":\"You are leading the <feature name> feature. Your PLAN REVIEWED subtasks are: <list>. Implement each, commit, and report back when done.\",
   \"origin\":\"<your own terminal friendlyName>\",
@@ -343,20 +325,18 @@ curl -s -X POST "$BASE/terminals/verb/ptySendPrompt" -H "Content-Type: applicati
 
 # 4. On each wake: VERIFY VIA GIT, not self-report. A subtask is "coded" only when its worktree
 #    branch is ahead of base with committed work. Use the base_branch from GET /worktree/list.
-curl -s "$BASE/worktree/list" | jq -r '.data[] | [.path, .base_branch] | @tsv' |
+switchboard api GET /worktree/list --json | jq -r '.result.data[] | [.path, .base_branch] | @tsv' |
 while IFS=$'\t' read -r wt base; do
   echo "$wt: $(git -C "$wt" rev-list --count "${base:-main}"..HEAD 2>/dev/null) commits ahead"
 done
 
 # 5. Advance verified cards; escalate planner-stage questions to the human.
-curl -s -X POST "$BASE/kanban/move" -H "Content-Type: application/json" \
-  -d "{\"planId\":\"$PLAN_ID\",\"targetColumn\":\"CODE REVIEWED\"}"
+switchboard api POST /kanban/move "{\"planId\":\"$PLAN_ID\",\"targetColumn\":\"CODE REVIEWED\"}"
 
 # 6. When all of a feature's subtasks are CODE REVIEWED, merge the feature's single shared
 #    worktree branch into main (per-feature model: one worktree per feature, so one merge —
 #    git -C <main checkout> merge <feature branch>), then clean up the worktree.
-curl -s -X POST "$BASE/worktree/cleanup" -H "Content-Type: application/json" \
-  -d "{\"branch\":\"$BRANCH\"}"
+switchboard api POST /worktree/cleanup "{\"branch\":\"$BRANCH\"}"
 ```
 
 ---

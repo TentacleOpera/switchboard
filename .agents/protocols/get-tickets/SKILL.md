@@ -11,26 +11,16 @@ Use this skill to access ClickUp/Linear ticket data via the local API server (no
 
 ## How to Use
 
-> **Important:** `sb_api_call` is a bash function defined by sourcing the helper. Run the `source` line in the **same shell session** as the call — each self-contained block below already does this.
-
 ### Step 1: Get Metadata (List View)
 
 **ClickUp metadata:**
 ```bash
-CUR="$PWD"
-while [ "$CUR" != "/" ] && [ ! -d "$CUR/.agents/skills" ]; do CUR=$(dirname "$CUR"); done
-source "$CUR/.agents/skills/_lib/sb_api_call.sh"
-
-sb_api_call GET /metadata/clickup
+switchboard api GET /metadata/clickup
 ```
 
 **Linear metadata:**
 ```bash
-CUR="$PWD"
-while [ "$CUR" != "/" ] && [ ! -d "$CUR/.agents/skills" ]; do CUR=$(dirname "$CUR"); done
-source "$CUR/.agents/skills/_lib/sb_api_call.sh"
-
-sb_api_call GET /metadata/linear
+switchboard api GET /metadata/linear
 ```
 
 Response structure:
@@ -61,11 +51,7 @@ Use this metadata to:
 
 **ClickUp task with full details (description, comments, attachments):**
 ```bash
-CUR="$PWD"
-while [ "$CUR" != "/" ] && [ ! -d "$CUR/.agents/skills" ]; do CUR=$(dirname "$CUR"); done
-source "$CUR/.agents/skills/_lib/sb_api_call.sh"
-
-sb_api_call GET /task/clickup/TASK_ID
+switchboard api GET /task/clickup/TASK_ID
 ```
 
 Response includes:
@@ -76,11 +62,7 @@ Response includes:
 
 **Linear issue with full details:**
 ```bash
-CUR="$PWD"
-while [ "$CUR" != "/" ] && [ ! -d "$CUR/.agents/skills" ]; do CUR=$(dirname "$CUR"); done
-source "$CUR/.agents/skills/_lib/sb_api_call.sh"
-
-sb_api_call GET /task/linear/ISSUE_ID
+switchboard api GET /task/linear/ISSUE_ID
 ```
 
 Response includes:
@@ -91,8 +73,7 @@ Response includes:
 
 ### Step 3: Handle Errors
 
-- **Port file doesn't exist:** Extension not running or API server not started
-- **API server not responding:** Extension may have crashed
+- **Server not running:** Extension or standalone host not started
 - **503 Service Unavailable:** ClickUp/Linear not configured in this workspace
 - **404 Not Found:** Task/issue ID doesn't exist
 - **Empty metadata:** No tickets cached — tasks may not have been synced yet

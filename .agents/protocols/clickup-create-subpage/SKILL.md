@@ -10,18 +10,12 @@
 
 ## Usage
 ```bash
-CUR="$PWD"
-while [ "$CUR" != "/" ] && [ ! -d "$CUR/.agents/skills" ]; do CUR=$(dirname "$CUR"); done
-source "$CUR/.agents/skills/_lib/sb_api_call.sh"
-
-sb_api_call POST /doc/clickup \
-  -H "Content-Type: application/json" \
-  -d '{
-    "docId": "doc123456",
-    "pageName": "Architecture Overview",
-    "content": "# Architecture\n\nThis system consists of...",
-    "parentPageId": "page789"
-  }'
+switchboard api POST /doc/clickup '{
+  "docId": "doc123456",
+  "pageName": "Architecture Overview",
+  "content": "# Architecture\n\nThis system consists of...",
+  "parentPageId": "page789"
+}'
 ```
 
 ## Parameters

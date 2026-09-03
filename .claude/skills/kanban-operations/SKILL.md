@@ -13,8 +13,6 @@ Move cards and query kanban state by running the provided scripts.
 
 ## Resolving Plan IDs (do this FIRST — offline, no script)
 
-> **If your prompt includes a `SWITCHBOARD STATUS: Live` line, use the port from that line for every HTTP call below — do NOT `cat .switchboard/api-server-port.txt`. You were dispatched by Switchboard, so the server is already up and its port is already in your prompt. The `$(cat …)` form below is for external agents connecting independently.**
-
 Every op below is keyed on a **`planId`** (a UUID), but you should not need UUIDs for most ops. Resolve a plan the cheap way when needed, or use the path/slug-addressed APIs below so the server resolves it:
 
 - **Per-column index (fastest, offline):** `.switchboard/kanban-state-<column>.md`. Every plan line ends with `<!-- planId:<uuid> … -->`; subtasks also carry `subtask-of:"<feature>"` and feature cards carry `feature`. One `grep` gives you the ID **and** its feature membership:
@@ -23,7 +21,7 @@ Every op below is keyed on a **`planId`** (a UUID), but you should not need UUID
   #  → …plans/my-plan.md](…) — My Plan Title <!-- planId:eb75281d-… subtask-of:"Some Feature" -->
   ```
   Columns: `created`, `backlog`, `plan-reviewed`, `lead-coded`, `coder-coded`, `intern-coded`, `code-reviewed`, `acceptance-tested`, `coded`, `completed`, plus custom columns.
-- **Whole board over HTTP (clean JSON):** `GET http://127.0.0.1:$(cat .switchboard/api-server-port.txt)/kanban/board` → `{ success, data: [{ planId, planFile, kanbanColumn, isFeature, featureId, … }] }`.
+- **Whole board via CLI (clean JSON):** `switchboard api GET /kanban/board` → `{ success, data: [{ planId, planFile, kanbanColumn, isFeature, featureId, … }] }`.
 
 > **The real fix is to not need IDs at all:** the path/slug-addressed feature API (`POST /kanban/features/reconcile`, Feature A · A3 — **landed**) lets you reference plans by file path or slug and reconcile the whole feature structure in one idempotent call. Use it (see "Reorganize Features" below) instead of the per-verb UUID choreography. The two lookups above remain useful for one-off card moves.
 
@@ -92,12 +90,11 @@ The move is routed through the running Switchboard host's local API server (`POS
 `move-card.js` / `POST /kanban/move` only modify card placement in the database — no terminal boots, no prompt is delivered. The primitive that **advances a card AND boots a terminal AND delivers the role prompt** is `POST /kanban/dispatch`. It is the canonical one-call advance-and-dispatch in both hosted and standalone modes (`POST /kanban/move` is unavailable — 503 — on the standalone host).
 
 ```bash
-curl -s -X POST "http://127.0.0.1:$(cat .switchboard/api-server-port.txt)/kanban/dispatch" \
-  -H "Content-Type: application/json" -d '{
+switchboard api POST /kanban/dispatch '{
   "plan": "<planId | plan-file path>",
   "targetColumn": "<optional — omitted|\"auto\" routes by complexity>",
   "workspaceRoot": "<optional — defaults to primary root>",
-  "from": "<optional — caller'"'"'s own terminal name for team routing>"
+  "from": "<optional — caller'\''s own terminal name for team routing>"
 }'
 ```
 
@@ -284,7 +281,7 @@ node .agents/skills/kanban_operations/reconcile-features.js <workspace_root> '<r
 
 Output: `{ ok, features: [{name, featurePlanId, subtasks:[{planId,planFile,topic}]}], mutations: [{action,detail}], warnings: [] }`.
 
-The equivalent HTTP endpoint (for non-shell hosts) is `POST /kanban/features/reconcile` on the local API server (port in `.switchboard/api-server-port.txt`).
+The equivalent HTTP endpoint (for non-shell hosts) is `POST /kanban/features/reconcile` (or `switchboard api POST /kanban/features/reconcile`).
 
 > **Single-add endpoint:** `POST /kanban/features/assign` with `{ feature, plan }` (or `{ feature, plans }` for a batch) is the additive, path/slug-addressed primitive. It resolves both operands server-side and never detaches existing subtasks — use it for "add one plan" instead of the converge-to-set `reconcile` or UUID-only `assignToFeature`.
 >

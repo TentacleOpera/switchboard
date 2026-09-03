@@ -26,24 +26,17 @@ of truth; the UI is just one view of it.
 
 ## 1. Bootstrap
 
-> **If your prompt includes a `SWITCHBOARD STATUS: Live` line, skip this port-discovery/health-check section — you already know the port and that the server is up. Use the port from that line directly. This section is for external agents connecting independently.**
-
+Verify Switchboard is up before anything else:
 ```bash
-# The port is written to a file at extension startup.
-PORT=$(cat .switchboard/api-server-port.txt)
-BASE="http://127.0.0.1:$PORT"
-
-# Confirm Switchboard is up before anything else.
-curl -s "$BASE/health"     # -> { status: 'ok', port, roots: [...] }
+switchboard api GET /health     # -> { status: 'ok', port, roots: [...] }
 ```
 
-If `.switchboard/api-server-port.txt` is missing or `/health` fails, Switchboard is **not running** —
-tell the user to open the workspace in VS Code with the Switchboard extension active. Do not fall
+If `switchboard api` fails with server not running, Switchboard is **not running** —
+tell the user to open the workspace in VS Code with the Switchboard extension active (or run the standalone host). Do not fall
 back to editing `kanban.db` directly.
 
 **Auth.** All endpoints sit behind the localhost boundary. If a token is set in VS Code
-(`Switchboard: Api Token`), pass `Authorization: Bearer <token>`; if none is set, any localhost
-request is accepted.
+(`Switchboard: Api Token`), the CLI handles auth automatically.
 
 **Multi-root.** `/health` returns `roots`. DB-backed endpoints accept an optional
 `?workspaceRoot=<root>` (GET) or `"workspaceRoot"` body field (POST/PUT/DELETE); omit it to use the
@@ -72,12 +65,28 @@ primary workspace.
 | `GET /mission-control/session-log` | Mission Control's session file — `.switchboard/mission-control/session.md` when it exists, falling back to the legacy `.switchboard/mission-control/session-log.md` (markdown string, `''` when neither exists) |
 
 ```bash
-curl -s "$BASE/kanban/board"
-curl -s "$BASE/kanban/plans?column=PLAN%20REVIEWED"
-curl -s "$BASE/kanban/plan?planId=a1b2c3d4"      # includes .data.content (the .md file)
-curl -s "$BASE/kanban/features"
-curl -s "$BASE/worktree/list"
+switchboard api GET /kanban/board
+switchboard api GET "/kanban/plans?column=PLAN%20REVIEWED"
+switchboard api GET "/kanban/plan?planId=a1b2c3d4"      # includes .data.content (the .md file)
+switchboard api GET /kanban/features
+switchboard api GET /worktree/list
 ```
+
+> **⚠ `planId` is NOT a valid query filter on `GET /kanban/plans`.** The handler
+> (`_handleGetPlans`, LocalApiServer.ts:6483) reads only `column` and `featureId`
+> from the query string — a `planId` param is silently ignored and the **full
+> workspace array** is returned. An agent consuming `res.data[0]` then inspects
+> whichever card happens to be first in the DB (often from a different column),
+> generating false reports. For a single plan, use `GET /kanban/plan?planId=<id>`
+> (returns one plan plus its file content at `.data.content`). Client-side
+> filtering (`res.data.find(p => p.planId === id)`) works but fetches the whole
+> board — prefer the dedicated endpoint.
+>
+> **Column filter requires the storage column id**, not the board label.
+> `GET /kanban/plans?column=Planned` returns an empty array — the stored id is
+> `PLAN REVIEWED`, URL-encoded as `PLAN%20REVIEWED`. See the column-translation
+> table in `query-kanban/SKILL.md` or call `GET /kanban/columns` for the live
+> `{id, label}` mapping.
 
 Plan records include: `planId`, `sessionId`, `topic`, `planFile`, `kanbanColumn`, `status`,
 `complexity`, `tags`, `project`, `isFeature`, `featureId`, `worktreeId`, `worktreeStatus`,
@@ -106,21 +115,19 @@ board or an active pair mode would make it wrong.
 
 ```bash
 # Create — returns { success:true, planId, planFile, slug }
-curl -s -X POST "$BASE/kanban/plans" -H "Content-Type: application/json" -d '{
+switchboard api POST /kanban/plans '{
   "title": "Add rate limiting to the API",
   "complexity": "5",
   "tags": "backend, api",
   "body": "Add token-bucket rate limiting to the public endpoints."
 }'
 
-curl -s -X PUT "$BASE/kanban/plans/project" -H "Content-Type: application/json" \
-  -d '{"planId":"a1b2c3d4","project":"Platform"}'
+switchboard api PUT /kanban/plans/project '{"planId":"a1b2c3d4","project":"Platform"}'
 
-curl -s -X PUT "$BASE/kanban/plans/priority" -H "Content-Type: application/json" \
-  -d '{"planId":"a1b2c3d4","starred":true}'
+switchboard api PUT /kanban/plans/priority '{"planId":"a1b2c3d4","starred":true}'
 
-curl -s -X DELETE "$BASE/kanban/plans?planId=a1b2c3d4"                    # DB row only
-curl -s -X DELETE "$BASE/kanban/plans?planId=a1b2c3d4&deleteFile=true"    # also remove the file
+switchboard api DELETE "/kanban/plans?planId=a1b2c3d4"                    # DB row only
+switchboard api DELETE "/kanban/plans?planId=a1b2c3d4&deleteFile=true"    # also remove the file
 ```
 
 > **`workspaceRoot` validation:** `POST /kanban/plans` and `POST /kanban/plans/import` require `workspaceRoot`
@@ -156,11 +163,9 @@ curl -s -X DELETE "$BASE/kanban/plans?planId=a1b2c3d4&deleteFile=true"    # also
 ```bash
 # Column vocabulary: CREATED | PLAN REVIEWED | LEAD CODED | CODER CODED | INTERN CODED
 #                    | CODE REVIEWED | ACCEPTANCE TESTED | COMPLETED   (see GET /kanban/columns)
-curl -s -X POST "$BASE/kanban/move" -H "Content-Type: application/json" \
-  -d '{"planId":"a1b2c3d4","targetColumn":"CODE REVIEWED"}'
+switchboard api POST /kanban/move '{"planId":"a1b2c3d4","targetColumn":"CODE REVIEWED"}'
 
-curl -s -X POST "$BASE/kanban/feature" -H "Content-Type: application/json" \
-  -d '{"name":"Auth Refactor","planIds":["id1","id2"],"description":"Group the auth work."}'
+switchboard api POST /kanban/feature '{"name":"Auth Refactor","planIds":["id1","id2"],"description":"Group the auth work."}'
 ```
 
 ---
@@ -211,16 +216,55 @@ drive prefix built by `_buildDrivePrefix` in KanbanProvider.ts; the endpoints ar
 
 | Endpoint | Body | Purpose |
 |---|---|---|
-| `POST /terminals/verb/ptySendPrompt` | `{ name, data, clearBeforePrompt, origin?, dispatch?, kind?, machineOrigin? }` | Deliver a prompt to a named terminal. **Pass `clearBeforePrompt: false` explicitly** — the omitted-field default has moved once already; if it moves back, every send wipes the coder's conversation. Both hosts apply standing orders (the callback contract) on a **dispatch** payload only — see the kinds below; a send that declares no kind and carries no `dispatch` object is read as a message and gets none of the three appends. **Payload kinds:**<br>• `kind: "dispatch"` — seat starting work; receives standing orders, seat directive block, and dispatch directives.<br>• `kind: "message"` (or legacy alias `machineOrigin: true`, to be retired once coder standing-order texts are reissued) — questions, instructions, relayed messages, and notifications; suppresses all three appends.<br>• `kind: "orders-refresh"` — reserved for after-clear delivery path (rejected if sent).<br>Omitted `kind` defaults to `dispatch` if `dispatch` object is supplied or if prompt text contains dispatch identity (`PLANS TO PROCESS:`), and defaults to `message` otherwise. **Dispatching a subtask? Pass `dispatch: { planFile\|planId, role }`** — the host then registers the dispatch before delivering *and* attaches the protocol directives the board attaches (plan-file completion report + Mission Control reports directive), echoing `attributed` and `directivesAttached`. Without it the coder is never told to write a completion report, so a finished subtask reports nothing the board can see. Fails closed: `attributed: 0` → `success: false`, nothing delivered. Never send `dispatch` on a plain message or on a report back to your head — it would make the recipient write a plan file and fire a false `completed`. **Messaging or dispatching from your own seat? Pass `origin: "<your own terminal name>"`** — the roster barrier clears the rest of the team when a new feature enters it, and `origin` is how it knows not to clear *you*. Without it a lead can wipe its own context with its own dispatch; the busy check only saves a seat that happens to be emitting output at that instant. Omit it only when you are relaying a human's board action. |
+| `POST /terminals/verb/ptySendPrompt` | `{ name, data, clearBeforePrompt, origin?, dispatch?, kind?, machineOrigin? }` | Deliver a prompt to a named terminal. **Pass `clearBeforePrompt: false` explicitly** — the omitted-field default has moved once already; if it moves back, every send wipes the coder's conversation. Both hosts apply standing orders (the callback contract) on a **dispatch** payload only — see the kinds below; a send that declares no kind and carries no `dispatch` object is read as a message and gets none of the three appends. **Payload kinds:**<br>• `kind: "dispatch"` — seat starting work; receives standing orders, seat directive block, and dispatch directives.<br>• `kind: "message"` (or legacy alias `machineOrigin: true`, to be retired once coder standing-order texts are reissued) — questions, instructions, relayed messages, and notifications; suppresses all three appends.<br>• `kind: "orders-refresh"` — reserved for after-clear delivery path (rejected if sent).<br>Omitted `kind` defaults to `dispatch` if `dispatch` object is supplied or if prompt text contains dispatch identity (`PLANS TO PROCESS:`), and defaults to `message` otherwise. **Dispatching a subtask? Pass `dispatch: { planFile\|planId, role }`** — the host then registers the dispatch before delivering *and* attaches the protocol directives the board attaches (plan-file completion report + Mission Control reports directive), echoing `attributed` and `directivesAttached`. Without it the coder is never told to write a completion report, so a finished subtask reports nothing the board can see. Fails closed: `attributed: 0` → `success: false`, nothing delivered. Never send `dispatch` on a plain message or on a report back to your head — it would make the recipient write a plan file and fire a false `completed`. The dispatch-protocol directives (COMPLETION REPORT, ORCHESTRATOR REPORT) are appended automatically for coder/intern/lead recipients — do not paste your own. **Messaging or dispatching from your own seat? Pass `origin: "<your own terminal name>"`** — the roster barrier clears the rest of the team when a new feature enters it, and `origin` is how it knows not to clear *you*. Without it a lead can wipe its own context with its own dispatch; the busy check only saves a seat that happens to be emitting output at that instant. Omit it only when you are relaying a human's board action. |
 | `POST /terminals/verb/ptyListTerminals` | `{}` | Enumerate live terminals: `{ terminals: [...] }` — one array, every live terminal. Copy `friendlyName` verbatim. |
 | `POST /terminals/clear` | `{ from, name? \| team? \| seats? }` | Canonical first-class clear endpoint. Clears a single seat (`name`), team roster (`team`), or explicit set (`seats`). Enforces server-side invariants: `from` is required and never cleared; team scope preserves the lead and defers mid-turn seats; redelivers standing orders; rolls log session boundary. Returns `{ success: true, cleared: [...], deferred: [...], skipped: [{ name, reason }] }`. |
 
-*(Note: `POST /terminals/verb/ptyClearTerminal` remains as a low-level host verb used internally, but `POST /terminals/clear` is the canonical agent-facing endpoint. Sending `/clear` via `ptySendPrompt` is delivered as literal text, does not clear context, and is rejected by the server.)*
+*(Note: `POST /terminals/verb/ptyClearTerminal` remains as a low-level host verb used internally, but `POST /terminals/clear` is the canonical agent-facing endpoint.)*
+
+### `ptySendPrompt` delivery evidence & response fields
+
+- **`success: true`**: Bytes were written to the pty and the submit CR was sent. It is not an echo, not a round trip, and not a claim that the CLI parsed anything.
+- **`bytesWritten`**: UTF-8 byte length of text written to the terminal, including host-appended directive, seat, and standing-orders blocks. It is **expected** to exceed the length of your `data` field. A larger number is not evidence of corruption.
+- **`promptSeq`**: That seat's delivery ordinal (post-increment `promptCount`). Re-reading `promptCount` on `ptyListTerminals` and seeing it advance *past* your `promptSeq` means a **later** send landed, not that yours did — your own evidence is the `promptSeq` on your own response.
+- **`lastDataAt`**: The seat's **output** heartbeat from `ptyListTerminals`. It proves the CLI emitted something; it never proves the CLI received something.
 
 Clear a coder the moment you stand it down, not on the way back in — the
 precondition is completion received **and** next work assigned elsewhere, and
 never clear your own terminal (see the inlined "Clear a terminal only when at
 rest" rule in the drive prefix).
+
+### Terminal Reset & Clear Protocol — why `/clear` via `ptySendPrompt` fails
+
+Agents frequently try to clear a terminal by sending `/clear` through
+`ptySendPrompt`. **This does not work, pollutes the prompt, and is rejected.**
+
+`ptySendPrompt` wraps `data` in bracketed-paste escape sequences
+(`\x1b[200~ ... \x1b[201~`). A CLI receiving bracketed-paste `/clear` treats it
+as **literal text input**, not a slash command. Inside the block it is absorbed as
+literal text and silently prefixes or pollutes the payload with appended orders.
+Sending bare slash commands like `/clear` via `ptySendPrompt` is rejected by the
+server with an error directing callers to `POST /terminals/clear`.
+
+**The canonical mechanism is `POST /terminals/clear`**:
+
+```bash
+# Clear a single seat
+switchboard api POST /terminals/clear '{"name":"<terminal friendlyName>","from":"<your terminal name>"}'
+
+# Clear team terminals
+switchboard api POST /terminals/clear '{"team":"<head terminal friendlyName or teamId>","from":"<your terminal name>"}'
+```
+
+**Rules:**
+- `from` is required on all calls to prevent accidental caller context wipe.
+- Clear a coder the moment you stand it down, not on the way back in. A clear
+  issued at rest is what resets a coder you always send with
+  `clearBeforePrompt: false`, and it lands long before the next dispatch
+  instead of racing it.
+- Never clear your own terminal.
+- Never use `ptyClearAllTerminals` (it clears every active terminal, you
+  included).
 
 ---
 
@@ -246,10 +290,8 @@ agent via `ptySendPrompt` (installed as a standing order on every team member). 
 have a chat channel to Mission Control; you use HTTP for board reads.
 
 ```bash
-PORT=$(cat .switchboard/api-server-port.txt); BASE="http://127.0.0.1:$PORT"
-
 # 1. Find your plan (its planId is in your dispatch prompt) and read its full spec.
-curl -s "$BASE/kanban/plan?planId=$PLAN_ID" | jq -r '.data.content'
+switchboard api GET "/kanban/plan?planId=$PLAN_ID" --json | jq -r '.result.data.content'
 
 # 2. Do the work in this worktree. Commit as you go (Mission Control verifies via git, not chat).
 
@@ -267,18 +309,15 @@ You are an external agent acting as Mission Control. Mirror the in-VS-Code perso
 (`switchboard-mission-control`): coding + code-review only; planner-stage questions escalate to the human.
 
 ```bash
-PORT=$(cat .switchboard/api-server-port.txt); BASE="http://127.0.0.1:$PORT"
-
 # 1. Read the whole board on each wake.
-curl -s "$BASE/kanban/board" | jq '.data'
+switchboard api GET /kanban/board --json | jq '.result.data'
 
 # 2. Group loose plans into features (the external equivalent of group-into-features).
-curl -s -X POST "$BASE/kanban/feature" -H "Content-Type: application/json" \
-  -d '{"name":"Checkout v2","planIds":["id1","id2","id3"]}'
+switchboard api POST /kanban/feature '{"name":"Checkout v2","planIds":["id1","id2","id3"]}'
 
 # 3. For each feature, read its subtasks + message the team leads (or dispatch to your own agents).
-curl -s "$BASE/kanban/plans?featureId=$FEATURE_ID" | jq '.data'
-curl -s -X POST "$BASE/terminals/verb/ptySendPrompt" -H "Content-Type: application/json" -d "{
+switchboard api GET "/kanban/plans?featureId=$FEATURE_ID" --json | jq '.result.data'
+switchboard api POST /terminals/verb/ptySendPrompt "{
   \"name\":\"<lead terminal friendlyName>\",
   \"data\":\"You are leading the <feature name> feature. Your PLAN REVIEWED subtasks are: <list>. Implement each, commit, and report back when done.\",
   \"origin\":\"<your own terminal friendlyName>\",
@@ -286,20 +325,18 @@ curl -s -X POST "$BASE/terminals/verb/ptySendPrompt" -H "Content-Type: applicati
 
 # 4. On each wake: VERIFY VIA GIT, not self-report. A subtask is "coded" only when its worktree
 #    branch is ahead of base with committed work. Use the base_branch from GET /worktree/list.
-curl -s "$BASE/worktree/list" | jq -r '.data[] | [.path, .base_branch] | @tsv' |
+switchboard api GET /worktree/list --json | jq -r '.result.data[] | [.path, .base_branch] | @tsv' |
 while IFS=$'\t' read -r wt base; do
   echo "$wt: $(git -C "$wt" rev-list --count "${base:-main}"..HEAD 2>/dev/null) commits ahead"
 done
 
 # 5. Advance verified cards; escalate planner-stage questions to the human.
-curl -s -X POST "$BASE/kanban/move" -H "Content-Type: application/json" \
-  -d "{\"planId\":\"$PLAN_ID\",\"targetColumn\":\"CODE REVIEWED\"}"
+switchboard api POST /kanban/move "{\"planId\":\"$PLAN_ID\",\"targetColumn\":\"CODE REVIEWED\"}"
 
 # 6. When all of a feature's subtasks are CODE REVIEWED, merge the feature's single shared
 #    worktree branch into main (per-feature model: one worktree per feature, so one merge —
 #    git -C <main checkout> merge <feature branch>), then clean up the worktree.
-curl -s -X POST "$BASE/worktree/cleanup" -H "Content-Type: application/json" \
-  -d "{\"branch\":\"$BRANCH\"}"
+switchboard api POST /worktree/cleanup "{\"branch\":\"$BRANCH\"}"
 ```
 
 ---
@@ -310,6 +347,46 @@ Trust **git and board state**, never an agent's self-reported "done":
 - **Coded** = worktree branch ahead of base with committed work (`git -C <wt> rev-list --count <base>..HEAD > 0`) and a clean tree (`git -C <wt> status --porcelain`).
 - **Reviewed** = the review stage genuinely passed and the card sits in `CODE REVIEWED`.
 - Read board state via these endpoints; read ground truth via your own `git` commands.
+
+---
+
+## 9a. Fleet Completion Detection Recipe
+
+When an operator asks you to monitor a fleet until completion, three concrete
+signals define "done". Check them in order; the first non-null/stopping signal
+wins.
+
+1. **Database signal — `completedAt`.** `completed_at` is non-null on the plan
+   record (written by `POST /kanban/task/complete` via `setCompletedAt`). Read
+   it via `GET /kanban/plan?planId=<id>` → `.data.completedAt`. **NULL means the
+   team is still working** — do not report completion.
+   - The `completed_at` write is **idempotent** — a repeat `POST /kanban/task/complete`
+     for the same planId returns the existing timestamp without re-writing. When
+     polling, a stable timestamp is not a new event; do not re-report.
+
+2. **Queue signal — `POST /kanban/queue/next`.** Returns
+   `200 { success: true, dispatched: null, reason: "queue empty" }` when the
+   session is ending normally — report and stop. (The response is wrapped in the
+   standard success envelope; an agent parsing for a bare `{ dispatched, reason }`
+   object will not find it under `res.data` and may misread the response.)
+   - A `409 { success: false, error, inFlight: {...} }` means a seat on your team
+     still HOLDS a card with no completion post — post
+     `POST /kanban/task/complete` for the `inFlight` planId before asking again.
+     Moving the card releases nothing.
+
+3. **Git signal — `Switchboard-Plan` trailer.** A commit on the integration
+   branch (`main` or the feature's shared worktree branch) carrying the git
+   trailer `Switchboard-Plan: <planId>` (one line per planId in a batch
+   dispatch), preceded by `Switchboard-Stage: <stage>`. The trailer block
+   requires a blank line before it (git only parses trailers in the message's
+   final paragraph). Verify with:
+   ```bash
+   git log --format='%(trailers:key=Switchboard-Plan,valueonly)'
+   ```
+
+**All three are ground truth; an agent's self-reported "done" is not.** Trust
+the database timestamp, the queue response, and the git trailer — never a chat
+claim.
 
 ---
 
@@ -369,3 +446,16 @@ This sits alongside `ptySendPrompt`, it does not replace it: a pty-hosted lead r
 - localhost only (127.0.0.1) — never a public interface.
 - Reads wrap payloads in `.data`; mutations return `{ success, ...fields }`.
 - This surface is documented for external tools; the in-VS-Code Mission Control persona is `switchboard-mission-control`.
+
+### Remote & Mobile Network Addressing (Tailscale)
+
+When the operator machine is reachable over Tailscale, the board and terminals
+are addressable at `http://100.x.y.z:7777` (the Tailscale IP, port from the live
+server). SSH access to the host requires **key-based authentication** when
+password auth is hardened — the operator must have a registered SSH key, not a
+password.
+
+**Tailscale IS the network boundary.** The API server must never be exposed on
+a public interface. Tailscale's encrypted mesh is the controlled boundary that
+replaces exposing a port to the open internet; it is not a hole in the localhost
+boundary, it is the boundary itself.

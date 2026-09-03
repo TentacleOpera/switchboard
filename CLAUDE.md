@@ -80,7 +80,7 @@ a wrong value silently changes *behaviour*.
 > - `view_file <path>` → use the **Read** tool.
 > - `send_message` and role-routing (reviewer, lead, etc.) are **Antigravity-only** — ignore them here.
 > - To run a workflow, invoke its native slash command (e.g. `/switchboard`, `/switchboard-cloud`, `/switchboard-remote`, `/switchboard-memo`) or read the skill at `.claude/skills/<name>/SKILL.md`.
-> - The ClickUp / Linear / kanban skills shell out via `.agents/skills/_lib/sb_api_call.sh` and work as-is, provided the Switchboard extension (and its API server) is running.
+> - The ClickUp / Linear / kanban skills shell out via the Switchboard CLI (`switchboard api`) and work as-is, provided the Switchboard extension (and its API server) is running.
 
 ---
 

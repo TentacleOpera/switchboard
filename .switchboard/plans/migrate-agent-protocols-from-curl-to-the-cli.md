@@ -278,3 +278,8 @@ Four files, kept identical to their `.agents/` counterparts.
 **Complexity: 6 → Send to Coder.** Multi-file migration with one delicate contract-gate edit;
 mechanical in most files, risky in the Mission Control trio. The contract-test assertion map above
 removes the trial-and-error risk.
+
+## Implementation Summary
+
+All agent protocols, skills, and workflows have been migrated from `sb_api_call.sh` and raw `curl` commands to the `switchboard` CLI (`switchboard api <METHOD> <path> [jsonBody]`). A shared helper `.agents/skills/_lib/cli-call.js` was introduced to back all `kanban_operations/*.js` scripts through the CLI, inheriting unified token handling, health probes, and offline envelopes. Sibling mirrors in `.claude/skills/`, `.claude/settings.json`, `ClaudeCodeMirrorService.ts`, and `CLAUDE.md` were updated to keep permissions and documentation synchronized. The legacy `sb_api_call.sh` script was archived to `sb_api_call.sh.migrated.bak` and replaced in `.agents/.switchboard-bundled.json`.
+

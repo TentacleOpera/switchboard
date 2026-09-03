@@ -9,9 +9,8 @@
 // the Linear/ClickUp integration-sync fan-out, and the board refresh.
 //
 
-const fs = require('fs');
 const path = require('path');
-const http = require('http');
+const { cliApiCall } = require('../_lib/cli-call');
 
 const effectiveKey = process.argv[2];
 const targetColumn = process.argv[3];
@@ -45,81 +44,13 @@ if (effectiveKey && (effectiveKey.includes('/') || effectiveKey.endsWith('.md'))
   resolvedPlanFile = effectiveKey;
 }
 
-// ── Discover the running extension's API server: walk up for the port file. ──
-function findApiPort(startDir) {
-  let cur = path.resolve(startDir);
-  while (true) {
-    const portFile = path.join(cur, '.switchboard', 'api-server-port.txt');
-    try {
-      if (fs.existsSync(portFile)) {
-        const port = fs.readFileSync(portFile, 'utf8').trim();
-        if (port) return port;
-      }
-    } catch { /* ignore and keep walking */ }
-    const next = path.dirname(cur);
-    if (next === cur) return null;
-    cur = next;
-  }
-}
-
-function httpJson(method, port, urlPath, bodyObj, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    const payload = bodyObj ? JSON.stringify(bodyObj) : '';
-    const req = http.request(
-      {
-        host: '127.0.0.1',
-        port: Number(port),
-        path: urlPath,
-        method,
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(payload)
-        }
-      },
-      (res) => {
-        let data = '';
-        res.on('data', (c) => { data += c; });
-        res.on('end', () => resolve({ status: res.statusCode, body: data }));
-      }
-    );
-    req.on('error', reject);
-    if (timeoutMs) { req.setTimeout(timeoutMs, () => req.destroy(new Error('timeout'))); }
-    if (payload) req.write(payload);
-    req.end();
-  });
-}
-
-// ── Path 1: route through the running extension (exact sync). ──
-// Returns { reachable, success?, error? }. When the extension is reachable it is
-// authoritative — we do NOT fall back to the raw DB on a logical failure (that
-// would bypass guards the extension applied on purpose).
 async function tryViaExtension() {
-  const port = findApiPort(workspaceRoot) || findApiPort(process.cwd());
-  if (!port) return { reachable: false };
-
-  try {
-    const health = await httpJson('GET', port, '/health', null, 2000);
-    if (!health || health.status !== 200) return { reachable: false };
-  } catch {
-    return { reachable: false };
-  }
-
-  try {
-    const move = await httpJson('POST', port, '/kanban/move', {
-      sessionId: effectiveKey,
-      targetColumn,
-      workspaceRoot,
-      planFile: resolvedPlanFile || undefined
-    }, 15000);
-    let parsed = {};
-    try { parsed = JSON.parse(move.body); } catch { /* non-JSON body */ }
-    if (move.status >= 200 && move.status < 300 && parsed.success) {
-      return { reachable: true, success: true };
-    }
-    return { reachable: true, success: false, error: parsed.error || `HTTP ${move.status}` };
-  } catch (err) {
-    return { reachable: true, success: false, error: err.message };
-  }
+  return await cliApiCall('POST', '/kanban/move', {
+    sessionId: effectiveKey,
+    targetColumn,
+    workspaceRoot,
+    planFile: resolvedPlanFile || undefined
+  }, workspaceRoot);
 }
 
 (async () => {

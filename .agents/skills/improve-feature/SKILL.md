@@ -16,11 +16,10 @@ Restructuring is expected — but bounded:
 - **Git is the undo.** Commit before any destructive op (delete/merge) so it is trivially reversible. Deletion of a plan file on a branch is cheap — it is a working document, not shipped user data. Do not treat it with production-data caution.
 - **Never hand-edit the auto-generated subtasks block** (`<!-- BEGIN/END SUBTASKS -->`) — Switchboard regenerates it from the DB.
 - **Route set changes through the real mechanisms**, not the block:
-  - **If SWITCHBOARD STATUS: Live is present in your prompt, you are local — use the injected port for kanban_operations calls; skip the .switchboard/api-server-port.txt file-existence detection.**
   - *Remote (no extension):* `git rm` the removed subtask `.md` files (the plan watcher hard-deletes their rows on the next local pull), create any new consolidated plan file (do NOT write a `**Plan ID:**` line — it is never read; the importer assigns the ID and keys by file path), and add a `**Feature:** <feature-plan-id>` line to the new plan file's frontmatter (the feature's UUID, taken from its `feature-<uuid>.md` filename; applied on import with apply-if-empty semantics). For column moves, you MUST move newly created cards to `PLAN REVIEWED` using the session-appropriate mechanism:
-    - **Local (extension running — `.switchboard/api-server-port.txt` present or `SWITCHBOARD STATUS: Live` in prompt):** Use the `kanban_operations` skill (move-card.js) to move the card to `PLAN REVIEWED`. (If `SWITCHBOARD STATUS: Live` is present, you are local — use the injected port directly for `kanban_operations` calls and skip `.switchboard/api-server-port.txt` file-existence detection.)
-    - **Remote (no extension — `.switchboard/api-server-port.txt` absent and no `SWITCHBOARD STATUS: Live` line):** Use the Notion/Linear provider or MCP to move the card to `PLAN REVIEWED`.
-    In-place rewrites keep their existing column. Detect remote by the absence of `.switchboard/api-server-port.txt`.
+    - **Local (extension or standalone host running):** Use the `kanban_operations` skill (move-card.js) or CLI (`switchboard api POST /kanban/move`) to move the card to `PLAN REVIEWED`.
+    - **Remote (no extension):** Use the Notion/Linear provider or MCP to move the card to `PLAN REVIEWED`.
+    In-place rewrites keep their existing column.
   - *Local (extension running):* use `assign-to-feature.js` / the feature's create path for card-set changes.
 - **Report the restructure** — what merged into what, what was deleted, what survived — so the diff is legible. End with the reconciled subtask list.
 

@@ -6,15 +6,9 @@
 
 ## Usage
 ```bash
-CUR="$PWD"
-while [ "$CUR" != "/" ] && [ ! -d "$CUR/.agents/skills" ]; do CUR=$(dirname "$CUR"); done
-source "$CUR/.agents/skills/_lib/sb_api_call.sh"
-
-sb_api_call POST /api/linear \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "query { issues(first: 10) { nodes { id title } } }"
-  }'
+switchboard api POST /api/linear '{
+  "query": "query { issues(first: 10) { nodes { id title } } }"
+}'
 ```
 
 ## Parameters
@@ -30,13 +24,11 @@ GraphQL call. The host adds the hidden `<!-- switchboard -->` self-marker so the
 poll skips your own comment and you don't trigger a feedback loop. The token stays host-side.
 
 ```bash
-sb_api_call POST /comment \
-  -H "Content-Type: application/json" \
-  -d '{
-    "provider": "linear",
-    "id": "<Linear Issue ID UUID from the plan metadata>",
-    "body": "Your comment text here."
-  }'
+switchboard api POST /comment '{
+  "provider": "linear",
+  "id": "<Linear Issue ID UUID from the plan metadata>",
+  "body": "Your comment text here."
+}'
 ```
 
 - provider: "linear"

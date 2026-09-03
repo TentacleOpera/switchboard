@@ -3,7 +3,7 @@
   "version": "1.7.13",
   "generatedAt": "2026-08-27T21:27:50.544Z",
   "files": [
-    "skills/_lib/sb_api_call.sh",
+    "skills/_lib/cli-call.js",
     "skills/_lib/workspace-root.js",
     "skills/external-team-lead/SKILL.md",
     "skills/improve-feature/SKILL.md",

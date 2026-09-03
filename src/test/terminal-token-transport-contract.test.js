@@ -11,7 +11,7 @@
  *                   `secrets.get('switchboard.apiToken') || ''` — an opt-in secret that
  *                   is EMPTY for essentially every install, so `_checkAuth` short-
  *                   circuits into loopback trust. The whole skill ecosystem
- *                   (`.agents/skills/_lib/sb_api_call.sh`) rides that path with no token
+ *                   (Switchboard CLI / skills) rides that path with no token
  *                   handling whatsoever. Returning a non-empty value from getAuthToken
  *                   401s every skill, every script and /health.
  *
@@ -149,7 +149,7 @@ function get(port, pathname, headers) {
         );
         assert.ok(
             !/_terminalSessionToken/.test(block),
-            'the terminal token must NEVER be returned from getAuthToken — that flips the entire HTTP surface to token-required and 401s every skill going through sb_api_call.sh.'
+            'the terminal token must NEVER be returned from getAuthToken — that flips the entire HTTP surface to token-required and 401s every skill.'
         );
     });
 

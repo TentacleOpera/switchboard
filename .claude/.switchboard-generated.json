@@ -45,9 +45,8 @@
     }
   ],
   "settingsAllowEntries": [
-    "Bash(curl *)",
     "Bash(node *)",
-    "Bash(source *)",
+    "Bash(switchboard *)",
     "Bash(sqlite3 *)",
     "Bash(duckdb *)"
   ],

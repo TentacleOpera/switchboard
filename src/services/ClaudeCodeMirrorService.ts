@@ -15,7 +15,7 @@ import * as path from 'path';
  *      tracked in `.claude/.switchboard-generated.json` are ever touched —
  *      user-authored `.claude/skills/` dirs are never modified.
  *   2. We copy ONLY `SKILL.md` into each `.claude/skills/<name>/`. Auxiliary files
- *      (e.g. `kanban_operations/move-card.js`, `_lib/sb_api_call.sh`) are NOT
+ *      (e.g. `kanban_operations/move-card.js`, `_lib/cli-call.js`) are NOT
  *      copied. The mirrored skill bodies keep their `.agents/skills/...`
  *      workspace-root-relative paths, which resolve because `.agents/` is always
  *      scaffolded alongside `.claude/`. Single source, single host-token path.
@@ -95,13 +95,11 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
 
 const GENERATED_MANIFEST_FILE = '.switchboard-generated.json';
 
-// Bash patterns the proxy/SQL/CLI skill family runs: curl (sb_api_call.sh),
-// source (sb_api_call.sh sources _lib), node (kanban_operations scripts), and
-// the SQL CLIs used by the read-only query skills.
+// Bash patterns the CLI/SQL skill family runs: switchboard CLI, node (kanban_operations scripts),
+// and the SQL CLIs used by the read-only query skills.
 const SWITCHBOARD_ALLOW_ENTRIES = [
-    'Bash(curl *)',
     'Bash(node *)',
-    'Bash(source *)',
+    'Bash(switchboard *)',
     'Bash(sqlite3 *)',
     'Bash(duckdb *)',
 ];

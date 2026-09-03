@@ -242,3 +242,7 @@ Extend `src/test/cli-board-commands-contract.test.js`, which already gates this 
 
 **Complexity: 3 → Send to Intern.** Single-file change reusing existing helpers; the risks
 (`workspaceRoot` routing, `--data @<file>`) are now pinned by tests.
+
+### Implementation Summary
+
+Implemented `switchboard api <METHOD> <path> [jsonBody] [--json] [--data @<file>]` in `src/standalone/cli.ts` as an authenticated escape hatch to any LocalApiServer route. Extracted the generic `apiRequest` helper with method-aware `workspaceRoot` routing (query params for GET/DELETE, body payload for POST/PUT/PATCH) and re-expressed `apiGet` and `apiPost` as callers. Registered `api` across `KNOWN_SUBCOMMANDS`, `subcommandTargetsCwd` exclusion, `usage()`, and main CLI dispatch. Extended `src/test/cli-board-commands-contract.test.js` to guard the contract, method coverage, route reachability, path validation, and `--json` envelope.

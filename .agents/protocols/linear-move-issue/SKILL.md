@@ -9,15 +9,9 @@ VS Code setting `switchboard.apiToken` must be configured.
 
 ## Usage
 ```bash
-CUR="$PWD"
-while [ "$CUR" != "/" ] && [ ! -d "$CUR/.agents/skills" ]; do CUR=$(dirname "$CUR"); done
-source "$CUR/.agents/skills/_lib/sb_api_call.sh"
-
-sb_api_call PUT "/task/linear/$ISSUE_ID/move" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "targetProjectId": "project-uuid-here"
-  }'
+switchboard api PUT "/task/linear/$ISSUE_ID/move" '{
+  "targetProjectId": "project-uuid-here"
+}'
 ```
 
 ## Parameters

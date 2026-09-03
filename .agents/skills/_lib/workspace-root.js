@@ -16,7 +16,7 @@ const path = require('path');
 // hold neither of these files.
 const ROOT_MARKERS = [
   path.join('.switchboard', 'kanban.db'),
-  path.join('.switchboard', 'api-server-port.txt')
+  path.join('.switchboard', 'workspace-id')
 ];
 
 function isWorkspaceRoot(dir) {

@@ -65,88 +65,23 @@ if (!Array.isArray(planIds) || planIds.length === 0 || !planIds.every(p => typeo
   process.exit(1);
 }
 
-// ── Discover the running extension's API server: walk up for the port file. ──
-function findApiPortInfo(startDir) {
-  let cur = path.resolve(startDir);
-  while (true) {
-    const portFile = path.join(cur, '.switchboard', 'api-server-port.txt');
-    try {
-      if (fs.existsSync(portFile)) {
-        const port = fs.readFileSync(portFile, 'utf8').trim();
-        if (port) return { port, portFile };
-      }
-    } catch { /* ignore and keep walking */ }
-    const next = path.dirname(cur);
-    if (next === cur) return null;
-    cur = next;
-  }
-}
-
-function httpJson(method, port, urlPath, bodyObj, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    const payload = bodyObj ? JSON.stringify(bodyObj) : '';
-    const req = http.request(
-      {
-        host: '127.0.0.1',
-        port: Number(port),
-        path: urlPath,
-        method,
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(payload)
-        }
-      },
-      (res) => {
-        let data = '';
-        res.on('data', (c) => { data += c; });
-        res.on('end', () => resolve({ status: res.statusCode, body: data }));
-      }
-    );
-    req.on('error', reject);
-    if (timeoutMs) { req.setTimeout(timeoutMs, () => req.destroy(new Error('timeout'))); }
-    if (payload) req.write(payload);
-    req.end();
-  });
-}
+const { cliApiCall } = require('../_lib/cli-call');
 
 // ── Route through the running extension. When reachable it is authoritative: a
 // logical failure is reported as-is, NOT retried via some other path. ──
 async function tryViaExtension() {
-  const portInfo = findApiPortInfo(workspaceRoot) || findApiPortInfo(process.cwd());
-  if (!portInfo) return { reachable: false };
-
-  try {
-    const health = await httpJson('GET', portInfo.port, '/health', null, 2000);
-    if (!health || health.status !== 200) {
-      return { reachable: false };
-    }
-    let healthJson = {};
-    try { healthJson = JSON.parse(health.body); } catch { /* non-json body */ }
-    if (healthJson.status !== 'ok' || healthJson.service !== 'switchboard') {
-      // Alien process detected binding to stale port file. Evict dead port file.
-      try { if (fs.existsSync(portInfo.portFile)) fs.unlinkSync(portInfo.portFile); } catch { }
-      return { reachable: false };
-    }
-  } catch {
-    return { reachable: false };
+  const resp = await cliApiCall('POST', '/kanban/feature', {
+    workspaceRoot,
+    name: featureName,
+    planIds,
+    description
+  }, workspaceRoot);
+  if (!resp.reachable) return { reachable: false };
+  const res = resp.result || {};
+  if (resp.success && res.success !== false) {
+    return { reachable: true, success: true, featurePlanId: res.featurePlanId, featureSessionId: res.featureSessionId };
   }
-
-  try {
-    const resp = await httpJson('POST', portInfo.port, '/kanban/feature', {
-      workspaceRoot,
-      name: featureName,
-      planIds,
-      description
-    }, 15000);
-    let parsed = {};
-    try { parsed = JSON.parse(resp.body); } catch { /* non-JSON body */ }
-    if (resp.status >= 200 && resp.status < 300 && parsed.success) {
-      return { reachable: true, success: true, featurePlanId: parsed.featurePlanId, featureSessionId: parsed.featureSessionId };
-    }
-    return { reachable: true, success: false, error: parsed.error || `HTTP ${resp.status}` };
-  } catch (err) {
-    return { reachable: true, success: false, error: err.message };
-  }
+  return { reachable: true, success: false, error: resp.error || res.error || (resp.status ? `HTTP ${resp.status}` : undefined) };
 }
 
 // ── Offline fallback: direct feature file creation with subtask links ──

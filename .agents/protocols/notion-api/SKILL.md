@@ -9,17 +9,11 @@
 
 ## Usage
 ```bash
-CUR="$PWD"
-while [ "$CUR" != "/" ] && [ ! -d "$CUR/.agents/skills" ]; do CUR=$(dirname "$CUR"); done
-source "$CUR/.agents/skills/_lib/sb_api_call.sh"
-
-sb_api_call POST /comment \
-  -H "Content-Type: application/json" \
-  -d '{
-    "provider": "notion",
-    "id": "<Notion Page ID from the plan metadata>",
-    "body": "Your reply text here."
-  }'
+switchboard api POST /comment '{
+  "provider": "notion",
+  "id": "<Notion Page ID from the plan metadata>",
+  "body": "Your reply text here."
+}'
 ```
 
 ## Parameters

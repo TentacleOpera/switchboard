@@ -41,10 +41,9 @@ direct-DB fallback, so it fails when the extension is unreachable.
 
 ### How to Detect Whether the Extension Is Running
 
-1. Check for `.switchboard/api-server-port.txt` in the workspace root.
-2. If present and the health endpoint responds
-   (`GET http://127.0.0.1:{port}/health`), the extension is live — use `create-feature.js`.
-3. If absent or health check fails, proceed with direct file write.
+1. Run `switchboard api GET /health`.
+2. If it responds with status `ok`, Switchboard is live — use `create-feature.js`.
+3. If it fails or is offline, proceed with direct file write.
 
 ### Feature File Format
 
@@ -164,11 +163,9 @@ proposal step. Just create the feature, verify it, and write the narrative.
 
 ### Prerequisites
 
-#### 1. Extension must be running
+#### 1. Extension or standalone host must be running
 
-Check for `.switchboard/api-server-port.txt` in the workspace root. If absent,
-the extension is not running — fall back to the Create section (direct
-file write).
+Check with `switchboard api GET /health`. If unreachable, the host is not running — fall back to the Create section (direct file write).
 
 #### 2. Plans must be in the kanban DB
 
@@ -448,8 +445,7 @@ Every implementation step, code block, line reference, and edge case in the sour
 
 Read the feature and every subtask first:
 ```bash
-PORT=$(cat .switchboard/api-server-port.txt); BASE="http://127.0.0.1:$PORT"
-curl -s "$BASE/kanban/plans?featureId=<featurePlanId>" | jq '.data[] | {planId, topic, planFile, kanbanColumn}'
+switchboard api GET "/kanban/plans?featureId=<featurePlanId>" --json | jq '.result.data[] | {planId, topic, planFile, kanbanColumn}'
 ```
 
 ### The building blocks
@@ -473,7 +469,7 @@ Subtask membership is `<!-- planId:… subtask-of:"<feature name>" -->` in the k
 4. **Create pieces 2..N** as new subtasks via the table above (local: `POST /kanban/plans` → `assign-to-feature.js`; remote: file + `**Feature:**` line → move to `PLAN REVIEWED`).
 5. **Verify nothing was lost** — every source step/code block/edge case is now in exactly one piece.
 6. **Update the feature's prose** — the `## Goal`, `## How the Subtasks Achieve This`, and any dependencies/sequencing narrative — to describe the new subtask set. **Never touch the auto-generated `<!-- BEGIN/END SUBTASKS -->` block** — the extension regenerates it from the DB.
-7. **Confirm the board** reflects the new set: `curl -s "$BASE/kanban/plans?featureId=<featurePlanId>" | jq '.data[].topic'`.
+7. **Confirm the board** reflects the new set: `switchboard api GET "/kanban/plans?featureId=<featurePlanId>" --json | jq '.result.data[].topic'`.
 
 Move scope, merge, and reorder are the same primitives: **move** = rewrite two files (cut from one, paste into the other); **merge** = fold one file's steps into another, then delete the emptied subtask (`deleteFile=true`); **reorder** = purely narrative (subtask order is presentation — encode intended sequence in the feature's dependencies prose, not by renumbering cards).
 

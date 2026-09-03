@@ -11,20 +11,14 @@
 
 ## Usage
 ```bash
-CUR="$PWD"
-while [ "$CUR" != "/" ] && [ ! -d "$CUR/.agents/skills" ]; do CUR=$(dirname "$CUR"); done
-source "$CUR/.agents/skills/_lib/sb_api_call.sh"
-
 # Encode file as Base64 (macOS/Linux)
 FILE_BASE64=$(base64 -i "./screenshot.png" | tr -d '\n')
 
-sb_api_call POST "/task/clickup/$TASK_ID/attach" \
-  -H "Content-Type: application/json" \
-  -d "{
-    \"fileName\": \"screenshot.png\",
-    \"fileDataBase64\": \"$FILE_BASE64\",
-    \"comment\": \"Screenshot of issue\"
-  }"
+switchboard api POST "/task/clickup/$TASK_ID/attach" "{
+  \"fileName\": \"screenshot.png\",
+  \"fileDataBase64\": \"$FILE_BASE64\",
+  \"comment\": \"Screenshot of issue\"
+}"
 ```
 
 ## Parameters

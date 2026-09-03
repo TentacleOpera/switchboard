@@ -43,18 +43,14 @@ When the user arrives with no active plan or needs guidance:
 
 ## Port Discovery
 
-Every `curl` in this skill talks to the local API, and every one of them opens with
-the same four-line resolve. It is four lines and not one because your shell does not
-survive between snippets — paste it at the top of each block, do not assume `BASE` is
-already set.
+Every API call in this skill talks to the local Switchboard API via `switchboard api`.
 
-**A port file is not liveness.** Read the port, call `GET /health`, and treat only a
-`200` as "a board is running". `.switchboard/api-server-port.txt` goes stale the moment
+**A port file is not liveness.** The CLI checks `/health` directly and treats only a
+`200` as "a board is running". A port file goes stale the moment
 the extension restarts on a different port, and a stale file resolves to a dead socket
 that answers nothing.
 
-**A failed resolve means the board is down. It does not mean no terminals exist, no
-teams are configured, or no work is staged** — you have not asked the board anything
+**A failed resolve means the board is down. It does not mean no terminals exist, no teams are configured, or no work is staged** — you have not asked the board anything
 yet, so you know nothing about its contents. Report that the board is not answering and
 stop. Never report an empty fleet, an empty board, or a missing team off a resolve that
 never got a `200`; that misdiagnosis is the whole reason this section exists.
@@ -91,18 +87,11 @@ Ask the API. Substitute `WS` and `PROJ` from the `WORKSPACE_ROOT` and
 `ACTIVE_PROJECT_FILTER` lines in your prompt:
 
 ```bash
-# Resolve BASE (see ## Port Discovery). A failed resolve means the board is
-# down — never that no terminals exist. Stop; do not fall through.
-PORT=$(tr -d '[:space:]' < "${WORKSPACE_ROOT:-$PWD}/.switchboard/api-server-port.txt" 2>/dev/null)
-BASE="http://127.0.0.1:$PORT"
-[ -n "$PORT" ] && [ "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/health" 2>/dev/null)" = "200" ] \
-  || { echo "Board not answering on port ${PORT:-<none>} — stale port file, board is down."; exit 1; }
 WS="<WORKSPACE_ROOT>"; PROJ="<ACTIVE_PROJECT_FILTER, empty if none>"
 ready () {
-  curl -s --get "$BASE/kanban/plans" \
-    --data-urlencode "column=$1" --data-urlencode "workspaceRoot=$WS" \
+  switchboard api GET "/kanban/plans?column=$1&workspaceRoot=$WS" --json \
   | jq -r --arg proj "$PROJ" '
-      .data
+      .result.data
       | map(select((.featureId // "") == ""))
       | map(select($proj == "" or .project == $proj))
       | .[] | "\(if .isFeature == 1 then "feature" else "plan  " end)\t\(.topic)\t\(.planId)"'
@@ -218,8 +207,7 @@ When the user confirms (or alters and confirms) the goal:
    opening Log entry. See `## Session File` for the structure. The write comes
    before the confirm call so a confirm that races a host restart still finds
    its session on disk.
-2. **Call `POST /mission-control/confirm`** against the port in
-   `.switchboard/api-server-port.txt`. This is the only thing that arms the
+2. **Call `POST /mission-control/confirm`** via `switchboard api POST /mission-control/confirm '{}'`. This is the only thing that arms the
    session — it sets `missionControlArmed` and applies the oversight
    worktree topology. No file-watcher backstop arms on `session.md` appearing;
    the API call is the single mechanism.
@@ -228,13 +216,7 @@ When the user confirms (or alters and confirms) the goal:
    begin ticking on a session that never armed.
 
 ```bash
-# Resolve BASE (see ## Port Discovery). A failed resolve means the board is
-# down — never that no terminals exist. Stop; do not fall through.
-PORT=$(tr -d '[:space:]' < "${WORKSPACE_ROOT:-$PWD}/.switchboard/api-server-port.txt" 2>/dev/null)
-BASE="http://127.0.0.1:$PORT"
-[ -n "$PORT" ] && [ "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/health" 2>/dev/null)" = "200" ] \
-  || { echo "Board not answering on port ${PORT:-<none>} — stale port file, board is down."; exit 1; }
-curl -s -X POST "$BASE/mission-control/confirm" -H "Content-Type: application/json" -d '{}'
+switchboard api POST /mission-control/confirm '{}'
 ```
 
 ## Handoff, or arm?
@@ -261,15 +243,9 @@ When handing off to a single team, execute these five steps in order, then exit:
 5. **Report and exit:** `POST /mission-control/handoff` closes your seat and finishes the session. It refuses with `409` if no coding head is live or the `STAGING` queue is empty — that refusal means you are not done, not that handoff is broken:
 
 ```bash
-# Resolve BASE (see ## Port Discovery). A failed resolve means the board is
-# down — never that no terminals exist. Stop; do not fall through.
-PORT=$(tr -d '[:space:]' < "${WORKSPACE_ROOT:-$PWD}/.switchboard/api-server-port.txt" 2>/dev/null)
-BASE="http://127.0.0.1:$PORT"
-[ -n "$PORT" ] && [ "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/health" 2>/dev/null)" = "200" ] \
-  || { echo "Board not answering on port ${PORT:-<none>} — stale port file, board is down."; exit 1; }
 # Head pacing: "dispatched card a1b2c3d4 to Coding lead. Lead paces from here; queue watch is armed."
 # Seat pacing: "dispatched card a1b2c3d4 to <seat returned by queue/next>. Seats pace from here; queue watch is armed."
-curl -s -X POST "$BASE/mission-control/handoff" -H "Content-Type: application/json" -d '{
+switchboard api POST /mission-control/handoff '{
   "headTerminal": "Coding",
   "stagedCount": 4,
   "firstCardPlanId": "a1b2c3d4",
@@ -471,14 +447,8 @@ disk, or the rules below describe behaviour you cannot perform:
 You communicate with leads or dispatch work by messaging team leads. The delivery path is:
 
 ```bash
-# Resolve BASE (see ## Port Discovery). A failed resolve means the board is
-# down — never that no terminals exist. Stop; do not fall through.
-PORT=$(tr -d '[:space:]' < "${WORKSPACE_ROOT:-$PWD}/.switchboard/api-server-port.txt" 2>/dev/null)
-BASE="http://127.0.0.1:$PORT"
-[ -n "$PORT" ] && [ "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/health" 2>/dev/null)" = "200" ] \
-  || { echo "Board not answering on port ${PORT:-<none>} — stale port file, board is down."; exit 1; }
 # For messages, questions, and status queries (suppresses standing orders and seat directive blocks):
-curl -s -X POST "$BASE/terminals/verb/ptySendPrompt" -H "Content-Type: application/json" -d '{
+switchboard api POST /terminals/verb/ptySendPrompt '{
   "name": "<lead terminal friendlyName>",
   "data": "Status query or instruction text",
   "clearBeforePrompt": false,
@@ -504,13 +474,13 @@ When clearing terminals (individual seat or team roster), use the canonical clea
 
 ```bash
 # Clear a team's terminals (excludes caller and lead automatically; defers busy seats)
-curl -s -X POST "$BASE/terminals/clear" -H "Content-Type: application/json" -d '{
+switchboard api POST /terminals/clear '{
   "team": "<head terminal friendlyName or teamId>",
   "from": "<your terminal name>"
 }'
 
 # Clear a single seat
-curl -s -X POST "$BASE/terminals/clear" -H "Content-Type: application/json" -d '{
+switchboard api POST /terminals/clear '{
   "name": "<terminal friendlyName>",
   "from": "<your terminal name>"
 }'

@@ -8,15 +8,11 @@
 
 ### Resolve name to ID:
 ```bash
-CUR="$PWD"
-while [ "$CUR" != "/" ] && [ ! -d "$CUR/.agents/skills" ]; do CUR=$(dirname "$CUR"); done
-source "$CUR/.agents/skills/_lib/sb_api_call.sh"
-
 # Resolve a task name
-sb_api_call GET "/resolve/clickup/name/My%20Task%20Name"
+switchboard api GET "/resolve/clickup/name/My%20Task%20Name"
 
 # Resolve a list name
-sb_api_call GET "/resolve/clickup/name/My%20List%20Name"
+switchboard api GET "/resolve/clickup/name/My%20List%20Name"
 ```
 
 ## Response

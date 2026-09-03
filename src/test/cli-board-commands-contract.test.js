@@ -30,7 +30,7 @@ function readSource(...segments) {
 }
 
 /** The board subcommands this plan added, plus the pre-existing read-only three. */
-const BOARD_SUBCOMMANDS = ['plans', 'ready', 'dispatch', 'done', 'next', 'clear', 'fleet', 'verb', 'help', 'about', 'version', 'setup'];
+const BOARD_SUBCOMMANDS = ['plans', 'ready', 'dispatch', 'done', 'next', 'clear', 'fleet', 'verb', 'api', 'help', 'about', 'version', 'setup'];
 
 // ── Banner art ───────────────────────────────────────────────────────────────
 //
@@ -659,7 +659,7 @@ function run() {
             && /'switchboard setup'/.test(guidanceHints[1]) && /'switchboard help'/.test(guidanceHints[1]),
         'OFFLINE_HINTS must carry all four recovery suggestions (local, tailnet, setup, help).'
     );
-    for (const cmd of ['cmdPlans', 'cmdReady', 'cmdDispatch', 'cmdClear', 'cmdFleet', 'cmdBoardConsole']) {
+    for (const cmd of ['cmdPlans', 'cmdReady', 'cmdDispatch', 'cmdClear', 'cmdFleet', 'cmdBoardConsole', 'cmdApi']) {
         const fnStart = cli.indexOf(`async function ${cmd}(`);
         assert.ok(fnStart > 0, `cli.ts must define ${cmd}.`);
         const fnEnd = cli.indexOf('async function ', fnStart + 1);
@@ -669,6 +669,83 @@ function run() {
             `${cmd} must call the shared emitOfflineGuidance helper when findRunningInstance returns null.`
         );
     }
+
+    // ── 12. Generic apiRequest helper & switchboard api escape hatch ──────────
+    // Plan: .switchboard/plans/switchboard-api-escape-hatch-in-the-cli.md
+    assert.match(
+        cli,
+        /function apiRequest\(\s*port: number,\s*method: string,\s*pathname: string,\s*workspaceRoot: string,/,
+        'cli.ts must define a generic apiRequest helper.'
+    );
+    assert.match(
+        cli,
+        /function apiGet\(port: number, pathname: string, workspaceRoot: string, query\?: Record<string, string>\): Promise<ApiResponse> \{\s*return apiRequest\(port, 'GET', pathname, workspaceRoot, undefined, query\);\s*\}/,
+        'apiGet must delegate to apiRequest.'
+    );
+    assert.match(
+        cli,
+        /function apiPost\(port: number, pathname: string, workspaceRoot: string, payload: unknown\): Promise<ApiResponse> \{\s*return apiRequest\(port, 'POST', pathname, workspaceRoot, payload\);\s*\}/,
+        'apiPost must delegate to apiRequest.'
+    );
+
+    // Method coverage & validation in cmdApi.
+    const apiStart = cli.indexOf('async function cmdApi(');
+    assert.ok(apiStart > 0, 'cli.ts must define cmdApi.');
+    const apiEnd = cli.indexOf('async function cmdDone(');
+    const apiBody = cli.slice(apiStart, apiEnd > 0 ? apiEnd : undefined);
+
+    for (const m of ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']) {
+        assert.ok(apiBody.includes(m), `cmdApi must support and validate ${m} method.`);
+    }
+
+    // Path validation: must start with / and not contain scheme / authority.
+    assert.match(
+        apiBody,
+        /!rawPath\.startsWith\('\/'\)\s*\|\|\s*rawPath\.startsWith\('\/\/'\)/,
+        "cmdApi must reject paths that do not start with '/' or start with '//'."
+    );
+
+    // Body on GET rejected.
+    assert.match(
+        apiBody,
+        /upperMethod === 'GET'\s*&&\s*\(positionalBody !== undefined\s*\|\|\s*dataArg !== undefined\)/,
+        'cmdApi must reject a body on GET requests.'
+    );
+
+    // Auth error handling (401 -> exit 4).
+    assert.match(
+        apiBody,
+        /res\.status === 401[\s\S]{0,300}?exitFlushed\(4\)/,
+        'cmdApi must exit 4 on 401 response.'
+    );
+
+    // JSON envelope { success, status, result }.
+    assert.match(
+        apiBody,
+        /emitJson\(\{\s*success:\s*ok,\s*status:\s*res\.status,\s*result\s*\}\)/,
+        'cmdApi must emit { success, status, result } under --json.'
+    );
+
+    // Verify 11 target agent-facing REST paths are documented and valid for cmdApi invocation.
+    const TARGET_REST_ROUTES = [
+        'GET /metadata/clickup',
+        'GET /metadata/linear',
+        'GET /task/clickup/',
+        'GET /task/linear/',
+        'POST /api/clickup',
+        'POST /api/linear',
+        'POST /comment',
+        'POST /diagram/generate',
+        'POST /doc/clickup',
+        'POST /task/clickup',
+        'POST /worktree/cleanup',
+    ];
+    for (const route of TARGET_REST_ROUTES) {
+        const [method, pathname] = route.split(' ');
+        assert.ok(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(method), `Route method ${method} must be in allowed set.`);
+        assert.ok(pathname.startsWith('/'), `Route path ${pathname} must start with /.`);
+    }
+
     // ── Every dispatched subcommand is also an ALLOWED subcommand. ───────────
     // main() answers `process.argv[2] === 'X'` far below the KNOWN_SUBCOMMANDS
     // gate, so a handler added without a matching allowlist entry is dead: the
@@ -691,7 +768,7 @@ function run() {
         `main() dispatches subcommand(s) missing from KNOWN_SUBCOMMANDS: ${unreachable.join(', ')} — `
         + 'the gate rejects them before the handler runs.'
     );
-    for (const cmd of ['done', 'next']) {
+    for (const cmd of ['done', 'next', 'api']) {
         assert.ok(known.has(cmd), `KNOWN_SUBCOMMANDS must contain '${cmd}'.`);
         assert.ok(dispatched.has(cmd), `main() must dispatch '${cmd}'.`);
     }

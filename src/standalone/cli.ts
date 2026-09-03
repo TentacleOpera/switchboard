@@ -24,6 +24,7 @@ function usage(): string {
        npx switchboard clear <terminal|--all> [--json]
        npx switchboard fleet [--json]
        npx switchboard verb <verbName> [jsonPayload] [--json]
+       npx switchboard api <METHOD> <path> [jsonBody] [--json] [--data @<file>]
        npx switchboard setup [init|scaffold|control-plane] [options]
        npx switchboard stop
        npx switchboard status [--json]
@@ -60,6 +61,7 @@ Board commands (drive the board from a terminal):
   clear               Clear a terminal seat (or --all seats).
   fleet               Show live terminal seats, roles, and assigned plans.
   verb                Call any protocol verb directly: switchboard verb <name> <json>
+  api                 Call any API endpoint directly: switchboard api <METHOD> <path> [json] [--data @file]
   setup               Unified setup wizard (init, scaffold, control-plane).
   help                Show this help (alias: --help, -h).
   about               Show version and system info (alias: version, --version, -v).
@@ -506,57 +508,58 @@ interface ApiResponse {
 }
 
 /**
- * HTTP GET against the running server with auth headers attached.
+ * Generic HTTP request against the running server with auth headers attached.
+ *
+ * `workspaceRoot` routing (load-bearing):
+ * Routes `workspaceRoot` by method family: query param for read-like methods (GET, DELETE),
+ * body field for write-like methods (POST, PUT, PATCH).
  * Rejects on network error or timeout — callers handle the rejection.
  */
-function apiGet(port: number, pathname: string, workspaceRoot: string, query?: Record<string, string>): Promise<ApiResponse> {
+function apiRequest(
+    port: number,
+    method: string,
+    pathname: string,
+    workspaceRoot: string,
+    payload?: unknown,
+    query?: Record<string, string>
+): Promise<ApiResponse> {
     const token = discoverAuthToken(workspaceRoot);
+    const upperMethod = (method || 'GET').toUpperCase();
+    const isReadLike = upperMethod === 'GET' || upperMethod === 'DELETE';
     let url = `http://127.0.0.1:${port}${pathname}`;
-    // `workspaceRoot` is NOT optional on the read path. `_resolveDbFromQuery`
-    // falls back to the host's own selected root when the param is absent — on
-    // the extension host that is a DIFFERENT board from the one the CLI's cwd
-    // names. The dispatch POST already carries `workspaceRoot` in its body, so
-    // omitting it here lets `ready` list one board's cards and `dispatch`
-    // resolve them against another (404 → exit 5, "plan not found" for a card
-    // the CLI just printed). The Mission Control protocol passes
-    // `workspaceRoot=$WS` on every read for exactly this reason.
-    const params: Record<string, string> = { ...(query || {}), workspaceRoot };
-    const qs = new URLSearchParams(params).toString();
-    if (qs) { url += `?${qs}`; }
+
+    if (isReadLike) {
+        // `workspaceRoot` is NOT optional on the read path. `_resolveDbFromQuery`
+        // falls back to the host's own selected root when the param is absent — on
+        // the extension host that is a DIFFERENT board from the one the CLI's cwd
+        // names.
+        const params: Record<string, string> = { ...(query || {}), workspaceRoot };
+        const qs = new URLSearchParams(params).toString();
+        if (qs) { url += (url.includes('?') ? '&' : '?') + qs; }
+    } else if (query) {
+        const qs = new URLSearchParams(query).toString();
+        if (qs) { url += (url.includes('?') ? '&' : '?') + qs; }
+    }
+
+    let finalPayload = payload;
+    if (!isReadLike && typeof payload === 'object' && payload !== null && !Array.isArray(payload)) {
+        finalPayload = { workspaceRoot, ...(payload as Record<string, any>) };
+    }
+
+    const bodyStr = finalPayload === undefined ? '' : JSON.stringify(finalPayload);
+
     return new Promise((resolve, reject) => {
         const headers: http.OutgoingHttpHeaders = {};
-        if (token) { headers['Authorization'] = `Bearer ${token}`; }
-        const req = http.get(url, { headers }, (res) => {
-            let body = '';
-            res.on('data', (c: Buffer) => body += c.toString());
-            res.on('end', () => {
-                const status = res.statusCode ?? 200;
-                resolve({
-                    status,
-                    body,
-                    json: () => { try { return JSON.parse(body); } catch { return null; } },
-                });
-            });
-        });
-        req.on('error', reject);
-        req.setTimeout(15000, () => { try { req.destroy(); } catch { /* */ } reject(new Error('Request timed out')); });
-    });
-}
-
-/**
- * HTTP POST against the running server with auth headers and a JSON body.
- */
-function apiPost(port: number, pathname: string, workspaceRoot: string, payload: unknown): Promise<ApiResponse> {
-    const token = discoverAuthToken(workspaceRoot);
-    const url = `http://127.0.0.1:${port}${pathname}`;
-    const bodyStr = payload === undefined ? '' : JSON.stringify(payload);
-    return new Promise((resolve, reject) => {
-        const headers: http.OutgoingHttpHeaders = {
-            'Content-Type': 'application/json',
-        };
-        if (bodyStr) { headers['Content-Length'] = Buffer.byteLength(bodyStr); }
-        if (token) { headers['Authorization'] = `Bearer ${token}`; }
-        const req = http.request(url, { method: 'POST', headers }, (res) => {
+        if (bodyStr || ['POST', 'PUT', 'PATCH'].includes(upperMethod)) {
+            headers['Content-Type'] = 'application/json';
+        }
+        if (bodyStr) {
+            headers['Content-Length'] = Buffer.byteLength(bodyStr);
+        }
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+        }
+        const req = http.request(url, { method: upperMethod, headers }, (res) => {
             let body = '';
             res.on('data', (c: Buffer) => body += c.toString());
             res.on('end', () => {
@@ -573,6 +576,21 @@ function apiPost(port: number, pathname: string, workspaceRoot: string, payload:
         if (bodyStr) { req.write(bodyStr); }
         req.end();
     });
+}
+
+/**
+ * HTTP GET against the running server with auth headers attached.
+ * Rejects on network error or timeout — callers handle the rejection.
+ */
+function apiGet(port: number, pathname: string, workspaceRoot: string, query?: Record<string, string>): Promise<ApiResponse> {
+    return apiRequest(port, 'GET', pathname, workspaceRoot, undefined, query);
+}
+
+/**
+ * HTTP POST against the running server with auth headers and a JSON body.
+ */
+function apiPost(port: number, pathname: string, workspaceRoot: string, payload: unknown): Promise<ApiResponse> {
+    return apiRequest(port, 'POST', pathname, workspaceRoot, payload);
 }
 
 /** The first 8 hex chars of a planId — short enough to type, unique in practice. */
@@ -1506,6 +1524,137 @@ async function cmdVerb(workspaceRoot: string, argv: string[]): Promise<void> {
 }
 
 /**
+ * `switchboard api <METHOD> <path> [jsonBody] [--json] [--data @<file>]`
+ *
+ * Direct CLI access to any LocalApiServer route with authentication.
+ */
+async function cmdApi(workspaceRoot: string, argv: string[]): Promise<void> {
+    const jsonFlag = argv.includes('--json');
+    if (jsonFlag) { routeLogsToStderr(); }
+
+    let dataArg: string | undefined;
+    const positional: string[] = [];
+    for (let i = 0; i < argv.length; i++) {
+        const a = argv[i];
+        if (a === '--json') { continue; }
+        if (a === '--data') { dataArg = argv[++i]; continue; }
+        if (a.startsWith('--data=')) { dataArg = a.slice('--data='.length); continue; }
+        if (a.startsWith('-')) { continue; }
+        positional.push(a);
+    }
+
+    const rawMethod = positional[0];
+    const rawPath = positional[1];
+    const positionalBody = positional[2];
+
+    if (!rawMethod || !rawPath) {
+        if (jsonFlag) { emitJson({ success: false, error: 'Usage: switchboard api <METHOD> <path> [jsonBody] [--json] [--data @<file>]' }); }
+        else { console.error('Usage: npx switchboard api <METHOD> <path> [jsonBody] [--json] [--data @<file>]'); }
+        exitFlushed(5);
+    }
+
+    const upperMethod = rawMethod.toUpperCase();
+    const ALLOWED_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
+    if (!ALLOWED_METHODS.includes(upperMethod)) {
+        if (jsonFlag) { emitJson({ success: false, error: `Invalid HTTP method '${rawMethod}'. Allowed: GET, POST, PUT, PATCH, DELETE` }); }
+        else { console.error(`[switchboard] Invalid HTTP method '${rawMethod}'. Allowed: GET, POST, PUT, PATCH, DELETE`); }
+        exitFlushed(5);
+    }
+
+    if (!rawPath.startsWith('/') || rawPath.startsWith('//') || /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(rawPath)) {
+        if (jsonFlag) { emitJson({ success: false, error: `Invalid path '${rawPath}': must start with '/' and not contain scheme or authority` }); }
+        else { console.error(`[switchboard] Invalid path '${rawPath}': must start with '/' and not contain scheme or authority`); }
+        exitFlushed(5);
+    }
+
+    if (upperMethod === 'GET' && (positionalBody !== undefined || dataArg !== undefined)) {
+        if (jsonFlag) { emitJson({ success: false, error: 'GET requests cannot carry a body' }); }
+        else { console.error('[switchboard] GET requests cannot carry a body.'); }
+        exitFlushed(5);
+    }
+
+    if (positionalBody !== undefined && dataArg !== undefined) {
+        if (jsonFlag) { emitJson({ success: false, error: 'Cannot specify both positional JSON body and --data file' }); }
+        else { console.error('[switchboard] Cannot specify both positional JSON body and --data file.'); }
+        exitFlushed(5);
+    }
+
+    let parsedBody: unknown = undefined;
+    if (dataArg !== undefined) {
+        const filePath = dataArg.startsWith('@') ? dataArg.slice(1) : dataArg;
+        const resolvedPath = path.isAbsolute(filePath) ? filePath : path.resolve(workspaceRoot, filePath);
+        try {
+            const fileContent = fs.readFileSync(resolvedPath, 'utf8');
+            try {
+                parsedBody = JSON.parse(fileContent);
+            } catch {
+                if (jsonFlag) { emitJson({ success: false, error: `Invalid JSON in data file: ${filePath}` }); }
+                else { console.error(`[switchboard] Invalid JSON in data file: ${filePath}`); }
+                exitFlushed(5);
+            }
+        } catch (err: any) {
+            if (jsonFlag) { emitJson({ success: false, error: `Cannot read data file: ${filePath}` }); }
+            else { console.error(`[switchboard] Cannot read data file '${filePath}': ${err?.message || err}`); }
+            exitFlushed(5);
+        }
+    } else if (positionalBody !== undefined) {
+        try {
+            parsedBody = JSON.parse(positionalBody);
+        } catch {
+            if (jsonFlag) { emitJson({ success: false, error: `Invalid JSON payload: ${positionalBody}` }); }
+            else { console.error(`[switchboard] Invalid JSON payload: ${positionalBody}`); }
+            exitFlushed(5);
+        }
+    }
+
+    const port = await findRunningInstance(workspaceRoot);
+    if (port === null) {
+        emitOfflineGuidance(jsonFlag);
+    }
+
+    let res: ApiResponse;
+    try {
+        res = await apiRequest(port, upperMethod, rawPath, workspaceRoot, parsedBody);
+    } catch (err: any) {
+        if (jsonFlag) { emitJson({ success: false, error: err?.message || 'Request failed' }); }
+        else { console.error(`[switchboard] Request failed: ${err?.message || err}`); }
+        exitFlushed(1);
+    }
+
+    if (res.status === 401) {
+        if (jsonFlag) {
+            const parsed = res.json();
+            const result = parsed !== null ? parsed : (res.body || 'Authentication failed');
+            emitJson({ success: false, status: 401, result });
+        } else {
+            console.error('[switchboard] Authentication failed (401). The server requires a token.');
+        }
+        exitFlushed(4);
+    }
+
+    if (jsonFlag) {
+        const parsed = res.json();
+        const result = parsed !== null ? parsed : res.body;
+        const ok = res.status >= 200 && res.status < 300;
+        emitJson({ success: ok, status: res.status, result });
+        exitFlushed(ok ? 0 : 1);
+    }
+
+    if (res.status >= 200 && res.status < 300) {
+        const data = res.json();
+        if (data && typeof data === 'object') {
+            console.log(JSON.stringify(data, null, 2));
+        } else {
+            console.log(res.body || 'OK');
+        }
+        exitFlushed(0);
+    }
+
+    console.error(`[switchboard] api ${upperMethod} ${rawPath} returned ${res.status}: ${res.body}`);
+    exitFlushed(1);
+}
+
+/**
  * `switchboard done --from <seat> [--plan <planId>] [--outcome failed] [--json]`
  *
  * Signal task completion for a seat via POST /kanban/queue/done.
@@ -2072,7 +2221,7 @@ async function main() {
     const KNOWN_SUBCOMMANDS = new Set([
         'local', 'tailnet', 'stop', 'status', 'logs', 'init', 'scaffold',
         'control-plane', 'secrets', 'token', 'export', 'import',
-        'plans', 'ready', 'dispatch', 'done', 'next', 'clear', 'fleet', 'verb',
+        'plans', 'ready', 'dispatch', 'done', 'next', 'clear', 'fleet', 'verb', 'api',
         'help', 'about', 'version', 'setup',
     ]);
     const firstArg = process.argv[2];
@@ -2123,7 +2272,7 @@ async function main() {
     // stray control-plane marker in whatever directory the command was launched from
     // — including $HOME, which `isAllowedSwitchboardLocation` exists to keep out.
     // `stop`, `status`, `logs`, and the board commands (`plans`, `ready`,
-    // `dispatch`, `clear`, `fleet`, `verb`, `help`, `about`, `version`, `setup`)
+    // `dispatch`, `clear`, `fleet`, `verb`, `api`, `help`, `about`, `version`, `setup`)
     // are read-only queries against an existing .switchboard/ — they must not
     // create one in a directory that has none. The bare `switchboard` (no
     // subcommand) renders the front-door menu and writes nothing itself:
@@ -2138,6 +2287,7 @@ async function main() {
         && subcommand !== 'plans' && subcommand !== 'ready' && subcommand !== 'dispatch'
         && subcommand !== 'done' && subcommand !== 'next'
         && subcommand !== 'clear' && subcommand !== 'fleet' && subcommand !== 'verb'
+        && subcommand !== 'api'
         && subcommand !== 'help' && subcommand !== 'about' && subcommand !== 'version'
         && subcommand !== 'setup';
     const switchboardDir = path.join(workspaceRoot, '.switchboard');
@@ -2829,6 +2979,11 @@ async function main() {
     // ── verb ──────────────────────────────────────────────────────
     if (process.argv[2] === 'verb') {
         await cmdVerb(workspaceRoot, process.argv.slice(3));
+    }
+
+    // ── api ───────────────────────────────────────────────────────
+    if (process.argv[2] === 'api') {
+        await cmdApi(workspaceRoot, process.argv.slice(3));
     }
 
     // ── Bare `switchboard`: interactive front-door menu ───────────

@@ -10,21 +10,15 @@
 
 ## Usage
 ```bash
-CUR="$PWD"
-while [ "$CUR" != "/" ] && [ ! -d "$CUR/.agents/skills" ]; do CUR=$(dirname "$CUR"); done
-source "$CUR/.agents/skills/_lib/sb_api_call.sh"
-
 # Generate and upload to ClickUp task
-sb_api_call POST /diagram/generate \
-  -H "Content-Type: application/json" \
-  -d '{
-    "diagramType": "flowchart",
-    "maxNodes": 30,
-    "focusPath": "src/services/",
-    "detailLevel": "summary",
-    "targetId": "task123456",
-    "platform": "clickup"
-  }'
+switchboard api POST /diagram/generate '{
+  "diagramType": "flowchart",
+  "maxNodes": 30,
+  "focusPath": "src/services/",
+  "detailLevel": "summary",
+  "targetId": "task123456",
+  "platform": "clickup"
+}'
 ```
 
 ## Parameters

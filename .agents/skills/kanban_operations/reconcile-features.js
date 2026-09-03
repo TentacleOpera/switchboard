@@ -67,53 +67,21 @@ try {
   process.exit(1);
 }
 
-function findApiPort(startDir) {
-  let cur = path.resolve(startDir);
-  while (true) {
-    const portFile = path.join(cur, '.switchboard', 'api-server-port.txt');
-    try {
-      if (fs.existsSync(portFile)) {
-        const port = fs.readFileSync(portFile, 'utf8').trim();
-        if (port) return port;
-      }
-    } catch { /* keep walking */ }
-    const next = path.dirname(cur);
-    if (next === cur) return null;
-    cur = next;
-  }
-}
-
-function httpJson(method, port, urlPath, bodyObj, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    const payload = bodyObj ? JSON.stringify(bodyObj) : '';
-    const req = http.request(
-      { host: '127.0.0.1', port: Number(port), path: urlPath, method,
-        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } },
-      (res) => { let data = ''; res.on('data', (c) => { data += c; }); res.on('end', () => resolve({ status: res.statusCode, body: data })); }
-    );
-    req.on('error', reject);
-    if (timeoutMs) { req.setTimeout(timeoutMs, () => req.destroy(new Error('timeout'))); }
-    if (payload) req.write(payload);
-    req.end();
-  });
-}
+const { cliApiCall } = require('../_lib/cli-call');
 
 (async () => {
-  const port = findApiPort(workspaceRoot) || findApiPort(process.cwd());
-  if (!port) {
-    console.log(JSON.stringify({ ok: false, error: 'Switchboard extension not reachable (no .switchboard/api-server-port.txt). Open the workspace in VS Code with Switchboard active and retry.' }));
-    process.exit(1);
-  }
   try {
-    const resp = await httpJson('POST', port, '/kanban/features/reconcile',
-      { workspaceRoot, ...body }, 30000);
-    let parsed = {};
-    try { parsed = JSON.parse(resp.body); } catch { /* non-JSON */ }
-    if (resp.status >= 200 && resp.status < 300 && parsed.success) {
-      console.log(JSON.stringify({ ok: true, features: parsed.features, mutations: parsed.mutations, warnings: parsed.warnings }));
+    const resp = await cliApiCall('POST', '/kanban/features/reconcile', { workspaceRoot, ...body }, workspaceRoot);
+    if (!resp.reachable) {
+      console.log(JSON.stringify({ ok: false, error: 'Switchboard extension not reachable. Open the workspace in VS Code with Switchboard active and retry.' }));
+      process.exit(1);
+    }
+    const res = resp.result || {};
+    if (resp.success && res.success !== false) {
+      console.log(JSON.stringify({ ok: true, features: res.features, mutations: res.mutations, warnings: res.warnings }));
       process.exit(0);
     }
-    console.log(JSON.stringify({ ok: false, error: parsed.error || `HTTP ${resp.status}`, mutations: parsed.mutations, warnings: parsed.warnings }));
+    console.log(JSON.stringify({ ok: false, error: resp.error || res.error || (resp.status ? `HTTP ${resp.status}` : undefined), mutations: res.mutations, warnings: res.warnings }));
     process.exit(1);
   } catch (err) {
     console.log(JSON.stringify({ ok: false, error: err.message }));

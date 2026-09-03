@@ -1,6 +1,6 @@
 # Skill: External Team Lead Mode
 
-This skill defines how a non-terminal external agent (Antigravity, Cursor, Zed, IDE chat, or any chat agent with localhost curl and filesystem access) operates as the lead of a team of terminal worker agents in Switchboard.
+This skill defines how a non-terminal external agent (Antigravity, Cursor, Zed, IDE chat, or any chat agent with localhost CLI and filesystem access) operates as the lead of a team of terminal worker agents in Switchboard.
 
 ---
 
@@ -16,18 +16,13 @@ In External-Headed Team Mode:
 
 ---
 
-## 2. Port Discovery & Endpoint Access
+## 2. API Access
 
-> **If your prompt includes a `SWITCHBOARD STATUS: Live` line, skip this port-discovery/health-check section — you already know the port and that the server is up. Use the port from that line directly. This section is for external agents connecting independently.**
-
-Find Switchboard's LocalApiServer port:
+All interactions with Switchboard go through the `switchboard` CLI (`switchboard api <METHOD> <path> [jsonBody]`).
+Verify Switchboard is running:
 ```bash
-PORT=$(cat .switchboard/api-server-port.txt 2>/dev/null || cat .switchboard/api-port)
-BASE="http://127.0.0.1:$PORT"
-curl -s "$BASE/health"
+switchboard api GET /health
 ```
-
-If auth is enabled, include `Authorization: Bearer <token>` (from environment `SWITCHBOARD_API_TOKEN` or settings).
 
 ---
 
@@ -35,13 +30,11 @@ If auth is enabled, include `Authorization: Bearer <token>` (from environment `S
 
 To create an external-headed team:
 ```bash
-curl -X POST "$BASE/teams/create-external" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "template": "Coding",
-    "headName": "<your-agent-name>",
-    "featureId": "<optional-feature-id>"
-  }'
+switchboard api POST /teams/create-external '{
+  "template": "Coding",
+  "headName": "<your-agent-name>",
+  "featureId": "<optional-feature-id>"
+}'
 ```
 Response returns:
 ```json
@@ -58,10 +51,10 @@ Response returns:
 
 ## 3b. Board Reads
 
-- **Full board:** `GET $BASE/kanban/board`
-- **Features:** `GET $BASE/kanban/features` — pick yours by `planId`. There is **no**
+- **Full board:** `switchboard api GET /kanban/board`
+- **Features:** `switchboard api GET /kanban/features` — pick yours by `planId`. There is **no**
   `GET /kanban/feature`; `/kanban/feature` is POST-only (feature creation).
-- **Plans:** `GET $BASE/kanban/plans` · **One plan:** `GET $BASE/kanban/plan?planId=<planId>`
+- **Plans:** `switchboard api GET /kanban/plans` · **One plan:** `switchboard api GET "/kanban/plan?planId=<planId>"`
 
 ---
 
@@ -81,13 +74,13 @@ ls -1 .switchboard/teams/<teamId>/reports/*.md 2>/dev/null
 ```
 
 If you are remote (reaching Switchboard through a tunnel, no filesystem access):
-- `GET /teams/<teamId>/reports` — list unclaimed worker reports with content
-- `POST /teams/<teamId>/reports/claim` — mark a report processed (body: `{"filename": "..."}`)
+- `switchboard api GET "/teams/<teamId>/reports"` — list unclaimed worker reports with content
+- `switchboard api POST "/teams/<teamId>/reports/claim" '{"filename": "..."}'` — mark a report processed
 
 For each unhandled report file:
 1. Read the frontmatter and report body.
 2. Verify the work (see Step 3).
-3. **Claim the report:** Move the report file to `.switchboard/teams/<teamId>/reports/claimed/` (or call `POST /teams/<teamId>/reports/claim` if remote) so it is not re-processed on future ticks:
+3. **Claim the report:** Move the report file to `.switchboard/teams/<teamId>/reports/claimed/` (or call `switchboard api POST "/teams/<teamId>/reports/claim" '{"filename": "..."}'` if remote) so it is not re-processed on future ticks:
    ```bash
    mv .switchboard/teams/<teamId>/reports/<report-file>.md .switchboard/teams/<teamId>/reports/claimed/
    ```
@@ -100,19 +93,17 @@ git -C <worktree> diff <base>..HEAD
 ```
 
 If you are remote:
-- `GET /worktree/<worktreeId>/diff` — full diff + commit count + commit log
-- `GET /worktree/<worktreeId>/diff?stat=true` — summary only (lighter)
+- `switchboard api GET "/worktree/<worktreeId>/diff"` — full diff + commit count + commit log
+- `switchboard api GET "/worktree/<worktreeId>/diff?stat=true"` — summary only (lighter)
 
 ### Step 4: Dispatch Next Subtask or Advance Card
 - **Dispatch subtask to a worker:**
   ```bash
-  curl -X POST "$BASE/kanban/dispatch" \
-    -H "Content-Type: application/json" \
-    -d '{
-      "plan": "<subtaskPlanId>",
-      "targetColumn": "<CODING_COLUMN>",
-      "from": "<your-agent-name>"
-    }'
+  switchboard api POST /kanban/dispatch '{
+    "plan": "<subtaskPlanId>",
+    "targetColumn": "<CODING_COLUMN>",
+    "from": "<your-agent-name>"
+  }'
   ```
 - **Send prompt to a worker terminal:**
   `"kind"` says what the payload IS, and it decides what the host appends.
@@ -123,38 +114,32 @@ If you are remote:
   Omitting `kind` on a payload that carries no `dispatch` object is read as a
   message, so a dispatch must say so.
   ```bash
-  curl -X POST "$BASE/terminals/verb/ptySendPrompt" \
-    -H "Content-Type: application/json" \
-    -d '{
-      "name": "<workerName>",
-      "data": "<instructions>",
-      "origin": "<your-agent-name>",
-      "clearBeforePrompt": false,
-      "kind": "dispatch"
-    }'
+  switchboard api POST /terminals/verb/ptySendPrompt '{
+    "name": "<workerName>",
+    "data": "<instructions>",
+    "origin": "<your-agent-name>",
+    "clearBeforePrompt": false,
+    "kind": "dispatch"
+  }'
   ```
 - **Hand whole feature to review when all subtasks pass — ONLY if your team has a reviewer seat:**
   Check your team roster (from `head-prompt.md` or `ptyListTerminals`) for a seat with role "reviewer".
   If your team has a reviewer:
   ```bash
-  curl -X POST "$BASE/kanban/dispatch" \
-    -H "Content-Type: application/json" \
-    -d '{
-      "plan": "<featurePlanId>",
-      "targetColumn": "CODE REVIEWED",
-      "from": "<your-agent-name>"
-    }'
+  switchboard api POST /kanban/dispatch '{
+    "plan": "<featurePlanId>",
+    "targetColumn": "CODE REVIEWED",
+    "from": "<your-agent-name>"
+  }'
   ```
   If your team has NO reviewer seat, do NOT move the card. Write a finished report to `.switchboard/mission-control/reports/` naming the feature and its planId, and stop. The card stays where it is.
 
 ### Step 5: Pull Next Feature (Queue Next)
 When the reviewer reports that the feature passed review:
 ```bash
-curl -X POST "$BASE/kanban/queue/next" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "from": "<your-agent-name>"
-  }'
+switchboard api POST /kanban/queue/next '{
+  "from": "<your-agent-name>"
+}'
 ```
 - If `dispatched` is returned: begin working on the new feature.
 - If `dispatched: null` (`reason: "queue empty"`): all staged work is complete. Report to human and stop.

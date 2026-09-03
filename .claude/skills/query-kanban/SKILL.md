@@ -143,8 +143,7 @@ WHERE plan_id = '<planId>'
 LIMIT 1;
 ```
 
-> **HTTP plan lookups:** use `GET /kanban/plan?planId=<id>` against
-> `http://127.0.0.1:$(cat .switchboard/api-server-port.txt)` (returns one plan
+> **HTTP plan lookups:** use `switchboard api GET "/kanban/plan?planId=<id>"` (returns one plan
 > plus its file content at `.data.content`, or `''` when the plan file is
 > missing). Do **NOT** use
 > `GET /kanban/plans?planId=<id>` — the `planId` query param is not a server-side

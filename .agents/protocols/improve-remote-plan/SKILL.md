@@ -17,22 +17,17 @@ operates on local `.md` files.
 
 ## Prerequisites
 
-- The Switchboard extension must be active (LocalApiServer running) — `sb_api_call.sh` health-checks this automatically.
+- The Switchboard host must be active (LocalApiServer running).
 - Linear integration must be configured in Switchboard (the proxy adds the token host-side).
-- **Source the API helper before any `sb_api_call` invocation** — `sb_api_call` is a shell
-  function, not a standalone command. Source it once at the start of the session:
-  ```bash
-  source "$(git rev-parse --show-toplevel)/.agents/skills/_lib/sb_api_call.sh"
-  ```
 
 ## Pre-flight
 
-1. Confirm the LocalApiServer is reachable: `sb_api_call.sh` will fail with a clear error if not.
+1. Confirm the LocalApiServer is reachable via `switchboard api GET /health`.
 2. Identify the target Linear issue:
    - If the user provides an issue ID/URL: use it directly.
    - If no issue specified: query for issues in the "Created"/backlog status in the Switchboard-mapped project:
      ```bash
-     sb_api_call POST /api/linear -H "Content-Type: application/json" -d '{
+     switchboard api POST /api/linear '{
        "query": "query { issues(first: 50, filter: { team: { id: { eq: \"<TEAM_ID>\" } } }) { nodes { id identifier title state { id name } } } }"
      }'
      ```
@@ -40,7 +35,7 @@ operates on local `.md` files.
 3. Identify the target "Improved" status:
    - Query the team's workflow states:
      ```bash
-     sb_api_call POST /api/linear -H "Content-Type: application/json" -d '{
+     switchboard api POST /api/linear '{
        "query": "query { teams(first: 1) { states { id name type } } }"
      }'
      ```
@@ -50,7 +45,7 @@ operates on local `.md` files.
 
 1. Fetch the full issue:
    ```bash
-   sb_api_call POST /api/linear -H "Content-Type: application/json" -d '{
+   switchboard api POST /api/linear '{
      "query": "query { issue(id: \"<ISSUE_ID>\") { id title description state { id name } } }"
    }'
    ```
@@ -70,7 +65,7 @@ Apply the same logic as `/improve-plan`:
 
 Write the improved content AND update the status in a SINGLE `issueUpdate` mutation using GraphQL variables (avoids double-escaping and eliminates the two-call race condition):
 ```bash
-sb_api_call POST /api/linear -H "Content-Type: application/json" -d '{
+switchboard api POST /api/linear '{
   "query": "mutation UpdateIssue($id: String!, $desc: String, $stateId: String) { issueUpdate(id: $id, input: { description: $desc, stateId: $stateId }) { success issue { id } } }",
   "variables": { "id": "<ISSUE_ID>", "desc": "<IMPROVED_CONTENT>", "stateId": "<STATE_ID>" }
 }'
