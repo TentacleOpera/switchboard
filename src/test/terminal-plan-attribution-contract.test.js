@@ -456,6 +456,39 @@ test('the turn-end verify instruction never tells a lead to move a card', () => 
         'the instruction must keep an action tail — "verify" alone makes verification the whole turn');
 });
 
+test('a standalone plan is never told to dispatch a next subtask', () => {
+    // A lead completing a one-off plan was told to "register the next one and
+    // dispatch it", went looking for a next one it did not have, imported an
+    // unrelated plan file off disk and dispatched it — three times. The tail
+    // belongs to a feature run; a standalone plan has no next subtask.
+    const { TURN_END_VERIFY_INSTRUCTION_STANDALONE, composeCompletedTurnEndBody } = require('../../out/services/PlanIngestionEngine');
+    assert.ok(!/register the next|and dispatch it/i.test(TURN_END_VERIFY_INSTRUCTION_STANDALONE),
+        'the standalone instruction must not order a next dispatch');
+    assert.ok(!/advanc|move the card|moves the card/i.test(TURN_END_VERIFY_INSTRUCTION_STANDALONE),
+        'the standalone instruction must not describe the lead moving a card');
+    assert.ok(/git diff/.test(TURN_END_VERIFY_INSTRUCTION_STANDALONE),
+        'the standalone instruction must keep the verify clause');
+
+    const base = { topic: '', kanbanColumn: '', dispatchedAt: null };
+    const standalone = composeCompletedTurnEndBody({ ...base, featureId: null }, 's', 'p.md', Date.now());
+    const subtask = composeCompletedTurnEndBody({ ...base, featureId: 'feat-1' }, 's', 'p.md', Date.now());
+    assert.ok(!/dispatch it/.test(standalone), 'a featureId-less record must take the standalone form');
+    assert.ok(/dispatch it/.test(subtask), 'a record with a featureId must keep the subtask form');
+});
+
+test('the queue/done relay selects the notice form on the held record featureId', () => {
+    // The relay is the notice the lead actually receives (the turn-end live send
+    // is suppressed when it fires), so the selection has to happen HERE too —
+    // fixing composeCompletedTurnEndBody alone leaves the loop intact.
+    const fs = require('fs');
+    const path = require('path');
+    const src = fs.readFileSync(path.join(__dirname, '../services/LocalApiServer.ts'), 'utf8');
+    const relay = src.slice(src.indexOf('const relayMsg = `[queue/done]'));
+    const stanza = relay.slice(0, relay.indexOf('try {'));
+    assert.ok(/held\.featureId \? TURN_END_VERIFY_INSTRUCTION : TURN_END_VERIFY_INSTRUCTION_STANDALONE/.test(stanza),
+        'the queue/done relay must pick the standalone form when held.featureId is absent');
+});
+
 test('composeCompletedTurnEndBody drops missing clauses gracefully', () => {
     const record = {
         topic: '',
@@ -472,7 +505,7 @@ test('composeCompletedTurnEndBody drops missing clauses gracefully', () => {
     );
     assert.strictEqual(
         lines[1],
-        'Verify the diff (git diff) before you trust the report, then close out that subtask, register the next one (attributePastedPrompt), and dispatch it. The system moves cards as work progresses — never move one yourself.'
+        'Verify the diff (git diff) before you trust the report, then close out that plan. There is no next subtask to dispatch. The system moves cards as work progresses — never move one yourself.'
     );
 });
 

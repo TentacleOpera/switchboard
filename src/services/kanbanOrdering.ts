@@ -139,7 +139,8 @@ export function compareByPrecedence(
 
     // Manual order (default, or fallback for priority mode):
     // queue_position (STAGING) or column_order (elsewhere).
-    // ASC; a card that has one outranks a card that does not.
+    // ASC; a card that has one outranks a card that does not (see the NULL
+    // note in the header — the alternative is an intransitive comparator).
     const oa = isStaging ? (a.queuePosition ?? null) : (a.columnOrder ?? null);
     const ob = isStaging ? (b.queuePosition ?? null) : (b.columnOrder ?? null);
     const oaNull = oa === null;
@@ -148,6 +149,15 @@ export function compareByPrecedence(
         const d = (oa as number) - (ob as number);
         if (d !== 0) return d;
     } else if (oaNull !== obNull) {
+        // Exactly one side carries a position. Which way NULL goes depends on
+        // what NULL MEANS in that field, and it means opposite things:
+        //   STAGING     — queue_position NULL is "never staged", so it belongs
+        //                 at the END of the queue (the V60 rule, unchanged).
+        //   every other — column_order NULL is "just arrived / not part of this
+        //   column        column's arrangement", so it belongs at the TOP, which
+        //                 is where the board has always put a card that just
+        //                 landed. An arrangement orders the cards that were
+        //                 arranged; it does not outrank a new arrival.
         if (isStaging) return oaNull ? 1 : -1;
         return oaNull ? -1 : 1;
     }

@@ -708,6 +708,62 @@ function formatPlanLine(p: any, index?: number): string {
     return `${num}${prefix}  ${col.padEnd(16)} ${title}${proj}`;
 }
 
+function parseConsoleComplexity(c: any): number {
+    if (typeof c === 'number') return c;
+    if (!c || c === 'Unknown') return 0;
+    const n = parseInt(String(c), 10);
+    return isNaN(n) ? 0 : n;
+}
+
+/**
+ * Sort cards in CLI console listings by board priority signals:
+ * 1. Starred first (`priorityStarred` truthy).
+ * 2. Board manual order (`columnOrder` ASC).
+ *    Note on null columnOrder: cards with explicit manual columnOrder sort ASC;
+ *    unarranged cards (null/undefined columnOrder) follow arranged cards,
+ *    falling through to complexity and title.
+ * 3. Complexity descending (numeric > Unknown/null).
+ * 4. Title ascending (lexicographical).
+ */
+function compareConsoleCards(a: any, b: any): number {
+    // 1. Starred first
+    const sa = a?.priorityStarred ? 1 : 0;
+    const sb = b?.priorityStarred ? 1 : 0;
+    if (sa !== sb) return sb - sa;
+
+    // 2. Manual columnOrder (ASC)
+    const oa = a?.columnOrder !== null && a?.columnOrder !== undefined ? Number(a.columnOrder) : null;
+    const ob = b?.columnOrder !== null && b?.columnOrder !== undefined ? Number(b.columnOrder) : null;
+    if (oa !== null && ob !== null) {
+        if (oa !== ob) return oa - ob;
+    } else if (oa !== null || ob !== null) {
+        // Explicit columnOrder outranks unarranged (null columnOrder)
+        return oa !== null ? -1 : 1;
+    }
+
+    // 3. Complexity descending
+    const ca = parseConsoleComplexity(a?.complexity);
+    const cb = parseConsoleComplexity(b?.complexity);
+    if (ca !== cb) return cb - ca;
+
+    // 4. Title ascending
+    return planTitle(a).localeCompare(planTitle(b));
+}
+
+/** Format a single plan/feature row for interactive board console listing. */
+function formatConsoleCard(p: any, index?: number, showColumn = false): string {
+    const num = index !== undefined ? `${String(index + 1).padStart(2, ' ')}. ` : '';
+    const star = p?.priorityStarred ? '★ ' : '  ';
+    const prefix = shortPrefix(String(p?.planId || ''));
+    const compVal = p?.complexity !== undefined && p?.complexity !== null && p?.complexity !== '' && p?.complexity !== 'Unknown' ? `c:${p.complexity}` : 'c:?';
+    const comp = `[${compVal}]`;
+    const col = showColumn ? `${String(p?.kanbanColumn || '?').padEnd(16)} ` : '';
+    const title = planTitle(p);
+    const proj = p?.project ? ` [${p.project}]` : '';
+    const subtask = (p?.featureId && !p?.isFeature) ? ` [subtask of ${shortPrefix(String(p.featureId))}]` : '';
+    return `${num}${star}${prefix}  ${comp}  ${col}${title}${proj}${subtask}`;
+}
+
 /**
  * The transfer bundle's CLI surface. `export`/`import` are the same
  * TransferBundleService the extension's palette commands and the two
@@ -1218,18 +1274,19 @@ async function cmdReady(workspaceRoot: string, argv: string[]): Promise<void> {
         const selected = filtered[num - 1];
         const planId = String(selected?.planId || '');
         console.log(`[switchboard] Dispatching ${shortPrefix(planId)} (${planTitle(selected)})…`);
-        await doDispatch(port, workspaceRoot, planId, 'auto');
+        const code = await doDispatch(port, workspaceRoot, planId, 'auto');
+        exitFlushed(code);
     } finally {
         prompter.close();
     }
 }
 
 /**
- * Core dispatch logic shared by `ready` picker and `dispatch` subcommand.
- * Calls POST /kanban/dispatch and maps the exit code. When `jsonFlag` is true,
+ * Core dispatch logic shared by `ready` picker, `dispatch` subcommand, and board console.
+ * Calls POST /kanban/dispatch and returns the exit code. When `jsonFlag` is true,
  * emits the result as JSON on stdout (logs already routed to stderr by caller).
  */
-async function doDispatch(port: number, workspaceRoot: string, planId: string, targetColumn: string, jsonFlag = false): Promise<void> {
+async function doDispatch(port: number, workspaceRoot: string, planId: string, targetColumn: string, jsonFlag = false): Promise<number> {
     const res = await apiPost(port, '/kanban/dispatch', workspaceRoot, {
         plan: planId,
         targetColumn,
@@ -1246,7 +1303,7 @@ async function doDispatch(port: number, workspaceRoot: string, planId: string, t
         const errMsg = String(data?.error || res.body || 'dispatch failed');
         console.error(`[switchboard] ${errMsg}`);
     }
-    exitFlushed(code);
+    return code;
 }
 
 /**
@@ -1315,7 +1372,8 @@ async function cmdDispatch(workspaceRoot: string, argv: string[]): Promise<void>
         }
     }
 
-    await doDispatch(port, workspaceRoot, planId, column, jsonFlag);
+    const code = await doDispatch(port, workspaceRoot, planId, column, jsonFlag);
+    exitFlushed(code);
 }
 
 /**
@@ -1965,7 +2023,7 @@ async function cmdMainMenu(workspaceRoot: string): Promise<void> {
                     // if the server died between render and selection.
                     prompter.close();
                     await cmdBoardConsole(workspaceRoot);
-                    return;
+                    continue;
                 }
                 if (answer === '2' || answer === '3' || answer === '4') {
                     const sub = answer === '2' ? 'setup' : answer === '3' ? 'help' : 'status';
@@ -2039,6 +2097,340 @@ async function cmdMainMenu(workspaceRoot: string): Promise<void> {
 }
 
 /**
+ * Prompt helper that hooks SIGINT during the question and exits cleanly if interrupted.
+ */
+async function promptWithSigInt(prompter: { ask: (q: string) => Promise<string | null>; close: () => void }, query: string): Promise<string | null> {
+    const onSigInt = (): void => { prompter.close(); exitFlushed(0); };
+    process.once('SIGINT', onSigInt);
+    try {
+        return await prompter.ask(query);
+    } finally {
+        process.removeListener('SIGINT', onSigInt);
+    }
+}
+
+async function consoleBrowseCardsInColumn(
+    port: number,
+    workspaceRoot: string,
+    selectedCol: string,
+    prompter: { ask: (q: string) => Promise<string | null>; close: () => void }
+): Promise<void> {
+    for (;;) {
+        // Re-fetch on return (Requirement 5)
+        let plansRes;
+        try {
+            plansRes = await apiGet(port, '/kanban/plans', workspaceRoot);
+        } catch (err: any) {
+            console.error(`[switchboard] Could not fetch plans: ${err?.message || err}`);
+            exitFlushed(1);
+            return;
+        }
+        if (plansRes.status !== 200) {
+            console.error(`[switchboard] Could not fetch plans (HTTP ${plansRes.status}).`);
+            exitFlushed(1);
+            return;
+        }
+        const plans = extractPlans(plansRes.json());
+        const colPlans = plans.filter((p: any) => String(p?.kanbanColumn) === selectedCol);
+
+        if (colPlans.length === 0) {
+            console.log(`\n${selectedCol} (0):`);
+            console.log('  (no cards in this column)');
+            await promptWithSigInt(prompter, '\nPress Enter or \'b\' to return to columns: ');
+            return;
+        }
+
+        const features = colPlans.filter((p: any) => Boolean(p?.isFeature)).sort(compareConsoleCards);
+        const regularPlans = colPlans.filter((p: any) => !p?.isFeature).sort(compareConsoleCards);
+        const allCards = [...features, ...regularPlans];
+
+        console.log(`\n${selectedCol} (${allCards.length}):`);
+        let cardIdx = 0;
+        if (features.length > 0) {
+            console.log('\nFEATURES:');
+            for (const f of features) {
+                console.log(`  ${formatConsoleCard(f, cardIdx++)}`);
+            }
+        }
+        if (regularPlans.length > 0) {
+            if (features.length > 0) {
+                console.log('\nPLANS:');
+            }
+            for (const p of regularPlans) {
+                console.log(`  ${formatConsoleCard(p, cardIdx++)}`);
+            }
+        }
+
+        const pickAnswer = await promptWithSigInt(prompter, `\nSelect a card to dispatch [1-${allCards.length}] (or 'b' for back): `);
+        if (pickAnswer === null || pickAnswer === '' || pickAnswer === 'b' || pickAnswer === 'q') {
+            return;
+        }
+
+        const pickNum = parseInt(pickAnswer, 10);
+        if (isNaN(pickNum) || pickNum < 1 || pickNum > allCards.length) {
+            console.log(`[switchboard] Invalid selection '${pickAnswer}'. Please enter a number between 1 and ${allCards.length}, or 'b' to go back.`);
+            continue;
+        }
+
+        const selected = allCards[pickNum - 1];
+        const planId = String(selected?.planId || '');
+        console.log(`\n[switchboard] Dispatching ${shortPrefix(planId)} (${planTitle(selected)})…`);
+        await doDispatch(port, workspaceRoot, planId, 'auto');
+    }
+}
+
+async function consoleBrowseByColumn(
+    port: number,
+    workspaceRoot: string,
+    prompter: { ask: (q: string) => Promise<string | null>; close: () => void }
+): Promise<void> {
+    for (;;) {
+        let plansRes;
+        try {
+            plansRes = await apiGet(port, '/kanban/plans', workspaceRoot);
+        } catch (err: any) {
+            console.error(`[switchboard] Could not fetch plans: ${err?.message || err}`);
+            exitFlushed(1);
+            return;
+        }
+        if (plansRes.status !== 200) {
+            console.error(`[switchboard] Could not fetch plans (HTTP ${plansRes.status}).`);
+            exitFlushed(1);
+            return;
+        }
+        const plans = extractPlans(plansRes.json());
+        if (plans.length === 0) {
+            console.log('\n[switchboard] No cards on the board.');
+            await promptWithSigInt(prompter, '\nPress Enter or \'b\' to return to menu: ');
+            return;
+        }
+
+        const colCounts: Record<string, number> = {};
+        for (const p of plans) {
+            const col = String(p?.kanbanColumn || '?');
+            colCounts[col] = (colCounts[col] || 0) + 1;
+        }
+        const cols = Object.keys(colCounts);
+        console.log('\nColumns:');
+        cols.forEach((col, i) => console.log(`  ${i + 1}. ${col} (${colCounts[col]})`));
+
+        const colAnswer = await promptWithSigInt(prompter, `\nSelect a column [1-${cols.length}] (or 'b' for back): `);
+        if (colAnswer === null || colAnswer === '' || colAnswer === 'b' || colAnswer === 'q') {
+            return;
+        }
+
+        const colNum = parseInt(colAnswer, 10);
+        if (isNaN(colNum) || colNum < 1 || colNum > cols.length) {
+            console.log(`[switchboard] Invalid selection '${colAnswer}'. Please enter a number between 1 and ${cols.length}, or 'b' to go back.`);
+            continue;
+        }
+
+        const selectedCol = cols[colNum - 1];
+        await consoleBrowseCardsInColumn(port, workspaceRoot, selectedCol, prompter);
+    }
+}
+
+async function consoleSearch(
+    port: number,
+    workspaceRoot: string,
+    prompter: { ask: (q: string) => Promise<string | null>; close: () => void }
+): Promise<void> {
+    for (;;) {
+        const q = await promptWithSigInt(prompter, '\nSearch query (or \'b\' for back): ');
+        if (q === null || q === '' || q === 'b' || q === 'q') {
+            return;
+        }
+
+        let plansRes;
+        try {
+            plansRes = await apiGet(port, '/kanban/plans', workspaceRoot);
+        } catch (err: any) {
+            console.error(`[switchboard] Could not fetch plans: ${err?.message || err}`);
+            exitFlushed(1);
+            return;
+        }
+        if (plansRes.status !== 200) {
+            console.error(`[switchboard] Could not fetch plans (HTTP ${plansRes.status}).`);
+            exitFlushed(1);
+            return;
+        }
+
+        const plans = extractPlans(plansRes.json());
+        const ql = q.toLowerCase();
+        const matches = plans.filter((p: any) => {
+            return planTitle(p).toLowerCase().includes(ql)
+                || String(p?.planFile || '').toLowerCase().includes(ql)
+                || String(p?.planId || '').toLowerCase().includes(ql);
+        });
+
+        if (matches.length === 0) {
+            console.log('[switchboard] No matches.');
+            continue;
+        }
+
+        const features = matches.filter((p: any) => Boolean(p?.isFeature)).sort(compareConsoleCards);
+        const regularPlans = matches.filter((p: any) => !p?.isFeature).sort(compareConsoleCards);
+        const allMatches = [...features, ...regularPlans];
+
+        console.log(`\n${allMatches.length} match${allMatches.length === 1 ? '' : 'es'}:`);
+        let cardIdx = 0;
+        if (features.length > 0) {
+            console.log('\nFEATURES:');
+            for (const f of features) {
+                console.log(`  ${formatConsoleCard(f, cardIdx++, true)}`);
+            }
+        }
+        if (regularPlans.length > 0) {
+            if (features.length > 0) {
+                console.log('\nPLANS:');
+            }
+            for (const p of regularPlans) {
+                console.log(`  ${formatConsoleCard(p, cardIdx++, true)}`);
+            }
+        }
+
+        for (;;) {
+            const pickAnswer = await promptWithSigInt(prompter, `\nSelect a card to dispatch [1-${allMatches.length}] (or 'b' for back): `);
+            if (pickAnswer === null || pickAnswer === '' || pickAnswer === 'b' || pickAnswer === 'q') {
+                break;
+            }
+
+            const pickNum = parseInt(pickAnswer, 10);
+            if (isNaN(pickNum) || pickNum < 1 || pickNum > allMatches.length) {
+                console.log(`[switchboard] Invalid selection '${pickAnswer}'. Please enter a number between 1 and ${allMatches.length}, or 'b' to go back.`);
+                continue;
+            }
+
+            const selected = allMatches[pickNum - 1];
+            const planId = String(selected?.planId || '');
+            console.log(`\n[switchboard] Dispatching ${shortPrefix(planId)} (${planTitle(selected)})…`);
+            await doDispatch(port, workspaceRoot, planId, 'auto');
+            break;
+        }
+    }
+}
+
+async function consoleFilterByProject(
+    port: number,
+    workspaceRoot: string,
+    prompter: { ask: (q: string) => Promise<string | null>; close: () => void }
+): Promise<void> {
+    for (;;) {
+        const proj = await promptWithSigInt(prompter, '\nProject name (or Enter for all, \'b\' for back): ');
+        if (proj === null || proj === 'b' || proj === 'q') {
+            return;
+        }
+
+        let plansRes;
+        try {
+            plansRes = await apiGet(port, '/kanban/plans', workspaceRoot);
+        } catch (err: any) {
+            console.error(`[switchboard] Could not fetch plans: ${err?.message || err}`);
+            exitFlushed(1);
+            return;
+        }
+        if (plansRes.status !== 200) {
+            console.error(`[switchboard] Could not fetch plans (HTTP ${plansRes.status}).`);
+            exitFlushed(1);
+            return;
+        }
+
+        const allPlans = extractPlans(plansRes.json());
+        let readyPlans = allPlans.filter((p: any) => {
+            const col = String(p?.kanbanColumn || '').toUpperCase();
+            return READY_COLUMNS.includes(col);
+        });
+        if (proj.trim() !== '') {
+            readyPlans = readyPlans.filter((p: any) => String(p?.project || '') === proj.trim());
+        }
+
+        if (readyPlans.length === 0) {
+            console.log(proj.trim() ? `[switchboard] No ready cards found for project '${proj.trim()}'.` : '[switchboard] No ready cards found.');
+            continue;
+        }
+
+        const features = readyPlans.filter((p: any) => Boolean(p?.isFeature)).sort(compareConsoleCards);
+        const regularPlans = readyPlans.filter((p: any) => !p?.isFeature).sort(compareConsoleCards);
+        const allFiltered = [...features, ...regularPlans];
+
+        console.log(`\n${allFiltered.length} ready card${allFiltered.length === 1 ? '' : 's'}${proj.trim() ? ` for [${proj.trim()}]` : ''}:`);
+        let cardIdx = 0;
+        if (features.length > 0) {
+            console.log('\nFEATURES:');
+            for (const f of features) {
+                console.log(`  ${formatConsoleCard(f, cardIdx++, true)}`);
+            }
+        }
+        if (regularPlans.length > 0) {
+            if (features.length > 0) {
+                console.log('\nPLANS:');
+            }
+            for (const p of regularPlans) {
+                console.log(`  ${formatConsoleCard(p, cardIdx++, true)}`);
+            }
+        }
+
+        for (;;) {
+            const pickAnswer = await promptWithSigInt(prompter, `\nSelect a card to dispatch [1-${allFiltered.length}] (or 'b' for back): `);
+            if (pickAnswer === null || pickAnswer === '' || pickAnswer === 'b' || pickAnswer === 'q') {
+                break;
+            }
+
+            const pickNum = parseInt(pickAnswer, 10);
+            if (isNaN(pickNum) || pickNum < 1 || pickNum > allFiltered.length) {
+                console.log(`[switchboard] Invalid selection '${pickAnswer}'. Please enter a number between 1 and ${allFiltered.length}, or 'b' to go back.`);
+                continue;
+            }
+
+            const selected = allFiltered[pickNum - 1];
+            const planId = String(selected?.planId || '');
+            console.log(`\n[switchboard] Dispatching ${shortPrefix(planId)} (${planTitle(selected)})…`);
+            await doDispatch(port, workspaceRoot, planId, 'auto');
+            break;
+        }
+    }
+}
+
+async function consoleInspectFleet(
+    port: number,
+    workspaceRoot: string,
+    prompter: { ask: (q: string) => Promise<string | null>; close: () => void }
+): Promise<void> {
+    let terminals: any[] = [];
+    try {
+        const res = await apiPost(port, '/terminals/verb/ptyListTerminals', workspaceRoot, {});
+        if (res.status === 200) {
+            const data = res.json();
+            if (Array.isArray(data)) { terminals = data; }
+            else if (data?.terminals && Array.isArray(data.terminals)) { terminals = data.terminals; }
+            else if (data?.result && Array.isArray(data.result)) { terminals = data.result; }
+        }
+    } catch { /* */ }
+
+    if (terminals.length === 0) {
+        console.log('\n[switchboard] No active terminals.');
+    } else {
+        console.log('\nFLEET STATUS:');
+        const header = ['SEAT', 'ROLE', 'STATUS', 'CURRENT PLAN / TASK'];
+        const rows: string[][] = [header];
+        for (const t of terminals) {
+            const name = String(t?.friendlyName || t?.name || t?.terminalName || '?');
+            const role = String(t?.role || '-');
+            const status = String(t?.status || (t?.alive || t?.active ? 'active' : 'idle'));
+            const planLabel = t?.currentPlanTitle || t?.planTitle || t?.topic || '';
+            const plan = String(planLabel || (t?.planId ? shortPrefix(String(t.planId)) : '') || '-');
+            rows.push([name, role, status, plan]);
+        }
+        const widths = header.map((_, i) => Math.max(...rows.map(r => r[i].length)));
+        for (const row of rows) {
+            console.log('  ' + row.map((cell, i) => cell.padEnd(widths[i] + 2)).join('').trimEnd());
+        }
+    }
+
+    await promptWithSigInt(prompter, '\nPress Enter or \'b\' to return to menu: ');
+}
+
+/**
  * `switchboard` (bare) — interactive board console.
  *
  * Connects to the running server and presents a menu: browse by column, search,
@@ -2046,186 +2438,124 @@ async function cmdMainMenu(workspaceRoot: string): Promise<void> {
  * If no server is running, exits 1 with advice.
  */
 async function cmdBoardConsole(workspaceRoot: string): Promise<void> {
-    const port = await findRunningInstance(workspaceRoot);
-    if (port === null) {
-        emitOfflineGuidance(false);
+    if (!process.stdin.isTTY) {
+        console.error('[switchboard] Interactive board console requires a TTY.');
+        console.error('[switchboard] Run `switchboard` in an interactive terminal, or use subcommands: plans, ready, dispatch.');
+        exitFlushed(0);
+        return;
     }
-
-    let health: Awaited<ReturnType<typeof getHealthJson>>;
-    try {
-        health = await getHealthJson(port);
-    } catch {
-        console.error('[switchboard] No running Switchboard instance for this workspace.');
-        exitFlushed(1);
-    }
-
-    const version = readVersion();
-    const seats = health.terminals ?? [];
-
-    // Board summary — fetch column counts.
-    let boardSummary = '';
-    try {
-        const plansRes = await apiGet(port, '/kanban/plans', workspaceRoot);
-        if (plansRes.status === 200) {
-            const plans = extractPlans(plansRes.json());
-            if (plans.length > 0) {
-                const colCounts: Record<string, number> = {};
-                for (const p of plans) {
-                    const col = String(p?.kanbanColumn || '?');
-                    colCounts[col] = (colCounts[col] || 0) + 1;
-                }
-                const cols = Object.entries(colCounts);
-                if (cols.length > 0) {
-                    boardSummary = 'BOARD SUMMARY:\n  ' + cols.map(([col, n]) => `${col} (${n})`).join('  ·  ');
-                }
-            }
-        }
-    } catch { /* */ }
-
-    console.log(banner(version));
-    console.log(`  Active Server:    http://127.0.0.1:${port}`);
-    console.log(`  Workspace:        ${health.selectedWorkspaceRoot ?? workspaceRoot}`);
-    console.log(`  Active Fleet:     ${seats.length} seat${seats.length === 1 ? '' : 's'}`);
-    if (boardSummary) { console.log(''); console.log(boardSummary); }
-    console.log('');
-    console.log('MENU:');
-    console.log('  [1] Browse & Dispatch by Column');
-    console.log('  [2] Search Plans & Features (keyword, title, or UUID prefix)');
-    console.log('  [3] Filter by Project');
-    console.log('  [4] Inspect Fleet Status');
-    console.log('  [5] Setup & Scaffolding Wizard');
-    console.log('  [q] Exit (or Enter)');
-    console.log('');
 
     const prompter = openPrompter();
     try {
-        const onSigInt = (): void => { prompter.close(); exitFlushed(0); };
-        process.once('SIGINT', onSigInt);
-
-        const answer = await prompter.ask('Select an option [1-5] (or enter plan ID / prefix to dispatch): ');
-        process.removeListener('SIGINT', onSigInt);
-
-        if (answer === null || answer === '' || answer === 'q') { exitFlushed(0); }
-
-        // Numeric menu option.
-        if (/^[1-5]$/.test(answer)) {
-            switch (answer) {
-                case '1': {
-                    // Browse by column — list all columns, let user pick one.
-                    const plansRes = await apiGet(port, '/kanban/plans', workspaceRoot);
-                    if (plansRes.status !== 200) {
-                        console.error(`[switchboard] Could not fetch plans (HTTP ${plansRes.status}).`);
-                        exitFlushed(1);
-                    }
-                    const plans = extractPlans(plansRes.json());
-                    if (plans.length === 0) {
-                        console.log('[switchboard] No cards on the board.');
-                        exitFlushed(0);
-                    }
-                    const colCounts: Record<string, number> = {};
-                    for (const p of plans) {
-                        const col = String(p?.kanbanColumn || '?');
-                        colCounts[col] = (colCounts[col] || 0) + 1;
-                    }
-                    const cols = Object.keys(colCounts);
-                    console.log('\nColumns:');
-                    cols.forEach((col, i) => console.log(`  ${i + 1}. ${col} (${colCounts[col]})`));
-                    const colAnswer = await prompter.ask('\nSelect a column [1-' + cols.length + ']: ');
-                    if (colAnswer === null || colAnswer === '') { exitFlushed(0); }
-                    const colNum = parseInt(colAnswer, 10);
-                    if (isNaN(colNum) || colNum < 1 || colNum > cols.length) {
-                        console.error(`[switchboard] Invalid selection '${colAnswer}'.`);
-                        exitFlushed(5);
-                    }
-                    const selectedCol = cols[colNum - 1];
-                    const colPlans = plans.filter((p: any) => String(p?.kanbanColumn) === selectedCol);
-                    console.log(`\n${selectedCol} (${colPlans.length}):`);
-                    colPlans.forEach((p: any, i: number) => console.log(`  ${formatPlanLine(p, i)}`));
-                    if (colPlans.length === 0) { exitFlushed(0); }
-                    const pickAnswer = await prompter.ask('\nSelect a card to dispatch [1-' + colPlans.length + '] (or Enter to exit): ');
-                    if (pickAnswer === null || pickAnswer === '') { exitFlushed(0); }
-                    const pickNum = parseInt(pickAnswer, 10);
-                    if (isNaN(pickNum) || pickNum < 1 || pickNum > colPlans.length) {
-                        console.error(`[switchboard] Invalid selection '${pickAnswer}'.`);
-                        exitFlushed(5);
-                    }
-                    const selected = colPlans[pickNum - 1];
-                    const planId = String(selected?.planId || '');
-                    console.log(`\n[switchboard] Dispatching ${shortPrefix(planId)} (${planTitle(selected)})…`);
-                    await doDispatch(port, workspaceRoot, planId, 'auto');
-                    break;
-                }
-                case '2': {
-                    const q = await prompter.ask('Search query: ');
-                    if (q === null || q === '') { exitFlushed(0); }
-                    const plansRes = await apiGet(port, '/kanban/plans', workspaceRoot);
-                    if (plansRes.status !== 200) { console.error(`[switchboard] Could not fetch plans (HTTP ${plansRes.status}).`); exitFlushed(1); }
-                    const plans = extractPlans(plansRes.json());
-                    const ql = q.toLowerCase();
-                    const matches = plans.filter((p: any) => {
-                        return planTitle(p).toLowerCase().includes(ql)
-                            || String(p?.planFile || '').toLowerCase().includes(ql)
-                            || String(p?.planId || '').toLowerCase().includes(ql);
-                    });
-                    if (matches.length === 0) { console.log('[switchboard] No matches.'); exitFlushed(0); }
-                    console.log(`\n${matches.length} match${matches.length === 1 ? '' : 'es'}:`);
-                    matches.forEach((p: any, i: number) => console.log(`  ${formatPlanLine(p, i)}`));
-                    const pickAnswer = await prompter.ask('\nSelect a card to dispatch [1-' + matches.length + '] (or Enter to exit): ');
-                    if (pickAnswer === null || pickAnswer === '') { exitFlushed(0); }
-                    const pickNum = parseInt(pickAnswer, 10);
-                    if (isNaN(pickNum) || pickNum < 1 || pickNum > matches.length) { console.error(`[switchboard] Invalid selection.`); exitFlushed(5); }
-                    const selected = matches[pickNum - 1];
-                    const planId = String(selected?.planId || '');
-                    console.log(`\n[switchboard] Dispatching ${shortPrefix(planId)} (${planTitle(selected)})…`);
-                    await doDispatch(port, workspaceRoot, planId, 'auto');
-                    break;
-                }
-                case '3': {
-                    const proj = await prompter.ask('Project name (or Enter for all): ');
-                    if (proj === null) { exitFlushed(0); }
-                    // Re-run ready with project filter.
-                    const projArg = proj ? ['--project', proj] : [];
-                    prompter.close();
-                    await cmdReady(workspaceRoot, projArg);
-                    break;
-                }
-                case '4': {
-                    prompter.close();
-                    await cmdFleet(workspaceRoot, []);
-                    break;
-                }
-                case '5': {
-                    prompter.close();
-                    // The setup wizard is a separate workflow — print instructions
-                    // rather than attempting in-process delegation (the init/scaffold
-                    // handlers are above this point in main()'s flow and cannot be
-                    // re-entered from here).
-                    console.log('\n[switchboard] Setup & Scaffolding Wizard:');
-                    console.log('  Run `switchboard setup` to access the interactive wizard,');
-                    console.log('  or use a direct subcommand:');
-                    console.log('    switchboard setup init [--target <agents|claude|both>]');
-                    console.log('    switchboard setup scaffold --parent-dir <dir> --workspace-name <name> --repo <url>');
-                    console.log('    switchboard setup control-plane <detect|preview|migrate>');
-                    exitFlushed(0);
-                }
+        for (;;) {
+            const port = await findRunningInstance(workspaceRoot);
+            if (port === null) {
+                emitOfflineGuidance(false);
             }
-            exitFlushed(0);
-        }
 
-        // Not numeric — try as a plan prefix to dispatch directly.
-        const resolved = await resolvePrefix(port, workspaceRoot, answer);
-        if (resolved === null) {
-            console.error(`[switchboard] No plan matches '${answer}'.`);
-            exitFlushed(5);
+            let health: Awaited<ReturnType<typeof getHealthJson>>;
+            try {
+                health = await getHealthJson(port);
+            } catch {
+                console.error('[switchboard] No running Switchboard instance for this workspace.');
+                exitFlushed(1);
+                return;
+            }
+
+            const version = readVersion();
+            const seats = health.terminals ?? [];
+
+            // Board summary — fetch column counts.
+            let boardSummary = '';
+            try {
+                const plansRes = await apiGet(port, '/kanban/plans', workspaceRoot);
+                if (plansRes.status === 200) {
+                    const plans = extractPlans(plansRes.json());
+                    if (plans.length > 0) {
+                        const colCounts: Record<string, number> = {};
+                        for (const p of plans) {
+                            const col = String(p?.kanbanColumn || '?');
+                            colCounts[col] = (colCounts[col] || 0) + 1;
+                        }
+                        const cols = Object.entries(colCounts);
+                        if (cols.length > 0) {
+                            boardSummary = 'BOARD SUMMARY:\n  ' + cols.map(([col, n]) => `${col} (${n})`).join('  ·  ');
+                        }
+                    }
+                } else {
+                    console.error(`[switchboard] Could not fetch plans (HTTP ${plansRes.status}).`);
+                    exitFlushed(1);
+                    return;
+                }
+            } catch (err: any) {
+                console.error(`[switchboard] Server error fetching plans: ${err?.message || err}`);
+                exitFlushed(1);
+                return;
+            }
+
+            console.log(banner(version));
+            console.log(`  Active Server:    http://127.0.0.1:${port}`);
+            console.log(`  Workspace:        ${health.selectedWorkspaceRoot ?? workspaceRoot}`);
+            console.log(`  Active Fleet:     ${seats.length} seat${seats.length === 1 ? '' : 's'}`);
+            if (boardSummary) { console.log(''); console.log(boardSummary); }
+            console.log('');
+            console.log('MENU:');
+            console.log('  [1] Browse & Dispatch by Column');
+            console.log('  [2] Search Plans & Features (keyword, title, or UUID prefix)');
+            console.log('  [3] Filter by Project');
+            console.log('  [4] Inspect Fleet Status');
+            console.log('  [5] Setup & Scaffolding Wizard');
+            console.log('  [b] Back / Exit (or Enter)');
+            console.log('');
+
+            const answer = await promptWithSigInt(prompter, 'Select an option [1-5] (or enter plan ID / prefix to dispatch, \'b\' to go back): ');
+
+            if (answer === null || answer === '' || answer === 'q' || answer === 'b') {
+                return;
+            }
+
+            if (answer === '1') {
+                await consoleBrowseByColumn(port, workspaceRoot, prompter);
+                continue;
+            }
+            if (answer === '2') {
+                await consoleSearch(port, workspaceRoot, prompter);
+                continue;
+            }
+            if (answer === '3') {
+                await consoleFilterByProject(port, workspaceRoot, prompter);
+                continue;
+            }
+            if (answer === '4') {
+                await consoleInspectFleet(port, workspaceRoot, prompter);
+                continue;
+            }
+            if (answer === '5') {
+                console.log('\n[switchboard] Setup & Scaffolding Wizard:');
+                console.log('  Run `switchboard setup` to access the interactive wizard,');
+                console.log('  or use a direct subcommand:');
+                console.log('    switchboard setup init [--target <agents|claude|both>]');
+                console.log('    switchboard setup scaffold --parent-dir <dir> --workspace-name <name> --repo <url>');
+                console.log('    switchboard setup control-plane <detect|preview|migrate>');
+                await promptWithSigInt(prompter, '\nPress Enter or \'b\' to return to menu: ');
+                continue;
+            }
+
+            // Not numeric — try as a plan prefix to dispatch directly.
+            const resolved = await resolvePrefix(port, workspaceRoot, answer);
+            if (resolved === null) {
+                console.log(`[switchboard] No plan matches '${answer}'.`);
+                continue;
+            }
+            if ('ambiguous' in resolved) {
+                console.log(`[switchboard] Ambiguous prefix '${answer}' — matches ${resolved.ambiguous.length} cards:`);
+                for (const pid of resolved.ambiguous) { console.log(`  ${shortPrefix(pid)}  ${pid}`); }
+                continue;
+            }
+            const planId = (resolved as { planId: string }).planId;
+            console.log(`\n[switchboard] Dispatching ${shortPrefix(planId)}…`);
+            await doDispatch(port, workspaceRoot, planId, 'auto');
         }
-        if ('ambiguous' in resolved) {
-            console.error(`[switchboard] Ambiguous prefix '${answer}' — matches ${resolved.ambiguous.length} cards:`);
-            for (const pid of resolved.ambiguous) { console.error(`  ${shortPrefix(pid)}  ${pid}`); }
-            exitFlushed(5);
-        }
-        const planId = (resolved as { planId: string }).planId;
-        console.log(`\n[switchboard] Dispatching ${shortPrefix(planId)}…`);
-        await doDispatch(port, workspaceRoot, planId, 'auto');
     } finally {
         prompter.close();
     }

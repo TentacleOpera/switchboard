@@ -4049,70 +4049,75 @@ Start by checking which documents exist, then present the menu.`;
                 }
                 break;
             }
+            // These three arms `return` rather than `break`. A verb that falls out of
+            // the switch answers `undefined`, and in the standalone host that is what
+            // handleServiceVerb hands the caller — a hollow ack in which "the star was
+            // set" and "no kanban provider was ever wired" are the same value. The
+            // verb-return-contract ratchet gates exactly this.
             case 'setPriorityStarred': {
                 const wsRoot = String(msg.workspaceRoot || workspaceRoot);
                 const planId = String(msg.planId || msg.sessionId || '');
                 const starred = !!msg.starred;
-                if (!planId || !wsRoot) break;
+                if (!planId || !wsRoot) { return { success: false, error: 'Missing planId or workspaceRoot' }; }
                 if (!this._kanbanProvider) {
                     this.postMessageToProjectWebview({ type: 'showStatusMessage', message: 'No kanban provider', isError: true });
-                    break;
+                    return { success: false, error: 'No kanban provider' };
                 }
                 try {
                     const result = await this._kanbanProvider.setPriorityStarred(wsRoot, planId, starred);
                     if (!result.success) {
                         this.postMessageToProjectWebview({ type: 'showStatusMessage', message: result.error || 'Failed to set priority star', isError: true });
                     }
-                    const allPlans = await this._getKanbanPlans(wsRoot);
-                    const effectiveRoot = this._resolveEffectiveWorkspaceRoot(wsRoot);
-                    this.postMessageToProjectWebview({ type: 'kanbanPlansReady', plans: allPlans, workspaceRoot: effectiveRoot, requestId: Date.now() });
+                    await this._pushKanbanPlansToProjectPanel(wsRoot);
+                    return result;
                 } catch (err) {
                     console.error('[PlanningPanelProvider] setPriorityStarred failed:', err);
+                    return { success: false, error: err instanceof Error ? err.message : 'setPriorityStarred failed' };
                 }
-                break;
             }
             case 'setCardPriority': {
                 const wsRoot = String(msg.workspaceRoot || workspaceRoot);
                 const planId = String(msg.planId || msg.sessionId || '');
                 const priorityRaw = msg.priority;
+                // 0 / 'none' / '' all mean "no priority" — NULL is the only unset state.
                 const priority = (priorityRaw === null || priorityRaw === undefined || priorityRaw === 0 || priorityRaw === 'none' || priorityRaw === '')
                     ? null
                     : Number(priorityRaw);
-                if (!planId || !wsRoot) break;
+                if (!planId || !wsRoot) { return { success: false, error: 'Missing planId or workspaceRoot' }; }
                 if (!this._kanbanProvider) {
                     this.postMessageToProjectWebview({ type: 'showStatusMessage', message: 'No kanban provider', isError: true });
-                    break;
+                    return { success: false, error: 'No kanban provider' };
                 }
                 try {
                     const result = await this._kanbanProvider.setCardPriority(wsRoot, planId, priority);
                     if (!result.success) {
                         this.postMessageToProjectWebview({ type: 'showStatusMessage', message: result.error || 'Failed to set priority', isError: true });
                     }
-                    const allPlans = await this._getKanbanPlans(wsRoot);
-                    const effectiveRoot = this._resolveEffectiveWorkspaceRoot(wsRoot);
-                    this.postMessageToProjectWebview({ type: 'kanbanPlansReady', plans: allPlans, workspaceRoot: effectiveRoot, requestId: Date.now() });
+                    await this._pushKanbanPlansToProjectPanel(wsRoot);
+                    return result;
                 } catch (err) {
                     console.error('[PlanningPanelProvider] setCardPriority failed:', err);
+                    return { success: false, error: err instanceof Error ? err.message : 'setCardPriority failed' };
                 }
-                break;
             }
             case 'setOrderByMode': {
                 const wsRoot = String(msg.workspaceRoot || workspaceRoot);
                 const mode = msg.mode || 'manual';
-                if (!wsRoot) break;
+                if (!wsRoot) { return { success: false, error: 'Missing workspaceRoot' }; }
                 if (!this._kanbanProvider) {
                     this.postMessageToProjectWebview({ type: 'showStatusMessage', message: 'No kanban provider', isError: true });
-                    break;
+                    return { success: false, error: 'No kanban provider' };
                 }
                 try {
                     const result = await this._kanbanProvider.setOrderByMode(wsRoot, mode);
                     if (!result.success) {
                         this.postMessageToProjectWebview({ type: 'showStatusMessage', message: result.error || 'Failed to set order by mode', isError: true });
                     }
+                    return result;
                 } catch (err) {
                     console.error('[PlanningPanelProvider] setOrderByMode failed:', err);
+                    return { success: false, error: err instanceof Error ? err.message : 'setOrderByMode failed' };
                 }
-                break;
             }
             case 'deleteKanbanPlan': {
                 const planId = String(msg.planId || '');
@@ -7646,6 +7651,29 @@ Please format the updated output document strictly as follows:
         // reassigns webview.options (incl. enableScripts) instead of short-circuiting on a
         // stale signature left over from the disposed panel.
         this._lastWebviewRootsSignature = '';
+    }
+
+    /**
+     * Re-fetch the sidebar's plan list and push it to the project panel.
+     * KanbanProvider's own writes call `_refreshBoard`, which repaints the BOARD
+     * webview only — the sidebar is a separate webview and shows stale state until
+     * something pushes to it.
+     */
+    private async _pushKanbanPlansToProjectPanel(workspaceRoot: string): Promise<void> {
+        // Deliberately overlaps with the `refreshKanbanPlans` nudge KanbanProvider's
+        // star/priority writes also send: that nudge covers the BOARD→sidebar case
+        // (a star toggled on the board), and project.js debounces it 200ms into a
+        // fetchKanbanPlans round trip. On the SIDEBAR path both fire, so the sidebar
+        // repaints immediately here and then once more, harmlessly, from the nudge.
+        // Do not "fix" this by deleting the nudge — that is the board→sidebar path.
+        const allPlans = await this._getKanbanPlans(workspaceRoot);
+        const effectiveRoot = this._resolveEffectiveWorkspaceRoot(workspaceRoot);
+        this.postMessageToProjectWebview({
+            type: 'kanbanPlansReady',
+            plans: allPlans,
+            workspaceRoot: effectiveRoot,
+            requestId: Date.now()
+        });
     }
 
     private async _getKanbanPlans(workspaceRoot: string): Promise<KanbanPlanSummary[]> {

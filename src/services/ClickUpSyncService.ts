@@ -60,6 +60,13 @@ export interface KanbanPlanRecord {
   updatedAt: string;
   lastAction: string;
   clickupTaskId?: string;
+  /**
+   * V67: native card priority, 1-4 (1=urgent, 4=low) or null/undefined for no
+   * priority. This interface is a LOCAL narrowing of KanbanDatabase's
+   * KanbanPlanRecord, not an import of it — a field added there is invisible
+   * here until it is added here too.
+   */
+  priority?: number | null;
 }
 
 export interface ClickUpListSummary {

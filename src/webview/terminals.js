@@ -114,7 +114,15 @@
     // per-group member order, per-group stored layouts, and per-group extras
     // (terminals added to a derived group via the locked-group empty-pane fill).
     // One object under one key to avoid a spray of saveSetting calls.
-    let groupPrefs = { threshold: 2, hidden: [], pinned: [], orders: {}, layouts: {}, extras: {}, autoRoleGroups: false };
+    let groupPrefs = { threshold: 2, hidden: [], pinned: [], orders: {}, layouts: {}, extras: {}, autoRoleGroups: false,
+        // Per-group kanban pane snapshots, keyed by kanbanScopeKey ('group:__all__'
+        // for the unlocked composition). Shape: { modes: string[], columns: (string|undefined)[],
+        // workspaces: (string|undefined)[], projects: string[] } — all padded to
+        // getMaxSlotCount(). The flat terminals.paneModes/kanbanPane* settings remain
+        // the LIVE arrays; this is the snapshot store the group switch reads and writes.
+        // Declared here as well as in the loader's whitelist: the loader only reassigns
+        // groupPrefs when a stored value exists, so an install with none needs the default.
+        kanbanPanes: {} };
 
     // ┌─ Section Map (approx, ±20 lines) ──────────────────────────────────
     // │ IIFE / state & constants (layout, panes, pins,
@@ -1959,6 +1967,28 @@
         return Math.max(...LAYOUT_MODES.map(m => LAYOUTS[m].slots));
     }
 
+    /**
+     * The one definition of "this rendered slot can take a terminal".
+     *
+     * A kanban-mode slot is unassigned but occupied by a live board column, so it is
+     * NOT a free seat. That rule was hand-copied into four separate seating paths
+     * (handleLockedTerminalClick, assignToFocusedPane, seatTeamWithoutGroup,
+     * fillEmptyPanes) and FORGOTTEN in two more (seatActiveGroupPage, clearGroupLock)
+     * — which is the whole reason a group switch bulldozed a kanban pane. New seating
+     * paths call this instead of writing a fifth copy.
+     *
+     * Pins are inert in a one-pane grid: LAYOUTS['1'] is the last rung of
+     * LAYOUT_FLOOR_ORDER, so a narrow window can involuntarily drop a pinned 2h layout
+     * to a single pane, and honouring the pin there makes every seat a dead click.
+     * This mirrors assignToFocusedPane's `pinsActive` exactly (:3707-3710).
+     */
+    function isSlotFree(i, rendered) {
+        if (i < 0 || i >= rendered) { return false; }
+        if (paneAssignments[i]) { return false; }
+        if (paneModes[i] === 'kanban') { return false; }
+        return rendered <= 1 || !pinnedPanes[i];
+    }
+
     // Grow ladder for open-all. Slot-ordered, unlike LAYOUT_FLOOR_ORDER (which is
     // demand-ordered for the DOWNWARD floor walk). '2v' is deliberately absent: it
     // holds the same two panes as '2h' but stacks them, and auto-picking a stacked
@@ -2195,6 +2225,20 @@
                         .map(([k, v]) => [k, v.filter(name => typeof name === 'string')])
                 )
                 : {};
+            // Absent or malformed reads as {} — an install with no stored value
+            // behaves exactly as it does today.
+            const savedKanbanPanes = (savedGroupPrefs.kanbanPanes && typeof savedGroupPrefs.kanbanPanes === 'object')
+                ? Object.fromEntries(
+                    Object.entries(savedGroupPrefs.kanbanPanes)
+                        .filter(([_, v]) => v && Array.isArray(v.modes))
+                        .map(([k, v]) => [k, {
+                            modes: v.modes.map(m => m === 'kanban' ? 'kanban' : 'terminal'),
+                            columns: Array.isArray(v.columns) ? v.columns : [],
+                            workspaces: Array.isArray(v.workspaces) ? v.workspaces : [],
+                            projects: Array.isArray(v.projects) ? v.projects.map(p => String(p || '')) : [],
+                        }])
+                )
+                : {};
             groupPrefs = {
                 threshold: Number(savedGroupPrefs.threshold) > 1 ? Math.floor(savedGroupPrefs.threshold) : 2,
                 hidden: Array.isArray(savedGroupPrefs.hidden) ? savedGroupPrefs.hidden.filter(id => typeof id === 'string') : [],
@@ -2202,6 +2246,7 @@
                 orders: (savedGroupPrefs.orders && typeof savedGroupPrefs.orders === 'object') ? savedGroupPrefs.orders : {},
                 layouts: savedLayouts,
                 extras: savedExtras,
+                kanbanPanes: savedKanbanPanes,
                 // Opt-in and stays opt-in: absent or non-true reads as false.
                 autoRoleGroups: savedGroupPrefs.autoRoleGroups === true
             };
@@ -2244,6 +2289,52 @@
             paneAssignments = [null];
             paneModes = ['kanban'];
         }
+
+        // Seed the currently-active scope from the flat settings if it has no snapshot
+        // yet. Without this, an install upgrading into this change loses its existing
+        // kanban pane on the FIRST switch to another composition: the capture is
+        // correct, but the return trip restores an absent snapshot. Absent-only, so it
+        // never overwrites a real snapshot, and captureKanbanPanesFor's solo guard applies.
+        if (!groupPrefs.kanbanPanes || !groupPrefs.kanbanPanes[kanbanScopeKey(activeGroupId)]) {
+            captureKanbanPanesFor(activeGroupId);
+        }
+    }
+
+    /** Group-scope key for kanban pane state. The unlocked composition is a real
+     *  composition and keys under the same '__all__' sentinel the picker uses. */
+    function kanbanScopeKey(groupId) { return 'group:' + (groupId || '__all__'); }
+
+    /** Snapshot the live kanban arrays against a group. NEVER called from a render
+     *  path (the 5s poll re-renders constantly) and never in solo mode, where
+     *  updatePaneElement deliberately suppresses kanban mode and must not write back. */
+    function captureKanbanPanesFor(groupId) {
+        if (document.body.classList.contains('is-solo')) { return; }
+        const max = getMaxSlotCount();
+        if (!groupPrefs.kanbanPanes) { groupPrefs.kanbanPanes = {}; }
+        groupPrefs.kanbanPanes[kanbanScopeKey(groupId)] = {
+            // Full max length, not the rendered count: renderPaneGrid pads and never
+            // trims so a kanban slot survives a shrink-grow round trip.
+            modes: Array.from({ length: max }, (_, i) => paneModes[i] === 'kanban' ? 'kanban' : 'terminal'),
+            columns: Array.from({ length: max }, (_, i) => kanbanPaneColumn[i]),
+            workspaces: Array.from({ length: max }, (_, i) => kanbanPaneWorkspace[i]),
+            projects: Array.from({ length: max }, (_, i) => kanbanPaneProject[i] || ''),
+        };
+    }
+
+    /** Restore a group's snapshot into the live arrays. A group with no snapshot
+     *  gets a clean terminal-only grid — NOT the previous group's panes, which is
+     *  the leak the flat arrays produce today. */
+    function restoreKanbanPanesFor(groupId) {
+        const max = getMaxSlotCount();
+        const snap = groupPrefs.kanbanPanes && groupPrefs.kanbanPanes[kanbanScopeKey(groupId)];
+        for (let i = 0; i < max; i++) {
+            paneModes[i] = snap && snap.modes[i] === 'kanban' ? 'kanban' : 'terminal';
+            kanbanPaneColumn[i] = snap ? snap.columns[i] : undefined;
+            kanbanPaneWorkspace[i] = snap ? snap.workspaces[i] : undefined;
+            kanbanPaneProject[i] = snap ? (snap.projects[i] || '') : '';
+        }
+        kanbanPaneCards = {};
+        kanbanPaneProjectsCache = {};
     }
 
     function saveLayoutSettings() {
@@ -3486,6 +3577,9 @@
             if (Array.isArray(groupPrefs.pinned)) {
                 groupPrefs.pinned = groupPrefs.pinned.filter(pid => pid !== id);
             }
+            if (groupPrefs.kanbanPanes) {
+                delete groupPrefs.kanbanPanes[kanbanScopeKey(id)];
+            }
             // Clean up namespaced layout keys (terminals.team.<id>.*) so they
             // do not accumulate as storage orphans when a team group is deleted.
             deleteNamespacedTeamKeys(id);
@@ -3531,8 +3625,10 @@
         // The group strip is hidden so this should not be reached from UI, but
         // guard against programmatic calls.
         if (teamScopeId) { return; }
+        captureKanbanPanesFor(activeGroupId);
         activeGroupId = null;
         activeGroupPage = 0;
+        restoreKanbanPanesFor(null);
 
         // Re-seat from the unassigned live fleet (no delegate children, no group
         // members), honouring pins that are still unassigned.
@@ -3555,7 +3651,7 @@
         let fillIdx = 0;
         for (const name of unassignedNames) {
             if (seated.has(name)) { continue; }
-            while (fillIdx < maxSlots && assignments[fillIdx] !== null) { fillIdx++; }
+            while (fillIdx < maxSlots && (assignments[fillIdx] !== null || paneModes[fillIdx] === 'kanban')) { fillIdx++; }
             if (fillIdx >= maxSlots) { break; }
             assignments[fillIdx] = name;
             fillIdx++;
@@ -3625,8 +3721,13 @@
         }
         const group = getAllGroups().find(g => g.id === id);
         if (!group) { return; }
+        // Capture against the OUTGOING scope — after the reassignment below this
+        // would write the departing group's panes onto the arriving one.
+        captureKanbanPanesFor(activeGroupId);
         const sameGroup = activeGroupId === id;
         activeGroupId = id;
+        // Restore BEFORE seatActiveGroupPage, so the seating skip has something to skip.
+        restoreKanbanPanesFor(id);
         // The page index is a scroll position, not a preference: it resets whenever
         // the lock moves to a different group. seatActiveGroupPage() re-clamps it
         // against the floored slot count, which covers a resize mid-lock.
@@ -3658,14 +3759,19 @@
         if (!group) { return; }
         const members = getGroupMembers(group);
         const rendered = Math.max(1, getSlotCount(effectiveLayout));
-        const pageCount = Math.max(1, Math.ceil(members.length / rendered));
+        // Paging must count FREE slots, or the last member of each page silently
+        // vanishes when a kanban pane is open.
+        const freeSlots = [];
+        for (let i = 0; i < rendered; i++) {
+            if (paneModes[i] !== 'kanban') { freeSlots.push(i); }
+        }
+        const perPage = Math.max(1, freeSlots.length);
+        const pageCount = Math.max(1, Math.ceil(members.length / perPage));
         if (activeGroupPage >= pageCount) { activeGroupPage = pageCount - 1; }
         if (activeGroupPage < 0) { activeGroupPage = 0; }
-        const start = activeGroupPage * rendered;
-        const assignments = members.slice(start, start + rendered);
-        while (assignments.length < getMaxSlotCount()) {
-            assignments.push(null);
-        }
+        const page = members.slice(activeGroupPage * perPage, activeGroupPage * perPage + perPage);
+        const assignments = new Array(getMaxSlotCount()).fill(null);
+        page.forEach((name, n) => { if (freeSlots[n] !== undefined) { assignments[freeSlots[n]] = name; } });
         paneAssignments = assignments;
         // A lock reseats slots but must not break `pinnedPanes[i] → paneAssignments[i]`.
         // Pins on slots the group left empty are cleared here rather than waiting for

@@ -7910,7 +7910,7 @@ Each plan file must include:
                 && partitionPlansByFeature(rawGroup.plans).featureGroups.length === 0
                 && this._kanbanProvider
                 && await this._kanbanProvider.isCodingTeamHead(resolvedWorkspaceRoot, role, rawGroup.targetAgent)) {
-                const { sent, skipped } = this._kanbanProvider.selectTeamBatchPlans(rawGroup.plans);
+                const { sent, skipped } = this._kanbanProvider.selectTeamBatchPlans(rawGroup.plans, resolvedWorkspaceRoot);
                 group = { ...rawGroup, plans: sent };
                 cappedOut = skipped;
             }

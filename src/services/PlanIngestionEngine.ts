@@ -2303,6 +2303,21 @@ export const TURN_END_VERIFY_INSTRUCTION =
     'Verify the diff (git diff) before you trust the report, then close out that subtask, register the next one (attributePastedPrompt), and dispatch it. The system moves cards as work progresses — never move one yourself.';
 
 /**
+ * The same notice for a plan that belongs to NO feature.
+ *
+ * A standalone plan has no next subtask, so the subtask form's action tail is an
+ * order the lead can only satisfy by inventing work: it went looking for "the
+ * next one", found an unimported plan file on disk, imported it and dispatched
+ * it — three times in a row, none of them asked for. The tail exists to stop a
+ * lead verifying and then stopping mid-feature; on a one-off dispatch, stopping
+ * is the correct end of the turn.
+ *
+ * Selected on `featureId`, by every composer of this notice.
+ */
+export const TURN_END_VERIFY_INSTRUCTION_STANDALONE =
+    'Verify the diff (git diff) before you trust the report, then close out that plan. There is no next subtask to dispatch. The system moves cards as work progresses — never move one yourself.';
+
+/**
  * The evidence fragment a completion notice carries after the seat/plan
  * identity: ` — "topic" (column X, feature Y, worked 12m)`. Empty when the
  * record has neither a topic nor a single renderable clause.
@@ -2354,6 +2369,6 @@ export function composeCompletedTurnEndBody(
     const evidence = composeCompletionEvidence(record, nowMs);
     const header = `[switchboard:turn-end] Seat '${seatName}' finished its turn on '${safePlanFile}'${evidence}.`;
 
-    return `${header}\n${TURN_END_VERIFY_INSTRUCTION}`;
+    return `${header}\n${record?.featureId ? TURN_END_VERIFY_INSTRUCTION : TURN_END_VERIFY_INSTRUCTION_STANDALONE}`;
 }
 

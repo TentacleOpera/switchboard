@@ -10590,7 +10590,19 @@ FROM plans
         );
     }
 
-    public async getOrderByMode(workspaceId?: string): Promise<SortMode> {
+    /**
+     * V67 — the board-wide order-by mode, read from the `kanban.orderBy` key of the
+     * `config` table (the same pattern `kanban.activeProjectFilter` uses).
+     *
+     * `workspaceId` is accepted for call-site symmetry with every other board
+     * accessor and is deliberately UNUSED: the decision (User Review item 3) was one
+     * mode for the board, not one per workspace or per project, and `config` is keyed
+     * by key alone. A DB that hosts several workspaces shares one mode across them.
+     *
+     * An unrecognised stored value reads as 'manual' — the default mode, so a
+     * corrupt key costs the pre-V67 ordering rather than an arbitrary one.
+     */
+    public async getOrderByMode(_workspaceId?: string): Promise<SortMode> {
         const val = await this.getConfig('kanban.orderBy');
         if (val === 'priority' || val === 'date' || val === 'complexity' || val === 'manual') {
             return val;
@@ -10598,7 +10610,16 @@ FROM plans
         return 'manual';
     }
 
-    public getOrderByModeSync(workspaceId?: string): SortMode {
+    /**
+     * Synchronous sibling of `getOrderByMode`, for the dispatch paths that cannot
+     * await. Returns 'manual' when the DB is not loaded — see the warn: an
+     * unreadable mode and a configured 'manual' are otherwise indistinguishable.
+     */
+    public getOrderByModeSync(_workspaceId?: string): SortMode {
+        if (!this._db) {
+            console.warn('[KanbanDatabase] kanban.orderBy unreadable (db not loaded) — assuming manual');
+            return 'manual';
+        }
         const val = this.getConfigSync('kanban.orderBy');
         if (val === 'priority' || val === 'date' || val === 'complexity' || val === 'manual') {
             return val;
@@ -10606,7 +10627,8 @@ FROM plans
         return 'manual';
     }
 
-    public async setOrderByMode(workspaceId: string, mode: SortMode): Promise<boolean> {
+    /** V67 — write the board-wide order-by mode. `workspaceId` is unused; see getOrderByMode. */
+    public async setOrderByMode(_workspaceId: string, mode: SortMode): Promise<boolean> {
         return this.setConfig('kanban.orderBy', mode);
     }
 

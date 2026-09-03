@@ -130,3 +130,7 @@ On returning to a list after an action, re-fetch rather than reusing the session
 10. Stop the server mid-session and choose a list. The console reports the failure and exits **non-zero** — a real failure is still a failure.
 11. Regression: `switchboard plans`, `switchboard ready --json`, and `switchboard dispatch <id>` produce byte-identical output and the same exit codes as before.
 12. Run the console with stdin piped rather than a TTY. It refuses with guidance and exits, rather than hanging on a prompt.
+
+## Implementation Summary
+
+Refactored `cmdBoardConsole` in `src/standalone/cli.ts` into a looping, navigable console interface. Added dedicated `formatConsoleCard` and `compareConsoleCards` functions to separate features from plans, attribute subtasks to their parent features, and sort cards by starred priority, manual column order, complexity descending, and title. Replaced exit calls on interactive branches with level returns (`b`/Enter) and typo re-prompting while preserving hard non-zero exits on server unreachable errors. Updated `doDispatch` to return numeric exit codes instead of unconditionally exiting, allowing dispatch actions within the interactive console to re-fetch and re-render board state.

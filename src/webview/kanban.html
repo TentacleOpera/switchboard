@@ -9270,7 +9270,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         return createdB - createdA;
                     }
 
-                    // Manual order: queue_position (STAGING) or column_order (elsewhere), ASC.
+                    // Manual order: queue_position (STAGING) or column_order
+                    // (elsewhere), ASC. A card that HAS a position outranks one
+                    // that does not; cards that both lack one fall through to
+                    // column_entered_at. This matches compareByPrecedence exactly
+                    // (see its header for why manual-vs-NULL cannot be resolved
+                    // by timestamp without an intransitive comparator).
                     if (queueOrdered) {
                         const ap = a.queuePosition, bp = b.queuePosition;
                         const an = (ap === null || ap === undefined), bn = (bp === null || bp === undefined);
@@ -9290,7 +9295,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             // NULL column_order means "just arrived / not part of
                             // this column's arrangement", so it sorts FIRST — the
                             // top, where the board has always put a card that just
-                            // landed.
+                            // landed. Opposite of STAGING above, where a NULL
+                            // queue_position means "never staged" and goes last.
                             return an ? -1 : 1;
                         }
                         // both null → fall through to column_entered_at

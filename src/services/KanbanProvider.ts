@@ -150,6 +150,12 @@ export interface KanbanCard {
     queuePosition?: number | null; // V60: 1-based STAGING session queue position; NULL = not staged (sorts last)
     columnEnteredAt?: string | null; // V61: when the card entered its current column (board sort key)
     priorityStarred?: number; // V63: 0/1 priority flag; starred cards sort first in every consumer
+    // V67: native card priority, 1-4 (1=urgent, 4=low) or null for no priority.
+    // Carried on the push because the webview both RENDERS the badge from it and
+    // SORTS on it under `orderByMode === 'priority'`. Omit it and both go quiet:
+    // every badge reads unset and the priority mode degenerates to manual with no
+    // error anywhere. Distinct from priorityStarred — this describes, the star directs.
+    priority?: number | null;
     columnOrder?: number | null; // V63: 1-based manual order for non-STAGING columns; NULL = unarranged (yields to columnEnteredAt DESC)
     // V64: the mission this card belongs to. A staged card ALWAYS has one —
     // staging resolves-or-creates a mission (item 10). Absent on unstaged cards
@@ -2176,6 +2182,7 @@ export class KanbanProvider implements vscode.Disposable {
                 queuePosition: row.queuePosition ?? null,
                 columnEnteredAt: row.columnEnteredAt ?? null,
                 priorityStarred: row.priorityStarred ?? 0,
+                priority: row.priority ?? null,
                 columnOrder: row.columnOrder ?? null,
                 missionId: missionByMember.get(row.planId)?.id,
                 missionName: missionByMember.get(row.planId)?.name,
@@ -2198,6 +2205,7 @@ export class KanbanProvider implements vscode.Disposable {
             subtaskCount: rec.isFeature ? (subtaskCountMap.get(rec.planId) || 0) : undefined,
             columnEnteredAt: rec.columnEnteredAt ?? null,
             priorityStarred: rec.priorityStarred ?? 0,
+            priority: rec.priority ?? null,
             columnOrder: rec.columnOrder ?? null,
         })));
 
@@ -4062,6 +4070,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                         queuePosition: row.queuePosition ?? null,
                         columnEnteredAt: row.columnEnteredAt ?? null,
                         priorityStarred: row.priorityStarred ?? 0,
+                        priority: row.priority ?? null,
                         columnOrder: row.columnOrder ?? null,
                         missionId: missionByMember2.get(row.planId)?.id,
                         missionName: missionByMember2.get(row.planId)?.name,
@@ -4086,6 +4095,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                     subtaskCount: rec.isFeature ? (subtaskCountMap2.get(rec.planId) || 0) : undefined,
                     columnEnteredAt: rec.columnEnteredAt ?? null,
                     priorityStarred: rec.priorityStarred ?? 0,
+                    priority: rec.priority ?? null,
                     columnOrder: rec.columnOrder ?? null,
                     missionId: missionByMember2.get(rec.planId)?.id,
                     missionName: missionByMember2.get(rec.planId)?.name,
@@ -4307,6 +4317,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                     queuePosition: row.queuePosition ?? null,
                     columnEnteredAt: row.columnEnteredAt ?? null,
                     priorityStarred: row.priorityStarred ?? 0,
+                    priority: row.priority ?? null,
                     columnOrder: row.columnOrder ?? null,
                 };
             });
@@ -4324,6 +4335,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 project: rec.project || '',
                 columnEnteredAt: rec.columnEnteredAt ?? null,
                 priorityStarred: rec.priorityStarred ?? 0,
+                priority: rec.priority ?? null,
                 columnOrder: rec.columnOrder ?? null,
             })));
 
@@ -4380,7 +4392,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const codingHeadLive = _codingRoles4.leads.length > 0 || _codingRoles4.coders.length > 0;
             const anyCodingTerminalLive = codingHeadLive || (this._taskViewerProvider?.getAliveCodingTerminalNames().length ?? 0) > 0;
             const teamHeadColumns = await this.resolveTeamHeadColumns(resolvedWorkspaceRoot, columns);
-            const orderByMode = (dbReady && typeof db.getOrderByMode === 'function' && workspaceId) ? await db.getOrderByMode(workspaceId) : 'manual';
+            const orderByMode = (typeof db.getOrderByMode === 'function' && workspaceId) ? await db.getOrderByMode(workspaceId) : 'manual';
             this.postMessage((scope: string | null | undefined) => ({
                 type: 'updateBoard',
                 cards,
@@ -4708,6 +4720,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 project: rec.project || undefined,   // REQUIRED — drives per-project PRD injection in generateUnifiedPrompt
                 column: rec.kanbanColumn,
                 priorityStarred: rec.priorityStarred,
+                priority: rec.priority ?? null,
                 queuePosition: rec.queuePosition,
                 columnOrder: rec.columnOrder,
                 columnEnteredAt: rec.columnEnteredAt,
@@ -6123,8 +6136,30 @@ If the user asks a question in a comment, post it as a comment on the issue. The
      * cap and the planner fan-out pick the same plans out of the same column, and a
      * hand-arranged column is respected rather than overridden by age.
      */
-    public selectTeamBatchPlans<T extends BatchPromptPlan>(plans: T[]): { sent: T[]; skipped: T[] } {
-        return applyBatchCap(plans, TEAM_BATCH_PLAN_CAP, true);
+    public selectTeamBatchPlans<T extends BatchPromptPlan>(
+        plans: T[],
+        workspaceRoot?: string
+    ): { sent: T[]; skipped: T[] } {
+        // V67: read the board-wide order-by mode from the SAME `kanban.orderBy`
+        // config key every other consumer reads. Without a workspaceRoot there is
+        // no DB to read it from, so the cap falls back to manual — a caller that
+        // omits the root is asking for the pre-V67 ordering by construction.
+        const mode = workspaceRoot ? this._resolveOrderByModeSync(workspaceRoot) : 'manual';
+        return applyBatchCap(plans, TEAM_BATCH_PLAN_CAP, true, mode);
+    }
+
+    /**
+     * V67: the one synchronous read of the board-wide order-by mode. Logs when the
+     * DB is not loaded, so "the board was ordering by priority but the dispatch
+     * used manual" is answerable after the fact instead of being a silent default.
+     */
+    private _resolveOrderByModeSync(workspaceRoot: string): SortMode {
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || typeof db.getOrderByModeSync !== 'function') {
+            console.warn('[KanbanProvider] order-by mode unreadable (no kanban DB) — assuming manual');
+            return 'manual';
+        }
+        return db.getOrderByModeSync();
     }
 
     public async generateUnifiedPrompt(
@@ -6497,7 +6532,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 // any card (so the remainder stays where it is); this second cap only
                 // covers callers that build a prompt without moving cards — the prompt
                 // previews — and is a no-op on an already-capped set.
-                const { sent } = this.selectTeamBatchPlans(partition.loosePlans);
+                const { sent } = this.selectTeamBatchPlans(partition.loosePlans, workspaceRoot);
                 orderedPlans = sent;
                 batchOptions.featureMode = true;
                 batchOptions.driveMode = true;
@@ -7281,8 +7316,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
         // a proxy for this very filter and added nothing once the filter exists.
         const dispatchable = sourceCards.filter(c => !c.working);
         const sortColumn = dispatchable[0]?.column || '';
-        const db = this._getKanbanDb(workspaceRoot);
-        const orderByMode = (db && typeof db.getOrderByModeSync === 'function') ? db.getOrderByModeSync() : 'manual';
+        const orderByMode = this._resolveOrderByModeSync(workspaceRoot);
         const ordered = [...dispatchable].sort((a, b) => compareByPrecedence(a, b, sortColumn, orderByMode));
         // The webview optimistically moved EVERY selected card on drop. A card the
         // in-flight filter drops is never named in the moveCards echo, so without
@@ -9640,6 +9674,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     queuePosition: plan.queuePosition ?? null,
                     columnEnteredAt: plan.columnEnteredAt ?? null,
                     priorityStarred: plan.priorityStarred ?? 0,
+                    priority: plan.priority ?? null,
                     columnOrder: plan.columnOrder ?? null,
                 });
             }

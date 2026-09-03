@@ -2562,7 +2562,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         // (planFile, workspaceId, sessionId, planId, kanbanColumn, topic)
                         // survives the spread.
                         const orderable = records.map((r: any) => ({ ...r, column: r.column || r.kanbanColumn || '' }));
-                        const { sent, skipped } = kanbanProvider.selectTeamBatchPlans(orderable);
+                        const { sent, skipped } = kanbanProvider.selectTeamBatchPlans(orderable, root);
                         records = sent;
                         cappedOut = skipped;
                     }

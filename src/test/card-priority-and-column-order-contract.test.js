@@ -148,21 +148,21 @@ check('manual-vs-absent is not resolved by timestamp — the comparator stays tr
 // ── One resolver, not three ────────────────────────────────────────────────
 
 check('the queue pop calls the shared resolver and keeps no local queue_position sort', () => {
-    assert.ok(/import\s*\{\s*compareByPrecedence\s*\}\s*from\s*'\.\/kanbanOrdering'/.test(apiServer),
+    assert.ok(/import\s*\{[^}]*\bcompareByPrecedence\b[^}]*\}\s*from\s*'\.\/kanbanOrdering'/.test(apiServer),
         'LocalApiServer must import compareByPrecedence');
-    assert.ok(/compareByPrecedence\(a,\s*b,\s*'STAGING'\)/.test(apiServer),
-        "the queue pop must sort via compareByPrecedence(a, b, 'STAGING')");
+    assert.ok(/compareByPrecedence\(a,\s*b,\s*'STAGING'(,\s*\w+)?\)/.test(apiServer),
+        "the queue pop must sort via compareByPrecedence(a, b, 'STAGING'[, mode])");
     assert.ok(!/const\s+byQueueThenBoard\s*=/.test(apiServer),
         'byQueueThenBoard must be gone — a second sort is how the surfaces drift');
 });
 
 check('the planner fan-out calls the shared resolver and keeps no lastActivity sort', () => {
-    assert.ok(/import\s*\{\s*compareByPrecedence\s*\}\s*from\s*'\.\/kanbanOrdering'/.test(provider),
+    assert.ok(/import\s*\{[^}]*\bcompareByPrecedence\b[^}]*\}\s*from\s*'\.\/kanbanOrdering'/.test(provider),
         'KanbanProvider must import compareByPrecedence');
     const fnStart = provider.indexOf('private async _distributePlannerDispatch(');
     assert.notStrictEqual(fnStart, -1, '_distributePlannerDispatch must exist');
     const body = provider.slice(fnStart, provider.indexOf('\n    private ', fnStart + 50));
-    assert.ok(/compareByPrecedence\(a,\s*b,\s*sortColumn\)/.test(body),
+    assert.ok(/compareByPrecedence\(a,\s*b,\s*sortColumn(,\s*\w+)?\)/.test(body),
         '_distributePlannerDispatch must sort via compareByPrecedence');
     assert.ok(!/lastActivity\s*\|\|\s*''\)\.localeCompare/.test(body),
         'the lastActivity ASC sort must be gone — it was a proxy for the in-flight filter, not an ordering');
@@ -172,7 +172,7 @@ check('the planner fan-out filters in-flight cards before sorting, and reports w
     const fnStart = provider.indexOf('private async _distributePlannerDispatch(');
     const body = provider.slice(fnStart, provider.indexOf('\n    private ', fnStart + 50));
     const filterIdx = body.indexOf('sourceCards.filter(c => !c.working)');
-    const sortIdx = body.indexOf('compareByPrecedence(a, b, sortColumn)');
+    const sortIdx = body.search(/compareByPrecedence\(a, b, sortColumn(, \w+)?\)/);
     assert.notStrictEqual(filterIdx, -1, 'the !working filter must exist');
     assert.ok(filterIdx < sortIdx, 'the in-flight filter must run BEFORE the sort');
     assert.ok(/_inFlightSkipFailures\(/.test(body),
@@ -184,11 +184,72 @@ check('the planner fan-out filters in-flight cards before sorting, and reports w
 check('the frontend display comparator applies the same precedence as the resolver', () => {
     const sortIdx = kanbanHtml.indexOf('const sortedItems = [...items].sort((a, b) => {');
     assert.notStrictEqual(sortIdx, -1, 'the display comparator must exist');
-    const body = kanbanHtml.slice(sortIdx, sortIdx + 3200);
+    const body = kanbanHtml.slice(sortIdx, sortIdx + 6000);
     assert.ok(/a\.priorityStarred\s*\?\s*1\s*:\s*0/.test(body), 'display sort must apply starred-first');
     assert.ok(/a\.queuePosition/.test(body) && /a\.columnOrder/.test(body),
         'display sort must read queue_position in STAGING and column_order elsewhere');
     assert.ok(/_colTs/.test(body), 'display sort must fall back to column_entered_at DESC');
+});
+
+// ── V67: the order-by mode reaches every consumer, and priority reaches the card ──
+
+check('V67 adds plans.priority to the schema, the migration chain, and PLAN_COLUMNS', () => {
+    assert.ok(/priority\s+INTEGER DEFAULT NULL/.test(database), 'SCHEMA_TABLES_SQL must declare priority');
+    assert.ok(/MIGRATION_V67_SQL/.test(database), 'MIGRATION_V67_SQL must exist');
+    assert.ok(/setMigrationVersion\(67\)/.test(database), 'the migration runner must stamp version 67');
+    const cols = database.slice(database.indexOf('const PLAN_COLUMNS ='), database.indexOf('const PLAN_COLUMNS =') + 900);
+    assert.ok(/,\s*priority\b/.test(cols),
+        'PLAN_COLUMNS must select priority or every read returns it undefined');
+});
+
+check('priority stays out of the upsert, so a file re-import cannot wipe a set priority', () => {
+    const upsert = database.slice(database.indexOf('const UPSERT_PLAN_SQL'), database.indexOf('const MIGRATION_VERSION_KEY'));
+    const setClause = upsert.slice(upsert.indexOf('DO UPDATE SET'));
+    assert.ok(!/\bpriority\s*=/.test(setClause),
+        'priority must stay out of the ON CONFLICT SET list — a board-set priority outranks a stale file pin');
+});
+
+check('the order-by mode is read from ONE config key, never re-derived per consumer', () => {
+    assert.ok(/'kanban\.orderBy'/.test(database),
+        'KanbanDatabase must own the kanban.orderBy read/write');
+    for (const [label, src] of [['KanbanProvider', provider], ['LocalApiServer', apiServer]]) {
+        assert.ok(/getOrderByMode(Sync)?\(/.test(src),
+            `${label} must read the mode through getOrderByMode/getOrderByModeSync, not its own config lookup`);
+        assert.ok(!/getConfig(Sync)?\('kanban\.orderBy'/.test(src),
+            `${label} must NOT read kanban.orderBy directly — that is a second source of truth`);
+    }
+});
+
+check('every compareByPrecedence call site passes a mode', () => {
+    // A call site left at the 3-arg form silently defaults to 'manual', which is how
+    // the board comes to show priority order while a consumer dispatches manual order
+    // — the exact discrepancy the shared resolver exists to prevent.
+    const promptBuilder = read('src/services/agentPromptBuilder.ts');
+    for (const [label, src] of [['KanbanProvider', provider],
+                                ['LocalApiServer', apiServer],
+                                ['agentPromptBuilder', promptBuilder]]) {
+        const calls = src.match(/compareByPrecedence\([^)]*\)/g) || [];
+        assert.ok(calls.length > 0, `${label} must call compareByPrecedence`);
+        for (const call of calls) {
+            assert.strictEqual(call.split(',').length, 4,
+                `${label}: ${call} passes no mode — it would sort by 'manual' whatever the board shows`);
+        }
+    }
+});
+
+check('priority is carried on the board push, so the badge and the priority sort are not inert', () => {
+    // The webview both RENDERS the badge from card.priority and SORTS on it. A payload
+    // that omits the field makes every badge read unset and turns 'priority' mode into
+    // manual, with no error on either side.
+    assert.ok(/priority\?: number \| null;/.test(provider),
+        'KanbanCard must declare priority');
+    const starredSites = (provider.match(/priorityStarred: (row|rec|plan)\.priorityStarred/g) || []).length;
+    const prioritySites = (provider.match(/priority: (row|rec|plan)\.priority \?\? null/g) || []).length;
+    assert.ok(starredSites > 0, 'the board card builders must exist');
+    assert.strictEqual(prioritySites, starredSites,
+        `every card builder that carries priorityStarred must carry priority too (${prioritySites} of ${starredSites})`);
+    assert.ok(/card\.priority/.test(kanbanHtml),
+        'the board webview must read card.priority for the badge and the priority sort');
 });
 
 // ── Persistence, clearing, and wiring ──────────────────────────────────────
@@ -381,8 +442,9 @@ check('both live copies of the HTTP contract document the priority endpoint', ()
                                 ['protocols/switchboard-mission-control-http', orchestrationProtocol]]) {
         assert.ok(/\| `PUT \/kanban\/plans\/priority` \|/.test(doc),
             `${label}/SKILL.md must carry the priority row — it is the only way an agent discovers the capability, and the two copies are maintained byte-identical`);
-        assert.ok(/kanban\/plans\/priority" -H "Content-Type: application\/json"/.test(doc),
-            `${label}/SKILL.md must carry the curl example`);
+        assert.ok(/kanban\/plans\/priority" -H "Content-Type: application\/json"/.test(doc)
+                  || /switchboard api PUT \/kanban\/plans\/priority/.test(doc),
+            `${label}/SKILL.md must carry the invocation example (raw curl or switchboard api)`);
     }
     assert.strictEqual(orchestrationSkill, orchestrationProtocol,
         'the skills copy and the protocols copy of the HTTP contract are duplicates — updating one and not the other leaves half the agent surface blind to the endpoint');

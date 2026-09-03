@@ -26,6 +26,33 @@ What produced the *original* exit frame is not established. The fleet's `recentl
 
 > **Line references in this plan were re-verified against HEAD on 2026-08-14.** The originals were captured on 2026-08-13 and `src/webview/terminals.js` has since drifted by roughly +100 lines in this region. Every `:NNN` below is the HEAD line, not the report-time line.
 
+### Trigger, established 2026-09-03
+
+The original report left this open — *"This plan therefore fixes the latch, not the trigger"*. The trigger is now identified, and it changes the shape of the fix.
+
+**The gateway tells a first-attaching client that its terminal is dead.** `terminalWsGateway.ts:1325`, in the attach path, immediately after scrollback replay:
+
+```ts
+if (terminal.status === 'exited') {
+    this.safeSend(ws, { t: 'exit', code: terminal.exitCode ?? 0 });
+}
+```
+
+**That notice is correct for a re-attach and wrong for a first attach, and the code cannot tell them apart.** The scenario it exists for is a pane whose socket dropped (the client has a `reconnectTimer`) reattaching to discover the pty died while it was away — real, and worth a notification. But the same path serves a brand-new pane, and it consults `terminal.status` without ever asking whether *this client* previously saw *this terminal* alive.
+
+**The state it guards is only reachable by racing it.** Exited terminals are removed from the fleet — the `recentlyClosed` tombstone map exists precisely because it covers *"terminals no longer in the fleet"* (`ptyFleetService.ts:165`), and `ptyListTerminals` returns no `exited` entries. So a dead seat is not listed, not selectable, and cannot be seated into a pane. `terminal.status === 'exited'` at attach time is the window between a pty dying and its handle being dropped.
+
+**Why delegates and not the head.** Seats are spawned in order — observed 2026-09-03: head `Coding` (pid 1976821), then `Coding-coder-1` (1977114), `-coder-2` (1977430), `-intern` (1978383). The head's handle exists well before its pane attaches. Delegate panes attach into the spawn sequence, which is where the window is.
+
+**And "code 0" is a manufactured claim, not an observation.** The absent-value default is applied twice on the same field:
+
+```ts
+{ t: 'exit', code: terminal.exitCode ?? 0 }                          // gateway :1325
+const exitCode = typeof frame.code === 'number' ? frame.code : 0;    // terminals.js :11252
+```
+
+A handle that recorded no exit code renders as **"exited cleanly"** — the most reassuring reading of no information at all. This is the same defect as the `kill()` case already noted in this plan (an operator kill reported as code 0), reached by a different route.
+
 ### Root cause
 
 **`entry.exited` is written in three places and cleared in none, and every recovery path in the client is gated behind it.**
@@ -370,6 +397,12 @@ test('an operator kill is distinguishable from a clean exit on the wire', () => 
         'the kill path must state the intent on the event rather than leaving it inferred from a missing code');
 });
 ```
+
+**Additional — gate the attach-time exit frame (added 2026-09-03).** Clearing the latch fixes recovery and leaves the cause. Also:
+
+1. **Send the exit frame only to a client that previously saw the terminal live.** Track prior attachment per client/terminal and condition `terminalWsGateway.ts:1325` on it. A first attach must never be told the seat is dead — if the handle is genuinely gone the socket already closes `4404`, which is the honest signal.
+2. **Stop defaulting an absent exit code to 0.** Omit `code` when `terminal.exitCode` is null/undefined (the same "omit, do not fabricate" rule this file already applies to `bracketedPaste` and `modes` at `:1306-1307`), and render the client-side unknown case as `[Process Exited (code unknown)]` rather than `code 0`. This also fixes the `kill()` ambiguity named in the Goal.
+
 
 ## Verification Plan
 

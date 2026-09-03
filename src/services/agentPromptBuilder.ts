@@ -9,7 +9,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { DefaultPromptOverride, CustomAgentAddons, BUILT_IN_AGENT_LABELS } from './agentConfig';
 import { extractDesignSystemTokens, ExtractedDesignSystem } from './designSystemTokens';
-import { compareByPrecedence } from './kanbanOrdering';
+import { compareByPrecedence, type SortMode } from './kanbanOrdering';
 import { substituteCliPath } from '../utils/cliPathToken';
 
 // One-time diagnostic for the ticket_updater mode collapse. Users who configured
@@ -56,6 +56,8 @@ export interface BatchPromptPlan {
     // array built any other way simply sorts by its fallbacks.
     column?: string;
     priorityStarred?: number | null;
+    /** V67: native card priority, 1-4 or null. Read only under mode 'priority'. */
+    priority?: number | null;
     queuePosition?: number | null;
     columnOrder?: number | null;
     columnEnteredAt?: string | null;
@@ -91,7 +93,14 @@ export const TEAM_BATCH_PLAN_CAP = 5;
 export function applyBatchCap<T extends BatchPromptPlan>(
     plans: T[],
     cap: number,
-    isTeamHead: boolean
+    isTeamHead: boolean,
+    // V67: the board-wide order-by mode. This is the FOURTH compareByPrecedence
+    // call site (the plan counted three), and it decides which plans a batch
+    // actually sends. Left at 'manual' it would reproduce the exact defect the
+    // shared resolver exists to prevent: the board showing priority order while
+    // the batch dispatches the manual-order top N, with nothing reporting the
+    // discrepancy. Callers read it from the same `kanban.orderBy` config key.
+    mode: SortMode = 'manual'
 ): { sent: T[]; skipped: T[] } {
     if (!isTeamHead) {
         return { sent: plans, skipped: [] };
@@ -102,7 +111,7 @@ export function applyBatchCap<T extends BatchPromptPlan>(
     // caller order would silently drop queue_position precedence for batches of five
     // or fewer, which is every preview and most real dispatches.
     const sortColumn = plans[0]?.column || '';
-    const ordered = [...plans].sort((a, b) => compareByPrecedence(a, b, sortColumn));
+    const ordered = [...plans].sort((a, b) => compareByPrecedence(a, b, sortColumn, mode));
     return { sent: ordered.slice(0, cap), skipped: ordered.slice(cap) };
 }
 

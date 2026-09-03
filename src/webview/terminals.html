@@ -1440,6 +1440,12 @@
         .terminal-pane.drag-drop-target .pane-content {
             pointer-events: none; /* let the drop land on the pane, not xterm */
         }
+        /* Still height:100% for centring, but NOT clickable any more. The
+           placeholder used to fill the pane body and was itself the click target
+           for the role picker, so every near-miss on the small `kanban mode`
+           button — and every press that released a few pixels outside it — opened
+           an agent picker at the top of the panel instead. The actions are explicit
+           buttons now; the placeholder is just the label above them. */
         .pane-empty-slot {
             display: flex;
             align-items: center;
@@ -1450,7 +1456,16 @@
             font-style: italic;
             flex-direction: column;
             gap: 8px;
+            pointer-events: none;   /* the buttons below re-enable their own */
         }
+        .pane-empty-actions {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 6px;
+            pointer-events: auto;
+        }
+        .pane-empty-actions > button { margin-top: 0; }
 
         /* ---------------------------------------------------------------------
            Status pane: a seat rendered as STATE. In flow (not absolute) so
@@ -1891,8 +1906,28 @@
             padding: 1px 4px;
             max-width: 120px;
             cursor: pointer;
+            /* A <select> has an intrinsic min content width; without this it
+               refuses to shrink and overflows the 22px .pane-header instead of
+               truncating. Both pickers are flex children of .pane-title. */
+            min-width: 0;
+            /* Cosmetic only. A <select> button face clips rather than ellipsises in
+               most engines; this is a free improvement where it is honoured and a
+               no-op where it is not. The `title` set in terminals.js is what
+               actually makes a capped label recoverable — do not chase this. */
+            text-overflow: ellipsis;
         }
-        .kanban-pane-ws-project-picker { max-width: 170px; }
+        /* The combined picker's options read "<workspace> > <project>" in a
+           multi-workspace install (terminals.js renderKanbanPane), which is
+           routinely 30+ characters. The old flat 170px cap was sized for a
+           workspace-only dropdown and cut every such label mid-word.
+           Percentage-of-pane, not a bigger fixed number: at 3x3 the pane is a
+           third of the panel and a fixed 340px would push the column picker and
+           the header buttons off-screen. flex-shrink lets it give way to the
+           column picker first when the pane is genuinely tiny. */
+        .kanban-pane-ws-project-picker {
+            max-width: min(340px, 55%);
+            flex: 0 1 auto;
+        }
         .kanban-pane-loading {
             display: flex;
             align-items: center;

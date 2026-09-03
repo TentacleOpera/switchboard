@@ -48,7 +48,7 @@ import { validateVerbPayload } from './verbSchemas';
 import { isAllowedHostFor, isAllowedOriginFor, isTailnetPolicy, LOOPBACK_ONLY_POLICY, type BindPolicy } from '../utils/loopbackHostname';
 import { listIconPalette } from './iconPalette';
 import { isSafeId as isSafeQueueId, listQueue, enqueueItem, deleteItem, reorderQueue, MAX_QUEUE_ITEM_BODY } from './TeamQueueService';
-import { composeCompletedTurnEndBody, composeCompletionEvidence, TURN_END_VERIFY_INSTRUCTION } from './PlanIngestionEngine';
+import { composeCompletedTurnEndBody, composeCompletionEvidence, TURN_END_VERIFY_INSTRUCTION, TURN_END_VERIFY_INSTRUCTION_STANDALONE } from './PlanIngestionEngine';
 import { compareByPrecedence } from './kanbanOrdering';
 import { TransferBundleService } from './TransferBundleService';
 
@@ -4097,7 +4097,11 @@ export class LocalApiServer {
                         const relayMsg = `[queue/done] ${from} reports its dispatched task complete`
                             + (relayPlanId ? ` (plan ${relayPlanId})` : '')
                             + `${composeCompletionEvidence(held, Date.now())}.`
-                            + ` ${TURN_END_VERIFY_INSTRUCTION}`
+                            // A standalone plan (no featureId) has no next subtask,
+                            // so it takes the notice form without the register-and-
+                            // dispatch tail. Selected on the SAME held record the
+                            // evidence above reads, so the two cannot disagree.
+                            + ` ${held.featureId ? TURN_END_VERIFY_INSTRUCTION : TURN_END_VERIFY_INSTRUCTION_STANDALONE}`
                             + (isTeamMember
                                 ? ` The system preserves ${from}'s context for review and fix requests.`
                                     + composeAcceptanceInstruction(relayHead, relayPlanId, workspaceRoot)
@@ -8057,6 +8061,68 @@ export class LocalApiServer {
                 res.end(JSON.stringify({ error: 'Missing required field: planId' }));
                 return;
             }
+            // PAYLOAD VALIDATION RUNS BEFORE THE DB LOOKUP. A malformed field is a
+            // 400 whether or not the plan exists; answering 404 for `starred: "maybe"`
+            // tells the caller to go looking for a missing card instead of fixing the
+            // value it sent. (V67 briefly inverted this by hoisting the lookup above
+            // the ladder — the contract test caught it.)
+            const wantsPriority = body?.priority !== undefined;
+            let priorityVal: number | null = null;
+            let starred = false;
+            if (wantsPriority) {
+                const raw = body.priority;
+                // 0 / 'none' / '' all mean "no priority", and NULL is the only
+                // no-priority state — 0 is never stored (V67 decision).
+                if (raw === null || raw === 'none' || raw === '' || raw === 0) {
+                    priorityVal = null;
+                } else if (typeof raw === 'number') {
+                    priorityVal = (Number.isFinite(raw) && raw >= 1 && raw <= 4) ? Math.floor(raw) : NaN as any;
+                } else if (typeof raw === 'string') {
+                    const parsed = parseInt(raw, 10);
+                    const label = raw.trim().toLowerCase();
+                    if (!isNaN(parsed) && parsed >= 1 && parsed <= 4) { priorityVal = parsed; }
+                    else if (label === 'urgent') { priorityVal = 1; }
+                    else if (label === 'high') { priorityVal = 2; }
+                    else if (label === 'normal' || label === 'medium') { priorityVal = 3; }
+                    else if (label === 'low') { priorityVal = 4; }
+                    else { priorityVal = NaN as any; }
+                } else {
+                    priorityVal = NaN as any;
+                }
+                if (typeof priorityVal === 'number' && isNaN(priorityVal)) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Field "priority" must be null or an integer between 1 and 4' }));
+                    return;
+                }
+            } else {
+                // Strict boolean validation — reject non-boolean-like values to prevent
+                // the silent-trap class of bug (e.g. starred: "false" → true with !!).
+                const starredRaw = body?.starred;
+                if (starredRaw === undefined || starredRaw === null) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Missing required field: starred (boolean) or priority (number|null)' }));
+                    return;
+                }
+                if (typeof starredRaw === 'boolean') {
+                    starred = starredRaw;
+                } else if (starredRaw === 1 || starredRaw === 0) {
+                    starred = starredRaw === 1;
+                } else if (typeof starredRaw === 'string') {
+                    const lower = starredRaw.trim().toLowerCase();
+                    if (lower === 'true') { starred = true; }
+                    else if (lower === 'false') { starred = false; }
+                    else {
+                        res.writeHead(400, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ error: 'Field "starred" must be a boolean, 1/0, or "true"/"false"' }));
+                        return;
+                    }
+                } else {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Field "starred" must be a boolean, 1/0, or "true"/"false"' }));
+                    return;
+                }
+            }
+
             const db = await this._resolveDbForRoot(String(body?.workspaceRoot || '').trim() || undefined);
             if (!db) {
                 res.writeHead(503, { 'Content-Type': 'application/json' });
@@ -8064,7 +8130,7 @@ export class LocalApiServer {
                 return;
             }
             // Resolve planId OR sessionId (the card key is planId || sessionId,
-            // matching KanbanProvider.setPriorityStarred line 8710).
+            // matching KanbanProvider.setPriorityStarred).
             let record = await db.getPlanByPlanId(planId);
             if (!record) { record = await db.getPlanBySessionId(planId); }
             if (!record) {
@@ -8074,68 +8140,14 @@ export class LocalApiServer {
             }
             const wsId = record.workspaceId || await this._wsId(db);
 
-            // If numeric priority is provided (1..4 or null/0/'none')
-            if (body?.priority !== undefined) {
-                let priorityVal: number | null = null;
-                if (body.priority === null || body.priority === 'none' || body.priority === '' || body.priority === 0) {
-                    priorityVal = null;
-                } else if (typeof body.priority === 'number') {
-                    if (body.priority >= 1 && body.priority <= 4) {
-                        priorityVal = Math.floor(body.priority);
-                    } else {
-                        res.writeHead(400, { 'Content-Type': 'application/json' });
-                        res.end(JSON.stringify({ error: 'Field "priority" must be null or an integer between 1 and 4' }));
-                        return;
-                    }
-                } else if (typeof body.priority === 'string') {
-                    const parsed = parseInt(body.priority, 10);
-                    if (!isNaN(parsed) && parsed >= 1 && parsed <= 4) {
-                        priorityVal = parsed;
-                    } else if (body.priority.toLowerCase() === 'urgent') {
-                        priorityVal = 1;
-                    } else if (body.priority.toLowerCase() === 'high') {
-                        priorityVal = 2;
-                    } else if (body.priority.toLowerCase() === 'normal' || body.priority.toLowerCase() === 'medium') {
-                        priorityVal = 3;
-                    } else if (body.priority.toLowerCase() === 'low') {
-                        priorityVal = 4;
-                    } else {
-                        res.writeHead(400, { 'Content-Type': 'application/json' });
-                        res.end(JSON.stringify({ error: 'Field "priority" must be null or an integer between 1 and 4' }));
-                        return;
-                    }
-                }
+            if (wantsPriority) {
+                // NOTE: this write does NOT push to Linear/ClickUp and does not refresh
+                // any webview — KanbanProvider.setCardPriority (the in-host verb path)
+                // does both. A priority set through this endpoint reaches the tracker
+                // only on the next outbound sync.
                 const ok = await db.setCardPriority(record.planId, wsId, priorityVal);
                 res.writeHead(ok ? 200 : 500, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: ok, planId: record.planId, priority: priorityVal }));
-                return;
-            }
-
-            // Strict boolean validation — reject non-boolean-like values to prevent
-            // the silent-trap class of bug (e.g. starred: "false" → true with !!).
-            const starredRaw = body?.starred;
-            if (starredRaw === undefined || starredRaw === null) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Missing required field: starred (boolean) or priority (number|null)' }));
-                return;
-            }
-            let starred: boolean;
-            if (typeof starredRaw === 'boolean') {
-                starred = starredRaw;
-            } else if (starredRaw === 1 || starredRaw === 0) {
-                starred = starredRaw === 1;
-            } else if (typeof starredRaw === 'string') {
-                const lower = starredRaw.trim().toLowerCase();
-                if (lower === 'true') { starred = true; }
-                else if (lower === 'false') { starred = false; }
-                else {
-                    res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({ error: 'Field "starred" must be a boolean, 1/0, or "true"/"false"' }));
-                    return;
-                }
-            } else {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Field "starred" must be a boolean, 1/0, or "true"/"false"' }));
                 return;
             }
 
