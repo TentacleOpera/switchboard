@@ -44,6 +44,7 @@ export interface QueueItem {
     feature?: string;
     target: string;      // 'head' | 'any-member' | <memberName>
     priority: number;
+    origin: 'auto' | 'mission';
     enqueuedTs: string;  // ISO
     body: string;
 }
@@ -135,6 +136,7 @@ function parseQueueItem(filename: string, content: string): QueueItem {
         feature: fm.feature || undefined,
         target: fm.target || 'head',
         priority: fm.priority ? parseInt(fm.priority, 10) || 0 : 0,
+        origin: (fm.origin as 'auto' | 'mission') || 'auto',
         enqueuedTs: fm.enqueued_ts || fm.created || new Date().toISOString(),
         body,
     };
@@ -191,7 +193,7 @@ export async function listQueue(workspaceRoot: string, groupId: string): Promise
 export async function enqueueItem(
     workspaceRoot: string,
     groupId: string,
-    params: { kind: string; body: string; planId?: string; feature?: string; target?: string; priority?: number }
+    params: { kind: string; body: string; planId?: string; feature?: string; target?: string; priority?: number; origin?: 'auto' | 'mission' | string }
 ): Promise<QueueEnqueueResult> {
     try {
         const body = String(params.body || '');
@@ -214,6 +216,7 @@ export async function enqueueItem(
         const compact = iso.replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
         const target = String(params.target || 'head').trim();
         const priority = typeof params.priority === 'number' ? params.priority : 0;
+        const origin = params.origin === 'mission' ? 'mission' : 'auto';
 
         const fmLines: string[] = ['---'];
         fmLines.push(`kind: ${flatten(kind)}`);
@@ -221,6 +224,7 @@ export async function enqueueItem(
         if (params.feature) { fmLines.push(`feature: ${flatten(params.feature)}`); }
         fmLines.push(`target: ${flatten(target)}`);
         fmLines.push(`priority: ${priority}`);
+        fmLines.push(`origin: ${origin}`);
         fmLines.push(`enqueued_ts: ${iso}`);
         fmLines.push('---');
         fmLines.push('');

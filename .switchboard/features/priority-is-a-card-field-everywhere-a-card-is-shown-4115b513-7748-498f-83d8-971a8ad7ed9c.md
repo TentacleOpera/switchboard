@@ -17,8 +17,8 @@ The star has the same shape of gap. It ships on the board webview, where clickin
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Priority is a native card field, and the board gets one "order by" control that decides what actually runs](../plans/priority-as-a-native-field-and-a-board-wide-order-by.md) — **PLAN REVIEWED** — ID: 602832e6-3b60-4701-aac5-8841969a1569
-- [ ] [Add priority star to sidebar project panel plan and feature cards](../plans/feature_plan_20260827144005_priority-star-on-sidebar-plan-and-feature-cards.md) — **PLAN REVIEWED** — ID: b677a96e-5e1c-4d16-be1b-d39372607ad0
+- [ ] [Priority is a native card field, and the board gets one "order by" control that decides what actually runs](../plans/priority-as-a-native-field-and-a-board-wide-order-by.md) — **CODER CODED** — ID: 602832e6-3b60-4701-aac5-8841969a1569
+- [ ] [Add priority star to sidebar project panel plan and feature cards](../plans/feature_plan_20260827144005_priority-star-on-sidebar-plan-and-feature-cards.md) — **CODER CODED** — ID: b677a96e-5e1c-4d16-be1b-d39372607ad0
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

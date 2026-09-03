@@ -31,6 +31,8 @@ export interface RemoteStateDelta {
     updatedAt?: string;
     /** Remote item body/description. Linear: issue.description. Notion: undefined (deferred — fetched lazily via fetchDescription). */
     description?: string;
+    /** Remote item priority (1-4 integer, or null for unset/no-priority). */
+    priority?: number | null;
     /**
      * Notion echo guard: true when the page's `last_edited_by` is the Switchboard
      * integration bot itself (i.e. the change was our own outbound push). When true,

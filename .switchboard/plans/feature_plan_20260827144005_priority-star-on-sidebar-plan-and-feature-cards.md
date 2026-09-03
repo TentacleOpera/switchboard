@@ -311,3 +311,7 @@ The board's star button CSS lives in `kanban.html` (lines 1164-1178). The sideba
 6. Star a plan from the board — assert the sidebar card's star updates without a manual refresh (board → sidebar real-time refresh).
 7. Verify completed plans do not show a star button.
 8. **Standalone parity:** Run the standalone host (`npx switchboard` or equivalent), open the project panel, click a star — assert it toggles successfully (no silent no-op).
+
+## Implementation Summary
+
+Added priority star support to sidebar project panel plan and feature cards. Extended `KanbanPlanSummary` interface and `_getKanbanPlans` mapping to include `priorityStarred`. Added `.star-btn` UI, SVG, CSS, and click handlers in `project.js` and `project.html` for both plan and feature cards with completed-plan suppression. Implemented `setPriorityStarred` handler in `PlanningPanelProvider`, regenerated protocol catalog and verb allowlists, wired standalone host seams in `bootstrap.ts`, and added real-time board-to-sidebar refresh notification in `KanbanProvider.setPriorityStarred`.

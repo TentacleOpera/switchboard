@@ -159,6 +159,7 @@ interface KanbanPlanSummary {
     subtaskCount?: number;
     clickupTaskId?: string;
     linearIssueId?: string;
+    priorityStarred?: number;
 }
 
 // ┌─ Section Map (approx, ±20 lines) ──────────────────────────────────────
@@ -4048,6 +4049,71 @@ Start by checking which documents exist, then present the menu.`;
                 }
                 break;
             }
+            case 'setPriorityStarred': {
+                const wsRoot = String(msg.workspaceRoot || workspaceRoot);
+                const planId = String(msg.planId || msg.sessionId || '');
+                const starred = !!msg.starred;
+                if (!planId || !wsRoot) break;
+                if (!this._kanbanProvider) {
+                    this.postMessageToProjectWebview({ type: 'showStatusMessage', message: 'No kanban provider', isError: true });
+                    break;
+                }
+                try {
+                    const result = await this._kanbanProvider.setPriorityStarred(wsRoot, planId, starred);
+                    if (!result.success) {
+                        this.postMessageToProjectWebview({ type: 'showStatusMessage', message: result.error || 'Failed to set priority star', isError: true });
+                    }
+                    const allPlans = await this._getKanbanPlans(wsRoot);
+                    const effectiveRoot = this._resolveEffectiveWorkspaceRoot(wsRoot);
+                    this.postMessageToProjectWebview({ type: 'kanbanPlansReady', plans: allPlans, workspaceRoot: effectiveRoot, requestId: Date.now() });
+                } catch (err) {
+                    console.error('[PlanningPanelProvider] setPriorityStarred failed:', err);
+                }
+                break;
+            }
+            case 'setCardPriority': {
+                const wsRoot = String(msg.workspaceRoot || workspaceRoot);
+                const planId = String(msg.planId || msg.sessionId || '');
+                const priorityRaw = msg.priority;
+                const priority = (priorityRaw === null || priorityRaw === undefined || priorityRaw === 0 || priorityRaw === 'none' || priorityRaw === '')
+                    ? null
+                    : Number(priorityRaw);
+                if (!planId || !wsRoot) break;
+                if (!this._kanbanProvider) {
+                    this.postMessageToProjectWebview({ type: 'showStatusMessage', message: 'No kanban provider', isError: true });
+                    break;
+                }
+                try {
+                    const result = await this._kanbanProvider.setCardPriority(wsRoot, planId, priority);
+                    if (!result.success) {
+                        this.postMessageToProjectWebview({ type: 'showStatusMessage', message: result.error || 'Failed to set priority', isError: true });
+                    }
+                    const allPlans = await this._getKanbanPlans(wsRoot);
+                    const effectiveRoot = this._resolveEffectiveWorkspaceRoot(wsRoot);
+                    this.postMessageToProjectWebview({ type: 'kanbanPlansReady', plans: allPlans, workspaceRoot: effectiveRoot, requestId: Date.now() });
+                } catch (err) {
+                    console.error('[PlanningPanelProvider] setCardPriority failed:', err);
+                }
+                break;
+            }
+            case 'setOrderByMode': {
+                const wsRoot = String(msg.workspaceRoot || workspaceRoot);
+                const mode = msg.mode || 'manual';
+                if (!wsRoot) break;
+                if (!this._kanbanProvider) {
+                    this.postMessageToProjectWebview({ type: 'showStatusMessage', message: 'No kanban provider', isError: true });
+                    break;
+                }
+                try {
+                    const result = await this._kanbanProvider.setOrderByMode(wsRoot, mode);
+                    if (!result.success) {
+                        this.postMessageToProjectWebview({ type: 'showStatusMessage', message: result.error || 'Failed to set order by mode', isError: true });
+                    }
+                } catch (err) {
+                    console.error('[PlanningPanelProvider] setOrderByMode failed:', err);
+                }
+                break;
+            }
             case 'deleteKanbanPlan': {
                 const planId = String(msg.planId || '');
                 const planFile = String(msg.planFile || '');
@@ -7632,7 +7698,8 @@ Please format the updated output document strictly as follows:
             featureId: r.featureId || '',
             subtaskCount: r.isFeature ? (subtaskCountMap.get(r.planId) || 0) : undefined,
             clickupTaskId: r.clickupTaskId || r.clickup_task_id || '',
-            linearIssueId: r.linearIssueId || r.linear_issue_id || ''
+            linearIssueId: r.linearIssueId || r.linear_issue_id || '',
+            priorityStarred: r.priorityStarred ?? 0
         }));
     }
 

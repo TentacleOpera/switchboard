@@ -18,6 +18,7 @@ import {
 import { deriveAgentDisplayName } from './cliIdentity';
 import { BoardSnapshotPublisher, BOARD_SNAPSHOT_MODE } from './BoardSnapshotPublisher';
 import type { HostPathConfigProvider } from './hostSeams';
+import type { SortMode } from './kanbanOrdering';
 
 export interface WorkspaceDatabaseMapping {
     id: string;
@@ -155,6 +156,13 @@ export interface KanbanPlanRecord {
      * Used to detect stale dependency maps without relying on noisy mtimes.
      */
     mapFingerprint?: string | null;
+    /**
+     * V67: priority 1–4 (1=urgent, 4=low), or NULL for no priority.
+     * NULL is the ONLY no-priority state — Linear's 0 and ClickUp's blank
+     * both import as NULL; 0 is never stored. Distinct from `priority_starred`
+     * (binary override) — this field describes, the star directs.
+     */
+    priority?: number | null;
 }
 
 export interface ImportedDocEntry {
@@ -248,7 +256,8 @@ CREATE TABLE IF NOT EXISTS plans (
     completed_at      TEXT DEFAULT NULL,
     priority_starred  INTEGER DEFAULT 0,
     column_order      INTEGER DEFAULT NULL,
-    map_fingerprint   TEXT DEFAULT NULL
+    map_fingerprint   TEXT DEFAULT NULL,
+    priority          INTEGER DEFAULT NULL
 );
 CREATE TABLE IF NOT EXISTS plan_dependencies (
     plan_id            TEXT NOT NULL,
@@ -639,6 +648,11 @@ const MIGRATION_V66_SQL = [
     `CREATE INDEX IF NOT EXISTS idx_mission_milestones_workspace ON mission_milestones(workspace_id)`,
 ];
 
+// V67: plans.priority (1-4 or NULL for no priority).
+const MIGRATION_V67_SQL = [
+    `ALTER TABLE plans ADD COLUMN priority INTEGER DEFAULT NULL`,
+];
+
 
 
 const MIGRATION_V13_SQL = [
@@ -1021,7 +1035,7 @@ const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, stat
                        dispatched_terminal, dispatched_at, last_liveness_at, blocked_at,
                        clickup_task_id, linear_issue_id, notion_page_id, worktree_id, worktree_status, is_feature, feature_id,
                        workspace_name, project_id, queue_position, column_entered_at, completed_at,
-                       priority_starred, column_order, map_fingerprint`;
+                       priority_starred, column_order, map_fingerprint, priority`;
 
 // Parse column definitions from SCHEMA_SQL's plans table for schema reconciliation.
 // This ensures that databases created before a column was added to SCHEMA_SQL
@@ -2530,12 +2544,12 @@ export class KanbanDatabase {
                 plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
                 repo_scope, project, project_id, workspace_id, created_at, updated_at, last_action, source_type,
                 brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
-                clickup_task_id, linear_issue_id, notion_page_id, workspace_name, is_feature, column_entered_at
+                clickup_task_id, linear_issue_id, notion_page_id, workspace_name, is_feature, column_entered_at, priority
             ) VALUES (?, ?, ?, ?, 'CREATED', 'active', ?, ?, '',
                 CASE WHEN COALESCE(?, (SELECT id FROM projects WHERE name = ? AND workspace_id = ?)) IS NOT NULL
                      THEN ? ELSE '' END,
                 COALESCE(?, (SELECT id FROM projects WHERE name = ? AND workspace_id = ?)),
-                ?, ?, ?, '', ?, '', '', '', '', '', '', '', '', ?, ?, ?)
+                ?, ?, ?, '', ?, '', '', '', '', '', '', '', '', ?, ?, ?, ?)
             ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
                 topic = excluded.topic,
                 complexity = excluded.complexity,
@@ -2577,7 +2591,8 @@ export class KanbanDatabase {
                 record.sourceType,
                 record.workspaceName || '',
                 effectiveIsFeature,
-                record.createdAt
+                record.createdAt,
+                record.priority ?? null
             ]);
             this._db.run('COMMIT');
         } catch (error) {
@@ -8796,6 +8811,16 @@ export class KanbanDatabase {
             await this.setMigrationVersion(66);
             console.log('[KanbanDatabase] V66 migration completed: mission_milestones table added');
         }
+
+        // V67: plans.priority (1-4 or NULL for no priority).
+        const v67 = await this.getMigrationVersion();
+        if (v67 < 67) {
+            for (const sql of MIGRATION_V67_SQL) {
+                try { this._db.exec(sql); } catch { /* column already exists */ }
+            }
+            await this.setMigrationVersion(67);
+            console.log('[KanbanDatabase] V67 migration completed: priority column added to plans');
+        }
     }
 
     private async _backfillStagedCardsToMissions(): Promise<void> {
@@ -10531,6 +10556,40 @@ FROM plans
     }
 
     /**
+     * V67 — set a card's priority (1-4 or null for no priority).
+     * 1=urgent, 2=high, 3=normal, 4=low, NULL=no priority.
+     * NOT cleared on column moves. Scoped by plan_id + workspace_id.
+     */
+    public async setCardPriority(planId: string, workspaceId: string, priority: number | null): Promise<boolean> {
+        if (!planId || !workspaceId) return false;
+        const p = (priority === null || priority === undefined) ? null : Math.max(1, Math.min(4, Math.floor(priority)));
+        return this._persistedUpdate(
+            'UPDATE plans SET priority = ? WHERE plan_id = ? AND workspace_id = ?',
+            [p, planId, workspaceId]
+        );
+    }
+
+    public async getOrderByMode(workspaceId?: string): Promise<SortMode> {
+        const val = await this.getConfig('kanban.orderBy');
+        if (val === 'priority' || val === 'date' || val === 'complexity' || val === 'manual') {
+            return val;
+        }
+        return 'manual';
+    }
+
+    public getOrderByModeSync(workspaceId?: string): SortMode {
+        const val = this.getConfigSync('kanban.orderBy');
+        if (val === 'priority' || val === 'date' || val === 'complexity' || val === 'manual') {
+            return val;
+        }
+        return 'manual';
+    }
+
+    public async setOrderByMode(workspaceId: string, mode: SortMode): Promise<boolean> {
+        return this.setConfig('kanban.orderBy', mode);
+    }
+
+    /**
      * Resolve the live dispatched plan row for a terminal name (V59). Returns
      * the most-recently-dispatched active row whose `dispatched_terminal`
      * matches AND whose `dispatched_at` is still live, or null. This is the
@@ -10995,7 +11054,9 @@ FROM plans
                     // Absent from SELECT lists that predate V63 → undefined → null (unarranged).
                     columnOrder: row.column_order !== null && row.column_order !== undefined ? Number(row.column_order) : null,
                     // Absent from SELECT lists that predate V64 → undefined → null.
-                    mapFingerprint: row.map_fingerprint !== null && row.map_fingerprint !== undefined ? String(row.map_fingerprint) : null
+                    mapFingerprint: row.map_fingerprint !== null && row.map_fingerprint !== undefined ? String(row.map_fingerprint) : null,
+                    // Absent from SELECT lists that predate V67 → undefined → null (no priority).
+                    priority: row.priority !== null && row.priority !== undefined ? Number(row.priority) : null
                 });
             }
         } finally {

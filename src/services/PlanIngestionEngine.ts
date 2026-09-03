@@ -2024,7 +2024,8 @@ export class PlanIngestionEngine {
                     dispatchedAgent: '',
                     dispatchedIde: '',
                     clickupTaskId: importClickupTaskId,
-                    linearIssueId: importLinearIssueId
+                    linearIssueId: importLinearIssueId,
+                    priority: metadata.priority !== undefined ? metadata.priority : null
                 };
                 newRecord.sourceType = importSourceType;
                 if (relativePath.startsWith('.switchboard/features/')) {

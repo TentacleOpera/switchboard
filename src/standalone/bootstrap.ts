@@ -1276,6 +1276,8 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     (planningProvider as any)._hostSeams = headlessSeams;
     (planningProvider as any)._broadcaster = headlessBroadcaster;
     planningProvider.setTaskViewerProvider(taskViewerProvider);
+    planningProvider.setKanbanProvider(kanbanProvider);
+    kanbanProvider.setPlanningPanelProvider(planningProvider);
 
     // Register standalone command handlers into switchboardCommandRegistry.
     //

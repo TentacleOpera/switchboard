@@ -50,8 +50,12 @@
  * apply it BEFORE calling this comparator. Age was never a substitute for it.
  */
 
+export type SortMode = 'manual' | 'priority' | 'date' | 'complexity';
+
 export interface OrderableCard {
     priorityStarred?: number | null;
+    priority?: number | null;
+    complexity?: string;
     queuePosition?: number | null;
     columnOrder?: number | null;
     columnEnteredAt?: string | null;
@@ -65,8 +69,15 @@ export interface OrderableCard {
  *
  * @param column The column the cards are in. 'STAGING' uses queue_position;
  *               every other column uses column_order.
+ * @param mode   The global board sort mode ('manual' | 'priority' | 'date' | 'complexity').
+ *               Default: 'manual'.
  */
-export function compareByPrecedence(a: OrderableCard, b: OrderableCard, column: string): number {
+export function compareByPrecedence(
+    a: OrderableCard,
+    b: OrderableCard,
+    column: string,
+    mode: SortMode = 'manual'
+): number {
     const isStaging = column === 'STAGING';
 
     // 1. Starred first — on the BOARD only. A mission is not the board, and
@@ -80,9 +91,55 @@ export function compareByPrecedence(a: OrderableCard, b: OrderableCard, column: 
         if (sa !== sb) return sb - sa; // starred (1) before unstarred (0) → descending
     }
 
-    // 2. Manual order: queue_position (STAGING) or column_order (elsewhere).
-    //    ASC; a card that has one outranks a card that does not (see the NULL
-    //    note in the header — the alternative is an intransitive comparator).
+    // 2. Mode-dependent secondary ordering:
+    if (mode === 'priority') {
+        const pa = (a.priority !== null && a.priority !== undefined && a.priority >= 1 && a.priority <= 4) ? a.priority : null;
+        const pb = (b.priority !== null && b.priority !== undefined && b.priority >= 1 && b.priority <= 4) ? b.priority : null;
+        if (pa !== null && pb !== null) {
+            const d = pa - pb;
+            if (d !== 0) return d;
+        } else if (pa !== null || pb !== null) {
+            return pa === null ? 1 : -1; // NULL sorts last
+        }
+        // Same priority (or both null) falls through to manual order / fallback below
+    } else if (mode === 'date') {
+        // Skips manual order entirely — column_entered_at DESC -> createdAt DESC
+        const colTsA = toMs(a.columnEnteredAt) ?? toMs(a.lastActivity) ?? toMs(a.createdAt) ?? 0;
+        const colTsB = toMs(b.columnEnteredAt) ?? toMs(b.lastActivity) ?? toMs(b.createdAt) ?? 0;
+        const colDiff = colTsB - colTsA; // DESC
+        if (colDiff !== 0) return colDiff;
+
+        const createdA = toMs(a.createdAt) ?? 0;
+        const createdB = toMs(b.createdAt) ?? 0;
+        return createdB - createdA; // DESC
+    } else if (mode === 'complexity') {
+        const parseC = (c?: string) => {
+            if (!c || c === 'Unknown') return null;
+            const n = parseInt(c, 10);
+            return isNaN(n) ? null : n;
+        };
+        const ca = parseC(a.complexity);
+        const cb = parseC(b.complexity);
+        if (ca !== null && cb !== null) {
+            const d = ca - cb;
+            if (d !== 0) return d;
+        } else if (ca !== null || cb !== null) {
+            return ca === null ? 1 : -1; // Unknown/null sorts last
+        }
+        // Same complexity falls through to column_entered_at DESC -> createdAt DESC
+        const colTsA = toMs(a.columnEnteredAt) ?? toMs(a.lastActivity) ?? toMs(a.createdAt) ?? 0;
+        const colTsB = toMs(b.columnEnteredAt) ?? toMs(b.lastActivity) ?? toMs(b.createdAt) ?? 0;
+        const colDiff = colTsB - colTsA; // DESC
+        if (colDiff !== 0) return colDiff;
+
+        const createdA = toMs(a.createdAt) ?? 0;
+        const createdB = toMs(b.createdAt) ?? 0;
+        return createdB - createdA; // DESC
+    }
+
+    // Manual order (default, or fallback for priority mode):
+    // queue_position (STAGING) or column_order (elsewhere).
+    // ASC; a card that has one outranks a card that does not.
     const oa = isStaging ? (a.queuePosition ?? null) : (a.columnOrder ?? null);
     const ob = isStaging ? (b.queuePosition ?? null) : (b.columnOrder ?? null);
     const oaNull = oa === null;
@@ -91,15 +148,6 @@ export function compareByPrecedence(a: OrderableCard, b: OrderableCard, column: 
         const d = (oa as number) - (ob as number);
         if (d !== 0) return d;
     } else if (oaNull !== obNull) {
-        // Exactly one side carries a position. Which way NULL goes depends on
-        // what NULL MEANS in that field, and it means opposite things:
-        //   STAGING     — queue_position NULL is "never staged", so it belongs
-        //                 at the END of the queue (the V60 rule, unchanged).
-        //   every other — column_order NULL is "just arrived / not part of this
-        //   column        column's arrangement", so it belongs at the TOP, which
-        //                 is where the board has always put a card that just
-        //                 landed. An arrangement orders the cards that were
-        //                 arranged; it does not outrank a new arrival.
         if (isStaging) return oaNull ? 1 : -1;
         return oaNull ? -1 : 1;
     }

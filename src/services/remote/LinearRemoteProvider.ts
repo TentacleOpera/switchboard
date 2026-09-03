@@ -87,7 +87,7 @@ export class LinearRemoteProvider implements RemoteProvider {
         const QUERY = `
           query {
             issues(filter: { updatedAt: { gt: ${since} } }, first: 100) {
-              nodes { id updatedAt description state { id } parent { id } children { nodes { id } } }
+              nodes { id updatedAt description priority state { id } parent { id } children { nodes { id } } }
             }
           }
         `;
@@ -101,6 +101,8 @@ export class LinearRemoteProvider implements RemoteProvider {
                 const stateKey = String(node.state?.id || '');
                 const updatedAt = String(node.updatedAt || '');
                 const description = String(node.description || '');
+                const rawPriority = node.priority;
+                const priority = (rawPriority === undefined || rawPriority === null || Number(rawPriority) === 0) ? null : Number(rawPriority);
                 if (remoteId && stateKey) {
                     deltas.push({
                         remoteId,
@@ -112,6 +114,7 @@ export class LinearRemoteProvider implements RemoteProvider {
                         isFeatureCandidate: (node.children?.nodes?.length || 0) > 0,
                         updatedAt: updatedAt || undefined,
                         description: description || undefined,
+                        priority,
                     });
                 }
                 if (updatedAt && updatedAt > nextCursor) { nextCursor = updatedAt; }

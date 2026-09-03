@@ -426,6 +426,21 @@
         }.kanban-plan-copy-link:hover, .kanban-plan-copy-prompt:hover, .kanban-plan-edit:hover, .feature-card-action:hover {
             border-color: var(--accent-teal);
             color: var(--text-primary);
+        }.card-btn.star-btn {
+            padding: 2px;
+            width: 20px;
+            height: 20px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+            background: transparent;
+            border: none;
+            cursor: pointer;
+        }.card-btn.star-btn.starred {
+            color: var(--vscode-editorWarning-foreground, #cca700);
+        }.card-btn.star-btn:hover {
+            color: var(--vscode-editorWarning-foreground, #cca700);
         }/* Doc sidebar cards (Projects / Constitution / System) own their Copy Link
           affordance rather than borrowing the kanban card's button classes. */
         .doc-card-actions {

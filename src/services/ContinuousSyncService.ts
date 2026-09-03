@@ -734,6 +734,19 @@ export class ContinuousSyncService implements vscode.Disposable {
             controller.signal
           );
           if (result.status === 200 && result.data) {
+            // Map ClickUp priority on poll using orderindex extraction (1-4 -> 1-4, null -> null)
+            if (result.data.priority !== undefined) {
+              const rawOrder = result.data.priority?.orderindex;
+              const p = rawOrder ? parseInt(String(rawOrder), 10) : null;
+              const priority = (p !== null && !isNaN(p) && p >= 1 && p <= 4) ? p : null;
+              if (plan.priority !== priority) {
+                const db = this._getKanbanDb(workspaceRoot);
+                const wsId = plan.workspaceId || await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+                if (wsId) {
+                  await db.setCardPriority(plan.planId, wsId, priority);
+                }
+              }
+            }
             return result.data.description || '';
           }
         }
@@ -743,12 +756,24 @@ export class ContinuousSyncService implements vscode.Disposable {
         const config = await linear.loadConfig();
         if (config?.setupComplete === true && config.realTimeSyncEnabled === true && (await linear.hasApiToken())) {
           const result = await linear.graphqlRequest(
-            `query ($id: String!) { issue(id: $id) { description } }`,
+            `query ($id: String!) { issue(id: $id) { description priority } }`,
             { id: plan.linearIssueId },
             10_000,
             controller.signal
           );
-          return result.data?.issue?.description || '';
+          if (result.data?.issue) {
+            // Map Linear priority changes back to plans.priority on poll: 1-4 -> 1-4, 0/null -> null
+            const rawP = result.data.issue.priority;
+            const priority = (rawP === undefined || rawP === null || Number(rawP) === 0) ? null : Number(rawP);
+            if (plan.priority !== priority) {
+              const db = this._getKanbanDb(workspaceRoot);
+              const wsId = plan.workspaceId || await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+              if (wsId) {
+                await db.setCardPriority(plan.planId, wsId, priority);
+              }
+            }
+            return result.data?.issue?.description || '';
+          }
         }
       }
       return '';

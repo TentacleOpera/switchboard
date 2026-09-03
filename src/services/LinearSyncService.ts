@@ -500,7 +500,7 @@ export class LinearSyncService {
           type: String(raw.state.type || '').trim()
         }
         : null,
-      priority: raw?.priority === undefined || raw?.priority === null ? null : Number(raw.priority),
+      priority: raw?.priority === undefined || raw?.priority === null || Number(raw.priority) === 0 ? null : Number(raw.priority),
       assignee: raw?.assignee
         ? {
           id: String(raw.assignee.id || '').trim(),

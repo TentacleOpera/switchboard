@@ -698,6 +698,14 @@ export class RemoteControlService {
             if (d.parentRemoteId !== undefined || d.isFeatureCandidate !== undefined) {
                 await this._mirrorFeatureStructure(db, plan, d, byRemoteId);
             }
+            // Mirror priority changes
+            if (d.priority !== undefined && d.priority !== plan.priority) {
+                const wsId = plan.workspaceId || (await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '';
+                if (wsId) {
+                    await db.setCardPriority(plan.planId, wsId, d.priority);
+                    plan.priority = d.priority;
+                }
+            }
             const column = provider.stateKeyToColumn(d.stateKey);
             if (!column) { continue; }
             // In ingest mode, skip state mirror (column move + agent dispatch).

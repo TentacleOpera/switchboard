@@ -2963,9 +2963,11 @@ export class ClickUpSyncService {
    * Create a new ClickUp task from a Switchboard plan record.
    */
   private async _createTask(listId: string, plan: KanbanPlanRecord, config: ClickUpConfig, planContent: string): Promise<string | null> {
-    // Map complexity to ClickUp priority: 1=urgent, 2=high, 3=normal, 4=low
+    // Priority: use plan.priority (1-4) if set; fallback to complexity mapping
     const complexityNum = parseInt(plan.complexity, 10) || 5;
-    const priority = complexityNum >= 8 ? 2 : complexityNum >= 5 ? 3 : 4;
+    const priority = (plan.priority && plan.priority >= 1 && plan.priority <= 4)
+      ? plan.priority
+      : (complexityNum >= 8 ? 2 : complexityNum >= 5 ? 3 : 4);
 
     // Sanitize description: use file content if available, else strip HTML from topic
     const description = planContent || (plan.topic || '').replace(/<[^>]*>/g, '');
@@ -3277,7 +3279,9 @@ export class ClickUpSyncService {
         const kanbanColumn = statusName === 'backlog' ? 'BACKLOG' : 'CREATED';
 
         // Core fields
-        const priority = task.priority?.priority || '';
+        const parsedPriority = task.priority?.orderindex ? parseInt(task.priority.orderindex, 10) : null;
+        const priorityNum = (parsedPriority !== null && !isNaN(parsedPriority) && parsedPriority >= 1 && parsedPriority <= 4) ? parsedPriority : null;
+        const priorityStr = priorityNum ? String(priorityNum) : (task.priority?.priority || '');
         const dueDate = task.due_date ? new Date(Number(task.due_date)).toLocaleDateString() : '';
         const assignees = (task.assignees || []).map((a: any) => a.username || a.email || a.id).join(', ');
         const tags = (task.tags || [])
@@ -3293,7 +3297,7 @@ export class ClickUpSyncService {
           `> **ClickUp Task ID:** ${task.id}`,
           task.url   ? `> **URL:** ${task.url}`                       : '',
           parentName ? `> **Parent Task:** ${parentName}`             : '',
-          priority   ? `> **Priority:** ${priority}`                  : '',
+          priorityStr ? `> **Priority:** ${priorityStr}`              : '',
           dueDate    ? `> **Due:** ${dueDate}`                        : '',
           assignees  ? `> **Assignees:** ${assignees}`                : '',
           tags       ? `> **Tags:** ${tags}`                          : '',
@@ -3303,10 +3307,11 @@ export class ClickUpSyncService {
           `# ${task.name || `ClickUp Task ${task.id}`}`,
           '',
           `kanbanColumn: ${kanbanColumn}`,
-          '',
           metaLines,
           '',
-          description || '',
+          '## Goal',
+          '',
+          description || '_No description provided._'
         ].join('\n');
 
         if (isTopLevelParent(task)) {
@@ -3340,7 +3345,8 @@ export class ClickUpSyncService {
                 dispatchedAgent: '',
                 dispatchedIde: '',
                 isFeature: 1,
-                featureId: ''
+                featureId: '',
+                priority: priorityNum
               } as any);
               await db.updateFeatureStatus(uuid, 1, '');
               await db.updateClickUpTaskIdByPlanFile(featurePlanFile, workspaceId, task.id);
@@ -3387,7 +3393,8 @@ export class ClickUpSyncService {
                 mirrorPath: '',
                 routedTo: '',
                 dispatchedAgent: '',
-                dispatchedIde: ''
+                dispatchedIde: '',
+                priority: priorityNum
               } as any);
               await db.updateClickUpTaskIdByPlanFile(childRelPath, workspaceId, task.id);
             } catch (dbErr) {

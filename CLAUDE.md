@@ -150,6 +150,7 @@ User ──► Switchboard Console (/switchboard) or cloud plan-brake (switchboa
 
 All file writes to .switchboard/ MUST use IsArtifact: false.
 Plans are executed via Kanban board workflow, not delegation.
+Agents do not set priority on cards unless explicitly instructed to.
 ```
 
 Kanban column transitions are handled automatically by the system/host. Execution agents must NEVER attempt to update kanban columns directly via SQL or any other method during normal workflow execution. The `query-switchboard-kanban` skill is for QUERYING kanban state only (e.g., identifying plans in specific columns). To manually move a card when explicitly requested by the user, use the `kanban_operations` skill. The **orchestrator persona** is the sanctioned exception — it moves cards via `move-card.js`/`POST /kanban/move` (the API path a human's click takes), never via SQL.

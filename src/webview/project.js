@@ -1711,6 +1711,11 @@
             const displayTime = plan.mtime > 0 ? formatRelativeTime(plan.mtime) : 'unknown';
             const columnDef = _kanbanAvailableColumns.find(c => c.id === plan.column);
             const complexityClass = _complexityToCssClass(plan.complexity);
+            const isStarred = !!plan.priorityStarred;
+            const isCompleted = plan.column === 'COMPLETED';
+            const starBtn = isCompleted ? '' : `<button class="card-btn icon-btn star-btn${isStarred ? ' starred' : ''}" data-plan-id="${escapeHtml(plan.planId)}" data-session="${escapeHtml(plan.sessionId || '')}" data-workspace-root="${escapeHtml(plan.workspaceRoot || '')}" data-starred="${isStarred ? '1' : '0'}" data-tooltip="${isStarred ? 'Remove priority star' : 'Set priority star (overrides order)'}">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="${isStarred ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.5l2 4.5 5 .4-3.8 3.3 1.2 4.9L8 12l-4.4 2.6 1.2-4.9L1 6.4l5-.4z"/></svg>
+            </button>`;
 
             itemDiv.innerHTML = `
                 <div style="width: 100%;">
@@ -1719,6 +1724,7 @@
                         ${escapeHtml(metaParts.join(' · '))} · ${escapeHtml(displayTime)}
                     </div>
                     <div class="kanban-plan-actions">
+                        ${starBtn}
                         <span class="kanban-column-badge clickable" data-column="${escapeHtml(plan.column)}">${escapeHtml(columnDef ? columnDef.label : plan.column)}</span>
                         <select class="kanban-column-dropdown" style="display:none;" data-plan-file="${escapeHtml(plan.planFile || '')}" data-workspace-root="${escapeHtml(plan.workspaceRoot)}">
                             ${_kanbanAvailableColumns.map(col => `<option value="${escapeHtml(col.id)}" ${col.id === plan.column ? 'selected' : ''}>${escapeHtml(col.label)}</option>`).join('')}
@@ -1730,13 +1736,32 @@
                 </div>
             `;
 
-            itemDiv.addEventListener('click', () => {
+            itemDiv.addEventListener('click', e => {
+                if (e.target.closest('.star-btn')) return;
                 _pendingAutoEdit = false;
                 if (state.dirtyFlags.kanban) exitEditMode('kanban');
                 document.querySelectorAll('.kanban-plan-item').forEach(el => el.classList.remove('selected'));
                 itemDiv.classList.add('selected');
                 loadKanbanPlanPreview(plan);
             });
+
+            // Star button wiring
+            const starBtnEl = itemDiv.querySelector('.star-btn');
+            if (starBtnEl) {
+                starBtnEl.addEventListener('click', e => {
+                    e.stopPropagation();
+                    const planId = starBtnEl.dataset.planId;
+                    const workspaceRoot = starBtnEl.dataset.workspaceRoot;
+                    const starred = starBtnEl.dataset.starred === '1';
+                    vscode.postMessage({
+                        type: 'setPriorityStarred',
+                        planId,
+                        sessionId: starBtnEl.dataset.session || '',
+                        workspaceRoot,
+                        starred: !starred
+                    });
+                });
+            }
 
             // Action wiring (Copy link, dropdown column change, etc.)
             const copyLinkBtn = itemDiv.querySelector('.kanban-plan-copy-link');
@@ -2361,8 +2386,15 @@
                 || (_kanbanAvailableColumns.find(c => c.id === plan.column)?.kind === 'created');
             const aggregateComplexity = _featureAggregateComplexity(plan);
             const aggregateComplexityClass = _complexityToCssClass(aggregateComplexity);
+            const isStarred = !!plan.priorityStarred;
+            const isCompleted = plan.column === 'COMPLETED';
+            const starBtn = isCompleted ? '' : `<button class="card-btn icon-btn star-btn${isStarred ? ' starred' : ''}" data-plan-id="${escapeHtml(plan.planId)}" data-session="${escapeHtml(plan.sessionId || plan.planId || '')}" data-workspace-root="${escapeHtml(plan.workspaceRoot || '')}" data-starred="${isStarred ? '1' : '0'}" data-tooltip="${isStarred ? 'Remove priority star' : 'Set priority star'}">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="${isStarred ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.5l2 4.5 5 .4-3.8 3.3 1.2 4.9L8 12l-4.4 2.6 1.2-4.9L1 6.4l5-.4z"/></svg>
+            </button>`;
+
             const actionButtons = `
                 <div class="kanban-plan-actions" style="margin-top: 6px;">
+                    ${starBtn}
                     ${columnBadge}
                     ${plan.planFile ? `<button class="kanban-plan-copy-link feature-card-action" data-plan-file="${escapeHtml(plan.planFile)}">Copy Link</button>` : ''}
                     ${copyPromptLabel && (plan.sessionId || plan.planId) ? `<button class="kanban-plan-copy-prompt feature-card-action" data-session-id="${escapeHtml(plan.sessionId || plan.planId)}" data-column="${escapeHtml(plan.column || 'CREATED')}" data-workspace-root="${escapeHtml(plan.workspaceRoot || '')}">${escapeHtml(copyPromptLabel)}</button>` : ''}
@@ -2383,12 +2415,30 @@
             `;
 
             itemDiv.addEventListener('click', e => {
-                if (e.target.tagName === 'SUMMARY' || e.target.closest('.feature-accordion') || e.target.closest('.feature-card-action') || e.target.closest('.kanban-column-badge') || e.target.closest('.kanban-column-dropdown')) return;
+                if (e.target.tagName === 'SUMMARY' || e.target.closest('.feature-accordion') || e.target.closest('.feature-card-action') || e.target.closest('.kanban-column-badge') || e.target.closest('.kanban-column-dropdown') || e.target.closest('.star-btn')) return;
                 if (state.dirtyFlags.features) exitEditMode('features');
                 document.querySelectorAll('.feature-plan-item').forEach(el => el.classList.remove('selected'));
                 itemDiv.classList.add('selected');
                 selectFeature(plan);
             });
+
+            // Star button wiring
+            const featureStarBtn = itemDiv.querySelector('.star-btn');
+            if (featureStarBtn) {
+                featureStarBtn.addEventListener('click', e => {
+                    e.stopPropagation();
+                    const planId = featureStarBtn.dataset.planId;
+                    const workspaceRoot = featureStarBtn.dataset.workspaceRoot;
+                    const starred = featureStarBtn.dataset.starred === '1';
+                    vscode.postMessage({
+                        type: 'setPriorityStarred',
+                        planId,
+                        sessionId: featureStarBtn.dataset.session || '',
+                        workspaceRoot,
+                        starred: !starred
+                    });
+                });
+            }
 
             // Column Badge & Dropdown Wiring
             const badge = itemDiv.querySelector('.kanban-column-badge.clickable');

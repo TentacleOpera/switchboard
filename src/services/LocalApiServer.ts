@@ -2756,8 +2756,9 @@ export class LocalApiServer {
             // This replaces the inline byQueueThenBoard comparator with the
             // SAME logic the frontend display sort and _distributePlannerDispatch
             // use — one resolver, not three independent copies that drift.
+            const orderByMode = (db && typeof db.getOrderByMode === 'function') ? await db.getOrderByMode(wsId) : 'manual';
             const byPrecedence = (a: any, b: any): number =>
-                compareByPrecedence(a, b, 'STAGING');
+                compareByPrecedence(a, b, 'STAGING', orderByMode);
 
             const candidates = board
                 .filter((p: any) => p && p.kanbanColumn === 'STAGING' && isQueueable(p))
@@ -6197,6 +6198,7 @@ export class LocalApiServer {
                     feature: body.feature ? String(body.feature) : undefined,
                     target: body.target ? String(body.target) : 'head',
                     priority: typeof body.priority === 'number' ? body.priority : 0,
+                    origin: body.origin === 'mission' ? 'mission' : 'auto',
                 });
                 res.writeHead(result.success ? 200 : 400, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify(result));
@@ -7826,12 +7828,66 @@ export class LocalApiServer {
                 res.end(JSON.stringify({ error: 'Missing required field: planId' }));
                 return;
             }
+            const db = await this._resolveDbForRoot(String(body?.workspaceRoot || '').trim() || undefined);
+            if (!db) {
+                res.writeHead(503, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Kanban database not available' }));
+                return;
+            }
+            // Resolve planId OR sessionId (the card key is planId || sessionId,
+            // matching KanbanProvider.setPriorityStarred line 8710).
+            let record = await db.getPlanByPlanId(planId);
+            if (!record) { record = await db.getPlanBySessionId(planId); }
+            if (!record) {
+                res.writeHead(404, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: `Plan not found: ${planId}` }));
+                return;
+            }
+            const wsId = record.workspaceId || await this._wsId(db);
+
+            // If numeric priority is provided (1..4 or null/0/'none')
+            if (body?.priority !== undefined) {
+                let priorityVal: number | null = null;
+                if (body.priority === null || body.priority === 'none' || body.priority === '' || body.priority === 0) {
+                    priorityVal = null;
+                } else if (typeof body.priority === 'number') {
+                    if (body.priority >= 1 && body.priority <= 4) {
+                        priorityVal = Math.floor(body.priority);
+                    } else {
+                        res.writeHead(400, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ error: 'Field "priority" must be null or an integer between 1 and 4' }));
+                        return;
+                    }
+                } else if (typeof body.priority === 'string') {
+                    const parsed = parseInt(body.priority, 10);
+                    if (!isNaN(parsed) && parsed >= 1 && parsed <= 4) {
+                        priorityVal = parsed;
+                    } else if (body.priority.toLowerCase() === 'urgent') {
+                        priorityVal = 1;
+                    } else if (body.priority.toLowerCase() === 'high') {
+                        priorityVal = 2;
+                    } else if (body.priority.toLowerCase() === 'normal' || body.priority.toLowerCase() === 'medium') {
+                        priorityVal = 3;
+                    } else if (body.priority.toLowerCase() === 'low') {
+                        priorityVal = 4;
+                    } else {
+                        res.writeHead(400, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ error: 'Field "priority" must be null or an integer between 1 and 4' }));
+                        return;
+                    }
+                }
+                const ok = await db.setCardPriority(record.planId, wsId, priorityVal);
+                res.writeHead(ok ? 200 : 500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: ok, planId: record.planId, priority: priorityVal }));
+                return;
+            }
+
             // Strict boolean validation — reject non-boolean-like values to prevent
             // the silent-trap class of bug (e.g. starred: "false" → true with !!).
             const starredRaw = body?.starred;
             if (starredRaw === undefined || starredRaw === null) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Missing required field: starred (boolean)' }));
+                res.end(JSON.stringify({ error: 'Missing required field: starred (boolean) or priority (number|null)' }));
                 return;
             }
             let starred: boolean;
@@ -7854,21 +7910,6 @@ export class LocalApiServer {
                 return;
             }
 
-            const db = await this._resolveDbForRoot(String(body?.workspaceRoot || '').trim() || undefined);
-            if (!db) {
-                res.writeHead(503, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Kanban database not available' }));
-                return;
-            }
-            // Resolve planId OR sessionId (the card key is planId || sessionId,
-            // matching KanbanProvider.setPriorityStarred line 8710).
-            let record = await db.getPlanByPlanId(planId);
-            if (!record) { record = await db.getPlanBySessionId(planId); }
-            if (!record) {
-                res.writeHead(404, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: `Plan not found: ${planId}` }));
-                return;
-            }
             // Key the write to the workspace the RESOLVED ROW belongs to, not the
             // server's own. getPlanByPlanId/getPlanBySessionId are unscoped, but the
             // UPDATE is `WHERE plan_id = ? AND workspace_id = ?` and _persistedUpdate
@@ -7876,7 +7917,6 @@ export class LocalApiServer {
             // workspace (a shared/cloud board, mapped roots), _wsId's id would match no
             // row and this endpoint would answer 200 {success:true} for a star it never
             // wrote — the exact silent-no-op trap this endpoint exists to close.
-            const wsId = record.workspaceId || await this._wsId(db);
             const ok = await db.setPriorityStarred(record.planId, wsId, starred);
             res.writeHead(ok ? 200 : 500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: ok, planId: record.planId, starred }));

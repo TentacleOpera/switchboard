@@ -85,6 +85,9 @@ export class ClickUpRemoteProvider implements RemoteProvider {
                     ? new Date(Number(task.dateUpdated)).toISOString()
                     : '';
                 const description = task.markdownDescription || '';
+                const rawOrder = task.priority?.orderindex;
+                const p = rawOrder ? parseInt(String(rawOrder), 10) : null;
+                const priority = (p !== null && !isNaN(p) && p >= 1 && p <= 4) ? p : null;
 
                 // Skip tasks that have a ClickUp parent (subtasks). ClickUp feature
                 // structure is strictly outbound: subtasks are projected out on
@@ -103,6 +106,7 @@ export class ClickUpRemoteProvider implements RemoteProvider {
                         stateKey,
                         updatedAt: updatedAt || undefined,
                         description: description || undefined,
+                        priority,
                     });
                 }
                 if (updatedAt && (!nextCursor || updatedAt > nextCursor)) {

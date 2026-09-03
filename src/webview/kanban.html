@@ -1136,6 +1136,55 @@
             color: var(--vscode-editorWarning-foreground, #cca700);
         }
 
+        /* V67: card priority badge and popover */
+        .card-btn.priority-btn {
+            padding: 2px;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+            cursor: pointer;
+        }
+        .card-btn.priority-btn:hover {
+            opacity: 0.85;
+        }
+        .priority-picker-popover {
+            background: var(--vscode-dropdown-background, #252526);
+            color: var(--vscode-dropdown-foreground, #cccccc);
+            border: 1px solid var(--vscode-dropdown-border, #3c3c3c);
+            border-radius: 4px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+            padding: 4px;
+            font-size: 11px;
+            min-width: 110px;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .priority-opt, .priority-opt-clear {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 8px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .priority-opt:hover, .priority-opt-clear:hover {
+            background: var(--vscode-list-hoverBackground, #2a2d2e);
+        }
+        .priority-opt.active, .priority-opt-clear.active {
+            background: var(--vscode-list-activeSelectionBackground, #094771);
+            color: #ffffff;
+        }
+        .priority-opt .pdot, .priority-opt-clear .pdot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+
         /* Card Copy Button Success Animation */
         @keyframes copyFlash {
             0% { background-color: var(--vscode-testing-iconPassed, #73c991); color: #ffffff; }
@@ -2927,6 +2976,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 <option value="cli-ide">CLI Lead + IDE Coder</option>
                 <option value="ide-cli">IDE Lead + CLI Coder</option>
                 <option value="ide-ide">IDE Lead + IDE Coder</option>
+            </select>
+            <select id="orderByModeSelect" class="kanban-mode-dropdown" data-tooltip="Order cards by precedence mode across all columns">
+                <option value="manual">Order: Manual</option>
+                <option value="priority">Order: Priority</option>
+                <option value="date">Order: Date</option>
+                <option value="complexity">Order: Complexity (est.)</option>
             </select>
 
             <!-- Hidden elements (unchanged) -->
@@ -8075,10 +8130,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         // Full board signature including presentational fields and working state.
         function buildBoardSignature(cards) {
             if (!Array.isArray(cards) || cards.length === 0) return '';
-            return cards
-                .map(card => `${card.workspaceRoot || ''}|${card.planId || card.sessionId || ''}|${card.column}|${card.topic || ''}|${card.planFile || ''}|${card.complexity || 'Unknown'}|${card.lastActivity || ''}|${card.isFeature ? '1' : '0'}|${card.subtaskCount || 0}|${card.featureId || ''}|${card.working ? '1' : '0'}|${card.columnEnteredAt || ''}|${card.priorityStarred ? '1' : '0'}|${card.columnOrder ?? ''}`)
+            return `${currentOrderByMode}:::${cards
+                .map(card => `${card.workspaceRoot || ''}|${card.planId || card.sessionId || ''}|${card.column}|${card.topic || ''}|${card.planFile || ''}|${card.complexity || 'Unknown'}|${card.lastActivity || ''}|${card.isFeature ? '1' : '0'}|${card.subtaskCount || 0}|${card.featureId || ''}|${card.working ? '1' : '0'}|${card.columnEnteredAt || ''}|${card.priorityStarred ? '1' : '0'}|${card.columnOrder ?? ''}|${card.priority ?? ''}`)
                 .sort()
-                .join('||');
+                .join('||')}`;
         }
 
         function captureBoardViewState() {
@@ -9190,12 +9245,51 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         if (sa !== sb) return sb - sa;
                     }
 
-                    // 2. Manual order: queue_position (STAGING) or column_order
-                    //    (elsewhere), ASC. A card that HAS a position outranks one
-                    //    that does not; cards that both lack one fall through to
-                    //    column_entered_at. This matches compareByPrecedence exactly
-                    //    (see its header for why manual-vs-NULL cannot be resolved
-                    //    by timestamp without an intransitive comparator).
+                    // 2. Mode-dependent secondary ordering:
+                    if (currentOrderByMode === 'priority') {
+                        const pa = (a.priority !== null && a.priority !== undefined && a.priority >= 1 && a.priority <= 4) ? a.priority : null;
+                        const pb = (b.priority !== null && b.priority !== undefined && b.priority >= 1 && b.priority <= 4) ? b.priority : null;
+                        if (pa !== null && pb !== null) {
+                            const d = pa - pb;
+                            if (d !== 0) return d;
+                        } else if (pa !== null || pb !== null) {
+                            return pa === null ? 1 : -1; // NULL sorts last
+                        }
+                        // Same priority (or both null) falls through to manual order / fallback below
+                    } else if (currentOrderByMode === 'date') {
+                        // Skips manual order entirely — column_entered_at DESC -> createdAt DESC
+                        const colTsDiff = (b._colTs || 0) - (a._colTs || 0);
+                        if (colTsDiff !== 0) return colTsDiff;
+                        let createdA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+                        let createdB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+                        if (isNaN(createdA)) createdA = 0;
+                        if (isNaN(createdB)) createdB = 0;
+                        return createdB - createdA;
+                    } else if (currentOrderByMode === 'complexity') {
+                        const parseC = (c) => {
+                            if (!c || c === 'Unknown') return null;
+                            const n = parseInt(c, 10);
+                            return isNaN(n) ? null : n;
+                        };
+                        const ca = parseC(a.complexity);
+                        const cb = parseC(b.complexity);
+                        if (ca !== null && cb !== null) {
+                            const d = ca - cb;
+                            if (d !== 0) return d;
+                        } else if (ca !== null || cb !== null) {
+                            return ca === null ? 1 : -1; // Unknown/null sorts last
+                        }
+                        // Same complexity falls through to column_entered_at DESC -> createdAt DESC
+                        const colTsDiff = (b._colTs || 0) - (a._colTs || 0);
+                        if (colTsDiff !== 0) return colTsDiff;
+                        let createdA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+                        let createdB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+                        if (isNaN(createdA)) createdA = 0;
+                        if (isNaN(createdB)) createdB = 0;
+                        return createdB - createdA;
+                    }
+
+                    // Manual order: queue_position (STAGING) or column_order (elsewhere), ASC.
                     if (queueOrdered) {
                         const ap = a.queuePosition, bp = b.queuePosition;
                         const an = (ap === null || ap === undefined), bn = (bp === null || bp === undefined);
@@ -9215,8 +9309,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             // NULL column_order means "just arrived / not part of
                             // this column's arrangement", so it sorts FIRST — the
                             // top, where the board has always put a card that just
-                            // landed. Opposite of STAGING above, where a NULL
-                            // queue_position means "never staged" and goes last.
+                            // landed.
                             return an ? -1 : 1;
                         }
                         // both null → fall through to column_entered_at
@@ -9468,6 +9561,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const starBtn = isCompleted ? '' : `<button class="card-btn icon-btn star-btn${isStarred ? ' starred' : ''}" data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-starred="${isStarred ? '1' : '0'}" data-tooltip="${isStarred ? 'Remove priority star' : 'Set priority star (overrides order)'}">
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="${isStarred ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 1.5l2 4.5 5 .4-3.8 3.3 1.2 4.9L8 12l-4.4 2.6 1.2-4.9L1 6.4l5-.4z"/></svg>
             </button>`;
+            const priorityNum = (card.priority !== null && card.priority !== undefined && card.priority >= 1 && card.priority <= 4) ? Number(card.priority) : null;
+            const priorityColors = { 1: '#eb5757', 2: '#f2c94c', 3: '#5e6ad2', 4: '#95a2b3' };
+            const priorityNames = { 1: 'Urgent', 2: 'High', 3: 'Normal', 4: 'Low' };
+            const priorityColor = priorityNum ? priorityColors[priorityNum] : 'transparent';
+            const priorityName = priorityNum ? priorityNames[priorityNum] : 'None';
+            const priorityTooltip = priorityNum ? `Priority: ${priorityNum} (${priorityName}) — click to change` : 'Set priority';
+            const priorityBtn = isCompleted ? '' : `<button class="card-btn icon-btn priority-btn${priorityNum ? ' has-priority' : ''}" data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-priority="${priorityNum || ''}" data-tooltip="${priorityTooltip}" style="${priorityNum ? `color: ${priorityColor};` : ''}">
+                <span style="display:inline-flex; align-items:center; justify-content:center; font-size:9px; font-weight:700; width:15px; height:15px; border-radius:50%; ${priorityNum ? `background:${priorityColor}22; border:1px solid ${priorityColor};` : 'border:1px dashed var(--vscode-descriptionForeground, #888); color:var(--vscode-descriptionForeground, #888);'}">${priorityNum ? `P${priorityNum}` : 'P'}</span>
+            </button>`;
             return `
                 <div class="kanban-card${completedClass}${featureClass}${workingClass}${droppedClass}" draggable="true"${stateTitle} data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-project="${escapeAttr(card.project || '')}" data-ts="${tsVal}" data-queue-position="${escapeAttr(qpVal)}">
                     <div class="card-topic">${featureBadge}${escapeHtml(shortTopic)}</div>
@@ -9475,6 +9577,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <div class="card-actions" style="display: flex; justify-content: space-between; align-items: center;">
                         <div style="display: flex; gap: 4px; flex-wrap: wrap; align-items: center;">
                             ${starBtn}
+                            ${priorityBtn}
                             ${primaryActionBtn}
                         </div>
                         <div style="display: flex; gap: 4px;">
@@ -9632,6 +9735,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
         // Backlog toggle state
         let showingBacklog = false;
+        // V67: global order-by mode across all columns
+        let currentOrderByMode = 'manual';
         // Host terminal-capability flag for the Analyze button (false in standalone
         // without node-pty). Defaults true so the extension host (which always has a
         // terminal) enables the button before the first board push arrives.
@@ -9661,6 +9766,20 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         // Team-headness and batch cap for pre-click cap disclosure.
         let lastTeamHeadColumns = [];
         let lastTeamBatchPlanCap = 5;
+
+        // V67: Priority picker popover
+        let activePriorityPopover = null;
+        function closePriorityPopover() {
+            if (activePriorityPopover) {
+                activePriorityPopover.remove();
+                activePriorityPopover = null;
+            }
+        }
+        document.addEventListener('click', (e) => {
+            if (activePriorityPopover && !activePriorityPopover.contains(e.target)) {
+                closePriorityPopover();
+            }
+        });
 
         // Drag & Drop handlers
         let draggedSessionId = null;
@@ -9724,6 +9843,50 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         starred: !currentlyStarred,
                         workspaceRoot
                     });
+                    return;
+                }
+                // V67: numeric priority picker popover
+                if (btn.classList.contains('priority-btn')) {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    closePriorityPopover();
+                    const planId = btn.dataset.planId || btn.dataset.session || '';
+                    const workspaceRoot = btn.dataset.workspaceRoot || '';
+                    const currentP = btn.dataset.priority ? parseInt(btn.dataset.priority, 10) : null;
+
+                    const popover = document.createElement('div');
+                    popover.className = 'priority-picker-popover';
+                    popover.innerHTML = `
+                        <div class="priority-opt${currentP === 1 ? ' active' : ''}" data-val="1"><span class="pdot" style="background:#eb5757"></span> 1 Urgent</div>
+                        <div class="priority-opt${currentP === 2 ? ' active' : ''}" data-val="2"><span class="pdot" style="background:#f2c94c"></span> 2 High</div>
+                        <div class="priority-opt${currentP === 3 ? ' active' : ''}" data-val="3"><span class="pdot" style="background:#5e6ad2"></span> 3 Normal</div>
+                        <div class="priority-opt${currentP === 4 ? ' active' : ''}" data-val="4"><span class="pdot" style="background:#95a2b3"></span> 4 Low</div>
+                        <div class="priority-opt-clear${currentP === null ? ' active' : ''}" data-val=""><span class="pdot" style="border:1px dashed #888"></span> Clear</div>
+                    `;
+                    const rect = btn.getBoundingClientRect();
+                    popover.style.position = 'fixed';
+                    popover.style.left = `${Math.min(window.innerWidth - 130, Math.max(10, rect.left))}px`;
+                    popover.style.top = `${rect.bottom + 4}px`;
+                    popover.style.zIndex = '99999';
+
+                    popover.addEventListener('click', (ev) => {
+                        const opt = ev.target.closest('[data-val]');
+                        if (!opt) return;
+                        ev.stopPropagation();
+                        const valStr = opt.dataset.val;
+                        const newPriority = valStr ? parseInt(valStr, 10) : null;
+                        closePriorityPopover();
+                        postKanbanMessage({
+                            type: 'setCardPriority',
+                            planId,
+                            sessionId: btn.dataset.session || '',
+                            priority: newPriority,
+                            workspaceRoot
+                        });
+                    });
+
+                    document.body.appendChild(popover);
+                    activePriorityPopover = popover;
                     return;
                 }
                 if (btn.classList.contains('review')) {
@@ -10776,6 +10939,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     // its view filter so browser and webview never reset each other.
                     allCards = applyPendingOptimisticMoves(Array.isArray(msg.cards) ? msg.cards : []);
                     currentMissions = Array.isArray(msg.missions) ? msg.missions : [];
+                    if (msg.orderByMode) {
+                        currentOrderByMode = msg.orderByMode;
+                        const orderSel = document.getElementById('orderByModeSelect');
+                        if (orderSel && orderSel.value !== currentOrderByMode) {
+                            orderSel.value = currentOrderByMode;
+                        }
+                    }
                     const nextCards = applyBoardProjectFilter(allCards);
                     const nextFeatureWorktrees = msg.featureWorktrees || {};
                     const featureWorktreesChanged = JSON.stringify(currentFeatureWorktrees) !== JSON.stringify(nextFeatureWorktrees);
@@ -12014,6 +12184,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const select = e.target;
             select.classList.toggle('is-off', select.value === 'off');
             postKanbanMessage({ type: 'setPairProgrammingMode', mode: select.value });
+        });
+
+        document.getElementById('orderByModeSelect')?.addEventListener('change', (e) => {
+            const select = e.target;
+            currentOrderByMode = select.value;
+            postKanbanMessage({ type: 'setOrderByMode', mode: select.value });
+            renderBoard(currentCards);
         });
 
         updateCliToggleUi();

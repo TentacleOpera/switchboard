@@ -53,7 +53,8 @@ export interface PlanMetadata {
     project?: string;
     /** Durable fact: the feature plan-id (filename UUID) this subtask belongs to. */
     feature?: string;
-
+    /** V67: numeric priority (1-4) or null for no priority. */
+    priority?: number | null;
 }
 
 /**
@@ -115,7 +116,26 @@ export async function parsePlanMetadata(content: string, planFile: string): Prom
         }
     }
 
-
+    // V67: **Priority:** 1..4 (or urgent/high/normal/low), null for 0/none
+    let priority: number | null | undefined;
+    const priorityMatch = content.match(/^[\s\-\*\>]*(?:\d+\.\s*)?\*\*Priority(?:\*\*:\s*|:\*\*)\s*(.+)$/im);
+    if (priorityMatch) {
+        const raw = priorityMatch[1].trim().toLowerCase();
+        const num = parseInt(raw, 10);
+        if (!isNaN(num) && num >= 1 && num <= 4) {
+            priority = num;
+        } else if (raw === 'urgent' || raw === 'p1') {
+            priority = 1;
+        } else if (raw === 'high' || raw === 'p2') {
+            priority = 2;
+        } else if (raw === 'normal' || raw === 'medium' || raw === 'p3') {
+            priority = 3;
+        } else if (raw === 'low' || raw === 'p4') {
+            priority = 4;
+        } else if (raw === 'none' || raw === '0' || raw === '') {
+            priority = null;
+        }
+    }
 
     return {
         topic,
@@ -123,7 +143,8 @@ export async function parsePlanMetadata(content: string, planFile: string): Prom
         complexity,
         tags,
         project,
-        feature
+        feature,
+        priority
     };
 }
 

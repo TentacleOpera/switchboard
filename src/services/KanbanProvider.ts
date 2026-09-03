@@ -25,7 +25,7 @@ import { deriveAgentDisplayName } from './cliIdentity';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
 import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, partitionPlansByFeature, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, PHONE_A_FRIEND_DIRECTIVE, SWITCHBOARD_LIVENESS_DIRECTIVE, SWITCHBOARD_CLI_DIRECTIVE, resolvePlanPathForWorktree, resolveWorkingDirForWorktree, normalizeRetiredWorkflowPath, buildAnalysisScopeLine, SeatDirectiveOptions, STAGE_BY_ROLE, TEAM_BATCH_PLAN_CAP, applyBatchCap } from './agentPromptBuilder';
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord, type WorktreeRow, type ColumnUpdateOutcome } from './KanbanDatabase';
-import { compareByPrecedence } from './kanbanOrdering';
+import { compareByPrecedence, type SortMode } from './kanbanOrdering';
 import type { FeatureWatchRecord } from './PlanIngestionEngine';
 import { appendFeatureClobberDiag } from './featureClobberDiag'; // DIAGNOSTIC (is_feature clobber) — remove with the probes
 import { GlobalIntegrationConfigService, type ScheduledJob, type SchedulerConfig } from './GlobalIntegrationConfigService';
@@ -1404,6 +1404,7 @@ export class KanbanProvider implements vscode.Disposable {
             // to every panel. An untagged entry is delivered to everyone by design;
             // this whole array is board state, so nothing here is `common`.
             const boardMissions = typeof db.getMissions === 'function' ? await db.getMissions(wsId) : [];
+            const orderByMode = typeof db.getOrderByMode === 'function' ? await db.getOrderByMode(wsId) : 'manual';
             const snapshot: Record<string, any>[] = [
                 { type: 'updateColumns', columns: filteredColumns, surface: SURFACES.kanban },
                 {
@@ -1424,7 +1425,7 @@ export class KanbanProvider implements vscode.Disposable {
                     projectContextEnabled,
                 },
                 { type: 'cliTriggersState', enabled: cliEnabled, surface: SURFACES.kanban },
-                { type: 'updateBoard', cards, missions: boardMissions, dbUnavailable: false, showingBacklog: this._showingBacklog, dispatchAnalyzeAvailable: true, coderTerminalCount, codingHeadLive, anyCodingTerminalLive, routingConfig, featureWorktrees, teamHeadColumns, teamBatchPlanCap: TEAM_BATCH_PLAN_CAP, surface: SURFACES.kanban },
+                { type: 'updateBoard', cards, missions: boardMissions, orderByMode, dbUnavailable: false, showingBacklog: this._showingBacklog, dispatchAnalyzeAvailable: true, coderTerminalCount, codingHeadLive, anyCodingTerminalLive, routingConfig, featureWorktrees, teamHeadColumns, teamBatchPlanCap: TEAM_BATCH_PLAN_CAP, surface: SURFACES.kanban },
                 // Automation tab state rides the connect-time resync too, so the tab is
                 // populated even before its on-open getAutobanConfig verb returns.
                 // Omitted entirely when the sidebar hasn't relayed a state yet — pushing
@@ -2369,8 +2370,9 @@ export class KanbanProvider implements vscode.Disposable {
             // anyCodingTerminalLive is included for the same reason: a standalone coder
             // coming online changes NO card and leaves coderTerminalCount at 0, but must
             // flip the Run-queue button enabled.
+            const orderByMode = (typeof db.getOrderByMode === 'function' && workspaceId) ? await db.getOrderByMode(workspaceId) : 'manual';
             const snapshotHash = crypto.createHash('sha256')
-                .update(JSON.stringify({ cards, featureWorktrees, coderTerminalCount, codingHeadLive, anyCodingTerminalLive, teamHeadColumns }))
+                .update(JSON.stringify({ cards, featureWorktrees, coderTerminalCount, codingHeadLive, anyCodingTerminalLive, teamHeadColumns, orderByMode }))
                 .digest('hex');
             const snapshotUnchanged = snapshotKey === this._lastBoardSnapshotKey
                 && snapshotHash === this._lastBoardSnapshotHash;
@@ -2382,6 +2384,7 @@ export class KanbanProvider implements vscode.Disposable {
                     type: 'updateBoard',
                     cards,
                     missions: boardMissions,
+                    orderByMode,
                     dbUnavailable: false,
                     showingBacklog: this._showingBacklog,
                     dispatchAnalyzeAvailable: true,
@@ -4159,10 +4162,12 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const codingHeadLive = _codingRoles3.leads.length > 0 || _codingRoles3.coders.length > 0;
             const anyCodingTerminalLive = codingHeadLive || (this._taskViewerProvider?.getAliveCodingTerminalNames().length ?? 0) > 0;
             const teamHeadColumns = await this.resolveTeamHeadColumns(resolvedWorkspaceRoot, filteredColumns);
+            const orderByMode = (dbReady && typeof db.getOrderByMode === 'function' && workspaceId) ? await db.getOrderByMode(workspaceId) : 'manual';
             this.postMessage((scope: string | null | undefined) => ({
                 type: 'updateBoard',
                 cards,
                 missions: boardMissions,
+                orderByMode,
                 dbUnavailable,
                 showingBacklog: this._showingBacklog,
                 dispatchAnalyzeAvailable: true,
@@ -4375,9 +4380,11 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const codingHeadLive = _codingRoles4.leads.length > 0 || _codingRoles4.coders.length > 0;
             const anyCodingTerminalLive = codingHeadLive || (this._taskViewerProvider?.getAliveCodingTerminalNames().length ?? 0) > 0;
             const teamHeadColumns = await this.resolveTeamHeadColumns(resolvedWorkspaceRoot, columns);
+            const orderByMode = (dbReady && typeof db.getOrderByMode === 'function' && workspaceId) ? await db.getOrderByMode(workspaceId) : 'manual';
             this.postMessage((scope: string | null | undefined) => ({
                 type: 'updateBoard',
                 cards,
+                orderByMode,
                 dbUnavailable: false,
                 showingBacklog: this._showingBacklog,
                 dispatchAnalyzeAvailable: true,
@@ -7274,7 +7281,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
         // a proxy for this very filter and added nothing once the filter exists.
         const dispatchable = sourceCards.filter(c => !c.working);
         const sortColumn = dispatchable[0]?.column || '';
-        const ordered = [...dispatchable].sort((a, b) => compareByPrecedence(a, b, sortColumn));
+        const db = this._getKanbanDb(workspaceRoot);
+        const orderByMode = (db && typeof db.getOrderByModeSync === 'function') ? db.getOrderByModeSync() : 'manual';
+        const ordered = [...dispatchable].sort((a, b) => compareByPrecedence(a, b, sortColumn, orderByMode));
         // The webview optimistically moved EVERY selected card on drop. A card the
         // in-flight filter drops is never named in the moveCards echo, so without
         // this its optimistic move is never reverted and its guard-ledger entry
@@ -8880,6 +8889,77 @@ This step is what moves the plan forward in the Switchboard pipeline.
         if (!plan) return { success: false, error: `No plan found for '${planId}'` };
         const ok = await db.setPriorityStarred(plan.planId, workspaceId, starred);
         if (!ok) return { success: false, error: 'Failed to set priority star' };
+        await this._refreshBoard(workspaceRoot);
+        // Refresh the sidebar project panel — same pattern as the column-move
+        // handler (line 8937). Without this, starring from the board does not
+        // update the sidebar until the next manual refresh or tab switch.
+        this._planningPanelProvider?.postMessageToProjectWebview({ type: 'refreshKanbanPlans' });
+        return { success: true };
+    }
+
+    /**
+     * V67: set a card's priority (1-4, or null for no priority).
+     * 1=urgent, 2=high, 3=normal, 4=low, null=no priority.
+     * On tracker-linked cards, writes back to Linear / ClickUp.
+     */
+    public async setCardPriority(
+        workspaceRoot: string,
+        planId: string,
+        priority: number | null
+    ): Promise<{ success: boolean; error?: string }> {
+        if (!workspaceRoot || !planId) return { success: false, error: 'Missing planId or workspaceRoot' };
+        if (priority !== null && (!Number.isInteger(priority) || priority < 1 || priority > 4)) {
+            return { success: false, error: 'Priority must be null or an integer between 1 and 4' };
+        }
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !(await db.ensureReady())) return { success: false, error: 'Kanban database not ready' };
+        const workspaceId = (await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '';
+        if (!workspaceId) return { success: false, error: 'No workspace id resolved' };
+        let plan = await db.getPlanByPlanId(planId);
+        if (!plan) { plan = await db.getPlanBySessionId(planId); }
+        if (!plan) return { success: false, error: `No plan found for '${planId}'` };
+        const ok = await db.setCardPriority(plan.planId, workspaceId, priority);
+        if (!ok) return { success: false, error: 'Failed to set card priority' };
+
+        // Tracker write-back if linked
+        if (plan.linearIssueId) {
+            try {
+                const linear = this._getLinearService(workspaceRoot);
+                await linear.updateIssuePriority(plan.linearIssueId, priority ?? 0);
+            } catch (err) {
+                console.warn('[KanbanProvider] Failed to sync priority to Linear:', err);
+            }
+        } else if (plan.clickupTaskId) {
+            try {
+                const clickup = this._getClickUpService(workspaceRoot);
+                await clickup.updateTask(plan.clickupTaskId, { priority: priority ?? undefined });
+            } catch (err) {
+                console.warn('[KanbanProvider] Failed to sync priority to ClickUp:', err);
+            }
+        }
+
+        await this._refreshBoard(workspaceRoot);
+        this._planningPanelProvider?.postMessageToProjectWebview({ type: 'refreshKanbanPlans' });
+        return { success: true };
+    }
+
+    /**
+     * V67: set global board order-by mode ('manual' | 'priority' | 'date' | 'complexity').
+     */
+    public async setOrderByMode(
+        workspaceRoot: string,
+        mode: SortMode
+    ): Promise<{ success: boolean; error?: string }> {
+        if (!workspaceRoot) return { success: false, error: 'Missing workspaceRoot' };
+        if (!['manual', 'priority', 'date', 'complexity'].includes(mode)) {
+            return { success: false, error: `Invalid order by mode: ${mode}` };
+        }
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !(await db.ensureReady())) return { success: false, error: 'Kanban database not ready' };
+        const workspaceId = (await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '';
+        if (!workspaceId) return { success: false, error: 'No workspace id resolved' };
+        const ok = await db.setOrderByMode(workspaceId, mode);
+        if (!ok) return { success: false, error: 'Failed to set order by mode' };
         await this._refreshBoard(workspaceRoot);
         return { success: true };
     }
@@ -12833,6 +12913,32 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 const result = await this.setPriorityStarred(workspaceRoot, planId, starred);
                 if (!result.success) {
                     this.postMessage({ type: 'showStatusMessage', message: result.error || 'Failed to set priority star', isError: true });
+                }
+                return result;
+            }
+            case 'setCardPriority': {
+                // V67: set a card's priority (1-4 or null).
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
+                if (!workspaceRoot) { return { success: false, error: 'No workspace root resolved' }; }
+                const planId: string = String(msg.planId || msg.sessionId || '');
+                const priorityRaw = msg.priority;
+                const priority = (priorityRaw === null || priorityRaw === undefined || priorityRaw === 0 || priorityRaw === 'none' || priorityRaw === '')
+                    ? null
+                    : Number(priorityRaw);
+                const result = await this.setCardPriority(workspaceRoot, planId, priority);
+                if (!result.success) {
+                    this.postMessage({ type: 'showStatusMessage', message: result.error || 'Failed to set priority', isError: true });
+                }
+                return result;
+            }
+            case 'setOrderByMode': {
+                // V67: set global board order-by mode.
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
+                if (!workspaceRoot) { return { success: false, error: 'No workspace root resolved' }; }
+                const mode = (msg.mode || 'manual') as SortMode;
+                const result = await this.setOrderByMode(workspaceRoot, mode);
+                if (!result.success) {
+                    this.postMessage({ type: 'showStatusMessage', message: result.error || 'Failed to set order by mode', isError: true });
                 }
                 return result;
             }
