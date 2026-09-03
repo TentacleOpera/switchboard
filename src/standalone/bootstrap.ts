@@ -47,6 +47,7 @@ import { createStandalonePlanIngestionHost, readPlanScannerCustomSourceDirs } fr
 import { PtyFleetService, PTY_IDE_NAME } from './ptyFleetService';
 import { resolveTeamScopedRoleTerminal } from '../services/teamWiring';
 import { isPtyAvailable } from './ptyBackend';
+import { getThemeBodyClass } from '../services/themeBodyClass';
 import { SURFACES } from '../services/wsHub';
 import { MISSION_CONTROL_TERMINAL_NAME } from '../services/autobanState';
 import { GlobalIntegrationConfigService } from '../services/GlobalIntegrationConfigService';
@@ -1001,9 +1002,9 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         integrationsConfigured: await computeIntegrationsConfigured(),
     });
 
-    const getBoardHtml = async () => sharedGetBoardHtml(repoRoot, workspaceRoot, await getStandaloneCaps());
-    const getProjectHtml = async () => sharedGetProjectHtml(repoRoot, workspaceRoot, await getStandaloneCaps());
-    const getShellHtml = async () => sharedGetShellHtml(repoRoot);
+    const getBoardHtml = async () => sharedGetBoardHtml(repoRoot, workspaceRoot, await getStandaloneCaps(), getThemeBodyClass(configProvider));
+    const getProjectHtml = async () => sharedGetProjectHtml(repoRoot, workspaceRoot, await getStandaloneCaps(), getThemeBodyClass(configProvider));
+    const getShellHtml = async () => sharedGetShellHtml(repoRoot, getThemeBodyClass(configProvider));
 
     // Standalone now wires the Design/Setup/TaskViewer/Planning verb routers
     // (B1) — their `/verb/*` endpoints serve results instead of 503. Mark
@@ -1016,7 +1017,8 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // the probe hides the rail tab entirely when node-pty could not load.
     const getPanelsManifest = () => sharedGetPanelsManifest({ design: true, setup: true, planning: true, tickets: true, terminals: ptyReady, linear: true });
     const getPanelHtml = async (id: string): Promise<{ html: string; csp?: string } | null> => {
-        const result = sharedGetPanelHtmlById(id, repoRoot, workspaceRoot, await getStandaloneCaps());
+        const themeClass = getThemeBodyClass(configProvider);
+        const result = sharedGetPanelHtmlById(id, repoRoot, workspaceRoot, await getStandaloneCaps(), themeClass);
         if (!result) { return null; }
         if (id === 'terminals' && terminalSessionToken) {
             // The terminal WS channel is RCE-grade and keeps its own credential,

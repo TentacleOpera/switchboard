@@ -106,6 +106,11 @@
             -webkit-mask-size: contain;
             mask-size: contain;
         }
+        .strip-team-glyph {
+            width: 22px;
+            height: 22px;
+            background-color: var(--accent);
+        }
         .strip-icon:hover { background: var(--bg-elev); color: var(--text); }
         .strip-icon.is-active {
             background: var(--bg-elev);
@@ -183,7 +188,7 @@
         #top-right-cluster {
             position: fixed;
             top: calc(env(safe-area-inset-top, 0px) + 6px);
-            right: calc(var(--dock-width, 0px) + env(safe-area-inset-right, 0px) + 6px);
+            right: calc(var(--dock-width, 0px) + 6px);
             z-index: 40;
             display: flex;
             flex-direction: row;
@@ -566,6 +571,48 @@
             text-align: center;
         }
         #dock-empty.is-visible { display: flex; }
+        .dock-cli-wrap {
+            display: none;
+            align-items: center;
+        }
+        .dock-cli-wrap.is-visible { display: flex; }
+        .dock-cli-wrap .dock-cli-input {
+            width: 200px;
+            font-size: 11px;
+            padding: 3px 6px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text);
+            font-family: var(--font-code);
+            outline: none;
+            box-sizing: border-box;
+            transition: width 0.15s ease;
+        }
+        .dock-cli-wrap.collapsed .dock-cli-input {
+            width: 120px;
+            font-size: 11px;
+            padding: 2px 6px;
+            cursor: pointer;
+        }
+        .dock-cli-wrap .dock-cli-input:focus {
+            border-color: var(--accent);
+            width: 200px;
+        }
+        #dock-empty .dock-cli-input {
+            width: 80%;
+            max-width: 320px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text);
+            font-family: var(--font-code);
+            font-size: 12px;
+            padding: 6px 10px;
+            outline: none;
+            box-sizing: border-box;
+        }
+        #dock-empty .dock-cli-input:focus { border-color: var(--accent); }
         #dock-empty-hint { font-size: 11px; color: var(--text-dim); line-height: 1.5; }
         /* position:fixed escapes #agent-dock's overflow:hidden — no ancestor here
            establishes a fixed-position containing block (no transform/filter/
@@ -634,11 +681,14 @@
                 <button id="dock-tab-fleet" type="button" class="dock-tab-btn" role="tab" aria-selected="false">Fleet</button>
             </div>
             <span id="dock-title"></span>
+            <div id="dock-cli-wrap" class="dock-cli-wrap collapsed"></div>
+            <button id="dock-restart" type="button" class="dock-chip" aria-label="Restart agent" style="display:none">Restart</button>
             <button id="dock-close" type="button" class="dock-icon-btn"
                     aria-label="Close agent dock" data-tooltip="Close">&times;</button>
         </div>
         <div id="dock-empty">
-            <button id="dock-start" type="button" class="dock-start-btn"></button>
+            <input id="dock-cli-input" type="text" placeholder="Startup command (e.g. claude)" class="dock-cli-input" />
+            <button id="dock-start" type="button" class="dock-start-btn" disabled>Start</button>
             <div id="dock-empty-hint"></div>
         </div>
         <iframe id="dock-frame" title="Agent terminal"

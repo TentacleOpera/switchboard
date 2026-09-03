@@ -1420,6 +1420,7 @@
         }
         .teams-card-portrait {
             flex-shrink: 0;
+            color: var(--accent);
         }
         /* Pixel-art <img> treatment — one class, defined per webview document
            (separate documents share no sheet). Integer display sizes plus
@@ -1503,6 +1504,7 @@
             overflow-x: auto;
         }
         .teams-flow-node {
+            color: var(--accent);
             opacity: 0;
             animation: teams-flow-node-in 0.3s ease-out forwards;
         }
@@ -3291,9 +3293,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
     <!-- Teams Tab Content -->
     <div id="teams-tab-content" class="shared-tab-content">
-      <!-- SVG defs: portrait symbols + glow filter. Emitted once, referenced
-           via <use> by every card and flow node. Placeholder art — replacing
-           it is an edit to this block alone, no layout shift. -->
+      <!-- SVG defs: portrait symbol + glow filter. Emitted once, referenced
+           via <use> by every card and flow node. Single flat interceptor silhouette
+           from agent-fleet-air-combat-detailed.svg#afc-jet. -->
       <svg width="0" height="0" style="position:absolute;" aria-hidden="true">
         <defs>
           <filter id="portrait-glow" x="-20%" y="-20%" width="140%" height="140%">
@@ -3303,54 +3305,39 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
               <feMergeNode in="SourceGraphic"/>
             </feMerge>
           </filter>
-          <!-- Planner: head + body, clipboard mark -->
-          <symbol id="portrait-planner" viewBox="0 0 24 24" shape-rendering="crispEdges">
-            <rect x="8" y="2" width="8" height="6" fill="#00e5ff"/>
-            <rect x="8" y="2" width="8" height="2" fill="#7ff3ff"/>
-            <rect x="6" y="8" width="12" height="12" fill="#00e5ff"/>
-            <rect x="6" y="8" width="12" height="2" fill="#7ff3ff"/>
-            <rect x="6" y="18" width="12" height="2" fill="#00b8cc"/>
-            <rect x="9" y="11" width="6" height="5" fill="#00b8cc"/>
-            <rect x="10" y="12" width="4" height="1" fill="#7ff3ff"/>
-          </symbol>
-          <!-- Lead: head + body, star mark -->
-          <symbol id="portrait-lead" viewBox="0 0 24 24" shape-rendering="crispEdges">
-            <rect x="8" y="2" width="8" height="6" fill="#00e5ff"/>
-            <rect x="8" y="2" width="8" height="2" fill="#7ff3ff"/>
-            <rect x="6" y="8" width="12" height="12" fill="#00e5ff"/>
-            <rect x="6" y="8" width="12" height="2" fill="#7ff3ff"/>
-            <rect x="6" y="18" width="12" height="2" fill="#00b8cc"/>
-            <rect x="10" y="11" width="4" height="4" fill="#00b8cc"/>
-            <rect x="11" y="12" width="2" height="2" fill="#7ff3ff"/>
-          </symbol>
-          <!-- Coder/Researcher: head + body, code mark -->
-          <symbol id="portrait-coder" viewBox="0 0 24 24" shape-rendering="crispEdges">
-            <rect x="8" y="2" width="8" height="6" fill="#00e5ff"/>
-            <rect x="8" y="2" width="8" height="2" fill="#7ff3ff"/>
-            <rect x="6" y="8" width="12" height="12" fill="#00e5ff"/>
-            <rect x="6" y="8" width="12" height="2" fill="#7ff3ff"/>
-            <rect x="6" y="18" width="12" height="2" fill="#00b8cc"/>
-            <rect x="9" y="12" width="2" height="3" fill="#00b8cc"/>
-            <rect x="13" y="12" width="2" height="3" fill="#00b8cc"/>
-          </symbol>
-          <!-- Reviewer: head + body, check mark -->
-          <symbol id="portrait-reviewer" viewBox="0 0 24 24" shape-rendering="crispEdges">
-            <rect x="8" y="2" width="8" height="6" fill="#00e5ff"/>
-            <rect x="8" y="2" width="8" height="2" fill="#7ff3ff"/>
-            <rect x="6" y="8" width="12" height="12" fill="#00e5ff"/>
-            <rect x="6" y="8" width="12" height="2" fill="#7ff3ff"/>
-            <rect x="6" y="18" width="12" height="2" fill="#00b8cc"/>
-            <rect x="9" y="12" width="2" height="2" fill="#00b8cc"/>
-            <rect x="11" y="13" width="2" height="2" fill="#00b8cc"/>
-            <rect x="13" y="14" width="2" height="2" fill="#00b8cc"/>
-          </symbol>
-          <!-- Generic agent: head + body, no distinguishing mark -->
-          <symbol id="portrait-agent" viewBox="0 0 24 24" shape-rendering="crispEdges">
-            <rect x="8" y="2" width="8" height="6" fill="#00e5ff"/>
-            <rect x="8" y="2" width="8" height="2" fill="#7ff3ff"/>
-            <rect x="6" y="8" width="12" height="12" fill="#00e5ff"/>
-            <rect x="6" y="8" width="12" height="2" fill="#7ff3ff"/>
-            <rect x="6" y="18" width="12" height="2" fill="#00b8cc"/>
+          <!-- Agent: radar interceptor silhouette (Source: agent-fleet-air-combat-detailed.svg#afc-jet) -->
+          <symbol id="portrait-agent" viewBox="-32 -28 64 64" shape-rendering="crispEdges">
+            <g fill="currentColor">
+              <rect x="-4" y="-16" width="8" height="8"/>
+              <rect x="-8" y="-8" width="16" height="4"/>
+              <rect x="-12" y="-8" width="4" height="4"/>
+              <rect x="8" y="-8" width="4" height="4"/>
+              <rect x="-8" y="-4" width="16" height="4"/>
+              <rect x="-16" y="-4" width="4" height="4"/>
+              <rect x="12" y="-4" width="4" height="4"/>
+              <rect x="-8" y="0" width="16" height="4"/>
+              <rect x="-20" y="0" width="4" height="4"/>
+              <rect x="16" y="0" width="4" height="4"/>
+              <rect x="-12" y="4" width="24" height="4"/>
+              <rect x="-24" y="4" width="4" height="4"/>
+              <rect x="20" y="4" width="4" height="4"/>
+              <rect x="-12" y="8" width="24" height="4"/>
+              <rect x="-28" y="8" width="4" height="4"/>
+              <rect x="24" y="8" width="4" height="4"/>
+              <rect x="-16" y="12" width="32" height="4"/>
+              <rect x="-24" y="12" width="4" height="4"/>
+              <rect x="20" y="12" width="4" height="4"/>
+              <rect x="-12" y="16" width="24" height="4"/>
+              <rect x="-16" y="16" width="4" height="4"/>
+              <rect x="12" y="16" width="4" height="4"/>
+              <rect x="-20" y="16" width="4" height="4"/>
+              <rect x="16" y="16" width="4" height="4"/>
+              <rect x="-8" y="20" width="16" height="4"/>
+              <rect x="-12" y="20" width="4" height="4"/>
+              <rect x="8" y="20" width="4" height="4"/>
+              <rect x="-16" y="20" width="4" height="4"/>
+              <rect x="12" y="20" width="4" height="4"/>
+            </g>
           </symbol>
         </defs>
       </svg>
@@ -4988,17 +4975,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         ];
 
         /**
-         * Map a role string to a portrait symbol id. Four authored symbols
-         * (planner, lead, coder, reviewer); everything else (researcher,
-         * analyst, tester, intern, free-text) resolves to the generic
-         * #portrait-agent. No <use> ever references a missing symbol.
+         * Map a role string to a portrait symbol id. Single jet portrait
+         * (Source: agent-fleet-air-combat-detailed.svg#afc-jet); this is the
+         * seam where per-role art returns when agent-<role>.png files land.
          */
         function teamsTabPortraitId(role) {
-            const r = String(role || '').toLowerCase();
-            if (r === 'planner') { return 'portrait-planner'; }
-            if (r === 'lead') { return 'portrait-lead'; }
-            if (r === 'coder') { return 'portrait-coder'; }
-            if (r === 'reviewer') { return 'portrait-reviewer'; }
             return 'portrait-agent';
         }
 
@@ -5835,7 +5816,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     : value;
             } else {
                 btn.appendChild(teamsTabPortraitSvgEl(headRole, 32));
-                label.textContent = 'Role portrait (default)';
+                label.textContent = 'Default icon';
             }
         }
 

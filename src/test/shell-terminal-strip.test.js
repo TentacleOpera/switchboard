@@ -612,16 +612,20 @@ test('the team button tooltip is just the team name', () => {
 
 test('the team icon fallback skips the head brand mark', () => {
     const fn = block(shellJs, 'function renderTerminalSection(terminals, teams) {', 'function renderManifest(manifest) {');
-    // When team.iconUri is empty, the shell must go straight to the role letter
+    // When team.iconUri is empty, the shell must go straight to the jet
     // glyph — the headTerm.iconUri arm (brand mark) must be gone.
     const iconBlock = block(fn, 'if (team.iconUri) {', "btn.addEventListener('click'");
     assert.ok(
         !/headTerm\.iconUri/.test(iconBlock),
-        'the head brand-mark fallback arm must not survive — a team with no icon shows the role letter'
+        'the head brand-mark fallback arm must not survive — a team with no icon shows the jet'
     );
     assert.ok(
-        /glyph\.textContent = roleChar/.test(iconBlock),
-        'the role letter glyph must be the fallback when there is no team icon'
+        /buildMaskedGlyph\('\/static\/icons\/nav-jet\.svg'\)/.test(iconBlock),
+        'the jet glyph must be the fallback when there is no team icon'
+    );
+    assert.ok(
+        !/roleChar/.test(iconBlock),
+        'the role letter must not creep back into the team fallback'
     );
 });
 

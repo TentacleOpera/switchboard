@@ -11253,6 +11253,11 @@
                         entry.term.write(`\r\n\x1b[31m[Process Exited with code ${exitCode}]\x1b[0m\r\n`);
                         entry.term.options.disableStdin = true;
                         refreshInputState(entry.name);
+                        if (isDockFrame && window.parent && window.parent !== window) {
+                            try {
+                                window.parent.postMessage({ type: 'dockTerminalExited', name: entry.name }, '*');
+                            } catch { /* ignore */ }
+                        }
                     }
                 }
             } catch (err) {

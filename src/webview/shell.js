@@ -33,6 +33,9 @@
     const dockCloseBtn = document.getElementById('dock-close');
     const emptyEl = document.getElementById('dock-empty');
     const startBtn = document.getElementById('dock-start');
+    const dockCliInput = document.getElementById('dock-cli-input');
+    const dockCliWrap = document.getElementById('dock-cli-wrap');
+    const dockRestartBtn = document.getElementById('dock-restart');
     const dockEmptyHint = document.getElementById('dock-empty-hint');
     const dockFleetEl = document.getElementById('dock-fleet');
     const dockFleetOfflineEl = document.getElementById('dock-fleet-offline');
@@ -70,7 +73,6 @@
     const DOCK_VIABLE_MIN = 48 + 4 + DOCK_MIN + DOCK_MIN_CONTENT; // 980
 
     let dockOpen = false;
-    const dockRole = 'mission-control';
     let lastFleet = [];
     let lastAutobanArmed = false;
 
@@ -294,10 +296,6 @@
         tooltipTarget = null;
     }
 
-    /* ── Mission Control rail icon ─────────────────────────────────────────
-       A UFO button at the top of #strip-terminals that lights (animated cyan
-       lights) when a Mission Control session is active and dims when inactive.
-       Lit click → REVEAL (navigate to the terminals panel and focus the
     /* Minimal transient message near the rail. Reuses the body-level
        tooltip-overlay positioning pattern but auto-dismisses. textContent
        only — never innerHTML. Declared as a function declaration so the
@@ -459,7 +457,7 @@
         return false;
     }
 
-    function dockSeatName() { return `dock-${dockRole}`; }
+    function dockSeatName() { return 'dock-project_manager'; }
 
     let fleetPollTimer = null;
 
@@ -703,7 +701,7 @@
                     const textSpan = document.createElement('span');
                     textSpan.className = 'dock-feed-text';
                     textSpan.textContent = item.text;
-                    textSpan.title = item.text;
+                    textSpan.dataset.tooltip = item.text;
 
                     line.appendChild(timeSpan);
                     line.appendChild(glyphSpan);
@@ -760,30 +758,38 @@
         }
     }
 
-    // Seat resolution — adopt, never implicitly create. The fleet snapshot
-    // (cached in lastFleet) is the only liveness oracle. `saved.seat` is the
-    // friendlyName the SERVER returned, treated as opaque — PtyFleetService
-    // drops the requested name entirely on collision and falls back to the
-    // `<role>-N` series, so nothing may key on the `dock-` prefix.
-    function syncDockSeat() {
+    async function checkDockLiveness() {
+        const saved = readDockState();
+        const wanted = saved.seat || dockSeatName();
+        try {
+            const res = await fetch('/terminals/verb/ptyListTerminals', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: '{}'
+            });
+            const data = await res.json();
+            const hidden = Array.isArray(data.hiddenTerminals) ? data.hiddenTerminals : [];
+            const terminals = Array.isArray(data.terminals) ? data.terminals : [];
+            const all = [...hidden, ...terminals];
+            const live = all.find(t => (t.friendlyName === wanted || t.name === wanted || isControllerTerminal(t)) && t.status !== 'exited' && t.light !== 'exited');
+            const exited = all.find(t => (t.friendlyName === wanted || t.name === wanted || isControllerTerminal(t)) && (t.status === 'exited' || t.light === 'exited'));
+            return { wanted, live, exited, hidden };
+        } catch { return { wanted, live: null, exited: null, hidden: [] }; }
+    }
+
+    async function syncDockSeat() {
         const saved = readDockState();
         if (saved.activeTab !== 'agent') { return; }
-        if (saved.seat) {
-            const liveSaved = lastFleet.find(t => t.name === saved.seat && t.light !== 'exited');
-            if (liveSaved) {
-                if (isControllerTerminal(liveSaved)) {
-                    mountDockFrame(liveSaved.name);
-                    return;
-                } else {
-                    // Non-controller persisted seat from picker era — discard it.
-                    writeDockState({ seat: null });
-                }
-            }
-        }
-        const liveController = lastFleet.find(t => isControllerTerminal(t) && t.light !== 'exited');
-        if (liveController) {
-            mountDockFrame(liveController.name);
+        const { live, exited } = await checkDockLiveness();
+        if (live) {
+            if (dockRestartBtn) { dockRestartBtn.style.display = 'none'; }
+            mountDockFrame(live.friendlyName || live.name || saved.seat || dockSeatName());
+        } else if (exited) {
+            if (dockRestartBtn) { dockRestartBtn.style.display = 'inline-block'; }
+            showDockEmptyState();
         } else {
+            if (dockRestartBtn) { dockRestartBtn.style.display = 'none'; }
             showDockEmptyState();
         }
     }
@@ -810,19 +816,43 @@
         dockFrame.classList.add('is-visible');
         emptyEl.hidden = true;
         emptyEl.classList.remove('is-visible');
+        if (dockCliInput && dockCliWrap) {
+            dockCliWrap.appendChild(dockCliInput);
+            dockCliWrap.classList.add('is-visible', 'collapsed');
+        }
         updateDockTitle(name);
         writeDockState({ seat: name });
     }
 
-    function showDockEmptyState() {
+    async function showDockEmptyState() {
         dockFrame.hidden = true;
         dockFrame.classList.remove('is-visible');
         emptyEl.hidden = false;
         emptyEl.classList.add('is-visible');
+        if (dockCliWrap) {
+            dockCliWrap.classList.remove('is-visible', 'collapsed');
+        }
+        if (dockCliInput && emptyEl && !emptyEl.contains(dockCliInput)) {
+            emptyEl.insertBefore(dockCliInput, startBtn);
+        }
         startBtn.style.display = '';
-        startBtn.textContent = 'Start Mission Control';
+        startBtn.textContent = 'Start';
         dockEmptyHint.innerHTML = '';
         dockTitleEl.textContent = '';
+        if (dockCliInput) {
+            try {
+                const res = await fetch('/kanban/verb/getStartupCommands', {
+                    method: 'POST', credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' }, body: '{}'
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    const cmds = data.commands || {};
+                    dockCliInput.value = cmds['project_manager'] || cmds['mission-control'] || '';
+                }
+            } catch { /* ignore */ }
+            startBtn.disabled = !dockCliInput.value.trim();
+        }
     }
 
     function renderDockClipboardPrompt(promptText) {
@@ -862,35 +892,51 @@
     }
 
     // Create on explicit click only — never implicitly on shell load (edge
-    // case 4). Routes through /mission-control/start.
+    // case 4). Saves startup commands and creates hidden terminal.
     async function startDockTerminal() {
         startBtn.disabled = true;
+        if (dockRestartBtn) { dockRestartBtn.style.display = 'none'; }
+        const cmdVal = dockCliInput ? dockCliInput.value.trim() : '';
         try {
-            const res = await fetch('/mission-control/start', {
+            if (cmdVal) {
+                let existing = {};
+                try {
+                    const getRes = await fetch('/kanban/verb/getStartupCommands', {
+                        method: 'POST', credentials: 'same-origin',
+                        headers: { 'Content-Type': 'application/json' }, body: '{}'
+                    });
+                    if (getRes.ok) {
+                        const d = await getRes.json();
+                        existing = d.commands || {};
+                    }
+                } catch { /* ignore */ }
+                await fetch('/kanban/verb/saveStartupCommands', {
+                    method: 'POST', credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ commands: { ...existing, project_manager: cmdVal } })
+                });
+            }
+            const res = await fetch('/terminals/verb/ptyCreateTerminal', {
                 method: 'POST',
                 credentials: 'same-origin',
                 headers: { 'Content-Type': 'application/json' },
-                body: '{}'
+                body: JSON.stringify({ role: 'project_manager', name: 'dock-project_manager', hidden: true })
             });
             if (res.status === 503) {
-                dockEmptyHint.textContent = 'Mission Control is not available in this host.';
+                dockEmptyHint.textContent = 'Terminal backend is not available in this host.';
                 return;
             }
             const data = await res.json();
             if (data && data.success !== false) {
-                if (data.mode === 'clipboard') {
-                    renderDockClipboardPrompt(data.prompt || data.message || 'Run /switchboard workflow to start Mission Control');
-                } else {
-                    const name = data.friendlyName || data.name || (data.terminal && data.terminal.friendlyName) || 'Mission Control';
-                    mountDockFrame(name);
-                }
+                const name = data.friendlyName || data.name || (data.terminal && data.terminal.friendlyName) || 'dock-project_manager';
+                mountDockFrame(name);
             } else {
-                dockEmptyHint.textContent = (data && data.error) || 'Could not start Mission Control.';
+                dockEmptyHint.textContent = (data && data.error) || 'Could not start dock terminal.';
             }
         } catch (err) {
             dockEmptyHint.textContent = 'Could not reach the server.';
         } finally {
-            startBtn.disabled = false;
+            startBtn.disabled = dockCliInput ? !dockCliInput.value.trim() : false;
         }
     }
 
@@ -961,6 +1007,32 @@
     // Start button — the ONLY create path (edge case 4).
     if (startBtn) {
         startBtn.addEventListener('click', startDockTerminal);
+    }
+
+    if (dockCliInput) {
+        dockCliInput.addEventListener('input', () => {
+            if (startBtn) { startBtn.disabled = !dockCliInput.value.trim(); }
+        });
+        dockCliInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && startBtn && !startBtn.disabled) {
+                void startDockTerminal();
+            }
+        });
+    }
+
+    if (dockRestartBtn) {
+        dockRestartBtn.addEventListener('click', () => {
+            void startDockTerminal();
+        });
+    }
+
+    if (dockCliWrap) {
+        dockCliWrap.addEventListener('click', () => {
+            if (dockCliWrap.classList.contains('collapsed')) {
+                dockCliWrap.classList.remove('collapsed');
+                if (dockCliInput) { dockCliInput.focus(); }
+            }
+        });
     }
 
     // Dock tab buttons.
@@ -1102,10 +1174,10 @@
             btn.setAttribute('aria-label', team.name);
             btn.dataset.tooltip = team.name;
 
-            // Two-deep icon fallback: team icon → head's role letter. The
-            // rail is the primary navigation surface and must never render
-            // an empty button. The head's CLI brand mark is NOT a valid
-            // fallback for a team button — it communicates the wrong identity.
+            // Two-deep icon fallback: team icon → jet. The rail is the primary
+            // navigation surface and must never render an empty button. The
+            // head's CLI brand mark is NOT a valid fallback for a team button —
+            // it communicates the wrong identity.
             if (team.iconUri) {
                 const icon = document.createElement('img');
                 icon.className = 'strip-term-icon strip-team-icon pixel-art';
@@ -1113,11 +1185,8 @@
                 icon.alt = '';
                 btn.appendChild(icon);
             } else {
-                const headTerm = (Array.isArray(terminals) ? terminals : []).find(t => t.name === team.head);
-                const roleChar = (team.headRole || (headTerm && headTerm.role) || 'T').charAt(0).toUpperCase();
-                const glyph = document.createElement('span');
-                glyph.className = 'strip-team-icon';
-                glyph.textContent = roleChar;
+                const glyph = buildMaskedGlyph('/static/icons/nav-jet.svg');
+                glyph.classList.add('strip-team-glyph');
                 btn.appendChild(glyph);
             }
 
@@ -1360,7 +1429,10 @@
             // If the dock is open and active on the agent tab, re-sync the seat — a fleet push may report
             // the seat we just created, or report that a previously-live seat
             // has exited.
-            if (dockOpen && readDockState().activeTab === 'agent') { syncDockSeat(); }
+            if (dockOpen && readDockState().activeTab === 'agent') { void syncDockSeat(); }
+        } else if (data.type === 'dockTerminalExited' && typeof data.name === 'string') {
+            if (event.origin !== location.origin) { return; }
+            if (dockRestartBtn) { dockRestartBtn.style.display = 'inline-block'; }
         } else if (data.type === 'popoutTerminal' && typeof data.name === 'string') {
             if (event.origin !== location.origin) { return; }
             const slug = data.name.replace(/[^A-Za-z0-9_-]/g, '_');
