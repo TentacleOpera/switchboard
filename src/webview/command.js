@@ -1614,16 +1614,32 @@
             });
 
             const result = await res.json().catch(() => null);
+            const legs = Array.isArray(result?.moved) ? result.moved : [];
+            // A leg with count 0 did NOT advance — the card was already in the final
+            // stage, or the verb refused. Never let one read as a move.
+            const advanced = legs.reduce((n, l) => n + (l.count || 0), 0);
+            const stalled = legs.filter(l => !l.count);
             if (res.ok && result?.success) {
                 // Always say how many, so a batch never reads like a single-card advance.
-                const legs = result.moved || [];
                 dispatchStatusChip.textContent = legs.length === 1 && legs[0].count === 1
                     ? `Advanced ${legs[0].from} → ${legs[0].column || 'next stage'}`
-                    : `Advanced ${result.count} cards — ` +
-                      legs.map(l => `${l.count} from ${l.from} → ${l.column || 'next stage'}`).join(', ');
+                    : `Advanced ${advanced} cards — ` +
+                      legs.map(l => `${l.count} from ${l.from} → ${l.column}`).join(', ');
                 dispatchStatusChip.className = 'status-chip success';
                 selectedDispatchCardIds.clear();
                 renderDispatchView();
+            } else if (res.ok && stalled.length) {
+                // 207: some or none advanced. Name the columns that did not, and why.
+                const why = stalled.map(l => `${l.from}: ${l.error || 'did not advance'}`).join('; ');
+                dispatchStatusChip.textContent = advanced
+                    ? `Advanced ${advanced} of ${result.count} — ${why}`
+                    : why;
+                dispatchStatusChip.className = advanced ? 'status-chip unknown' : 'status-chip error';
+                if (advanced) {
+                    selectedDispatchCardIds.clear();
+                }
+                renderDispatchView();
+                btnDispatch.disabled = advanced > 0;
             } else {
                 dispatchStatusChip.textContent = result?.error || `Advance failed (HTTP ${res.status})`;
                 dispatchStatusChip.className = 'status-chip error';
@@ -1653,25 +1669,33 @@
         renderMoveView();
 
         try {
-            let allOk = true;
-            let lastBody = null;
-            for (const cardId of cardIds) {
-                const res = await fetch('/kanban/move', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        planId: cardId,
-                        targetColumn: targetCol,
-                        workspaceRoot: currentWorkspaceRoot
-                    })
-                });
-                const body = await res.json().catch(() => null);
-                if (!res.ok) {
-                    allOk = false;
-                    lastBody = body;
+            // One operator gesture is ONE request: the route takes `planIds[]` and
+            // reports per-card results (207 on a partial batch). A client-side loop
+            // would turn one tap into N unsynchronised moves.
+            const res = await fetch('/kanban/move', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    planIds: cardIds,
+                    targetColumn: targetCol,
+                    workspaceRoot: currentWorkspaceRoot
+                })
+            });
+            const body = await res.json().catch(() => null);
+            const perCard = Array.isArray(body?.results) ? body.results : [];
+            const failed = perCard.filter(r => !r.success);
+            // Roll back the optimistic move for the cards that did not land, so a
+            // failed row never sits in a column the board does not agree with.
+            for (const r of failed) {
+                pendingMoves.delete(r.id);
+            }
+            const allOk = res.ok && body?.success === true;
+            if (!allOk && !perCard.length) {
+                for (const cardId of cardIds) {
                     pendingMoves.delete(cardId);
                 }
             }
+            const lastBody = failed.length ? { error: failed.map(r => `${r.id}: ${r.error || 'move refused'}`).join('; ') } : body;
 
             if (allOk) {
                 moveStatusChip.textContent = cardIds.length === 1

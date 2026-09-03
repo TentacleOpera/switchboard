@@ -161,7 +161,7 @@ export interface KanbanColumnDefinition {
     triggerPrompt?: string;
     featureOnly?: boolean;
     enabled?: boolean;
-    enabledSource?: 'config' | 'default' | 'structural' | 'unknown';
+    enabledSource?: 'config' | 'legacy-db-config' | 'default' | 'structural' | 'unknown';
 }
 
 export interface KanbanColumnBuildOverrides {

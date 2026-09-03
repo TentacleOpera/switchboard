@@ -31,6 +31,7 @@ import { plausibleOriginTerminal, describeStandingOrderMigrations, TERMINALS_GRO
 import { computeRosterClearTargets } from './workContextResolver';
 import { instantiateExternalHeadedTeam, resolveExternalTeamTemplate } from './agentGroupInstantiation';
 import { parseComplexityScore, getFallbackRole } from './complexityScale';
+import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import {
     DEFAULT_KANBAN_COLUMNS,
     DEFAULT_VISIBLE_AGENTS,
@@ -1903,37 +1904,60 @@ export class LocalApiServer {
     }
 
     /**
-     * Look up multiple plans by an array of identifiers (planId, sessionId, or plan-file path).
-     * Returns resolved records with { sessionId, planId, planFile, kanbanColumn }.
+     * Look up multiple plans by an array of identifiers (planId, sessionId, or
+     * plan-file path). One DB read pass for N ids, shared by `POST /kanban/move`
+     * (which needs each card's `planFile`) and `POST /kanban/advance` (which needs
+     * each card's source `kanbanColumn`).
+     *
+     * **An unresolved id is reported as unresolved.** Every entry carries the `id`
+     * that was asked for and a `resolved` flag; a miss yields `resolved: false` and
+     * NO synthesised `sessionId`/`planId`/`kanbanColumn`. Fabricating those made a
+     * non-existent card indistinguishable from a real one, which silently defeated
+     * the advance route's missing-id 404 and sent `column: undefined` into
+     * `promptSelected`. Callers decide what a miss means: advance 404s, move falls
+     * back to passing the raw key to the `moveCard` seam (which does its own
+     * resolution, as it always has).
      */
     private async _lookupPlansByIds(
         ids: string[],
         workspaceRoot?: string
-    ): Promise<Array<{ sessionId: string; planId: string; planFile: string; kanbanColumn: string }>> {
+    ): Promise<Array<{ id: string; resolved: boolean; sessionId?: string; planId?: string; planFile?: string; kanbanColumn?: string }>> {
         const db = await this._options.getKanbanDatabase?.(workspaceRoot || this._options.workspaceRoot || '');
         if (!db) {
-            return [];
+            return ids.map(id => ({ id, resolved: false }));
         }
-        const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
-        const records: Array<{ sessionId: string; planId: string; planFile: string; kanbanColumn: string }> = [];
-        for (const id of ids) {
-            let rec: any = (await db.resolvePlanByAnyId?.(id)) ?? (await db.getPlanByPlanId?.(id)) ?? (await db.getPlanBySessionId?.(id));
-            if (!rec && (id.includes('/') || id.includes('\\') || id.endsWith('.md'))) {
-                rec = await db.getPlanByPlanFile?.(id, wsId);
+        try {
+            await db.ensureReady?.();
+            const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
+            const records: Array<{ id: string; resolved: boolean; sessionId?: string; planId?: string; planFile?: string; kanbanColumn?: string }> = [];
+            for (const id of ids) {
+                const pathShaped = id.includes('/') || id.includes('\\') || id.endsWith('.md');
+                let rec: any = typeof db.resolvePlanByAnyId === 'function'
+                    ? await db.resolvePlanByAnyId(id)
+                    : ((await db.getPlanByPlanId?.(id)) ?? (await db.getPlanBySessionId?.(id)));
+                if (!rec && pathShaped) {
+                    rec = await db.getPlanByPlanFile?.(id, wsId);
+                }
+                if (!rec && typeof db.resolvePlanIdentifier === 'function') {
+                    rec = await db.resolvePlanIdentifier(id, wsId);
+                }
+                records.push(rec
+                    ? {
+                        id,
+                        resolved: true,
+                        sessionId: rec.sessionId || rec.planId,
+                        planId: rec.planId || rec.sessionId,
+                        planFile: rec.planFile || (pathShaped ? id : undefined),
+                        kanbanColumn: rec.kanbanColumn
+                    }
+                    : { id, resolved: false });
             }
-            if (!rec && db.resolvePlanIdentifier) {
-                rec = await db.resolvePlanIdentifier(id, wsId);
-            }
-            if (rec) {
-                records.push({
-                    sessionId: rec.sessionId || rec.planId,
-                    planId: rec.planId || rec.sessionId,
-                    planFile: rec.planFile || '',
-                    kanbanColumn: rec.kanbanColumn || ''
-                });
-            }
+            return records;
+        } catch (err) {
+            // A DB failure is not an answer about whether these cards exist.
+            console.error('[LocalApiServer] _lookupPlansByIds failed:', err);
+            return ids.map(id => ({ id, resolved: false }));
         }
-        return records;
     }
 
     /**
@@ -1980,10 +2004,25 @@ export class LocalApiServer {
             // Columns are resolved server-side per card so the client cannot send a stale
             // one, and a selection spanning two columns advances each card from where it is.
             const records = await this._lookupPlansByIds(ids, workspaceRoot);
-            const missing = ids.filter(id => !records.some(r => (r.planId === id || r.sessionId === id || r.planFile === id)));
+            // Report EVERY unknown id at once rather than failing on the first. An
+            // unresolved record carries no synthesised column, so this 404 is the only
+            // thing standing between a bad id and `promptSelected({ column: undefined })`.
+            const missing = records.filter(r => !r.resolved).map(r => r.id);
             if (missing.length) {
                 res.writeHead(404, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: false, error: `Plan(s) not found: ${missing.join(', ')}` }));
+                return;
+            }
+            // A resolved card with no recorded column cannot be advanced from anywhere:
+            // `promptSelected` filters on the source column, so passing '' would refuse
+            // for a reason the operator could not act on. Name it instead.
+            const columnless = records.filter(r => !r.kanbanColumn).map(r => r.id);
+            if (columnless.length) {
+                res.writeHead(409, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: false,
+                    error: `Plan(s) have no recorded kanban column, so there is no stage to advance from: ${columnless.join(', ')}`
+                }));
                 return;
             }
 
@@ -1991,8 +2030,8 @@ export class LocalApiServer {
             // board's own path is likewise per-column.
             const byColumn = new Map<string, string[]>();
             for (const r of records) {
-                const key = r.kanbanColumn;
-                (byColumn.get(key) ?? byColumn.set(key, []).get(key)!).push(r.sessionId || r.planId);
+                const key = r.kanbanColumn as string;
+                (byColumn.get(key) ?? byColumn.set(key, []).get(key)!).push((r.sessionId || r.planId) as string);
             }
 
             const moved: Array<{ from: string; column?: string; count: number; error?: string }> = [];
@@ -2015,10 +2054,22 @@ export class LocalApiServer {
                 // TICKET UPDATER are never reached on this board. If one were enabled,
                 // the card would advance there — same as the board — and the console
                 // would simply report the destination without rendering the prompt.
-                moved.push({ from: column, column: result?.targetColumn, count: sessionIds.length });
+                // A card in the final stage: `promptSelected` returns
+                // `{ success: true, prompt, advanced: 0 }` with NO `targetColumn` — it
+                // copied a prompt and moved nothing. Reporting that as an advance is a
+                // false success on a no-op, so `targetColumn` is the discriminator.
+                if (!result?.targetColumn) {
+                    moved.push({ from: column, count: 0, error: 'already in the final stage' });
+                    continue;
+                }
+                moved.push({ from: column, column: result.targetColumn, count: sessionIds.length });
             }
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: true, moved, count: ids.length }));
+            // A partial outcome must never read as a bare success — same 207 convention
+            // as the batch move route.
+            const advanced = moved.reduce((n, leg) => n + leg.count, 0);
+            const failedLegs = moved.filter(leg => leg.count === 0);
+            res.writeHead(failedLegs.length ? 207 : 200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: failedLegs.length === 0, moved, count: ids.length, advanced }));
         } catch (err) {
             console.error('[LocalApiServer] kanbanAdvance error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -4139,54 +4190,6 @@ export class LocalApiServer {
     }
 
     /**
-     * Look up plans across an array of IDs/keys to resolve sessionId, planId, planFile, and kanbanColumn.
-     */
-    private async _lookupPlansByIds(
-        ids: string[],
-        workspaceRoot?: string
-    ): Promise<Array<{ id: string; sessionId?: string; planId?: string; planFile?: string; kanbanColumn?: string }>> {
-        const db = await this._options.getKanbanDatabase?.(workspaceRoot);
-        if (!db) {
-            return ids.map(id => ({ id, sessionId: id, planId: id }));
-        }
-        try {
-            await db.ensureReady?.();
-            const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
-            const results: Array<{ id: string; sessionId?: string; planId?: string; planFile?: string; kanbanColumn?: string }> = [];
-            for (const id of ids) {
-                let rec: any = null;
-                if (typeof db.resolvePlanByAnyId === 'function') {
-                    rec = await db.resolvePlanByAnyId(id);
-                } else {
-                    rec = (await db.getPlanByPlanId?.(id)) ?? (await db.getPlanBySessionId?.(id));
-                }
-                if (!rec && (id.includes('/') || id.includes('\\') || id.endsWith('.md'))) {
-                    rec = await db.getPlanByPlanFile?.(id, wsId);
-                }
-                if (rec) {
-                    results.push({
-                        id,
-                        sessionId: rec.sessionId || rec.planId || id,
-                        planId: rec.planId || rec.sessionId || id,
-                        planFile: rec.planFile,
-                        kanbanColumn: rec.kanbanColumn
-                    });
-                } else {
-                    results.push({
-                        id,
-                        sessionId: id,
-                        planId: id,
-                        planFile: (id.includes('/') || id.includes('\\') || id.endsWith('.md')) ? id : undefined
-                    });
-                }
-            }
-            return results;
-        } catch {
-            return ids.map(id => ({ id, sessionId: id, planId: id }));
-        }
-    }
-
-    /**
      * POST /kanban/move — move a kanban card via the running extension so the move
      * inherits the feature→subtask cascade, the Linear/ClickUp sync fan-out, and the
      * board refresh. Reached by the kanban_operations fallback script over the
@@ -4324,13 +4327,21 @@ export class LocalApiServer {
                 return;
             }
 
+            // `planFile` is resolved server-side per card: the single-card form can carry
+            // one in the body, but a batch cannot pass N of them. Without it, moveCard's
+            // updatePlanFile step is skipped and the recorded path drifts from the DB row.
+            //
+            // An id the DB could not resolve is NOT dropped and NOT rewritten — it is
+            // handed to the `moveCard` seam as the caller typed it, which is exactly the
+            // behaviour before this route learned to batch (the seam does its own
+            // resolution and reports its own failure).
             const records = await this._lookupPlansByIds(ids, resolvedRoot);
             const results: Array<{ id: string; success: boolean; error?: string; reason?: string }> = [];
             for (const rec of records) {
                 const planFile = rec.planFile || (ids.length === 1 ? singlePlanFile : undefined);
                 const targetId = rec.sessionId || rec.planId || rec.id;
                 const result = await moveCard(resolvedRoot, targetId, targetColumn, planFile);
-                results.push({ id: rec.id || targetId, ...result });
+                results.push({ id: rec.id, ...result });
             }
 
             if (isBatch) {
@@ -4359,7 +4370,6 @@ export class LocalApiServer {
             res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'kanbanMove failed' }));
         }
     }
-
 
     /**
      * POST /teams/create-external — create an external-headed team (non-terminal agent lead).
@@ -7435,19 +7445,64 @@ export class LocalApiServer {
         return await db.getBoard(wsId);
     }
 
-    private async _resolveVisibleAgents(db: any): Promise<{ agents: Record<string, boolean>; source: 'config' | 'default' | 'unknown' }> {
-        if (!db) {
+    /**
+     * Which agent roles this machine runs, and WHICH STORE said so.
+     *
+     * Agent visibility is machine-global, not per-workspace: `visibleAgents` is one
+     * of `AGENT_GLOBAL_FILE_KEYS` (`stateConfigBridge.ts`), so Setup's toggle writes
+     * `~/.switchboard` via `GlobalIntegrationConfigService` and `writeStateToDb`
+     * explicitly SKIPS the per-workspace db for it. The kanban.db `agents.visibleAgents`
+     * key is the pre-fold legacy store — `TaskViewerProvider._foldAgentConfigToGlobalFile`
+     * migrated its values out — so reading it first would serve a value nothing
+     * updates while tagging it `'config'`. Order matters, and so does the tag: a
+     * caller must be able to answer "which store answered?" after the fact.
+     *
+     * `source` is `'config'` (the live machine-global file), `'legacy-db-config'` (only
+     * the pre-fold per-workspace key answered), `'default'` (nothing has ever been
+     * written) or `'unknown'` (no store was reachable at all).
+     */
+    private async _resolveVisibleAgents(db: any): Promise<{ agents: Record<string, boolean>; source: 'config' | 'legacy-db-config' | 'default' | 'unknown' }> {
+        const isMap = (v: unknown): v is Record<string, boolean> =>
+            !!v && typeof v === 'object' && !Array.isArray(v);
+
+        // 1. The live machine-global file — what Setup writes today, on both hosts.
+        let fileValue: unknown;
+        let fileReadable = true;
+        try {
+            fileValue = await GlobalIntegrationConfigService.getAgentConfig<Record<string, boolean>>('visibleAgents');
+        } catch (err) {
+            fileReadable = false;
+            console.error('[LocalApiServer] visibleAgents: machine-global read failed:', err);
+        }
+        if (isMap(fileValue)) {
+            // Returned RAW: the per-column join defaults role-by-role and tags each one,
+            // so pre-merging the defaults here would report a defaulted role as configured.
+            return { agents: fileValue, source: 'config' };
+        }
+
+        // 2. The pre-fold per-workspace key, for an install whose fold has not run.
+        let dbReadable = !!db;
+        if (db) {
+            try {
+                const raw = db.getConfigJsonSync?.('agents.visibleAgents', undefined);
+                if (isMap(raw)) {
+                    return { agents: raw, source: 'legacy-db-config' };
+                }
+            } catch (err) {
+                dbReadable = false;
+                console.error('[LocalApiServer] visibleAgents: legacy db-config read failed:', err);
+            }
+        }
+
+        // 3. No store was reachable — that is not the same as "never configured".
+        //    Tag it 'unknown'; the caller shows every stage rather than hiding one it
+        //    could not verify (an extra column is recoverable, a missing stage is not).
+        if (!fileReadable && !dbReadable) {
             return { agents: {}, source: 'unknown' };
         }
-        try {
-            const raw = db.getConfigJsonSync?.('agents.visibleAgents', undefined);
-            if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
-                return { agents: raw as Record<string, boolean>, source: 'config' };
-            }
-            return { agents: DEFAULT_VISIBLE_AGENTS, source: 'default' };
-        } catch {
-            return { agents: DEFAULT_VISIBLE_AGENTS, source: 'default' };
-        }
+
+        // 4. Reachable and empty: nobody has ever set agent visibility.
+        return { agents: DEFAULT_VISIBLE_AGENTS, source: 'default' };
     }
 
     /**
