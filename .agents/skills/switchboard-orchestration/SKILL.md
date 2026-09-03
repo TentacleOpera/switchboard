@@ -66,7 +66,7 @@ primary workspace.
 | `GET /kanban/plans?column=<col>` | Plans filtered to one column |
 | `GET /kanban/plans?featureId=<id>` | Subtasks of a feature |
 | `GET /kanban/plan?planId=<id>` | **One** plan record **plus its full file content** (`.data.content`) |
-| `GET /kanban/columns` | `{ builtIn: [...defs], custom: [{id,label,labelSource,displayModeOf?,legacyAliasOf?}], displayOnly: [{label,aliasOf}] }` — `displayModeOf`/`legacyAliasOf` mark a column that is NOT an independent peer (`BACKLOG` is a view of `CREATED`; `CODED` is a legacy alias of `LEAD CODED`) |
+| `GET /kanban/columns` | `{ builtIn: [...defs], custom: [{id,label,labelSource,enabled,displayModeOf?,legacyAliasOf?}], displayOnly: [{label,aliasOf}] }` — every column includes `enabled` (boolean) and `enabledSource` (`'config' | 'default' | 'structural' | 'unknown'`). `displayModeOf`/`legacyAliasOf` mark a column that is NOT an independent peer (`BACKLOG` is a view of `CREATED`; `CODED` is a legacy alias of `LEAD CODED`). Filter destinations to `enabled !== false`. |
 | `GET /kanban/features` | All features (`isFeature` rows) |
 | `GET /worktree/list` | All worktree rows (`path`, `branch`, `subtask_plan_id`, `feature_id`, `tier`, `status`, `base_branch`) |
 | `GET /mission-control/session-log` | Mission Control's session file — `.switchboard/mission-control/session.md` when it exists, falling back to the legacy `.switchboard/mission-control/session-log.md` (markdown string, `''` when neither exists) |

@@ -3,18 +3,12 @@
 // Move a kanban card to a target column. Feature-aware: when the card is a feature,
 // all of its subtasks cascade to the same column.
 //
-// Two paths, tried in order:
-//   1. Preferred — route through the running Switchboard extension's local API
-//      server. The extension performs the move via KanbanProvider, so it inherits
-//      the feature cascade, the Linear/ClickUp integration-sync fan-out, and the board
-//      refresh. This is the ONLY way external trackers stay in exact sync, because
-//      the integration token lives in VS Code secret storage and is unreachable
-//      from a standalone Node process.
-//   2. Fallback — when the extension isn't running (no reachable API server), write
-//      the kanban DB directly. This still cascades subtasks, but does NOT sync to
-//      Linear/ClickUp (no token), and if real-time sync is enabled the change may be
-//      reconciled away on the next inbound poll. Recovery use only.
 //
+// Route through the running Switchboard host's local API server (POST /kanban/move).
+// The host performs the move via KanbanProvider, so it inherits the feature cascade,
+// the Linear/ClickUp integration-sync fan-out, and the board refresh.
+//
+
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
@@ -128,74 +122,20 @@ async function tryViaExtension() {
   }
 }
 
-// ── Path 2: direct DB write (no integration sync). ──
-async function viaDirectDb() {
-  // Lazy require so Path 1 works even where the compiled output isn't present.
-  const { KanbanDatabase, VALID_KANBAN_COLUMNS } = require('../../../out/services/KanbanDatabase');
-
-  if (!VALID_KANBAN_COLUMNS.has(targetColumn)) {
-    console.error(`Invalid column: ${targetColumn}`);
-    console.error(`Valid columns: ${Array.from(VALID_KANBAN_COLUMNS).join(', ')}`);
-    process.exit(1);
-  }
-
-  const db = KanbanDatabase.forWorkspace(workspaceRoot);
-  await db.ensureReady();
-
-  let plan;
-  if (resolvedPlanFile) {
-    // getPlanByPlanFile requires the DB workspace_id (a UUID), NOT the workspace root path.
-    // Resolve it from the DB config / dominant workspace before querying.
-    const wsId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
-    plan = await db.getPlanByPlanFile(resolvedPlanFile, wsId);
-  } else {
-    plan = await db.getPlanBySessionId(effectiveKey);
-  }
-
-  let columnSuccess;
-  if (plan && plan.isFeature) {
-    // Prefer the atomic, race-free cascadeFeatureByPlanId (Plan 2). Fall back to
-    // updateColumnWithFeatureCascadeByPlanId only if it's missing — note the signatures
-    // differ (the latter requires an explicit subtaskPlanIds[] array).
-    if (typeof db.cascadeFeatureByPlanId === 'function') {
-      columnSuccess = await db.cascadeFeatureByPlanId(plan.planId, targetColumn);
-    } else {
-      const subtasks = await db.getSubtasksByFeatureId(plan.planId);
-      const subtaskPlanIds = subtasks.map(st => st.planId).filter(Boolean);
-      columnSuccess = await db.updateColumnWithFeatureCascadeByPlanId(plan.planId, subtaskPlanIds, targetColumn);
-    }
-  } else if (plan) {
-    columnSuccess = await db.updateColumnByPlanFile(plan.planFile, plan.workspaceId, targetColumn);
-  } else {
-    columnSuccess = await db.updateColumn(effectiveKey, targetColumn);
-  }
-
-  let planFileSuccess = true;
-  if (resolvedPlanFile) {
-    planFileSuccess = await db.updatePlanFile(plan ? plan.sessionId : effectiveKey, resolvedPlanFile);
-  }
-
-  if (typeof db.close === 'function') db.close();
-  return columnSuccess && planFileSuccess;
-}
-
 (async () => {
   const viaExt = await tryViaExtension();
-  if (viaExt.reachable) {
-    if (viaExt.success) {
-      console.log('OK');
-      process.exit(0);
-    }
-    console.error(`Move via extension failed: ${viaExt.error || 'unknown error'}`);
-    console.log('FAILED');
-    process.exit(1);
+  if (viaExt.success) {
+    console.log('OK');
+    process.exit(0);
   }
-
-  // Extension not reachable — direct DB fallback (no Linear/ClickUp sync).
-  const ok = await viaDirectDb();
-  console.log(ok ? 'OK' : 'FAILED');
-  process.exit(ok ? 0 : 1);
+  console.error(viaExt.reachable
+    ? `Move failed: ${viaExt.error || 'unknown error'}`
+    : 'Move failed: no Switchboard host is reachable. Start the board (or the standalone '
+      + 'host) and retry — a card move goes through the same code path a human click takes.');
+  console.log('FAILED');
+  process.exit(1);
 })().catch(err => {
   console.error(err);
   process.exit(1);
 });
+

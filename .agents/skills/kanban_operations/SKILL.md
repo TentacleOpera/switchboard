@@ -70,15 +70,15 @@ Confirm the resolved id in your reply when you move a card (*"Moved to Planned (
 so a mis-resolution is visible immediately.
 
 **Custom columns** carry user-chosen labels this table cannot cover. The live mapping is
-`GET /kanban/columns` (`{id, label}` for built-in and custom alike). Code source of truth:
+`GET /kanban/columns` (the full catalogue tagged with `enabled` and `enabledSource` for built-in and custom alike; filter destinations to `enabled !== false`, though a disabled column may still hold historical cards). Code source of truth:
 `DEFAULT_KANBAN_COLUMNS` / `DISPLAY_MODE_COLUMNS` in `src/services/agentConfig.ts` — that file wins
 over this table.
 
 **Features:** When the card is a feature, all of its subtasks cascade to the same column automatically.
 
 **How it routes (and why it matters for Linear/ClickUp sync):**
-1. **Preferred** — if the Switchboard extension is running, the move is routed through its local API server (`POST /kanban/move`). The extension performs the move, so it cascades subtasks **and** pushes the feature + every subtask status to Linear/ClickUp — keeping external trackers in exact sync. When the extension is reachable it is authoritative: a refused move (e.g. an invalid transition) fails rather than silently falling back.
-2. **Fallback** — if no extension/API server is reachable, the script writes the kanban DB directly. Subtasks still cascade, but there is **no Linear/ClickUp sync** (the integration token lives in VS Code secret storage, unreachable from a standalone process). If real-time sync is enabled, a direct-DB change may be reconciled away on the next inbound poll. Use the fallback for recovery only.
+The move is routed through the running Switchboard host's local API server (`POST /kanban/move`). The host performs the move, cascades subtasks, and pushes the feature + every subtask status to Linear/ClickUp — keeping external trackers in exact sync. A running host is required; there is no direct-DB write fallback.
+
 
 ## Dispatching Cards & Features
 

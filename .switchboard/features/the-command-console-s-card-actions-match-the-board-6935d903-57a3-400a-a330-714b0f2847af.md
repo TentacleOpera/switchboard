@@ -32,9 +32,9 @@ own verbs and reading the board's own configuration.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [POST /kanban/move is unwired in the standalone host, so every remote card move fails 503 and the only recovery path is a raw DB write](../plans/kanban-move-is-unwired-in-the-standalone-host.md) — **CREATED** — ID: 1946ee61-5e32-4663-8ddc-7cb0b45d4cc0
-- [ ] [The command console never implemented advance — it calls the coding-seat router directly, so every card jumps to a coding column](../plans/command-console-dispatch-reads-as-an-advance.md) — **CREATED** — ID: c73ea0da-6d96-41fa-81ed-95f2134e5ef1
-- [ ] [GET /kanban/columns publishes the built-in catalogue instead of this board's columns, so clients offer Researcher and Ticket Updater to a board that has neither](../plans/column-reads-publish-the-catalogue-not-the-board.md) — **CREATED** — ID: d8cc4d79-ff07-4730-804d-fde66f617ac6
+- [ ] [move-card.js's direct-DB fallback must go, and /kanban/move must accept a batch — the seam wiring itself is already owned by another plan](../plans/kanban-move-is-unwired-in-the-standalone-host.md) — **INTERN CODED** — ID: 1946ee61-5e32-4663-8ddc-7cb0b45d4cc0
+- [ ] [The command console never implemented advance — it calls the coding-seat router directly, so every card jumps to a coding column](../plans/command-console-dispatch-reads-as-an-advance.md) — **INTERN CODED** — ID: c73ea0da-6d96-41fa-81ed-95f2134e5ef1
+- [ ] [GET /kanban/columns publishes the built-in catalogue instead of this board's columns, so clients offer Researcher and Ticket Updater to a board that has neither](../plans/column-reads-publish-the-catalogue-not-the-board.md) — **INTERN CODED** — ID: d8cc4d79-ff07-4730-804d-fde66f617ac6
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -56,4 +56,38 @@ parallel. Two soft orderings are worth knowing, and neither blocks a coder:
 Each subtask's verification runs on **both** composition roots — the standalone host and the
 installed VSIX. Subtask 1 exists because those two roots had drifted, so a same-host-only pass
 would miss the whole class of defect.
+
+## Team Dispatch Instructions
+
+### move-card.js's direct-DB fallback must go, and /kanban/move must accept a batch
+
+- **Seat:** Intern (complexity 2)
+- **Acceptance:**
+  - `POST /kanban/move` with `planIds: [a,b,c]` moves all three and reports `count: 3` with per-card results; a partial batch returns 207 naming the failing id
+  - With no host reachable, `move-card.js` exits 1 telling the operator to start the board, and the kanban DB is byte-identical (`md5sum` before/after) — no fallback write
+  - `grep -r viaDirectDb .agents .claude` returns nothing; neither skill mirror describes a second path
+  - With the seam deliberately unset, `POST /kanban/move` returns 503 with `seam: 'moveCard'` in the body
+- **Must not touch:** The `moveCard` seam wiring itself — that is owned by `wire-the-sixteen-unwired-localapiserver-seams-in-standalone.md`. Do not add `moveCard` to `bootstrap.ts` options; only delete the fallback, widen the route, and improve the 503.
+
+### The command console never implemented advance — it calls the coding-seat router directly, so every card jumps to a coding column
+
+- **Seat:** Intern (complexity 3)
+- **Acceptance:**
+  - Card in New, console ADVANCE → lands in Planned (not a coding column); same card, board advance → same destination
+  - Card in Planned, complexity 6, console ADVANCE → lands in Coder (banding applies where it should)
+  - Three cards selected, ADVANCE → all three move in one request, chip reports `Advanced 3 cards`; selection clears after
+  - `grep` the served console JS for `resolveAutoDispatchColumn` and coding-column identifiers → zero matches; the console names no column and no role
+  - `POST /kanban/advance` response body does not contain a `prompt` field
+- **Must not touch:** `POST /kanban/dispatch` handler (existing callers — CLI `dispatch` verb, board drag-drop — must keep working unchanged); `getNextColumn` in `kanban.html` (board-local optimistic predictor only; the console does not get a copy)
+
+### GET /kanban/columns publishes the built-in catalogue instead of this board's columns, so clients offer Researcher and Ticket Updater to a board that has neither
+
+- **Seat:** Intern (complexity 3)
+- **Acceptance:**
+  - `GET /kanban/columns` on this board: `RESEARCHER`, `TICKET UPDATER`, `ACCEPTANCE TESTED` come back with `enabled: false, enabledSource: 'config'`; the five enabled role columns with `enabled: true`
+  - Console's three dropdowns do not include disabled columns as options; enabling Researcher in Setup (no restart) makes it appear, disabling hides it
+  - A card parked in `TICKET UPDATER` by direct DB write still appears in `GET /kanban/board` with its label — disabled ≠ invisible on read paths
+  - `DEFAULT_VISIBLE_AGENTS` is exported from `agentConfig.ts`; `grep` confirms no private static copy remains in `GlobalIntegrationConfigService.ts`
+  - `.agents/skills/**` and `.claude/skills/**` describe the same response shape (diff the two mirrors)
+- **Must not touch:** `/kanban/board`, `/kanban/plan`, and label resolution paths (reads must stay untouched — the response tags, it does not server-side filter); `displayModeOf` / `legacyAliasOf` relationships (enabled must not override those signals)
 

@@ -28162,6 +28162,11 @@
       "prefix": false
     },
     {
+      "path": "/kanban/advance",
+      "method": "POST",
+      "prefix": false
+    },
+    {
       "path": "/teams/create-external",
       "method": "POST",
       "prefix": false

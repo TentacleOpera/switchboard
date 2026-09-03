@@ -25,9 +25,9 @@
     let workspaceProjects = {};
     let activeView = 'dispatch';
 
-    let selectedDispatchCardId = null;
+    let selectedDispatchCardIds = new Set();
     let selectedDispatchColumn = '';
-    let selectedMoveCardId = null;
+    let selectedMoveCardIds = new Set();
     let selectedMoveSourceColumn = '';
     let selectedMoveTargetColumn = '';
     let dispatchStarredOnly = false;
@@ -300,8 +300,8 @@
             if (!opt) return;
             currentWorkspaceRoot = opt.dataset.workspaceRoot || currentWorkspaceRoot;
             currentProject = opt.dataset.project || '__all__';
-            selectedDispatchCardId = null;
-            selectedMoveCardId = null;
+            selectedDispatchCardIds.clear();
+            selectedMoveCardIds.clear();
             // Workspace switch invalidates any in-flight delivery poll — its
             // planId belongs to the previous workspace's board.
             cancelDispatchPoll();
@@ -322,13 +322,10 @@
         });
 
         btnDispatchView?.addEventListener('click', () => {
-            if (!selectedDispatchCardId) return;
-            // The pushed card projection has NO `id` — getEffectiveCard synthesises one
-            // from planId/sessionId for the rendered rows, and `selectedDispatchCardId`
-            // already IS that value. Reading `.id` off a raw allCards entry here sent
-            // `planId=undefined` and the preview always failed to load.
-            const card = allCards.find(c => (c.planId || c.sessionId || c.id) === selectedDispatchCardId);
-            if (card) openDocumentPreview(selectedDispatchCardId, card.planFile);
+            if (selectedDispatchCardIds.size === 0) return;
+            const firstId = selectedDispatchCardIds.values().next().value;
+            const card = allCards.find(c => (c.planId || c.sessionId || c.id) === firstId);
+            if (card) openDocumentPreview(firstId, card.planFile);
         });
 
         btnDispatch?.addEventListener('click', executeDispatch);
@@ -352,10 +349,10 @@
         });
 
         btnMoveView?.addEventListener('click', () => {
-            if (!selectedMoveCardId) return;
-            // See btnDispatchView: `.id` is not a field of the pushed card.
-            const card = allCards.find(c => (c.planId || c.sessionId || c.id) === selectedMoveCardId);
-            if (card) openDocumentPreview(selectedMoveCardId, card.planFile);
+            if (selectedMoveCardIds.size === 0) return;
+            const firstId = selectedMoveCardIds.values().next().value;
+            const card = allCards.find(c => (c.planId || c.sessionId || c.id) === firstId);
+            if (card) openDocumentPreview(firstId, card.planFile);
         });
 
         btnMove?.addEventListener('click', executeMove);
@@ -410,7 +407,9 @@
                 allColumns = raw.filter(c => {
                     if (!c || typeof c.id !== 'string' || seen.has(c.id)) return false;
                     seen.add(c.id);
-                    return true;
+                    // A column whose agent is switched off is not a destination. `enabled`
+                    // absent (older host) ⇒ keep it: never hide a stage on a stale field.
+                    return c.enabled !== false;
                 });
                 populateColumnDropdowns();
             }
@@ -639,8 +638,8 @@
             lockBanner.classList.add('hidden');
         }
 
-        btnDispatch.disabled = locked || !selectedDispatchCardId;
-        btnMove.disabled = locked || !selectedMoveCardId;
+        btnDispatch.disabled = locked || selectedDispatchCardIds.size === 0;
+        btnMove.disabled = locked || selectedMoveCardIds.size === 0;
     }
 
     function getComplexityClass(score) {
@@ -700,18 +699,14 @@
     }
 
     function selectDispatchCard(cardId) {
-        selectedDispatchCardId = cardId;
-        // Selecting a different card cancels any in-flight delivery poll for the
-        // previous card — its chip would otherwise settle the wrong row.
+        if (selectedDispatchCardIds.has(cardId)) {
+            selectedDispatchCardIds.delete(cardId);
+        } else {
+            selectedDispatchCardIds.add(cardId);
+        }
         cancelDispatchPoll();
         clearChip(dispatchStatusChip);
-        if (dispatchCardsList) {
-            const items = dispatchCardsList.querySelectorAll('.cmd-card-row');
-            items.forEach(el => {
-                el.classList.toggle('selected', el.dataset.cardId === cardId);
-            });
-        }
-        updateDispatchActionState();
+        renderDispatchView();
     }
 
     function renderDispatchView() {
@@ -727,17 +722,19 @@
         // Scope to dispatch source column
         const dispatchCol = (dispatchSourceColSelect ? dispatchSourceColSelect.value : '') || selectedDispatchColumn;
         if (dispatchCol) {
-            cards = cards.filter(c => (c.kanbanColumn || c.column) === dispatchCol || c.id === selectedDispatchCardId);
+            cards = cards.filter(c => (c.kanbanColumn || c.column) === dispatchCol || selectedDispatchCardIds.has(c.id));
         }
 
         if (dispatchStarredOnly) {
-            cards = cards.filter(c => Boolean(c.priorityStarred) || c.id === selectedDispatchCardId);
+            cards = cards.filter(c => Boolean(c.priorityStarred) || selectedDispatchCardIds.has(c.id));
         }
 
         // Sort starred first, then complexity
         cards.sort((a, b) => {
-            if (a.id === selectedDispatchCardId) return -1;
-            if (b.id === selectedDispatchCardId) return 1;
+            const aSel = selectedDispatchCardIds.has(a.id);
+            const bSel = selectedDispatchCardIds.has(b.id);
+            if (aSel && !bSel) return -1;
+            if (!aSel && bSel) return 1;
             const starA = a.priorityStarred ? 1 : 0;
             const starB = b.priorityStarred ? 1 : 0;
             if (starA !== starB) return starB - starA;
@@ -756,7 +753,7 @@
         }
 
         cards.forEach(card => {
-            const item = createCardItemElement(card, selectedDispatchCardId === card.id, (selectedCard) => {
+            const item = createCardItemElement(card, selectedDispatchCardIds.has(card.id), (selectedCard) => {
                 selectDispatchCard(selectedCard.id);
             });
             dispatchCardsList.appendChild(item);
@@ -767,13 +764,13 @@
 
     function updateDispatchActionState() {
         const locked = isMissionInFlight();
-        const selectedCard = allCards.find(c => (c.planId || c.sessionId || c.id) === selectedDispatchCardId);
+        const hasSelection = selectedDispatchCardIds.size > 0;
 
         if (btnDispatchView) {
-            btnDispatchView.disabled = !selectedCard;
+            btnDispatchView.disabled = !hasSelection;
         }
 
-        if (selectedCard) {
+        if (hasSelection) {
             if (locked) {
                 if (dispatchStatusChip) {
                     dispatchStatusChip.textContent = 'Locked: Mission in flight';
@@ -792,15 +789,13 @@
     // ── 2. Move View Rendering ─────────────────────────────────────────
 
     function selectMoveCard(cardId) {
-        selectedMoveCardId = cardId;
-        clearChip(moveStatusChip);
-        if (moveCardsList) {
-            const items = moveCardsList.querySelectorAll('.cmd-card-row');
-            items.forEach(el => {
-                el.classList.toggle('selected', el.dataset.cardId === cardId);
-            });
+        if (selectedMoveCardIds.has(cardId)) {
+            selectedMoveCardIds.delete(cardId);
+        } else {
+            selectedMoveCardIds.add(cardId);
         }
-        updateMoveActionState();
+        clearChip(moveStatusChip);
+        renderMoveView();
     }
 
     function renderMoveView() {
@@ -816,17 +811,19 @@
         // Scope to source column
         const sourceCol = moveSourceColSelect?.value;
         if (sourceCol) {
-            cards = cards.filter(c => (c.kanbanColumn || c.column) === sourceCol || c.id === selectedMoveCardId);
+            cards = cards.filter(c => (c.kanbanColumn || c.column) === sourceCol || selectedMoveCardIds.has(c.id));
         }
 
         if (moveStarredOnly) {
-            cards = cards.filter(c => Boolean(c.priorityStarred) || c.id === selectedMoveCardId);
+            cards = cards.filter(c => Boolean(c.priorityStarred) || selectedMoveCardIds.has(c.id));
         }
 
         // Starred first, then moved card rises to top if it was acted on
         cards.sort((a, b) => {
-            if (a.id === selectedMoveCardId) return -1;
-            if (b.id === selectedMoveCardId) return 1;
+            const aSel = selectedMoveCardIds.has(a.id);
+            const bSel = selectedMoveCardIds.has(b.id);
+            if (aSel && !bSel) return -1;
+            if (!aSel && bSel) return 1;
             const starA = a.priorityStarred ? 1 : 0;
             const starB = b.priorityStarred ? 1 : 0;
             if (starA !== starB) return starB - starA;
@@ -845,7 +842,7 @@
         }
 
         cards.forEach(card => {
-            const item = createCardItemElement(card, selectedMoveCardId === card.id, (selectedCard) => {
+            const item = createCardItemElement(card, selectedMoveCardIds.has(card.id), (selectedCard) => {
                 selectMoveCard(selectedCard.id);
             });
             moveCardsList.appendChild(item);
@@ -856,13 +853,13 @@
 
     function updateMoveActionState() {
         const locked = isMissionInFlight();
-        const selectedCard = allCards.find(c => (c.planId || c.sessionId || c.id) === selectedMoveCardId);
+        const hasSelection = selectedMoveCardIds.size > 0;
 
         if (btnMoveView) {
-            btnMoveView.disabled = !selectedCard;
+            btnMoveView.disabled = !hasSelection;
         }
 
-        if (selectedCard) {
+        if (hasSelection) {
             if (locked) {
                 if (moveStatusChip) {
                     moveStatusChip.textContent = 'Locked: Mission in flight';
@@ -1595,101 +1592,98 @@
     }
 
     async function executeDispatch() {
-        if (!selectedDispatchCardId || isMissionInFlight()) return;
-        const cardId = selectedDispatchCardId;
-        const card = allCards.find(c => (c.planId || c.sessionId || c.id) === cardId);
-        if (!card) return;
+        if (selectedDispatchCardIds.size === 0 || isMissionInFlight()) return;
 
         // A new dispatch supersedes any in-flight poll for a previous card.
         cancelDispatchPoll();
 
         // Apply immediate optimistic state (< 100ms)
-        dispatchStatusChip.textContent = 'Dispatching agent...';
+        dispatchStatusChip.textContent = 'Advancing card(s)...';
         dispatchStatusChip.className = 'status-chip pending';
         btnDispatch.disabled = true;
 
+        const planIds = [...selectedDispatchCardIds];
         try {
-            // ack: true → the server returns as soon as the dispatch is committed
-            // (gate pre-flighted, move+delivery fired), not after the paced paste.
-            const res = await fetch('/kanban/dispatch', {
+            const res = await fetch('/kanban/advance', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    plan: cardId,
-                    workspaceRoot: currentWorkspaceRoot,
-                    ack: true
+                    planIds,
+                    workspaceRoot: currentWorkspaceRoot
                 })
             });
 
             const result = await res.json().catch(() => null);
-            // The acked variant returns { success: true, phase: 'dispatching', ... }
-            // for a committed dispatch; 4xx/5xx (gate refusal, no terminals, etc.)
-            // arrive immediately with today's wording and no success chip.
-            if (res.ok && result?.success !== false && result?.phase === 'dispatching') {
-                // The ack carries a SEAT name only when team-scoped routing
-                // resolved one (`teamOverride`); a plain dispatch from this
-                // surface has no origin terminal, so the receiving terminal is
-                // chosen downstream and is not known yet. Say "the <role> seat"
-                // in that case — putting the role in the seat's slot would make
-                // a fallback read exactly like a resolved seat name. The poll
-                // upgrades the chip once the real name lands.
-                const seatName = result?.seat || '';
-                dispatchStatusChip.textContent = seatName
-                    ? `Dispatched — ${seatName} is receiving the prompt`
-                    : `Dispatched — the ${result?.role || 'agent'} seat is receiving the prompt`;
-                dispatchStatusChip.className = 'status-chip pending';
-                // Re-enable the button: the operator is NOT blocked for the paste.
-                btnDispatch.disabled = false;
+            if (res.ok && result?.success) {
+                // Always say how many, so a batch never reads like a single-card advance.
+                const legs = result.moved || [];
+                dispatchStatusChip.textContent = legs.length === 1 && legs[0].count === 1
+                    ? `Advanced ${legs[0].from} → ${legs[0].column || 'next stage'}`
+                    : `Advanced ${result.count} cards — ` +
+                      legs.map(l => `${l.count} from ${l.from} → ${l.column || 'next stage'}`).join(', ');
+                dispatchStatusChip.className = 'status-chip success';
+                selectedDispatchCardIds.clear();
                 renderDispatchView();
-                // Second phase: poll for prompt delivery, settle to success/unknown.
-                pollDispatchDelivery(
-                    result.planId || cardId,
-                    result.dispatchedAtBefore ?? null,
-                    result.deadline || (Date.now() + 60000)
-                );
             } else {
-                const errMsg = result?.error || 'Dispatch outcome unknown';
-                dispatchStatusChip.textContent = errMsg;
-                dispatchStatusChip.className = 'status-chip unknown';
+                dispatchStatusChip.textContent = result?.error || `Advance failed (HTTP ${res.status})`;
+                dispatchStatusChip.className = 'status-chip error';
                 btnDispatch.disabled = false;
             }
         } catch (err) {
-            dispatchStatusChip.textContent = 'Outcome unknown (connection dropped)';
+            dispatchStatusChip.textContent = 'Advance failed (offline)';
             dispatchStatusChip.className = 'status-chip unknown';
             btnDispatch.disabled = false;
         }
     }
 
     async function executeMove() {
-        if (!selectedMoveCardId || isMissionInFlight()) return;
-        const cardId = selectedMoveCardId;
+        if (selectedMoveCardIds.size === 0 || isMissionInFlight()) return;
         const targetCol = selectedMoveTargetColumn;
         if (!targetCol) return;
 
+        const cardIds = [...selectedMoveCardIds];
         // Apply immediate optimistic DOM move (< 100ms)
-        pendingMoves.set(cardId, targetCol);
-        moveStatusChip.textContent = `Moved to ${targetCol} (syncing...)`;
+        for (const cardId of cardIds) {
+            pendingMoves.set(cardId, targetCol);
+        }
+        moveStatusChip.textContent = cardIds.length === 1
+            ? `Moved to ${targetCol} (syncing...)`
+            : `Moved ${cardIds.length} cards to ${targetCol} (syncing...)`;
         moveStatusChip.className = 'status-chip pending';
         renderMoveView();
 
         try {
-            const res = await fetch('/kanban/move', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    planId: cardId,
-                    targetColumn: targetCol,
-                    workspaceRoot: currentWorkspaceRoot
-                })
-            });
+            let allOk = true;
+            let lastBody = null;
+            for (const cardId of cardIds) {
+                const res = await fetch('/kanban/move', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        planId: cardId,
+                        targetColumn: targetCol,
+                        workspaceRoot: currentWorkspaceRoot
+                    })
+                });
+                const body = await res.json().catch(() => null);
+                if (!res.ok) {
+                    allOk = false;
+                    lastBody = body;
+                    pendingMoves.delete(cardId);
+                }
+            }
 
-            if (res.ok) {
-                moveStatusChip.textContent = `Moved to ${targetCol}`;
+            if (allOk) {
+                moveStatusChip.textContent = cardIds.length === 1
+                    ? `Moved to ${targetCol}`
+                    : `Moved ${cardIds.length} cards to ${targetCol}`;
                 moveStatusChip.className = 'status-chip success';
+                selectedMoveCardIds.clear();
                 renderMoveView();
             } else {
-                pendingMoves.delete(cardId);
-                moveStatusChip.textContent = 'Move failed on server';
+                moveStatusChip.textContent = lastBody?.seam === 'moveCard'
+                    ? 'Move unavailable on this host (not a card problem)'
+                    : (lastBody?.error || 'Move failed on server');
                 moveStatusChip.className = 'status-chip error';
                 renderMoveView();
             }

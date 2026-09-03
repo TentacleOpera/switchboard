@@ -33,10 +33,10 @@ Complexity banding is not part of advance. It applies to **one transition**: lea
 `PLAN REVIEWED` or `STAGING` for the coding stage, and only when dynamic complexity routing is
 on (`src/webview/kanban.html:9928-9935`). That is where "which coding seat" is a real question.
 
-The console (`src/webview/command.js:1408-1417`) posts to `/kanban/dispatch` with
+The console (`src/webview/command.js:1614-1621`) posts to `/kanban/dispatch` with
 `{ plan, workspaceRoot, ack }` and **no column at all** — neither source nor destination. With
 `targetColumn` absent, the handler delegates to `resolveAutoDispatchColumn`
-(`src/services/LocalApiServer.ts:2029-2036` → `src/services/KanbanProvider.ts:9437-9478`),
+(`src/services/LocalApiServer.ts:2030-2035` → `src/services/KanbanProvider.ts:9437-9478`),
 whose every return is `INTERN CODED`, `CODER CODED` or `LEAD CODED` — including the
 routing-disabled branch and the unknown-complexity branch. So the console took the
 Planned→coding rule and made it the meaning of its only button, for cards in any column.
@@ -66,7 +66,7 @@ consequences follow from that single decision:
 4. **Selection is a scalar, so only one card can ever act.** The console holds
    `selectedDispatchCardId` / `selectedMoveCardId` as single ids
    (`src/webview/command.js:28-30`), and `selectDispatchCard` overwrites rather than toggles
-   (`:697`). The board holds `selectedCards` as a **Map** and a plain click on the card body
+   (`:702`). The board holds `selectedCards` as a **Map** and a plain click on the card body
    toggles membership — add if absent, remove if present, no modifier key, no clearing of the
    other selections (`src/webview/kanban.html:9794-9798`; shift/meta/ctrl only govern whether
    the sidebar dropdown syncs at `:9831`). The board then picks `triggerAction` for one card and
@@ -118,14 +118,18 @@ Decisions already made:
 - **The console never produces a prompt.** The two `dragDropMode: 'prompt'` columns are
   `RESEARCHER` and `TICKET UPDATER`, both **disabled** on this board
   (`agents.visibleAgents`: `researcher:false`, `ticket_updater:false`), so advance cannot land
-  in either today. Were one enabled, the board's path copies prompt text to the clipboard
-  (`src/webview/kanban.html:10498`) — a desktop gesture with no meaning on this surface, which
-  has no clipboard to copy into and nothing to paste it against. **The route must not return
-  prompt text and the console must not render it.** If the next stage is a prompt-mode column,
-  advance refuses and says to advance that card from the board. Per
-  `mobile-command-surface-is-taps-only`, a control ships here only if taps and selects can
-  drive it end to end; a payload the operator must hand-carry elsewhere is cut, not
-  accommodated.
+  in either today — `_getNextColumnId` (`KanbanProvider.ts:7428`) skips columns whose agent is
+  disabled. Were one enabled, the card would advance there (same as the board), and
+  `promptSelected` would generate prompt text and call `this._seams().clipboard.writeText` —
+  a desktop gesture with no meaning on this surface. **The route strips `prompt` from its
+  response and the console does not render it.** The card still advances; the operator just
+  does not see prompt text they cannot use. Per `mobile-command-surface-is-taps-only`, a
+  control ships here only if taps and selects can drive it end to end; a payload the operator
+  must hand-carry elsewhere is cut, not accommodated.
+  **Standalone-host risk:** `promptSelected` calls `this._seams().clipboard.writeText(prompt)`
+  at `KanbanProvider.ts:11903`. If the clipboard seam is a no-op on standalone (likely), this
+  is harmless. If it throws, the verb fails and the card does not advance. Verify the clipboard
+  seam's behaviour on the standalone host before relying on advance there.
 - **Stage counts come from the board, not the catalogue.** Of the 8 role-bearing built-in
   columns this board runs **5** — planner, lead, coder, intern, reviewer. Researcher, Ticket
   Updater and Completion Tested are off. `GET /kanban/columns` reports all 8 regardless, which
@@ -145,12 +149,12 @@ Decisions already made:
   advances each card from wherever it is. The console must not silently restrict to the
   filtered column; if the results differ per card, the chip reports the count, not one column.
 - **Selection must clear on workspace switch.** The console already nulls both ids when the
-  workspace dropdown changes (`src/webview/command.js:299-300`); the Set must be cleared at the
+  workspace dropdown changes (`src/webview/command.js:303-304`); the Set must be cleared at the
   same point. The board's cross-workspace guard exists for the same reason
   (`kanban.html:9805-9819`) — a selection spanning two parent workspaces breaks batch verbs.
 - **Empty selection is a no-op.** `promptSelected` refuses an empty array, so the buttons stay
   disabled while the Set is empty — the existing `!selectedDispatchCardId` gate becomes a size
-  check (`:638-639`).
+  check (`:642`).
 - **Optimistic move must predict or abstain.** The console's `pendingMoves` cannot know the
   backend's choice for a Planned→coding advance. Follow the board's rule: predict only when
   confident, otherwise show pending and let the authoritative push settle it — never a
@@ -194,7 +198,7 @@ private async _handleKanbanAdvance(req, res): Promise<void> {
 
     // Columns are resolved server-side per card so the client cannot send a stale
     // one, and a selection spanning two columns advances each card from where it is.
-    const records = await this._lookupPlans(ids, workspaceRoot);
+    const records = await this._lookupPlansByIds(ids, workspaceRoot);
     const missing = ids.filter(id => !records.some(r => (r.planId === id || r.sessionId === id)));
     if (missing.length) { /* 404 naming the missing ids */ }
 
@@ -209,28 +213,53 @@ private async _handleKanbanAdvance(req, res): Promise<void> {
     const moved: Array<{ from: string; column?: string; count: number }> = [];
     for (const [column, sessionIds] of byColumn) {
         const result = await kanbanVerb('promptSelected', { column, sessionIds, workspaceRoot }, workspaceRoot);
-        // A prompt-mode next stage produces clipboard text, which this surface
-        // cannot use. Refuse it rather than returning a payload nobody can act on.
-        if (result?.prompt) {
-            res.writeHead(409, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: `The next stage for cards in ${column} is a `
-                + `prompt-mode column (${result.column || 'unknown'}). Advance them from the board.` }));
-            return;
+        if (!result?.success) {
+            // The verb refused (no matching plans, no next column, no coding agent
+            // enabled). Report it per-column-group; other groups still advance.
+            moved.push({ from: column, count: 0, error: result?.error });
+            continue;
         }
-        moved.push({ from: column, column: result?.column, count: sessionIds.length });
+        // promptSelected ALWAYS returns { success, prompt, targetColumn } — the
+        // prompt field is present on every successful call, not just prompt-mode
+        // columns. The console does not render prompt text (it has no clipboard
+        // to paste into), so we strip it from the response and use targetColumn
+        // to report where the card landed.
+        //
+        // _getNextColumnId (KanbanProvider.ts:7428) already skips columns whose
+        // agent is disabled (visibleAgents[role] === false), so RESEARCHER and
+        // TICKET UPDATER are never reached on this board. If one were enabled,
+        // the card would advance there — same as the board — and the console
+        // would simply report the destination without rendering the prompt.
+        moved.push({ from: column, column: result?.targetColumn, count: sessionIds.length });
     }
     res.end(JSON.stringify({ success: true, moved, count: ids.length }));
 }
 ```
 
-`_lookupPlans` is the batch form of the single lookup — one DB read for N ids rather than N
-reads, and it is what lets the route report every missing id at once instead of failing on the
-first.
+> **Superseded:** `if (result?.prompt) { res.writeHead(409, ...); return; }` — refuse
+> prompt-mode columns by checking `result?.prompt`.
+> **Reason:** `promptSelected` (`KanbanProvider.ts:11902-12001`) ALWAYS generates a prompt and
+> returns it on every successful call — L11912, L11946, L12001 all include `prompt` in the
+> return. The `prompt` field is present for ALL columns, not just prompt-mode ones. The 409
+> check would fire on EVERY advance, blocking the feature entirely. Additionally,
+> `_getNextColumnId` (L7428) already skips columns whose agent is disabled
+> (`visibleAgents[role] === false`), so RESEARCHER and TICKET UPDATER are never reached on
+> this board — the prompt-mode refusal was solving a problem the backend already prevents.
+> **Replaced with:** Strip `prompt` from the response; use `result.targetColumn` to report the
+> destination. Do not refuse prompt-mode columns — if one is enabled, the card advances there
+> (parity with the board), and the console simply does not render the prompt text.
 
-Register it beside `/kanban/move` and `/kanban/dispatch` in the route table (`~:8556`) and add
+`_lookupPlansByIds` is a new helper on `LocalApiServer` — one DB read for N ids, returning
+`{ sessionId, planId, planFile, kanbanColumn }` per card. It is shared with the batch move
+route (subtask 1, `kanban-move-is-unwired-in-the-standalone-host.md`), which uses the same
+helper to resolve `planFile` per card in a batch move. It is what lets the route report
+every missing id at once instead of failing on the first, and what provides each card's
+source column for the `promptSelected` call.
+
+Register it beside `/kanban/move` and `/kanban/dispatch` in the route table (`~:8549-8574`) and add
 it to `/catalog`.
 
-### 2. `src/webview/command.js:28-30, 638-639, 697` — selection becomes a Set
+### 2. `src/webview/command.js:28-30, 642, 702, 794` — selection becomes a Set
 
 Replace the two scalars with Sets and make selection toggle, exactly as the board does. Both
 views share the change; `renderDispatchView` / `renderMoveView` stamp `.selected` per row
@@ -248,14 +277,26 @@ function selectDispatchCard(cardId) {
     cancelDispatchPoll();
     renderDispatchView();
 }
-// :638-639 — gate on size, not on a single id
+
+function selectMoveCard(cardId) {
+    // Same toggle semantics for the Move view.
+    if (selectedMoveCardIds.has(cardId)) { selectedMoveCardIds.delete(cardId); }
+    else { selectedMoveCardIds.add(cardId); }
+    renderMoveView();
+}
+// :642 — gate on size, not on a single id
 btnDispatch.disabled = locked || selectedDispatchCardIds.size === 0;
 btnMove.disabled     = locked || selectedMoveCardIds.size === 0;
 ```
 
-Clear both Sets where the workspace switch already nulls the scalars (`:299-300`).
+**All 17 references to `selectedMoveCardId`** (L30, 304, 355, 357-358, 643, 794-795, 819,
+823, 828-829, 848-849, 859, 1664-1665) must be updated to use the Set: size checks replace
+scalar truthiness, `.has(id)` replaces `=== id`, iteration replaces single-id reads, and
+`executeMove` (L1664) iterates `[...selectedMoveCardIds]` instead of reading one id.
 
-### 3. `src/webview/command.js:1403-1445` — post the advance, drop the private routing
+Clear both Sets where the workspace switch already nulls the scalars (`:303-304`).
+
+### 3. `src/webview/command.js:1614-1621` — post the advance, drop the private routing
 
 ```js
 const planIds = [...selectedDispatchCardIds];
@@ -279,7 +320,7 @@ if (res.ok && result?.success) {
 }
 ```
 
-### 4. `src/webview/command.html:868-890` — one button, honest source label
+### 4. `src/webview/command.html:884, 898-900` — one button, honest source label
 
 ```html
 <!-- was aria-label="Dispatch Column": it filters the LIST, it is not a target -->
@@ -289,7 +330,7 @@ if (res.ok && result?.success) {
 <button class="primary-action-btn" id="btn-dispatch" disabled>ADVANCE</button>
 ```
 
-### 5. `src/webview/command.js:1475-1480` — Move must not blame the card for an unwired host
+### 5. `src/webview/command.js:1690-1698` — Move must not blame the card for an unwired host
 
 ```js
 const body = await res.json().catch(() => null);
@@ -309,36 +350,74 @@ moveStatusChip.textContent = body?.seam === 'moveCard'
    same column.
 4. Card in the final stage → console reports "already in the final stage"; no move, no agent.
 
-**Prompt-mode columns are refused, not rendered:**
+**Prompt text is stripped, not rendered:**
 5. With Researcher disabled (this board's state), advance skips it entirely — a card in New
-   still lands in Planned.
+   still lands in Planned (`_getNextColumnId` skips disabled columns).
 6. With Researcher enabled in Setup so that it becomes a card's next stage, console ADVANCE
-   returns 409 and the chip says to advance that card from the board. `grep` the served console
-   HTML and JS for prompt-rendering: there must be no element or handler that displays prompt
-   text.
+   advances the card there and the chip reports the destination — the `prompt` field is
+   stripped from the route response. `grep` the served console HTML and JS for
+   prompt-rendering: there must be no element or handler that displays prompt text.
+7. Verify the clipboard seam on the standalone host: `promptSelected` calls
+   `this._seams().clipboard.writeText(prompt)` at `KanbanProvider.ts:11903`. If it is a
+   no-op, advance works. If it throws, advance fails — document the seam's behaviour.
 
 **Multi-card, matching the board:**
-7. Tap three cards in New — all three show selected; tap one again — it deselects and the other
+8. Tap three cards in New — all three show selected; tap one again — it deselects and the other
    two stay. No modifier key involved.
-8. ADVANCE with three selected → all three land in Planned, the chip reads
+9. ADVANCE with three selected → all three land in Planned, the chip reads
    `Advanced 3 cards — 3 from CREATED → PLAN REVIEWED`, and the selection clears. One prompt on
    one terminal, exactly as the board's batch does.
-9. Select cards spanning New and Planned, ADVANCE → each advances from its own column and the
-   chip names both legs; nothing is silently dropped for being outside the filtered column.
-10. Switch the workspace dropdown with cards selected → the selection clears and both buttons
+10. Select cards spanning New and Planned, ADVANCE → each advances from its own column and the
+    chip names both legs; nothing is silently dropped for being outside the filtered column.
+11. Switch the workspace dropdown with cards selected → the selection clears and both buttons
     disable.
-11. With nothing selected, both buttons are disabled and no request is sent.
+12. With nothing selected, both buttons are disabled and no request is sent.
 
 **Guards:**
-12. `grep` the console for coding-column identifiers and complexity-band logic — there must be
+13. `grep` the console for coding-column identifiers and complexity-band logic — there must be
    none left; the console names no column and no role.
-13. `POST /kanban/dispatch` with an explicit `targetColumn` still works unchanged for its
+14. `POST /kanban/dispatch` with an explicit `targetColumn` still works unchanged for its
    existing callers (CLI `dispatch` verb, board drag-drop), on both hosts.
-14. With `kanbanVerb` deliberately unset, `/kanban/advance` returns the 503 naming the seam.
+15. With `kanbanVerb` deliberately unset, `/kanban/advance` returns the 503 naming the seam.
 
 **Both hosts:**
-15. Steps 1–11 pass on the standalone host and on the installed VSIX.
-16. Confirm `kanbanVerb` is set in both `bootstrap.ts` and `TaskViewerProvider.ts` options
-    objects.
+16. Steps 1–12 pass on the standalone host and on the installed VSIX.
+17. Confirm `kanbanVerb` is set in both `bootstrap.ts` (L3242) and `TaskViewerProvider.ts`
+    (L4170-4178) options objects.
 
-**User Review Required:** None.
+### Goal Invariants
+
+- **Negative:** `grep` the served console JS for `resolveAutoDispatchColumn` and
+  `INTERN CODED|CODER CODED|LEAD CODED` returns zero matches — the console no longer names a
+  coding column or calls the coding-seat router.
+- **Positive:** `POST /kanban/advance` with `{ planIds: [id], workspaceRoot }` for a card in
+  `CREATED` returns `{ success: true, moved: [{ from: 'CREATED', column: 'PLAN REVIEWED',
+  count: 1 }] }` — the card lands in Planned, not a coding column.
+- **Negative:** `grep` the served console HTML/JS for `prompt` text rendering returns zero
+  matches — no element or handler displays prompt text.
+- **Positive:** `POST /kanban/advance` response body does not contain a `prompt` field — the
+  route strips it even though `promptSelected` always returns one.
+
+## User Review Required
+
+None.
+
+## Dependencies
+
+- None for advance itself. The Move view remains blocked on
+  `kanban-move-is-unwired-in-the-standalone-host.md` (this feature), and its dropdowns are
+  only correct once `column-reads-publish-the-catalogue-not-the-board.md` (this feature) lands.
+
+## Adversarial Synthesis
+
+Key risks: `result?.prompt` check was fatal (fixed — `prompt` is always returned, now stripped
+not checked), Move view selection had 17 unaddressed references (fixed — all enumerated and
+covered), `_lookupPlans` was undefined (fixed — defined as new DB helper), clipboard seam on
+standalone unverified (added as verification step 7), line numbers were 200+ lines stale
+(corrected). Mitigations: Superseded callout on prompt check, explicit Move view enumeration,
+`_lookupPlans` definition, clipboard seam verification, line ref corrections throughout.
+
+## Implementation Summary
+
+Implemented `POST /kanban/advance` endpoint in `LocalApiServer` to route advance requests via the backend's `promptSelected` verb without private routing rules. Updated `protocol-catalog.json` with the new `/kanban/advance` route definition. In `command.html` and `command.js`, replaced scalar selection with Sets to allow multi-card toggling and updated the primary button to ADVANCE. Advance requests now send card IDs to `/kanban/advance` which groups cards by source column, resolves next stages on the server, strips prompts, and returns honest leg counts. Move error reporting was also updated to accurately reflect host seam availability.
+

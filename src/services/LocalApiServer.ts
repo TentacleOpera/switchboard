@@ -33,6 +33,7 @@ import { instantiateExternalHeadedTeam, resolveExternalTeamTemplate } from './ag
 import { parseComplexityScore, getFallbackRole } from './complexityScale';
 import {
     DEFAULT_KANBAN_COLUMNS,
+    DEFAULT_VISIBLE_AGENTS,
     DISPLAY_MODE_COLUMNS,
     DISPLAY_ONLY_COLUMN_LABELS,
     LEGACY_COLUMN_LABELS,
@@ -1898,6 +1899,130 @@ export class LocalApiServer {
             console.error('[LocalApiServer] kanbanDispatch error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'kanbanDispatch failed' }));
+        }
+    }
+
+    /**
+     * Look up multiple plans by an array of identifiers (planId, sessionId, or plan-file path).
+     * Returns resolved records with { sessionId, planId, planFile, kanbanColumn }.
+     */
+    private async _lookupPlansByIds(
+        ids: string[],
+        workspaceRoot?: string
+    ): Promise<Array<{ sessionId: string; planId: string; planFile: string; kanbanColumn: string }>> {
+        const db = await this._options.getKanbanDatabase?.(workspaceRoot || this._options.workspaceRoot || '');
+        if (!db) {
+            return [];
+        }
+        const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
+        const records: Array<{ sessionId: string; planId: string; planFile: string; kanbanColumn: string }> = [];
+        for (const id of ids) {
+            let rec: any = (await db.resolvePlanByAnyId?.(id)) ?? (await db.getPlanByPlanId?.(id)) ?? (await db.getPlanBySessionId?.(id));
+            if (!rec && (id.includes('/') || id.includes('\\') || id.endsWith('.md'))) {
+                rec = await db.getPlanByPlanFile?.(id, wsId);
+            }
+            if (!rec && db.resolvePlanIdentifier) {
+                rec = await db.resolvePlanIdentifier(id, wsId);
+            }
+            if (rec) {
+                records.push({
+                    sessionId: rec.sessionId || rec.planId,
+                    planId: rec.planId || rec.sessionId,
+                    planFile: rec.planFile || '',
+                    kanbanColumn: rec.kanbanColumn || ''
+                });
+            }
+        }
+        return records;
+    }
+
+    /**
+     * POST /kanban/advance — advance one or more cards to their next column/stage.
+     * Advance = the board's own gesture: send the card and the column it is IN.
+     * The backend resolves the next stage (_advanceCards), applies complexity
+     * banding where it belongs (leaving PLAN REVIEWED / STAGING), and honours the
+     * CLI-triggers gate. This route adds no routing logic of its own — by design.
+     *
+     * Body: { planIds?: string[], planId?: string, plan?: string, workspaceRoot?: string }
+     * Response: { success: true, moved: Array<{ from: string, column?: string, count: number, error?: string }>, count: number }
+     */
+    private async _handleKanbanAdvance(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+
+        const kanbanVerb = this._options.kanbanVerb;
+        if (!kanbanVerb) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                error: 'Advance not available: the kanbanVerb seam is not wired in this host\'s composition root.',
+                seam: 'kanbanVerb'
+            }));
+            return;
+        }
+
+        try {
+            const body = await this._parseJsonBody(req);
+            // One card or many — the verb underneath has always taken an array, and the
+            // board sends N through the same path. `planId` stays accepted so existing
+            // single-card callers keep working.
+            const ids = Array.isArray(body?.planIds) && body.planIds.length
+                ? body.planIds.map((v: unknown) => String(v).trim()).filter(Boolean)
+                : [String(body?.planId || body?.plan || '').trim()].filter(Boolean);
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            if (ids.length === 0) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Missing required field: planIds or planId' }));
+                return;
+            }
+
+            // Columns are resolved server-side per card so the client cannot send a stale
+            // one, and a selection spanning two columns advances each card from where it is.
+            const records = await this._lookupPlansByIds(ids, workspaceRoot);
+            const missing = ids.filter(id => !records.some(r => (r.planId === id || r.sessionId === id || r.planFile === id)));
+            if (missing.length) {
+                res.writeHead(404, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: `Plan(s) not found: ${missing.join(', ')}` }));
+                return;
+            }
+
+            // Group by source column: promptSelected takes one column per call, and the
+            // board's own path is likewise per-column.
+            const byColumn = new Map<string, string[]>();
+            for (const r of records) {
+                const key = r.kanbanColumn;
+                (byColumn.get(key) ?? byColumn.set(key, []).get(key)!).push(r.sessionId || r.planId);
+            }
+
+            const moved: Array<{ from: string; column?: string; count: number; error?: string }> = [];
+            for (const [column, sessionIds] of byColumn) {
+                const result = await kanbanVerb('promptSelected', { column, sessionIds, workspaceRoot }, workspaceRoot);
+                if (!result?.success) {
+                    // The verb refused (no matching plans, no next column, no coding agent
+                    // enabled). Report it per-column-group; other groups still advance.
+                    moved.push({ from: column, count: 0, error: result?.error });
+                    continue;
+                }
+                // promptSelected ALWAYS returns { success, prompt, targetColumn } — the
+                // prompt field is present on every successful call, not just prompt-mode
+                // columns. The console does not render prompt text (it has no clipboard
+                // to paste into), so we strip it from the response and use targetColumn
+                // to report where the card landed.
+                //
+                // _getNextColumnId (KanbanProvider.ts:7428) already skips columns whose
+                // agent is disabled (visibleAgents[role] === false), so RESEARCHER and
+                // TICKET UPDATER are never reached on this board. If one were enabled,
+                // the card would advance there — same as the board — and the console
+                // would simply report the destination without rendering the prompt.
+                moved.push({ from: column, column: result?.targetColumn, count: sessionIds.length });
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, moved, count: ids.length }));
+        } catch (err) {
+            console.error('[LocalApiServer] kanbanAdvance error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'kanbanAdvance failed' }));
         }
     }
 
@@ -4013,6 +4138,54 @@ export class LocalApiServer {
     }
 
     /**
+     * Look up plans across an array of IDs/keys to resolve sessionId, planId, planFile, and kanbanColumn.
+     */
+    private async _lookupPlansByIds(
+        ids: string[],
+        workspaceRoot?: string
+    ): Promise<Array<{ id: string; sessionId?: string; planId?: string; planFile?: string; kanbanColumn?: string }>> {
+        const db = await this._options.getKanbanDatabase?.(workspaceRoot);
+        if (!db) {
+            return ids.map(id => ({ id, sessionId: id, planId: id }));
+        }
+        try {
+            await db.ensureReady?.();
+            const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
+            const results: Array<{ id: string; sessionId?: string; planId?: string; planFile?: string; kanbanColumn?: string }> = [];
+            for (const id of ids) {
+                let rec: any = null;
+                if (typeof db.resolvePlanByAnyId === 'function') {
+                    rec = await db.resolvePlanByAnyId(id);
+                } else {
+                    rec = (await db.getPlanByPlanId?.(id)) ?? (await db.getPlanBySessionId?.(id));
+                }
+                if (!rec && (id.includes('/') || id.includes('\\') || id.endsWith('.md'))) {
+                    rec = await db.getPlanByPlanFile?.(id, wsId);
+                }
+                if (rec) {
+                    results.push({
+                        id,
+                        sessionId: rec.sessionId || rec.planId || id,
+                        planId: rec.planId || rec.sessionId || id,
+                        planFile: rec.planFile,
+                        kanbanColumn: rec.kanbanColumn
+                    });
+                } else {
+                    results.push({
+                        id,
+                        sessionId: id,
+                        planId: id,
+                        planFile: (id.includes('/') || id.includes('\\') || id.endsWith('.md')) ? id : undefined
+                    });
+                }
+            }
+            return results;
+        } catch {
+            return ids.map(id => ({ id, sessionId: id, planId: id }));
+        }
+    }
+
+    /**
      * POST /kanban/move — move a kanban card via the running extension so the move
      * inherits the feature→subtask cascade, the Linear/ClickUp sync fan-out, and the
      * board refresh. Reached by the kanban_operations fallback script over the
@@ -4030,7 +4203,7 @@ export class LocalApiServer {
      * - **Supplied** ⇒ that root is used verbatim or the move fails naming that root.
      *   An explicit root is NEVER overridden — the search runs only on the omitted path.
      *
-     * Body: { sessionId?: string, planId?: string, targetColumn: string, workspaceRoot?: string, planFile?: string }.
+     * Body: { sessionId?: string, planId?: string, planIds?: string[], targetColumn: string, workspaceRoot?: string, planFile?: string }.
      */
     private async _handleKanbanMove(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
@@ -4041,22 +4214,31 @@ export class LocalApiServer {
         const moveCard = this._options.moveCard;
         if (!moveCard) {
             res.writeHead(503, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: 'Kanban move not available' }));
+            res.end(JSON.stringify({
+                error: 'Kanban move not available: the moveCard seam is not wired in this host\'s '
+                     + 'composition root. Reads work; writes do not. This is a wiring defect, not an outage.',
+                seam: 'moveCard'
+            }));
             return;
         }
 
         try {
             const body = await this._parseJsonBody(req);
-            const sessionId = String(body?.sessionId || '').trim();
-            const planId = String(body?.planId || '').trim();
-            const effectiveKey = sessionId || planId;
+            const isBatch = Array.isArray(body?.planIds);
+            const ids: string[] = isBatch
+                ? body.planIds.map((v: unknown) => String(v).trim()).filter(Boolean)
+                : [String(body?.sessionId || body?.planId || '').trim()].filter(Boolean);
             const rawColumn = String(body?.targetColumn || '').trim();
             const explicitRoot = String(body?.workspaceRoot || '').trim();
             const defaultRoot = String(this._options.workspaceRoot || '').trim();
-            const planFile = body?.planFile ? String(body.planFile).trim() : undefined;
-            if (!effectiveKey || !rawColumn) {
+            const singlePlanFile = body?.planFile ? String(body.planFile).trim() : undefined;
+            if (ids.length === 0 || !rawColumn) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Missing required fields: sessionId/planId and targetColumn' }));
+                res.end(JSON.stringify({
+                    error: isBatch
+                        ? 'Missing required fields: planIds and targetColumn'
+                        : 'Missing required fields: sessionId/planId and targetColumn'
+                }));
                 return;
             }
 
@@ -4071,6 +4253,7 @@ export class LocalApiServer {
                 // Windows, where both `_allRoots` and an absolute plan path are
                 // backslash-separated — the fast path would never match and every
                 // multi-root move would silently fall back to the default root.
+                const effectiveKey = ids[0];
                 const keyIsPathShaped =
                     effectiveKey.includes('/') || effectiveKey.includes('\\') || effectiveKey.endsWith('.md');
                 let pathResolved: string | undefined;
@@ -4140,20 +4323,42 @@ export class LocalApiServer {
                 return;
             }
 
-            const result = await moveCard(resolvedRoot, effectiveKey, targetColumn, planFile);
-            const responsePayload = {
-                ...result,
-                resolvedWorkspaceRoot: resolvedRoot,
-                rootResolution
-            };
-            res.writeHead(result.success ? 200 : 502, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(responsePayload));
+            const records = await this._lookupPlansByIds(ids, resolvedRoot);
+            const results: Array<{ id: string; success: boolean; error?: string; reason?: string }> = [];
+            for (const rec of records) {
+                const planFile = rec.planFile || (ids.length === 1 ? singlePlanFile : undefined);
+                const targetId = rec.sessionId || rec.planId || rec.id;
+                const result = await moveCard(resolvedRoot, targetId, targetColumn, planFile);
+                results.push({ id: rec.id || targetId, ...result });
+            }
+
+            if (isBatch) {
+                const failed = results.filter(r => !r.success);
+                res.writeHead(failed.length ? 207 : 200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: failed.length === 0,
+                    count: results.length,
+                    results,
+                    resolvedWorkspaceRoot: resolvedRoot,
+                    rootResolution
+                }));
+            } else {
+                const singleResult = results[0] || { success: false, error: 'No results' };
+                const responsePayload = {
+                    ...singleResult,
+                    resolvedWorkspaceRoot: resolvedRoot,
+                    rootResolution
+                };
+                res.writeHead(singleResult.success ? 200 : 502, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(responsePayload));
+            }
         } catch (err) {
             console.error('[LocalApiServer] kanbanMove error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'kanbanMove failed' }));
         }
     }
+
 
     /**
      * POST /teams/create-external — create an external-headed team (non-terminal agent lead).
@@ -7219,6 +7424,21 @@ export class LocalApiServer {
         return await db.getBoard(wsId);
     }
 
+    private async _resolveVisibleAgents(db: any): Promise<{ agents: Record<string, boolean>; source: 'config' | 'default' | 'unknown' }> {
+        if (!db) {
+            return { agents: {}, source: 'unknown' };
+        }
+        try {
+            const raw = db.getConfigJsonSync?.('agents.visibleAgents', undefined);
+            if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+                return { agents: raw as Record<string, boolean>, source: 'config' };
+            }
+            return { agents: DEFAULT_VISIBLE_AGENTS, source: 'default' };
+        } catch {
+            return { agents: DEFAULT_VISIBLE_AGENTS, source: 'default' };
+        }
+    }
+
     /**
      * Canonicalise a workspace root path with a robust fallback chain:
      * fs.realpathSync.native() -> fs.realpathSync() -> path.resolve().
@@ -7388,13 +7608,31 @@ export class LocalApiServer {
      *  display-only labels (e.g. AUTOCODE) that name no writable column. */
     private async _handleGetColumns(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         await this._handleReadEndpoint(req, res, async () => {
-            const builtIn = DEFAULT_KANBAN_COLUMNS;
-            let custom: { id: string; label: string; labelSource: string; displayModeOf?: string; legacyAliasOf?: string }[] = [];
             const db = await this._resolveDbFromQuery(req);
+            // Which stages does THIS board run? Every built-in column carries its role and
+            // agents.visibleAgents maps role → bool, so publish the join rather than the
+            // catalogue. Tagged, not filtered: a disabled column can still hold historical
+            // cards, and callers use this endpoint to translate storage ids to labels.
+            const visible = await this._resolveVisibleAgents(db);
+            const builtIn = DEFAULT_KANBAN_COLUMNS.map(c => {
+                if (!c.role) return { ...c, enabled: true, enabledSource: 'structural' as const };
+                const configured = Object.prototype.hasOwnProperty.call(visible.agents, c.role);
+                if (visible.source === 'unknown') {
+                    // Neither config nor defaults reachable — treat as enabled (visible-failure
+                    // choice: an extra column is recoverable; a silently missing stage is not).
+                    return { ...c, enabled: true, enabledSource: 'unknown' as const };
+                }
+                return {
+                    ...c,
+                    enabled: configured ? visible.agents[c.role] !== false : DEFAULT_VISIBLE_AGENTS[c.role] !== false,
+                    enabledSource: configured ? visible.source : 'default' as const
+                };
+            });
+            let custom: { id: string; label: string; labelSource: string; enabled: boolean; displayModeOf?: string; legacyAliasOf?: string }[] = [];
             if (db) {
                 try {
                     const board = await this._resolveBoard(db);
-                    const builtInIds = new Set(builtIn.map(c => c.id));
+                    const builtInIds = new Set(DEFAULT_KANBAN_COLUMNS.map(c => c.id));
                     let customCols: CustomKanbanColumnConfig[] = [];
                     try {
                         customCols = parseCustomKanbanColumns(db.getConfigJsonSync?.('kanban.customColumns', []));
@@ -7418,6 +7656,7 @@ export class LocalApiServer {
                         return {
                             id,
                             ...resolved,
+                            enabled: true,
                             ...(displayMode?.displayModeOf ? { displayModeOf: displayMode.displayModeOf } : {}),
                             ...(legacy?.legacyAliasOf ? { legacyAliasOf: legacy.legacyAliasOf } : {})
                         };
@@ -8548,6 +8787,8 @@ export class LocalApiServer {
                 await this._handleUpdateClickUpTask(taskId, req, res);
             } else if (pathname === '/kanban/dispatch' && req.method === 'POST') {
                 await this._handleKanbanDispatch(req, res);
+            } else if (pathname === '/kanban/advance' && req.method === 'POST') {
+                await this._handleKanbanAdvance(req, res);
             } else if (pathname === '/teams/create-external' && req.method === 'POST') {
                 await this._handleTeamsCreateExternal(req, res);
             } else if (pathname.startsWith('/teams/') && pathname.endsWith('/reports') && req.method === 'GET') {

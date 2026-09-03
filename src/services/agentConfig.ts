@@ -160,6 +160,8 @@ export interface KanbanColumnDefinition {
     dragDropMode: 'cli' | 'prompt' | 'disabled';
     triggerPrompt?: string;
     featureOnly?: boolean;
+    enabled?: boolean;
+    enabledSource?: 'config' | 'default' | 'structural' | 'unknown';
 }
 
 export interface KanbanColumnBuildOverrides {
@@ -176,6 +178,22 @@ export const BUILT_IN_AGENT_LABELS: Record<BuiltInAgentRole, string> = {
     analyst: 'Analyst',
     ticket_updater: 'Ticket Updater',
     researcher: 'Researcher',
+};
+
+export const DEFAULT_VISIBLE_AGENTS: Record<string, boolean> = {
+    lead: true,
+    coder: true,
+    intern: true,
+    reviewer: true,
+    tester: false,
+    planner: true,
+    analyst: true,
+    jules: false,
+    ticket_updater: false,
+    researcher: false,
+    claude_designer: false,
+    phone_a_friend: false,
+    project_manager: true
 };
 
 export const DEFAULT_KANBAN_COLUMNS: KanbanColumnDefinition[] = [

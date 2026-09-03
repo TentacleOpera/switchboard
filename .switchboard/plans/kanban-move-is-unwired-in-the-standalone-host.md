@@ -51,10 +51,10 @@ learn that.
 
 | What | That plan says | Actual at HEAD |
 | --- | --- | --- |
-| `moveCard` 503 guard | `LocalApiServer.ts:3728` | **`LocalApiServer.ts:4024-4028`** |
-| Extension's `moveCard` callback | `TaskViewerProvider.ts:3827-3864` | **`TaskViewerProvider.ts:3997-4030`** |
-| Option declaration | *(not cited)* | **`LocalApiServer.ts:226-232`** |
-| Standalone options object | *(not cited)* | **`bootstrap.ts:3592`** (constructed), sibling seam `resolveAutoDispatchColumn` wired at **`:3347-3348`** |
+| `moveCard` 503 guard | `LocalApiServer.ts:3728` | **`LocalApiServer.ts:4041-4046`** |
+| Extension's `moveCard` callback | `TaskViewerProvider.ts:3827-3864` | **`TaskViewerProvider.ts:3997-4034`** |
+| Option declaration | *(not cited)* | **`LocalApiServer.ts:226-231`** |
+| Standalone options object | *(not cited)* | **`bootstrap.ts:3228`** (options constructed), **`:3592`** (server instantiated), `moveCard` **absent** from options; `kanbanVerb` wired at **`:3242`**; sibling seam `resolveAutoDispatchColumn` wired at **`:3347-3348`** |
 
 Its **User Review Required #2** asks whether a shared helper is acceptable for the callback's
 planFile/sessionId preamble rather than replicating it inline. **Answer: yes, a shared helper.**
@@ -114,7 +114,7 @@ Remove `viaDirectDb()` and its `out/services/KanbanDatabase` require, leaving on
 Update the script's two-path preamble and `.agents/skills/kanban_operations/SKILL.md` to
 describe one path; regenerate `.claude/skills/`.
 
-### 2. `src/services/LocalApiServer.ts:4024-4028` — name the seam in the 503
+### 2. `src/services/LocalApiServer.ts:4041-4046` — name the seam in the 503
 
 ```ts
 res.end(JSON.stringify({
@@ -133,13 +133,29 @@ const ids = Array.isArray(body?.planIds) && body.planIds.length
     ? body.planIds.map((v: unknown) => String(v).trim()).filter(Boolean)
     : [String(body?.sessionId || body?.planId || '').trim()].filter(Boolean);
 …
+// Resolve planFile per card from the DB — the single-card form reads it from the
+// body, but a batch cannot pass N planFiles in one body. Look up each card's
+// planFile via the same DB read that resolves the sessionId→planId mapping.
+// Without this, moveCard's updatePlanFile step is skipped and the plan file
+// path drifts from the DB record.
+const records = await this._lookupPlansByIds(ids, workspaceRoot);
 // Per-card results — a partial batch must never report a bare success.
+// Batch is NOT atomic: card 1 may move while card 2 fails. This matches the
+// board's moveSelected parity (per-card moves, not a transaction). The 207
+// with per-card results makes the partial outcome legible.
 const results = [];
-for (const id of ids) { results.push({ id, ...(await moveCard(resolvedRoot, id, targetColumn, planFile)) }); }
+for (const rec of records) {
+    results.push({ id: rec.sessionId || rec.planId, ...(await moveCard(resolvedRoot, rec.sessionId || rec.planId, targetColumn, rec.planFile)) });
+}
 const failed = results.filter(r => !r.success);
 res.writeHead(failed.length ? 207 : 200, { 'Content-Type': 'application/json' });
 res.end(JSON.stringify({ success: failed.length === 0, count: results.length, results }));
 ```
+
+`_lookupPlansByIds` is a new helper on `LocalApiServer` — one DB read for N ids,
+returning `{ sessionId, planId, planFile, kanbanColumn }` per card. It generalizes
+the single-card lookup already used by `_handleKanbanMove` (which reads `body.planFile`
+for one card) to a batch form that resolves `planFile` server-side per card.
 
 ## Verification Plan
 
@@ -168,5 +184,36 @@ res.end(JSON.stringify({ success: failed.length === 0, count: results.length, re
 
 **Both hosts:** steps 1–6 pass on the standalone host and the installed VSIX.
 
-**User Review Required:** None. (This plan answers the other plan's Review item #2: yes to a
-shared helper.)
+### Goal Invariants
+
+- **Negative:** `grep -r viaDirectDb .agents .claude` returns zero matches — the direct-DB
+  fallback is absent from both skill mirrors.
+- **Positive:** `move-card.js` either prints `OK` (card moved via API) or prints `FAILED` with
+  a diagnostic (API unreachable or seam unwired) — there is exactly one code path, and it is
+  the API path.
+- **Negative:** `POST /kanban/move` with the seam unset returns a 503 body containing
+  `seam: 'moveCard'` — no alternative route succeeds.
+- **Positive:** `POST /kanban/move` with `planIds: [a,b,c]` returns `count: 3` with three
+  per-card result objects — the batch form is live.
+
+## User Review Required
+
+None. (This plan answers the other plan's Review item #2: yes to a shared helper.)
+
+## Dependencies
+
+- `wire-the-sixteen-unwired-localapiserver-seams-in-standalone.md` (planId
+  `417980bd-e8d9-4465-b301-0857c39ee3d7`, PLAN REVIEWED) — must land first. Deleting the
+  fallback before the seam is wired leaves standalone with no working move at all.
+
+## Adversarial Synthesis
+
+Key risks: batch `planFile` resolution gap (fixed — `_lookupPlansByIds` resolves per card from
+DB), batch non-atomicity (accepted — matches board parity, 207 makes partial outcome legible),
+deletion timing (sequenced after external plan). Mitigations: per-card `planFile` lookup,
+explicit non-atomicity documentation, hard sequencing constraint.
+
+## Implementation Summary
+
+Removed the direct-DB fallback (`viaDirectDb`) from `.agents/skills/kanban_operations/move-card.js` and updated skill documentation across both `.agents/` and `.claude/` mirrors. Updated `POST /kanban/move` in `LocalApiServer.ts` to name the missing `moveCard` seam in 503 error responses. Extended `_handleKanbanMove` to accept `planIds[]` batches with per-card `_lookupPlansByIds` resolution and 207 multi-status reporting for partial batch outcomes.
+

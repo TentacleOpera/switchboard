@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { stateFile } from '../utils/stateHome';
-import { parseCustomAgents } from './agentConfig';
+import { parseCustomAgents, DEFAULT_VISIBLE_AGENTS } from './agentConfig';
 
 export interface GlobalConfig {
     migrationComplete?: boolean;
@@ -364,22 +364,6 @@ export class GlobalIntegrationConfigService {
         await this.saveGlobal(globalConfig);
     }
 
-    private static DEFAULT_VISIBLE_AGENTS: Record<string, boolean> = {
-        lead: true,
-        coder: true,
-        intern: true,
-        reviewer: true,
-        tester: false,
-        planner: true,
-        analyst: true,
-        jules: false,
-        ticket_updater: false,
-        researcher: false,
-        claude_designer: false,
-        phone_a_friend: false,
-        project_manager: true
-    };
-
     // System-managed terminal roles that are launched by automation (Kanban
     // AUTOMATION tab / scheduler / Jules monitor, unattended batch improvers), NOT
     // user-selectable agent roles. They must never appear in the terminals.html role
@@ -400,7 +384,7 @@ export class GlobalIntegrationConfigService {
         const custom = Array.isArray(customRaw) ? customRaw.filter(a => a && typeof (a as any).role === 'string') : [];
         const commands = (await this.getAgentStartupCommands()) || {};
 
-        const visible: Record<string, boolean> = { ...this.DEFAULT_VISIBLE_AGENTS };
+        const visible: Record<string, boolean> = { ...DEFAULT_VISIBLE_AGENTS };
         for (const agent of parseCustomAgents(custom)) {
             visible[agent.role] = true;
         }

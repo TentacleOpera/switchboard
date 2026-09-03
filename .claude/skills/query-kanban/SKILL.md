@@ -105,8 +105,9 @@ back at them. That is a bug in your response, not a correction.
 
 **Custom columns:** users can add their own, with labels this table cannot cover. The authoritative
 live mapping is `GET /kanban/columns` (see the `switchboard-orchestration` skill), which returns
-`{id, label}` for built-in and custom columns alike. Source of truth in code is
-`DEFAULT_KANBAN_COLUMNS` / `DISPLAY_MODE_COLUMNS` in `src/services/agentConfig.ts` — if this table
+the full catalogue tagged with `enabled` (`true`/`false`) and `enabledSource` (`'config' | 'default' | 'structural' | 'unknown'`) for built-in and custom columns alike.
+Destinations must be filtered to `enabled !== false`. A disabled column may still hold historical cards.
+Source of truth in code is `DEFAULT_KANBAN_COLUMNS` / `DISPLAY_MODE_COLUMNS` in `src/services/agentConfig.ts` — if this table
 ever disagrees with that file, the file wins and this table is stale.
 
 **If a label is genuinely ambiguous**, query the closest match and say which column you read
