@@ -117,3 +117,49 @@ None for user data. Legacy `kanban-state` backup files are preserved and listed,
 
 - Should export include the workspace's markdown plans as well, producing a fully self-contained bundle, or stay DB-only on the assumption the recipient has the repo?
 - Does restore need to be per-project (restore only workspace A from a full backup)? That is export/import applied to a backup file, so it is nearly free — worth confirming whether users will expect it.
+
+
+## Merged in: a backup is a set, not a file (2026-09-04, Board Collapse 07)
+
+The loose plan *Backups that can actually be restored — a set, a verified write, and a
+non-destructive restore* has been **merged into this one and deleted**. Both described how a lost
+`kanban.db` comes back and neither named the other. This plan already had the stronger *mechanism*
+(Online Backup API rather than a file copy, because copying a WAL-mode database while the sidecar
+holds it open produces a torn file; `PRAGMA integrity_check` before a backup counts as complete).
+The deleted plan had the stronger *unit*, and it is adopted here.
+
+**A backup is a set, and the manifest is what makes it a set rather than a coincidence.**
+
+```
+<backup-root>/<timestamp>/
+├── kanban.db
+├── plans/
+└── manifest.json
+```
+
+`manifest.json` records the row counts, the `dbSchemaVersion`, and for every plan file its path,
+byte length and sha256. Hash the plan files as they are copied and verify the manifest matches
+before the set is marked complete. A database restored without the plan files that were current when
+it was taken is a board pointing at files that do not exist.
+
+Adopted with it:
+
+- **A set that fails verification is marked `*.FAILED`**, never silently retained as if usable, and
+  never counted toward retention.
+- **Restore never unlinks the live database first.** The current state is itself captured as a
+  pre-restore set before anything is replaced, so a failed restore is recoverable.
+- **A set never contains `secrets.enc` or the master key.** Backups are copied, moved and shared;
+  credentials are not.
+- **Legacy `dbbackup/` files are left in place** and listed as single-artifact sets, so the existing
+  `writeDbBackup` output at `KanbanDatabase.ts:7337` stays visible instead of being orphaned. Nothing
+  reads that directory today, which is the defect the deleted plan opened with.
+
+**Two other restore paths exist and are not superseded.** Cross-reference both, so no plan claims to
+be the only one:
+
+- *Board state cannot survive machine loss without a third-party account* — the v1
+  `kanban-state-backup.json` export and import. It is the **interim** path and the only restore
+  available before the sidecar lands.
+- The *Board sync is a capability all three providers implement* feature — rebuilding columns and
+  feature structure **from a tracker**. That is a different operation from restoring a database, and
+  both are wanted.

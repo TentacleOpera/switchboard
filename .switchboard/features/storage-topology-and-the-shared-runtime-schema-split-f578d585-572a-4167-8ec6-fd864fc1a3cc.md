@@ -1,5 +1,9 @@
 # Storage Topology and the Shared/Runtime Schema Split
 
+<!-- board-collapse-07 -->
+> **Sequenced within the storage programme (2026-09-04, Board Collapse 07).** The full seven-step order is stated once, in the *Storage layer overhaul* feature file. This feature is step 5 and 6 of that order and cannot start until steps 1 and 2 land. Do not dispatch a card from it before its prerequisites.
+
+
 **Complexity:** 9
 
 ## Goal

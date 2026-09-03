@@ -74,3 +74,31 @@ Ordering is load-bearing here, unusually so — two of the constraints are data-
 **Independent:** *Single-instance enforcement + the `is_feature` clobber fix* can ship at any point, including first. Its stale-image half is largely superseded by (1), but the `updateFeatureStatus` wrong-row bug is unaffected by every other subtask here and should not wait on them.
 
 One caution on read paths: the ~780 existing sql.js touchpoints assume microsecond in-memory reads, so the per-card N+1 patterns need auditing and batching before (1) routes extension-host reads across a process boundary.
+
+## The storage programme — one order, stated once (2026-09-04, Board Collapse 07)
+
+Storage is one chain of hard prerequisites spread over ten features and several loose plans. No
+file stated it end to end, so cards that cannot be coded yet sat in Planned looking dispatchable.
+The order is:
+
+1. **Move the database behind a single sidecar owner and replace sql.js with a real SQLite binding.**
+   The foundation. Nothing below it can be built on sql.js, which holds the whole database in memory
+   and rewrites the entire image on each persist, so two processes lose each other's updates.
+2. **Scope the ten unscoped tables by `workspace_id`** and fix the three colliding unique constraints.
+3. **Durable board backups and per-project export/import.**
+4. **Consolidate to one global database in `~/.switchboard`.**
+5. **Storage topology: three stores, one operator choice.**
+6. **Split the schema into shared board state and machine-local runtime.**
+7. **Shared stores** — libSQL, or the git-carried snapshot. Operator picks one.
+
+Steps 1 to 3 are independently useful and stay in Planned. So does *Enforce one database instance
+per path and fix the `is_feature` clobber*: its clobber half is superseded by nothing and ships
+before the engine swap.
+
+Everything that depends on step 1 and cannot start without it is parked in **Backlog**, not
+cancelled: the *Shared Board Stores*, *Two Machines One Board* and *Cloud-Driven Switchboard*
+features, and the loose plans for the state home, the bundle ledger and board-control instructions.
+
+One card moved the other way. *Global settings are a JSON file two boards can both write* waits only
+on **step 1**, not step 4 as it claimed — the blocker is the engine, not the store's location — so
+it stays available in New.

@@ -1,5 +1,9 @@
 # The bundle ledger is extension bookkeeping written into the user's repository, and it belongs in the database
 
+<!-- board-collapse-07 -->
+> **PARKED IN BACKLOG 2026-09-04 (Board Collapse 07).** Not cancelled — **unreachable until the storage programme's first step lands**: *Move the database behind a single sidecar owner and replace sql.js with a real SQLite binding*. sql.js holds the whole database in memory and rewrites the entire image on each persist, so nothing here that assumes concurrent or remote writers can be built on it. The full seven-step order is stated once, in the *Storage layer overhaul* feature file. Leaving these in Planned invited a coder to start one; move it back when step 1 lands.
+
+
 ## Goal
 
 Move the control-plane bundle ledgers out of `.agents/` and `.claude/` and into `kanban.db` config

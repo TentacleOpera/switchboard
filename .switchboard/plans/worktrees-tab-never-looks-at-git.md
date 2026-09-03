@@ -1,5 +1,9 @@
 # The Worktrees Tab Never Looks at Git, So a Worktree It Did Not Create Is Unreachable Forever
 
+<!-- board-collapse-07b -->
+> **SCHEMA DEPENDENCY 2026-09-04 (Board Collapse 07).** This plan reads or writes columns that *Split the schema into shared board state and machine-local runtime* **relocates**: `dispatched_terminal`, `dispatched_at`, `last_liveness_at`, `blocked_at` and the `worktrees` table move out of `plans` into separate machine-local runtime tables keyed by `plan_id` + `device_id`, in a different database file that never travels to a remote store. Whichever lands second must target the schema that then exists. The tier split is step 6 of the storage programme (see the *Storage layer overhaul* feature file), so in practice this plan lands first — but do not assume it: check where those columns live before writing the query.
+
+
 ## Goal
 
 Reconcile the Worktrees tab against `git worktree list` so it shows what is actually on disk, and let Abandon act on a worktree that has no database row.

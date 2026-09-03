@@ -4,6 +4,10 @@ description: 'Cloud-Driven Switchboard — Commands, Dispatch And Visibility'
 
 # Cloud-Driven Switchboard — Commands, Dispatch And Visibility
 
+<!-- board-collapse-07 -->
+> **PARKED IN BACKLOG 2026-09-04 (Board Collapse 07).** Not cancelled — **unreachable until the storage programme's first step lands**: *Move the database behind a single sidecar owner and replace sql.js with a real SQLite binding*. sql.js holds the whole database in memory and rewrites the entire image on each persist, so nothing here that assumes concurrent or remote writers can be built on it. The full seven-step order is stated once, in the *Storage layer overhaul* feature file. Leaving these in Planned invited a coder to start one; move it back when step 1 lands.
+
+
 **Complexity:** 6
 
 ## Goal
@@ -36,11 +40,11 @@ What the git channel could not do, and this feature adds: carry **commands** rat
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [The canonical layout: a control plane containing one sibling per purpose](../plans/canonical-control-plane-layout-with-sibling-repos.md) — **CREATED** — ID: 9996e23f-7db6-4088-8bb3-6a55b8b1bba2
-- [ ] [A cloud agent fills the template and pushes it — the authoring side of board control](../plans/cloud-agent-fills-and-pushes-board-instructions.md) — **CREATED** — ID: 97dcd28a-2501-498a-9f98-99e721c85687
-- [ ] [Remote dispatch is its own seam — audited and attributable, not stripped down](../plans/remote-dispatch-is-its-own-audited-seam.md) — **CREATED** — ID: f2e147c4-0521-4fd3-8904-506e0bc02bab
-- [ ] [Terminal logs are named for what they record — plan, terminal, and CLI](../plans/terminal-logs-are-named-for-what-they-record.md) — **CREATED** — ID: 33aa0676-783c-4f0d-961d-cda599e6e0ce
-- [ ] [Terminal logs live in the logs sibling, with an index; status publishes with the board](../plans/terminal-logs-live-in-the-logs-sibling.md) — **CREATED** — ID: 86144910-7395-4c9d-bc5a-25fc73622433
+- [ ] [The canonical layout: a control plane containing one sibling per purpose](../plans/canonical-control-plane-layout-with-sibling-repos.md) — **BACKLOG** — ID: 9996e23f-7db6-4088-8bb3-6a55b8b1bba2
+- [ ] [A cloud agent fills the template and pushes it — the authoring side of board control](../plans/cloud-agent-fills-and-pushes-board-instructions.md) — **BACKLOG** — ID: 97dcd28a-2501-498a-9f98-99e721c85687
+- [ ] [Remote dispatch is its own seam — audited and attributable, not stripped down](../plans/remote-dispatch-is-its-own-audited-seam.md) — **BACKLOG** — ID: f2e147c4-0521-4fd3-8904-506e0bc02bab
+- [ ] [Terminal logs are named for what they record — plan, terminal, and CLI](../plans/terminal-logs-are-named-for-what-they-record.md) — **BACKLOG** — ID: 33aa0676-783c-4f0d-961d-cda599e6e0ce
+- [ ] [Terminal logs live in the logs sibling, with an index; status publishes with the board](../plans/terminal-logs-live-in-the-logs-sibling.md) — **BACKLOG** — ID: 86144910-7395-4c9d-bc5a-25fc73622433
 <!-- END SUBTASKS -->
 
 ## Open decision carried, not resolved here

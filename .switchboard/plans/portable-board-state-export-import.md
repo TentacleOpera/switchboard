@@ -1,5 +1,11 @@
 # Board state cannot survive machine loss without a third-party account — surface the state file as an explicit export/import
 
+<!-- board-collapse-07 -->
+> **THIS IS THE INTERIM RESTORE PATH (2026-09-04, Board Collapse 07).** Say so in the Goal. Until the storage programme's sidecar and backup steps land, the v1 `kanban-state-backup.json` export and import is the **only** way board state moves between machines, which is why it is worth building now even though a stronger mechanism is planned.
+> 
+> Two sibling paths exist and this plan does not supersede either: *Durable board backups and per-project export/import* (verified backup sets, after the sidecar) and the *Board sync is a capability all three providers implement* feature (rebuilding a board from a tracker, a different operation). None of the three is the only restore.
+
+
 <!-- board-collapse-01 -->
 > **RESCOPED 2026-09-04 (Board Collapse 01).** The Database panel **shipped** in commit `7d71ac56` ("add Database panel to the shell rail, retire Setup tab's DB section"). Delete the framing that command-palette entries are the user-facing path "until the Database panel lands": Export and Import land in the Database panel's "This machine" section directly. Palette entries remain only as an additional route.
 

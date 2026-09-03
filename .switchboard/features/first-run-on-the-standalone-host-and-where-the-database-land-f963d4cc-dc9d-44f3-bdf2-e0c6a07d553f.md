@@ -1,5 +1,9 @@
 # First Run On The Standalone Host, And Where The Database Lands
 
+<!-- board-collapse-07 -->
+> **Sequenced within the storage programme (2026-09-04, Board Collapse 07).** The full seven-step order is stated once, in the *Storage layer overhaul* feature file. This feature is step adjacent to it: its database-creation parity and first-boot work is independent of the chain, but its db-path subtask feeds steps 4 and 5, and its wizard shares a surface with the shipped Database panel. Do not dispatch a card from it before its prerequisites.
+
+
 **Complexity:** 7
 
 ## Goal
