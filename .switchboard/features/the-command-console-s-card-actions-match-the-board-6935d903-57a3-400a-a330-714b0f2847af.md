@@ -91,3 +91,7 @@ would miss the whole class of defect.
   - `.agents/skills/**` and `.claude/skills/**` describe the same response shape (diff the two mirrors)
 - **Must not touch:** `/kanban/board`, `/kanban/plan`, and label resolution paths (reads must stay untouched — the response tags, it does not server-side filter); `displayModeOf` / `legacyAliasOf` relationships (enabled must not override those signals)
 
+## Completion Summary
+
+All three subtasks implemented and verified via git diff review. Subtask 1 deleted the direct-DB fallback from move-card.js, widened POST /kanban/move to accept planIds[] batches with 207 on partial failure, and named the moveCard seam in the 503. Subtask 2 replaced the console's /kanban/dispatch call with POST /kanban/advance over the kanbanVerb seam, enabling multi-card selection with no prompt field in the response and no coding-column identifiers in the served JS. Subtask 3 joined agents.visibleAgents into GET /kanban/columns with enabled/enabledSource tagging, moved DEFAULT_VISIBLE_AGENTS to agentConfig.ts, and filtered console dropdowns to enabled columns. Committed as 505e6e92.
+
