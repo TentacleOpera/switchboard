@@ -457,6 +457,45 @@ export interface PmDeliveryResult {
  * Resolves planFile-shaped sessionId, workspace ID, performs the move via
  * kanbanProvider, and updates the planFile in the DB if needed.
  */
+/**
+ * Normalise an agent/terminal name to the comparison key used for Phone-a-Friend
+ * target matching and send locks. Shared with the standalone composition root:
+ * `resolvePhoneAFriendTarget` derives `targetKey` through this function, so any
+ * caller comparing against a `targetKey` MUST normalise the same way. A raw
+ * `.toLowerCase()` does not match — hyphens and underscores become spaces here,
+ * so `Phone-a-Friend` is `phone a friend`, and a lowercase-only comparison makes
+ * the self-dispatch guard silently never fire.
+ */
+export function normalizeAgentKey(value: string | undefined | null): string {
+    return (value || '')
+        .toLowerCase()
+        .replace(/[_-]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+/**
+ * The Phone-a-Friend prompt text, shared by both composition roots so the two
+ * hosts cannot drift. The single-plan text is byte-identical to the shipped
+ * prompt and must stay that way; the done directive is appended by the caller,
+ * never woven in.
+ */
+export function buildPhoneAFriendPrompt(
+    planFiles: string[],
+    originRole: string,
+    originTerminal?: string,
+    dispatchId?: string,
+    mode?: 'pre-review' | 'post-batch'
+): string {
+    if (mode === 'pre-review') {
+        return `Pre-review check for plan ${planFiles[0]}. Read the plan file and the coder's git diff (git diff HEAD~<commit count> or git log --oneline -5 to find the coder's commits). Answer two questions: (1) Does the diff implement what the plan describes, or is it a stub/empty/partial? (2) Are there any obvious gaps a plan reader would catch? Report PASS or FAIL with specific findings in your completion report to the lead. Do NOT do deep analysis — that's the next stage. Focus on: did they implement it at all, and does it look like a real implementation? GIT POLICY: stay on the current branch — do not switch or create branches, do not push to shared branches, and do not force-push.`;
+    }
+    if (planFiles.length === 1) {
+        return `Read ${planFiles[0]} — this plan was just coded by another agent (origin role: ${originRole}, originTerminal: ${originTerminal || 'unknown'}, dispatch: ${dispatchId || 'none'}). Assume the implementation contains hidden bugs. Check the code against the plan, find and fix any issues you discover. Do NOT append a Stage Complete marker — you are a second-pass continuation, not a stage transition. GIT POLICY: stay on the current branch — do not switch or create branches, do not push to shared branches, and do not force-push. When done, summarize the bugs you found and the fixes you applied.`;
+    }
+    return `Read these ${planFiles.length} plans — they were just coded by another agent (origin role: ${originRole}, originTerminal: ${originTerminal || 'unknown'}, dispatch: ${dispatchId || 'none'}):\n${planFiles.map((f, i) => `${i + 1}. ${f}`).join('\n')}\n\nAssume each implementation contains hidden bugs. Work the list in order, one plan at a time: check the code against that plan, find and fix any issues you discover, then move to the next. Do NOT append a Stage Complete marker — you are a second-pass continuation, not a stage transition. GIT POLICY: stay on the current branch — do not switch or create branches, do not push to shared branches, and do not force-push. When done, summarize per plan the bugs you found and the fixes you applied.`;
+}
+
 export async function resolveAndMoveCard(
     kanbanProvider: any,
     getDb: (wsRoot: string) => Promise<any>,
@@ -5069,11 +5108,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     private _normalizeAgentKey(value: string | undefined | null): string {
-        return (value || '')
-            .toLowerCase()
-            .replace(/[_-]+/g, ' ')
-            .replace(/\s+/g, ' ')
-            .trim();
+        return normalizeAgentKey(value);
     }
 
     /**
@@ -6826,11 +6861,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             // so the base text stays byte-identical. Pre-review mode (pipeline-triggered sanity check)
             // uses a different prompt: "did they implement it at all" — not deep analysis or bug-fixing.
             const apiPort = this.getLocalApiServerPort();
-            const basePrompt = mode === 'pre-review'
-                ? `Pre-review check for plan ${planFiles[0]}. Read the plan file and the coder's git diff (git diff HEAD~<commit count> or git log --oneline -5 to find the coder's commits). Answer two questions: (1) Does the diff implement what the plan describes, or is it a stub/empty/partial? (2) Are there any obvious gaps a plan reader would catch? Report PASS or FAIL with specific findings in your completion report to the lead. Do NOT do deep analysis — that's the next stage. Focus on: did they implement it at all, and does it look like a real implementation? GIT POLICY: stay on the current branch — do not switch or create branches, do not push to shared branches, and do not force-push.`
-                : planFiles.length === 1
-                ? `Read ${planFiles[0]} — this plan was just coded by another agent (origin role: ${originRole}, originTerminal: ${originTerminal || 'unknown'}, dispatch: ${dispatchId || 'none'}). Assume the implementation contains hidden bugs. Check the code against the plan, find and fix any issues you discover. Do NOT append a Stage Complete marker — you are a second-pass continuation, not a stage transition. GIT POLICY: stay on the current branch — do not switch or create branches, do not push to shared branches, and do not force-push. When done, summarize the bugs you found and the fixes you applied.`
-                : `Read these ${planFiles.length} plans — they were just coded by another agent (origin role: ${originRole}, originTerminal: ${originTerminal || 'unknown'}, dispatch: ${dispatchId || 'none'}):\n${planFiles.map((f, i) => `${i + 1}. ${f}`).join('\n')}\n\nAssume each implementation contains hidden bugs. Work the list in order, one plan at a time: check the code against that plan, find and fix any issues you discover, then move to the next. Do NOT append a Stage Complete marker — you are a second-pass continuation, not a stage transition. GIT POLICY: stay on the current branch — do not switch or create branches, do not push to shared branches, and do not force-push. When done, summarize per plan the bugs you found and the fixes you applied.`;
+            // Built by the shared `buildPhoneAFriendPrompt` so the standalone
+            // composition root sends the same text — a second inline copy in
+            // bootstrap.ts is how the two hosts drift.
+            const basePrompt = buildPhoneAFriendPrompt(planFiles, originRole, originTerminal, dispatchId, mode);
             // Append the completion directive ONLY for queue-originated dispatches
             // (one plan at a time, waiting for /phone-a-friend/done). The automatic
             // batch-end path has no queue entry — appending the directive would

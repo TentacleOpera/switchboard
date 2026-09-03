@@ -111,3 +111,7 @@ Reviewer pass over all three subtasks. The feature's goal is met — the console
 - NIT — `src/webview/command.js:706` — each tap re-runs `renderDispatchView()`, whose sort floats selected rows to the top, so rows reorder under the operator's finger. Plan-specified behaviour.
 - NIT — `src/services/LocalApiServer.ts:7712` — custom columns are `enabled: true` unconditionally, so a custom column with a disabled role is still offered as a destination.
 - NIT — `src/webview/command.js:1712` — a 207 partial move leaves the successfully-moved cards selected.
+
+### Deferred-Finding Resolution (2026-09-03)
+
+The CRITICAL deferred finding above — `moveCard` unwired in the standalone composition root while subtask 1 had deleted the direct-DB fallback — is **closed** by commit `cf57044b` (plan `417980bd`), which wires `moveCard` at `bootstrap.ts:3654` via the shared `resolveAndMoveCard` helper. That commit was reviewed separately; its own review fixed a compile error, a dead self-dispatch guard, and a duplicated prompt literal, and its findings are recorded in its plan file. All three subtasks of this feature are now reviewed with their blocking dependency satisfied. Remaining open items are the absence of automated cover for the three card actions and for option-key parity (planId `a82e0a62`, CREATED) — no gate discriminates on any of these mechanisms, and none of the code has been exercised against a running host.

@@ -84,7 +84,7 @@ import { TransferBundleService } from '../services/TransferBundleService';
 import { DesignPanelProvider } from '../services/DesignPanelProvider';
 import { SetupPanelProvider } from '../services/SetupPanelProvider';
 import { TicketsPanelProvider } from '../services/TicketsPanelProvider';
-import { TaskViewerProvider, resolveAndMoveCard } from '../services/TaskViewerProvider';
+import { TaskViewerProvider, resolveAndMoveCard, normalizeAgentKey, buildPhoneAFriendPrompt } from '../services/TaskViewerProvider';
 import { KanbanProvider } from '../services/KanbanProvider';
 import { PlanningPanelProvider } from '../services/PlanningPanelProvider';
 import { ResearchImportService } from '../services/ResearchImportService';
@@ -3438,13 +3438,18 @@ Each plan file must include:
                 const active = ptyFleetService.listActive();
                 const agentName = target?.agentName;
                 const targetKey = target?.targetKey;
-                const originKey = originTerminal?.toLowerCase();
-                if (targetKey && originKey && targetKey === originKey) {
+                // `targetKey` comes out of resolvePhoneAFriendTarget already
+                // normalised (hyphens/underscores → spaces), so the origin must be
+                // normalised identically. A plain .toLowerCase() never matches
+                // `phone a friend`, which made this guard dead and let a seat be
+                // told to review its own work.
+                const originKey = normalizeAgentKey(originTerminal);
+                if (targetKey && originKey && normalizeAgentKey(targetKey) === originKey) {
                     return;
                 }
                 const handle = active.find(t =>
                     (agentName && t.friendlyName === agentName) ||
-                    (targetKey && t.friendlyName?.toLowerCase() === targetKey.toLowerCase()) ||
+                    (targetKey && normalizeAgentKey(t.friendlyName) === normalizeAgentKey(targetKey)) ||
                     t.friendlyName === 'Phone-a-Friend' ||
                     t.role === 'phone-a-friend'
                 );
@@ -3455,9 +3460,8 @@ Each plan file must include:
                 if (!ptyHandle || ptyHandle.status !== 'active') {
                     return;
                 }
-                const basePrompt = mode === 'pre-review'
-                    ? `Pre-review check for plan ${planFile}. Read the plan file and the coder's git diff (git diff HEAD~<commit count> or git log --oneline -5 to find the coder's commits). Answer two questions: (1) Does the diff implement what the plan describes, or is it a stub/empty/partial? (2) Are there any obvious gaps a plan reader would catch? Report PASS or FAIL with specific findings in your completion report to the lead. Do NOT do deep analysis — that's the next stage. Focus on: did they implement it at all, and does it look like a real implementation? GIT POLICY: stay on the current branch — do not switch or create branches, do not push to shared branches, and do not force-push.`
-                    : `Read ${planFile} — this plan was just coded by another agent (origin role: ${originRole || 'coder'}, originTerminal: ${originTerminal || 'unknown'}, dispatch: ${dispatchId || 'none'}). Assume the implementation contains hidden bugs. Check the code against the plan, find and fix any issues you discover. Do NOT append a Stage Complete marker — you are a second-pass continuation, not a stage transition. GIT POLICY: stay on the current branch — do not switch or create branches, do not push to shared branches, and do not force-push. When done, summarize the bugs you found and the fixes you applied.`;
+                // Shared with the extension's dispatch path — one prompt text, two hosts.
+                const basePrompt = buildPhoneAFriendPrompt([planFile], originRole || 'coder', originTerminal, dispatchId, mode);
                 await deliverPrompt(ptyHandle, basePrompt, getPromptDeliveryOptions());
             } catch (err) {
                 log(opts, `onPhoneAFriend failed: ${err}`);
@@ -3476,7 +3480,7 @@ Each plan file must include:
             if (!handle || handle.status !== 'active') {
                 return { dispatched: false, reason: 'researcher agent is not live' };
             }
-            const savePath = configProvider.getConfigString('research.localFolderPaths[0]', '.switchboard/docs/') || '.switchboard/docs/';
+            const savePath = configProvider.getConfigString('research.localFolderPaths[0]') || '.switchboard/docs/';
             const fullPrompt = `${prompt}\n\nIMPORTANT: After completing the research, save the results to ${savePath} using the write_to_file tool so the plan author can review them later.`;
             try {
                 await deliverPrompt(handle, fullPrompt, getPromptDeliveryOptions());
