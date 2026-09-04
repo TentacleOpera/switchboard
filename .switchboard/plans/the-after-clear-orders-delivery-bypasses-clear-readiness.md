@@ -1,62 +1,59 @@
-# The After-Clear Orders Delivery Bypasses Clear Readiness
+# Every Lead-to-Coder Post Re-Orients the Whole Team, Because `created` Means "the Roster"
 
 kanbanColumn: CREATED
 
 ## Goal
 
-Standing orders delivered after a clear wait for the CLI to have actually cleared, the same way a prompt following a clear already does.
+A startup orientation reaches a seat that was just started. Not a seat that has been running for hours, and not every other seat on its team.
 
 ### Problem analysis
 
-**Measured 2026-09-04, from the seat's own log and the board:**
+**Observed 2026-09-04, inside a feature implementation.** Seats had been running for hours. The lead reviewed a coder's work and posted to it. The coder then received:
 
-```
-21:47:04.787   completion POST recorded, seat cleared      (plans.completed_at)
-21:47:04.859   new log session                             (+72ms)
-21:47:05.003   standing orders delivered                   (+216ms)
-```
+> *"Startup orientation — your standing orders follow. Acknowledge them in one line and wait; do not begin any work until you are given a task."*
 
-The orders were written 216 ms after the clear, into a CLI that had not finished clearing. The log captures the state they landed in — Devin's slash-command picker was still open:
+A seat mid-feature was told to acknowledge and wait for a task it already had.
 
-```
-○ /clear                  Clear conversation history
-shift+tab prev · ↵ accept · esc close
-^[[200~Startup orientation — your standing orders follow…
-```
+**The chain, from the seat's log and the source:**
 
-The bracketed-paste markers appear as literal `^[[200~` / `^[[201~` because the paste arrived while the CLI was in a menu, not at a prompt. Devin then accepted the clear and restarted its session, discarding the orders that had just arrived.
-
-**The cause is a readiness gate that this path does not pass through.**
-
-`clearPty` (`ptyPromptDelivery.ts:297`) writes `/clear` and returns:
+1. The lead posts to the coder — the `sendToTerminal` verb.
+2. `sendToTerminal` calls `instantiateAgentGroupCore` (`bootstrap.ts:3286-3306`), a create-or-attach for the team.
+3. That function builds its return at `agentGroupInstantiation.ts:147`:
 
 ```js
-export async function clearPty(handle) {
-    return withTerminalLock(handle.name, async () => {
-        try { await writeSlashCommandLocked(handle, '/clear'); }
-        catch { /* PTY died between check and write */ }
-    });
+const created: string[] = [headName, ...workers.map((w: any) => w.friendlyName)];
+```
+
+**The whole roster, unconditionally** — head plus every worker — with no test for whether anything was actually created. It is never filtered afterwards; it is returned as-is at `:166` and `:176`.
+
+4. `bootstrap.ts:3306` then does:
+
+```js
+if (result.success && Array.isArray(result.created)) {
+    relayStartupOrientation(result.created);
 }
 ```
 
-No readiness wait, and its own docblock says that is intentional — *"sendPromptToPty, the ONE path where a prompt follows the clear with no gap."* The readiness machinery (`createClearReadinessTracker`, `awaitFirstReadiness`, `clearReadiness.ts` with per-CLI quiet and timeout windows) is wired into `sendPromptToPty` precisely because that was the only place anything followed a clear.
+So **every lead-to-coder post arms a startup orientation for every seat on the team.**
 
-Then `bootstrap.ts:3441-3453` added a second such place:
+**The field name is the defect.** `created` reads as "seats this call created" and is consumed on that assumption. It means "the roster". Every caller that treats it as a creation list is wrong, and this one relays a startup preamble to seats that started hours ago.
 
-```js
-await clearPty(handle);
-// …
-taskViewerProvider.deliverStandingOrdersAfterClear(terminalName);
+**Timing, measured:**
+
+```
+21:47:04.787   completion POST recorded, coder-1 cleared
+21:47:04.859   coder-1 log session rolls           (+72ms)
+21:47:05.003   startup orientation delivered       (+216ms)
 ```
 
-`clearPty` has no gate, and `deliverStandingOrdersAfterClear` is fire-and-forget (`TaskViewerProvider.ts:2558`). So the orders race the clear they are meant to follow, and the docblock's claim that `sendPromptToPty` is the only such path has been false since this line was added.
+The orientation landed while the CLI was still processing its clear — the log shows Devin's `/clear` picker open (`○ /clear  Clear conversation history`) with the paste arriving as literal `^[[200~`, because a menu cannot consume bracketed paste. Devin then completed the clear and restarted, discarding it.
 
-**Why it looks like "orders fire on a completion post".** The completion POST clears the accepted coding seat, the clear triggers the after-clear delivery, and the delivery outruns the clear. The operator sees standing orders arrive immediately after posting a completion, then the session restart that erases them.
+**This is not the after-clear delivery.** That path exists and is correct: `TaskViewerProvider.ts:2505-2515` wraps the orders in an explicitly non-actionable envelope — *"This delivery restores your standing orders after a context clear. No action is required. Wait for your next dispatch."* The text in the log is `ORIENTATION_PREAMBLE`, which only `relayStartupOrientation` sends. The envelope built for exactly this situation is not what fired.
 
 ## Metadata
 
 - **Complexity:** 3
-- **Tags:** teams, prompts, pty, standing-orders, both-hosts
+- **Tags:** teams, prompts, both-hosts, bugfix
 
 ## User Review Required
 
@@ -64,31 +61,37 @@ None.
 
 ## Proposed Changes
 
-### 1. Gate the after-clear delivery on clear readiness
+### 1. `created` must list what was created
 
-Await readiness before writing the orders — the same tracker `sendPromptToPty` uses, with the same per-CLI windows. The machinery exists; this path simply does not call it.
+Return only the seats the call actually created. A caller asking "what did you just start" must not receive the roster.
 
-### 2. Correct `clearPty`'s docblock, or give it the gate
+This is the fix. Everything else follows from it.
 
-Its comment asserts that `sendPromptToPty` is the only path where a prompt follows a clear. That has not been true since the after-clear delivery was wired. Either move the wait into `clearPty` so the claim becomes true again, or correct the comment — a docblock stating an invariant the code no longer holds is how the next person reproduces this.
+### 2. Audit every consumer of `created`
 
-### 3. A delivery that lands during a clear should be detectable
+The field is returned from a shared function used by both hosts. Any other caller treating it as a creation list has the same defect with a different symptom; find them before changing the semantics, so nothing depends on the roster behaviour.
 
-The bracketed-paste markers appearing as literal text is a clean signal that a write reached a surface that could not consume it. Where readiness cannot be established, that outcome should be reported rather than counted as delivered.
+If some caller genuinely wants the roster, give it a separate, correctly named field rather than overloading this one.
+
+### 3. Orientation is for a started seat, and only that
+
+Even with `created` corrected, state the rule at the relay: it fires for a seat that has just started and has no task. A seat mid-feature never receives it, whatever a caller passes.
+
+`1e2afcd8` covers the other half — the relay firing into a seat that is already working. Same relay, and the two fixes should agree.
 
 ## Edge-Case & Dependency Audit
 
-1. **Do not serialise the clear.** `clearPty` returning fast is useful to callers that are not following it with a prompt. Gate the *delivery*, not the clear, unless the wait proves cheap enough to move inside.
-2. **Readiness windows are per-CLI.** `clearReadiness.ts` already carries Devin's own quiet and timeout constants — use the seat's resolved family, do not pick one default. A seat whose family is unknown must take the longest window, not the shortest.
-3. **Both hosts.** The extension host calls `deliverStandingOrdersAfterClear` from its own `clearTerminalContext`; check whether its clear path has the same gap.
-4. **Related, distinct: `1e2afcd8`** — the startup orientation relay firing into a working agent. Different arming, same symptom of a prompt arriving when the seat cannot use it. The two must not be merged, but their fixes should agree on what "ready" means.
-5. **A seat being stood down does not need orders at all.** If a clear is known to be terminal — the lead has no further subtask — the delivery is waste even when correctly timed. Out of scope here, but worth recording: the clear path cannot currently tell a between-tasks clear from a final one.
+1. **A genuine create must still orient.** Narrowing `created` must not stop a newly spawned seat receiving its orientation — that is what the relay is for.
+2. **A create-or-attach that creates some and attaches others** must return only the created ones. This is the case that produced the bug and the one to test.
+3. **Both hosts.** `instantiateAgentGroupCore` is shared; `bootstrap.ts:3306` and the extension's `ptyCreateTerminal` / `ptyCreateBatch` sites all consume the result.
+4. **Do not fix this at the relay by comparing timestamps.** Suppressing an orientation for an old seat papers over a return value that lies; the next consumer of `created` inherits it.
+5. **The after-clear envelope is correct and should be left alone** — it already says no action is required. The problem is that it was not the delivery that fired.
 
 ## Verification Plan
 
-1. Standing orders after a clear are written only once the CLI has cleared.
-2. No bracketed-paste markers appear as literal text in the seat's log after a clear.
-3. A completion post produces one clear and one orders delivery, in that order, with the orders surviving.
-4. The readiness window used matches the seat's CLI family.
-5. `clearPty`'s docblock matches what the code does.
+1. A lead posting to a coder produces no orientation for any seat.
+2. A newly created seat still receives its orientation.
+3. A create-or-attach that creates one seat and attaches three returns one name in `created`.
+4. No consumer of `created` treats it as the roster.
+5. A seat running for hours never receives a startup orientation.
 6. Both hosts behave identically.
