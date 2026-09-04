@@ -75,5 +75,6 @@ The open mid-session clear defects. A roster clear still clears the team head; t
 - [ ] [An idempotent completion skips the clear, so a seat that reported its own done is never stood down](../plans/an-idempotent-completion-skips-the-clear-so-a-seat-is-never-stood-down.md) — **PLAN REVIEWED** — ID: 16bdde5d-1749-4ab5-b41a-248df79e81d6
 - [ ] [The Roster Clear Barrier Defers Forever, Clears the Head Anyway, and Measures Busy With a Hardcoded Window](../plans/memo-the-roster-clear-barrier-defers-forever-and-clears-the-head-anyway.md) — **PLAN REVIEWED** — ID: 01e5bcef-c4cf-4603-afdc-26cd5235daae
 - [ ] [A Team Seat Is Cleared on Every Dispatch, Because the Team Branch Never Compares the Work Context](../plans/a-team-seat-is-cleared-on-every-dispatch-because-the-team-branch-never-compares-the-work-context.md) — **CREATED** — ID: a29bed0f-2fec-4117-8576-ba9fcc2556dc
+- [ ] [A Lead's Completion Post Must Clear the Seat — `completed_at` Is a Latch That Is Never Reset](../plans/a-lead-completion-post-must-clear-the-seat-completed-at-is-a-latch-that-is-never-reset.md) — **CREATED** — ID: 711fa15e-0fc0-4e9f-bf6d-28c0169dde13
 <!-- END SUBTASKS -->
 
