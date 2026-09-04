@@ -121,20 +121,16 @@ function getEnforcedSwitchboardBooleanSetting(key: string, defaultValue: boolean
 }
 
 // --- Agent version tracking ---
+// .agent_version.json has been migrated to the kanban.db config table under
+// `agents.lastCopiedVersion`. Sync reads return undefined if the db is not yet
+// open; writes are fire-and-forget (mirrors stateConfigBridge's sync write).
 
-function getAgentVersionFilePath(workspaceRoot: string): string {
-    return path.join(workspaceRoot, '.switchboard', '.agent_version.json');
-}
-
-// Intentionally uses synchronous I/O: called infrequently (once per activation),
-// reads a tiny JSON file from local disk — negligible event-loop impact.
 function getLastCopiedAgentVersion(workspaceRoot: string): string | undefined {
-    const versionFilePath = getAgentVersionFilePath(workspaceRoot);
     try {
-        if (fs.existsSync(versionFilePath)) {
-            const versionData = JSON.parse(fs.readFileSync(versionFilePath, 'utf-8'));
-            return versionData.version;
-        }
+        const db = KanbanDatabase.forWorkspace(workspaceRoot);
+        if (!db.isOpen()) return undefined;
+        const versionData = db.getConfigJsonSync<{ version?: string }>('agents.lastCopiedVersion', { version: '' });
+        return versionData?.version;
     } catch (e) {
         console.error('Failed to read last agent version:', e);
     }
@@ -142,10 +138,12 @@ function getLastCopiedAgentVersion(workspaceRoot: string): string | undefined {
 }
 
 function setLastCopiedAgentVersion(workspaceRoot: string, version: string): void {
-    const versionFilePath = getAgentVersionFilePath(workspaceRoot);
     try {
+        const db = KanbanDatabase.forWorkspace(workspaceRoot);
         const versionData = { version, lastUpdated: new Date().toISOString() };
-        fs.writeFileSync(versionFilePath, JSON.stringify(versionData, null, 2));
+        void db.ensureReady()
+            .then(() => db.setConfigJson('agents.lastCopiedVersion', versionData))
+            .catch((e: unknown) => console.error('Failed to write agent version:', e));
     } catch (e) {
         console.error('Failed to write agent version:', e);
     }
@@ -194,12 +192,33 @@ async function initializeMappingIndex(outputChannel?: vscode.OutputChannel): Pro
     }
 
     try {
-        const merged = await discoverAndMergeDatabases(rootPaths);
-        if (merged > 0) {
-            outputChannel?.appendLine(`[initializeMappingIndex] Discovered and merged ${merged} database(s)`);
+        const summary = await discoverAndMergeDatabases(rootPaths);
+        if (summary.sourcesMerged > 0) {
+            outputChannel?.appendLine(`[initializeMappingIndex] Discovered and relocated ${summary.sourcesMerged} database(s)`);
         }
     } catch (err) {
         outputChannel?.appendLine(`[initializeMappingIndex] Database discovery error: ${err}`);
+    }
+
+    // Split any consolidated global database (population (b): installs that ran 8258ce4b
+    // with multiple workspaces in one file) into per-project board files.
+    try {
+        const { splitConsolidatedDatabase, consolidatedGlobalDbExists } = require('./services/dbMerge');
+        if (consolidatedGlobalDbExists()) {
+            const { resolveCanonicalWorkspaceIdSync } = require('./services/WorkspaceIdentityService');
+            const knownIds = rootPaths.map(r => {
+                try { return resolveCanonicalWorkspaceIdSync(r).value; } catch { return ''; }
+            }).filter(id => id);
+            const splitResult = await splitConsolidatedDatabase(undefined, knownIds);
+            if (splitResult.success && splitResult.workspacesSplit > 0) {
+                outputChannel?.appendLine(`[initializeMappingIndex] Split consolidated global database into ${splitResult.workspacesSplit} board file(s)`);
+            }
+            if (splitResult.unknownWorkspaceIds.length > 0) {
+                outputChannel?.appendLine(`[initializeMappingIndex] Split: ${splitResult.unknownWorkspaceIds.length} workspace_id(s) matched no known workspace, left in place`);
+            }
+        }
+    } catch (err) {
+        outputChannel?.appendLine(`[initializeMappingIndex] Consolidated database split error: ${err}`);
     }
 }
 
@@ -223,7 +242,7 @@ function shouldRefreshAgentWorkspaceFiles(extensionPath: string, workspaceRoot: 
 /**
  * Predicate: a folder is Switchboard-managed for the control-plane refresh loop.
  * Consults workspace mappings first, then falls back to on-disk markers of a
- * deliberate setup (`kanban.db`, `db-pointer`, or `workspace-id`). The previous
+ * deliberate setup (`kanban.db` or `workspace-id`). The previous
  * "`.switchboard/` exists" test was self-defeating because board-mirror and
  * identity writers auto-created that directory; this tiered gate prevents that.
  */
@@ -748,6 +767,16 @@ export async function activate(context: vscode.ExtensionContext) {
 
     const firstWsFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     const backupService = BackupService.getInstance({ workspaceRoot: firstWsFolder });
+    // Wire restore-notification: every connected client must reload after a
+    // restore, not continue against a swapped-out database file.
+    backupService.setOnDatabaseRestored((info) => {
+        try {
+            (kanbanProvider as any)?._broadcaster?.push({ type: 'databaseRestored', ...info });
+            (taskViewerProvider as any)?._broadcaster?.push({ type: 'databaseRestored', ...info });
+        } catch (e) {
+            console.warn('[Switchboard] databaseRestored broadcast failed:', e);
+        }
+    });
     backupService.startScheduledBackups();
     context.subscriptions.push({
         dispose: () => {
@@ -1562,11 +1591,14 @@ export async function activate(context: vscode.ExtensionContext) {
         }
 
         const backupPath = path.join(workspaceRoot, '.switchboard', 'kanban-state-backup.json');
+        const migratedBackupPath = backupPath + '.migrated.bak';
+        const effectiveBackupPath = fs.existsSync(backupPath) ? backupPath
+            : (fs.existsSync(migratedBackupPath) ? migratedBackupPath : null);
         let restoreResult = { restored: 0, skipped: 0 };
-        if (fs.existsSync(backupPath)) {
+        if (effectiveBackupPath) {
             try {
                 await db.createIfMissing();
-                restoreResult = await db.restoreFromBackup(backupPath);
+                restoreResult = await db.restoreFromBackup(effectiveBackupPath);
             } catch (e) {
                 console.error('[resetKanbanDb] Backup restore failed:', e);
             }
