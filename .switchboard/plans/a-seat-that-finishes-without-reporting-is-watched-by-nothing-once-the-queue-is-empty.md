@@ -71,11 +71,18 @@ A single setting. Not per-role, not per-column, not per-complexity — one numbe
 
 Where the default comes from matters less than that it is visible and adjustable; a threshold nobody can find is a threshold nobody trusts.
 
-### 3. Tell the lead, once per card
+### 3. Tell the lead, and re-arm on evidence of progress
 
 The lead is the addressee — it is the party that is stuck, and it already has a recovery ladder (`3b387cf6`). Name the seat and the card so it can act without asking.
 
-Once per card, not per tick. A repeating nudge is noise and noise gets ignored, which leaves you where you started.
+**Not once per card. Once per stall.** A card can stall twice: the lead is nudged, it prods the coder, the coder does some work and stalls again. The second stall matters as much as the first and must not be silent.
+
+So the re-arm condition has to be stated, not left as "until something changes":
+
+- **Progress re-arms.** The card's plan file mtime advancing, or the seat producing output after the nudge, means the situation moved. A subsequent stall gets a fresh nudge.
+- **Silence does not.** A lead nudged about a card where nothing has changed since is told once and not again. Repeating into an unchanged situation is the noise this must avoid.
+
+**Do not re-arm on `dispatched_at`.** The existing feature nudge does exactly that (`:1088`), and it fails for this case: `dispatched_at` is stamped once at dispatch and does not change while a coder stalls, resumes and stalls again. Re-arming on it means one nudge per dispatch, ever, which is what leaves a second stall silent.
 
 ### 4. Never infer completion
 
@@ -110,5 +117,7 @@ Stated as a change because it is the mistake to avoid. The queue nudge stays as 
 5. A card completed before the threshold produces nothing.
 6. No card is marked complete, no seat cleared, no column advanced by this path.
 7. The threshold is a visible, adjustable setting.
-8. The feature nudge no longer suppresses on a dispatched subtask, and its contract test asserts the new arrangement.
-9. Both hosts behave identically.
+8. A card that stalls, is nudged, shows progress, then stalls again produces a second nudge.
+9. A card that stalls and shows no progress produces one nudge, not a stream.
+10. The feature nudge no longer suppresses on a dispatched subtask, and its contract test asserts the new arrangement.
+11. Both hosts behave identically.
