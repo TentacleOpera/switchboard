@@ -19,7 +19,7 @@ Typing /switchboard must reach the right board, prove it is alive, and present o
 - [ ] [The Console Column View Lists Subtasks as Plans, and Cannot Filter to What You Care About](../plans/the-console-column-view-lists-subtasks-as-plans-and-cannot-filter-to-what-you-care-about.md) — **CREATED** — ID: 9572d35f-4868-4e7c-85d0-b5fa4e61ac04
 - [ ] [The CLI Can Filter by Project, but Cannot List Them or Select Unassigned](../plans/the-cli-can-filter-by-project-but-cannot-list-them-or-select-unassigned.md) — **CREATED** — ID: 07922522-e407-4347-8bcd-345eaaf00f61
 - [ ] [The Console Gets Session Filters — Set Once, Applied Everywhere](../plans/the-console-gets-session-filters-set-once-applied-everywhere.md) — **CREATED** — ID: 8db0da5c-b0eb-456a-afa5-dd1e6da058d4
-- [ ] [The Console Gets a Command Menu Instead of One Flat List](../plans/the-console-gets-a-command-menu-instead-of-one-flat-list.md) — **CREATED** — ID: 5144f7ef-264f-4776-8a79-fb0e51013285
+- [ ] [The Board Console Gets a Commands Sub Menu and a Filters Option](../plans/the-board-console-gets-a-commands-sub-menu-and-a-filters-option.md) — **CREATED** — ID: 700b30ec-36cc-41f0-94a8-e3e0e70c4f95
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing (2026-09-04, Board Collapse 08)

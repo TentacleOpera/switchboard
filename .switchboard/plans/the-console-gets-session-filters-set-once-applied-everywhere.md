@@ -16,11 +16,9 @@ So the operator's actual question, *"show me my high-priority cards and let me d
 
 **The board has the axes, the console has none of them.** Starred, project, column, feature-vs-loose, and search are all real dimensions the board sorts and renders on. `compareConsoleCards` (`cli.ts:719-731`) already reads `priorityStarred`; `filterPlans` (`:673`) already takes a project. The pieces exist as one-shot arguments, not as state.
 
-**This absorbs two narrower filter cards.** `9572d35f` proposes a starred filter and `07922522` a project filter; both become values in this set rather than separate mechanisms. What does not fold in is `9572d35f`'s subtask exclusion — that is a correctness fix to what a column *is*, not a preference, and should land on its own.
+**This is additive. It removes nothing.** `Filter by Project` and `Search Plans & Features` stay on the console as commands, in the Commands sub menu (`700b30ec`), working exactly as they do now. The filter set is the persistent version of the same idea sitting beside them — an operator wanting a one-shot project view still uses the command. `9572d35f`'s subtask exclusion is separate again: that is a correctness fix to what a column listing contains, not a preference.
 
-**This is the board console's menu, not the top-level front door.** `cmdBoardConsole` (`cli.ts:2449`) currently lists Browse by Column, Search, Filter by Project, Inspect Fleet and Setup — three filters and two actions in one list. Set filters and Commands (`5144f7ef`) replace all five. The front door keeps its own job of starting servers and opening this console.
-
-`consoleSearch` (`:2242`) and `consoleFilterByProject` (`:2322`) already exist and become values in this set. Their code moves; the capability does not go away.
+**This is the board console, not the top-level front door.** Set filters is one of two options on `cmdBoardConsole`'s top level (`cli.ts:2449`); Commands (`700b30ec`) is the other, and the console's existing entries live inside it. The front door keeps its own job of starting servers and opening this console.
 
 ## Metadata
 
@@ -82,7 +80,7 @@ An operator who set a filter yesterday should find it today, and must be told it
 2. **Zero matches states the filter, and offers the clear key.** Never a bare empty list.
 3. **Subtask exclusion is not a filter.** It is what a column means; keep it in `9572d35f` and outside this set.
 4. **Non-TTY is unaffected.** Scripted invocation keeps using flags; session filters are an interactive-only concept and must not silently apply to `--json` output.
-5. **Supersedes the filter halves of `9572d35f` and `07922522`.** Reconcile before either is dispatched, or the same predicate gets written three times.
+5. **Nothing existing is removed or repurposed.** `consoleSearch` (`:2242`) and `consoleFilterByProject` (`:2322`) keep their entries and their behaviour. This adds a persistent filter set beside them.
 6. **Where the state lives** must be recorded — this is the config-read rule: a filter that came from a remembered value and one set this session must be distinguishable after the fact.
 
 ## Verification Plan
