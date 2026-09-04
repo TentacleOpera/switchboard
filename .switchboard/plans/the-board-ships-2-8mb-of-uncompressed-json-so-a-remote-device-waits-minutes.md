@@ -66,15 +66,28 @@ None.
 
 ## Proposed Changes
 
-### 1. Stop rendering the archive — this is the fix
+### 1. Cap what every column sends and renders, and page the rest — this is the fix
 
-The board must not build 2,038 Reviewed cards to show the operator New and Planned.
+**No column is special.** The obvious version of this fix — "don't load the archive" — keys on Reviewed being terminal, which is one operator's habit, not a property of the product. Confirmed against the code: the board has no notion of an archival column at all. Terminality exists only inside the tracker sync services, as a hardcoded `['DONE','COMPLETED','ARCHIVED']` list, and columns carry only an `order` integer. A different operator finishes in Completed, or in Acceptance Tested, or in a custom column, or genuinely works out of a Planned column holding six hundred cards. Any rule that names a column is wrong for someone.
 
-- **Scope the fetch by column.** Give `/kanban/plans` an explicit column scope and have the board request only the columns it is about to render. Default to today's behaviour when no scope is passed, so the CLI, `get-state.js` and the agent skills keep working — this must be additive, several shipped clients read this route.
-- **Load an archival column on demand.** Reviewed and Completed fetch and render when the operator scrolls to or expands them, not as part of first paint.
-- **Cap what one column renders, and say so.** A column holding thousands of cards needs windowing or an explicit "showing N of M" with a way to see the rest. Silently truncating is worse than either.
+The rule that is right for everyone is uniform:
 
-On today's board this takes first paint from 2,475 cards to about 437, and removes 82% of the DOM work.
+- **Every column returns its first N rows**, ordered by the board's existing comparator (starred first, then manual `columnOrder`, then the active order-by mode), **plus its true total**. Same N for every column, no exceptions, no per-column configuration.
+- **The column header shows the honest count** — the total, not the loaded count — and states "showing N of M" when they differ. A silently truncated column is worse than a slow one, because the operator cannot tell work is missing.
+- **Paging is on demand.** Scrolling a column, or an explicit control in it, fetches the next page and appends. Nothing else on the board blocks while it does.
+- **N is a single number, not a settings matrix.** Pick a default that makes first paint fast on a phone (50 is a reasonable starting point, to be confirmed by measurement) and expose it as one value if it needs exposing at all. Do not build a per-column policy UI.
+
+This satisfies all three constraints at once. It is **habit-agnostic**, because it never asks which column is terminal. It **assumes no workflow**, because it needs no reviewer, no completion step and no discipline. And it **scales for a genuinely busy board**: an operator with five hundred live cards in Planned gets fifty rendered, a header saying five hundred, and a board that opens as fast as an empty one.
+
+It also fixes the growth property, which is the real defect. First-paint cost stops being a function of how much work you have ever done.
+
+**Explicit non-goals**, because each is a tempting wrong turn:
+
+- Do not key on column id, on `order`, or on the sync services' terminal-column list.
+- Do not add a per-column "is archival" flag. That pushes the operator's habit into configuration and produces a board that is fast only when configured correctly.
+- Do not make the cap conditional on being remote. A local board with three thousand cards has the same defect; loopback merely hides it.
+
+**Where virtualisation fits.** Rendering only the rows in the viewport is the deeper fix and would make even a single page free. It is deliberately not proposed here: it does nothing for transfer, and it interacts badly with the board's drag-and-drop, which needs real elements as drop targets. If a fifty-card page still feels heavy after this lands, virtualise then, with a measurement to justify it.
 
 ### 2. Compress every response
 
@@ -96,6 +109,16 @@ Even at 300 KB the board currently paints nothing until the whole response lands
 
 Add the payload size and elapsed time of the last board fetch to the status bar or the diagnostics view, behind the existing verbose flag. The reason this survived so long is that it is invisible on loopback, where it is developed and tested. A number on screen makes the next regression a fact rather than a report.
 
+## Related but deliberately separate: reducing accumulation
+
+The operator's own diagnosis of *why* their Reviewed column holds two thousand cards is that nothing moves a card on from it — and the idea raised is that when the reviewer posts completion, the card could be marked complete automatically.
+
+That is worth doing and it is **not part of this plan**, for two reasons the operator named. It "won't work for everyone": plenty of setups have no reviewer seat, review outside Switchboard, or want a deliberate human gate before a card is called done. And it addresses accumulation, not speed — a board that accumulates more slowly is still unusable once it accumulates.
+
+If it is built, it must be **opt-in**, and this plan must not depend on it. The test is simple and worth stating: with the completion behaviour switched off and a column holding three thousand cards, the board must still open in about a second. If that is not true, this plan has not done its job.
+
+Filed as its own card rather than absorbed here.
+
 ## Edge-Case & Dependency Audit
 
 1. **Do not gzip an already-gzipped body.** Check for an existing `Content-Encoding` before wrapping.
@@ -104,7 +127,7 @@ Add the payload size and elapsed time of the last board fetch to the status bar 
 4. **The CLI and the agent skills read this route.** `switchboard plans`, `get-state.js` and the orchestration skills all call it. Additive scoping keeps them working; a required parameter would break them silently.
 5. **Proxies.** `Vary: Accept-Encoding` is mandatory, or an intermediary can serve a compressed body to a client that did not ask for one.
 6. **Measurement before optimisation.** *Attribute Switchboard's CPU before optimising it* gates the terminal-stream optimisations for good reason. It does **not** gate this: compression is not a guess, the before and after are both measured above, and the change is reversible in one line. Note the relationship so the two are not confused.
-7. **Board growth.** After change 2 the archive is still 2,038 rows and still grows. Retention and archival are owned by the storage programme's retention plan; this plan stops the archive being on the critical path, it does not bound it.
+7. **Board growth.** The archive still grows. Retention and archival are owned by the storage programme's retention plan; this plan stops the archive being on the critical path, it does not bound it.
 
 ## Dependencies
 
@@ -114,15 +137,19 @@ Related, not blocking: *Review Plan Selects The Plan It Was Clicked On* fixes th
 
 ## Verification Plan
 
-Every before-value below is measured, on this machine, 2026-09-04.
+Every before-value is measured on this machine, 2026-09-04. The last three are the ones that prove the fix is general rather than fitted to one board.
 
-1. **The reported scenario.** On the MacBook Air and the iPad on the same wifi, the board shows New, Planned and the coding columns with their cards within about a second. No interval in which a rendered board displays zero cards, and no reload needed.
-2. **Cards rendered at first paint**: about 437, against 2,475 today. Count DOM nodes matching the card selector after load.
-3. **Reviewed opens on demand** and its cards appear when expanded, without blocking anything else.
-4. A column holding thousands of cards either windows them or states "showing N of M" with a route to the rest. It never silently truncates.
-5. **Compression**: `curl -H 'Accept-Encoding: gzip' -D-` returns `Content-Encoding: gzip` and about 300 KB, against 2,826,774 bytes today; `Vary: Accept-Encoding` is present.
-6. `curl` with no `Accept-Encoding` still returns valid uncompressed JSON.
-7. **Both hosts** pass 5 and 6 — extension host and standalone.
-8. **Existing callers unaffected**: `switchboard plans`, `get-state.js`, and `GET /kanban/plans` with no scope parameter all return what they return today.
-9. The WebSocket deflate contract test still passes, untouched.
-10. **The growth property is gone**: adding a thousand rows to Reviewed does not change first-paint time. This is the check that proves the cause was the render and not the transfer.
+1. **The reported scenario.** On the MacBook Air and the iPad, on the same wifi, the board shows its columns with cards within about a second. No interval in which a rendered board displays zero cards, and no reload needed.
+2. **Rows at first paint**: capped per column, roughly 50 each, against 2,475 total today.
+3. **Counts stay honest.** Every column header shows its true total, and a capped column says "showing N of M". Compare each against `SELECT kanban_column, COUNT(*)` in the database.
+4. **Paging works** in both directions and appends without re-rendering the board.
+5. **Compression**: `curl -H 'Accept-Encoding: gzip' -D-` returns `Content-Encoding: gzip` and about 300 KB against 2,826,774 bytes today, with `Vary: Accept-Encoding`. Without the header, valid uncompressed JSON.
+6. **Both hosts** pass 5 — extension host and standalone.
+7. **Existing callers unaffected**: `switchboard plans`, `get-state.js`, and `GET /kanban/plans` with no scope parameter return what they return today.
+8. The WebSocket deflate contract test still passes, untouched.
+
+**The three that prove it generalises:**
+
+9. **Column-agnostic.** Move the bulk of the cards from Reviewed into Planned and reopen. First-paint time does not change. A fix that only helps when the big column is Reviewed fails here.
+10. **Growth-proof.** Add a thousand rows to any column. First-paint time does not change. This is the check that distinguishes the render cause from the transfer cause.
+11. **Workflow-independent.** With no reviewer seat configured and no completion automation, a board holding three thousand cards still opens in about a second.
