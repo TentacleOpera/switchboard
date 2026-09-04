@@ -1,29 +1,37 @@
-# The Subagent Policy Is a Sentence — Nothing Enforces It
+# The Subagent Policy Is Delivered Once and Is Not a Standing Order
 
 kanbanColumn: CREATED
 
 ## Goal
 
-A seat configured for no subagents cannot spawn one, on any host where that is enforceable. Where it is not enforceable, the operator is told that the setting is advice, and a violation is visible rather than silent.
+A seat configured for no subagents is still under that constraint on its second task, after a clear, and after a follow-up message — the same way it is still under the git-safety constraint.
 
 ### Problem analysis
 
-**Observed 2026-09-04.** A Devin coder dispatched with the policy in its prompt announced *"Let me write them all in parallel using subagents"* and ran a `code-specialist` subagent. The prompt it was given says, in full:
+**Observed 2026-09-04.** A coder finished one piece of work, was told *"now write the remaining tests"*, announced it would parallelise with subagents, and ran one. Asked about it, the coder said it had not been told not to.
 
-> `SUBAGENT POLICY: You are strictly forbidden from spawning or invoking any subagents. Handle all tasks yourself.`
+**It was right.** The constraint is delivered once, with the dispatch prompt, and it is not part of the durable set.
 
-**That sentence is the entire mechanism.** `NO_SUBAGENTS_DIRECTIVE` (`agentPromptBuilder.ts:1369`) is a string appended to a prompt. A repo-wide search for tool-permission machinery finds only `ClaudeCodeMirrorService`'s `allowedTools`, which scopes *skills* — not the seat's own tools. Nothing writes a host settings file, disallows a tool, or checks afterwards whether the instruction was followed.
+`NO_SUBAGENTS_DIRECTIVE` (`agentPromptBuilder.ts:1370`) appears only on the dispatch-prompt path — `:1443`, `:1502`, `:1834`. The standing-order fragments are a different list entirely:
 
-**So it is not a policy, it is a request** — and it competes against the host's own affordances. Spawning parallel subagents is a first-class, encouraged capability in the seat's harness; one line in a long prompt is the weaker signal. The failure is entirely predictable and will recur on any host that offers subagents natively.
+```
+codingHead   externalMemberCallback   gitSafety   globalCompletion
+headCommit   headCompletion   headNext   memberCompletion
+memberWork   orchestratorReport   reviewHead
+```
 
-**The cost is not theoretical.** The setting exists because the operator's teams *are* the parallelism: seats are the unit, and a coder fanning out to subagents spends budget outside the fleet, produces work no reviewer sees, and makes the seat's own progress unreadable. That is why the policy is set, and it did not hold.
+**There is no subagent fragment.** Standing orders are the block that says *"These apply to everything you do in this terminal until told otherwise"*, and they are re-delivered on terminal establish and after every clear. `gitSafety` is among them, because destructive-git constraints were recognised as needing to persist. The subagent policy is the same class of constraint — a standing prohibition on how the seat works, not an instruction about one task — and was never made one.
 
-**Two things are conflated today.** Whether a seat *should* use subagents is configuration and works. Whether a seat *can* is enforcement and does not exist. A setting that reads as the first while only delivering the second half of nothing is worse than an honest note, because the operator stops watching for the thing they believe is prevented.
+So the policy survives exactly as long as the dispatch prompt stays in context. A follow-up message, a clear, a long task that pushes it out, and the seat is operating with no policy and no way to know one existed. It does not ignore the instruction; it no longer has it.
+
+**The asymmetry is the tell.** Git safety persists and subagent policy does not, for no reason other than which list each was added to.
+
+**A second, separate gap: nothing enforces it either.** Even while in context, the directive is a prompt string. A repo-wide search for tool-permission machinery finds only `ClaudeCodeMirrorService`'s `allowedTools`, which scopes *skills*, not the seat's own tools. Nothing writes a host settings file, disallows a tool, or checks afterwards. That matters less than the durability gap — an instruction that is present and ignored is a different failure from one that is absent — but both are real.
 
 ## Metadata
 
-- **Complexity:** 4
-- **Tags:** agents, prompts, policy, both-hosts
+- **Complexity:** 3
+- **Tags:** agents, prompts, standing-orders, both-hosts
 
 ## User Review Required
 
@@ -31,42 +39,41 @@ None.
 
 ## Proposed Changes
 
-### 1. Enforce it where the host can
+### 1. Make the subagent policy a standing-order fragment
 
-Some seat CLIs can be launched with tools restricted or a permission file that denies subagent spawning. Where the seat's CLI family supports it, apply the restriction at spawn instead of asking in the prompt.
+Add it beside `gitSafety` in `standingOrderFragments.ts`, gated on the seat's resolved `subagentPolicy`. It is then composed into the standing-orders block, re-delivered on establish and after clear, and lives under the block's own contract — *"until told otherwise"*.
 
-The CLI family is already resolved per seat, so the dispatch path knows which host it is talking to. Use it.
+This is the fix. Everything below is secondary.
 
-### 2. Where it cannot be enforced, say so
+### 2. It must express the authorized variant too
 
-A host with no restriction mechanism gets the prompt directive and nothing else — that is unavoidable. What is avoidable is presenting it as a guarantee.
+The policy has two shapes: forbidden, and *"authorized to use `<name>`, no others"* (`:1371`). Both are standing constraints on how the seat works. A fragment that only carries the ban leaves the authorized case with the same durability gap.
 
-The setting must show which seats it actually binds and which it merely asks. An operator who knows a Devin seat is on the honour system watches for it; one who believes it is enforced does not.
+### 3. Enforce where the host allows it
 
-### 3. Detect a violation rather than assuming compliance
+Where a seat's CLI family supports restricting tools at spawn, apply it rather than relying on the prompt. The family is already resolved per seat, so the dispatch path knows which host it is talking to.
 
-Where enforcement is impossible, detection is still cheap. A seat that spawns a subagent produces recognisable output. Surface it as a turn-end notice to the lead, once, naming the seat.
+Where no mechanism exists, the prompt is what there is — but the setting should show which seats it binds and which are on the honour system. An operator who knows a seat is unenforced watches for it.
 
-The point is not to punish it — it is that today the violation is invisible until an operator reads the transcript, which is how this was found.
+### 4. Do not soften the wording
 
-### 4. Do not soften the directive
-
-The wording is not the problem and must not be weakened into a suggestion. An agent that ignores "strictly forbidden" will ignore anything gentler. The gap is mechanism, not phrasing.
+"Strictly forbidden" is not the problem. An agent that ignores it will ignore anything gentler. The gaps are durability and mechanism, not phrasing.
 
 ## Edge-Case & Dependency Audit
 
-1. **The authorized-subagent variant** (`:1371`, "you are authorized to use the `<name>` subagent") has the same gap in reverse — nothing stops a seat using a *different* one. Whatever enforcement lands must express both shapes, not just the ban.
-2. **Do not enforce by breaking the seat.** A restriction that stops the CLI starting, or that removes tools the task needs, is worse than the current state.
-3. **Host capability must be read, not assumed.** Guessing that a family supports a flag and silently doing nothing when it does not reproduces this bug one layer down. Record which mechanism was applied per seat.
-4. **The default is separate.** A memo finding records that `subagentPolicy` initialises to `'default'` rather than `'noSubagents'` (`KanbanProvider.ts:6610-6613`) — whether the ban should be the default is its own decision and not this card.
-5. **Both hosts** dispatch seats and both must apply whatever mechanism lands.
-6. **Detection must not fire on a legitimate authorized subagent.**
+1. **Check every other dispatch-only directive for the same gap.** The subagent policy was found because it failed loudly. Any constraint phrased as "how you work" rather than "what to do now" belongs in the standing orders, and the two lists should be reconciled rather than patched one entry at a time.
+2. **The standing-orders block has a length budget.** It is re-delivered on every clear and already carries several fragments; adding to it is not free. One sentence is affordable, a policy essay is not.
+3. **The `default` policy emits nothing** and must continue to — a seat with no policy set should not gain a standing order it never had.
+4. **A memo finding records that `subagentPolicy` initialises to `'default'`** rather than `'noSubagents'` (`KanbanProvider.ts:6610-6613`). Whether the ban should be the default is a separate decision and not this card.
+5. **Both hosts** compose standing orders and both must carry the new fragment.
+6. **Relates to `7dae7ef2` and `1e2afcd8`** — the after-clear block and the startup orientation. All three concern what a seat is told and when. Fixes should agree on what the durable set contains.
 
 ## Verification Plan
 
-1. A seat on a host that supports restriction cannot spawn a subagent, with the directive removed from the prompt entirely.
-2. A seat on a host that cannot be restricted still receives the directive, and the setting shows that seat as unenforced.
-3. A violation on an unenforced seat produces one notice to the lead naming the seat.
-4. An authorized subagent does not trigger the violation notice.
-5. The mechanism applied to each seat is recorded and readable after the fact.
-6. No seat fails to start because of the restriction.
+1. A seat with `noSubagents` receives the policy in its standing orders, not only in its dispatch prompt.
+2. That seat still has the policy after a clear.
+3. That seat still has the policy on a follow-up message with no new dispatch.
+4. A seat with an authorized subagent carries that constraint durably too.
+5. A seat with `default` gains no subagent standing order.
+6. Both hosts compose the fragment identically.
+7. Where a host supports tool restriction, a seat cannot spawn a subagent regardless of the prompt.
