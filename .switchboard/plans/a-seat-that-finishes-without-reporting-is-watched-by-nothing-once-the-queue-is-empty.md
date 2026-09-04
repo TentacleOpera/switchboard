@@ -12,9 +12,37 @@ One rule: **if a card has been dispatched for longer than the threshold and no c
 
 The lead could not have known. A report is the only event that reaches it, and none arrived. From the lead's side, "finished and forgot to report" and "still working" are the same silence.
 
-**Nothing watches for this, and what exists watches something else.** `PlanIngestionEngine`'s queue nudge gates every branch on `queueCards.length` (`:1324`) — cards staged in the dispatch queue. It exists to keep a *queue* advancing: no pacer with work staged, a dead pacer to re-stage, a pacer gone idle with more to hand out. The lead in this case had dispatched everything it had, so nothing was staged, and the whole watch returned before looking at anything.
+**Nothing watches for this, and a comment claims something does.**
 
-**The rule does not need the queue, and should not be built on it.** Whether cards are staged behind a seat has nothing to do with whether that seat's card has been out too long. Hanging this off the queue machinery makes it inherit a gate it does not want, which is exactly how the existing behaviour came to be.
+The feature nudge tracks exactly the right thing — subtasks with no completion post (`PlanIngestionEngine.ts:1067`) — and then suppresses itself at `:1080`:
+
+```js
+const outstanding = remaining.some(s => !!s.dispatchedAt);
+if (outstanding) {
+    // A dispatch is in progress — the head is working, not stalled.
+    // ... the per-dispatch backstop covers it, so the nudge stays silent.
+    kept.push(watch); continue;
+}
+```
+
+**The per-dispatch backstop does not exist.** The phrase occurs twice in the repository: in the comment above that defers to it, and in a contract test that asserts the suppression —
+
+```js
+assert.ok(sweep.includes('!!s.dispatchedAt'),
+  'an outstanding dispatch must suppress the nudge — the per-dispatch backstop owns that window');
+```
+
+So a green gate holds the suppression in place on the strength of a mechanism nobody built. Nothing anywhere is keyed on elapsed-since-`dispatchedAt`.
+
+**The queue nudge cannot cover it either.** Its scope (`:1319-1322`) is:
+
+```js
+p.kanbanColumn === 'STAGING'  &&  !p.dispatchedAt  &&  (!p.featureId || p.featureId === '')
+```
+
+A dispatched feature subtask fails all three conditions. And with nothing staged, `:1324` drops the watch entirely.
+
+**So the card falls between them by construction.** The feature watch hands it to something imaginary; the queue watch has excluded it by definition. The two existing thresholds — `nudgeSilenceMs` 600000 (10 minutes, `:511`) and `livenessWindowMs` 90000 (90 seconds, `:505`) — belong to watches that never look at it.
 
 **The data required is two fields already on the card.** `dispatched_at` is a timestamp and `completed_at` is NULL until the lead posts. `now - dispatched_at > threshold && completed_at IS NULL` is the entire condition. No seat liveness, no output sampling, no pacing model, no queue.
 
@@ -53,7 +81,13 @@ Once per card, not per tick. A repeating nudge is noise and noise gets ignored, 
 
 The nudge says a card has been out a long time. It never marks the card complete, never clears the seat, and never advances the column. `completed_at` remains NULL until the lead posts, exactly as today.
 
-### 5. Do not build this on the queue watch
+### 5. Delete the suppression and its test assertion
+
+Gate 4a at `:1080` suppresses the feature nudge for any dispatched subtask, deferring to a backstop that does not exist. Once this rule is built, that deferral is finally true — but the assertion in `terminal-plan-attribution-contract.test.js:365` must be rewritten to assert the *new* arrangement rather than the old suppression, or it locks the gap back in.
+
+An assertion whose justification is a mechanism nobody wrote is worse than no test. Do not leave it green over a rule that has changed underneath it.
+
+### 6. Do not build this on the queue watch
 
 Stated as a change because it is the mistake to avoid. The queue nudge stays as it is — it has its own job. This rule reads two card fields and a clock; it must not acquire a queue gate, a pacer concept, or a liveness probe on the way in.
 
@@ -62,7 +96,8 @@ Stated as a change because it is the mistake to avoid. The queue nudge stays as 
 1. **A legitimately long task will trip it.** That is acceptable and is what the threshold is for — one notification on a long-running card costs nothing; a missed one costs hours.
 2. **A card with no lead** (a solo seat, a direct dispatch) has nobody to notify. Notify the operator instead, or skip — decide, and do not silently drop it.
 3. **Depends on `711fa15e`.** `completed_at` is currently never reset, so a re-dispatched card carries a stale completion and would never trip this rule. That card resets it on dispatch.
-4. **`dispatched_at` must be trustworthy.** A card whose `dispatched_at` is cleared by a column move (see the dispatch-holder cards) would silently leave this watch. Confirm the field survives the paths that touch it.
+4. **The contract test at `terminal-plan-attribution-contract.test.js:365` will pass while the bug exists** and must be updated with the fix, not around it.
+4b. **`dispatched_at` must be trustworthy.** A card whose `dispatched_at` is cleared by a column move (see the dispatch-holder cards) would silently leave this watch. Confirm the field survives the paths that touch it.
 5. **Both hosts.**
 6. **`3b387cf6`** owns what the lead does once told. This card only makes sure it is told.
 
@@ -75,4 +110,5 @@ Stated as a change because it is the mistake to avoid. The queue nudge stays as 
 5. A card completed before the threshold produces nothing.
 6. No card is marked complete, no seat cleared, no column advanced by this path.
 7. The threshold is a visible, adjustable setting.
-8. Both hosts behave identically.
+8. The feature nudge no longer suppresses on a dispatched subtask, and its contract test asserts the new arrangement.
+9. Both hosts behave identically.

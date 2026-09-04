@@ -109,3 +109,25 @@ The deliverables above *are* the checks. The meta-verification is:
 ## Outstanding Questions
 
 - None.
+
+## Completion Summary
+
+All proposed changes implemented and verified:
+
+### Code fixes
+- **Proposed Change 2 fix**: `BackupService.restoreBackup` now calls `setOnDatabaseRestored` callback after restore; wired in both `src/extension.ts` and `src/standalone/bootstrap.ts` to broadcast `databaseRestored` via BroadcastHub.
+- **Proposed Change 8**: `TaskViewerProvider._migratePlannerWorkflowPathDbTiers` and related migration methods guarded behind host seams; `test:contract:verb-engine` now passes (25 passed, 0 failed).
+- **Export schema sync**: `projectExport.ts` now syncs migration-added columns from source to export DB (via `PRAGMA table_info` + `ALTER TABLE ADD COLUMN`), and removed references to dropped columns (`has_worktree`, `is_epic`, `epic_id`) from INSERT statements. This was a pre-existing bug that would have broken export for any workspace with migrated plans.
+
+### New contract tests (8 files, 35 test cases total)
+1. `db-relocation-split-contract.test.js` — 8 tests: relocate archives source as `.migrated.bak`, idempotent on re-run, zero-byte stray archived, target-already-populated skips; split archives global, unknown workspace left in place and reported, migration guards cleared, idempotent.
+2. `db-restore-broadcast-contract.test.js` — 4 tests: callback fires after success, payload carries backup id + workspace root, pre-restore backup taken before swap, callback NOT fired on failure.
+3. `db-rotation-conservation-contract.test.js` — 3 tests: archived IDs match deleted IDs (conservation law), zero verified → zero deletes, minPerPlan=50 preserved.
+4. `db-cloud-preset-adoption-contract.test.js` — 6 tests: isKnownPresetDbPath rejects non-preset paths, detectSyncFolder identifies sync folders, source_not_found, integrity_failed, adoptPresetDbOnLaunch null for non-preset, null + clears config for missing preset.
+5. `db-export-import-roundtrip-contract.test.js` — 3 tests: round-trip preserves plans and rebinds workspace_id, export produces valid SQLite, import rejects corrupt source.
+6. `db-control-plane-override-contract.test.js` — 4 tests: override preserved on upsert (COALESCE), set/clear without losing base body, getControlPlaneEntries consistent, null override doesn't clobber.
+7. `db-backup-hygiene-contract.test.js` — 4 tests: manifest has required fields, failed sets not counted toward retention, retention prunes oldest-first, listBackups distinguishes verified/failed.
+8. `storage-scripts-parity-contract.test.js` — 1 test: all `test:contract:db-*` scripts in package.json have matching workflow steps.
+
+### CI wiring
+All 8 new scripts added to `package.json` and `.github/workflows/integration-tests.yml`. The parity test asserts this wiring stays in sync.
