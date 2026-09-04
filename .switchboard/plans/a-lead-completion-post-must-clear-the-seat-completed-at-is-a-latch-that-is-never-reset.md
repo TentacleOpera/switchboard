@@ -89,3 +89,7 @@ If a completion genuinely is a duplicate — same run, same seat, already cleare
 4. A seat that has moved to a different card is not cleared by a stale completion, and the response says so.
 5. `onTeamReleased` fires for a team whose last subtask completed on a re-dispatched card.
 6. No completion response reports plain `success: true` while having cleared nothing.
+
+## Implementation Summary
+
+Reset `completed_at` to NULL on plan dispatch across both hosts (`updateDispatchInfoByPlanFile` and `attributePastedPrompt` in `KanbanDatabase` and `KanbanProvider`). Added `clearCompletedAt` and `clearCompletedAtByPlanFile` to `KanbanDatabase`, and invoked `clearCompletedAt` in `LocalApiServer.performKanbanDispatch`. Updated `completeCardInternal` in `LocalApiServer` to treat stale `completed_at` timestamps as fresh runs and guarded seat clears with `_isSeatCurrentDispatchedCard` against moved or already-cleared seats. Completion responses now explicitly return `cleared: false` with detailed `clearReason` and `clearError` on skipped clears rather than silent partial success envelopes. Unblocked `onTeamReleased` by removing the `!result.idempotent` gate so team releases trigger reliably on card completion.

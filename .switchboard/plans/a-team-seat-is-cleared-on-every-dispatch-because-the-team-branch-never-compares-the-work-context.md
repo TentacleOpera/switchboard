@@ -78,3 +78,7 @@ Clear when the key changed. Do not clear when it is the same. That is the whole 
 3. A lead is not cleared between two subtasks of one feature.
 4. A first dispatch to a seat with no recorded work context does not clear it.
 5. Both hosts produce the same clear decision for the same dispatch.
+
+## Implementation Summary
+
+Implemented work-context comparison before clearing team destination seats in both hosts (`TaskViewerProvider.ts` and `bootstrap.ts`). The team destination clear now requires `clearEnabled && lastTeamWorkKey && lastTeamWorkKey !== workContextKey`, matching the non-team branch logic. Redispatching a feature or subtask to a team seat that already holds the work context will no longer trigger an unconditional terminal clear. Updated `host-auto-clear-on-plan-change.test.js` contract tests to verify that both hosts gate team seat clearing on work-context change and truthy previous key.

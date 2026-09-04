@@ -217,3 +217,7 @@ from `reason: 'fallback'` (timer-based) and `reason: 'error'`.
 - `computeRosterClearTargets` in `workContextResolver.ts` is unchanged — the already-clean filter is applied by the caller, not the helper.
 
 **Recommendation:** Complexity 5 → Send to Coder.
+
+## Implementation Summary
+
+Moved the dispatch curtain arming site downstream of work-context overrides into `_ptyHostVerb` (extension) and verified parallel handling in `deliverPrompt` (standalone), eliminating premature curtaining in `handlePtyVerb`. Filtered `toClear` targets in both hosts' roster barriers against `_lastWorkContextByTerminal` / `lastWorkContextByTerminal` so clean seats are neither re-cleared nor re-curtained. Added a `cleared: boolean` field across `PromptDeliveryReceipt`, `ptyHost`, and standalone `ptySendPrompt` verb responses, threading `reason: 'no-clear'` to `terminalDispatchFinished` when a clear is suppressed or bypassed. Updated `terminals.js` (src and dist) to immediately disarm curtains on `reason: 'no-clear'` without timer delays, and extended contract tests to assert all invariants.

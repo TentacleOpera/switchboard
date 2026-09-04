@@ -150,3 +150,8 @@ Change the guard to clear team members too. The non-team clear path (`:4138-4141
 - `idempotent: true` is still present in the response when `existing.completedAt` is set.
 
 **Recommendation:** Complexity 4 → Send to Coder.
+
+## Implementation Summary
+
+Separated the database write of `completed_at` from the seat stand-down and clear side-effects in `LocalApiServer.ts`. In `completeCardInternal`, repeat completion requests preserve `idempotent: true` while still resolving `acceptedCodingSeat` and executing `clearTerminalContext`, guarded by `_isSeatCurrentDispatchedCard` and seat rest tracking so already-cleared or re-dispatched seats are not erroneously cleared. The `!result.idempotent` gate on `onTeamReleased` was removed so idempotent completions correctly trigger team release, and the `!isTeamMember` guard in `_runQueueDone` was eliminated so finishing team members are properly stood down upon completion.
+

@@ -219,6 +219,22 @@ const backend = kanbanProvider._getScopedSetting('terminalBackend', 'fleet') || 
 
 Roles, roster, definition resolution, the wire-safety guard at `TaskViewerProvider.ts:3473`, standing orders and dispatch all stay as they are. The `instantiateAgentGroupCore` flow (`agentGroupInstantiation.ts:83-182`) runs unchanged — caps pre-flight, `wireSpawnedTeam`, group registration, `onCreated` hook. Only the `createHeadWithDelegates` callback and the `onCreated` registry update branch on the backend. If this plan finds itself editing team semantics, the seam is in the wrong place.
 
+### Layout: one window per lead, coders as panes inside it
+
+The session's layout is not incidental — it decides what a small client can do with the session at all. Commit to this shape:
+
+- **One tmux window per team lead**, titled for the team.
+- **That team's coders and intern are panes inside their lead's window.**
+- **The CLI is its own window** alongside the leads.
+
+A client then sees leads as the top-level thing, and `prefix n` / `prefix p` cycles between them one full-screen at a time. That is the whole phone workflow: switch between leads and the CLI, which is what a phone is for. Coders remain seated, running and durable — they are simply not what the top level of the session shows.
+
+**This is a layout choice, not a second seating mode.** The whole roster is still seated through the one path this plan describes; `createHeadWithDelegates` still spawns the head and its delegates together. What is being fixed is *where* they land in the session tree. Do not add a leads-only backend, and do not let a team span two backends — a team half in tmux and half in the fleet breaks per-seat delivery routing, splits liveness across two pollers, and leaves reattach with no whole roster to match against.
+
+It also resolves the sizing problem below by construction: a client is looking at one lead's window, not a four-pane grid squeezed to 40 columns.
+
+**Reattach must match on this shape.** The roster-match check compares pane titles; with windows in play it has to match the window-per-lead structure too, or a session created before this layout will fail to match and refuse.
+
 ### Multi-device attach: a phone must not resize the Mac
 
 The feature's stated value is attaching "from the Mac, the iPad, or a different network". tmux does not size windows per client — with tmux 3.x's default `window-size latest`, the most recently attached client's dimensions win for **every** attached client. So a phone attaching at 80x20 resizes the team's window to 80x20 and the Mac's grid collapses into a corner of its terminal.
