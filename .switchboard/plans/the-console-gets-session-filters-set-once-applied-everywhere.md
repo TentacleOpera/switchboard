@@ -16,7 +16,9 @@ So the operator's actual question, *"show me my high-priority cards and let me d
 
 **The board has the axes, the console has none of them.** Starred, project, column, feature-vs-loose, and search are all real dimensions the board sorts and renders on. `compareConsoleCards` (`cli.ts:719-731`) already reads `priorityStarred`; `filterPlans` (`:673`) already takes a project. The pieces exist as one-shot arguments, not as state.
 
-**This subsumes narrower cards.** `9572d35f` proposes a starred filter and `07922522` a project filter. Both become values in this set rather than separate mechanisms. What does not fold in is `9572d35f`'s subtask exclusion — that is a correctness fix to what a column *is*, not a preference, and should land on its own.
+**This absorbs two narrower filter cards.** `9572d35f` proposes a starred filter and `07922522` a project filter; both become values in this set rather than separate mechanisms. What does not fold in is `9572d35f`'s subtask exclusion — that is a correctness fix to what a column *is*, not a preference, and should land on its own.
+
+**It sits alongside the command menu, not above it.** The filter set is one entry on the board-work arm of the front door (`759c05b5`'s `[C]`), the command menu (`5144f7ef`) is the other, and everything the command menu opens honours whatever is set here.
 
 ## Metadata
 

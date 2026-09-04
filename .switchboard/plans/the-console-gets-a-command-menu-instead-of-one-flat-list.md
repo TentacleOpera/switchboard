@@ -16,7 +16,21 @@ The result is a menu that is simultaneously too long and missing the things it i
 
 **This is the shape the operator asked for:** a command menu grouping the common actions, sitting beside the filter set. Both are one keystroke from the front door, and everything under the command menu honours the filters.
 
-**Relationship to `759c05b5`.** That card also restructures the front door, splitting it into a GUI branch and a CLI branch. This is the same instinct with a better split: the division that matters is not "server vs board" but "set what I'm looking at" vs "do something". Reconcile the two before either is built — they must not both land.
+**How this composes with `759c05b5`.** That card defines the front door's top bifurcation — server lifecycle (`[G]`) versus board work (`[C]`). This card defines what lives inside the board-work arm. They are different levels of the same structure and both land:
+
+```
+switchboard
+  [G] GUI / server      → start local | start tailnet          (759c05b5)
+  [C] Board console     → [f] set filters                      (8db0da5c)
+                          [c] commands ─ view features
+                                         view fleet
+                                         view cards & dispatch
+                                         start a team
+                                         diagnostics
+                                         more: setup, help      (this card)
+```
+
+`5fb04de7` then binds Enter to the likely arm and gives every key a stable meaning, and `9572d35f` fixes what a column listing contains. Four cards, one structure, no overlap.
 
 ## Metadata
 
@@ -26,11 +40,11 @@ The result is a menu that is simultaneously too long and missing the things it i
 
 ## User Review Required
 
-Change 1 carries one decision: whether this replaces `759c05b5` or is merged into it.
+None.
 
 ## Proposed Changes
 
-### 1. A command menu, grouping what an operator actually does **[decision]**
+### 1. A command menu, grouping what an operator actually does
 
 One submenu holding the common actions, each already existing somewhere as a subcommand:
 
@@ -42,7 +56,7 @@ One submenu holding the common actions, each already existing somewhere as a sub
 
 Setup, scaffolding and help are not common actions. They belong behind the same menu but at the bottom, or behind a single "more" entry — not competing for attention with the things done every session.
 
-**The decision:** `759c05b5` proposes a GUI/CLI split of the same front door. Settle whether that card is superseded by this one or whether the two merge, before either is coded. Both rewriting `cmdMainMenu` independently is a guaranteed conflict.
+This menu is the contents of `759c05b5`'s `[C]` arm, not a replacement for it. Server lifecycle stays on the `[G]` arm where that card puts it.
 
 ### 2. Everything under it honours the session filters
 
@@ -59,8 +73,8 @@ The operator's most frequent action must stay reachable in one keystroke from th
 ## Edge-Case & Dependency Audit
 
 1. **Depends on the session filters card** for change 2. The menu can ship first with no filtering, but then must be revisited — say so rather than shipping it as finished.
-2. **Conflicts with `759c05b5`** on the same function. One of them lands.
-3. **Also conflicts with `5fb04de7`** (Enter binding, stable keys) and `9572d35f` (column listing) in the same code. Four cards, one `cmdMainMenu` — sequence them.
+2. **Four cards touch `cmdMainMenu`** — `759c05b5` (the top split), this one (the `[C]` arm's contents), `5fb04de7` (Enter binding and stable keys), `9572d35f` (column listing). They compose, but they edit the same function: sequence them rather than dispatching in parallel.
+3. **`759c05b5` should land first.** It defines the structure this fills in.
 4. **Server-offline state changes what is available.** Actions needing a running server are shown unavailable with their key, not renumbered away — same rule as `5fb04de7`.
 5. **Non-TTY is unaffected.**
 
@@ -72,4 +86,4 @@ The operator's most frequent action must stay reachable in one keystroke from th
 4. The most common action remains one keystroke from the front door.
 5. With no server running, unavailable entries are shown unavailable rather than removed.
 6. Setup, scaffolding and help are reachable but not competing with daily actions.
-7. Exactly one of this card and `759c05b5` has been implemented.
+7. The command menu sits inside `759c05b5`'s board-work arm, and the GUI arm still starts a server.
