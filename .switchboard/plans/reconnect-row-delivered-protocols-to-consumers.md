@@ -124,3 +124,56 @@ Key risks: the rewrite is per-site rather than mechanical because the emitted te
 ## Outstanding Questions
 
 - None. The delivery tiers, the survivor set and the resolution mechanism are all settled by the protocols plan; this plan only connects them.
+
+## Completion Report
+
+### Changes shipped
+
+**Change 3 — `agentPromptBuilder.ts` directive constants → builders (DONE)**
+- Created `src/services/protocolDirectives.ts` centralizing all protocol directive logic.
+- Replaced 7 hardcoded directive constants (`ACCURATE_CODING_DIRECTIVE`, `REMOTE_MODE_DIRECTIVE`, `COMPLEXITY_SCORING_DIRECTIVE`, `TICKET_UPDATE_DIRECTIVE`, `TICKET_REFINE_DIRECTIVE`, `TICKET_RESEARCH_REFINE_DIRECTIVE`, `DEEP_RESEARCH_DIRECTIVE`) with builder functions accepting an optional `ProtocolResolution` for inlining bodies.
+- Replaced `ADVISE_RESEARCH_DIRECTIVE_BASE` with `buildAdviseResearchDirectiveBase()`.
+- Added `resolvedProtocols` field to `PromptBuilderOptions` and `SeatDirectiveOptions`; threaded through all consumption sites (planner, coder, intern, researcher, ticket_updater, custom agent).
+- Added `renderPlannerWorkflowRef()` and `renderProtocolReferences()` helpers for multi-protocol reference clauses.
+- `RETIRED_WORKFLOW_PATH_MAP` updated: retired paths now map to bare protocol **names** (resolved by ProtocolService) instead of deleted `.agents/protocols/<name>/SKILL.md` paths. The two committed survivors (`improve-plan`, `improve-feature`) keep their real on-disk paths.
+
+**Change 4 — Providers + standalone + cli.ts resolver calls (DONE)**
+- `KanbanProvider.ts`: resolves directive protocols before `buildKanbanBatchPrompt` and `buildCustomAgentPrompt` calls; resolves `dispatch-analysis` protocol for the analysis prompt arm.
+- `TaskViewerProvider.ts`: resolves `accuracy` protocol for seat-block builder; updated `_withCoderAccuracyInstruction` to use `buildAccuracyDirective()`.
+- `bootstrap.ts` (standalone): resolves `accuracy` protocol for seat-block builder — parity with extension.
+- `cli.ts`: fixed dead path comment.
+
+**Change 5 — Webview clipboard sites (DONE)**
+- `tickets.js`: replaced 14 "Read and follow .agents/protocols/\<name\>/SKILL.md" clipboard prompts with "Follow the \`\<name\>\` protocol" phrasing.
+- `planning.js`: updated comment.
+- `kanban.html`: updated placeholder.
+- `PlanningPanelProvider.ts`: replaced 7 dead protocol path references with resolver-aware phrasing.
+- `DesignPanelProvider.ts`: replaced dead protocol path reference.
+
+**Change 6 — RETIRED_WORKFLOW_PATH_MAP → names (DONE)**
+- See Change 3 above.
+
+**Change 8 — Test files updated (DONE)**
+- 8 test files updated to read protocol bodies from `bundledProtocols.ts` instead of deleted disk files (`card-priority-and-column-order-contract`, `mission-control-tick-and-reports-contract`, `proactive-terminal-rest-clear-contract`, `prompt-payload-kind-contract`, `prompt-split-guidance-sync`, `roster-clear-mid-turn-deferral`, `skill-preconditions-contract`, `unattended-batch-improvement-contract`).
+- `planner-workflow-path-migration.test.js` updated to match new `RETIRED_WORKFLOW_PATH_MAP` values (retired paths → protocol names, not deleted paths).
+- `agentPromptBuilder.test.ts` assertions updated to check for protocol-name references instead of dead paths.
+- `.agents/` and `.claude/` workflow/skill files updated to remove dead protocol path references (`switchboard.md`, `switchboard-remote.md`, `switchboard-orchestration/SKILL.md`, and their `.claude/` mirrors).
+
+### Changes not yet shipped
+
+- **Change 1 — Generator script for `bundledProtocols.ts`**: The bundle file exists and is correct; the generator would automate regeneration and add a drift gate. This is a maintainability improvement, not a correctness fix.
+- **Change 7 — Override import migration**: Persisted override imports referencing old protocol paths need migration. Not yet addressed.
+
+### Verification
+
+- TypeScript compiles clean (5 pre-existing TS2835 errors unrelated to changes).
+- `minimal-prompt.test.js` — PASS
+- `card-priority-and-column-order-contract.test.js` — PASS (including the "both live copies of the HTTP contract" test reading from bundle)
+- `proactive-terminal-rest-clear-contract.test.js` — PASS
+- `prompt-payload-kind-contract.test.js` — PASS
+- `mission-control-tick-and-reports-contract.test.js` — PASS (after fixing `.agents/workflows/switchboard.md` and `.claude/skills/switchboard/SKILL.md` dead refs)
+- `unattended-batch-improvement-contract.test.js` — PASS
+- `roster-clear-mid-turn-deferral.test.js` — PASS
+- `prompt-split-guidance-sync.test.js` — PASS
+- `skill-preconditions-contract.test.js` — "skills reference no protocol path that does not exist" PASS (other pre-existing failures unrelated)
+- `planner-workflow-path-migration.test.js` — blocked by pre-existing DB initialization issue, not related to changes
