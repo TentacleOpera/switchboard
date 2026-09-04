@@ -84,6 +84,23 @@ So the re-arm condition has to be stated, not left as "until something changes":
 
 **Do not re-arm on `dispatched_at`.** The existing feature nudge does exactly that (`:1088`), and it fails for this case: `dispatched_at` is stamped once at dispatch and does not change while a coder stalls, resumes and stalls again. Re-arming on it means one nudge per dispatch, ever, which is what leaves a second stall silent.
 
+### 3b. What turns it off
+
+The rule is a predicate evaluated each sweep, not a watch that is armed and dropped:
+
+```
+dispatched_at set  AND  completed_at NULL  AND  now - dispatched_at > threshold
+```
+
+A card stops matching when the lead posts its completion. That is the only intended off switch — no registry, nothing to arm, nothing to leak, and no separate lifecycle to get wrong.
+
+Two things must **not** turn it off:
+
+- **A dead head.** The existing feature nudge drops its watch when the head terminal is absent or exited (`:1030-1038`). For this rule that is backwards: a lead that has died is the strongest reason to tell someone about the cards it was holding, not a reason to stop looking. If the head is gone, escalate to the operator.
+- **The end of a queue.** Nothing about what is or is not staged has any bearing on whether a dispatched card has been out too long.
+
+One thing that *will* turn it off, silently, and should be checked: **`dispatched_at` being cleared.** A card whose dispatch stamp is nulled leaves the predicate and is never looked at again. `bf23c37f` (*A column move orphans the dispatch holder, and the seat can never release it*, starred) is exactly that path. Confirm which operations clear the stamp before relying on it as the anchor.
+
 ### 4. Never infer completion
 
 The nudge says a card has been out a long time. It never marks the card complete, never clears the seat, and never advances the column. `completed_at` remains NULL until the lead posts, exactly as today.
@@ -104,6 +121,7 @@ Stated as a change because it is the mistake to avoid. The queue nudge stays as 
 2. **A card with no lead** (a solo seat, a direct dispatch) has nobody to notify. Notify the operator instead, or skip — decide, and do not silently drop it.
 3. **Depends on `711fa15e`.** `completed_at` is currently never reset, so a re-dispatched card carries a stale completion and would never trip this rule. That card resets it on dispatch.
 4. **The contract test at `terminal-plan-attribution-contract.test.js:365` will pass while the bug exists** and must be updated with the fix, not around it.
+4c. **Do not add a watch registry.** The existing watches carry arming, dropping, `nudgeCount` and `lastNudgedAt` per feature, and two of their four drop conditions are unrelated to whether anything still needs watching. A predicate over card fields has none of that surface.
 4b. **`dispatched_at` must be trustworthy.** A card whose `dispatched_at` is cleared by a column move (see the dispatch-holder cards) would silently leave this watch. Confirm the field survives the paths that touch it.
 5. **Both hosts.**
 6. **`3b387cf6`** owns what the lead does once told. This card only makes sure it is told.
@@ -120,4 +138,6 @@ Stated as a change because it is the mistake to avoid. The queue nudge stays as 
 8. A card that stalls, is nudged, shows progress, then stalls again produces a second nudge.
 9. A card that stalls and shows no progress produces one nudge, not a stream.
 10. The feature nudge no longer suppresses on a dispatched subtask, and its contract test asserts the new arrangement.
-11. Both hosts behave identically.
+11. A card stops nudging when, and only when, its completion is posted.
+12. A dead head does not stop the nudges for cards it dispatched; those escalate to the operator.
+13. Both hosts behave identically.
