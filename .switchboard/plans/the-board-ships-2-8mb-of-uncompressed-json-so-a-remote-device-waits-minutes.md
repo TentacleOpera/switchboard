@@ -109,6 +109,25 @@ Even at 300 KB the board currently paints nothing until the whole response lands
 
 Add the payload size and elapsed time of the last board fetch to the status bar or the diagnostics view, behind the existing verbose flag. The reason this survived so long is that it is invisible on loopback, where it is developed and tested. A number on screen makes the next regression a fact rather than a report.
 
+## Asked and answered: does the local-replica plan already cover this?
+
+It does not, and the distinction is worth writing down because the idea is a reasonable one to have twice.
+
+Two existing cards are in the neighbourhood, both parked in Backlog behind the storage programme:
+
+- **A libSQL shared store, hosted on Turso or self-hosted sqld** proposes exactly a local database that syncs: an **embedded replica**, a local SQLite file as the read path, writes forwarded to the remote, periodic `.sync()`, with offline as the default mode rather than a degraded one.
+- **Make the orphan-branch board snapshot bidirectional** carries board state in a git branch.
+
+Neither helps here, for two independent reasons.
+
+**The replica is on the wrong side of the wire.** That plan's local file lives with the *sidecar*, so the Switchboard process reads locally instead of round-tripping to Turso. Its own text is explicit that the remote's job is "arbitration and durability, not query serving". The iPad and the MacBook are still browsers talking HTTP to that server, and they still receive the same 2,475 rows.
+
+**Even a replica on the device would not fix the symptom.** The measured bottleneck is the browser building every card into the DOM, not the bytes arriving. A local store removes a one-to-three-second transfer and leaves the render untouched — a large piece of machinery that does not fix the reported problem. The same is true of *Board state you can carry*, which is a file export for machine migration, not a live read path.
+
+For completeness: the PWA card, *The board is reachable only by typing a tailnet address into Safari*, deliberately ships **no service worker, no offline and no caching**, with a stated reason — a stale shell served from cache after an update is a nasty failure. So there is no client-side cache to lean on either.
+
+**When a local replica would earn its place:** genuine offline use, a genuinely distant link where round-trip latency dominates, or repeated loads that should not refetch. None of those is the case reported here, where the device is a metre away on the same wifi.
+
 ## Related but deliberately separate: reducing accumulation
 
 The operator's own diagnosis of *why* their Reviewed column holds two thousand cards is that nothing moves a card on from it — and the idea raised is that when the reviewer posts completion, the card could be marked complete automatically.
