@@ -16,7 +16,7 @@ Give storage a single operator-facing surface, and make board state survivable w
 ## Subtasks
 - [ ] [Board state cannot survive machine loss without a third-party account — surface the state file as an explicit export/import](../plans/portable-board-state-export-import.md) — **PLAN REVIEWED** — ID: afe4fd67-0786-4aea-80cd-822dc6704dcb
 - [ ] [Board state backup works and nobody knows it exists — document it, and stop telling only git that the state is unrecoverable](../plans/board-state-backup-discoverability.md) — **PLAN REVIEWED** — ID: 73eaecb7-c038-4f5f-aab9-1de2ec417e0b
-- [ ] [A Database panel in the shell rail that owns storage, and the retirement of the Setup tab that half-owns it today](../plans/database-panel-in-the-shell-rail.md) — **PLAN REVIEWED** — ID: 3e1f6644-9398-424f-99b3-c8995d1adbb6
+- [ ] [A Database panel in the shell rail that owns storage, and the retirement of the Setup tab that half-owns it today](../plans/database-panel-in-the-shell-rail.md) — **CODER CODED** — ID: 3e1f6644-9398-424f-99b3-c8995d1adbb6
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

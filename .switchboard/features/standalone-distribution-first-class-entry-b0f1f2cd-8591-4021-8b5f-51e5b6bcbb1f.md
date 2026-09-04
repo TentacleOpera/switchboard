@@ -7,7 +7,6 @@
 > 
 > Dependencies still carries a guard belonging to the moved card — *"`npm run mirror:check` is a CI gate on the entry-protocol subtask"*. Void twice over: that subtask is elsewhere, and `mirror:check` is being deleted with the mirror generator. The entry-protocol plan now edits both control-plane trees directly and cites the drift test that replaces the gate.
 
-
 **Complexity:** 6
 
 ## Goal

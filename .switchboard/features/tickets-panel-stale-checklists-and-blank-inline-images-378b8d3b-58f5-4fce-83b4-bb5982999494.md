@@ -7,7 +7,6 @@
 > 
 > Note for that survivor: *Replace embedded subtask content with file references* absorbs its checklist rewrite as a migration step, so coordinate rather than duplicating the strip.
 
-
 **Complexity:** 6
 
 ## Goal

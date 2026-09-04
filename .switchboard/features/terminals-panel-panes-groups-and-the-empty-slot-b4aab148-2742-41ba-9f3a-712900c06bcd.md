@@ -7,7 +7,6 @@
 > 
 > A correction of record: a Board Collapse note claimed this subtask was named in this file but not linked in the database. That was wrong — it has always carried this feature's id. It was simply outside the New and Planned scope being audited, which is why it did not appear in the survey. The dependency the feature file describes still holds: without it, the empty-pane subtask's third `index` argument and the group-switch subtask's `isSlotFree` extraction ship as inert scaffolding.
 
-
 **Complexity:** 6
 
 ## Goal

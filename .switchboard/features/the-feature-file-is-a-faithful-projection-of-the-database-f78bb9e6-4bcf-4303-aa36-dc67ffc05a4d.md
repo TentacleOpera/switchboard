@@ -10,12 +10,9 @@ Three defects share one fault line. A feature subtask block is a lossy write-tim
 
 These are not column-containment bugs - that concern is owned by Board State Integrity. These three are about the file being an honest mirror of the rows: written completely, written safely under concurrency, and not silently reverted on the next watcher pass.
 
-
 ## How the Subtasks Achieve This
 
-- **Feature Subtask Block Goes Invisible on Stale Feature File Read**: fixes the case where a subtask is correctly linked in the DB but absent from the file's `<!-- BEGIN SUBTASKS -->` block — which every agent reading that file sees as absent. Keeps the file to DB direction rather than deleting it.
-- **Serialize feature-file subtask-block regeneration**: makes the block a self-healing projection of the `plans` table instead of a lossy write-time snapshot, and serialises concurrent regenerations so one pass cannot silently drop what another just wrote.
-- **Renaming a card is a supported operation**: one verb that writes the card's topic and the plan file's `# H1` together, so a rename survives `UPSERT_PLAN_SQL` overwriting `topic` from the file on the next re-import.
+- **Feature Subtask Block Goes Invisible on Stale Feature File Read**: fixes the case where a subtask is correctly linked in the DB but absent from the file's `
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
