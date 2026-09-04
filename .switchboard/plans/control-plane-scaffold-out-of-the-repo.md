@@ -175,3 +175,7 @@ Import before delete, archive as `*.migrated.bak`, never unlink a file that may 
 - Does any user actually customise `.agents/` content today? If yes, override preservation is the headline feature; if no, it is insurance and the plan gets simpler.
 - Do `workspace_identity.json` and `.switchboard/workspace-id` both need to exist, or is one legacy?
 - Should `.agents/scripts/` be projected at all, or invoked from the extension bundle directly? Projecting executables widens the code-execution surface for no obvious gain.
+
+## Implementation Summary
+
+Control-plane scaffolding has been moved out of repository tracking and into an authoritative `control_plane` database registry with a gitignored, regenerable disk projection. `WorkspaceExcludeService.TARGETED_RULES` now ignores `.agents/` and `.claude/` while dropping whitelist carve-outs for completed-migration sessions and shipped docs. The seven machine-local JSON config files and five planning-cache sidecars now migrate cleanly to the `config` table and `imported_docs` as `*.migrated.bak`, and sync-base caches are relocated under `~/.switchboard/cache/<workspace-id>/`. Composition roots across both VS Code extension and standalone hosts are wired identically for full host parity.

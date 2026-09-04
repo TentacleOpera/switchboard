@@ -18,7 +18,7 @@ override Devin's readiness wait.
 
 ### Root cause — compatibility inference lets a delay silently replace readiness
 
-`resolvePtyClearPolicyFromExplicit` (`ptyClearPolicy.ts:24`) infers manual mode from the mere
+`resolvePtyClearPolicyFromExplicit` (`src/services/ptyClearPolicy.ts:24`) infers manual mode from the mere
 presence of a delay value:
 
 | Rule | Condition | Result |
@@ -26,7 +26,7 @@ presence of a delay value:
 | 3 | no explicit mode + explicit `terminal.ptyClearBeforePromptDelay` | `{mode:'manual', source:'pty-explicit'}` |
 | 4 | no explicit mode + explicit **legacy** `terminal.clearBeforePromptDelay` | `{mode:'manual', source:'legacy-explicit'}` |
 
-and `createClearReadinessTracker` (`clearReadiness.ts:127`) checks mode **above** family:
+and `createClearReadinessTracker` (`clearReadiness.ts:166`) checks mode **above** family:
 
 ```ts
 if (mode === 'manual') { mainTimer = setTimeout(() => finish('manual'), fallbackDelay); return ...; }
@@ -49,7 +49,7 @@ observation on the path where it can.
 
 That plan already saw this trap. Its Goal is *"make the effective compatibility source visible
 instead of allowing a 600ms slider to silently defeat known-CLI readiness detection"*, and it
-shipped the escape: an explicit Auto radio (`kanban.html:7480`) that overrides the inference.
+shipped the escape: an explicit Auto radio (`kanban.html:3127`) that overrides the inference.
 
 **Visibility is the wrong remedy for this failure.** The symptom is a Devin prompt landing
 mid-clear — the operator sees a truncated dispatch, not a settings problem. Nothing in that
@@ -60,24 +60,75 @@ expecting them to diagnose the resolver. A correct default must not need that.
 The escape hatch stays. It stops being the thing standing between a Devin seat and a truncated
 clear.
 
-## Implementation
+## Metadata
 
-### 1. Delete rule 4 — a VS Code delay must never govern PTY policy
+**Complexity:** 4
+**Tags:** backend, reliability, bugfix, ux
+**Project:** Browser Switchboard
 
-Remove the `explicitLegacyDelay → {mode:'manual', source:'legacy-explicit'}` inference from
-`resolvePtyClearPolicyFromExplicit`. `terminal.clearBeforePromptDelay` keeps governing VS Code
-seats exactly as it does now; it stops being an input to PTY mode.
+## User Review Required
+
+None. The safe-default direction is settled: a delay is a floor, never a bypass. Rule 4 deletion
+is a strict narrowing — a VS Code setting stops affecting PTY seats, which is the documented intent.
+
+## Complexity Audit
+
+### Routine
+- Deleting rule 4 from `resolvePtyClearPolicyFromExplicit` — removing one `if` branch.
+- Keeping `source` reporting and the legacy delay value plumbing intact.
+- Extending the pty-clear-policy tests for the removed inference.
+
+### Complex / Risky
+- **Changing the mode/family precedence in `createClearReadinessTracker`.** The current code short-circuits on `mode === 'manual'` before consulting family. The fix makes a known family always run its state machine, with the delay as a floor via `max(configured delay, readiness outcome)`. This changes the resolution semantics for every manual-mode known-family seat — the delay stops being the whole wait and becomes a minimum. The resolution logic must live in `createClearReadinessTracker` itself (the one place the mode/family precedence is decided), not in the caller.
+- **Late-signal detection.** After the tracker resolves (via floor/fallback/timeout), a ready signal may still arrive. Detecting this requires the `onData` subscription to remain active past `finish()` — or a separate post-resolution listener. The boundary for "late" is: any ready signal arriving after `finish()` has been called, regardless of margin. The tracker must record this as a distinct reason (e.g. `'late-signal'`) on `terminalDispatchFinished` rather than folding it into `fallback`.
+
+## Edge-Case & Dependency Audit
+
+**Race conditions:**
+- The floor timer and the state machine run concurrently inside `createClearReadinessTracker`. The state machine may resolve `signal` before the floor elapses; in that case the floor must still be honoured — the tracker waits the remaining floor time before resolving. If the floor elapses first, the tracker resolves on `fallback` but keeps the `onData` subscription alive to detect a late signal.
+- A seat that exits during the floor wait: the existing `onExit` listener fires `finish('exit')`, which must override the floor — an exited seat has nothing to wait for.
+
+**Security:**
+- No new attack surface. The change affects timing, not content.
+
+**Side effects:**
+- A manual-mode known-family seat that previously resolved in 600ms now waits at least the state machine's resolution time (up to 15s for devin). This is the intended fix but is a visible latency change for any operator who set a manual delay on a known-CLI seat.
+- Rule 4 deletion means `terminal.clearBeforePromptDelay` no longer appears in PTY policy source reporting. The UI's source label for PTY seats will never show `legacy-explicit` again. This is correct but may surprise an operator who previously saw it.
+
+**Dependencies & conflicts:**
+- `a-seats-cli-family-is-frozen-at-spawn-so-devin-timing-fixes-never-reach-it.md` — changes the `unknown` arm's timeout in `createClearReadinessTracker` from `fallbackDelay` (600ms) to `DEVIN_DEFAULT_TIMEOUT_MS` (15000ms). This plan's floor logic and the frozen-family plan's timeout change both touch the `unknown` branch. They are compatible: the frozen-family plan changes the *value*, this plan changes the *precedence* (manual no longer short-circuits for known families). For `unknown` family, this plan's change is a no-op — "unknown family is unchanged: the delay is the whole policy." Land the frozen-family plan first.
+- `prompt-delivery-should-be-patient-not-precise.md` — adds a flat floor timer in `sendPromptToPty`. This plan's floor is in `createClearReadinessTracker` (the clear path); the patient-delivery plan's floor is in `sendPromptToPty` (the delivery path). They are additive, not conflicting: a clear-path seat waits `max(delay, readiness)` in the tracker, then the delivery floor applies on top.
+
+## Dependencies
+
+- `a-seats-cli-family-is-frozen-at-spawn-so-devin-timing-fixes-never-reach-it.md` — changes the `unknown` branch timeout in `createClearReadinessTracker`. Land first; this plan's floor logic is compatible with the new timeout but should be coded against the post-frozen-family state.
+- `dispatch-preparation-curtain-and-themed-ufo.md` — settled the 15s ceiling for known CLIs. Not a dependency; a constraint this plan does not reopen.
+
+## Adversarial Synthesis
+
+Key risks: (1) the floor-as-max resolution is underspecified — it must live in `createClearReadinessTracker`, not the caller, or two sites resolving independently reintroduce the defect; (2) late-signal detection requires the `onData` subscription to outlive `finish()`, which is a lifecycle change to the tracker — the subscription must be torn down after the late-signal window closes, not left dangling; (3) rule 4 deletion narrows PTY policy correctly but removes a source label the UI previously showed, which is a visible change. Mitigations: one resolution site; explicit late-signal teardown; the UI source label change is correct and expected.
+
+## Proposed Changes
+
+### `src/services/ptyClearPolicy.ts`
+
+**Context.** `resolvePtyClearPolicyFromExplicit` (`:24`) is the one precedence rule shared by both hosts. Rule 4 (`:48-49`) infers manual mode from the legacy VS Code delay.
+
+**Logic — delete rule 4.** Remove the `explicitLegacyDelay → {mode:'manual', source:'legacy-explicit'}` inference. `terminal.clearBeforePromptDelay` keeps governing VS Code seats via `resolvePtyClearDelay` and the extension host's `clearTerminalContext`; it stops being an input to PTY mode.
 
 Keep `source` reporting so the UI can still show where a value came from, and keep the legacy
 delay available as the *value* for PTY manual mode when manual is genuinely selected — the
 plumbing that reads it stays, only the mode inference goes.
 
-### 2. Make a delay a floor, not a replacement, for a known family
+**Edge cases.** An operator who previously relied on rule 4 (setting only `terminal.clearBeforePromptDelay` and expecting PTY manual mode) will see their PTY seats switch to Auto. This is the correct behaviour — the delay was never meant to govern PTY readiness — but the change is silent. The UI's source label will show `default` instead of `legacy-explicit`.
 
-In `createClearReadinessTracker`, stop treating `mode === 'manual'` as a reason to skip the
-family branch when the family is known. For a known family, run the state machine and resolve on
-`max(configured delay, readiness outcome)` — the seat waits at least as long as the operator
-asked, and never less than the CLI needs.
+### `src/standalone/clearReadiness.ts`
+
+**Context.** `createClearReadinessTracker` (`:96`) is where mode/family precedence is decided. The mode check at `:166` short-circuits before the family branch at `:171`.
+
+**Logic — make a delay a floor, not a replacement, for a known family.** In `createClearReadinessTracker`, stop treating `mode === 'manual'` as a reason to skip the family branch when the family is known. For a known family (`devin`, `claude`, `antigravity`), run the state machine and resolve on `max(configured delay, readiness outcome)` — the seat waits at least as long as the operator asked, and never less than the CLI needs.
+
+Implementation: after the family branch resolves (via `signal` or `fallback`), check whether the configured delay has elapsed. If not, wait the remaining time before resolving the tracker's promise. This keeps the resolution in one place — `createClearReadinessTracker` itself.
 
 - `unknown` family is unchanged: there is no signal to wait for, so the delay is the whole
   policy. This is the case the delay was always for.
@@ -87,25 +138,17 @@ asked, and never less than the CLI needs.
 - Preserve explicit `0`, which the prior plan calls out as meaningful: a floor of zero is just
   the readiness result.
 
-Decide this in one place. The mode/family precedence is the defect; two call sites resolving it
-independently would reintroduce it.
-
-### 3. Make a truncated clear observable instead of silent
-
-When readiness resolves by floor/fallback and the CLI's ready signal arrives *after* the prompt
-was written, that is direct evidence the wait was too short. Record it — the reason is already
-carried on `terminalDispatchFinished` (`'signal' | 'fallback' | 'manual' | 'exit' | 'timeout'`),
-so the shape exists. Surface a late signal distinctly rather than folding it into `fallback`.
+**Logic — make a truncated clear observable.** When readiness resolves by floor/fallback and the CLI's ready signal arrives *after* the tracker has already called `finish()`, that is direct evidence the wait was too short. The `onData` subscription must remain active past `finish()` for a brief late-signal window (the same `quietMs` the family branch uses). If a ready signal arrives in that window, record it as a distinct reason `'late-signal'` on `terminalDispatchFinished` (`'signal' | 'fallback' | 'manual' | 'exit' | 'timeout' | 'late-signal'`), rather than folding it into `fallback`. After the late-signal window closes, tear down the subscription.
 
 This is the part that makes the class self-reporting. The operator could not have diagnosed this
 one; the next one should not need diagnosing either.
 
-### 4. Both hosts
+### Both hosts
 
 The tracker is shared, but the policy resolvers are not:
 `resolvePtyClearPolicy` (extension, `vscode.WorkspaceConfiguration`) and
 `resolveStandalonePtyClearPolicy` both feed `resolvePtyClearPolicyFromExplicit`
-(`ptyClearPolicy.ts:65`, `:103`). One shared helper, two callers — change the helper and check
+(`src/services/ptyClearPolicy.ts:65`, `:103`). One shared helper, two callers — change the helper and check
 both callers still pass what it now expects.
 
 ### Explicitly out of scope
@@ -114,7 +157,7 @@ both callers still pass what it now expects.
 - The Auto/Manual UI, which ships and works. This plan makes it unnecessary as a defence, not
   redundant as a control.
 - `family === 'unknown'` on a seat whose CLI *is* known — a separate gap
-  (`ptyHost.ts:291` passes no `cliFamily`, leaving delivery dependent on `handle.cliFamily`
+  (`ptyHost.ts:183` passes `cliFamily` from the handle, leaving delivery dependent on `handle.cliFamily`
   from `deriveCliFamily(startupCommand)` at seat creation). Related symptom, different cause;
   worth its own plan.
 
@@ -131,13 +174,17 @@ both callers still pass what it now expects.
    whole policy.
 5. Explicit `0` is preserved and is not read as unset.
 6. A VS Code seat's delay behaviour is unchanged by any of the above.
-7. A late ready signal (arriving after the prompt was written) is reported distinctly from
-   `fallback` on `terminalDispatchFinished`.
+7. A late ready signal (arriving after the tracker has called `finish()`) is reported distinctly from
+   `fallback` on `terminalDispatchFinished` as `'late-signal'`.
 8. Both hosts: run 1-6 under the extension and standalone policy resolvers.
 9. `dispatch-curtain-and-ufo-contract.test.js` and the pty-clear-policy tests pass, extended for
    the new precedence. `npx tsc --noEmit -p tsconfig.json`.
 
-## Metadata
+### Goal Invariants
 
-**Complexity:** 4
-**Tags:** backend, reliability, bugfix, ux
+- Assert `resolvePtyClearPolicyFromExplicit` with `explicitMode: undefined`, `explicitPtyDelay: undefined`, `explicitLegacyDelay: 2000` returns `{ mode: 'auto', ... }` — NOT `{ mode: 'manual', source: 'legacy-explicit' }`. Rule 4 is gone.
+- Assert `createClearReadinessTracker` with `mode: 'manual'` and `cliFamily: 'devin'` runs the devin state machine (subscribes to `onData`) — does NOT short-circuit with a flat `fallbackDelay` timer.
+- Assert `createClearReadinessTracker` with `mode: 'manual'`, `cliFamily: 'devin'`, and `fallbackDelayMs: 5000` waits at least 5000ms before resolving, even if the signal arrives at 3s.
+- Assert `createClearReadinessTracker` with `mode: 'manual'` and `cliFamily: 'unknown'` still uses a flat `fallbackDelay` timer — the delay is the whole policy for unknown.
+- Assert `createClearReadinessTracker` with `fallbackDelayMs: 0` does not add any floor wait — explicit zero is preserved.
+- Assert a ready signal arriving after `finish()` was called is recorded as `'late-signal'` on `terminalDispatchFinished`, not folded into `'fallback'`.

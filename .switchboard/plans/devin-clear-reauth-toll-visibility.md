@@ -16,17 +16,17 @@ The browser-spam symptom is **not** a bug in the clear logic, a broken token, or
 misconfigured MCP server. It is an unpriced, invisible cost of correct behaviour:
 
 1. **Switchboard clears a seat when its work context changes.**
-   `src/services/TaskViewerProvider.ts:816-826` gates the clear on
-   `lastWorkKey !== workContextKey` (`featureId ?? planId`). The comment at :819 is
+   `src/services/TaskViewerProvider.ts:1004-1010` gates the clear on
+   `lastWorkKey !== workContextKey` (`featureId ?? planId`). The comment at :1004 is
    explicit that two subtasks of one feature are one work context and deliberately
    do *not* clear between them. **This gating is already correct and already
    minimal — it is not the defect and must not be touched by this plan.**
 
 2. **For Devin, a clear is a full session restart, not a buffer wipe.**
-   `src/standalone/clearReadiness.ts:146-180` documents the observed state machine:
+   `src/standalone/clearReadiness.ts:178-216` documents the observed state machine:
    old-session bracketed-paste teardown (`\x1b[?2004l`), then re-enable
    (`\x1b[?2004h`), then cursor/sync re-establishment — a session transition, not a
-   screen clear. `src/standalone/ptyHost.ts:182` corroborates: the CLI emits
+   screen clear. `src/standalone/ptyHost.ts:180` corroborates: the CLI emits
    "Devin is resetting context."
 
 3. **A new session re-initialises MCP servers**, so every OAuth-backed MCP re-runs
@@ -63,16 +63,16 @@ composition-root divergence traps were found during analysis, and **both become
 moot** once nothing is wired at runtime. They are recorded here so a future
 implementer does not rediscover them the hard way:
 
-- `src/services/hostSeams.ts:299` — `onData: () => ({ dispose: () => {} })`. VS
+- `src/services/hostSeams.ts:298` — `onData: () => ({ dispose: () => {} })`. VS
   Code's terminal API exposes no output stream, so detecting an OAuth prompt by
   scraping terminal output is standalone-only and can never reach parity.
-- `src/standalone/vscodeShim.ts:189` — `showInformationMessage` returns
+- `src/standalone/vscodeShim.ts:204` — `showInformationMessage` returns
   `undefined` and displays nothing on standalone, while `hostSeams.ts:369` is real
   on the extension host. Any notification-based surface ships to one host and
   silently vanishes on the other.
 
 **Neither applies to this plan.** The webview is rendered by both hosts from the
-same source (`src/services/headlessPanelHtml.ts`), so static copy reaches both
+same source (`src/services/headlessPanelHtml.ts:171` reads `src/webview/kanban.html`), so static copy reaches both
 roots with no seam, no wiring, and no parity audit required.
 
 ### Non-goals (do not implement any of these)
@@ -82,22 +82,57 @@ roots with no seam, no wiring, and no parity audit required.
 - **No session-log line and no runtime detection.** No new code at the clear
   decision point. No `deriveCliFamily` call, no cost model, no new module.
 - **No change to clear behaviour.** Do not suppress, defer, batch, or gate the
-  clear. The `:816-826` decision is out of scope entirely.
+  clear. The `:1004-1010` decision is out of scope entirely.
 - **No confirmation dialog.** See the repo-wide prohibition in `CLAUDE.md`.
 - **No browser suppression** (e.g. `BROWSER=/bin/true`) and **no stripping of MCP
   servers from seat profiles** — both considered and rejected by the operator.
 
-## Implementation
+## Metadata
 
-### 1. The note in the AGENTS tab
+**Complexity:** 2
+**Tags:** ux, docs, authentication, cli
+**Project:** Browser Switchboard
 
-Add a short static note to the AGENTS tab in `src/webview/kanban.html`, placed
-next to the startup-command configuration — the custom-agent command field
-(`agents-tab-custom-agent-command`, ~:4493-4520) is the control that determines
-which CLI a seat runs, and therefore whether the operator pays this toll. Place
-the note where that decision is made, not in a general help section.
+## User Review Required
 
-Content requirements — keep it to roughly two sentences:
+None. The copy content and placement are settled: static note next to the startup-command
+configuration, no runtime code, no confirm gate.
+
+## Complexity Audit
+
+### Routine
+- Adding a `<p>` element with static text to `src/webview/kanban.html` next to the custom-agent-command field (`:3276-3277`).
+- Adding a short paragraph to the docs file covering the same explanation.
+- Matching the existing informational-note styling already used in the tab (`:3279-3281`).
+
+### Complex / Risky
+- None. This is a copy-only change with no runtime code, no config surface, and no behavioural change.
+
+## Edge-Case & Dependency Audit
+
+**Race conditions:** None — no runtime code.
+
+**Security:** The note directs the operator to their agent's MCP config. It does not touch, read, or modify any MCP config. The only code that touches MCP config (`src/extension.ts:892-919`) exclusively *deletes* a key named `switchboard` from a fixed path list. The note must not imply Switchboard manages agent MCP configuration.
+
+**Side effects:** None — static copy only.
+
+**Dependencies & conflicts:** None. This plan touches only `src/webview/kanban.html` and a docs file. No shared surfaces with other subtasks in this feature.
+
+## Dependencies
+
+None. This plan is independent of all other subtasks in this feature. It touches no shared source files with the other three plans.
+
+## Adversarial Synthesis
+
+Key risks: (1) a future implementer reads the Root Cause Analysis and revives the rejected runtime-detection design — mitigation: the Non-goals section explicitly forbids it and the Verification Plan asserts no runtime code in the diff; (2) the note names a specific CLI and becomes stale when agents change — mitigation: the Implementation section requires the note describe seat behaviour, not CLI names; (3) the note says "disable" instead of "remove" and a `disabled: true` flag silently fails — mitigation: the Implementation section requires "remove", never "disable".
+
+## Proposed Changes
+
+### `src/webview/kanban.html`
+
+**Context.** The AGENTS tab's custom-agent form contains the startup-command field (`:3276-3277`) — the control that determines which CLI a seat runs, and therefore whether the operator pays this toll. An existing informational note (`:3279-3281`) already uses `font-size:10px; color:var(--text-secondary)` styling. The webview is rendered by both hosts from the same source (`src/services/headlessPanelHtml.ts:171`).
+
+**Logic — add the note.** Add a short static note next to the startup-command configuration, after the existing informational `<p>` at `:3279-3281`. Content requirements — keep it to roughly two sentences:
 
 - Clearing a seat restarts that seat's CLI session.
 - A restarted session re-initialises its MCP servers, so OAuth-backed MCP servers
@@ -116,13 +151,13 @@ of whether the flag is supported; advising "disable it" may silently not work an
 sends the reader back into the same confusion this note exists to end.
 
 **Switchboard does not manage agent MCP configuration, and the note must not
-imply otherwise.** The only code touching any MCP config is `src/extension.ts:965-997`,
+imply otherwise.** The only code touching any MCP config is `src/extension.ts:892-919`,
 which exclusively *deletes* a key named `switchboard` from a fixed path list that
 does not include every agent's config location. It never adds, enables, or
 re-enables an entry. Word the remedy as "in your agent's MCP config", and add no
 control for it in the panel.
 
-Style: match the existing informational-note styling already used in the tab. Do
+Style: match the existing informational-note styling already used in the tab (`:3279-3281`). Do
 not introduce a new visual treatment, an icon, or a warning colour — this is
 neutral information, not a problem.
 
@@ -134,11 +169,17 @@ session", not "some agents may restart". Vague phrasing is what made this
 invisible in the first place, and a reader cannot act on a maybe. Describing the
 behaviour in the general case is not the same as softening it.
 
-### 2. Documentation
+**Edge cases.** None — static copy.
 
-Add a short paragraph to the docs covering the same explanation, so it is findable
+### Documentation
+
+**Context.** The docs should be findable by search as well as in the panel.
+
+**Logic.** Add a short paragraph to the docs covering the same explanation, so it is findable
 by search as well as in the panel. Keep it factual: this change delivers
 visibility, not a reduction in prompts.
+
+**Edge cases.** None.
 
 ## Verification Plan
 
@@ -166,7 +207,10 @@ worth confirming once rather than trusting.
    `window.confirm`, and modal `showWarningMessage`. Any hit is a defect per
    `CLAUDE.md`.
 
-## Metadata
+### Goal Invariants
 
-**Complexity:** 2
-**Tags:** ux, docs, authentication, cli
+- Assert `git diff --name-only` for this plan's changes contains only `src/webview/kanban.html` and a docs file — no `.ts` source files.
+- Assert the note text contains the word "remove" (or "removing") and does NOT contain the word "disable" (or "disabled") in the remedy sentence.
+- Assert the note text does NOT contain any of: "devin", "claude", "antigravity", "agy" — no specific CLI names.
+- Assert the note is placed within the `agents-tab-custom-agent-form` div, after the startup-command input field.
+- Assert the diff contains no `confirm(`, `window.confirm`, or `showWarningMessage` calls.

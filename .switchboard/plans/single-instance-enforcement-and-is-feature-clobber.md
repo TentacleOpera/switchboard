@@ -118,3 +118,7 @@ None. Historically clobbered rows self-heal via the plan-watcher re-import; veri
 
 - Does the `sessionId` arm ever fire in practice? The added logging answers this and decides whether the fallback can be deleted.
 - Are there other direct-UPDATE paths that can write a non-file-derivable field and therefore have no self-heal? `dispatched_terminal`, `dispatched_at`, `blocked_at` are the candidates worth auditing for the same wrong-row hazard.
+
+## Implementation Summary
+
+Single-instance database enforcement was implemented across `KanbanDatabase.forWorkspace` and `KanbanDatabase.forDbPath` to guarantee one canonical in-memory image per resolved DB path, with in-flight eviction gating across both workspace root and database path. `KanbanDatabase.updateFeatureStatus` was hardened to reject empty IDs, separate `planId` and `sessionId` resolution into explicit lookups with logging, assert resolved `plan_file` consistency, protect `.switchboard/features/` paths from demotion, and target updates using `AND plan_id = ?`. `KanbanProvider.createFeatureFromPlanIds` now skips subtasks matching the new feature itself, passes uncoalesced IDs to `updateFeatureStatus`, and makes `linkOk` load-bearing by capturing link failures into `skipped`. Diagnostic probe code and `_nextInstanceId` were removed, the investigation document was updated to resolved status, and regression tests were added.

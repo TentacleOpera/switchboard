@@ -174,3 +174,7 @@ No user-data migration. Ship-order safety: the sidecar must refuse to serve an e
 - How large is the async conversion inside the sidecar, measured rather than estimated? This is the deciding number for the binding choice; scope it in the first day of work and report before proceeding.
 - Does the extension host ever need synchronous DB reads that cannot become async? If so, which call sites, and can they be served from a cached snapshot instead?
 - Should the sidecar be shared across all VS Code windows on the machine, or one per window? (One per machine is required by the global-DB plan; confirm it does not break per-window terminal ownership.)
+
+## Implementation Summary
+
+Replaced sql.js in-memory database implementation with better-sqlite3 (pinned to 11.8.1) and WAL mode enabled. Implemented ISqliteDriver and BetterSqliteDriver in sqliteDriver.ts with savepoint nested transactions, cursor shims, and mutation notifications. In KanbanDatabase.ts, replaced in-memory exports and coalesced persistence with direct database operations and SQLite backup API, while completely removing the sql.js eviction subsystem, sweep intervals, and memory budget tracking. Extension host and KanbanProvider lifecycle hooks were updated to eliminate obsolete eviction references.

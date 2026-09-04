@@ -8,9 +8,9 @@ Make the readiness profile follow what a seat is actually running, and make a mi
 
 **The observation.** Starting a team, the standing orders were pasted into Devin's composer and never submitted — the text sat in the input area. This has recurred across multiple attempted fixes aimed at prompts being sent before the CLI is ready.
 
-**The delivery path is not the problem, and must not be re-fixed.** `sendPromptToPty` (`ptyPromptDelivery.ts:241-259`) opens bracketed paste, chunks the payload, closes it, settles, writes `\r`, waits `CONFIRM_ENTER_DELAY_MS = 200`, and writes a second `\r`. The confirm Enter is **unconditional by design** — the comment at `:235-240` records that the previous `CLI_AGENT_REGEX` gate was removed precisely because it "silently omitted 13 of the 19 CLIs" and was "a static name match standing in for a runtime question". That work is done. Devin is not missing a confirm Enter.
+**The delivery path is not the problem, and must not be re-fixed.** `sendPromptToPty` (`ptyPromptDelivery.ts:241-259`) opens bracketed paste, chunks the payload, closes it, settles, writes `\r`, waits `CONFIRM_ENTER_DELAY_MS = 200`, and writes a second `\r`. The confirm Enter is **unconditional by design** — the comment at `:234-240` records that the previous `CLI_AGENT_REGEX` gate was removed precisely because it "silently omitted 13 of the 19 CLIs" and was "a static name match standing in for a runtime question". That work is done. Devin is not missing a confirm Enter.
 
-**What actually decides when the prompt fires.** Before the paste, `awaitFirstReadiness` (`clearReadiness.ts:288`) waits for the cold-booting CLI. It resolves per family (`:337-358`):
+**What actually decides when the prompt fires.** Before the paste, `awaitFirstReadiness` (`clearReadiness.ts:288`) waits for the cold-booting CLI. It resolves per family (`:338-358`):
 
 ```
 family = options?.cliFamily || target.cliFamily || 'unknown'
@@ -23,13 +23,13 @@ unknown      → falls through to the CLAUDE constants: 8000ms / 250ms
 
 Devin's ceiling is **2.5× every other family's**, because Devin's boot is that much slower. A seat that is running Devin but is *classified* as anything else gets the 8-second gate, the prompt lands mid-boot, the composer swallows both carriage returns, and the text sits there.
 
-**Where the classification comes from.** `ptyFleetService.ts:437`:
+**Where the classification comes from.** `ptyFleetService.ts:457`:
 
 ```ts
 const cliFamily = deriveCliFamily(effectiveStartupCommand);
 ```
 
-`deriveCliIdentity` (`cliIdentity.ts:25-57`) takes `basename` of the first token and matches exactly three names: `devin`, `claude`, `agy`/`antigravity`. **Everything else is `unknown`**, which silently borrows Claude's 8-second ceiling. And `cliFamily` is written onto the handle at spawn and never recomputed.
+`deriveCliIdentity` (`src/services/cliIdentity.ts:25-57`) takes `basename` of the first token and matches exactly three names: `devin`, `claude`, `agy`/`antigravity`. **Everything else is `unknown`**, which silently borrows Claude's 8-second ceiling. And `cliFamily` is written onto the handle at spawn and never recomputed.
 
 ### Root Cause
 
@@ -56,6 +56,7 @@ Three independent ways a Devin seat gets a non-Devin gate:
 **Topic:** Readiness family follows the running CLI and a misclassification is visible
 **Complexity:** 5
 **Tags:** agents, terminals, reliability, prompt-delivery, bug
+**Project:** Browser Switchboard
 
 ## User Review Required
 
@@ -104,6 +105,8 @@ At spawn: seat, role, resolved command, provenance (from the companion plan), de
 
 Inside the existing lock, before the readiness gate, re-derive the family from the handle's current recorded startup command. A seat whose command was corrected after spawn picks up the right gate on its next prompt instead of staying wrong for its lifetime.
 
+> **Clarification (not a new requirement):** Re-derivation re-runs `deriveCliFamily`, which still matches only three names. A wrapped command (`npx devin`, `bash -lc "devin"`) still derives `unknown` after re-derivation — the same result as at spawn. Re-derivation's value is picking up *corrected* commands (an operator fixes a stale command in Agent Setup), not *wrapped* ones. Change #1 (unknown → longest ceiling) makes the wrong answer safe for wrappers; a runtime probe is the fix for wrappers and is correctly deferred to a separate plan.
+
 **4. Surface a mismatch.**
 
 When a seat's derived family is `unknown`, show it in Agent Setup next to that seat with its command — an operator who has wrapped their CLI can see that Switchboard cannot identify it, rather than discovering it through a prompt that never submits.
@@ -119,3 +122,12 @@ When a seat's derived family is `unknown`, show it in Agent Setup next to that s
 7. Measure the first-prompt latency for an unrecognised CLI before and after change 1, and report the delta. If the quiet window resolves it in the common case, the 12-second ceiling is rarely reached and the plan should say so.
 8. Confirm brand icons are unchanged for `devin`, `claude` and `agy` seats.
 9. Both hosts: run 1, 2 and 5 against the VS Code extension and the standalone host — the extension's delivery chokepoint is `sendRobustText`, the standalone's is `sendPromptToPty`, and the family derivation must be correct on both.
+
+### Goal Invariants
+
+- Assert `awaitFirstReadiness` with `family: 'unknown'` sets `ceilingMs === DEVIN_FIRST_READINESS_TIMEOUT_MS` (20000) and `quietMs === DEVIN_FIRST_READINESS_QUIET_MS` (250) — not `CLAUDE_FIRST_READINESS_TIMEOUT_MS` (8000).
+- Assert `deriveCliFamily` is called inside `sendPromptToPty`'s `withTerminalLock` callback before the readiness gate, re-deriving from the handle's current startup command — not only at spawn in `ptyFleetService.ts`.
+- Assert the spawn-time log line records: seat name, role, resolved startup command, provenance source (from companion plan), and derived `cliFamily`.
+- Assert the delivery-time log line records: seat name, `cliFamily` used, readiness arm (`signal`/`timeout`/`exit`), and elapsed ms.
+- Assert `sendPromptToPty` writes exactly two `\r` bytes for every family — the confirm-Enter sequence is unconditional and unchanged.
+- Assert a seat whose `cliFamily` is `unknown` shows an indicator in Agent Setup next to its command field.

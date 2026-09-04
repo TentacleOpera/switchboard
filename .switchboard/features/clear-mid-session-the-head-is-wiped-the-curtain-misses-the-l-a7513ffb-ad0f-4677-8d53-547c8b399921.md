@@ -74,6 +74,6 @@ The open mid-session clear defects. A roster clear still clears the team head; t
 - [ ] [The dispatch curtain is armed from intent, not from a clear that actually runs — so it covers dispatches and misses real clears](../plans/the-curtain-is-armed-from-intent-not-from-a-clear-that-happened.md) — **PLAN REVIEWED** — ID: 2e648081-3693-4485-8c74-777dd7118ed8
 - [ ] [An idempotent completion skips the clear, so a seat that reported its own done is never stood down](../plans/an-idempotent-completion-skips-the-clear-so-a-seat-is-never-stood-down.md) — **PLAN REVIEWED** — ID: 16bdde5d-1749-4ab5-b41a-248df79e81d6
 - [ ] [The Roster Clear Barrier Defers Forever, Clears the Head Anyway, and Measures Busy With a Hardcoded Window](../plans/memo-the-roster-clear-barrier-defers-forever-and-clears-the-head-anyway.md) — **PLAN REVIEWED** — ID: 01e5bcef-c4cf-4603-afdc-26cd5235daae
-- [ ] [The CLI Sends No Caller Identity, So the Origin Guard Is Dead on Every CLI Dispatch](../plans/the-cli-sends-no-caller-identity-so-the-origin-guard-is-dead-on-every-cli-dispatch.md) — **CREATED** — ID: d153c1c7-02e1-4870-8837-3a90ddcc8ddb
+- [ ] [A Team Seat Is Cleared on Every Dispatch, Because the Team Branch Never Compares the Work Context](../plans/a-team-seat-is-cleared-on-every-dispatch-because-the-team-branch-never-compares-the-work-context.md) — **CREATED** — ID: a29bed0f-2fec-4117-8576-ba9fcc2556dc
 <!-- END SUBTASKS -->
 
