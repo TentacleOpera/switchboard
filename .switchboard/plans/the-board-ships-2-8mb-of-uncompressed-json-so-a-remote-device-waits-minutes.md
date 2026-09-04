@@ -15,38 +15,57 @@ It arrived as three symptoms on an iPad over Tailscale, and a fourth that turned
 3. It was slow enough to look broken.
 4. **A MacBook Air on the same wifi is also slow** — "not hugely slow, but all the plans are taking forever to load in".
 
-#### The cause is rendering, not transfer
+#### Two costs, not one — and the split is not yet measured
 
-A first pass at this blamed payload size, and that was wrong. The numbers, measured on this machine 2026-09-04:
+This plan has been wrong twice about the cause, so the reasoning is recorded rather than asserted.
 
-- The iPad is a **direct** Tailscale peer on the same wifi (`direct 192.168.20.29`), not relayed through DERP.
-- The box serves the full board response at **21.9 MB/s** on its own tailnet interface.
-- Over that wifi the 2.8 MB response is roughly **1 to 3 seconds** — real, worth fixing, but nowhere near "minutes".
+The first pass blamed payload size alone. That was wrong: the iPad is a **direct** Tailscale peer on the same wifi, and the box serves the whole response at **21.9 MB/s** on its own tailnet interface.
 
-The fourth symptom settles it. A MacBook Air is not a slow client, and it shows the same behaviour. What both devices share is the work the board hands them:
+The second pass blamed rendering alone, on the strength of the MacBook Air also being slow. That over-corrected, and the operator's next observation is the counter-evidence: **the board on localhost is much faster.** Render cost is identical on both paths for a given device, so if rendering were the whole story, localhost would be just as slow. It is not.
+
+**What is measured, on this machine, 2026-09-04:**
+
+| | Loopback | To the iPad over wifi |
+| :--- | ---: | ---: |
+| Round-trip time | 0.06 ms avg | **109.7 ms avg, 195 ms max, 60.7 ms jitter** |
+| All five board requests, server-side | 0.20 s | 0.12 s |
+| Board JSON on the wire | 2,826,774 B | 2,826,774 B |
+
+The server is not the problem on either path. What the remote path adds is:
+
+- **Five sequential round trips** — the HTML, `shell.js`, `sharedDefaults.js`, the manifest, then the data — at ~110 ms each, so roughly **0.55 s of pure waiting before any useful byte**, against effectively zero locally.
+- **2.8 MB of uncompressed transfer**, which on real wifi to a tablet is **1.1 to 4.5 s**.
+
+That is 1.5 to 5 seconds the local board never pays, which is exactly the difference the operator describes.
+
+**The jitter is the client's radio, and it amplifies both costs.** Re-measured with the iPad on mains power: RTT improved from 109.7 ms average to 62.8 ms, but the spread stayed wide — 4.6 ms minimum, 153 ms maximum, 45 ms deviation. The minimum proves the path is capable; the variance is the device's wifi behaviour and is not Switchboard's to fix. What *is* Switchboard's is how much it exposes itself to that variance: five sequential requests and 2.8 MB across a link that intermittently stalls for 150 ms is the worst possible shape. Fewer round trips and a tenth of the bytes shrink the exposure, which is why both changes below matter more on a jittery link than the averages suggest.
+
+It also explains the intermittency. With RTT swinging between 5 ms and 195 ms, the waterfall is unpredictable, which is why the same load sometimes shows a rendered board with no cards and sometimes does not.
+
+**And the render cost is real and additive.** The board builds every one of 2,475 rows into the DOM and does not virtualise — `grep -oE "virtual|windowing|IntersectionObserver|lazy"` over the shipped board returns nothing, and each column body is wiped with `innerHTML = ''` and rebuilt. 2,038 of those rows are in one column. That cost is paid identically on localhost and remotely, which is why it does not explain the *difference*, and why the MacBook Air is slow even so.
+
+**The honest position: both costs are large, and the split between them has not been measured.** Doing so needs a browser timing on the actual devices, which is change 0 below. Every number above is server-side or network-level; none of it is a render timing.
+
+#### Environment note: the network this was measured on is faulty, and that matters for the next measurement
+
+Every remote number in this plan was taken across a **known-bad router**, which the operator is replacing.
+
+The decisive evidence is a ping to the box's own gateway — one hop, no client device involved:
 
 ```
-GET /kanban/plans  →  2,475 card rows
-    CODE REVIEWED   2,038   (82%)
-    PLAN REVIEWED     268
-    CREATED           105
-    BACKLOG            58
-    CODER/INTERN        6
+gateway     min 3.5   avg 53.1   max 189.0   jitter 64.0 ms
+macbook     min 6.3   avg 56.4   max 168.3   jitter 56.2 ms
+ipad        min 4.6   avg 62.8   max 153.5   jitter 45.1 ms
+loopback    min 0.03  avg 0.06   max 0.09    jitter 0.03 ms
 ```
 
-**The board renders every one of those rows into the DOM, and it does not virtualise.** `grep -oE "virtual|windowing|IntersectionObserver|lazy"` over the shipped board returns nothing. There is no windowing, no lazy column, no cap. Every card in every column becomes real DOM nodes on every full render, and each column body is rebuilt with `innerHTML = ''` followed by a fresh build.
+All three remote figures share one profile because they share one cause. The box itself is **on wifi** (`enp0s31f6` down, no cable; `wlp4s0` at 52 Mb/s, −58 dBm, 52/70 quality, 71,111 misc errors), so every byte the board serves crosses that link. The iPad and the MacBook are not slow; they inherit it.
 
-At a conservative dozen-odd DOM operations per card that is on the order of 30,000 to 70,000 operations, synchronously, before the board is usable — and 82% of it is for **Reviewed**, an archival column nobody is reading when they open the board on a phone. That is what "all the plans are taking forever to load in" looks like: the frame paints immediately, then the cards grind in.
+**Two consequences for whoever codes this.**
 
-It also explains the two symptoms that looked like separate bugs. The board HTML is 29 KB and arrives instantly, so there is a window in which a **fully rendered board displays zero cards** — that is symptom 1, and the reload only appeared to fix it because the second load found a warm cache. The sub-resources, including the icons, compete with that work — symptom 2.
+First, **do not re-derive the cause from these numbers**. They are real and they were the operator's lived experience, but a large share of the remote cost here is environmental. Re-measure on the replacement router before concluding anything about the split between transfer and render.
 
-**This grows with use.** It is not a fixed cost to tune once. Every card that reaches Reviewed makes opening the board slower, permanently.
-
-#### Compression is real but secondary
-
-The server sends the response with **no `Content-Encoding` at all**; `grep -nE "gzip|deflate|zlib|content-encoding" src/services/LocalApiServer.ts` returns nothing. Asked explicitly for gzip it still returns all 2,826,774 bytes, where the same payload gzips to **300,118**.
-
-That is worth fixing — it is one middleware for a 9.4x reduction — but it must not be mistaken for the fix. Compression shortens the one-to-three-second transfer. It does nothing about the 2,475 DOM builds, which is the part that reads as broken.
+Second, **this does not retire the plan — it sharpens why it matters**. Five sequential round trips and 2.8 MB of uncompressed JSON is the worst possible shape for a link that intermittently stalls, and a board that is only usable on a good network is not a board you can open from a phone. The fixes below reduce exposure to any bad link, and on a clean one they are what takes first paint from seconds to well under one. What changes after the router is which fix dominates, not whether they are wanted.
 
 #### Why existing plans do not cover this
 
@@ -66,7 +85,15 @@ None.
 
 ## Proposed Changes
 
-### 1. Cap what every column sends and renders, and page the rest — this is the fix
+### 0. Measure the split first — one browser timing, before either fix
+
+Open the board on the MacBook and the iPad with the browser's performance panel, and record three numbers for each: time to first byte of the data response, time until that response has fully arrived, and time from there until the last card is in the DOM.
+
+This is cheap and it settles which of the two changes below matters more on which device. It also gives the regression baseline that change 4 makes permanent. **Do not skip it** — this plan has already been wrong twice by reasoning from server-side numbers about a client-side experience.
+
+**Take this measurement on a healthy network** — see the environment note below. Measured on the network as it was when this plan was written, everything is dominated by the router and the split cannot be seen.
+
+### 1. Cap what every column sends and renders, and page the rest
 
 **No column is special.** The obvious version of this fix — "don't load the archive" — keys on Reviewed being terminal, which is one operator's habit, not a property of the product. Confirmed against the code: the board has no notion of an archival column at all. Terminality exists only inside the tracker sync services, as a hardcoded `['DONE','COMPLETED','ARCHIVED']` list, and columns carry only an `order` integer. A different operator finishes in Completed, or in Acceptance Tested, or in a custom column, or genuinely works out of a Planned column holding six hundred cards. Any rule that names a column is wrong for someone.
 
@@ -89,9 +116,9 @@ It also fixes the growth property, which is the real defect. First-paint cost st
 
 **Where virtualisation fits.** Rendering only the rows in the viewport is the deeper fix and would make even a single page free. It is deliberately not proposed here: it does nothing for transfer, and it interacts badly with the board's drag-and-drop, which needs real elements as drop targets. If a fifty-card page still feels heavy after this lands, virtualise then, with a measurement to justify it.
 
-### 2. Compress every response
+### 2. Compress every response — this is what closes the local-versus-remote gap
 
-Worth doing on its own merits, and it shortens the transfer from roughly 1–3 seconds to well under one. It does **not** address the render cost above; do not let it be mistaken for the fix or scheduled as a substitute for change 1.
+Not secondary. Compression is the change that specifically targets the cost the local board does not pay: 2.8 MB becomes about 300 KB, taking the transfer from 1.1–4.5 s to roughly 0.1–0.5 s on the same link. Change 1 helps every device including localhost; this one is why remote feels different from local.
 
 In `src/services/LocalApiServer.ts`, negotiate compression from `Accept-Encoding`: gzip, deflate as fallback, none when the client asks for none.
 
