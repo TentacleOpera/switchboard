@@ -1,5 +1,9 @@
 # The state home derives from an explicitly configured control plane
 
+<!-- board-collapse-audit -->
+> **REDIRECT 2026-09-04 (Board Collapse audit).** This plan names `backups-that-can-actually-be-restored.md`, which has been **merged into `board-backup-and-per-project-export.md` and deleted**. Read the reference as pointing there.
+
+
 <!-- board-collapse-07 -->
 > **PARKED IN BACKLOG 2026-09-04 (Board Collapse 07).** Not cancelled — **unreachable until the storage programme's first step lands**: *Move the database behind a single sidecar owner and replace sql.js with a real SQLite binding*. sql.js holds the whole database in memory and rewrites the entire image on each persist, so nothing here that assumes concurrent or remote writers can be built on it. The full seven-step order is stated once, in the *Storage layer overhaul* feature file. Leaving these in Planned invited a coder to start one; move it back when step 1 lands.
 

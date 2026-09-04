@@ -1,5 +1,11 @@
 # The board read endpoints must survive the storage topology, or the SQL-to-endpoints migration lands on endpoints that lie
 
+<!-- board-collapse-audit -->
+> **REDIRECT 2026-09-04 (Board Collapse audit).** This plan names `sql-write-guardrail-prevent-agents-from-writing-to-kanban-db.md` as editing the same files in the opposite direction. That plan has been **deleted** (decision 11): three of its four layers were already closed or void, and its warning lived inside `KanbanDatabase._reloadIfStale`, which the sidecar plan deletes outright.
+> > 
+> > The coordination it warned about is gone with it — nothing now pushes `sqlite3` guidance *into* the skills. Its one surviving idea, narrowing the Claude Code permission to `Bash(sqlite3 -readonly *)`, moved to `skills-posix-only-tooling.md`, which also removes this skill's SQL templates. That plan and this one still edit `query-kanban/SKILL.md`, so the sequencing note stands: the POSIX rewrite lands first.
+
+
 <!-- board-collapse-01b -->
 > **PATH CORRECTION 2026-09-04 (Board Collapse 01).** This file names `.agents/skills/_lib/sb_api_call.sh`, which was **deleted** in commit `96fb16df`. All eight `kanban_operations/*.js` scripts now share `.agents/skills/_lib/cli-call.js`, and `switchboard api` is the shell-side escape hatch. Read every `sb_api_call` reference below as `cli-call.js` / `switchboard api`, and do not restore the shell helper.
 

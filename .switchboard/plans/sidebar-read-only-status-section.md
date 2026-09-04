@@ -1,5 +1,9 @@
 # A Read-Only Status Section in the Sidebar: What Is Running, Never What Should Run
 
+<!-- board-collapse-audit -->
+> **REDIRECT 2026-09-04 (Board Collapse audit).** This plan names `sql-write-guardrail-prevent-agents-from-writing-to-kanban-db.md`. That plan has been **deleted** (decision 11). Its "never SQL from the webview" principle is unaffected and still correct here; there is simply no separate plan enforcing it. The permission narrowing moved to `skills-posix-only-tooling.md`.
+
+
 ## Goal
 
 Add a **Status** section to the Switchboard sidebar that answers, without the browser cockpit being open: is the host alive, is the fleet up, what teams exist and who is seated, how deep is each team's queue, and is the controller running. Strictly read-only — every affordance that would *change* something is a deep-link to the surface that owns it.

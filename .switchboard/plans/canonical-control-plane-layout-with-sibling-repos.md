@@ -1,5 +1,11 @@
 # The canonical layout: a control plane containing one sibling per purpose
 
+<!-- board-collapse-audit -->
+> **REDIRECT 2026-09-04 (Board Collapse audit).** This plan names `backups-that-can-actually-be-restored.md` twice. That plan has been **merged into `board-backup-and-per-project-export.md` and deleted**; the surviving plan carries its definition of a backup as a verified set of database, plan files and manifest. Read both references as pointing there.
+> > 
+> > Note also that this plan is now **parked in Backlog** behind the storage programme's first step, as are the plans that depend on its `controlPlaneRoot`.
+
+
 ## Goal
 
 Define the layout Switchboard should guide users toward, and make setup create and

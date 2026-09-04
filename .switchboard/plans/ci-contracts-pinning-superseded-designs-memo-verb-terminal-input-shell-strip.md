@@ -1,5 +1,11 @@
 # Three CI contracts pin implementations that were deliberately replaced — the code moved on and the assertions did not
 
+<!-- board-collapse-audit -->
+> **REDIRECT 2026-09-04 (Board Collapse audit).** This plan names `mirror-check-red-delegates-skill-missing-manifest-entry.md` as sequencing. That plan has been **deleted**: the Claude mirror generator, its `MIRROR_MANIFEST` and the `mirror:check` CI gate are all being removed by `delete-the-claude-mirror-generator.md`, so there is no manifest entry to add and no gate to unblock.
+> > 
+> > **The practical effect is that this plan is no longer blocked by it.** The CI step it was waiting behind ceases to exist. This card now sits in the *Red at HEAD* feature, whose Dependencies section carries the deduplicated order.
+
+
 ## Goal
 
 Re-author three red contract assertions so each defends its stated **intent** against the design that actually shipped, instead of the implementation shape that has since been replaced. All three block CI (run-steps 64, 78, 80 of 101 — verified: `test:contract:memo-browser-clear` is the 64th `run:` step in `.github/workflows/integration-tests.yml`, `terminal-focus-affordance` the 78th, `shell-terminal-strip` the 80th, of 101 total). In all three cases the production code is correct and the design change was deliberate; the contracts were left behind.

@@ -1,5 +1,11 @@
 # Standalone Parity by Code Verification — Sweep for Stubs, Omitted Wiring, Discarded Values and Gates That Pass Vacuously
 
+<!-- board-collapse-audit -->
+> **REDIRECT 2026-09-04 (Board Collapse audit).** This plan names `standalone-kanban-move-endpoint-not-wired.md` in its Shape 1 discussion and in **Dependencies & Conflicts**. That plan has been **deleted**: commit `cf57044b` wired `moveCard`, `onPhoneAFriend`, `clearTerminalContext` and both team-pacing resolvers into the standalone composition root, closing its defect — verified against a running board, `POST /kanban/move` returns 200.
+> > 
+> > The option-supply parity assertion it was going to add is now owned by **`a-composition-root-parity-gate-that-actually-fails.md`**, in the *Gates that mean something* feature. Read the dependency as pointing there. Do not wait for a plan that no longer exists.
+
+
 ## Metadata
 
 **Complexity:** 5

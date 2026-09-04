@@ -1,5 +1,14 @@
 # The queue is invisible from a phone unless an agent remembers to narrate it
 
+<!-- board-collapse-audit -->
+> **REDIRECT 2026-09-04 (Board Collapse audit, decision 10).** This plan names two siblings that have been **deleted**, and its former parent feature *The Card Is A Two-Way Channel* is dissolved. This plan is now a loose card.
+> > 
+> > - `a-card-comment-cannot-reach-the-seat-holding-the-work.md` — deleted. An inbound tracker comment now goes to the **instructions column** owned by the *Trackers are for bulk queueing* feature, with Mission Control as the judgement layer, rather than being relayed into a working seat's terminal. That plan's own Collision section asked for exactly this ruling.
+> > - `standing-orders-can-post-a-team-status-report-to-a-card.md` — deleted. Its own header said do not build it until the notification bridge had shipped and been lived with.
+> > 
+> > **This plan is unaffected in substance.** It is outbound only — the host posting dispatch and completion comments on the synced card — which is complementary to the instructions column. Drop any text implying the two deleted plans will supply a piece of it.
+
+
 ## Goal
 
 Have Switchboard itself post dispatch and completion notifications as comments on the plan's

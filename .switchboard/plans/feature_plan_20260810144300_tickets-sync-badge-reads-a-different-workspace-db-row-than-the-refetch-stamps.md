@@ -1,5 +1,11 @@
 # Tickets sync badge reads a different workspace's DB row than the refetch stamps
 
+<!-- board-collapse-audit -->
+> **REDIRECT 2026-09-04 (Board Collapse audit, decision 15).** This plan names `feature_plan_20260810144131_tickets-source-not-sticky-across-restarts.md` as a file-level dependency. That plan has been **merged into `tickets-panel-8-single-source-for-tickets-root.md` and deleted** — both fixed the same broken `restoredTabState` push and the same `persistTabState` arm from two different features.
+> > 
+> > The file-level contention is unchanged and still real: this plan and the merge target both edit `TicketsPanelProvider.ts`. Serialise with the merge target instead.
+
+
 ## Goal
 
 Make the Tickets sidebar's sync badge read `last_synced_at` from the **same** `kanban.db` row that a refetch writes, so a full refetch from source actually clears the `modified` badge.

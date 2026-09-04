@@ -1,5 +1,13 @@
 # Attribute Switchboard's CPU before optimising it, and catch the wedge in the act
 
+<!-- board-collapse-audit -->
+> **REDIRECT 2026-09-04 (Board Collapse audit).** This plan names `a-wedged-board-holds-its-port-and-every-liveness-check-lies.md` as the plan whose diagnostic work it defers. That plan has been **merged into `sandbox-surviving-board-liveness-via-unix-socket.md` and deleted**, so one plan now answers both liveness questions: dead, and alive-but-not-serving.
+> > 
+> > Two observations of yours were carried into the merged plan and should not be re-filed: the freeze was seen in **attached** mode, which disconfirms the detach-specific framing; and the `stop` ungating has not shipped, so it is pulled forward there.
+> > 
+> > **This plan gained weight.** Two terminal-stream optimisation plans are now parked in Backlog behind it, so it is the gate on that work rather than a nice-to-have.
+
+
 ## Goal
 
 Make CPU cost attributable per process and per terminal, and make a blocked event loop dump

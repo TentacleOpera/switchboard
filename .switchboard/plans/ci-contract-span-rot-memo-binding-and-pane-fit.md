@@ -1,5 +1,9 @@
 # Two CI contracts extract a span that no longer exists — a renamed declaration and a guard clause silently emptied their assertion windows
 
+<!-- board-collapse-audit -->
+> **REDIRECT 2026-09-04 (Board Collapse audit).** This plan names `mirror-check-red-delegates-skill-missing-manifest-entry.md`, which has been **deleted** along with the whole mirror-generator machinery it was repairing. This plan is no longer blocked behind that CI step, because the step is being removed. This card now sits in the *Red at HEAD* feature.
+
+
 ## Goal
 
 Re-anchor the span extraction in `src/test/terminal-pane-fit-verification-contract.test.js` and `src/test/memo-panel-workspace-binding-contract.test.js` so both stop failing on source they are not actually asserting about. Both are red at HEAD, both block CI (run-steps 76 and 65 of 101), and in both cases **the production code is correct** — the tests lost their grip on it when an unrelated, legitimate edit moved the landmark each one navigates by.

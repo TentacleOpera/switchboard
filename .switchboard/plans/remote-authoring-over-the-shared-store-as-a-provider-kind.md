@@ -1,5 +1,9 @@
 # Remote plan authoring over the shared store — a fourth provider kind, not a new pipeline
 
+<!-- board-collapse-audit -->
+> **REDIRECT 2026-09-04 (Board Collapse audit).** This plan names `sql-write-guardrail-prevent-agents-from-writing-to-kanban-db.md` as complementary. That plan has been **deleted** (decision 11) — its layers were already closed, void, or attached to a function the sidecar removes. Nothing this plan does depends on it. This plan is also **parked in Backlog** behind the storage programme.
+
+
 ## Goal
 
 Let an agent with no repository access author a plan by writing a row to the shared store, reusing the remote-authoring pipeline that already exists for Linear rather than building a second one. The point is a new *transport* into a proven materialiser, and the Turso MCP is what makes that transport reachable from a cloud agent with no local machine.

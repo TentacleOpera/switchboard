@@ -1,5 +1,11 @@
 # The Memo Panel Protects Your Typing by Throwing Away Everything an Agent Appended
 
+<!-- board-collapse-audit -->
+> **REDIRECT 2026-09-04 (Board Collapse audit).** This plan names `process-memo-clears-entries-it-never-read.md` twice. That plan has been **merged into `memo-append-seam-reviewer-risks-are-prompt-only.md` and deleted**, so one plan creates `src/services/memoFile.ts` instead of three claiming it under a whichever-lands-first rule.
+> > 
+> > Both references still hold, redirected: the consume-vs-clear gap is that plan's, and its post-consume handler is the one to reuse rather than re-implement. Both plans are subtasks of the **Memo** feature, which states the landing order.
+
+
 ## Goal
 
 Make the memo textarea merge external appends instead of dropping them, and make `memoSave` a compare-and-swap, so a user typing in the Memo tab can no longer silently overwrite risks a reviewer wrote to `memo.md`.
