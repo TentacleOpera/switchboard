@@ -2892,6 +2892,42 @@ export class KanbanDatabase {
         }
     }
 
+    /**
+     * Clear the asserted completion timestamp on a plan (e.g. on re-dispatch).
+     */
+    public async clearCompletedAt(planId: string): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db || !planId) return false;
+        try {
+            this._db.run(
+                'UPDATE plans SET completed_at = NULL, updated_at = ? WHERE plan_id = ?',
+                [new Date().toISOString(), planId]
+            );
+            const affected = this._db.getRowsModified();
+            await this._persist();
+            return affected > 0;
+        } catch (error) {
+            console.error('[KanbanDatabase] clearCompletedAt failed:', error);
+            return false;
+        }
+    }
+
+    public async clearCompletedAtByPlanFile(planFile: string, workspaceId: string): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db || !planFile || !workspaceId) return false;
+        const normalized = this._ensureRelativePlanFile(planFile);
+        try {
+            this._db.run(
+                'UPDATE plans SET completed_at = NULL, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+                [new Date().toISOString(), normalized, workspaceId]
+            );
+            const affected = this._db.getRowsModified();
+            await this._persist();
+            return affected > 0;
+        } catch (error) {
+            console.error('[KanbanDatabase] clearCompletedAtByPlanFile failed:', error);
+            return false;
+        }
+    }
+
     public async updateTagsByPlanFile(planFile: string, workspaceId: string, tags: string): Promise<boolean> {
         const normalized = this._ensureRelativePlanFile(planFile);
         return this._persistedUpdate(
@@ -10904,7 +10940,7 @@ FROM plans
         // values, but we still write/clear the feature row's own dispatched_at for dispatch-identity.
         const terminalName = info.dispatchedTerminal || '';
         return this._persistedUpdate(
-            'UPDATE plans SET routed_to = ?, dispatched_agent = ?, dispatched_ide = ?, dispatched_terminal = ?, dispatched_at = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+            'UPDATE plans SET routed_to = ?, dispatched_agent = ?, dispatched_ide = ?, dispatched_terminal = ?, dispatched_at = ?, completed_at = NULL, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
             [info.routedTo, info.dispatchedAgent, info.dispatchedIde, terminalName, new Date().toISOString(), new Date().toISOString(), normalized, workspaceId]
         );
     }

@@ -87,6 +87,29 @@ function test(name, fn) {
         assert.ok(js.includes("'terminalDispatchFinished'"), 'Must handle terminalDispatchFinished');
         assert.ok(js.includes('Preparing for dispatch…'), 'Must have primary label Preparing for dispatch…');
         assert.ok(js.includes('is resetting context.'), 'Must have secondary reset label');
+        assert.ok(js.includes("reason === 'no-clear' ? 0 :"), "Must immediately disarm on reason 'no-clear'");
+    });
+
+    test('curtain arm site moved below work-context override in TaskViewerProvider.ts', () => {
+        const tvp = fs.readFileSync(path.join(REPO_ROOT, 'src', 'services', 'TaskViewerProvider.ts'), 'utf8');
+        const handlePtyVerbMatch = tvp.match(/const handlePtyVerb = async[\s\S]*?\n {8}\};\n/);
+        assert.ok(handlePtyVerbMatch, 'handlePtyVerb must be defined in TaskViewerProvider.ts');
+        const handlePtyVerbBody = handlePtyVerbMatch[0];
+        assert.ok(!handlePtyVerbBody.includes('shouldArmCurtain'), 'handlePtyVerb must not contain shouldArmCurtain');
+        assert.ok(!handlePtyVerbBody.includes('isClearing'), 'handlePtyVerb must not contain isClearing');
+        assert.ok(tvp.includes('const toClear = rawToClear.filter(name => this._lastWorkContextByTerminal.has(name));'), 'Extension roster barrier must filter already-clean seats');
+    });
+
+    test('ptySendPrompt returns cleared boolean in both hosts and delivery receipt', () => {
+        const ptyDelivery = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'ptyPromptDelivery.ts'), 'utf8');
+        assert.ok(ptyDelivery.includes('cleared?: boolean;'), 'PromptDeliveryReceipt must declare cleared boolean');
+
+        const ptyHost = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'ptyHost.ts'), 'utf8');
+        assert.ok(ptyHost.includes('cleared: receipt.cleared === true'), 'ptyHost ptySendPrompt must return cleared');
+
+        const bootstrap = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'bootstrap.ts'), 'utf8');
+        assert.ok(bootstrap.includes('cleared: receipt?.cleared === true'), 'standalone ptySendPrompt must return cleared');
+        assert.ok(bootstrap.includes('const toClear = rawToClear.filter(name => lastWorkContextByTerminal.has(name));'), 'Standalone roster barrier must filter already-clean seats');
     });
 
     if (failures > 0) {

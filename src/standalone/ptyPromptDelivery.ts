@@ -135,6 +135,8 @@ export interface PromptDeliveryReceipt {
     deliveredAt: number;
     /** This seat's delivery ordinal, post-increment. Absent on an aborted send. */
     promptSeq?: number;
+    /** Whether a context clear (/clear) was actually executed and completed ahead of the prompt. */
+    cleared?: boolean;
 }
 
 /**
@@ -169,6 +171,7 @@ export async function sendPromptToPty(
         // the dispatchCards path — it lives only in the ptySendPrompt handler —
         // so the suppression must live here in the shared delivery layer.
         const effectiveClearBeforePrompt = isFirstDelivery ? false : (opts?.clearBeforePrompt === true);
+        let cleared = false;
 
         // Change 3: first-readiness gate — wait for the cold-booting CLI to
         // produce output before writing anything. This is the ONE location
@@ -176,24 +179,25 @@ export async function sendPromptToPty(
         // extension host's ptySendPrompt path both flow through sendPromptToPty.
         if (isFirstDelivery) {
             if (handle.status === 'exited') {
-                return { readiness: { reason: 'exit', elapsedMs: 0 }, bytesWritten: 0, deliveredAt: Date.now() };
+                return { readiness: { reason: 'exit', elapsedMs: 0 }, bytesWritten: 0, deliveredAt: Date.now(), cleared: false };
             }
             readiness = await awaitFirstReadiness(handle, {
                 cliFamily: opts?.cliFamily || handle.cliFamily,
             });
             if (readiness.reason === 'exit' || (handle.status as string) === 'exited') {
-                return { readiness, bytesWritten: 0, deliveredAt: Date.now() };
+                return { readiness, bytesWritten: 0, deliveredAt: Date.now(), cleared: false };
             }
         }
 
         if (effectiveClearBeforePrompt) {
             if (handle.status === 'exited') {
-                return { readiness, bytesWritten: 0, deliveredAt: Date.now() };
+                return { readiness, bytesWritten: 0, deliveredAt: Date.now(), cleared: false };
             }
             readiness = await clearAndAwaitReadinessLocked(handle, opts);
             if (readiness.reason === 'exit' || (handle.status as string) === 'exited') {
-                return { readiness, bytesWritten: 0, deliveredAt: Date.now() };
+                return { readiness, bytesWritten: 0, deliveredAt: Date.now(), cleared: false };
             }
+            cleared = true;
         }
 
         // PORTED VERBATIM from _sendRobustTextBackground (src/services/terminalUtils.ts:241-258),
@@ -269,6 +273,7 @@ export async function sendPromptToPty(
             bytesWritten,
             deliveredAt,
             promptSeq,
+            cleared,
         };
     });
 }

@@ -890,7 +890,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             // costs a re-auth toll and the state it needs to manage the run; the
                             // origin guard is no substitute, being caller-supplied and routinely
                             // absent on machine dispatches). Busy seats are deferred, not skipped.
-                            const { toClear, deferred } = computeRosterClearTargets({
+                            const { toClear: rawToClear, deferred } = computeRosterClearTargets({
                                 roster,
                                 liveActive: liveActiveNames,
                                 destination: payload.name,
@@ -898,6 +898,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                 head: teamInfo.head,
                                 busySet,
                             });
+                            const toClear = rawToClear.filter(name => this._lastWorkContextByTerminal.has(name));
                             // Record deferred seats for the same-feature branch intercept.
                             if (deferred.length > 0) {
                                 const deferredSet = this._deferredClearsByTeam.get(teamId) || new Set<string>();
@@ -955,13 +956,18 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                             terminalName: name,
                                             success: !teamErr && results[i]?.cleared !== false,
                                             reason: teamErr || results[i]?.cleared === false
-                                                ? 'error'
+                                                ? (results[i]?.cleared === false && !teamErr ? 'no-clear' : 'error')
                                                 : (results[i]?.reason || 'fallback'),
                                             elapsedMs: Math.max(0, Date.now() - teamStartAt),
                                         };
                                         this.postMessage(finishMsg, SURFACES.terminals);
                                         this._broadcaster?.push(finishMsg, SURFACES.terminals);
                                     });
+                                    // Prune the deferred set for seats the barrier just
+                                    // cleared — they are no longer owed a deferred clear.
+                                    for (const name of toClear) {
+                                        dropDeferredClear(this._deferredClearsByTeam, name);
+                                    }
                                 }
                             }
                             // Deferred seats get NO curtain. A curtain exists to hide a
@@ -971,14 +977,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             // the same-feature branch intercept clears the seat before its
                             // next delivery — the pane receives no terminal-level signal at
                             // all for a deferred seat.
-                            // Record the work-context key only when the barrier actually
-                            // cleared someone OR there was nobody to clear (roster already
-                            // clean). When every active member was busy (toClear empty,
-                            // deferred non-empty), the run is NOT prepared — leave the key
-                            // unrecorded so the next dispatch can try again.
-                            if (toClear.length > 0 || deferred.length === 0) {
-                                this._lastWorkContextByTeam.set(teamId, workContextKey);
-                            }
+                            // Record the work-context key unconditionally after the barrier
+                            // runs. The re-fire (barrier running on every dispatch forever)
+                            // is the worse failure; a genuinely needed later pass is
+                            // triggered by a new work-context key, not the same one.
+                            this._lastWorkContextByTeam.set(teamId, workContextKey);
                         });
                         this._teamPreparationChains.set(teamId, prepPromise.catch(() => {}));
                         try {
@@ -986,7 +989,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             // The destination clears itself through the delivery path, WITH readiness
                             // — the prompt follows immediately. Suppressing it here was the hole: the
                             // roster clear had already fired, so nothing waited for anything.
-                            if (clearEnabled) {
+                            if (clearEnabled && lastTeamWorkKey && lastTeamWorkKey !== workContextKey) {
                                 payload = { ...payload, clearBeforePrompt: true };
                             }
                         } catch (prepErr) {
@@ -1223,8 +1226,40 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             }
         }
 
+        let shouldArmCurtain = false;
+        let opId: string | undefined;
+        let isBooting = false;
+        let startAt = 0;
+        if (verb === 'ptySendPrompt' && typeof payload?.name === 'string') {
+            try {
+                const fleetRes = await this._ptyHostVerb('ptyListTerminals', {});
+                if (fleetRes?.success && Array.isArray(fleetRes.terminals)) {
+                    const target = fleetRes.terminals.find((t: any) => t.friendlyName === payload.name);
+                    if (target && target.promptCount === 0) {
+                        isBooting = true;
+                    }
+                }
+            } catch { /* fleet query is best-effort for curtain phase */ }
+            const isClearing = payload?.clearBeforePrompt === true;
+            shouldArmCurtain = isClearing || isBooting;
+            const curtainPhase = isBooting ? 'booting' : 'clearing';
+            opId = payload?.operationId || (shouldArmCurtain ? `ext-${Date.now()}-${Math.random().toString(36).slice(2, 7)}` : undefined);
+            startAt = Date.now();
+            if (shouldArmCurtain && opId) {
+                const prepMsg = {
+                    type: 'terminalDispatchPreparing',
+                    operationId: opId,
+                    terminalName: payload.name,
+                    cliFamily: 'unknown',
+                    phase: curtainPhase,
+                };
+                this.postMessage(prepMsg, SURFACES.terminals);
+                this._broadcaster?.push(prepMsg, SURFACES.terminals);
+            }
+        }
+
+        let result: any = null;
         try {
-            let result: any;
             if (this._ptyHostChild && this._ptyHostPort) {
                 const http = require('http');
                 const port = this._ptyHostPort;
@@ -1353,7 +1388,24 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             }
             return result;
         } catch (err) {
-            return { success: false, error: err instanceof Error ? err.message : String(err) };
+            result = { success: false, error: err instanceof Error ? err.message : String(err) };
+            return result;
+        } finally {
+            if (shouldArmCurtain && opId) {
+                const noClear = result && result.success !== false && result.cleared === false && !isBooting;
+                const finishMsg = {
+                    type: 'terminalDispatchFinished',
+                    operationId: opId,
+                    terminalName: payload.name,
+                    success: result && result.success !== false,
+                    reason: result && result.success === false
+                        ? 'error'
+                        : (noClear ? 'no-clear' : (result?.readiness?.reason || 'fallback')),
+                    elapsedMs: Math.max(0, Date.now() - startAt),
+                };
+                this.postMessage(finishMsg, SURFACES.terminals);
+                this._broadcaster?.push(finishMsg, SURFACES.terminals);
+            }
         }
     }
 
@@ -2356,7 +2408,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private async _deliverStandingOrdersOnEstablish(
         terminalName: string,
         role: string,
-        opts?: { skipMissionControl?: boolean; readyDelayMs?: number }
+        opts?: { skipMissionControl?: boolean; readyDelayMs?: number; isAfterClear?: boolean }
     ): Promise<void> {
         // Mission Control skip — on ESTABLISH only. Mission Control's spawn is
         // immediately followed by the kickoff dispatch, which carries the orders
@@ -2422,6 +2474,23 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             const block = renderStandaloneOrdersBlock(orders, terminalName, live, groups || [], roleMap);
             if (block === null) { return; }
 
+            // After a clear, wrap the block in a non-action envelope so the
+            // recipient reads it as a reference update, not a task. The block
+            // itself stays byte-identical — the envelope sits outside the
+            // renderer, composed here at the send site.
+            let payload = block;
+            if (opts?.isAfterClear) {
+                const isLead = roleMap.get(terminalName) === 'lead';
+                const leadLine = isLead
+                    ? '\nThe roster and membership rules below apply to your next dispatch. They are not a request to check the roster now.\n'
+                    : '';
+                payload =
+                    'This delivery restores your standing orders after a context clear. No action is required. Wait for your next dispatch.\n'
+                    + leadLine
+                    + block
+                    + '\nNo action is required. Wait for your next dispatch.\n';
+            }
+
             // A freshly-spawned terminal is still booting its CLI. The delay is the
             // caller's call (establish waits, clear does not — clearTerminalContext
             // already waited out its own clear delay).
@@ -2444,7 +2513,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             // already rendered (which would drop the role-scoped rules on the VS Code
             // path, whose resolver carries no roleMap).
             await this._dispatchExecuteMessage(
-                workspaceRoot, terminalName, block, {}, 'sidebar', true,
+                workspaceRoot, terminalName, payload, {}, 'sidebar', true,
                 { clearBeforePrompt: false, standingOrders: false }
             );
         } catch (err) {
@@ -2463,7 +2532,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * withTerminalSendLock. A terminal with no applicable orders is a no-op
      * (renderStandaloneOrdersBlock returns null inside the shared method).
      */
-    private _deliverStandingOrdersAfterClear(terminalName: string): void {
+    public deliverStandingOrdersAfterClear(terminalName: string): void {
         // No role argument and no Mission Control skip: role is only consulted for the
         // establish-time Mission Control skip, and that skip exists because the kickoff
         // dispatch follows a spawn. Nothing follows a clear — for either
@@ -2471,7 +2540,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // seat — so this one-shot is the cleared terminal's only orders delivery.
         // No ready delay either: clearTerminalContext has already waited out its own
         // clear delay, so the CLI is up.
-        this._deliverStandingOrdersOnEstablish(terminalName, '', { skipMissionControl: false })
+        this._deliverStandingOrdersOnEstablish(terminalName, '', { skipMissionControl: false, isAfterClear: true })
             .catch((err) => {
                 console.warn(`[TaskViewerProvider] Standing-orders post-clear delivery failed for '${terminalName}':`, err);
             });
@@ -3778,68 +3847,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 if (payload.orientationOnly !== undefined) { delete payload.orientationOnly; }
                 if (payload.suppressStartupOrientation !== undefined) { delete payload.suppressStartupOrientation; }
             }
-            // Detect boot phase: a first delivery (promptCount === 0) gets the
-            // cold-boot first-readiness gate inside sendPromptToPty, which
-            // suppresses the clear and waits for the CLI to produce output.
-            // Change 1 kills the curtain's only trigger (isClearing) on new
-            // seats, so arm on boot phase too — with a distinct phase so the
-            // pane shows "starting up" rather than "resetting context" for a
-            // cold boot. The fleet list query is best-effort: a failure leaves
-            // isBooting false and falls back to the isClearing path.
-            let isBooting = false;
-            if (verb === 'ptySendPrompt' && typeof payload?.name === 'string') {
-                try {
-                    const fleetRes = await this._ptyHostVerb('ptyListTerminals', {});
-                    if (fleetRes?.success && Array.isArray(fleetRes.terminals)) {
-                        const target = fleetRes.terminals.find((t: any) => t.friendlyName === payload.name);
-                        if (target && target.promptCount === 0) {
-                            isBooting = true;
-                        }
-                    }
-                } catch { /* fleet query is best-effort for curtain phase */ }
-            }
-            const isClearing = verb === 'ptySendPrompt' && payload?.clearBeforePrompt === true;
-            const shouldArmCurtain = isClearing || isBooting;
-            const curtainPhase = isBooting ? 'booting' : 'clearing';
-            const opId = (verb === 'ptySendPrompt' && payload?.operationId) || (shouldArmCurtain ? `ext-${Date.now()}-${Math.random().toString(36).slice(2, 7)}` : undefined);
-            const startAt = Date.now();
-            if (shouldArmCurtain && opId) {
-                const prepMsg = {
-                    type: 'terminalDispatchPreparing',
-                    operationId: opId,
-                    terminalName: payload.name,
-                    // NOT payload.cliFamily — that field is caller-supplied and this
-                    // verb is reachable by anything holding the API token. The panel
-                    // resolves the family from its own fleet list (ptyListTerminals,
-                    // host-resolved) when the event does not name one.
-                    cliFamily: 'unknown',
-                    phase: curtainPhase,
-                };
-                this.postMessage(prepMsg, SURFACES.terminals);
-                this._broadcaster?.push(prepMsg, SURFACES.terminals);
-            }
             let result: any = null;
-            try {
-                result = await this._ptyHostVerb(verb, payload, signal);
-            } finally {
-                if (shouldArmCurtain && opId) {
-                    const finishMsg = {
-                        type: 'terminalDispatchFinished',
-                        operationId: opId,
-                        terminalName: payload.name,
-                        success: result && result.success !== false,
-                        // The child's own detector result — never a hardcoded 'signal'.
-                        // A 15s Devin fallback and a real ready signal must not look
-                        // identical on this event.
-                        reason: result && result.success === false
-                            ? 'error'
-                            : (result?.readiness?.reason || 'fallback'),
-                        elapsedMs: Math.max(0, Date.now() - startAt),
-                    };
-                    this.postMessage(finishMsg, SURFACES.terminals);
-                    this._broadcaster?.push(finishMsg, SURFACES.terminals);
-                }
-            }
+            result = await this._ptyHostVerb(verb, payload, signal);
             if (['ptyCreateTerminal', 'ptyCreateBatch', 'ptyCloseTerminal', 'ptyRenameTerminal'].includes(verb)) {
                 const db = await this._getKanbanDb(root || effectiveRoot);
                 void updateMirrorRegistry(db);
@@ -11321,7 +11330,7 @@ Each plan file must include:
                             kind: 'message'
                         });
                         if (clearRes?.success) {
-                            this._deliverStandingOrdersAfterClear(target.friendlyName);
+                            this.deliverStandingOrdersAfterClear(target.friendlyName);
                             return { cleared: true, reason: clearRes?.readiness?.reason };
                         }
                         return { cleared: false, error: clearRes?.error || 'ptySendPrompt clear reported failure' };
@@ -11366,7 +11375,7 @@ Each plan file must include:
                 terminal!.sendText('', true);
                 await new Promise(r => setTimeout(r, clearDelay));
             });
-            this._deliverStandingOrdersAfterClear(terminal.name || terminalName);
+            this.deliverStandingOrdersAfterClear(terminal.name || terminalName);
             return { cleared: true };
         } catch (err) {
             console.error(`[TaskViewerProvider] clearTerminalContext clipboard paste failed for '${terminalName}':`, err);

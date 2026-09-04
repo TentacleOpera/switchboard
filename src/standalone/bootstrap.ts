@@ -517,14 +517,20 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         } finally {
             if ((isClearing || isBooting) && operationId) {
                 try {
+                    let finishReason: string;
+                    if (sendErr) {
+                        finishReason = 'error';
+                    } else if (!isBooting && receipt && receipt.cleared === false) {
+                        finishReason = 'no-clear';
+                    } else {
+                        finishReason = receipt?.readiness?.reason || (handle.status === 'exited' ? 'exit' : 'signal');
+                    }
                     server?.broadcastWs('terminalDispatchFinished', {
                         type: 'terminalDispatchFinished',
                         operationId,
                         terminalName: handle.friendlyName,
                         success: !sendErr,
-                        reason: sendErr
-                            ? 'error'
-                            : (receipt?.readiness?.reason || (handle.status === 'exited' ? 'exit' : 'signal')),
+                        reason: finishReason,
                         elapsedMs: Math.max(0, Date.now() - startAt),
                     }, SURFACES.terminals);
                 } catch { /* best effort broadcast */ }
@@ -2274,7 +2280,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                     // costs a re-auth toll and the state it needs to manage the run; the
                                     // origin guard is no substitute, being caller-supplied and routinely
                                     // absent on machine dispatches). Busy seats are deferred, not skipped.
-                                    const { toClear, deferred } = computeRosterClearTargets({
+                                    const { toClear: rawToClear, deferred } = computeRosterClearTargets({
                                         roster,
                                         liveActive: activeNames,
                                         destination: payload.name,
@@ -2282,6 +2288,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                         head: teamInfo.head,
                                         busySet,
                                     });
+                                    const toClear = rawToClear.filter(name => lastWorkContextByTerminal.has(name));
                                     // Record deferred seats for the same-feature branch intercept.
                                     if (deferred.length > 0) {
                                         const deferredSet = deferredClearsByTeam.get(teamId) || new Set<string>();
@@ -2310,6 +2317,11 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                         // here buys nothing and stalls the run behind the slowest seat.
                                         let teamErr: Error | null = null;
                                         try {
+                                            for (const h of handles) {
+                                                if (h) {
+                                                    lastWorkContextByTerminal.delete(h.friendlyName);
+                                                }
+                                            }
                                             await Promise.all(handles.map(h => clearPty(h!)));
                                         } catch (err: any) {
                                             teamErr = err;
@@ -2327,6 +2339,11 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                                     }, SURFACES.terminals);
                                                 } catch { /* best effort */ }
                                             }
+                                            // Prune the deferred set for seats the barrier just
+                                            // cleared — they are no longer owed a deferred clear.
+                                            for (const name of toClear) {
+                                                dropDeferredClear(deferredClearsByTeam, name);
+                                            }
                                         }
                                     }
                                     // Deferred seats get NO curtain. A curtain exists to hide a
@@ -2336,14 +2353,11 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                     // the same-feature branch intercept clears the seat before its
                                     // next delivery — the pane receives no terminal-level signal at
                                     // all for a deferred seat.
-                                    // Record the work-context key only when the barrier actually
-                                    // cleared someone OR there was nobody to clear (roster already
-                                    // clean). When every active member was busy (toClear empty,
-                                    // deferred non-empty), the run is NOT prepared — leave the key
-                                    // unrecorded so the next dispatch can try again.
-                                    if (toClear.length > 0 || deferred.length === 0) {
-                                        lastWorkContextByTeam.set(teamId, workContextKey);
-                                    }
+                                    // Record the work-context key unconditionally after the barrier
+                                    // runs. The re-fire (barrier running on every dispatch forever)
+                                    // is the worse failure; a genuinely needed later pass is
+                                    // triggered by a new work-context key, not the same one.
+                                    lastWorkContextByTeam.set(teamId, workContextKey);
                                 });
                                 teamPreparationChains.set(teamId, prepPromise.catch(() => {}));
                                 try {
@@ -2352,7 +2366,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                     // readiness — the prompt follows immediately, so this is the gap
                                     // that actually needs detecting. Suppressing it here was the hole:
                                     // the roster clear had already fired, so nothing waited for anything.
-                                    if (clearEnabled) {
+                                    if (clearEnabled && lastTeamWorkKey && lastTeamWorkKey !== workContextKey) {
                                         payload.clearBeforePrompt = true;
                                     }
                                 } catch (prepErr) {
@@ -2394,6 +2408,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                     ? payload.clearBeforePromptDelayMs
                                     : deliveryDefaults.clearBeforePromptDelayMs,
                                 clearReadinessMode: payload.clearReadinessMode || deliveryDefaults.clearReadinessMode,
+                                operationId: payload.operationId,
                             },
                             payload.standingOrders !== false && !isMessage,
                             !isMessage,
@@ -2410,6 +2425,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                 deliveredAt: receipt?.deliveredAt ?? Date.now(),
                                 bootPhase,
                                 directivesAttached,
+                                cleared: false,
                                 ...(receipt?.readiness ? { deliveryReason: receipt.readiness.reason, readiness: receipt.readiness } : {}),
                             };
                         }
@@ -2420,6 +2436,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             promptSeq: receipt?.promptSeq,
                             bootPhase,
                             directivesAttached,
+                            cleared: receipt?.cleared === true,
                             // Thread the delivery reason and readiness so the caller
                             // distinguishes delivered-and-confirmed from
                             // delivered-on-a-timeout instead of a bare success.
@@ -2430,7 +2447,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             } : {})
                         };
                     } catch (err) {
-                        return { success: false, error: err instanceof Error ? err.message : String(err) };
+                        return { success: false, cleared: false, error: err instanceof Error ? err.message : String(err) };
                     }
                 }
 
@@ -2632,13 +2649,22 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     }
                     if (!prompt) { return { success: false, error: 'Failed to build dispatch prompt' }; }
 
-                    // 4th arg: standing orders still apply (a dispatched seat reports to
-                    // its head). 5th arg: the seat block does NOT — generateUnifiedPrompt
-                    // already emitted the git policy / skip / caveman directives, and the
-                    // dispatch-protocol bundle, inside the prompt body. This is the
-                    // positional twin of the extension's `addonsComposed: true`
-                    // (TaskViewerProvider.ts:460).
-                    const deliveryReceipt = await deliverPrompt(terminal, prompt, getPromptDeliveryOptions(), true, false);
+                    // Route through ptySendPrompt so the roster barrier runs —
+                    // a board drag must clear the roster the same way a lead
+                    // dispatch does. Calling deliverPrompt directly bypassed
+                    // the barrier on this host.
+                    const sendPayload: any = {
+                        name: terminal.friendlyName,
+                        data: prompt,
+                        clearBeforePrompt: false,
+                        standingOrders: true,
+                        origin: payload.originTerminal || payload.origin,
+                    };
+                    if (records[0]?.planId) {
+                        sendPayload.dispatch = { planId: records[0].planId, role: targetRole };
+                    }
+                    const sendResult = await handlePtyVerb('ptySendPrompt', sendPayload, root);
+                    const deliveryReceipt = sendResult;
 
                     // A CLI that exits during boot (auth failure, bad command) aborts
                     // delivery — the prompt was never written. Report an error rather
@@ -2661,6 +2687,9 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                 dispatchedIde: PTY_IDE_NAME,
                                 dispatchedTerminal: terminal.friendlyName,
                             });
+                            if (rec.planId) {
+                                await db.clearCompletedAt?.(rec.planId);
+                            }
                         } catch (err) {
                             console.warn('[bootstrap] Failed to update dispatch info:', err);
                         }
@@ -3347,6 +3376,10 @@ Each plan file must include:
                 return { cleared: false, error: err instanceof Error ? err.message : String(err) };
             }
             relayStartupOrientation([terminalName]);
+            // Deliver standing orders after clear — the extension host calls
+            // deliverStandingOrdersAfterClear from its clearTerminalContext;
+            // standalone must do the same so a cleared seat gets its orders back.
+            taskViewerProvider.deliverStandingOrdersAfterClear(terminalName);
             // The log session boundary is NOT rolled here. Every caller of this
             // seam (LocalApiServer's lead-acceptance clear, the queue/done pop,
             // and POST /terminals/clear) fires `onTerminalContextCleared` right

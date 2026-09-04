@@ -322,6 +322,7 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                             bytesWritten: receipt.bytesWritten,
                             deliveredAt: receipt.deliveredAt,
                             bootPhase,
+                            cleared: false,
                             ...(receipt.readiness ? { deliveryReason: receipt.readiness.reason, readiness: receipt.readiness } : {}),
                         };
                     }
@@ -334,10 +335,11 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                         deliveredAt: receipt.deliveredAt,
                         promptSeq: receipt.promptSeq,
                         bootPhase,
+                        cleared: receipt.cleared === true,
                         ...(receipt.readiness ? { deliveryReason: receipt.readiness.reason, readiness: receipt.readiness } : {}),
                     };
                 } catch (err) {
-                    return { success: false, error: err instanceof Error ? err.message : String(err) };
+                    return { success: false, cleared: false, error: err instanceof Error ? err.message : String(err) };
                 }
             }
             case 'ptySetControllerSeat': {

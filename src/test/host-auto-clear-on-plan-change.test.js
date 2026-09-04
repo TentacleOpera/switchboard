@@ -207,8 +207,8 @@ test('extension host destination override honours terminal.clearBeforePrompt', (
         '_ptyHostVerb must read terminal.clearBeforePrompt for the lifecycle decision'
     );
     assert.ok(
-        /if \(clearEnabled\) \{\s*\n\s*payload = \{ \.\.\.payload, clearBeforePrompt: true \};/.test(PTY_HOST_VERB_SRC),
-        'the team-branch destination override must be gated on clearEnabled'
+        /if \(clearEnabled && lastTeamWorkKey && lastTeamWorkKey !== workContextKey\) \{\s*\n\s*payload = \{ \.\.\.payload, clearBeforePrompt: true \};/.test(PTY_HOST_VERB_SRC),
+        'the team-branch destination override must be gated on clearEnabled and work-context change'
     );
     assert.ok(
         /if \(clearEnabled && lastWorkKey && lastWorkKey !== workContextKey\)/.test(PTY_HOST_VERB_SRC),
@@ -222,8 +222,8 @@ test('standalone destination override honours terminal.clearBeforePrompt', () =>
         'ptySendPrompt case must read the configured clearBeforePrompt for the lifecycle decision'
     );
     assert.ok(
-        /if \(clearEnabled\) \{\s*\n\s*payload\.clearBeforePrompt = true;/.test(SEND_PROMPT_SRC),
-        'the team-branch destination override must be gated on clearEnabled'
+        /if \(clearEnabled && lastTeamWorkKey && lastTeamWorkKey !== workContextKey\) \{\s*\n\s*payload\.clearBeforePrompt = true;/.test(SEND_PROMPT_SRC),
+        'the team-branch destination override must be gated on clearEnabled and work-context change'
     );
     assert.ok(
         /if \(clearEnabled && lastWorkKey && lastWorkKey !== workContextKey\)/.test(SEND_PROMPT_SRC),
@@ -347,6 +347,14 @@ test('both hosts check work-key existence before overriding (first dispatch is n
     assert.ok(
         /lastWorkKey && lastWorkKey !== workContextKey/.test(SEND_PROMPT_SRC),
         'ptySendPrompt case must check lastWorkKey existence so a first dispatch does not auto-clear'
+    );
+    assert.ok(
+        /lastTeamWorkKey && lastTeamWorkKey !== workContextKey/.test(PTY_HOST_VERB_SRC),
+        '_ptyHostVerb must check lastTeamWorkKey existence so a first team dispatch does not auto-clear'
+    );
+    assert.ok(
+        /lastTeamWorkKey && lastTeamWorkKey !== workContextKey/.test(SEND_PROMPT_SRC),
+        'ptySendPrompt case must check lastTeamWorkKey existence so a first team dispatch does not auto-clear'
     );
 });
 

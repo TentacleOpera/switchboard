@@ -152,7 +152,7 @@ export async function resolveTeamGroupForTerminal(
             return {
                 id: g.id,
                 name: g.name || g.id,
-                head: g.head,
+                head: g.head || terminalName,
                 roster,
                 group: g
             };

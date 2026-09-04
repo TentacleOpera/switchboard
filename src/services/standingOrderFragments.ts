@@ -82,7 +82,16 @@ export function buildHeadCompletionFragment(): string {
         + 'the feature\'s. Accepting and rejecting are not two different endings: you reject by '
         + 'sending a fix round first, then you post when the subtask is done. Until you post, that '
         + 'seat is not cleared and you cannot be handed the next subtask. Your POST is the only fact '
-        + 'that releases a seat.';
+        + 'that releases a seat.\n\n'
+        + 'ROUND BOUNDARY: when every subtask in a round is finished, POST /kanban/round/complete '
+        + 'with {"from":"<your terminal name>","workspaceRoot":"<your cwd>"} to complete all '
+        + 'outstanding cards and clear every coder seat in one call. You are NOT cleared — you '
+        + 'orchestrate the next round.\n\n'
+        + 'FEATURE COMPLETE: when the entire feature is finished, POST /kanban/feature/complete '
+        + 'with {"from":"<your terminal name>","planId":"<the FEATURE\'s planId>","workspaceRoot":'
+        + '"<your cwd>"} to complete all outstanding subtasks, clear every roster seat including '
+        + 'yourself, and release the team. A feature planId posted to /kanban/task/complete is '
+        + 'rejected — use the feature endpoint.';
 }
 
 export function buildHeadNextFragment(ctx: Pick<StandingOrderCompositionContext, 'teamId'>): string {

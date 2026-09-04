@@ -12290,7 +12290,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             dispatchedTerminal: terminalName,
                             dispatchedAt,
                         });
-                        if (ok) { attributed.push(record.planId || record.sessionId); }
+                        if (ok) {
+                            const pId = record.planId || record.sessionId;
+                            if (pId) {
+                                await db.clearCompletedAt?.(pId);
+                            }
+                            attributed.push(record.planId || record.sessionId);
+                        }
                     } catch (err) {
                         console.warn('[KanbanProvider] attributePasteDispatch failed:', err);
                     }

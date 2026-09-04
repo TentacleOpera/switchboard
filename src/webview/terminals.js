@@ -2938,8 +2938,8 @@
             op.hardTimer = null;
         }
         const age = Date.now() - op.armedAt;
-        const remaining = Math.max(0, MIN_DISPATCH_CURTAIN_MS - age);
-        setTimeout(() => {
+        const remaining = reason === 'no-clear' ? 0 : Math.max(0, MIN_DISPATCH_CURTAIN_MS - age);
+        const cleanup = () => {
             opMap.delete(operationId);
             if (opMap.size === 0) {
                 dispatchCurtains.delete(name);
@@ -2949,7 +2949,12 @@
                 }
             }
             updatePaneCurtains(name);
-        }, remaining);
+        };
+        if (remaining === 0) {
+            cleanup();
+        } else {
+            setTimeout(cleanup, remaining);
+        }
     }
 
     function updatePaneCurtains(name) {
@@ -6464,7 +6469,7 @@
                         // strand the chip, and the failure toast below must never
                         // appear beside a live "dispatching…".
                         endDispatchIndicator(targetName);
-                        disarmDispatchCurtain(targetName, opId, promptResult && promptResult.success ? 'signal' : 'error');
+                        disarmDispatchCurtain(targetName, opId, promptResult && promptResult.success ? (promptResult.cleared === false ? 'no-clear' : 'signal') : 'error');
                     }
                     if (!promptResult || !promptResult.success) {
                         showPaneToast('Failed to send prompt: ' + ((promptResult && promptResult.error) || 'unknown'));

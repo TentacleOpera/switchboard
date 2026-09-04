@@ -751,6 +751,13 @@ interface LocalApiServerOptions {
         getPanelHtml?: (id: string) => Promise<{ html: string; csp?: string } | null>;
         staticRoutes: Record<string, string[]>;
     };
+    /**
+     * Liveness window (ms) for the roster-clear busy predicate. Defaults to
+     * the standard 90-second window for backward compatibility. Three of four
+     * readers honour a config value; this seam lets the fourth (LocalApiServer)
+     * do the same.
+     */
+    livenessWindowMs?: number;
 }
 
 /**
@@ -812,7 +819,85 @@ export class LocalApiServer {
     // answerable from persisted state alone (dispatched_at advancing) when the
     // client supplies `since`/`deadline` query params — this map is the
     // fallback for a bare probe and the source of the seat name mid-delivery.
+    private static readonly DEFAULT_LIVENESS_WINDOW_MS = 90 * 1000;
     private _ackedDispatchState: Map<string, { since: string | null; deadline: number; seat: string | null }> = new Map();
+    private _seatsAtRest: Map<string, { planId?: string; at: number }> = new Map();
+
+    public markSeatAtRest(workspaceRoot: string, seat: string, planId?: string): void {
+        if (!seat) return;
+        const ws = workspaceRoot || this._options.workspaceRoot || '';
+        this._seatsAtRest.set(`${ws}\0${seat}`, { planId, at: Date.now() });
+    }
+
+    public markSeatActive(workspaceRoot: string, seat: string): void {
+        if (!seat) return;
+        const ws = workspaceRoot || this._options.workspaceRoot || '';
+        this._seatsAtRest.delete(`${ws}\0${seat}`);
+    }
+
+    public isSeatAtRest(workspaceRoot: string, seat: string, planDispatchedAt?: string | null): boolean {
+        if (!seat) return false;
+        const ws = workspaceRoot || this._options.workspaceRoot || '';
+        const entry = this._seatsAtRest.get(`${ws}\0${seat}`);
+        if (!entry) return false;
+        if (planDispatchedAt) {
+            const dAt = Date.parse(planDispatchedAt);
+            if (!isNaN(dAt) && dAt > entry.at) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private async _isSeatCurrentDispatchedCard(
+        db: any,
+        workspaceRoot: string,
+        seat: string,
+        planId: string,
+        existingDispatchedAt?: string | null
+    ): Promise<{ shouldClear: boolean; reason?: string; movedTo?: string }> {
+        if (this.isSeatAtRest(workspaceRoot, seat, existingDispatchedAt)) {
+            return { shouldClear: false, reason: `Seat '${seat}' already cleared for this run` };
+        }
+
+        try {
+            const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
+            if (typeof db.getActiveDispatchedByTerminal === 'function') {
+                const row = await db.getActiveDispatchedByTerminal(wsId, seat);
+                if (row && row.planId && row.planId !== planId) {
+                    return {
+                        shouldClear: false,
+                        reason: `Seat '${seat}' has moved to card '${row.planId}'`,
+                        movedTo: row.planId
+                    };
+                }
+            }
+            if (typeof db.getBoard === 'function') {
+                const board: any[] = (await db.getBoard(wsId)) || [];
+                const seatCards = board.filter((p: any) =>
+                    p && typeof p.dispatchedTerminal === 'string'
+                    && p.dispatchedTerminal.trim() === seat
+                    && (p.dispatchedAt || !p.completedAt)
+                );
+                if (seatCards.length > 0) {
+                    seatCards.sort((a, b) => {
+                        const atA = a.dispatchedAt ? Date.parse(a.dispatchedAt) : (a.updatedAt ? Date.parse(a.updatedAt) : 0);
+                        const atB = b.dispatchedAt ? Date.parse(b.dispatchedAt) : (b.updatedAt ? Date.parse(b.updatedAt) : 0);
+                        return atB - atA;
+                    });
+                    if (seatCards[0].planId && seatCards[0].planId !== planId) {
+                        return {
+                            shouldClear: false,
+                            reason: `Seat '${seat}' has moved to card '${seatCards[0].planId}'`,
+                            movedTo: seatCards[0].planId
+                        };
+                    }
+                }
+            }
+        } catch { /* best effort */ }
+
+        return { shouldClear: true };
+    }
 
     constructor(options: LocalApiServerOptions) {
         this._options = options;
@@ -2491,6 +2576,7 @@ export class LocalApiServer {
             // 4. Fire the exact arm a webview drag fires: it persists the move FIRST,
             //    then dispatches (the known move↔dispatch coupling order).
             const dispatchedAtBefore = record.dispatchedAt ?? null;
+            await db.clearCompletedAt?.(record.planId);
             await kanbanVerb('triggerAction', { sessionId, targetColumn, workspaceRoot, bypassTriggerGate: true, unattended: !!dispatchOptions?.unattended, targetTerminalOverride: teamOverride, originTerminal: dispatchOptions?.originTerminal }, workspaceRoot);
 
             // 5. Verify against the DB — report what happened, not what was requested.
@@ -2500,6 +2586,12 @@ export class LocalApiServer {
             const dispatchObserved = !!after?.dispatchedAt && after.dispatchedAt !== dispatchedAtBefore;
             const dispatched = isPromptMode ? moved : dispatchObserved;
             const success = moved && dispatched;
+            if (success) {
+                const targetTerm = teamOverride || after?.dispatchedTerminal || record?.dispatchedTerminal;
+                if (targetTerm) {
+                    this.markSeatActive(workspaceRoot, String(targetTerm).trim());
+                }
+            }
             return {
                 status: success ? 200 : 502,
                 payload: {
@@ -2714,6 +2806,9 @@ export class LocalApiServer {
                 deadline: Date.now() + DISPATCH_STATE_DEADLINE_MS,
                 seat
             });
+            if (seat) {
+                this.markSeatActive(workspaceRoot, String(seat).trim());
+            }
 
             // Fire the exact arm a webview drag fires — move FIRST, then deliver —
             // but do NOT await the paced paste. The move persists as the arm's
@@ -3513,6 +3608,7 @@ export class LocalApiServer {
         note?: string;
         cleared?: boolean;
         clearError?: string;
+        clearReason?: string;
         acceptedCodingSeat?: string;
         dispatchedTerminal?: string;
         idempotent?: boolean;
@@ -3530,17 +3626,9 @@ export class LocalApiServer {
             return { success: false, notFound: true, planId, error: `Plan not found: ${planId}` };
         }
 
-        // Idempotency: check if already completed.
-        if (existing.completedAt) {
-            return {
-                success: true,
-                planId,
-                completed_at: existing.completedAt,
-                outcome,
-                note,
-                idempotent: true
-            };
-        }
+        const isStaleCompletedAt = !!existing.completedAt && !!existing.dispatchedAt &&
+            Date.parse(existing.completedAt) < Date.parse(existing.dispatchedAt);
+        const isIdempotent = !!existing.completedAt && !isStaleCompletedAt;
 
         // 2. Resolve the accepted coding seat from HOST evidence only — never from
         // the request body, and never `from` (the lead posting the acceptance).
@@ -3567,37 +3655,71 @@ export class LocalApiServer {
             acceptedCodingSeat = undefined;
         }
 
-        // 3. Write completed_at timestamp.
-        const timestamp = new Date().toISOString();
-        const updated = await db.setCompletedAt?.(planId, timestamp);
+        // 3. Write completed_at timestamp (only on first write).
+        let timestamp = existing.completedAt;
+        if (!isIdempotent) {
+            timestamp = new Date().toISOString();
+            const updated = await db.setCompletedAt?.(planId, timestamp);
 
-        if (!updated) {
-            return { success: false, notFound: true, planId, error: `Plan not found: ${planId}` };
+            if (!updated) {
+                return { success: false, notFound: true, planId, error: `Plan not found: ${planId}` };
+            }
+
+            // 4. Record to plan_events for queryability.
+            await db.appendPlanEventByPlanId?.(planId, {
+                eventType: 'completed',
+                workflow,
+                payload: JSON.stringify({ from, outcome, note, acceptedCodingSeat })
+            });
         }
 
-        // 4. Record to plan_events for queryability.
-        await db.appendPlanEventByPlanId?.(planId, {
-            eventType: 'completed',
-            workflow,
-            payload: JSON.stringify({ from, outcome, note, acceptedCodingSeat })
-        });
-
-        // 5. On first successful completion write, clear the accepted coding seat once.
+        // 5. Clear the accepted coding seat if its current dispatched card is this planId.
         let cleared = false;
         let clearError: string | undefined;
+        let clearReason: string | undefined;
         if (acceptedCodingSeat && this._options.clearTerminalContext) {
-            try {
-                const clr = await this._options.clearTerminalContext(workspaceRoot, acceptedCodingSeat);
-                cleared = !!clr?.cleared;
-                if (clr && clr.cleared === false && clr.error) {
-                    clearError = clr.error;
+            const check = await this._isSeatCurrentDispatchedCard(
+                db,
+                workspaceRoot,
+                acceptedCodingSeat,
+                planId,
+                existing.dispatchedAt
+            );
+            if (!check.shouldClear) {
+                cleared = false;
+                clearReason = check.reason;
+                if (check.movedTo) {
+                    clearError = check.reason;
                 }
-                if (cleared && this._options.onTerminalContextCleared) {
-                    try { this._options.onTerminalContextCleared(acceptedCodingSeat); } catch { /* log writer must never crash the complete */ }
+            } else if (isIdempotent) {
+                cleared = false;
+                clearReason = `Card '${planId}' already completed at ${timestamp} — seat '${acceptedCodingSeat}' was already cleared`;
+            } else {
+                try {
+                    const clr = await this._options.clearTerminalContext(workspaceRoot, acceptedCodingSeat);
+                    cleared = !!clr?.cleared;
+                    if (clr && clr.cleared === false && clr.error) {
+                        clearError = clr.error;
+                        clearReason = clr.error;
+                    }
+                    if (cleared) {
+                        this.markSeatAtRest(workspaceRoot, acceptedCodingSeat, planId);
+                        if (this._options.onTerminalContextCleared) {
+                            try { this._options.onTerminalContextCleared(acceptedCodingSeat); } catch { /* log writer must never crash the complete */ }
+                        }
+                    }
+                } catch (clrErr) {
+                    clearError = clrErr instanceof Error ? clrErr.message : String(clrErr);
+                    clearReason = clearError;
+                    console.warn(`[LocalApiServer] clearTerminalContext failed for accepted seat '${acceptedCodingSeat}':`, clrErr);
                 }
-            } catch (clrErr) {
-                clearError = clrErr instanceof Error ? clrErr.message : String(clrErr);
-                console.warn(`[LocalApiServer] clearTerminalContext failed for accepted seat '${acceptedCodingSeat}':`, clrErr);
+            }
+        } else if (!acceptedCodingSeat) {
+            cleared = false;
+            if (dispatchedSeat === from) {
+                clearReason = `Lead '${from}' is never cleared as a coding seat`;
+            } else {
+                clearReason = 'No coding seat attributed to plan';
             }
         }
 
@@ -3609,8 +3731,10 @@ export class LocalApiServer {
             note,
             cleared,
             ...(clearError ? { clearError } : {}),
+            ...(clearReason ? { clearReason } : {}),
             ...(acceptedCodingSeat ? { acceptedCodingSeat } : {}),
-            ...(existing.dispatchedTerminal ? { dispatchedTerminal: existing.dispatchedTerminal } : {})
+            ...(existing.dispatchedTerminal ? { dispatchedTerminal: existing.dispatchedTerminal } : {}),
+            ...(isIdempotent ? { idempotent: true } : {})
         };
     }
 
@@ -3681,6 +3805,27 @@ export class LocalApiServer {
                 return;
             }
 
+            // Reject a feature planId — use POST /kanban/feature/complete instead.
+            try {
+                let isFeature = false;
+                if (typeof db.getSubtasksByFeaturePlanId === 'function') {
+                    const subs = await db.getSubtasksByFeaturePlanId(planId);
+                    isFeature = Array.isArray(subs) && subs.length > 0;
+                }
+                if (!isFeature && typeof db.getPlanByPlanId === 'function') {
+                    const row = await db.getPlanByPlanId(planId);
+                    isFeature = !!row && !!row.isFeature;
+                }
+                if (isFeature) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        success: false,
+                        error: 'This planId is a feature. Use POST /kanban/feature/complete with { from, planId, workspaceRoot } to complete all subtasks and clear the team.'
+                    }));
+                    return;
+                }
+            } catch { /* best effort — if the check fails, proceed to normal completion */ }
+
             const result = await this.completeCardInternal(db, planId, from, {
                 workspaceRoot,
                 workflow: 'task-complete',
@@ -3696,7 +3841,7 @@ export class LocalApiServer {
             }
 
             // Trigger advance-when-ready hook if team is released
-            if (result.success && !result.idempotent && this._options.onTeamReleased) {
+            if (result.success && this._options.onTeamReleased) {
                 const terminal = result.dispatchedTerminal || from;
                 void (async () => {
                     try {
@@ -3721,6 +3866,231 @@ export class LocalApiServer {
             console.error('[LocalApiServer] kanbanTaskComplete error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'kanbanTaskComplete failed' }));
+        }
+    }
+
+    /**
+     * POST /kanban/round/complete — batch completion for a round boundary.
+     * Completes every outstanding card dispatched to the poster's team, clears
+     * those coder seats, runs the release check once, and returns one response.
+     * The lead is NOT cleared — it orchestrates the next round.
+     *
+     * Body: `{ from, workspaceRoot? }`.
+     */
+    private async _handleKanbanRoundComplete(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const body = await this._parseJsonBody(req);
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const from = String(body?.from || '').trim();
+
+            if (!workspaceRoot) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Missing required field: workspaceRoot' }));
+                return;
+            }
+            if (!from) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: "Missing required field: from (the lead's terminal name)" }));
+                return;
+            }
+
+            const db = await this._options.getKanbanDatabase?.(workspaceRoot);
+            if (!db) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Kanban database not available' }));
+                return;
+            }
+
+            // Resolve the poster's team roster.
+            let roster: string[] | null = null;
+            if (this._options.resolveTeamMembers) {
+                roster = await this._options.resolveTeamMembers(workspaceRoot, from);
+            }
+            if (!roster || roster.length === 0) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, completed: [], cleared: [], note: 'No team roster resolved — nothing to complete' }));
+                return;
+            }
+
+            // Find all cards dispatched to team members that are not completed.
+            const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
+            const board: any[] = (await db.getBoard?.(wsId)) || [];
+            const rosterSet = new Set(roster);
+            const outstanding = board.filter((p: any) =>
+                p && typeof p.dispatchedTerminal === 'string'
+                && rosterSet.has(p.dispatchedTerminal.trim())
+                && !p.completedAt
+            );
+
+            if (outstanding.length === 0) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, completed: [], cleared: [], note: 'No outstanding cards for this team' }));
+                return;
+            }
+
+            const completed: Array<{ planId: string; seat: string }> = [];
+            const cleared: Array<{ name: string; cleared: boolean; reason?: string }> = [];
+            const coderSeats = roster.filter(name => name !== from);
+
+            for (const card of outstanding) {
+                const planId = card.planId || card.sessionId;
+                if (!planId) continue;
+                const seat = String(card.dispatchedTerminal || '').trim();
+                const result = await this.completeCardInternal(db, planId, from, {
+                    workspaceRoot,
+                    workflow: 'round-complete',
+                });
+                if (result.success) {
+                    completed.push({ planId, seat });
+                }
+            }
+
+            // Clear all coder seats (unconditional — a round is a barrier).
+            for (const name of coderSeats) {
+                if (this._options.clearTerminalContext) {
+                    try {
+                        const clr = await this._options.clearTerminalContext(workspaceRoot, name);
+                        cleared.push({ name, cleared: !!clr?.cleared, ...(clr?.error ? { reason: clr.error } : {}) });
+                    } catch (err: any) {
+                        cleared.push({ name, cleared: false, reason: err instanceof Error ? err.message : String(err) });
+                    }
+                } else {
+                    cleared.push({ name, cleared: false, reason: 'clearTerminalContext not available' });
+                }
+            }
+
+            // Run the release check once.
+            if (this._options.onTeamReleased) {
+                try {
+                    const inFlightCheck = await resolveTeamInFlight(db, roster);
+                    if (!inFlightCheck.inFlight) {
+                        await this._options.onTeamReleased(workspaceRoot, roster);
+                    }
+                } catch (releaseErr) {
+                    console.warn('[LocalApiServer] round-complete onTeamReleased error:', releaseErr);
+                }
+            }
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, completed, cleared }));
+        } catch (err) {
+            console.error('[LocalApiServer] kanbanRoundComplete error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'kanbanRoundComplete failed' }));
+        }
+    }
+
+    /**
+     * POST /kanban/feature/complete — feature-scoped completion.
+     * Completes the feature's outstanding subtasks, clears EVERY roster seat
+     * including the lead, and releases the team.
+     *
+     * Body: `{ from, planId, workspaceRoot? }`.
+     * - `planId` — the FEATURE's planId.
+     */
+    private async _handleKanbanFeatureComplete(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const body = await this._parseJsonBody(req);
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const from = String(body?.from || '').trim();
+            const planId = String(body?.planId || '').trim();
+
+            if (!workspaceRoot) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Missing required field: workspaceRoot' }));
+                return;
+            }
+            if (!from) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: "Missing required field: from (the lead's terminal name)" }));
+                return;
+            }
+            if (!planId) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Missing required field: planId (the feature planId)' }));
+                return;
+            }
+
+            const db = await this._options.getKanbanDatabase?.(workspaceRoot);
+            if (!db) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Kanban database not available' }));
+                return;
+            }
+
+            // Resolve the feature's subtasks.
+            let subtasks: any[] = [];
+            try {
+                if (typeof db.getSubtasksByFeaturePlanId === 'function') {
+                    subtasks = (await db.getSubtasksByFeaturePlanId(planId)) || [];
+                } else if (typeof db.getPlansByFeatureId === 'function') {
+                    subtasks = (await db.getPlansByFeatureId(planId)) || [];
+                }
+            } catch { /* best effort */ }
+
+            // Resolve the poster's team roster.
+            let roster: string[] | null = null;
+            if (this._options.resolveTeamMembers) {
+                roster = await this._options.resolveTeamMembers(workspaceRoot, from);
+            }
+            if (!roster || roster.length === 0) {
+                roster = [from];
+            }
+
+            const completed: Array<{ planId: string; seat: string }> = [];
+            const cleared: Array<{ name: string; cleared: boolean; reason?: string }> = [];
+
+            // Complete each outstanding subtask.
+            for (const sub of subtasks) {
+                const subPlanId = sub.planId || sub.sessionId;
+                if (!subPlanId || sub.completedAt) continue;
+                const seat = String(sub.dispatchedTerminal || '').trim();
+                const result = await this.completeCardInternal(db, subPlanId, from, {
+                    workspaceRoot,
+                    workflow: 'feature-complete',
+                });
+                if (result.success) {
+                    completed.push({ planId: subPlanId, seat });
+                }
+            }
+
+            // Clear EVERY roster seat including the lead.
+            for (const name of roster) {
+                if (this._options.clearTerminalContext) {
+                    try {
+                        const clr = await this._options.clearTerminalContext(workspaceRoot, name);
+                        cleared.push({ name, cleared: !!clr?.cleared, ...(clr?.error ? { reason: clr.error } : {}) });
+                    } catch (err: any) {
+                        cleared.push({ name, cleared: false, reason: err instanceof Error ? err.message : String(err) });
+                    }
+                } else {
+                    cleared.push({ name, cleared: false, reason: 'clearTerminalContext not available' });
+                }
+            }
+
+            // Release the team.
+            if (this._options.onTeamReleased) {
+                try {
+                    await this._options.onTeamReleased(workspaceRoot, roster);
+                } catch (releaseErr) {
+                    console.warn('[LocalApiServer] feature-complete onTeamReleased error:', releaseErr);
+                }
+            }
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, completed, cleared }));
+        } catch (err) {
+            console.error('[LocalApiServer] kanbanFeatureComplete error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'kanbanFeatureComplete failed' }));
         }
     }
 
@@ -4343,16 +4713,18 @@ export class LocalApiServer {
                     }
 
                     // ── Clear the finishing seat ───────────────────────────
-                    // Team members preserve context across coder report, review,
-                    // and fixes until lead acceptance via POST /kanban/task/complete.
-                    // Non-team seats clear on completion.
+                    // Stand down the finishing seat on completion. Both team
+                    // and non-team seats clear on completion.
                     let cleared = false;
                     let clearError: string | undefined;
-                    if (!isTeamMember && this._options.clearTerminalContext) {
+                    if (this._options.clearTerminalContext) {
                         try {
                             const clr = await this._options.clearTerminalContext(workspaceRoot, from);
                             cleared = !!clr?.cleared;
                             clearError = clr?.error;
+                            if (cleared) {
+                                this.markSeatAtRest(workspaceRoot, from, held.planId || planId);
+                            }
                             // Notify the log writer to roll the session file —
                             // a cleared terminal starting fresh work is a new
                             // session to a reader.
@@ -5334,6 +5706,15 @@ export class LocalApiServer {
                 }
             }
 
+            if (verb === 'ptyClearTerminal' && (!result || result.success !== false) && body?.name) {
+                this.markSeatAtRest(workspaceRoot || '', String(body.name).trim());
+            }
+            if (verb === 'ptySendPrompt' && (!result || result.success !== false) && body?.name) {
+                if (body.dispatch || body.kind === 'dispatch') {
+                    this.markSeatActive(workspaceRoot || '', String(body.name).trim());
+                }
+            }
+
             const ok = !result || result.success !== false;
             res.writeHead(ok ? 200 : 502, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(result ?? { success: true }));
@@ -5532,7 +5913,7 @@ export class LocalApiServer {
             const liveActive = new Set<string>(
                 fleet.filter(t => t && t.status === 'active').map(t => t.friendlyName)
             );
-            const livenessWindowMs = 90000;
+            const livenessWindowMs = this._options.livenessWindowMs ?? LocalApiServer.DEFAULT_LIVENESS_WINDOW_MS;
             const nowMs = Date.now();
             const busySet = new Set<string>(
                 fleet
@@ -5549,6 +5930,7 @@ export class LocalApiServer {
                 const clr = await this._options.clearTerminalContext(workspaceRoot || '', targetName);
                 if (clr?.cleared) {
                     cleared.push(targetName);
+                    this.markSeatAtRest(workspaceRoot || '', targetName);
                     this._options.onTerminalContextCleared?.(targetName);
                 } else {
                     skipped.push({ name: targetName, reason: clr?.reason || clr?.error || 'clear failed' });
@@ -9331,6 +9713,10 @@ export class LocalApiServer {
                 await this._handleKanbanMissionRoute(pathname, req, res);
             } else if (pathname === '/kanban/task/complete' && req.method === 'POST') {
                 await this._handleKanbanTaskComplete(req, res);
+            } else if (pathname === '/kanban/round/complete' && req.method === 'POST') {
+                await this._handleKanbanRoundComplete(req, res);
+            } else if (pathname === '/kanban/feature/complete' && req.method === 'POST') {
+                await this._handleKanbanFeatureComplete(req, res);
             } else if (pathname === '/kanban/team/release' && req.method === 'POST') {
                 await this._handleKanbanTeamRelease(req, res);
             } else if (pathname === '/kanban/move' && req.method === 'POST') {
