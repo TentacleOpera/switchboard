@@ -74,7 +74,9 @@ Today `consoleBrowseCardsInColumn` dispatches the moment a card is picked (`:218
 
 A picked card should offer what an operator does with one: dispatch, star or unstar, and view the plan. Starring matters most here — Starred is this menu's headline view, and without it the operator curates their priority list in the browser and only *reads* it from the CLI.
 
-**Use the command the command-set plan defines; do not invent a second path.** `ef40963b` carries a `star` action, and `d1556fd0` already records the collision: `ef40963b` expresses it as a bare boolean while the same `PUT /kanban/plans/priority` endpoint carries a 1–4 level, so whichever lands second ships a half-command. This menu consumes whatever they settle on — it must not add a third spelling.
+**Use the command the command-set plan defines; do not invent a second path.** `ef40963b` carries a `star` action as a bare boolean, which is correct — `priority_starred` (`KanbanDatabase.ts:11378`) is a flag. Priority is a *different* field, `priority` (`:11392`), a 1–4 level owned by `d1556fd0`. They share an endpoint and nothing else.
+
+Star is what this menu needs: Starred is a view, and a flag is what puts a card in it. A priority action can appear here later if wanted, but it is not the same operation and must not be folded into the same entry.
 
 
 | entry | what it is |
@@ -148,7 +150,7 @@ Direct actions, unchanged behaviour, at the bottom. **Setup**, not "First time s
 3c. Setting a project or starred filter changes what a chosen column lists; there is no column filter to contradict the choice.
 3d. Picking a card offers dispatch, star/unstar and view — not dispatch alone.
 3e. A card starred from the console appears in Starred without leaving the CLI.
-3f. Starring from the console goes through the same command `ef40963b` and `d1556fd0` settle on, not a third path.
+3f. Starring from the console goes through `ef40963b`'s `star` command, not a third path, and does not touch the separate `priority` field.
 4. Set Filters narrows every view under Fleet command, and each says what is filtering it.
 5. One key clears all filters.
 6. Launch offers Local and Remote; with a server running the entry reads Stop and stops it.

@@ -1,7 +1,11 @@
 # Agents can set a card's priority level, and can tell whether it changed anything
 
 <!-- board-collapse-09 -->
-> **VOCABULARY NOTE 2026-09-04 (Board Collapse 09).** Two other plans define an agent-facing board-write vocabulary containing a `star` action: *The CLI is a peer control surface* and *Board control instructions* (the latter now parked in Backlog). Both express `star` as a **bare boolean**, which cannot carry the 1–4 priority level this plan adds to the same `PUT /kanban/plans/priority` endpoint. Whichever lands second would otherwise ship a command that can only half-address the field.
+> **VOCABULARY NOTE 2026-09-04 (Board Collapse 09) — CORRECTED 2026-09-05.** ~~Two other plans define a `star` action as a bare boolean, which cannot carry the 1–4 priority level this plan adds to the same endpoint; whichever lands second ships a half-command.~~
+>
+> **There is no collision. Star and priority are different things.** They are separate columns with separate writers — `priority_starred` (`KanbanDatabase.ts:11378`) and `priority` (`:11392`) — and `PUT /kanban/plans/priority` accepts either, branching on which field the body carries. A **bare boolean `star` is correct** for `priority_starred` and is not made wrong by this plan. What this plan adds is a **separate** priority action taking 1–4 or null.
+>
+> Do not act on the struck text: making `star` accept a level would conflate two independent fields. The two vocabularies coexist — `star <planId> <true|false>` and a priority action — and neither has to wait for the other.
 > 
 > Add the level argument to both when they are coded. They also cite the same handler at two different line ranges (`:6505-6528` and `:7077-7143`), so at least one is stale — re-derive rather than trust either.
 > 
