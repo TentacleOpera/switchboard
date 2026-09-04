@@ -1,5 +1,13 @@
 # Tickets Panel: Title, Description, Sync Badge and Source Selection
 
+<!-- board-collapse-membership -->
+> **MEMBERSHIP CORRECTED 2026-09-04 (Board Collapse audit). Three subtasks, not four, and the title over-promises.**
+> 
+> *Tickets Tab Source Selection Not Sticky Across Restarts* was **merged into `tickets-panel-8-single-source-for-tickets-root.md` and deleted**: both fixed the same broken `restoredTabState` push and the same `persistTabState` arm from two different features. The merge target carries its embedded-in-`rootsFetched` browser path and its three-entry-point warning.
+> 
+> The "Source Selection" half of this feature's title is therefore delivered elsewhere. The file-level contention on `TicketsPanelProvider.ts` still stands, now against the merge target.
+
+
 **Complexity:** 7
 
 ## Goal

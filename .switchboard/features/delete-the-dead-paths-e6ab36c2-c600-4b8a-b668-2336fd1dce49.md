@@ -1,5 +1,11 @@
 # Delete the Dead Paths
 
+<!-- board-collapse-membership -->
+> **MEMBERSHIP CORRECTED 2026-09-04 (Board Collapse audit). Two subtasks, not three.**
+> 
+> The Goal paragraph was corrected when *Remove Retired-Mode UI Notices* was moved to Completed (it landed 2026-08-24 in `a42cad1f`), but **its bullet in the body was not removed**. That bullet describes delivered work as pending. The banner and the surviving two bullets are correct.
+
+
 **Complexity:** 2
 
 ## Goal

@@ -4,6 +4,16 @@ description: 'Mission Control — the front door, the role, and how missions sta
 
 # Mission Control — the front door, the role, and how missions start and are watched
 
+<!-- board-collapse-membership -->
+> **MEMBERSHIP CORRECTED 2026-09-04 (Board Collapse audit). This feature has TWO subtasks, not four.**
+> 
+> *The /switchboard front door arms against an endpoint that does not exist* and *Replace the Mission Control persona with a run sheet* moved to the **/switchboard front door** feature, which owns the eight cards across four features that all rewrote the same workflow file.
+> 
+> **Everything below that describes four subtasks is void**: the "four subtasks move from the mechanical break outward" framing, two of the four *How the Subtasks Achieve This* bullets, the Dependencies chain that makes the front-door subtask ship "first and alone" with the run sheet depending on it, and — most dangerous — **two of the four seat briefs in Team Dispatch Instructions**. Those two briefs also exist in the front-door feature, so acting on this file would hand the same work to a second seat. They are struck below.
+> 
+> What remains here: **the ready flag gates the Launch button** and **a supervised mission has no supervision**. They are independent of each other; neither needs the other first.
+
+
 **Complexity:** 5
 
 ## Goal
@@ -58,27 +68,15 @@ The ready-gate subtask is a one-line fix with no dependencies and may ship at an
 
 ## Team Dispatch Instructions
 
-### The /switchboard front door arms against an endpoint that does not exist, delivers the persona twice, and hardcodes the wrong posture
+### ~~The /switchboard front door arms against an endpoint that does not exist, delivers the persona twice, and hardcodes the wrong posture~~ — MOVED, DO NOT DISPATCH FROM HERE
 
-- **Seat:** Intern (Complexity 3)
-- **Acceptance:**
-  - No `/orchestration/` string remains in `.agents/workflows/switchboard.md` or its mirror; every `POST /` path the launcher names is registered in `LocalApiServer.ts`.
-  - A `/switchboard` session arms end-to-end (adopt → confirm → `missionControlArmed` true) — must fail on the current tree, pass after the fix.
-  - The launcher states the `prompt` field is the persona and gives no instruction to read `switchboard-mission-control/SKILL.md`; the read ban is scoped to inline content.
-  - `interview`/`stale-session` prompts carry `ATTENDED=true` (not `UNATTENDED=true`); `resume` carries `UNATTENDED=true` (not `ATTENDED=true`); `no-persona` carries neither.
-  - `manage-features/SKILL.md:412` distinguishes the two flags by exact token; grouping asks in an attended interview and skips when unattended.
-- **Must not touch:** `launchMission` (already correct); the `no-persona` branch; the `UNATTENDED IMPROVER CONTRACT` at `agentPromptBuilder.ts:1963` (out of scope).
+> **Struck 2026-09-04 (Board Collapse audit).** This plan belongs to the **/switchboard front door** feature, which holds its live seat brief. The brief below was left here when the card moved and would hand the same work to a second seat. It is removed rather than annotated, because a dispatcher reading this section does not necessarily read the top of the file.
 
-### Replace the Mission Control persona with a run sheet that asks what you want and loads only that protocol
 
-- **Seat:** Coder (Complexity 6)
-- **Acceptance:**
-  - The `interview` prompt contains the menu heading and NOT `## The Tick`, `## Merge-Back`, or `stallCount`.
-  - Every protocol path the menu names resolves on disk.
-  - The `resume` prompt contains `## The Tick`, `## Signals`, `## Verify via Git`, and the `progress.json` stall-counter contract, and carries no menu.
-  - Intentionally-removed sections (Tick, Context Is Cleared, the empty-fleet paragraph) are absent from the interview prompt and present in the resume prompt where they belong.
-  - The run sheet is under 80 lines; no `-o /dev/null` appears anywhere; the orientation snippet appears exactly once; launcher and mirror agree modulo frontmatter.
-- **Must not touch:** `switchboard-mission-control-http` and `switchboard-contracts` skills (named by branches, not inlined); the standalone `deliveryMode` question (recorded, not fixed here); the `#agent-dock` project-management buttons (a separate controller-UI plan).
+### ~~Replace the Mission Control persona with a run sheet that asks what you want and loads only that protocol~~ — MOVED, DO NOT DISPATCH FROM HERE
+
+> **Struck 2026-09-04 (Board Collapse audit).** This plan belongs to the **/switchboard front door** feature, which holds its live seat brief. The brief below was left here when the card moved and would hand the same work to a second seat. It is removed rather than annotated, because a dispatcher reading this section does not necessarily read the top of the file.
+
 
 ### A supervised mission has no supervision: `type` is stored, shown and reported, but nothing wakes on a transition
 

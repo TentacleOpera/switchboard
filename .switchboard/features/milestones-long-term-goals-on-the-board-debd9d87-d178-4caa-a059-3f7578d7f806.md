@@ -4,6 +4,12 @@ description: 'Milestones — Long-Term Goals On The Board'
 
 # Milestones — Long-Term Goals On The Board
 
+<!-- board-collapse-membership -->
+> **SUBTASK LIST IS INCOMPLETE 2026-09-04 (Board Collapse audit).** The auto-generated block below lists **one** subtask, the Milestones tab. The database has **two**: the tab, and *Milestones — long-term goals that cards belong to, and that a controller agent can read* (`.switchboard/plans/milestones-long-term-targets-on-the-board.md`), which the prose describes and Dependencies correctly requires first.
+> 
+> **Dispatching from the list alone ships the tab against routes that do not exist.** This drift predates the Board Collapse work; it is recorded here rather than silently regenerated, because the regeneration path is itself the subject of an open plan (*Serialize feature-file subtask-block regeneration so the file can't silently lose subtasks the DB has*), and this file is a live instance of exactly that defect.
+
+
 <!-- board-collapse-01c -->
 > **MIGRATION NUMBER CORRECTED 2026-09-04 (Board Collapse 01).** This feature reserved **V66**. V66 is already the `mission_milestones` mapping table (`KanbanDatabase.ts:636`) and the schema head is **V67**. Both this file and its state subtask now say "the next free migration version at implementation time".
 

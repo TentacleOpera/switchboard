@@ -1,5 +1,13 @@
 # Researcher Relationship: Standing Orders, Return Path and Endpoint Retirement
 
+<!-- board-collapse-membership -->
+> **BODY CORRECTION 2026-09-04 (Board Collapse audit).** The banner below records that *Link-Up Role Presets Fire Through The Relay Path* was deleted. **The body still treats it as live.**
+> 
+> Void: the "all three subtasks" framing, its bullet, and the chain **return path → preset delivery → retirement** in which it is numbered step 2 — so the surviving retirement subtask is ordered behind a plan that will never land. The chain is now **return path → retirement**.
+> 
+> The **File contention** paragraph analysing `terminals.js` line regions "for the two webview-side subtasks" is also void: there is one. The real contention is with the *Terminals Panel UAT Fixes* subtask that deletes Link-Up's Instant mode, and with the terminals-viewport extraction, which every smaller `terminals.js` plan must precede.
+
+
 <!-- board-collapse-04 -->
 > **UPDATED 2026-09-04 (Board Collapse 04, decision 2).** Subtask *Link-Up Role Presets Fire Through The Relay Path* has been **deleted**. It derived the Link-Up mode from whether a preset carried an instruction body, to stop a preset being relayed verbatim and inverting who it addresses. Link-Up now has only one mode — standing orders — so that inversion cannot occur and the plan's goal is met by the deletion of Instant mode.
 > 

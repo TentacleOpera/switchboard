@@ -1,5 +1,13 @@
 # .agents file lifecycle fixes
 
+<!-- board-collapse-membership -->
+> **BODY CORRECTION 2026-09-04 (Board Collapse audit).** The banner below already records that this feature lost one of two subtasks. **The body was not updated to match, and still gives the voided instruction.**
+> 
+> Specifically: Dependencies still reads *"Ship '.claude mirror regenerates on deletion-respected skip' FIRST"* and states the survivor *"depends on the sibling plan's `deletionSkipped` flag"*. That sibling is deleted. **The survivor adds the `deletionSkipped` flag itself** — it has no sibling to wait for and nothing to inherit. A coder reading past the banner would otherwise build against a flag nothing creates.
+> 
+> The closing Note also says the auto-generated block "still lists the three pre-merge subtask files". It lists one, correctly.
+
+
 <!-- board-collapse-09 -->
 > **RETURNED TO NEW FOR RE-REVIEW 2026-09-04 (Board Collapse 09).** This feature had two subtasks and now has one. *`.claude/` mirror keeps retired skill until next version bump* was **deleted** by Board Collapse 02: it exists only to re-run `generateClaudeMirror` so its stale-skill cleanup fires, and that generator is being removed.
 > 

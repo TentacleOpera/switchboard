@@ -1,5 +1,11 @@
 # Ticket Images - Attach in the Browser, Survive a Refetch
 
+<!-- board-collapse-membership -->
+> **MEMBERSHIP CORRECTED 2026-09-04 (Board Collapse audit). One subtask, not two, and the title over-promises.**
+> 
+> *Refetch Leaves Inline Images Blank Until Second Click* moved to the new **Tickets images** feature. The "Survive a Refetch" half of this title is delivered there; what remains here is the browser attach-image picker.
+
+
 **Complexity:** 5
 
 ## Goal

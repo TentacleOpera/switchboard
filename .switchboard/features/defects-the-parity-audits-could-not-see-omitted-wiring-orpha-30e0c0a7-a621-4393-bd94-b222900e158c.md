@@ -1,5 +1,15 @@
 # Defects the Parity Audits Could Not See — Omitted Wiring, Orphan Writes and Discarded Values
 
+<!-- board-collapse-membership -->
+> **MEMBERSHIP CORRECTED 2026-09-04 (Board Collapse audit). The lead subtask no longer exists.**
+> 
+> *`POST /kanban/move` Is Dead in Standalone — and 13 More `LocalApiServer` Options* was **deleted**: commit `cf57044b` wired `moveCard`, `onPhoneAFriend`, `clearTerminalContext` and both team-pacing resolvers into the standalone root, and a live board now answers `POST /kanban/move` with 200.
+> 
+> Two consequences this file still gets wrong. **Shipping order step 1 names a card that does not exist**, and step 4 is sequenced "after (1)" — the sweep subtask is no longer blocked and can be scheduled on its own merits. And **Guard ownership assigns the option-supply parity assertion to "the move subtask"**, which is what this file calls the feature's lasting deliverable. That assertion is now owned by **`a-composition-root-parity-gate-that-actually-fails.md`** in the *Gates that mean something* feature. It has an owner; it is just not here.
+> 
+> Five subtasks remain, matching the database.
+
+
 **Complexity:** 6
 
 ## Goal

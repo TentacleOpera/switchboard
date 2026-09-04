@@ -1,5 +1,9 @@
 # The Phone a Friend Panel Shows Controls, Not Plumbing
 
+<!-- board-collapse-membership -->
+> **COUNT CORRECTION 2026-09-04 (Board Collapse audit).** The Goal states a safety guarantee over "**both subtasks**" — stored map keys preserved on disk, neither deleting operator config. There is **one** subtask; the two original plans were consolidated into it before this pass. The guarantee itself is unchanged and still binding on that one plan.
+
+
 **Complexity:** 3
 
 ## Goal

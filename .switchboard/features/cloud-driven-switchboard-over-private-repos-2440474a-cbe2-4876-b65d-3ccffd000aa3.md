@@ -4,6 +4,14 @@ description: 'Cloud-Driven Switchboard — Commands, Dispatch And Visibility'
 
 # Cloud-Driven Switchboard — Commands, Dispatch And Visibility
 
+<!-- board-collapse-membership -->
+> **MEMBERSHIP CORRECTED 2026-09-04 (Board Collapse audit). Five subtasks, not six.**
+> 
+> *Board control instructions — a structured command payload on the channel that already exists* is **not a subtask of this feature** and never was linked as one. It is a loose plan, now parked in Backlog alongside this feature.
+> 
+> Dependencies step 2 names it, and step 3 gates the cloud-agent skill on shipping "in the same release as the executor". **That release coupling is not something this feature controls**, because the executor is a card outside it. Keep the intent — a skill describing a channel nothing reads is worse than no skill — but track it as an external dependency rather than an internal step.
+
+
 <!-- board-collapse-07 -->
 > **PARKED IN BACKLOG 2026-09-04 (Board Collapse 07).** Not cancelled — **unreachable until the storage programme's first step lands**: *Move the database behind a single sidecar owner and replace sql.js with a real SQLite binding*. sql.js holds the whole database in memory and rewrites the entire image on each persist, so nothing here that assumes concurrent or remote writers can be built on it. The full seven-step order is stated once, in the *Storage layer overhaul* feature file. Leaving these in Planned invited a coder to start one; move it back when step 1 lands.
 

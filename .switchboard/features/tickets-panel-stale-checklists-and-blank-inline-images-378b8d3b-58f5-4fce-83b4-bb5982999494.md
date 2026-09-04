@@ -1,5 +1,13 @@
 # Tickets Panel — Stale Checklists and Blank Inline Images
 
+<!-- board-collapse-membership -->
+> **MEMBERSHIP CORRECTED 2026-09-04 (Board Collapse audit). One subtask, not two, and the title over-promises.**
+> 
+> *Tickets Panel: Inline Images Are Blank On First View* moved to the new **Tickets images** feature, which gathers the two inline-image plans that were sitting in two different tickets features. This feature now delivers the checklist prune only.
+> 
+> Note for that survivor: *Replace embedded subtask content with file references* absorbs its checklist rewrite as a migration step, so coordinate rather than duplicating the strip.
+
+
 **Complexity:** 6
 
 ## Goal

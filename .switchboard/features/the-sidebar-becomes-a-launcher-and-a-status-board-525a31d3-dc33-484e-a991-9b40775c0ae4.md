@@ -1,5 +1,13 @@
 # The Sidebar Becomes a Launcher and a Status Board
 
+<!-- board-collapse-membership -->
+> **MEMBERSHIP CORRECTED 2026-09-04 (Board Collapse audit). Four subtasks, not five.**
+> 
+> *Memo Is the One Surface That Exists Only in the Cramped Column* moved to the new **Memo** feature, which gathers the eight memo cards that were spread across four features.
+> 
+> **Two features give opposite instructions for that card, and Memo's is correct.** This file says the Memo tab "is independent of all three and can proceed in parallel". Memo sequences it **last**, behind the shared `memoFile.ts` module and the dirty guard, because the geometry plans make `memo.js` post to `window.parent` and in an editor tab the frame is its own parent. Follow Memo's ordering; treat that sentence here as void.
+
+
 **Complexity:** 5
 
 ## Goal

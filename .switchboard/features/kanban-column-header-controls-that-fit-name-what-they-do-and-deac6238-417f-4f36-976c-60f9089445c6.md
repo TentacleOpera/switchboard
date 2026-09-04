@@ -1,5 +1,13 @@
 # Kanban Column Header: Controls That Fit, Name What They Do, and Report Honestly
 
+<!-- board-collapse-membership -->
+> **MEMBERSHIP CORRECTED 2026-09-04 (Board Collapse audit). Two subtasks, not three.**
+> 
+> *Copy Dispatch Prompt must not flash "Copied!" on every card's coder-prompt button* was **merged into `feature_plan_20260820074420_copy-prompt-button-feedback-fires-late-and-flashes-green.md` and deleted**. Both were about what the copy affordance says when it fires, from two different features.
+> 
+> Dependencies still lists it as item 3 with a scope estimate. **That deliverable is not gone, it moved**: the merge target owns both the press-feedback shape and the batch case, deleting the per-card `copyPlanLinkResult` loop so a batch copy stops flashing every card in the column. Do not schedule it from here.
+
+
 **Complexity:** 6
 
 ## Goal
