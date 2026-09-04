@@ -16,6 +16,7 @@ Typing /switchboard must reach the right board, prove it is alive, and present o
 - [ ] [Split the CLI Front-Door Menu into GUI and CLI Branches](../plans/split-cli-front-door-menu-into-gui-and-cli-branches.md) — **CREATED** — ID: 759c05b5-1092-45c6-869a-fc6726e4cb5e
 - [ ] [The CLI Front Door Exits Non-Zero, Its Setup Handler Silently Does Nothing, and Its Only Gate Cannot Run It](../plans/memo-the-cli-front-door-exits-non-zero-and-its-setup-handler-silently-does-nothing.md) — **CREATED** — ID: 5cc038b6-a729-433c-9a3f-ac53b79cbdae
 - [ ] [The CLI Front Door Costs a Keystroke to Do the Likely Thing, and Is Free to Quit](../plans/the-cli-front-door-costs-a-keystroke-to-do-the-likely-thing-and-is-free-to-quit.md) — **CREATED** — ID: 5fb04de7-0433-4a2d-a020-d6063d414825
+- [ ] [The Console Column View Lists Subtasks as Plans, and Cannot Filter to What You Care About](../plans/the-console-column-view-lists-subtasks-as-plans-and-cannot-filter-to-what-you-care-about.md) — **CREATED** — ID: 9572d35f-4868-4e7c-85d0-b5fa4e61ac04
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing (2026-09-04, Board Collapse 08)

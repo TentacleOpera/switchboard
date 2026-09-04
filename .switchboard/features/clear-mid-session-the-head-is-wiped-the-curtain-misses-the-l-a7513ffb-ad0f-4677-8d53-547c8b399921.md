@@ -79,3 +79,7 @@ The open mid-session clear defects. A roster clear still clears the team head; t
 - [ ] [Completion Has No Round or Feature Scope, So the Lead Clears Seats One at a Time — or Not at All](../plans/completion-has-no-round-or-feature-scope-so-the-lead-clears-seats-one-at-a-time-or-not-at-all.md) — **CODER CODED** — ID: 39e9f9f6-d83e-4f8d-bd35-85fb130c8a4e
 <!-- END SUBTASKS -->
 
+## Implementation Summary
+
+All seven subtasks implemented and committed. The dispatch curtain now arms from the final `clearBeforePrompt` value after work-context overrides, with a `cleared: boolean` field in the verb response and immediate disarm on `reason: 'no-clear'`. The roster barrier prunes the deferred set when seats are cleared, records the work-context key unconditionally, backfills legacy team rows with no `head`, routes standalone's `triggerAction` through the barrier, and uses a configurable liveness window. Idempotent completions now resolve the seat and run the clear, the `!isTeamMember` guard is removed, and `onTeamReleased` fires on all branches. Team-seat clearing is gated on work-context change in both hosts. The lead's completion post resets stale `completed_at` on dispatch and reports `clearReason` explicitly. After-clear standing-orders delivery is wrapped in a non-action envelope with head-specific roster deferral. Round-complete and feature-complete endpoints batch completion and clearing, with feature planIds rejected at `task/complete`. Standalone's `clearTerminalContext` now calls `deliverStandingOrdersAfterClear`.
+
