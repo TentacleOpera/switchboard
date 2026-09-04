@@ -69,11 +69,13 @@ Worse, the work-context key is written only when `toClear.length > 0 || deferred
 
 Remove from the set when the barrier clears a seat (call `dropDeferredClear` for each name in `toClear` after the clears complete), and decide the re-fire gate. **[decision]** Recording the key even when nothing was cleared is the obvious fix; proceeding on the assumption that this is correct — the re-fire is the worse failure (barrier runs forever on every dispatch), and a genuinely needed later pass would be triggered by a new work context key, not by the same one. Confirm that recording unconditionally does not suppress a genuinely needed later pass — if a seat becomes dirty after the barrier recorded the key, the next dispatch with the same work context key would skip the barrier, but the same-feature intercept at `:847-850` catches deferred seats, and a seat that was clean and becomes dirty is dispatched to (which writes a new `_lastWorkContextByTerminal` entry), so the barrier would fire on the next NEW work context. The assumption holds.
 
-### 2. The delivery path clears the head the barrier just excluded
+### 2. ~~The delivery path clears the head the barrier just excluded~~ — MOVED 2026-09-04
 
-After `await prepPromise`, `clearBeforePrompt: true` is set unconditionally at `TaskViewerProvider.ts:988-990`, with the same shape at `bootstrap.ts:2350-2352`. A dispatch addressed to the head therefore wipes the head, which is exactly what the exclusion exists to prevent.
+~~Gate the flag on the resolved target not being the excluded head: `if (clearEnabled && payload.name !== teamInfo.head)`.~~
 
-Gate the flag on the resolved target not being the excluded head: `if (clearEnabled && payload.name !== teamInfo.head)`. Apply the same gate in both hosts.
+**Superseded — do not fix it here, and do not use the head gate above.** The unconditional clear at `TaskViewerProvider.ts:988-990` / `bootstrap.ts:2350-2352` is real, but gating it on the head is the wrong predicate and would leave the bug in place for every other team seat. The correct gate is the **work context**: a seat handed genuinely new work clears; a seat handed work it already holds does not. A lead is not a special case, it is just the seat where the damage was noticed.
+
+Moved to *A Team Seat Is Cleared on Every Dispatch, Because the Team Branch Never Compares the Work Context* (`a29bed0f`), in this same feature, which carries the 2026-09-04 reproduction.
 
 ### 3. Legacy team rows carry no head, so the exclusion is inert for them
 
