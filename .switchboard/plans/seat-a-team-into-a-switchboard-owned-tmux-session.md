@@ -219,6 +219,19 @@ const backend = kanbanProvider._getScopedSetting('terminalBackend', 'fleet') || 
 
 Roles, roster, definition resolution, the wire-safety guard at `TaskViewerProvider.ts:3473`, standing orders and dispatch all stay as they are. The `instantiateAgentGroupCore` flow (`agentGroupInstantiation.ts:83-182`) runs unchanged — caps pre-flight, `wireSpawnedTeam`, group registration, `onCreated` hook. Only the `createHeadWithDelegates` callback and the `onCreated` registry update branch on the backend. If this plan finds itself editing team semantics, the seam is in the wrong place.
 
+### Multi-device attach: a phone must not resize the Mac
+
+The feature's stated value is attaching "from the Mac, the iPad, or a different network". tmux does not size windows per client — with tmux 3.x's default `window-size latest`, the most recently attached client's dimensions win for **every** attached client. So a phone attaching at 80x20 resizes the team's window to 80x20 and the Mac's grid collapses into a corner of its terminal.
+
+A four-pane team grid at phone dimensions is roughly 40x10 per pane. It renders; it cannot be read.
+
+Two things follow, and neither is in the plan today:
+
+- **Attach through a session group, not the session itself.** `tmux new-session -t <session>` gives each device its own client session sharing the same windows, with independent current-window and independent sizing. Document this as the attach gesture — a bare `tmux attach` is the one that squashes everyone.
+- **The grid is not the phone view.** On a small client the expected workflow is one zoomed pane at a time (`prefix z`), switching between seats. Whatever guidance ships with this feature should say so rather than implying the grid travels.
+
+Decide whether Switchboard sets `window-size` explicitly on the sessions it creates, or documents the attach gesture and leaves the default. Setting it to `manual` with an explicit size makes the box's own layout authoritative and stops any attach from resizing it — at the cost of a client whose terminal is smaller than that size scrolling rather than reflowing.
+
 ## Verification Plan
 
 ### Automated Tests
