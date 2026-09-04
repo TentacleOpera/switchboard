@@ -194,3 +194,18 @@ The engine swap is real — `BetterSqliteDriver` uses WAL, page-level writes, sa
 - MAJOR — none of the plan's Verification Plan items were executed as automated checks: no RSS/memory test under 200 card moves, no `_dataVersion`-bump-per-mutating-method generated test, no two-writer concurrency test, no WAL→rollback-journal downgrade test, no dialect-parity test for the 18 `rowid` / 13 `AUTOINCREMENT` / 6 `PRAGMA` / 16 `datetime('now')` sites. Passing unrelated suites is not evidence the engine behaves identically. `.switchboard/plans/sidecar-owned-db-real-sqlite-binding.md`
 - NIT — `_writeKanbanStateBackup()` is now defined with zero callers (dead code) rather than removed. `src/services/KanbanDatabase.ts:9599`
 - NIT — the driver re-prepares nothing now that statements are cached, but the cache is unbounded; a long-lived host accumulates one compiled statement per distinct SQL string. `src/services/sqliteDriver.ts:176`
+
+## ABI Experiment — recorded 2026-09-05 (one-owner-for-scheduled-storage-work.md)
+
+The deciding experiment from `one-owner-for-scheduled-storage-work.md` was run. Data point:
+
+- **VS Code 1.136.1** (snap, x64) ships **Electron 42.10.0** → bundled Node 24.18.1, **modules ABI 146**, V8 14.8.178.38-electron.0. Stock Node 24.19.0 is **modules ABI 137**. The ABIs differ, exactly as the plan predicted from the `engines.node` major enumeration.
+- **Stock-Node build does NOT load in the extension host:** `require('better-sqlite3')` in Electron's Node fails with `NODE_MODULE_VERSION 137. This version of Node.js requires NODE_MODULE_VERSION 146`. Confirmed.
+- **`node-gyp rebuild --release --runtime=electron --target=42.10.0 --dist-url=https://electronjs.org/headers` succeeds** and produces an ABI-146 binary — the `NODE_MODULE_VERSION` error disappears. The rebuild mechanism works.
+- **A separate glibc floor blocks the final load *inside the VS Code snap*:** the snap runs on core20 (glibc 2.31), but the from-source Electron build links the build host's glibc (2.38+) and the `prebuild-install --runtime electron` prebuild carries a glibc 2.34 floor. Both fail with `GLIBC_2.38 not found` / `GLIBC_2.33 not found` against the snap's confined libc. This is a **snap-confinement artifact**, not an ABI-matrix property: a `.deb`/tarball VS Code install on the same machine (host glibc 2.39) would load the from-source build, and any glibc ≥2.34 system would load the prebuild.
+
+### Decision
+
+This is the plan's anticipated **third outcome**: the sidecar is **not required for correctness** — single-ownership of scheduled storage work is served by `src/services/storeLock.ts` (the extracted, hardened lock), and the binding loads in the extension host on a normal (non-snap) install once rebuilt for Electron's ABI. The residual risk is the **packaging pipeline**, not the architecture: a CI step that runs `node-gyp rebuild --runtime=electron --target=<vscode-electron>` (or `@electron/rebuild`) before packaging the VSIX, plus prebuild glibc-floor management across the supported distro matrix.
+
+The sidecar subtask is therefore **superseded** by its own dependency: the binding half shipped, and the ownership half is answered by a lock, not a process. A full close is pending one confirmation a snap environment cannot provide — a `.deb`/tarball VS Code load test on glibc ≥2.38 — but the ABI evidence is decisive and the remaining work is packaging, not a sidecar. Re-opening this card should be around the CI Electron-rebuild step and the prebuild matrix, not the original five reasons (the `sql.js` clobber, the stale-image reload, the `SCHEMA_WORKTREE_COLUMN_DEFS` shim, the eviction subsystem, and the "two images of one file" argument are all gone with `better-sqlite3` + WAL).

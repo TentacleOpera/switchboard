@@ -1,5 +1,14 @@
 # Consolidate to one global database in ~/.switchboard and retire the location guard, db-pointer and mapping subsystem
 
+> **SUPERSEDED** by `board-store-one-database-per-project.md`. The single-file
+> consolidation was a fourth topology nobody asked for: it is not a Board target
+> that a libSQL/Turso target can substitute for. The per-project topology
+> (`~/.switchboard/boards/<workspace-id>.db`) is what the product actually
+> supports. The genuinely good work from this plan — `globalStore.ts` as the
+> sole path authority, the deletion of `switchboardLocationGuard`, `db-pointer`
+> and the DB-resolution half of `WorkspaceIdentityService`, the engine swap —
+> stays. The N-to-1 merge and the single shared file are superseded.
+
 ## Goal
 
 Move board state out of the repository and into a single database in the user's home store, holding every workspace at once. Migrate existing per-workspace databases into it with an N-to-1 merge, then delete the three subsystems that exist only to answer "which database does this folder use?".
