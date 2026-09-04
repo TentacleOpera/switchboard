@@ -52,6 +52,21 @@ None.
 
 Everything that was a filter moves under Set filters. Everything that was an action moves under Commands. Setup goes to the bottom of the submenu — it is run once, not every session.
 
+Every current menu item has a destination — nothing is dropped:
+
+| today | becomes |
+| :--- | :--- |
+| `[1]` Browse & Dispatch by Column | action *view cards & dispatch*; the column choice becomes a filter value |
+| `[2]` Search Plans & Features | filter value *search* |
+| `[3]` Filter by Project | filter value *project* |
+| `[4]` Inspect Fleet Status | action *view fleet*, behaviour unchanged |
+| `[5]` Setup & Scaffolding Wizard | action, demoted under *more* |
+| `[b]` Back | unchanged |
+
+**`[2]` keeps its UUID lookup.** `consoleSearch` (`:2242`) matches on title *or* planId substring, so pasting a prefix still finds the card — as a filter that narrows to it, dispatched from the shared list rather than a separate screen.
+
+**`[1]` is the one real behaviour change.** Choosing a column is mandatory today; it is the only entry into the card list. As a filter it becomes optional, so an unset column means cards across all columns. That is what makes "show me my starred cards" expressible at all, but the default view is wider than today's — state that in the header so it reads as intentional.
+
 ### 2. Add the actions that are missing
 
 *View features* and *start a team* have no entry today. A command menu that lists only what already exists reproduces the current menu with extra nesting. These are the reason the operator wants the menu.
@@ -87,3 +102,5 @@ Viewing cards and dispatching is the daily action. From the console's menu it mu
 6. Setup, scaffolding and help are reachable but not competing with daily actions.
 7. The board console's menu has two entries plus Back, and the top-level front door is unchanged.
 8. Project filtering and search are still reachable — as filter values, not menu items.
+9. A UUID prefix typed into search still finds and dispatches its card.
+10. With no column filter set, the card list spans all columns and the header says so.
