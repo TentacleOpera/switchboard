@@ -35,6 +35,7 @@ Today the menu is a flat list whose contents change with server state (`cli.ts:1
 - **Filters are one-shot menu items**, not a set. Project and search are picked, used, and lost on the way back.
 - **Numbers shift meaning with server state** — offline `[3]` is Setup, online `[3]` is Help — so learned keys are wrong half the time.
 - **Stopping a running server is not offered at all.**
+- **A card has exactly one action: dispatch.** Picking a card in a column goes straight to `doDispatch` (`:2183-2186`). There is no way to star, unstar, inspect or move it. Starred is the headline view of this menu and nothing in the CLI can put a card into it — that requires the browser.
 - **Tracker sync is not reachable from the CLI.** The capability itself is well covered — `e7e9f2f5` (*Board sync is a capability all three providers implement*, Planned) carries five subtasks on the provider seam, its contract test, Notion's misnamed backup, ClickUp restore orchestration and the Linear planId anchor. What none of that touches is the CLI: `grep` for a sync, tickets or integration subcommand in `cli.ts` returns nothing. Sync exists through the panel and the HTTP verb rail (`_handleTicketsVerb`, `LocalApiServer.ts:6117`) only, so an operator over ssh cannot reach any of it.
 
 The structure above fixes each by being the structure, not by adding items to a list.
@@ -66,6 +67,14 @@ Keys are stable regardless of server state. Nothing renumbers.
 Selecting **Columns** lists the columns with their card counts, the operator picks one, and its cards are listed with the active filters applied and dispatchable — the flow that exists today, narrowed by whatever is set and by `9572d35f`'s subtask exclusion.
 
 Selecting **Starred** skips the column step entirely: starred cards across every column, dispatchable from the same list.
+
+### 2b. Picking a card offers actions, not just dispatch
+
+Today `consoleBrowseCardsInColumn` dispatches the moment a card is picked (`:2183-2186`). That is one action hardcoded as *the* action.
+
+A picked card should offer what an operator does with one: dispatch, star or unstar, and view the plan. Starring matters most here — Starred is this menu's headline view, and without it the operator curates their priority list in the browser and only *reads* it from the CLI.
+
+**Use the command the command-set plan defines; do not invent a second path.** `ef40963b` carries a `star` action, and `d1556fd0` already records the collision: `ef40963b` expresses it as a bare boolean while the same `PUT /kanban/plans/priority` endpoint carries a 1–4 level, so whichever lands second ships a half-command. This menu consumes whatever they settle on — it must not add a third spelling.
 
 
 | entry | what it is |
@@ -137,6 +146,9 @@ Direct actions, unchanged behaviour, at the bottom. **Setup**, not "First time s
 3. Starred shows only starred cards, across all columns, with no column step.
 3b. Columns lists the columns with counts, and a chosen column lists its cards with the active filters applied.
 3c. Setting a project or starred filter changes what a chosen column lists; there is no column filter to contradict the choice.
+3d. Picking a card offers dispatch, star/unstar and view — not dispatch alone.
+3e. A card starred from the console appears in Starred without leaving the CLI.
+3f. Starring from the console goes through the same command `ef40963b` and `d1556fd0` settle on, not a third path.
 4. Set Filters narrows every view under Fleet command, and each says what is filtering it.
 5. One key clears all filters.
 6. Launch offers Local and Remote; with a server running the entry reads Stop and stops it.
