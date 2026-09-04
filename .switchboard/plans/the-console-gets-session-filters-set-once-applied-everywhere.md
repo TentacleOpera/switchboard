@@ -47,6 +47,19 @@ The axes worth having, all of which the board already has:
 
 Keep it to axes the board genuinely sorts and renders on. A filter nobody sets is another option in a menu the operator already finds crowded.
 
+### 1b. Filters are settable inline, not only from the filters screen
+
+A filters screen alone is a regression. Today, browsing a column is two keystrokes (`[1]`, pick) and searching is two (`[2]`, type). Routing both through a separate screen and back makes the two most common actions slower than they are now:
+
+| action | today | filters-screen only | with inline keys |
+| :--- | :--- | :--- | :--- |
+| browse a column | 2 | 5 | 2 |
+| search | 2 | 5 | 2 |
+
+So every filter must have a key that works **from inside the card list**: search, column, project, starred, and clear. Change a filter and the list re-renders in place — no exit, no re-entry.
+
+The filters screen from change 1 stays as the discoverable route: it is how an operator learns what can be narrowed and sees everything currently set. The inline keys are how it is used once known. Both, not one.
+
 ### 2. The active filter is always visible
 
 Every view states what is filtering it. A short list must read as *"3 cards match"*, never as an empty board — that ambiguity is worse than no filter at all, because it looks like data loss.
@@ -79,5 +92,8 @@ An operator who set a filter yesterday should find it today, and must be told it
 3. Zero matches reads as a filtered result and names the clear key.
 4. Starred plus project plus column apply together, through one predicate.
 5. One keystroke clears everything from any view.
+5b. Browsing a specific column takes no more keystrokes than it does today.
+5c. Searching takes no more keystrokes than it does today.
+5d. Every filter can be changed from inside the card list, and the list re-renders without leaving it.
 6. A filter set, then a restart, is active and announced on the first screen.
 7. `--json` and non-TTY output ignore session filters entirely.
