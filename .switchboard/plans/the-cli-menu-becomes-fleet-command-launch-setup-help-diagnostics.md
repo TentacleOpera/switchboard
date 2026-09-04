@@ -63,10 +63,15 @@ Keys are stable regardless of server state. Nothing renumbers.
 
 ### 2. Fleet command — the board and the fleet
 
+Selecting **Columns** lists the columns with their card counts, the operator picks one, and its cards are listed with the active filters applied and dispatchable — the flow that exists today, narrowed by whatever is set and by `9572d35f`'s subtask exclusion.
+
+Selecting **Starred** skips the column step entirely: starred cards across every column, dispatchable from the same list.
+
+
 | entry | what it is |
 | :--- | :--- |
 | **Starred** | starred cards only, across all columns |
-| **Columns** | browse and dispatch by column — today's `consoleBrowseByColumn` (`:2191`) |
+| **Columns** | pick a column, see its cards, dispatch — today's `consoleBrowseByColumn` (`:2191`) |
 | **Status** | fleet status, once — today's `consoleInspectFleet` (`:2403`) |
 | **Monitor** | the same status, refreshing on a timer — **new** |
 | **Teams** | view teams, start a team |
@@ -83,7 +88,9 @@ Monitor is the one genuinely new capability in this sub menu. Keep it small: an 
 
 One screen listing the filters and their current values. Set once, applied to every view under Fleet command until changed.
 
-The axes: starred, project, column, search. Project and search exist today as one-shot menu items (`consoleFilterByProject` `:2322`, `consoleSearch` `:2242`) — their matching logic is reused here rather than rewritten, and they stop being separate destinations.
+The axes: **starred, project, search**. These narrow *within* whatever view is open. Project and search exist today as one-shot menu items (`consoleFilterByProject` `:2322`, `consoleSearch` `:2242`) — their matching logic is reused here rather than rewritten, and they stop being separate destinations.
+
+**Column is deliberately not a filter axis.** It is a navigation choice, and Columns is where it is made. Listing it in both places gives "pick Planned in Columns while the column filter says New" no defined answer. Starred already spans all columns by definition; the operator narrowing to one column does it by opening that column.
 
 Every view states what is filtering it, so a short list reads as a filtered result and never as an empty board. One key clears everything.
 
@@ -127,7 +134,9 @@ Direct actions, unchanged behaviour, at the bottom. **Setup**, not "First time s
 2. Fleet command opens the seven entries listed.
 2b. Status reports once and returns; Monitor redraws on an interval until a key exits.
 2c. Monitor with the server stopped reports that and stops, rather than looping on failures.
-3. Starred shows only starred cards, across all columns.
+3. Starred shows only starred cards, across all columns, with no column step.
+3b. Columns lists the columns with counts, and a chosen column lists its cards with the active filters applied.
+3c. Setting a project or starred filter changes what a chosen column lists; there is no column filter to contradict the choice.
 4. Set Filters narrows every view under Fleet command, and each says what is filtering it.
 5. One key clears all filters.
 6. Launch offers Local and Remote; with a server running the entry reads Stop and stops it.
