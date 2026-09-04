@@ -1,32 +1,30 @@
-# Every Lead-to-Coder Post Re-Orients the Whole Team, Because `created` Means "the Roster"
+# Startup Orientation Is for Hand-Driven Seats — Standalone Sends It to Automated Ones
 
 kanbanColumn: CREATED
 
 ## Goal
 
-A startup orientation reaches a seat that was just started. Not a seat that has been running for hours, and not every other seat on its team.
+A startup orientation reaches a seat a human will prompt by hand. A dispatch-driven seat never receives one, in either host.
 
 ### Problem analysis
 
-**Observed 2026-09-04, inside a feature implementation.** Seats had been running for hours. The lead reviewed a coder's work and posted to it. The coder then received:
+**The orientation exists for manually-driven seats.** A planner or controller terminal the operator types into has no dispatch to carry its standing orders, so it needs them at startup and needs to hold until prompted. That is what `ORIENTATION_PREAMBLE` says: *"Acknowledge them in one line and wait; do not begin any work until you are given a task."*
 
-> *"Startup orientation — your standing orders follow. Acknowledge them in one line and wait; do not begin any work until you are given a task."*
+**An automated coder seat never needed it.** Every work dispatch attaches the standing orders by default (`bootstrap.ts:2462`, `standingOrders !== false && !isMessage`), and the only paths that suppress them are agent-to-agent relays — `LocalApiServer.ts:5872` states the principle: *"Relays are agent-to-agent notes — a question, an answer, a 'done' — not task dispatches... the recipient's context is never cleared here so there is nothing to re-establish."* And when context *is* wiped, the after-clear envelope restores the orders with an explicitly non-actionable wrapper (`TaskViewerProvider.ts:2505-2515`).
 
-A seat mid-feature was told to acknowledge and wait for a task it already had.
+So for a dispatch-driven seat the orders arrive with the work, and are restored after a clear. The startup orientation adds only a hold instruction, in a window where the seat has no work to hold off from.
 
-**The chain, from the seat's log and the source:**
+**The extension host already implements this. Standalone does not.**
 
-1. The lead posts to the coder — the `sendToTerminal` verb.
-2. `sendToTerminal` calls `instantiateAgentGroupCore` (`bootstrap.ts:3286-3306`), a create-or-attach for the team.
-3. That function builds its return at `agentGroupInstantiation.ts:147`:
-
-```js
-const created: string[] = [headName, ...workers.map((w: any) => w.friendlyName)];
+```
+TaskViewerProvider.ts:13635   team delegates created with suppressStartupOrientation: true
+TaskViewerProvider.ts:3976    the relay honours the flag
+bootstrap.ts                  zero occurrences of suppressStartupOrientation
 ```
 
-**The whole roster, unconditionally** — head plus every worker — with no test for whether anything was actually created. It is never filtered afterwards; it is returned as-is at `:166` and `:176`.
+The extension deliberately withholds the orientation from team member seats, for exactly the reason above. Standalone never passes the flag and its relay never checks one — the classic composition-root divergence where "never wired" and "working" produce the same green gates.
 
-4. `bootstrap.ts:3306` then does:
+**And standalone arms it from a path the flag would not cover anyway.** `bootstrap.ts:3306`, inside `case 'sendToTerminal'`:
 
 ```js
 if (result.success && Array.isArray(result.created)) {
@@ -34,26 +32,28 @@ if (result.success && Array.isArray(result.created)) {
 }
 ```
 
-So **every lead-to-coder post arms a startup orientation for every seat on the team.**
+`result.created` comes from `instantiateAgentGroupCore` and is built at `agentGroupInstantiation.ts:147` as the **entire roster**, unconditionally, with no test for whether anything was created:
 
-**The field name is the defect.** `created` reads as "seats this call created" and is consumed on that assumption. It means "the roster". Every caller that treats it as a creation list is wrong, and this one relays a startup preamble to seats that started hours ago.
-
-**Timing, measured:**
-
-```
-21:47:04.787   completion POST recorded, coder-1 cleared
-21:47:04.859   coder-1 log session rolls           (+72ms)
-21:47:05.003   startup orientation delivered       (+216ms)
+```js
+const created: string[] = [headName, ...workers.map((w: any) => w.friendlyName)];
 ```
 
-The orientation landed while the CLI was still processing its clear — the log shows Devin's `/clear` picker open (`○ /clear  Clear conversation history`) with the paste arriving as literal `^[[200~`, because a menu cannot consume bracketed paste. Devin then completed the clear and restarted, discarding it.
+So every lead-to-coder post re-orients every seat on the team, including seats running for hours.
 
-**This is not the after-clear delivery.** That path exists and is correct: `TaskViewerProvider.ts:2505-2515` wraps the orders in an explicitly non-actionable envelope — *"This delivery restores your standing orders after a context clear. No action is required. Wait for your next dispatch."* The text in the log is `ORIENTATION_PREAMBLE`, which only `relayStartupOrientation` sends. The envelope built for exactly this situation is not what fired.
+**Observed 2026-09-04**, mid-feature, seats hours old. The lead reviewed a coder's work and posted to it; the coder received a startup orientation telling it to acknowledge and wait for a task it already had. Measured:
+
+```
+21:47:04.787   completion POST, coder-1 cleared
+21:47:04.859   coder-1 log session rolls        (+72ms)
+21:47:05.003   startup orientation delivered    (+216ms)
+```
+
+It landed while the CLI was still processing its clear — the log shows Devin's `/clear` picker open, with the paste arriving as literal `^[[200~` because a menu cannot consume bracketed paste.
 
 ## Metadata
 
 - **Complexity:** 3
-- **Tags:** teams, prompts, both-hosts, bugfix
+- **Tags:** teams, prompts, both-hosts, standalone-parity, bugfix
 
 ## User Review Required
 
@@ -61,37 +61,35 @@ None.
 
 ## Proposed Changes
 
-### 1. `created` must list what was created
+### 1. Standalone suppresses the orientation for team seats, as the extension does
 
-Return only the seats the call actually created. A caller asking "what did you just start" must not receive the roster.
+Pass `suppressStartupOrientation: true` when creating team delegates in standalone, and have the standalone relay honour the flag. This is porting a decision the other host already made, not making a new one.
 
-This is the fix. Everything else follows from it.
+### 2. `sendToTerminal` must not arm the orientation at all
 
-### 2. Audit every consumer of `created`
+A lead posting to a coder is not a seat startup. Remove the relay from `bootstrap.ts:3306`, or gate it on seats this call genuinely created and that are not team members.
 
-The field is returned from a shared function used by both hosts. Any other caller treating it as a creation list has the same defect with a different symptom; find them before changing the semantics, so nothing depends on the roster behaviour.
+### 3. `created` must list what was created
 
-If some caller genuinely wants the roster, give it a separate, correctly named field rather than overloading this one.
+`agentGroupInstantiation.ts:147` returns the roster under a name that reads as a creation list, and this consumer is not necessarily the only one to believe it. Return the seats actually created; audit the other consumers before changing the semantics, and give any caller that genuinely wants the roster its own field.
 
-### 3. Orientation is for a started seat, and only that
+### 4. State the rule where the relay lives
 
-Even with `created` corrected, state the rule at the relay: it fires for a seat that has just started and has no task. A seat mid-feature never receives it, whatever a caller passes.
-
-`1e2afcd8` covers the other half — the relay firing into a seat that is already working. Same relay, and the two fixes should agree.
+The orientation is for a seat a human will prompt by hand. Write that at `relayStartupOrientation` so the next caller does not have to infer it from a flag defaulted the wrong way in one host.
 
 ## Edge-Case & Dependency Audit
 
-1. **A genuine create must still orient.** Narrowing `created` must not stop a newly spawned seat receiving its orientation — that is what the relay is for.
-2. **A create-or-attach that creates some and attaches others** must return only the created ones. This is the case that produced the bug and the one to test.
-3. **Both hosts.** `instantiateAgentGroupCore` is shared; `bootstrap.ts:3306` and the extension's `ptyCreateTerminal` / `ptyCreateBatch` sites all consume the result.
-4. **Do not fix this at the relay by comparing timestamps.** Suppressing an orientation for an old seat papers over a return value that lies; the next consumer of `created` inherits it.
-5. **The after-clear envelope is correct and should be left alone** — it already says no action is required. The problem is that it was not the delivery that fired.
+1. **A manually created terminal must still get it.** A planner or controller the operator drives by hand is the case this exists for; do not remove the relay outright.
+2. **The head is dispatch-driven too.** A feature dispatch goes to the lead, so the lead is not a hand-driven seat and should be suppressed alongside its members. Confirm before assuming the head is the exception.
+3. **`1e2afcd8` folds into this.** That card covers the orientation firing into an already-working agent. With the relay scoped to hand-driven seats, a working team seat can no longer receive one — check whether anything survives of it before keeping it open.
+4. **This is a parity defect, so audit both roots by hand.** The extension passes the flag from one call site; whether it covers every team-creation path there is worth checking too.
+5. **Do not fix this by comparing seat age at the relay.** That hides both a return value that lies and a flag that was never wired.
 
 ## Verification Plan
 
-1. A lead posting to a coder produces no orientation for any seat.
-2. A newly created seat still receives its orientation.
-3. A create-or-attach that creates one seat and attaches three returns one name in `created`.
-4. No consumer of `created` treats it as the roster.
-5. A seat running for hours never receives a startup orientation.
-6. Both hosts behave identically.
+1. A team coder never receives a startup orientation, in either host.
+2. A manually created planner or controller terminal still does.
+3. A lead posting to a coder produces no orientation for any seat.
+4. A create-or-attach that creates one seat and attaches three returns one name in `created`.
+5. Both hosts pass and honour `suppressStartupOrientation` identically.
+6. Nothing remains of `1e2afcd8` that this does not cover, or it is kept with a stated reason.
