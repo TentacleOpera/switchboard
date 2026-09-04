@@ -1814,7 +1814,18 @@ export class KanbanDatabase {
             this._localMirrorDebounce = null;
         }
         this._boardSnapshotPublisher = null;
-        try { void this.exportStateToFile(); } catch { /* best-effort */ }
+        // NO unawaited export here. `void this.exportStateToFile()` started an async
+        // write while `_db` was still set, and by the time its continuation reached
+        // `getBoard()` -> `ensureReady()` this method had already closed the driver and
+        // nulled `_db` — so it re-initialised the instance dispose had just torn down
+        // and removed from `_instancesByDbPath`, then wrote the mirror back into a
+        // workspace a caller was mid-teardown on (observed as ENOTEMPTY). It is the
+        // same resurrection the `_localMirrorDebounce` cancel above prevents, reached
+        // through a second entry point.
+        //
+        // Nothing could depend on it completing anyway: it was fire-and-forget inside
+        // a try/catch. A caller that wants a final mirror awaits `flushPersist()` first
+        // — which is exactly what `invalidateWorkspace()` does.
         if (this._onColumnChanged) {
             try {
                 this._onColumnChanged.dispose();
@@ -10199,7 +10210,10 @@ FROM plans
     }
 
     private async _writeLocalBoardMirror(): Promise<void> {
-        if (!this._workspaceRoot || !this._db) return;
+        // `_disposed` as well as `_db`: this method awaits `getBoard()`, which calls
+        // `ensureReady()`, which re-opens a closed database. A `_db` check alone passes
+        // at entry and is stale by the time the await resumes.
+        if (this._disposed || !this._workspaceRoot || !this._db) return;
         if (this._localMirrorInFlight) {
             this._localMirrorPending = true;
             return;

@@ -183,11 +183,36 @@ suite('KanbanDatabase - Feature Status Update', () => {
     });
 
     test('single instance identity across acquisition paths', async () => {
+        // The invariant is "one in-memory image per DB FILE per process", so every
+        // acquisition path that resolves to the same file must return the same object.
+        //
+        // The third assertion here used to be `forWorkspace(db.dbPath)` — passing a
+        // database file where a workspace root belongs. That passed only because
+        // consolidation made EVERY root resolve to one global file, so any argument
+        // produced the same path; it was vacuous by construction, no production caller
+        // uses that shape, and it broke the moment boards became per-project. Replaced
+        // with the shape production actually uses: `forWorkspace(root, customDbPath)`,
+        // which SetupPanelProvider calls at :1134, :1213 and :1300.
         const dbByRoot = KanbanDatabase.forWorkspace(tempDir);
         const dbByPath = KanbanDatabase.forDbPath(db.dbPath);
-        const dbByFile = KanbanDatabase.forWorkspace(db.dbPath);
+        const dbByRootAgain = KanbanDatabase.forWorkspace(tempDir);
+        const dbByExplicitPath = KanbanDatabase.forWorkspace(tempDir, db.dbPath);
         assert.strictEqual(dbByRoot, db, 'workspace root lookup yields same instance');
         assert.strictEqual(dbByPath, db, 'forDbPath yields same instance');
-        assert.strictEqual(dbByFile, db, 'forWorkspace with db file path yields same instance');
+        assert.strictEqual(dbByRootAgain, db, 'repeated workspace root lookup yields same instance');
+        assert.strictEqual(dbByExplicitPath, db, 'forWorkspace(root, customDbPath) resolving to the same file yields same instance');
+
+        // And the converse, which the monolith could not express: a DIFFERENT project
+        // must resolve to a different board file, and therefore a different instance.
+        const otherRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sb-feature-status-other-'));
+        try {
+            const otherDb = KanbanDatabase.forWorkspace(otherRoot);
+            assert.notStrictEqual(otherDb, db, 'a different project must not share an instance');
+            assert.notStrictEqual(otherDb.dbPath, db.dbPath, 'a different project must not share a board file');
+            otherDb.dispose();
+            await KanbanDatabase.invalidateWorkspace(otherRoot);
+        } finally {
+            await fs.promises.rm(otherRoot, { recursive: true, force: true });
+        }
     });
 });
