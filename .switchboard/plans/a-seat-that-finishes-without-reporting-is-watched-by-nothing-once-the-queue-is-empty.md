@@ -1,42 +1,29 @@
-# A Seat That Finishes Without Reporting Is Watched by Nothing Once the Queue Is Empty
+# A Card Dispatched Long Enough With No Report Nudges the Lead
 
 kanbanColumn: CREATED
 
 ## Goal
 
-A seat holding an uncompleted card that has gone idle is noticed, whether or not anything is queued behind it. The lead is told, once, and can act.
+One rule: **if a card has been dispatched for longer than the threshold and no completion has been posted, nudge the lead.** Once. That is the whole feature.
 
 ### Problem analysis
 
-**Observed 2026-09-04.** A coder completed its work and did not post its completion report. Its lead waited hours. Nothing nudged either of them, and the operator had to notice by hand.
+**Observed 2026-09-04.** A coder finished its work and did not post its completion report. Its lead waited hours. Nothing told either of them, and the operator noticed by hand.
 
-The guard for this appears to exist. `PlanIngestionEngine.ts:1542` carries the message verbatim:
+The lead could not have known. A report is the only event that reaches it, and none arrived. From the lead's side, "finished and forgot to report" and "still working" are the same silence.
 
-> `[switchboard:turn-end] Queue stall (seat pacing) — you have gone idle holding card 'X' with N card(s) staged in the dispatch queue.`
+**Nothing watches for this, and what exists watches something else.** `PlanIngestionEngine`'s queue nudge gates every branch on `queueCards.length` (`:1324`) — cards staged in the dispatch queue. It exists to keep a *queue* advancing: no pacer with work staged, a dead pacer to re-stage, a pacer gone idle with more to hand out. The lead in this case had dispatched everything it had, so nothing was staged, and the whole watch returned before looking at anything.
 
-It is armed in both hosts — `bootstrap.ts:3189-3221` wires all four queue seams, so the extension-only divergence recorded in `CLAUDE.md` is fixed and is not the cause here.
+**The rule does not need the queue, and should not be built on it.** Whether cards are staged behind a seat has nothing to do with whether that seat's card has been out too long. Hanging this off the queue machinery makes it inherit a gate it does not want, which is exactly how the existing behaviour came to be.
 
-**The cause is the scope.** At `:1324` the watch short-circuits:
+**The data required is two fields already on the card.** `dispatched_at` is a timestamp and `completed_at` is NULL until the lead posts. `now - dispatched_at > threshold && completed_at IS NULL` is the entire condition. No seat liveness, no output sampling, no pacing model, no queue.
 
-```js
-const queueCards = board.filter(…);       // :1319
-if (queueCards.length === 0) { … }        // :1324
-```
-
-Every branch below that gate — the no-pacer escalation, the dead-seat re-stage, and the idle-seat nudge at `:1542` — runs only when cards are **staged in the dispatch queue**. The whole mechanism exists to keep a queue moving.
-
-The lead in the reported case had dispatched all of its subtasks. Nothing remained staged. So the queue was empty, the watch returned, and a seat sitting idle holding an uncompleted card was never examined. There was no queue to stall, so nothing looked.
-
-**The signal to detect this already exists and is already plumbed.** `_terminalLivenessProvider` (`:333`) supplies `{ friendlyName, lastDataAt, status }` per seat, and `dispatched_at set / completed_at NULL` identifies a held card. A seat whose `lastDataAt` is older than the liveness window while holding such a card has either finished and not reported, or died. Both need the lead told.
-
-**This does not mean inferring completion.** Completion remains the explicit POST and nothing here changes that — a nudge says *"this seat has gone quiet holding your card"*, never *"this card is done"*. The lead decides.
-
-**Why the lead did nothing on its own.** It had no signal to act on. The coder's report is the only event that reaches it, and the seat never sent one. A lead waiting on a report it will never receive cannot distinguish that from a coder still working, for exactly the same reason the watch cannot.
+Seat liveness is deliberately *not* the trigger. A seat can be quiet while thinking and chatty while stuck; elapsed time since dispatch is the thing the operator actually means by "this has been out too long".
 
 ## Metadata
 
-- **Complexity:** 4
-- **Tags:** teams, completion, watchdog, both-hosts, bugfix
+- **Complexity:** 3
+- **Tags:** teams, completion, watchdog, both-hosts
 
 ## User Review Required
 
@@ -44,42 +31,48 @@ None.
 
 ## Proposed Changes
 
-### 1. The idle-seat check runs regardless of the queue
+### 1. The rule
 
-Move the "seat has gone idle holding an uncompleted card" check out from behind the `queueCards.length` gate. A held card and a quiet seat are the whole condition; what is or is not staged behind it is irrelevant to whether that seat needs attention.
+A card with `dispatched_at` set, `completed_at` NULL, and `now - dispatched_at` past the threshold produces one notification to the lead of the team holding it.
 
-The existing branches that genuinely concern the queue — no pacer with cards staged, dead pacer to re-stage — keep their gate. This is one check moving, not a rewrite of the watch.
+Independent of the queue, of seat activity, and of what column the card is in. Do not gate it on anything else.
 
-### 2. Say it to the lead, not only to the seat
+### 2. One threshold, configurable, with a sane default
 
-The message at `:1542` is addressed to the seat (*"you have gone idle"*). In the reported case that seat had stopped producing anything, so a prompt to it may land on an agent that has already ended its turn.
+A single setting. Not per-role, not per-column, not per-complexity — one number the operator can raise if their work runs long.
 
-The party that is stuck is the lead. It is waiting on a report and cannot know it will not arrive. Tell the lead which seat is quiet and which card it holds, so the recovery it already has a ladder for can start.
+Where the default comes from matters less than that it is visible and adjustable; a threshold nobody can find is a threshold nobody trusts.
 
-### 3. Once, not repeatedly
+### 3. Tell the lead, once per card
 
-A seat can be legitimately quiet — thinking, waiting on a long build, blocked on a prompt. The nudge fires once per seat per held card and does not repeat until something changes. A watchdog that repeats becomes noise, and noise is ignored, which is the same as not having one.
+The lead is the addressee — it is the party that is stuck, and it already has a recovery ladder (`3b387cf6`). Name the seat and the card so it can act without asking.
 
-### 4. Do not infer completion from silence
+Once per card, not per tick. A repeating nudge is noise and noise gets ignored, which leaves you where you started.
 
-Explicitly, because the temptation is obvious once a seat is detected as done-looking: silence is not a completion. The card stays open, `completed_at` stays NULL, and the lead posts as it does today. This produces a notification and nothing else.
+### 4. Never infer completion
+
+The nudge says a card has been out a long time. It never marks the card complete, never clears the seat, and never advances the column. `completed_at` remains NULL until the lead posts, exactly as today.
+
+### 5. Do not build this on the queue watch
+
+Stated as a change because it is the mistake to avoid. The queue nudge stays as it is — it has its own job. This rule reads two card fields and a clock; it must not acquire a queue gate, a pacer concept, or a liveness probe on the way in.
 
 ## Edge-Case & Dependency Audit
 
-1. **A genuinely slow seat must not be declared stuck.** The liveness window is the existing tunable; use it rather than a new literal. Note that `LocalApiServer.ts:5322` hardcodes 90000 where three other readers take it from configuration — do not add a fourth hardcode.
-2. **A seat holding a card with no queue behind it is the *normal* end state**, not an error. The nudge is informational and must read that way.
-3. **A dead seat is already handled** by the dead-pacer branch when a queue exists. Confirm the two paths do not both fire when a queue is present.
-4. **Both hosts.** The seams are wired in both now; the change is in shared code, but verify the liveness provider is supplied in each.
-5. **Relates to `711fa15e`.** A stale `completed_at` from a previous run makes a held card look complete, so this check would skip a seat that is genuinely stuck. That card resets the field on dispatch and this one depends on it being right.
-6. **`3b387cf6`** (*Team lead escalation must exhaust cheap recovery before declaring a subtask blocked*) owns what the lead does once told. This card only makes sure it is told.
-7. **A false nudge is cheap; a missed one costs hours.** Where the two trade off, prefer telling the lead.
+1. **A legitimately long task will trip it.** That is acceptable and is what the threshold is for — one notification on a long-running card costs nothing; a missed one costs hours.
+2. **A card with no lead** (a solo seat, a direct dispatch) has nobody to notify. Notify the operator instead, or skip — decide, and do not silently drop it.
+3. **Depends on `711fa15e`.** `completed_at` is currently never reset, so a re-dispatched card carries a stale completion and would never trip this rule. That card resets it on dispatch.
+4. **`dispatched_at` must be trustworthy.** A card whose `dispatched_at` is cleared by a column move (see the dispatch-holder cards) would silently leave this watch. Confirm the field survives the paths that touch it.
+5. **Both hosts.**
+6. **`3b387cf6`** owns what the lead does once told. This card only makes sure it is told.
 
 ## Verification Plan
 
-1. A seat that finishes and does not report, with an empty queue, produces a nudge naming the seat and the card.
-2. The lead receives it, not only the silent seat.
-3. It fires once, not on every tick.
-4. A seat that is merely slow, still producing output, produces nothing.
-5. No card is marked complete by this path under any circumstances.
-6. The existing queue-stall branches still fire when cards are staged.
-7. Both hosts behave identically.
+1. A card dispatched past the threshold with no completion posted nudges its lead, naming the seat and the card.
+2. It fires whether or not anything is staged in a queue.
+3. It fires whether or not the seat is producing output.
+4. It fires once per card, not per tick.
+5. A card completed before the threshold produces nothing.
+6. No card is marked complete, no seat cleared, no column advanced by this path.
+7. The threshold is a visible, adjustable setting.
+8. Both hosts behave identically.
