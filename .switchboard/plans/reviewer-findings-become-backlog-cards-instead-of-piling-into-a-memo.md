@@ -4,7 +4,7 @@ kanbanColumn: CREATED
 
 ## Goal
 
-A reviewer's remaining risks land on the board as short, individually addressable cards in Backlog, each linking to the plan it was found reviewing, at the moment the review ends. They stop accumulating in a file that nothing consumes.
+A reviewer's remaining risks land on the board as short, individually addressable cards in Backlog, each linking to the plan it was found reviewing, at the moment the review ends. They stop accumulating in the operator's memo file, which goes back to holding only what the operator put there.
 
 *(The line above this section is the mechanism this plan is about, used on this plan. It names New explicitly so the template further down can show the real syntax without routing this card.)*
 
@@ -12,7 +12,7 @@ A reviewer's remaining risks land on the board as short, individually addressabl
 
 Reviewer findings are worth keeping. The 2026-09-04 drain of `.switchboard/memo.md` triaged 214 accumulated entries and **103 were real, current, unowned defects** — a 48% signal rate. The mechanism produces good work and then loses it.
 
-`REVIEWER_RISKS_TO_MEMO_DIRECTIVE` (`agentPromptBuilder.ts:1117`) tells every reviewer to append each remaining risk to `.switchboard/memo.md`, and it is on by default. Nothing drains that file unless the operator runs `process memo`. So it grows: 214 entries, 98 KB, none of it on the board, none of it searchable, and 42 of the entries either stale or already fixed by the time anyone read them. Meanwhile a `memo-to-plans` job is scheduled daily to convert every entry into its own card, which on that backlog would have taken the board from 124 top-level cards to over 330 in one unattended run. The file is untracked by git, so its clear is unrecoverable.
+`REVIEWER_RISKS_TO_MEMO_DIRECTIVE` (`agentPromptBuilder.ts:1117`) tells every reviewer to append each remaining risk to `.switchboard/memo.md`, and it is on by default. Nothing drains that file unless the operator runs `process memo`. So it grows: 214 entries, 98 KB, none of it on the board, none of it searchable, and 42 of the entries either stale or already fixed by the time anyone read them. The daily `memo-to-plans` job would have converted every one of those entries into its own card — taking the board from 124 top-level cards to over 330 in a single unattended run. The job is behaving correctly; it is the automatic input volume that makes it dangerous. The file is also untracked by git, so its clear is unrecoverable.
 
 **The fix is to skip the middle step.** A finding worth writing down is worth a card. Write the card.
 
@@ -78,13 +78,13 @@ Two rules on the shape, both load-bearing:
 - **The column line goes directly under the title, above all prose.** The parser takes the *first* match in the file, so a declaration at the top cannot be overridden by a later mention of the field in the body — which matters here, because these findings quote code for a living.
 - **The link is a bare filename.** The finding and the plan it came from are siblings in `.switchboard/plans/`. It carries the plan id too, so the reference survives a rename.
 
-### 3. Retire the memo path and cap the job
+### 3. Retire the automatic append, and nothing else
 
-With reviewers writing plans, the `reviewerRisksToMemo` toggle has no producer. Retire it, and leave `memo.md` to its other purpose — the operator's own capture surface, which is a different thing and still wanted.
+With reviewers writing plans, the `reviewerRisksToMemo` toggle has no producer. Retire the toggle.
 
-Then cap `memo-to-plans`. It is one of four job definitions scaffolded by `ScheduledJobsService.ts:581-589`, runs daily, and its instruction is to turn every entry into a plan file and clear the memo. With no reviewer traffic the memo stays small and operator-authored, which is the case that job was written for — so keep it and bound it: above a threshold, say 20 entries, it reports instead of generating cards unattended.
+**That is the whole of it.** `.switchboard/memo.md` stays, `/switchboard-memo` capture mode stays, and the daily `memo-to-plans` job stays exactly as it is. The memo is the operator's own capture surface and is still wanted; what is being removed is the automatic reviewer traffic that filled it with 214 entries nobody asked for.
 
-That job file is **shipped state**. It is scaffolded to disk, so installs already hold the uncapped text and editing the scaffold does not change theirs. Either rewrite the on-disk copy when it matches a known previous version, or accept that existing installs keep the old job and say so.
+No cap on the job, either. A cap would only ever have been protection against that automatic volume — with it gone, everything in the memo is there because the operator typed it, and a job that refuses to process 30 deliberate entries is worse than one that processes them. Nothing about the job needs to change, which also means no scaffolded-file migration.
 
 ## Edge-Case & Dependency Audit
 
@@ -104,5 +104,5 @@ That job file is **shipped state**. It is scaffolded to disk, so installs alread
 4. A finding filed from a worktree lands in the main checkout and survives cleanup — checked on all three emitters, including the two that send no path line.
 5. Coder, lead coder and researcher prompts contain no findings directive.
 6. `reviewerRisksToMemo` has no producer, and no reviewer path writes `.switchboard/memo.md`.
-7. `memo-to-plans` reports instead of generating cards above its threshold.
+7. `/switchboard-memo` capture still appends, and `memo-to-plans` still processes what it finds — both unchanged.
 8. The eight directive tests at `agentPromptBuilder.test.ts:196-264` are rewritten against the new behaviour, not deleted — the role-scoping ones are still real invariants. Run them by hand; that suite does not gate CI.
