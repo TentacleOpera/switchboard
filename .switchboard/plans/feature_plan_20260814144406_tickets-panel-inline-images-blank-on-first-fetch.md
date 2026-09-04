@@ -1,5 +1,13 @@
 # Tickets Panel: Inline Images Are Blank On First View And Only Appear After Clicking Around
 
+<!-- board-collapse-audit -->
+> **COUPLING 2026-09-04 (Board Collapse audit).** The one-shot image retry this plan adds changes an image's rendered height **after first paint**. That is precisely the moment the markdown editor's scroll synchronisation re-measures: *The Editor and the Preview Stay Level* pairs each source image with its preview element and re-measures on `load`, because an image's height is unknown until it loads and that is when the editor and preview columns diverge.
+> 
+> Whichever of the two lands second must make this retry trigger that re-measure, or a retried image leaves the two panes misaligned by its height for the rest of the session. Ticket previews with inline images are the common case for both plans. The scroll-sync plan carries the same note.
+> 
+> This card now sits in the **Tickets images** feature and lands first of its two.
+
+
 ## Goal
 
 Make a ticket's inline description images render on the **first** view of that ticket in `tickets.html`, and make a failed image load recover by itself instead of requiring the user to click to another ticket and back.

@@ -26,11 +26,12 @@ check meaningful.
    first: require `$ROOT ∈ health.roots` before using a board, and validate `workspaceRoot` on both
    sides of the adopt call. *Orchestrator adopt call drops workspaceRoot* has been merged into this
    plan and deleted; it fixed the same call from another feature.
-2. **Liveness** — currently **two cards**: *Sandbox-Surviving Board Liveness via a Unix Domain
-   Socket* (dead is detectable) and *A detached board can spin at 100% CPU holding its port* (alive
-   but not serving is detectable). **Board Collapse 09 merges these two into one plan.** Until it
-   does, treat them as one step and do not dispatch them separately: both edit the same region of
-   `bootstrap.ts` and both add a liveness artefact beside `api-server-port.txt`.
+2. **Liveness** — *Sandbox-Surviving Board Liveness via a Unix Domain Socket*, now **one card**.
+   The two plans that split this question were merged on 2026-09-04: the socket answers "is it
+   dead" (a socket dies with the process, so a sandbox that cannot reach loopback TCP can still
+   tell a live board from a stale port file), and the heartbeat file answers "is it alive but not
+   serving" (written on the main loop so it starves when the loop does, with a wedge threshold and
+   a `stop` path that no longer gates on `/health`, which is false by definition when wedged).
 3. **The front door arms against an endpoint that does not exist** — repair the dead
    `POST /orchestration/confirm`, the legacy paths, and the doubled persona delivery.
 4. **Replace the Mission Control persona with a run sheet** — carries the single recovery rung from
