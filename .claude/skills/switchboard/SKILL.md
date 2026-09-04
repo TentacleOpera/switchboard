@@ -54,7 +54,7 @@ switchboard api POST /mission-control/adopt "{\"terminalName\": \"${SWITCHBOARD_
 ```
 
 The response carries `prompt` — the pre-flight instruction. **Follow it in this
-session**: read `.agents/protocols/switchboard-mission-control/SKILL.md`, run the pre-flight,
+session**: resolve the `switchboard-mission-control` protocol (`switchboard api GET /protocol/switchboard-mission-control`), run the pre-flight,
 report what you find, propose a goal, and wait for the user to answer *here*.
 
 `POST /mission-control/adopt` **does not arm** and seats no terminal. On the user's

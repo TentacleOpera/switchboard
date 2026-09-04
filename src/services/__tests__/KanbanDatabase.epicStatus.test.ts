@@ -59,7 +59,7 @@ suite('KanbanDatabase - Feature Status Update', () => {
 
         // Update feature status using absolute path (which should be normalized internally to relative)
         const updated = await db.updateFeatureStatus(planId, 1, 'feature-parent-123');
-        assert.strictEqual(updated, true, 'updateFeatureStatus should return true');
+        assert.strictEqual(updated, 'applied', 'updateFeatureStatus should return applied');
 
         // Verify the database row was actually updated
         const planAfter = await db.getPlanByPlanId(planId);
@@ -70,9 +70,9 @@ suite('KanbanDatabase - Feature Status Update', () => {
 
     test('updateFeatureStatus rejects empty or whitespace id', async () => {
         const result1 = await db.updateFeatureStatus('', 0, 'feat-1');
-        assert.strictEqual(result1, false);
+        assert.strictEqual(result1, 'not_found');
         const result2 = await db.updateFeatureStatus('   ', 0, 'feat-1');
-        assert.strictEqual(result2, false);
+        assert.strictEqual(result2, 'not_found');
     });
 
     test('updateFeatureStatus refuses to clear is_feature on a .switchboard/features/ file', async () => {
@@ -103,7 +103,7 @@ suite('KanbanDatabase - Feature Status Update', () => {
 
         // Attempt to demote feature to 0
         const result = await db.updateFeatureStatus(featPlanId, 0, 'some-parent');
-        assert.strictEqual(result, true, 'returns true indicating safe handling');
+        assert.strictEqual(result, 'refused', 'returns refused indicating the demotion was declined');
 
         const after = await db.getPlanByPlanId(featPlanId);
         assert.ok(after);
@@ -139,7 +139,7 @@ suite('KanbanDatabase - Feature Status Update', () => {
 
         // Call updateFeatureStatus using sessionId as 4th param
         const result = await db.updateFeatureStatus('', 0, 'parent-123', sessId);
-        assert.strictEqual(result, true);
+        assert.strictEqual(result, 'applied');
         const after = await db.getPlanByPlanId(planId);
         assert.ok(after);
         assert.strictEqual(after.featureId, 'parent-123');
@@ -177,9 +177,9 @@ suite('KanbanDatabase - Feature Status Update', () => {
 
         // Mock plan where plan.planFile points to file1 but planId is plan2 (mismatch)
         // Since getPlanByPlanId checks by plan_id, let's create a scenario or test directly:
-        // If we call updateFeatureStatus for a non-existent plan, it returns false
+        // If we call updateFeatureStatus for a non-existent plan, it returns 'not_found'
         const nonExistent = await db.updateFeatureStatus('does-not-exist', 0, 'parent');
-        assert.strictEqual(nonExistent, false);
+        assert.strictEqual(nonExistent, 'not_found');
     });
 
     test('single instance identity across acquisition paths', async () => {

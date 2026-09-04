@@ -12,7 +12,8 @@ export interface ImportRegistryEntry {
   importedAt: string;     // ISO timestamp
   lastSyncedAt?: string;  // ISO timestamp of last successful sync
   contentHash?: string;   // SHA-256 hash of content at last sync, for conflict detection
-  remoteContentHash?: string; // Legacy alias for contentHash
+  /** @deprecated use contentHash — imported_docs.content_hash is the single home. */
+  remoteContentHash?: string;
 }
 
 export interface TaskCacheEntry<T> {
@@ -38,12 +39,6 @@ export class PlanningPanelCacheService {
     private _taskCacheLruList: string[] = []; // Most recent at end
     private readonly _taskCacheMaxSize = 100;
     private readonly _taskCacheTtlMs = 5 * 60 * 1000; // 5 minutes
-
-    // File paths for persisted metadata
-    private readonly _clickupMetadataPath: string;
-    private readonly _linearMetadataPath: string;
-    private _metadataWriteTimer: NodeJS.Timeout | null = null;
-    private readonly _metadataWriteDebounceMs = 500;
 
     constructor(workspaceRoot: string, kanbanDb?: KanbanDatabase) {
         this._workspaceRoot = workspaceRoot;
@@ -77,8 +72,6 @@ export class PlanningPanelCacheService {
             }
         }
         this._cacheBaseDir = resolvedCacheDir;
-        this._clickupMetadataPath = path.join(this._cacheBaseDir, 'clickup-tasks.json');
-        this._linearMetadataPath = path.join(this._cacheBaseDir, 'linear-tasks.json');
     }
 
     private async _getEffectiveWorkspaceId(workspaceId?: string): Promise<string> {
@@ -172,62 +165,63 @@ cachedAt: ${new Date().toISOString()}
 
     /**
      * Cache document titles for a source (for instant sidebar display).
-     * Stored at .switchboard/planning-cache/{sourceId}/documentTitles.json
+     * Previously stored at .switchboard/planning-cache/{sourceId}/documentTitles.json;
+     * now folded into imported_docs (doc_name column).
      */
     public async cacheDocumentTitles(sourceId: string, titles: Array<{ docId: string; title: string }>): Promise<void> {
-        const titlesPath = path.join(this._cacheBaseDir, sourceId, 'documentTitles.json');
-        await fs.promises.mkdir(path.dirname(titlesPath), { recursive: true });
-        const data = {
-            sourceId,
-            titles: titles.map(t => ({ docId: t.docId, title: t.title, lastUpdated: new Date().toISOString() })),
-            updatedAt: new Date().toISOString()
-        };
-        await fs.promises.writeFile(titlesPath, JSON.stringify(data, null, 2), 'utf8');
+        if (!this._kanbanDb) return;
+        const wsId = await this._getEffectiveWorkspaceId();
+        for (const t of titles) {
+            const entry = await this._kanbanDb.getImportBySlug(t.docId, wsId);
+            if (entry) {
+                entry.docName = t.title;
+                await this._kanbanDb.registerImport(entry);
+            }
+        }
     }
 
     /**
      * Get cached document titles for a source.
-     * Returns null if no title cache exists.
+     * Returns null if no imported docs exist for this source. Folded into
+     * imported_docs — a single batched query, not one per document.
      */
     public async getCachedDocumentTitles(sourceId: string): Promise<Array<{ docId: string; title: string; lastUpdated: string }> | null> {
-        const titlesPath = path.join(this._cacheBaseDir, sourceId, 'documentTitles.json');
-        try {
-            const raw = await fs.promises.readFile(titlesPath, 'utf8');
-            const data = JSON.parse(raw);
-            return data.titles || null;
-        } catch {
-            return null;
-        }
-    }
-
-    /**
-     * Get the path to the cache metadata file for a source.
-     */
-    private _getMetadataPath(sourceId: string): string {
-        return path.join(this._cacheBaseDir, sourceId, 'cache-metadata.json');
+        if (!this._kanbanDb) return null;
+        const wsId = await this._getEffectiveWorkspaceId();
+        const entries = await this._kanbanDb.getImportedDocsBySource(wsId, sourceId);
+        if (entries.length === 0) return null;
+        return entries.map(e => ({
+            docId: e.remoteDocId || e.slugPrefix,
+            title: e.docName,
+            lastUpdated: e.lastSyncedAt || e.importedAt
+        }));
     }
 
     /**
      * Read import metadata for a source.
+     * Previously stored at .switchboard/planning-cache/{sourceId}/cache-metadata.json;
+     * now folded into imported_docs (imported_at / last_synced_at columns).
      * Returns a map of docId → { isImported, importedAt }.
      */
     private async _readMetadata(sourceId: string): Promise<Record<string, { isImported: boolean; importedAt?: string }>> {
-        const metaPath = this._getMetadataPath(sourceId);
-        try {
-            const raw = await fs.promises.readFile(metaPath, 'utf8');
-            return JSON.parse(raw);
-        } catch {
-            return {};
+        if (!this._kanbanDb) return {};
+        const wsId = await this._getEffectiveWorkspaceId();
+        const entries = await this._kanbanDb.getImportedDocsBySource(wsId, sourceId);
+        const result: Record<string, { isImported: boolean; importedAt?: string }> = {};
+        for (const e of entries) {
+            const docId = e.remoteDocId || e.slugPrefix;
+            result[docId] = { isImported: true, importedAt: e.importedAt };
         }
+        return result;
     }
 
     /**
      * Write import metadata for a source.
+     * Now a no-op — the imported_docs table is the single home, and import
+     * registration happens through registerImport/setDocumentImported.
      */
-    private async _writeMetadata(sourceId: string, metadata: Record<string, { isImported: boolean; importedAt?: string }>): Promise<void> {
-        const metaPath = this._getMetadataPath(sourceId);
-        await fs.promises.mkdir(path.dirname(metaPath), { recursive: true });
-        await fs.promises.writeFile(metaPath, JSON.stringify(metadata, null, 2), 'utf8');
+    private async _writeMetadata(_sourceId: string, _metadata: Record<string, { isImported: boolean; importedAt?: string }>): Promise<void> {
+        // Folded into imported_docs; writes happen through registerImport/setDocumentImported.
     }
 
     /**
@@ -269,29 +263,38 @@ cachedAt: ${new Date().toISOString()}
 
     /**
      * Cache a document ID map for a source (ClickUp traversal optimization).
-     * Stored at .switchboard/planning-cache/{sourceId}/documentIdMap.json
+     * Previously stored at .switchboard/planning-cache/{sourceId}/documentIdMap.json;
+     * now folded into imported_docs (remote_doc_id ↔ slug_prefix ↔ doc_name).
      */
-    public async cacheDocumentIdMap(sourceId: string, idMap: Array<{ docId: string; title: string; url?: string }>, lastTraversalAt: string): Promise<void> {
-        const mapPath = path.join(this._cacheBaseDir, sourceId, 'documentIdMap.json');
-        await fs.promises.mkdir(path.dirname(mapPath), { recursive: true });
-        const data = { sourceId, idMap, lastTraversalAt, cachedAt: new Date().toISOString() };
-        await fs.promises.writeFile(mapPath, JSON.stringify(data, null, 2), 'utf8');
+    public async cacheDocumentIdMap(sourceId: string, idMap: Array<{ docId: string; title: string; url?: string }>, _lastTraversalAt: string): Promise<void> {
+        if (!this._kanbanDb) return;
+        const wsId = await this._getEffectiveWorkspaceId();
+        for (const item of idMap) {
+            const entry = await this._kanbanDb.getImportBySlug(item.docId, wsId);
+            if (entry) {
+                entry.remoteDocId = item.docId;
+                entry.docName = item.title;
+                if (item.url) entry.url = item.url;
+                await this._kanbanDb.registerImport(entry);
+            }
+        }
     }
 
     /**
      * Get cached document ID map for a source.
-     * Returns null if no map exists. Cache is valid until explicitly
-     * overwritten by cacheDocumentIdMap() or cleared by clearSourceCache().
+     * Returns null if no imported docs exist for this source. Folded into
+     * imported_docs — a single batched query, not one per document.
      */
     public async getCachedDocumentIdMap(sourceId: string): Promise<Array<{ docId: string; title: string; url?: string }> | null> {
-        const mapPath = path.join(this._cacheBaseDir, sourceId, 'documentIdMap.json');
-        try {
-            const raw = await fs.promises.readFile(mapPath, 'utf8');
-            const data = JSON.parse(raw);
-            return data.idMap || null;
-        } catch {
-            return null;
-        }
+        if (!this._kanbanDb) return null;
+        const wsId = await this._getEffectiveWorkspaceId();
+        const entries = await this._kanbanDb.getImportedDocsBySource(wsId, sourceId);
+        if (entries.length === 0) return null;
+        return entries.map(e => ({
+            docId: e.remoteDocId || e.slugPrefix,
+            title: e.docName,
+            url: e.url
+        }));
     }
 
     /**
@@ -391,7 +394,7 @@ cachedAt: ${new Date().toISOString()}
         docId: string,
         docName: string,
         slugPrefix: string,
-        options: { remoteContentHash?: string; workspaceId?: string; filePath?: string }
+        options: { contentHash?: string; remoteContentHash?: string; workspaceId?: string; filePath?: string }
     ): Promise<void> {
         if (!this._kanbanDb) {
             const msg = 'Database not available. Please ensure Switchboard setup is complete.';
@@ -432,11 +435,12 @@ cachedAt: ${new Date().toISOString()}
         
         try {
             const docsDir = path.join(this._workspaceRoot, '.switchboard', 'docs');
-            const shortHash = options.remoteContentHash ? options.remoteContentHash.slice(0, 8) : '';
+            const effectiveHash = options.contentHash || options.remoteContentHash;
+            const shortHash = effectiveHash ? effectiveHash.slice(0, 8) : '';
             const fileName = shortHash ? `${slugPrefix}_${shortHash}.md` : `${slugPrefix}.md`;
             const filePath = options.filePath || path.join(docsDir, fileName);
             const workspaceId = await this._getEffectiveWorkspaceId(options.workspaceId);
-            
+
             await this._kanbanDb.registerImport({
                 slugPrefix,
                 sourceId,
@@ -446,7 +450,7 @@ cachedAt: ${new Date().toISOString()}
                 filePath,
                 importedAt: new Date().toISOString(),
                 lastSyncedAt: new Date().toISOString(),
-                contentHash: options.remoteContentHash,
+                contentHash: effectiveHash,
                 workspaceId
             });
         } catch (err: any) {
@@ -477,13 +481,13 @@ cachedAt: ${new Date().toISOString()}
         return this._kanbanDb.getImportBySlug(slugPrefix, effectiveWsId);
     }
 
-    public async updateLastSynced(slugPrefix: string, remoteContentHash: string, workspaceId?: string): Promise<void> {
+    public async updateLastSynced(slugPrefix: string, contentHash: string, workspaceId?: string): Promise<void> {
         if (!this._kanbanDb) return;
         const effectiveWsId = await this._getEffectiveWorkspaceId(workspaceId);
         const entry = await this._kanbanDb.getImportBySlug(slugPrefix, effectiveWsId);
         if (entry) {
             entry.lastSyncedAt = new Date().toISOString();
-            entry.contentHash = remoteContentHash;
+            entry.contentHash = contentHash;
             await this._kanbanDb.registerImport(entry); // INSERT OR REPLACE
         }
     }
@@ -710,72 +714,56 @@ cachedAt: ${new Date().toISOString()}
     public async clearAllTaskCache(): Promise<void> {
         this._taskCache.clear();
         this._taskCacheLruList.length = 0;
-
-        // Write empty metadata immediately (no debounce)
-        try {
-            await this._writeMetadataFile(this._clickupMetadataPath, 'clickup');
-            await this._writeMetadataFile(this._linearMetadataPath, 'linear');
-        } catch (err) {
-            console.warn('[PlanningPanelCache] Failed to write empty metadata to JSON:', err);
-        }
+        // Task metadata JSON files (clickup-tasks.json, linear-tasks.json) have been
+        // retired — the in-memory cache is the sole home, and the files were archived
+        // by the migration. No file writes needed here.
     }
 
     /**
-     * Write minimal task metadata to JSON files for agent access.
-     * Uses atomic write pattern (temp file + rename) to avoid corruption.
+     * Task metadata JSON files (clickup-tasks.json, linear-tasks.json) have been
+     * retired — the in-memory LRU cache is the sole home for task metadata, and the
+     * JSON sidecars were archived by the migration. This is now a no-op.
      */
     private async _writeMetadataToJson(): Promise<void> {
-        if (this._metadataWriteTimer) {
-            clearTimeout(this._metadataWriteTimer);
-        }
-        this._metadataWriteTimer = setTimeout(async () => {
-            try {
-                await this._writeMetadataFile(this._clickupMetadataPath, 'clickup');
-                await this._writeMetadataFile(this._linearMetadataPath, 'linear');
-            } catch (err) {
-                console.warn('[PlanningPanelCache] Failed to write metadata to JSON:', err);
-            }
-        }, this._metadataWriteDebounceMs);
+        // No-op: sidecars retired.
     }
 
     /**
-     * Extract minimal metadata from cache entries for a specific source.
+     * Extract minimal task metadata for a source from the in-memory LRU cache.
+     * Replaces the JSON sidecar read that LocalApiServer's /metadata/{source}
+     * endpoint used to perform. Returns the same shape the old files carried so
+     * existing consumers (agents reading the endpoint) see no change.
      */
-    private async _writeMetadataFile(filePath: string, sourceId: string): Promise<void> {
+    public getTaskMetadataForSource(sourceId: string): {
+        version: number;
+        sourceId: string;
+        metadata: Array<{ id: string; name: string; status: string; listId?: string; projectId?: string; sprint?: string; lastUpdated: number }>;
+        writtenAt: number;
+    } {
         const metadata: Array<{ id: string; name: string; status: string; listId?: string; projectId?: string; sprint?: string; lastUpdated: number }> = [];
         const prefix = `${sourceId}:`;
-
         for (const [fullKey, entry] of this._taskCache.entries()) {
-            if (fullKey.startsWith(prefix)) {
-                // Extract listId/projectId from cache key (format: "source:listId:..." or "source:projectId:...")
-                const keyParts = fullKey.split(':');
-                const listId = sourceId === 'clickup' ? keyParts[1] : undefined;
-                const projectId = sourceId === 'linear' ? keyParts[1] : undefined;
-
-                for (const task of entry.data) {
-                    metadata.push({
-                        id: task.id,
-                        name: task.name || '',
-                        status: task.status || '',
-                        listId,
-                        projectId,
-                        sprint: task.sprint || undefined,  // if available
-                        lastUpdated: entry.timestamp
-                    });
-                }
+            if (!fullKey.startsWith(prefix)) continue;
+            const keyParts = fullKey.split(':');
+            const listId = sourceId === 'clickup' ? keyParts[1] : undefined;
+            const projectId = sourceId === 'linear' ? keyParts[1] : undefined;
+            for (const task of entry.data as any[]) {
+                metadata.push({
+                    id: task.id,
+                    name: task.name || '',
+                    status: task.status || '',
+                    listId,
+                    projectId,
+                    sprint: task.sprint || undefined,
+                    lastUpdated: entry.timestamp
+                });
             }
         }
-
-        const metadataObject = {
+        return {
             version: 1,
             sourceId,
             metadata,
             writtenAt: Date.now()
         };
-
-        const tmpPath = `${filePath}.tmp`;
-        await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
-        await fs.promises.writeFile(tmpPath, JSON.stringify(metadataObject, null, 2), 'utf8');
-        await fs.promises.rename(tmpPath, filePath);
     }
 }

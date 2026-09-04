@@ -761,26 +761,26 @@ export class ControlPlaneMigrationService {
         }
     }
 
-    private static _getAgentVersionFilePath(rootDir: string): string {
-        return path.join(rootDir, '.switchboard', '.agent_version.json');
-    }
-
     private static _getLastAgentVersion(rootDir: string): string | undefined {
         try {
-            const versionFilePath = this._getAgentVersionFilePath(rootDir);
-            if (fs.existsSync(versionFilePath)) {
-                const versionData = JSON.parse(fs.readFileSync(versionFilePath, 'utf-8'));
-                return versionData.version;
-            }
+            // .agent_version.json has been migrated to the kanban.db config table
+            // under `agents.lastCopiedVersion`. Sync read returns undefined if the
+            // db is not yet open (callers treat that as "needs refresh").
+            const db = KanbanDatabase.forWorkspace(rootDir);
+            if (!db.isOpen()) return undefined;
+            const versionData = db.getConfigJsonSync<{ version?: string }>('agents.lastCopiedVersion', { version: '' });
+            return versionData?.version;
         } catch { /* non-fatal */ }
         return undefined;
     }
 
     private static _setAgentVersion(rootDir: string, version: string): void {
         try {
-            const versionFilePath = this._getAgentVersionFilePath(rootDir);
+            const db = KanbanDatabase.forWorkspace(rootDir);
             const versionData = { version, lastUpdated: new Date().toISOString() };
-            fs.writeFileSync(versionFilePath, JSON.stringify(versionData, null, 2));
+            void db.ensureReady()
+                .then(() => db.setConfigJson('agents.lastCopiedVersion', versionData))
+                .catch(() => { /* non-fatal */ });
         } catch { /* non-fatal */ }
     }
 

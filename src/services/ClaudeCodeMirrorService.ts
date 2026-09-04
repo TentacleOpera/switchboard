@@ -69,8 +69,8 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
     // switchboard-contracts, complexity-scoring, deep-planning, web-research, tuning,
     // constitution-builder, external-team-lead, improve-remote-plan, design-system-builder,
     // refine_feature, archive, and the API proxy skills (clickup-*, linear-*, notion-api,
-    // get-tickets, generate-diagram) have been moved to .agents/protocols/ — they are
-    // delivered by path reference, not via CLI skill discovery, so they are NOT mirrored here.
+    // get-tickets, generate-diagram) have been moved to control_plane rows — they are
+    // delivered by ProtocolService resolution, not via CLI skill discovery, so they are NOT mirrored here.
 
     // manage-features — merged from create-feature, create-feature-from-plans,
     // group-into-features, rearrange-feature. Discoverable skill with four sections.

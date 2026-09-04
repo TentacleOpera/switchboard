@@ -660,7 +660,7 @@ function dispatchExitCode(status: number): number {
 /**
  * The two columns that constitute "ready to go".
  *
- * These are the protocol's, not a guess: `.agents/protocols/switchboard-mission-control/SKILL.md`
+ * These are the protocol's, not a guess: the `switchboard-mission-control` protocol
  * § "What Is Ready To Go" defines ready as the two dispatchable lanes —
  * `CREATED` (planning lane) and `PLAN REVIEWED` (coding lane) — and names
  * `STAGING` explicitly among the columns that are NOT ready ("a manual staging
@@ -776,21 +776,38 @@ function formatConsoleCard(p: any, index?: number, showColumn = false): string {
  *
  * `forWorkspace()` caches one instance per workspace root and resolves the path
  * once, at construction. Calling it here to answer "does a board exist?" would
- * cache an instance pinned to the default path, and a db-pointer written
+ * cache an instance pinned to the default path, and a board relocation
  * afterwards (menu option 2) would then be ignored for the whole process. Both
  * helpers used here are static and side-effect-free.
+ *
+ * One board per project: resolves the canonical workspace id, then the
+ * per-project board path under ~/.switchboard/boards/<id>.db. Falls back to
+ * the legacy per-repo kanban.db if it exists (pre-migration).
  */
 function resolveBoardDbPath(workspaceRoot: string): string {
-    const { getGlobalDbPath } = require('../services/globalStore');
-    const globalPath = getGlobalDbPath();
-    if (fs.existsSync(globalPath)) {
-        return globalPath;
-    }
+    const { resolveBoardDbPath: resolveBoard } = require('../services/globalStore');
+    const { resolveCanonicalWorkspaceIdSync } = require('../services/WorkspaceIdentityService');
+    try {
+        const wsId = resolveCanonicalWorkspaceIdSync(workspaceRoot).value;
+        const boardPath = resolveBoard(wsId).path;
+        if (fs.existsSync(boardPath)) {
+            return boardPath;
+        }
+    } catch { /* fall through to legacy check */ }
+    // Legacy: per-repo kanban.db (pre-migration)
     const localPath = path.join(workspaceRoot, '.switchboard', 'kanban.db');
     if (fs.existsSync(localPath)) {
         return localPath;
     }
-    return globalPath;
+    // Default: per-project board path (will be created by createIfMissing)
+    try {
+        const wsId = resolveCanonicalWorkspaceIdSync(workspaceRoot).value;
+        return resolveBoard(wsId).path;
+    } catch {
+        // Last resort: legacy global path
+        const { getGlobalDbPath } = require('../services/globalStore');
+        return getGlobalDbPath();
+    }
 }
 
 /** A 0-byte file is not a board: standalone pre-creates the file and lets
@@ -914,10 +931,11 @@ async function firstRunDatabaseMenu(workspaceRoot: string): Promise<{ pendingBun
                 if (!answer) { console.log('  Enter a path, or 1 to start a new board.'); continue; }
                 const resolved = resolveUserPath(answer);
                 if (!fs.existsSync(resolved)) { console.log(`  Not found: ${resolved}`); continue; }
-                const { mergeDatabase } = require('../services/dbMerge');
-                const { getGlobalDbPath } = require('../services/globalStore');
-                await mergeDatabase(resolved, getGlobalDbPath());
-                console.log(`[switchboard] Merged ${resolved} into global database`);
+                const { relocateBoardDatabase } = require('../services/dbMerge');
+                const { resolveCanonicalWorkspaceIdSync } = require('../services/WorkspaceIdentityService');
+                const wsId = resolveCanonicalWorkspaceIdSync(workspaceRoot).value;
+                await relocateBoardDatabase(resolved, workspaceRoot, wsId);
+                console.log(`[switchboard] Relocated ${resolved} into per-project board`);
                 return {};
             }
             if (choice === '3') {
@@ -3400,7 +3418,7 @@ async function main() {
     //
     // Runs BEFORE the detach fork, so the prompt lands on the parent's TTY and
     // never on a child whose stdio is 'ignore'. Options 1 and 2 are pure file
-    // side effects (the board file, or a db-pointer), so the child inherits them
+    // side effects (the board file, or a board relocation), so the child inherits them
     // with no plumbing; option 3's import has to be deferred until the plan files
     // are ingested, so it travels to the child as --import-bundle.
     let pendingBundlePath = args.importBundle;

@@ -4,7 +4,10 @@ import * as os from 'os';
 import { KanbanDatabase, DatabaseStorageStats } from './KanbanDatabase';
 import { ArchiveManager } from './ArchiveManager';
 import { exportProject, importProject } from './projectExport';
-import { getGlobalStoreDir } from './globalStore';
+import { getGlobalStoreDir, resolveBoardDbPath } from './globalStore';
+import { resolveCanonicalWorkspaceIdSync } from './WorkspaceIdentityService';
+import { tryAcquireStoreLock } from './storeLock';
+import { readScheduleState, writeLastRun, writeLastSkip, LastRunRecord } from './scheduleState';
 
 export interface RetentionConfig {
     /** Master toggle. Default false on initial release per policy. */
@@ -170,10 +173,58 @@ export class RetentionService {
         if (this._timer) return;
         this._log('Starting scheduled retention rotation service');
         this._timer = setInterval(() => {
-            void this.runRotation({ force: false }).catch(err => {
+            void this._runScheduledRotation().catch(err => {
                 this._log(`Scheduled rotation error: ${err?.message || err}`);
             });
         }, ROTATION_INTERVAL_MS);
+    }
+
+    /**
+     * One scheduled rotation tick. Acquires the store lock (shared with
+     * BackupService so rotation and backup cannot interleave), honours the
+     * per-machine schedule from persisted last-run state, and records every
+     * skip with a reason on the skip surface.
+     */
+    private async _runScheduledRotation(): Promise<void> {
+        const storePath = this._resolveStorePath();
+        const acquire = await tryAcquireStoreLock({ storePath });
+        if (!acquire.acquired) {
+            const db = this._getDb();
+            await writeLastSkip(db, 'rotation', { atMs: Date.now(), reason: acquire.skip.reason });
+            this._log(`Scheduled rotation skipped: ${acquire.skip.reason}`);
+            return;
+        }
+        try {
+            const db = this._getDb();
+            const state = await readScheduleState(db, 'rotation');
+            const lastRunAt = state.lastRun?.atMs ?? 0;
+            if (lastRunAt && Date.now() - lastRunAt < ROTATION_INTERVAL_MS * 0.9) {
+                await writeLastSkip(db, 'rotation', {
+                    atMs: Date.now(),
+                    reason: `another host ran rotation at ${new Date(lastRunAt).toISOString()} (within ${ROTATION_INTERVAL_MS}ms interval)`,
+                });
+                this._log(`Scheduled rotation skipped: recent last-run at ${new Date(lastRunAt).toISOString()}`);
+                return;
+            }
+            const report = await this._runRotationInner({ force: false });
+            const record: LastRunRecord = {
+                atMs: Date.now(),
+                ok: !report.error,
+                detail: report.error || `events=${report.rotated.planEvents} logs=${report.rotated.activityLog}`,
+            };
+            await writeLastRun(db, 'rotation', record);
+        } finally {
+            await acquire.release();
+        }
+    }
+
+    private _resolveStorePath(): string {
+        try {
+            const wsId = resolveCanonicalWorkspaceIdSync(this._workspaceRoot).value;
+            return resolveBoardDbPath(wsId).path;
+        } catch {
+            return path.join(this._workspaceRoot, '.switchboard', 'kanban.db');
+        }
     }
 
     public stopScheduledRotation(): void {
@@ -204,7 +255,45 @@ export class RetentionService {
 
     // ─── Core Rotation Mechanics (Copy-Verify-Delete across SQLite & DuckDB) ───
 
+    /**
+     * Run a retention rotation.
+     *
+     * Takes the store lock (shared with BackupService) so a rotation cannot
+     * interleave with a backup on another window. If the lock is held, the
+     * rotation is skipped and the skip is recorded on the skip surface. The
+     * scheduled path calls `_runRotationInner` directly while it holds the
+     * lock; this public entry is the manual / API path.
+     */
     public async runRotation(options?: { force?: boolean }): Promise<RotationReport> {
+        const storePath = this._resolveStorePath();
+        const acquire = await tryAcquireStoreLock({ storePath });
+        if (!acquire.acquired) {
+            const db = this._getDb();
+            await writeLastSkip(db, 'rotation', { atMs: Date.now(), reason: acquire.skip.reason });
+            return {
+                ran: false,
+                reason: `Rotation skipped — store lock held: ${acquire.skip.reason}`,
+                startedAt: new Date().toISOString(),
+                rotated: { planEvents: 0, activityLog: 0, jobRuns: 0, boardMoveRequests: 0 },
+                prunedControlPlane: 0,
+                dormantWorkspacesArchived: []
+            };
+        }
+        try {
+            const report = await this._runRotationInner(options);
+            const db = this._getDb();
+            await writeLastRun(db, 'rotation', {
+                atMs: Date.now(),
+                ok: !report.error,
+                detail: report.error || `events=${report.rotated.planEvents} logs=${report.rotated.activityLog}`,
+            });
+            return report;
+        } finally {
+            await acquire.release();
+        }
+    }
+
+    private async _runRotationInner(options?: { force?: boolean }): Promise<RotationReport> {
         if (this._rotating) {
             return {
                 ran: false,

@@ -24,7 +24,6 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import { KanbanDatabase, type KanbanPlanRecord } from './KanbanDatabase';
-import { appendFeatureClobberDiag } from './featureClobberDiag';
 import { parsePlanMetadata, extractClickUpTaskId, extractLinearIssueId } from './planMetadataUtils';
 import { isRuntimeMirrorPlanFile } from './PlanFileImporter';
 import type { ClickUpSyncService } from './ClickUpSyncService';
@@ -1901,8 +1900,7 @@ export class PlanIngestionEngine {
 
             const relativePath = path.relative(workspaceRoot, fsPath).replace(/\\/g, '/');
             if (relativePath.startsWith('.switchboard/features/')) {
-                this._host.logger.appendLine(`[GlobalPlanWatcher] feature-file handle: instance ${db.instanceId} (dbPath=${db.dbPath}) for ${relativePath}`);
-                appendFeatureClobberDiag(workspaceRoot, `watcher._handlePlanFile: instance=${db.instanceId} handling feature file ${relativePath}`);
+                this._host.logger.appendLine(`[GlobalPlanWatcher] feature-file handle: (dbPath=${db.dbPath}) for ${relativePath}`);
             }
             if (isRuntimeMirrorPlanFile(path.basename(relativePath))) {
                 this._host.logger.appendLine(`[GlobalPlanWatcher] Skipped brain mirror file: ${relativePath}`);

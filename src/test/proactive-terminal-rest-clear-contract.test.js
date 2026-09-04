@@ -20,7 +20,13 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const read = (rel) => fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8');
 
 const KANBAN_PROVIDER = read('src/services/KanbanProvider.ts');
-const ORCH = '.agents/protocols/switchboard-mission-control-http/SKILL.md';
+// The protocol file was retired from disk — its body lives in bundledProtocols.ts now.
+const _bundledSrc = read('src/services/bundledProtocols.ts');
+function readBundledProtocol(name) {
+    const m = _bundledSrc.match(new RegExp(`"${name}":\\s*\\{[^}]*"body":\\s*"((?:[^"\\\\]|\\\\.)*)"`, 's'));
+    return m ? JSON.parse('"' + m[1] + '"') : '';
+}
+const ORCH = 'switchboard-mission-control-http';
 
 // Extract the _buildDrivePrefix method body from the source text.
 const drivePrefixStart = KANBAN_PROVIDER.indexOf('_buildDrivePrefix');
@@ -56,7 +62,7 @@ test('proactive clearing did NOT trade away clearBeforePrompt: false', () => {
 });
 
 test('the Mission Control HTTP surface documents the clear verb', () => {
-    const orch = read(ORCH);
+    const orch = readBundledProtocol(ORCH);
     assert.ok(/ptyClearTerminal/.test(orch), 'switchboard-mission-control-http §4b omits ptyClearTerminal');
 });
 
@@ -64,13 +70,12 @@ test('neither contract re-states a retired standing-order cap', () => {
     // MAX_ORDERS / MAX_INSTRUCTION_CHARS / MAX_BLOCK_CHARS were removed from the runtime;
     // standing-orders-marker-contract.test.js pins their absence in source. The skills
     // documented them for months after they were gone.
-    for (const rel of [ORCH]) {
-        for (const cap of ['MAX_ORDERS', 'MAX_INSTRUCTION_CHARS', 'MAX_BLOCK_CHARS']) {
-            assert.ok(
-                !new RegExp(`\\b${cap}\\b`).test(read(rel)),
-                `${rel} documents ${cap}, which no longer exists`
-            );
-        }
+    const orch = readBundledProtocol(ORCH);
+    for (const cap of ['MAX_ORDERS', 'MAX_INSTRUCTION_CHARS', 'MAX_BLOCK_CHARS']) {
+        assert.ok(
+            !new RegExp(`\\b${cap}\\b`).test(orch),
+            `${ORCH} documents ${cap}, which no longer exists`
+        );
     }
 });
 
@@ -78,13 +83,11 @@ test('neither contract claims an omitted clearBeforePrompt defaults to true', ()
     // Both hosts treat an absent field as FALSE and inject the config default only on
     // an explicit clearBeforePromptFromConfig opt-in. The rule (pass false) stands; the
     // old justification did not.
-    for (const rel of [ORCH]) {
-        const text = read(rel);
-        assert.ok(
-            !/[Oo]mit(ting)? (the field|it)[^.]{0,80}(wipes|sends `\/clear`)/.test(text),
-            `${rel} still claims an omitted clearBeforePrompt clears the terminal — both hosts default it to false`
-        );
-    }
+    const text = readBundledProtocol(ORCH);
+    assert.ok(
+        !/[Oo]mit(ting)? (the field|it)[^.]{0,80}(wipes|sends `\/clear`)/.test(text),
+        `${ORCH} still claims an omitted clearBeforePrompt clears the terminal — both hosts default it to false`
+    );
 });
 
 if (failures > 0) { console.error(`\n${failures} contract failure(s)`); process.exit(1); }

@@ -5,6 +5,7 @@ import type {
     HostSeams, HostPathConfigProvider, HostSecrets, HostWatchEvent, HostWatchHandle
 } from '../services/hostSeams';
 import { switchboardCommandRegistry } from '../services/commandRegistry';
+import { readConfigValueSync, writeConfigValueSync } from '../services/configJsonBridge';
 
 /**
  * Standalone implementations of the host seams A2a defined.
@@ -64,12 +65,10 @@ function envKeyForSetting(settingKey: string): string {
 
 export class StandaloneHostPathConfigProvider implements HostPathConfigProvider {
     readonly workspaceRoot: string;
-    private _config: Record<string, any> = {};
     private _listeners: Set<(key: string, value: any, originatorId?: string) => void> = new Set();
 
     constructor(workspaceRoot: string) {
         this.workspaceRoot = workspaceRoot;
-        this._load();
     }
 
     onConfigChanged(listener: (key: string, value: any, originatorId?: string) => void): { dispose: () => void } {
@@ -83,38 +82,14 @@ export class StandaloneHostPathConfigProvider implements HostPathConfigProvider 
         }
     }
 
-    private _configPath(): string {
-        return path.join(this.workspaceRoot, '.switchboard', 'config.json');
-    }
-
-    private _load(): void {
-        try {
-            const raw = fs.readFileSync(this._configPath(), 'utf8');
-            this._config = JSON.parse(raw) || {};
-        } catch {
-            this._config = {};
-        }
-    }
-
-    private _save(): void {
-        const dir = path.dirname(this._configPath());
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
-        }
-        fs.writeFileSync(this._configPath(), JSON.stringify(this._config, null, 2), 'utf8');
-    }
-
     private _rawValue(key: string): any {
         // 1. Environment override (e.g. SWITCHBOARD_KANBAN_DBPATH)
         const envValue = process.env[envKeyForSetting(key)];
         if (envValue !== undefined) { return envValue; }
 
-        // 2. Config file, either as written ("switchboard.x.y") or without prefix ("x.y")
-        if (this._config[key] !== undefined) { return this._config[key]; }
-        const prefixed = `switchboard.${key}`;
-        if (this._config[prefixed] !== undefined) { return this._config[prefixed]; }
-
-        return undefined;
+        // 2. config.json has been migrated to the kanban.db config table.
+        //    Sync read returns undefined if the db is not yet open.
+        return readConfigValueSync(this.workspaceRoot, key);
     }
 
     getConfigString(key: string): string {
@@ -150,15 +125,13 @@ export class StandaloneHostPathConfigProvider implements HostPathConfigProvider 
     }
 
     async updateConfigGlobal(key: string, value: any, originatorId?: string): Promise<void> {
-        this._config[`switchboard.${key}`] = value;
-        this._save();
+        writeConfigValueSync(this.workspaceRoot, key, value);
         this._notifyListeners(key, value, originatorId);
     }
 
     async updateConfigWorkspace(key: string, value: any, originatorId?: string): Promise<void> {
-        // Standalone has no global/user split; treat workspace scope as local file config.
-        this._config[`switchboard.${key}`] = value;
-        this._save();
+        // Standalone has no global/user split; treat workspace scope as the db config table.
+        writeConfigValueSync(this.workspaceRoot, key, value);
         this._notifyListeners(key, value, originatorId);
     }
 }

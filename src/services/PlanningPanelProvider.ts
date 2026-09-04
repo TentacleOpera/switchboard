@@ -1441,13 +1441,13 @@ Your job is to help the user write and refine the following governance documents
    - [unresolved decision or risk]
 
 2. **Constitution** (coding standards) — located at \`CONSTITUTION.md\`
-   Follow instructions in \`.agents/protocols/constitution-builder/SKILL.md\`.
+   Follow instructions in the \`constitution-builder\` protocol (resolve via \`switchboard api GET /protocol/constitution-builder\`).
 
 3. **System Files** — \`CLAUDE.md\` and \`AGENTS.md\`
    These are agent governance files. Help the user write rules that agents should follow when working in this repo.
 
 4. **Tuning Insights** — \`.switchboard/insights/*.md\`
-   Follow instructions in \`.agents/protocols/tuning/SKILL.md\`.
+   Follow instructions in the \`tuning\` protocol (resolve via \`switchboard api GET /protocol/tuning\`).
 
 ## Workflow
 
@@ -3772,7 +3772,7 @@ Start by checking which documents exist, then present the menu.`;
                     const wsRoot = typeof msg.workspaceRoot === 'string' ? msg.workspaceRoot : '';
                     const root = wsRoot || this._getAllowedRoots().values().next().value || '';
                     const archivePath = KanbanDatabase.resolveArchiveDbPath(root);
-                    const prompt = `Read and follow .agents/protocols/archive/SKILL.md to query the Switchboard archive for workspace: ${root}.\n\nThe archive is a SQLite cold store at ${archivePath}. Use sqlite3 (read-only) to query it.\n\nWhat would you like to find?`;
+                    const prompt = `Follow the \`archive\` protocol (resolve via \`switchboard api GET /protocol/archive\`) to query the Switchboard archive for workspace: ${root}.\n\nThe archive is a SQLite cold store at ${archivePath}. Use sqlite3 (read-only) to query it.\n\nWhat would you like to find?`;
                     await this._seams().clipboard.writeText(prompt);
                     const payload = { type: 'archivesPromptCopied', prompt };
                     this.postMessageToProjectWebview(payload);
@@ -4747,7 +4747,7 @@ Please format the updated output document strictly as follows:
                 if (!allRoots.includes(wsRoot)) {
                     break;
                 }
-                const promptText = `Follow instructions in .agents/protocols/constitution-builder/SKILL.md to build or improve CONSTITUTION.md in this project.`;
+                const promptText = `Follow the \`constitution-builder\` protocol (resolve via \`switchboard api GET /protocol/constitution-builder\`) to build or improve CONSTITUTION.md in this project.`;
                 // Try dispatching via the planner role (gets rotation for free).
                 // Fall back to ad-hoc terminal creation if no planner agent is registered.
                 if (this._taskViewerProvider) {
@@ -4770,7 +4770,7 @@ Please format the updated output document strictly as follows:
                 if (!allRoots.includes(wsRoot)) {
                     break;
                 }
-                const promptText = `Follow instructions in .agents/protocols/constitution-builder/SKILL.md to improve and update the existing CONSTITUTION.md in this project.`;
+                const promptText = `Follow the \`constitution-builder\` protocol (resolve via \`switchboard api GET /protocol/constitution-builder\`) to improve and update the existing CONSTITUTION.md in this project.`;
                 if (this._taskViewerProvider) {
                     const dispatched = await this._taskViewerProvider.dispatchCustomPromptToRole(
                         'planner', promptText, wsRoot
@@ -5557,7 +5557,7 @@ Please format the updated output document strictly as follows:
                 } else {
                     planFilesList = planFiles.join('\n');
                 }
-                const extractPrompt = `Read and follow .agents/protocols/tuning/SKILL.md in extract mode for workspace: ${effectiveWsRoot}\n\nScan the following plan files for adversarial review sections ("Stage 1 — Grumpy Adversarial Findings" and "Stage 2 — Balanced Synthesis"):\n${planFilesList}\n\nFor each plan, extract the review findings. Then cluster recurring problem patterns across plans using these criteria:\n  - Same problem category (e.g., missing error handling, race conditions, prompt-design flaws, unvalidated assumptions)\n  - Same severity level (recurring vs critical vs minor)\n  - Same governance target (CONSTITUTION.md vs AGENTS.md vs CLAUDE.md)\nFor each distinct pattern, create an insight .md file in ${effectiveWsRoot}/.switchboard/insights/ using the insight template. If an existing insight covers the same pattern (same category AND similar description), append new evidence to it instead of creating a duplicate. When appending, update the Source Plans list and add new evidence entries.`;
+                const extractPrompt = `Follow the \`tuning\` protocol (resolve via \`switchboard api GET /protocol/tuning\`) in extract mode for workspace: ${effectiveWsRoot}\n\nScan the following plan files for adversarial review sections ("Stage 1 — Grumpy Adversarial Findings" and "Stage 2 — Balanced Synthesis"):\n${planFilesList}\n\nFor each plan, extract the review findings. Then cluster recurring problem patterns across plans using these criteria:\n  - Same problem category (e.g., missing error handling, race conditions, prompt-design flaws, unvalidated assumptions)\n  - Same severity level (recurring vs critical vs minor)\n  - Same governance target (CONSTITUTION.md vs AGENTS.md vs CLAUDE.md)\nFor each distinct pattern, create an insight .md file in ${effectiveWsRoot}/.switchboard/insights/ using the insight template. If an existing insight covers the same pattern (same category AND similar description), append new evidence to it instead of creating a duplicate. When appending, update the Source Plans list and add new evidence entries.`;
                 await this._seams().clipboard.writeText(extractPrompt);
                 this._seams().ui.showTemporaryNotification('Tuning extract prompt copied to clipboard. Paste it into your agent chat.');
                 this.postMessageToProjectWebview({ type: 'tuningExtractComplete', planCount: planFiles.length });
@@ -5566,7 +5566,7 @@ Please format the updated output document strictly as follows:
             case 'runTuningGovernance': {
                 const wsRoot = String(msg.workspaceRoot || '');
                 const effectiveWsRoot = wsRoot || (allRoots.length > 0 ? allRoots[0] : '');
-                const governancePrompt = `Read and follow .agents/protocols/tuning/SKILL.md in governance mode for workspace: ${effectiveWsRoot}\n\nRead all insight files in ${effectiveWsRoot}/.switchboard/insights/ with status 'open'. Review the insights and propose specific edits to governance files (CONSTITUTION.md, AGENTS.md, CLAUDE.md) to address the recurring patterns. Present proposed changes as diffs.`;
+                const governancePrompt = `Follow the \`tuning\` protocol (resolve via \`switchboard api GET /protocol/tuning\`) in governance mode for workspace: ${effectiveWsRoot}\n\nRead all insight files in ${effectiveWsRoot}/.switchboard/insights/ with status 'open'. Review the insights and propose specific edits to governance files (CONSTITUTION.md, AGENTS.md, CLAUDE.md) to address the recurring patterns. Present proposed changes as diffs.`;
                 await this._seams().clipboard.writeText(governancePrompt);
                 this._seams().ui.showTemporaryNotification('Tuning governance prompt copied to clipboard. Paste it into your agent chat.');
                 this.postMessageToProjectWebview({ type: 'tuningGovernanceComplete' });
@@ -6708,7 +6708,7 @@ Please format the updated output document strictly as follows:
                     const contentHash = crypto.createHash('sha256').update(contentWithoutFrontMatter).digest('hex');
                     const workspaceId = await this._getWorkspaceId(workspaceRoot);
                     await this._cacheService.registerImport(sourceId, docId, docName, rawSlug, {
-                        remoteContentHash: contentHash,
+                        contentHash: contentHash,
                         workspaceId,
                         filePath: result.savedPath
                     });
@@ -6748,9 +6748,14 @@ Please format the updated output document strictly as follows:
             if (err instanceof Error && err.message.includes('No workspace_id configured')) {
                 throw err;
             }
-            // Otherwise it's a structural failure (require failed, etc.) - use hash as last resort
+            // Otherwise it's a structural failure (require failed, etc.) - use canonical resolver as last resort
         }
-        return crypto.createHash('sha256').update(workspaceRoot).digest('hex').slice(0, 16);
+        try {
+            const { resolveCanonicalWorkspaceIdSync } = require('./WorkspaceIdentityService');
+            return resolveCanonicalWorkspaceIdSync(workspaceRoot).value;
+        } catch {
+            return 'default';
+        }
     }
 
     private async _handleFetchImportedDocs(workspaceRoot: string): Promise<any> {
@@ -7067,7 +7072,7 @@ Please format the updated output document strictly as follows:
                         const contentHash = crypto.createHash('sha256').update(contentWithoutFrontMatter).digest('hex');
                         const workspaceId = await this._getWorkspaceId(workspaceRoot);
                         await this._cacheService.registerImport(sourceId, safeDocId, docName, rawSlug, {
-                            remoteContentHash: contentHash,
+                            contentHash: contentHash,
                             workspaceId,
                             filePath: writeResult.savedPath
                         });
@@ -7198,7 +7203,7 @@ Please format the updated output document strictly as follows:
                     const contentWithoutFrontMatter = content.replace(/^---\n[\s\S]*?\n---\n*/, '');
                     const contentHash = crypto.createHash('sha256').update(contentWithoutFrontMatter).digest('hex');
                     await this._cacheService.registerImport(sourceId, safeDocId, docName, rawSlug, { 
-                        remoteContentHash: contentHash,
+                        contentHash: contentHash,
                         workspaceId: workspaceId,
                         filePath: writeResult.savedPath
                     });
@@ -7332,7 +7337,7 @@ Please format the updated output document strictly as follows:
                     const contentHash = crypto.createHash('sha256').update(contentWithoutFrontMatter).digest('hex');
                     const workspaceId = await this._getWorkspaceId(effectiveRoot);
                     await this._cacheService.registerImport('research-clipboard', finalDocTitle, finalDocTitle, rawSlug, {
-                        remoteContentHash: contentHash,
+                        contentHash: contentHash,
                         workspaceId,
                         filePath: writeResult.savedPath
                     });

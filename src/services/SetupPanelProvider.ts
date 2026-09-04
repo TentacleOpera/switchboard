@@ -13,6 +13,7 @@ import * as cp from 'child_process';
 import { ControlPlaneMigrationService } from './ControlPlaneMigrationService';
 import { MultiRepoScaffoldingService } from './MultiRepoScaffoldingService';
 import { applyThemeBodyClass } from './themeBodyClass';
+import { readAllConfigSync } from './configJsonBridge';
 import type { TaskViewerProvider } from './TaskViewerProvider';
 import { KanbanDatabase, type WorkspaceDatabaseMapping } from './KanbanDatabase';
 import type { KanbanProvider } from './KanbanProvider';
@@ -1703,7 +1704,7 @@ export class SetupPanelProvider implements vscode.Disposable {
     /**
      * Tiered predicate mirroring extension.ts isSwitchboardManagedFolder:
      * mapped children are not managed, configured parents are, and unclaimed roots
-     * must carry a deliberate-setup marker (kanban.db or db-pointer). workspace-id
+     * must carry a deliberate-setup marker (kanban.db). workspace-id
      * is deliberately excluded — it was self-planted into unrelated repos by the
      * identity writers pre-guard, so it proves nothing (keep in sync with extension.ts).
      */
@@ -2116,21 +2117,17 @@ export class SetupPanelProvider implements vscode.Disposable {
                 return true;
             }
 
-            // Check Switchboard's internal config (stored via webview UI)
-            const internalConfigPath = path.join(workspaceRoot, '.switchboard', 'config.json');
-            if (fs.existsSync(internalConfigPath)) {
-                const raw = fs.readFileSync(internalConfigPath, 'utf8');
-                const internalConfig = JSON.parse(raw);
-                const checkValue = (val: unknown): boolean => {
-                    if (typeof val === 'string' && val.includes('.agent/')) return true;
-                    if (val && typeof val === 'object') {
-                        return Object.values(val).some(checkValue);
-                    }
-                    return false;
-                };
-                if (checkValue(internalConfig)) {
-                    return true;
+            // Check Switchboard's internal config (now in the db config table)
+            const internalConfig = readAllConfigSync(workspaceRoot);
+            const checkValue = (val: unknown): boolean => {
+                if (typeof val === 'string' && val.includes('.agent/')) return true;
+                if (val && typeof val === 'object') {
+                    return Object.values(val).some(checkValue);
                 }
+                return false;
+            };
+            if (checkValue(internalConfig)) {
+                return true;
             }
         } catch {
             // Non-fatal — assume no legacy references if we can't read config

@@ -73,7 +73,9 @@ list_output.txt
 .switchboard/**/*.db
 .switchboard/**/*.db-shm
 .switchboard/**/*.db-wal
-.switchboard/**/*.bak
+# NOTE: .migrated.bak archives are deliberately NOT ignored — they are the
+# user-visible proof that a migration did not destroy data. Ignoring them
+# hides that proof (see storage-hardening-deferred-defects item 3).
 
 # Encrypted secret store and its master key. The live store is machine-global
 # (~/.switchboard) but legacy per-workspace stores — plus the .migrated.bak and

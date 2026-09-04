@@ -35,7 +35,7 @@ suite('agentPromptBuilder', () => {
                 accurateCodingEnabled: true
             });
             assert.ok(prompt.includes('Accuracy Mode'), 'Should include Accuracy Mode header');
-            assert.ok(prompt.includes('.agents/protocols/accuracy/SKILL.md'), 'Should include reference to accuracy workflow');
+            assert.ok(prompt.includes('accuracy') && prompt.includes('protocol'), 'Should include reference to accuracy protocol');
         });
 
         test('accurateCodingEnabled: false omits Accuracy Mode instructions', () => {
@@ -518,7 +518,7 @@ suite('agentPromptBuilder', () => {
         test('adviseResearchIfUnsure: true includes research directive', () => {
             const prompt = buildKanbanBatchPrompt('planner', makePlans(1), { adviseResearchIfUnsure: true });
             assert.ok(prompt.includes('RESEARCH WHEN UNSURE:'), 'Should include research directive');
-            assert.ok(prompt.includes('.agents/protocols/advise_research/SKILL.md'), 'Should include path to skill file');
+            assert.ok(prompt.includes('advise_research') && prompt.includes('protocol'), 'Should include reference to advise_research protocol');
         });
 
         test('adviseResearchIfUnsure: false omits research directive', () => {
@@ -529,7 +529,7 @@ suite('agentPromptBuilder', () => {
         test('adviseResearchIfUnsure: undefined includes research directive (default ON)', () => {
             const prompt = buildKanbanBatchPrompt('planner', makePlans(1), {});
             assert.ok(prompt.includes('RESEARCH WHEN UNSURE:'), 'Should include research directive by default');
-            assert.ok(prompt.includes('.agents/protocols/advise_research/SKILL.md'), 'Should include path to skill file');
+            assert.ok(prompt.includes('advise_research') && prompt.includes('protocol'), 'Should include reference to advise_research protocol');
         });
     });
 

@@ -18,7 +18,6 @@ import {
 } from '../services/WorkspaceIdentityService';
 import { discoverAndMergeDatabases } from '../services/dbMerge';
 import { adoptPresetDbOnLaunch, isKnownPresetDbPath } from '../services/cloudSyncMigration';
-import { getGlobalDbPath } from '../services/globalStore';
 import { WorkspaceExcludeService } from '../services/WorkspaceExcludeService';
 import { seedControlPlaneFromBundle, projectControlPlane } from '../services/ClaudeCodeMirrorService';
 import {
@@ -30,6 +29,8 @@ import {
     partitionPlansByFeature,
     TEAM_BATCH_PLAN_CAP,
 } from '../services/agentPromptBuilder';
+import { resolveProtocolSet } from '../services/protocolDirectives';
+import type { ProtocolResolution } from '../services/protocolDirectives';
 import { writeMissionControlReport } from '../services/ScheduledJobsService';
 import { StandaloneHostPathConfigProvider, createStandaloneHostSecrets } from './hostServices';
 import {
@@ -225,12 +226,30 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         }
     }
 
-    // Wire database source discovery on standalone startup
+    // Wire database source discovery on standalone startup.
+    // 1. Relocate any per-repo kanban.db to the per-project board file (1:1).
+    // 2. Split any consolidated global file (population (b): installs that ran 8258ce4b).
     setHostWorkspaceRoots([workspaceRoot]);
     try {
         await discoverAndMergeDatabases([workspaceRoot]);
     } catch (err) {
-        console.error('[bootstrap] Failed to discover and merge legacy databases:', err);
+        console.error('[bootstrap] Failed to discover and relocate legacy databases:', err);
+    }
+    try {
+        const { splitConsolidatedDatabase, consolidatedGlobalDbExists } = require('../services/dbMerge');
+        if (consolidatedGlobalDbExists()) {
+            const { resolveCanonicalWorkspaceIdSync } = require('../services/WorkspaceIdentityService');
+            const wsId = resolveCanonicalWorkspaceIdSync(workspaceRoot).value;
+            const splitResult = await splitConsolidatedDatabase(undefined, [wsId]);
+            if (splitResult.success && splitResult.workspacesSplit > 0) {
+                console.log(`[bootstrap] Split consolidated global database into ${splitResult.workspacesSplit} board file(s)`);
+            }
+            if (splitResult.unknownWorkspaceIds.length > 0) {
+                console.warn(`[bootstrap] Split: ${splitResult.unknownWorkspaceIds.length} workspace_id(s) matched no known workspace, left in place`);
+            }
+        }
+    } catch (err) {
+        console.error('[bootstrap] Failed to split consolidated global database:', err);
     }
 
     /**
@@ -403,8 +422,11 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                 // the stripStandingOrdersBlock call at the top of this branch),
                 // which is what we want to test against — the SO block is handled
                 // by applyStandingOrders' own strip below.
+                const seatResolved = effectiveOpts?.accurateCoding
+                    ? await resolveProtocolSet(['accuracy'], workspaceRoot, db || undefined)
+                    : undefined;
                 const seatBlock = effectiveOpts
-                    ? buildSeatDirectiveBlock({ ...effectiveOpts, planIds }, out)
+                    ? buildSeatDirectiveBlock({ ...effectiveOpts, planIds, resolvedProtocols: seatResolved as ProtocolResolution | undefined }, out)
                     : '';
                 if (seatBlock) {
                     const instanceId = handle?.agentInstanceId;
@@ -3924,6 +3946,17 @@ Each plan file must include:
     const port = await server.start();
 
     const backupService = BackupService.getInstance({ workspaceRoot });
+    // Wire restore-notification: every connected client must reload after a
+    // restore, not continue against a swapped-out database file. Mirrors the
+    // extension host wiring in src/extension.ts — the two roots MUST NOT diverge.
+    backupService.setOnDatabaseRestored((info) => {
+        try {
+            (kanbanProvider as any)?._broadcaster?.push({ type: 'databaseRestored', ...info });
+            (taskViewerProvider as any)?._broadcaster?.push({ type: 'databaseRestored', ...info });
+        } catch (e) {
+            console.warn('[standalone] databaseRestored broadcast failed:', e);
+        }
+    });
     backupService.startScheduledBackups();
 
     const retentionService = RetentionService.getInstance({ workspaceRoot });

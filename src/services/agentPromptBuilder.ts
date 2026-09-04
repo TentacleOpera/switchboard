@@ -11,6 +11,23 @@ import { DefaultPromptOverride, CustomAgentAddons, BUILT_IN_AGENT_LABELS } from 
 import { extractDesignSystemTokens, ExtractedDesignSystem } from './designSystemTokens';
 import { compareByPrecedence, type SortMode } from './kanbanOrdering';
 import { substituteCliPath } from '../utils/cliPathToken';
+import {
+    ProtocolResolution,
+    DIRECTIVE_PROTOCOL_NAMES,
+    resolveProtocolSet,
+    buildAccuracyDirective,
+    buildRemoteModeDirective,
+    buildComplexityScoringDirective,
+    buildTicketUpdateDirective,
+    buildTicketRefineDirective,
+    buildTicketResearchRefineDirective,
+    buildDeepResearchDirective,
+    buildAdviseResearchDirectiveBase,
+    renderProtocolReferences,
+    renderPlannerWorkflowRef,
+} from './protocolDirectives';
+export { DIRECTIVE_PROTOCOL_NAMES, resolveProtocolSet };
+export type { ProtocolResolution };
 
 // One-time diagnostic for the ticket_updater mode collapse. Users who configured
 // 'refine-ticket' or 'research-and-refine' (modes that rewrote ticket descriptions)
@@ -282,6 +299,16 @@ export interface PromptBuilderOptions {
      */
     reviewCommits?: string[];
 
+    /**
+     * Pre-resolved protocol content for the nine protocol-carrying directives.
+     * The async dispatch site resolves `DIRECTIVE_PROTOCOL_NAMES` once via
+     * `resolveProtocolSet` and threads the result here; the sync builder then
+     * embeds inline bodies / emits materialised paths without awaiting. When
+     * absent, each directive falls back to a live fetch instruction
+     * (`switchboard api GET /protocol/<name>`) — never a dead filesystem path.
+     */
+    resolvedProtocols?: ProtocolResolution;
+
     /** Path to the workflow file for the planner role. Defaults to .agents/protocols/improve-plan/SKILL.md */
     plannerWorkflowPath?: string;
 
@@ -478,8 +505,8 @@ export const UNASSIGNED_PROJECT_SENTINEL = '__unassigned__';
  * standalone bootstrap's buildDispatchAnalysisPrompt) so the two cannot drift.
  *
  * Returns the line INCLUDING its trailing newline, or `''` when no line should
- * be emitted. The four cases map onto the skill's table
- * (`.agents/protocols/dispatch-analysis/SKILL.md`, step 1):
+ * be emitted. The four cases map onto the `dispatch-analysis` protocol's table
+ * (resolved through ProtocolService, step 1):
  *
  *  - `undefined` → `''`. The scope was never threaded (e.g. the single-plan
  *    planner dispatch at TaskViewerProvider's `dispatch-analysis` allowlist,
@@ -552,14 +579,21 @@ function buildExecutionIntro(verb: string, plans: BatchPromptPlan[], featureMode
     return `Please ${verb} the ${plans.length} plans below.`;
 }
 
-export const ACCURATE_CODING_DIRECTIVE = `Accuracy Mode: Before coding, read and follow the workflow at .agents/protocols/accuracy/SKILL.md step-by-step while implementing this task.`;
+/**
+ * Accuracy Mode directive — fallback (no-resolution) form, kept as a constant
+ * for legacy import sites and tests. The former string embedded a dead
+ * `accuracy` protocol filesystem path; this fallback emits a live fetch
+ * instruction instead. Call sites that thread resolution invoke
+ * `buildAccuracyDirective(resolved)` directly to inline the body.
+ */
+export const ACCURATE_CODING_DIRECTIVE = buildAccuracyDirective();
 
-function withCoderAccuracyInstruction(basePayload: string, enabled: boolean): string {
+function withCoderAccuracyInstruction(basePayload: string, enabled: boolean, resolved?: ProtocolResolution): string {
     if (!enabled) {
         return basePayload;
     }
 
-    const accuracyInstruction = `\n\n${ACCURATE_CODING_DIRECTIVE}`;
+    const accuracyInstruction = `\n\n${buildAccuracyDirective(resolved)}`;
     return `${basePayload}${accuracyInstruction}`;
 }
 
@@ -955,7 +989,8 @@ export const FOCUS_DIRECTIVE = `FOCUS: Each plan file path below is the single s
 // The user is on their phone, not the terminal, so questions must go to the linked issue
 // as a comment (posted host-side through the LocalApiServer bridge via linear_api/clickup_api),
 // not to terminal input.
-export const REMOTE_MODE_DIRECTIVE = `REMOTE MODE: You are running under remote control — the user is NOT at the terminal. If you need to ask the user anything or report a blocker, post it as a comment on the linked issue using .agents/protocols/linear-api/SKILL.md (or .agents/protocols/clickup-api/SKILL.md). Do NOT wait on terminal input. Continue with any work you can do without the answer.`;
+/** Remote Mode directive — fallback (no-resolution) form. See `buildRemoteModeDirective`. */
+export const REMOTE_MODE_DIRECTIVE = buildRemoteModeDirective();
 
 /** §8 — Shared batch execution rules constant, used by both buildKanbanBatchPrompt and buildCustomAgentPrompt. */
 export const BATCH_EXECUTION_RULES = `CRITICAL INSTRUCTIONS:
@@ -1082,18 +1117,19 @@ export const INLINE_CHALLENGE_DIRECTIVE = `For each plan, before implementation:
 export const SPLIT_PLAN_DIRECTIVE = `SPLIT PLAN MODE: Produce TWO files per plan. Original file = Complex / Risky only. Companion file (\`<stem>_routine.md\`) = Routine only. Both files must include full shared context (Goal, Metadata, Current State, Edge-Case audit, Dependencies). Original file notes: "Assume Routine items implemented by Coder agent." Read the full original file before writing either output. Create both files in the same directory as the original.`;
 export const SKIP_COMPILATION_DIRECTIVE = `SKIP COMPILATION: Do not run any project compilation step as part of the verification plan. This directive overrides the plan file's Verification Plan for this run — the checks remain written down, they are simply not executed now.`;
 export const SKIP_TESTS_DIRECTIVE = `SKIP TESTS: Do not run automated tests as part of the verification plan. This directive overrides the plan file's Verification Plan for this run — the checks remain written down, they are simply not executed now.`;
-// The full research-prompt template now lives in .agents/protocols/advise_research/SKILL.md (the
-// canonical source). The generateResearchPrompt() function in src/webview/planning.js is a separate
-// UI-driven code path (Research tab) and remains independent — it embeds the same structure for the
-// webview and cannot read the extension-side skill file at runtime. Both share the template structure
-// via the skill file as canonical source.
+// The full research-prompt template now lives in the `advise_research` protocol (a
+// control_plane row, resolved through ProtocolService). The generateResearchPrompt()
+// function in src/webview/planning.js is a separate UI-driven code path (Research tab)
+// and remains independent — it embeds the same structure for the webview and cannot
+// read the extension-side resolver at runtime. Both share the template structure via
+// the protocol body as canonical source.
 //
 // The directive is split into two variants based on whether a researcher agent is configured at
 // prompt-build time. When no researcher is configured, the planner never sees the POST hand-off
 // instructions — it goes straight to the chat-paste fallback. This eliminates the P0 "phantom
 // hand-off" bug by construction (the planner can't attempt a POST it was never told about) and
 // saves ~400 tokens on every planner run in workspaces without a researcher.
-const ADVISE_RESEARCH_DIRECTIVE_BASE = `RESEARCH WHEN UNSURE: As you plan, track every assumption, factual claim, API/behavior, or library detail you are NOT 100% certain about. If any exist, read the skill file .agents/protocols/advise_research/SKILL.md and follow it. In the plan file, add a brief "## Uncertain Assumptions" section that lists ONLY those uncertainties and notes that the user was advised to run web research to confirm them before implementation — do NOT put the research prompt itself in the plan. Then build the ready-to-run research prompt.`;
+const ADVISE_RESEARCH_DIRECTIVE_BASE = buildAdviseResearchDirectiveBase();
 const ADVISE_RESEARCH_DIRECTIVE_HANDOFF = `
 
 RESEARCHER HAND-OFF (try this before showing the prompt to the user): A Researcher agent is configured for this workspace — attempt to hand the research prompt directly to it via the Switchboard HTTP server. Read the port from .switchboard/api-server-port.txt (relative to the workspace root); if the file is missing, skip the POST and fall back to the chat-summary prompt. Otherwise POST to http://127.0.0.1:<port>/research/dispatch with JSON body {"workspaceRoot":"<absolute workspace root>","prompt":"<the full research prompt>"}. Build the JSON safely (write the prompt to a temp file and pipe it through \`jq -Rs\` or \`python3 -c 'import json,sys;print(json.dumps(sys.stdin.read()))'\` — never hand-escape newlines); if neither tool is available the POST will fail and you fall back to chat-paste. The server signals the outcome with the HTTP status code AND the \`dispatched\` field — there is NO \`success\` field, so do NOT key on one. If a Researcher agent is registered AND live it forwards the prompt to that agent, tells it to save its findings to the configured research-docs folder, and responds with HTTP 200 and body {"dispatched":true,"researcher":"...","savePath":"..."}. If a researcher is configured but not live it responds with HTTP 200 and {"dispatched":false,"reason":"..."}. Only announce a hand-off if the HTTP status is 200 AND the JSON body contains "dispatched": true — tell the user you handed the research to the Researcher agent and that it will attempt to save its findings to savePath, and do NOT paste the full research prompt into your summary. If the HTTP status is not 200, OR the body does not contain "dispatched": true, OR the port file is missing, OR the request fails — fall back: supply the ready-to-run research prompt at the very end of your chat summary so the user can trigger web research themselves. If you are confident about everything, state that no research is needed and omit the section, the hand-off, and the prompt.`;
@@ -1381,6 +1417,8 @@ export interface SeatDirectiveOptions {
      *  the lookup itself, and it cannot move into resolveSeatPromptOptions,
      *  which roots on the board's ACTIVE workspace. */
     planIds?: string[];
+    /** Pre-resolved protocol content (threaded by the async caller). */
+    resolvedProtocols?: ProtocolResolution;
 }
 
 /**
@@ -1427,7 +1465,7 @@ export function buildSeatDirectiveBlock(opts: SeatDirectiveOptions, existingProm
     // Output shaping — verbatim constants.
     if (opts.cavemanOutput) { parts.push(CAVEMAN_OUTPUT_DIRECTIVE); }
     if (opts.suppressWalkthrough) { parts.push(SUPPRESS_WALKTHROUGH_DIRECTIVE); }
-    if (opts.accurateCoding) { parts.push(ACCURATE_CODING_DIRECTIVE); }
+    if (opts.accurateCoding) { parts.push(buildAccuracyDirective(opts.resolvedProtocols)); }
 
     // A board-composed prompt already carries these constants verbatim
     // (KanbanProvider._generatePromptForColumn → agentPromptBuilder). The
@@ -1550,35 +1588,17 @@ export function resolveFeatureOrchestrationDirective(
         `Before starting, briefly tell the user how you are handling these subtasks (e.g. order, grouping, and any review/verification pass you plan to run).`;
 }
 
-export const COMPLEXITY_SCORING_DIRECTIVE =
-    `COMPLEXITY SCORING: Before proceeding, read and follow ` +
-    `.agents/protocols/complexity-scoring/SKILL.md to add a ## Complexity Audit section with ` +
-    `### Routine and ### Complex / Risky subsections. ` +
-    `Classify each implementation step by complexity before splitting.`;
+/** Complexity Scoring directive — fallback (no-resolution) form. See `buildComplexityScoringDirective`. */
+export const COMPLEXITY_SCORING_DIRECTIVE = buildComplexityScoringDirective();
 
-export const TICKET_UPDATE_DIRECTIVE =
-    `TICKET UPDATE MODE: You are authorized to update the associated ticket. ` +
-    `Extract the ticket number from the plan metadata field "**Ticket:**" (format: CU-XXXXX or LIN-XXXXX). ` +
-    `Analyze the plan, then read .agents/protocols/clickup-api/SKILL.md or .agents/protocols/linear-api/SKILL.md and use it to add an "AI Analysis" comment to the ticket. ` +
-    `Do not modify the ticket description. Only add a comment. ` +
-    `If no ticket number is found, skip the ticket update and notify the user.`;
+/** Ticket Update directive — fallback (no-resolution) form. See `buildTicketUpdateDirective`. */
+export const TICKET_UPDATE_DIRECTIVE = buildTicketUpdateDirective();
 
-export const TICKET_REFINE_DIRECTIVE =
-    `TICKET UPDATE MODE: You are authorized to update the associated ticket. ` +
-    `Extract the ticket number from the plan metadata field "**Ticket:**" (format: CU-XXXXX or LIN-XXXXX). ` +
-    `Analyze the plan, then read .agents/protocols/clickup-api/SKILL.md or .agents/protocols/linear-api/SKILL.md and use it to refine the ticket description. ` +
-    `Update the description to reflect the plan's current state, implementation details, and any changes from the original request. ` +
-    `If no ticket number is found, skip the ticket update and notify the user.`;
+/** Ticket Refine directive — fallback (no-resolution) form. See `buildTicketRefineDirective`. */
+export const TICKET_REFINE_DIRECTIVE = buildTicketRefineDirective();
 
-export const TICKET_RESEARCH_REFINE_DIRECTIVE =
-    `RESEARCH MODE: Before updating the ticket, read and follow .agents/protocols/web-research/SKILL.md to gather additional context. ` +
-    `Research the technical approach, dependencies, best practices, and any relevant recent developments. ` +
-    `If the web-research protocol is unavailable, proceed with codebase-only analysis and note the gap.\n\n` +
-    `TICKET UPDATE MODE: You are authorized to update the associated ticket. ` +
-    `Extract the ticket number from the plan metadata field "**Ticket:**" (format: CU-XXXXX or LIN-XXXXX). ` +
-    `After completing research, read .agents/protocols/clickup-api/SKILL.md or .agents/protocols/linear-api/SKILL.md and use it to refine the ticket description. ` +
-    `Update the description to reflect the plan's current state, implementation details, research findings, and any changes from the original request. ` +
-    `If no ticket number is found, skip the ticket update and notify the user.`;
+/** Ticket Research-Refine directive — fallback (no-resolution) form. See `buildTicketResearchRefineDirective`. */
+export const TICKET_RESEARCH_REFINE_DIRECTIVE = buildTicketResearchRefineDirective();
 
 
 export const ADVANCED_REVIEWER_DIRECTIVE = `ADVANCED REGRESSION ANALYSIS (enabled):
@@ -1592,32 +1612,8 @@ This analysis is token-intensive but catches regressions that plan-compliance-on
 
 export const AGGRESSIVE_PAIR_PROGRAMMING_DIRECTIVE = `PAIR PROGRAMMING OPTIMISATION: Aggressive mode is enabled. Assume the Coder agent is highly competent and can handle most implementation tasks independently, including multi-file changes, test updates, and straightforward refactors. Only classify tasks as Complex / Risky if they involve: (a) new architectural patterns or framework integrations the codebase hasn't used before, (b) security-sensitive logic (auth, crypto, permissions), (c) complex state machines or concurrency, or (d) changes that could silently break existing behaviour without obvious test failures. Everything else — even if it touches multiple files or requires careful reading — should be Routine.`;
 
-export const DEEP_RESEARCH_DIRECTIVE =
-    `DEEP RESEARCH MODE: You are authorized to perform comprehensive deep research ` +
-    `on the provided plan using the deep planning protocol at .agents/protocols/deep-planning/SKILL.md with depth set to "deep" (50-100 sources). ` +
-    `\n\nSKIP PHASE 0 (Planning Proposal): Research depth is pre-configured. Proceed directly to Phase 1.` +
-    `\n\nEXECUTE FULL DEEP PLANNING PROTOCOL:\n` +
-    `PHASE 1: Codebase Exploration — run parallel searches (find_by_name, grep, list_dir); read key implementation, config, test, and doc files.\n` +
-    `PHASE 2: External Research — use search_web with dynamic date ranges. ` +
-    `IF search_web is unavailable: complete with codebase-only analysis, note gap in "Knowledge Gaps" section, continue to Phase 3.\n` +
-    `PHASE 3: Cross-Reference — compare internal and external findings; identify gaps, anti-patterns, security issues.\n` +
-    `PHASE 4: Synthesis — produce output following this structure:\n` +
-    `1) Executive summary (≤ 1 page)\n` +
-    `2) Tiered findings: required vs recommended vs optional — clearly distinguish compliance levels\n` +
-    `3) Focused trade-off evaluation (e.g. searchability vs confidentiality, cost vs coverage)\n` +
-    `4) Defence-in-Depth controls checklist\n` +
-    `5) Plain-English glossary of domain-specific terms\n` +
-    `6) Full source list with direct links and retrieval dates\n` +
-    `7) Current State Analysis\n` +
-    `8) External Research Findings\n` +
-    `9) Proposed Implementation Plan\n` +
-    `10) Impact Analysis\n` +
-    `11) Source Credibility Assessment\n` +
-    `12) Knowledge Gaps\n` +
-    `13) Recommended Next Steps\n` +
-    `SOURCE GUIDANCE: Prefer official documentation, standards bodies, and peer-reviewed sources; distrust vendor marketing claims. Date-check all sources — flag anything older than 2 years. Separate "required" from "recommended" from "opinion" in every finding. Where law or standards are silent or ambiguous, say so rather than assuming applicability.\n` +
-    `DECISION THIS FEEDS: End with a recommended default for a platform of typical scale — do not just survey the field.\n` +
-    `TARGET SOURCE COUNT: 50-100 sources (soft target — prioritize quality over quantity).`;
+/** Deep Research directive — fallback (no-resolution) form. See `buildDeepResearchDirective`. */
+export const DEEP_RESEARCH_DIRECTIVE = buildDeepResearchDirective();
 
 /**
  * DEFAULT_CHAT_BASE_INSTRUCTIONS must be kept in sync with .agents/workflows/switchboard-cloud.md.
@@ -1657,41 +1653,47 @@ const DEFAULT_FEATURE_PLANNER_WORKFLOW = '.agents/protocols/improve-feature/SKIL
 
 /** Map of retired workflow paths (the four files the four-front-doors refactor
  *  relocated from `.agents/workflows/`, plus later `.agents/skills/` and
- *  `.switchboard/protocols/` vintages) to
- *  their new skills paths. Targets are kept in sync with the canonical constants
- *  above where they exist. Used by `normalizeRetiredWorkflowPath` — the read-time
- *  guard that ensures a persisted stale path can never hand an agent a dead file
- *  reference, regardless of which tier it survived in. */
+ *  `.switchboard/protocols/` vintages) to their current resolution target.
+ *  The two committed survivors (`improve-plan`, `improve-feature`) keep their
+ *  real on-disk paths — they are the defaults of two user-editable path fields
+ *  with a `Validate` button and the files ship in the extension. Every other
+ *  retired path maps to a bare protocol **name** that `ProtocolService` resolves
+ *  (inline body / materialised path / control_plane row) — never to a deleted
+ *  `.agents/protocols/<name>/SKILL.md` path, which ceased to exist in 8258ce4b.
+ *  Used by `normalizeRetiredWorkflowPath` — the read-time guard that ensures a
+ *  persisted stale path can never hand an agent a dead file reference. */
 export const RETIRED_WORKFLOW_PATH_MAP: Record<string, string> = {
     '.agents/workflows/improve-plan.md': DEFAULT_PLANNER_WORKFLOW,
     '.agents/workflows/improve-feature.md': DEFAULT_FEATURE_PLANNER_WORKFLOW,
-    '.agents/workflows/accuracy.md': '.agents/protocols/accuracy/SKILL.md',
-    '.agents/workflows/switchboard-orchestrator.md': '.agents/protocols/switchboard-mission-control/SKILL.md',
+    '.agents/workflows/accuracy.md': 'accuracy',
+    '.agents/workflows/switchboard-orchestrator.md': 'switchboard-mission-control',
     // Persisted .agents/skills/ paths from the v1 migration → normalized to the
-    // protocol move at runtime so users who already migrated don't get dead refs.
-    '.agents/skills/improve-plan/SKILL.md': '.agents/protocols/improve-plan/SKILL.md',
-    '.agents/skills/improve-feature/SKILL.md': '.agents/protocols/improve-feature/SKILL.md',
-    '.agents/skills/accuracy/SKILL.md': '.agents/protocols/accuracy/SKILL.md',
-    '.agents/skills/switchboard-orchestrator/SKILL.md': '.agents/protocols/switchboard-mission-control/SKILL.md',
+    // protocol name so users who already migrated don't get dead refs.
+    '.agents/skills/improve-plan/SKILL.md': DEFAULT_PLANNER_WORKFLOW,
+    '.agents/skills/improve-feature/SKILL.md': DEFAULT_FEATURE_PLANNER_WORKFLOW,
+    '.agents/skills/accuracy/SKILL.md': 'accuracy',
+    '.agents/skills/switchboard-orchestrator/SKILL.md': 'switchboard-mission-control',
     // Protocols briefly lived under `.switchboard/protocols/` before that destination
     // was found to be unshippable (`.vscodeignore` excludes `.switchboard/**`, so the
     // files never reach a user workspace). A dev build sharing the published version
     // number can have persisted these into `planner.workflowPath`, so normalize them
     // too — a no-op for anyone who never ran one.
-    '.switchboard/protocols/improve-plan/SKILL.md': '.agents/protocols/improve-plan/SKILL.md',
-    '.switchboard/protocols/improve-feature/SKILL.md': '.agents/protocols/improve-feature/SKILL.md',
-    '.switchboard/protocols/accuracy/SKILL.md': '.agents/protocols/accuracy/SKILL.md',
-    '.switchboard/protocols/switchboard-orchestrator/SKILL.md': '.agents/protocols/switchboard-mission-control/SKILL.md',
+    '.switchboard/protocols/improve-plan/SKILL.md': DEFAULT_PLANNER_WORKFLOW,
+    '.switchboard/protocols/improve-feature/SKILL.md': DEFAULT_FEATURE_PLANNER_WORKFLOW,
+    '.switchboard/protocols/accuracy/SKILL.md': 'accuracy',
+    '.switchboard/protocols/switchboard-orchestrator/SKILL.md': 'switchboard-mission-control',
     // Protocol directory renamed from switchboard-orchestrator → switchboard-mission-control.
-    // The old protocol path is a stale ref after the rename; normalize it to the new path.
-    '.agents/protocols/switchboard-orchestrator/SKILL.md': '.agents/protocols/switchboard-mission-control/SKILL.md',
+    // The old protocol path is a stale ref after the rename; normalize it to the new name.
+    '.agents/protocols/switchboard-orchestrator/SKILL.md': 'switchboard-mission-control',
     '.agents/protocols/improve-plan/SKILL.md': DEFAULT_PLANNER_WORKFLOW,
     '.agents/protocols/improve-feature/SKILL.md': DEFAULT_FEATURE_PLANNER_WORKFLOW,
 };
 
-/** Rewrite a retired relocated workflow path to its new skills path. Any other
- *  value (custom path, absolute path, already-correct skills path) is returned
- *  unchanged. Pure function, no injection surface. */
+/** Rewrite a retired relocated workflow path to its current resolution target.
+ *  Survivors map to their committed on-disk path; other retired paths map to a
+ *  bare protocol name the resolver understands. Any other value (custom path,
+ *  absolute path, already-correct path) is returned unchanged. Pure function,
+ *  no injection surface. */
 export function normalizeRetiredWorkflowPath(p: string): string {
     if (typeof p !== 'string') return p as any;
     return RETIRED_WORKFLOW_PATH_MAP[p] ?? p;
@@ -1909,7 +1911,7 @@ export function buildKanbanBatchPrompt(
     }
     // §11 — fold the remote-mode directive into the shared dispatch prefix so it reaches
     // every role's suffixBlock without touching each role branch individually.
-    const remoteModeBlock = options?.remoteControlActive ? REMOTE_MODE_DIRECTIVE : '';
+    const remoteModeBlock = options?.remoteControlActive ? buildRemoteModeDirective(options?.resolvedProtocols) : '';
     // Per-project PRD: fold into the shared prefix so it reaches every role's
     // suffixBlock (planner, lead, coder, reviewer, tester, …) without
     // touching each role branch — same pattern as the §11 remote-mode block.
@@ -1983,7 +1985,7 @@ export function buildKanbanBatchPrompt(
         // Build default base instructions
         let plannerBase = '';
         if (options?.workflowFilePathEnabled !== false) {
-            plannerBase = `Read ${workflowPath} and follow it step-by-step.\n\n`;
+            plannerBase = `${renderPlannerWorkflowRef(workflowPath, options?.resolvedProtocols)}\n\n`;
         }
 
         if (options?.routingMapConfig) {
@@ -2006,7 +2008,10 @@ export function buildKanbanBatchPrompt(
             plannerBase += '\n\n' + SKIP_TESTS_DIRECTIVE;
         }
         if (adviseResearchIfUnsure) {
-            plannerBase += '\n\n' + (researcherConfigured ? ADVISE_RESEARCH_DIRECTIVE : ADVISE_RESEARCH_DIRECTIVE_NO_RESEARCHER);
+            const adviseBase = buildAdviseResearchDirectiveBase(options?.resolvedProtocols);
+            plannerBase += '\n\n' + (researcherConfigured
+                ? adviseBase + ADVISE_RESEARCH_DIRECTIVE_HANDOFF
+                : adviseBase + ADVISE_RESEARCH_DIRECTIVE_NO_RESEARCHER_TAIL);
         }
         if (writeFeatureDescriptionIfEmpty && options?.featureMode) {
             plannerBase += '\n\n' + WRITE_FEATURE_DESCRIPTION_IF_EMPTY_DIRECTIVE;
@@ -2419,7 +2424,7 @@ For each plan:
                 suppressWalkthroughBlock
             ].filter(Boolean).join('\n\n');
 
-            const coderPrompt = withCoderAccuracyInstruction(normalizeNewlines(promptParts), isDriveMode ? false : accurateCodingEnabled);
+            const coderPrompt = withCoderAccuracyInstruction(normalizeNewlines(promptParts), isDriveMode ? false : accurateCodingEnabled, options?.resolvedProtocols);
             return finalizeAgentPrompt(coderPrompt, options?.cliPath);
         }
 
@@ -2464,7 +2469,7 @@ For each plan:
             suppressWalkthroughBlock
         ].filter(Boolean).join('\n\n');
 
-        const coderPrompt = withCoderAccuracyInstruction(normalizeNewlines(promptParts), accurateCodingEnabled);
+        const coderPrompt = withCoderAccuracyInstruction(normalizeNewlines(promptParts), accurateCodingEnabled, options?.resolvedProtocols);
         return finalizeAgentPrompt(coderPrompt, options?.cliPath);
     }
 
@@ -2507,7 +2512,7 @@ For each plan:
             suppressWalkthroughBlock
         ].filter(Boolean).join('\n\n');
 
-        const internPrompt = withCoderAccuracyInstruction(normalizeNewlines(promptParts), accurateCodingEnabled);
+        const internPrompt = withCoderAccuracyInstruction(normalizeNewlines(promptParts), accurateCodingEnabled, options?.resolvedProtocols);
         return finalizeAgentPrompt(internPrompt, options?.cliPath);
     }
 
@@ -2547,6 +2552,11 @@ For each plan:
         // warnOnLegacyTicketUpdateMode().
         warnOnLegacyTicketUpdateMode(options?.ticketUpdateMode);
 
+        const triagerRefs = renderProtocolReferences(
+            ['clickup-api', 'linear-api', 'notion-api'],
+            ['ClickUp', 'Linear', 'Notion'],
+            options?.resolvedProtocols
+        );
         const updaterBase = `You are a Ticket Triager Agent.
 
 You read ONE imported ticket (its title, description, and any captured comments in the plan
@@ -2557,8 +2567,7 @@ Resolve the provider ticket ID from the plan metadata: the "**ClickUp Task ID:**
 (Notion). Use that ID — not the legacy "**Ticket:**" field. If none is present, skip posting
 and notify the user.
 
-Post the verdict as a comment using .agents/protocols/clickup-api/SKILL.md (ClickUp), .agents/protocols/linear-api/SKILL.md
-(Linear), or .agents/protocols/notion-api/SKILL.md (Notion). These post through the Switchboard local API
+Post the verdict as a comment using ${triagerRefs.clause}. These post through the Switchboard local API
 bridge — never call the provider API directly and never touch tokens. NEVER overwrite the
 ticket description — comment only.
 
@@ -2572,7 +2581,7 @@ Your verdict MUST be a single short comment, target ≤ 120 words, in exactly th
 cross-cutting → move to the planning.html Tickets tab)
 
 Rules: no preamble, no restating the whole ticket, no markdown section dumps beyond the five
-fields above, no speculative implementation detail. Comment only.`;
+fields above, no speculative implementation detail. Comment only.${triagerRefs.bodies}`;
 
         let baseInstructions = resolveBaseInstructions('ticket_updater', updaterBase, options);
         if (cavemanOutputEnabled) {
@@ -2612,7 +2621,7 @@ fields above, no speculative implementation detail. Comment only.`;
         const label = depthLabels[researchDepth] || researchDepth;
 
         // Parameterize the research directive with the selected depth
-        const customDeepDirective = DEEP_RESEARCH_DIRECTIVE
+        const customDeepDirective = buildDeepResearchDirective(options?.resolvedProtocols)
             .replace('depth set to "deep" (50-100 sources)', `depth set to "${researchDepth}" (${label})`)
             .replace('TARGET SOURCE COUNT: 50-100 sources', `TARGET SOURCE COUNT: ${label}`);
 
@@ -2717,7 +2726,8 @@ export function buildCustomAgentPrompt(
     plans: BatchPromptPlan[],
     promptInstructions?: string,
     addons?: CustomAgentAddons,
-    workspaceRoot?: string
+    workspaceRoot?: string,
+    resolvedProtocols?: ProtocolResolution
 ): string {
     const { planList, dispatchContextBlock } = buildPromptDispatchContext(plans);
     const dispatchContextPrefix = dispatchContextBlock ? `${dispatchContextBlock}\n\n` : '';
@@ -2738,12 +2748,12 @@ export function buildCustomAgentPrompt(
         // not also prepended (would double-prepend two Read-workflow instructions).
         return `Read ${addons.featureWorkflowFilePath} and follow it step-by-step.\n\n` +
             buildCustomAgentPrompt(plans, promptInstructions,
-                { ...addons, featureWorkflowFilePathEnabled: undefined, featureWorkflowFilePath: undefined, workflowFilePathEnabled: undefined, workflowFilePath: undefined }, workspaceRoot);
+                { ...addons, featureWorkflowFilePathEnabled: undefined, featureWorkflowFilePath: undefined, workflowFilePathEnabled: undefined, workflowFilePath: undefined }, workspaceRoot, resolvedProtocols);
     }
     if (addons?.workflowFilePathEnabled && addons?.workflowFilePath) {
         return `Read ${addons.workflowFilePath} and follow it step-by-step.\n\n` +
             buildCustomAgentPrompt(plans, promptInstructions,
-                { ...addons, workflowFilePathEnabled: undefined, workflowFilePath: undefined }, workspaceRoot);
+                { ...addons, workflowFilePathEnabled: undefined, workflowFilePath: undefined }, workspaceRoot, resolvedProtocols);
     }
 
     let subagentBlock = '';
@@ -2815,7 +2825,7 @@ export function buildCustomAgentPrompt(
             : '\n\nWORKSPACE TYPE: single-repo. Do NOT include a **Repo:** line.';
     }
     if (addons?.includeInlineChallenge) prompt += `\n\n${INLINE_CHALLENGE_DIRECTIVE}`;
-    if (addons?.accurateCodingEnabled) prompt += `\n\nAccuracy Mode: Before coding, read and follow .agents/protocols/accuracy/SKILL.md step-by-step.`;
+    if (addons?.accurateCodingEnabled) prompt += `\n\n${buildAccuracyDirective(resolvedProtocols)}`;
     if (addons?.pairProgrammingEnabled) prompt += `\n\nPAIR PROGRAMMING NOTE: Focus only on Complex / Risky (Band B) implementation steps. A separate Coder agent is handling Routine (Band A) tasks.`;
     if (addons?.aggressivePairProgramming) prompt += '\n\n' + AGGRESSIVE_PAIR_PROGRAMMING_DIRECTIVE;
     if (addons?.advancedReviewerEnabled) prompt += '\n\n' + ADVANCED_REVIEWER_DIRECTIVE;
@@ -2823,17 +2833,17 @@ export function buildCustomAgentPrompt(
 
     if (addons?.ticketUpdateMode && addons.ticketUpdateMode !== 'disabled') {
         const directive = addons.ticketUpdateMode === 'refine-ticket'
-            ? TICKET_REFINE_DIRECTIVE
+            ? buildTicketRefineDirective(resolvedProtocols)
             : addons.ticketUpdateMode === 'research-and-refine'
-                ? TICKET_RESEARCH_REFINE_DIRECTIVE
-                : TICKET_UPDATE_DIRECTIVE;
+                ? buildTicketResearchRefineDirective(resolvedProtocols)
+                : buildTicketUpdateDirective(resolvedProtocols);
         prompt += `\n\n${directive}`;
     }
     if (addons?.complexityScoringSkill) {
-        prompt += `\n\n${COMPLEXITY_SCORING_DIRECTIVE}`;
+        prompt += `\n\n${buildComplexityScoringDirective(resolvedProtocols)}`;
     }
 
-    if (addons?.researchEnabled) prompt += `\n\n${DEEP_RESEARCH_DIRECTIVE}`;
+    if (addons?.researchEnabled) prompt += `\n\n${buildDeepResearchDirective(resolvedProtocols)}`;
 
     const customDsRefsBlock = buildDesignSystemReferencesBlockFromRefs(addons?.designSystemReferences);
     if (customDsRefsBlock) {

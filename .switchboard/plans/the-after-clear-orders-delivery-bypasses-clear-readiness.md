@@ -73,7 +73,17 @@ A lead posting to a coder is not a seat startup. Remove the relay from `bootstra
 
 `agentGroupInstantiation.ts:147` returns the roster under a name that reads as a creation list, and this consumer is not necessarily the only one to believe it. Return the seats actually created; audit the other consumers before changing the semantics, and give any caller that genuinely wants the roster its own field.
 
-### 4. State the rule where the relay lives
+### 4. Even a hand-driven seat must not be oriented after work arrives
+
+Scoping the relay to hand-driven seats leaves one case. A planner is hand-driven *and* dispatchable from the board, so it can receive work inside its orientation window. `ORIENTATION_MAX_WAIT_MS = 15000` is documented as *"hard cap: always relay eventually"*, and `waitForSeatQuiescence` cannot tell a booting CLI from a working agent — both are output. So a planner dispatched within 15 seconds of creation gets *"do not begin any work until you are given a task"* on top of a task.
+
+Three parts, folded in from the card this replaces:
+
+- Decide at **send** time, not schedule time: if the seat has been dispatched, drop the relay.
+- The hard cap means "send if still idle", not "send regardless". On expiry with work outstanding, log the drop rather than delivering.
+- Soften the imperative. Even correctly targeted, *"do not begin any work"* is a strong instruction to an agent that may already have one; the orders are the point, not the wait.
+
+### 5. State the rule where the relay lives
 
 The orientation is for a seat a human will prompt by hand. Write that at `relayStartupOrientation` so the next caller does not have to infer it from a flag defaulted the wrong way in one host.
 
@@ -81,7 +91,7 @@ The orientation is for a seat a human will prompt by hand. Write that at `relayS
 
 1. **A manually created terminal must still get it.** A planner or controller the operator drives by hand is the case this exists for; do not remove the relay outright.
 2. **The head is dispatch-driven too.** A feature dispatch goes to the lead, so the lead is not a hand-driven seat and should be suppressed alongside its members. Confirm before assuming the head is the exception.
-3. **`1e2afcd8` folds into this.** That card covers the orientation firing into an already-working agent. With the relay scoped to hand-driven seats, a working team seat can no longer receive one — check whether anything survives of it before keeping it open.
+3. **`1e2afcd8` is folded in and deleted.** Its team-seat case is covered by construction once the relay is scoped; its residual — a hand-driven seat dispatched inside the orientation window — is change 4 above.
 4. **This is a parity defect, so audit both roots by hand.** The extension passes the flag from one call site; whether it covers every team-creation path there is worth checking too.
 5. **Do not fix this by comparing seat age at the relay.** That hides both a return value that lies and a flag that was never wired.
 
@@ -92,4 +102,5 @@ The orientation is for a seat a human will prompt by hand. Write that at `relayS
 3. A lead posting to a coder produces no orientation for any seat.
 4. A create-or-attach that creates one seat and attaches three returns one name in `created`.
 5. Both hosts pass and honour `suppressStartupOrientation` identically.
-6. Nothing remains of `1e2afcd8` that this does not cover, or it is kept with a stated reason.
+6. A planner dispatched within 15 seconds of creation receives its task and no orientation.
+7. A hard-cap expiry on a seat that has been dispatched logs a drop rather than delivering.

@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
-import * as fs from 'fs';
-import * as path from 'path';
 import type { HostPathConfigProvider } from './hostSeams';
+import { readAllConfigSync } from './configJsonBridge';
 
 /**
  * The body class a webview should render with on first paint, derived from the
@@ -35,12 +34,7 @@ export function getEffectiveColourKanbanIcons(configOrWorkspaceRoot?: string | H
     }
     let fileConfig: Record<string, any> = {};
     if (typeof configOrWorkspaceRoot === 'string' && configOrWorkspaceRoot) {
-        try {
-            const p = path.join(configOrWorkspaceRoot, '.switchboard', 'config.json');
-            if (fs.existsSync(p)) {
-                fileConfig = JSON.parse(fs.readFileSync(p, 'utf8')) || {};
-            }
-        } catch {}
+        fileConfig = readAllConfigSync(configOrWorkspaceRoot);
     }
     const val = fileConfig['switchboard.theme.colourKanbanIcons'] ?? fileConfig['theme.colourKanbanIcons'];
     if (val !== undefined) return !!val;
@@ -74,12 +68,7 @@ export function getThemeBodyClass(configOrWorkspaceRoot?: string | HostPathConfi
     } else {
         let fileConfig: Record<string, any> = {};
         if (typeof configOrWorkspaceRoot === 'string' && configOrWorkspaceRoot) {
-            try {
-                const p = path.join(configOrWorkspaceRoot, '.switchboard', 'config.json');
-                if (fs.existsSync(p)) {
-                    fileConfig = JSON.parse(fs.readFileSync(p, 'utf8')) || {};
-                }
-            } catch {}
+            fileConfig = readAllConfigSync(configOrWorkspaceRoot);
         }
         const cfg = vscode.workspace?.getConfiguration ? vscode.workspace.getConfiguration('switchboard') : null;
         theme = fileConfig['switchboard.theme.name'] ?? fileConfig['theme.name'] ?? cfg?.get<string>('theme.name', 'afterburner') ?? 'afterburner';

@@ -168,15 +168,25 @@ test('the LocalApiServer probe is referenced, not reinvented', () => {
 test('skills reference no protocol path that does not exist', () => {
     // A pointer into .agents/protocols/ is only as good as the directory it
     // names. The switchboard-orchestration → switchboard-mission-control-http
-    // rename broke exactly this link once already.
+    // rename broke exactly this link once already. Retired protocols were moved
+    // to control_plane rows (bodies in bundledProtocols.ts) — a skill may still
+    // reference the old path, but the protocol must resolve either on disk (the
+    // two committed survivors) or in the bundle.
+    const bundledSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/services/bundledProtocols.ts'), 'utf8');
+    const bundledNames = new Set();
+    for (const m of bundledSrc.matchAll(/"([A-Za-z0-9_\-]+)":\s*\{/g)) {
+        bundledNames.add(m[1]);
+    }
     const pattern = /\.agents\/protocols\/([A-Za-z0-9_\-]+)\/SKILL\.md/g;
     for (const s of SKILLS) {
         const body = sourceBody(s);
         let m;
         while ((m = pattern.exec(body)) !== null) {
             const target = path.join(REPO_ROOT, '.agents', 'protocols', m[1], 'SKILL.md');
-            assert.ok(fs.existsSync(target),
-                `${s.dir}/SKILL.md points at .agents/protocols/${m[1]}/SKILL.md, which does not exist`);
+            const onDisk = fs.existsSync(target);
+            const inBundle = bundledNames.has(m[1]);
+            assert.ok(onDisk || inBundle,
+                `${s.dir}/SKILL.md points at .agents/protocols/${m[1]}/SKILL.md, which does not exist on disk or in the bundle`);
         }
     }
 });

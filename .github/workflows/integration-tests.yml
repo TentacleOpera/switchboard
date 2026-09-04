@@ -727,6 +727,58 @@ jobs:
       - name: Kanban DB backup retention contract (per-reason cap, throttle, dedupe)
         run: npm run test:contract:db-backup-retention
 
+      # relocateBoardDatabase and splitConsolidatedDatabase are the two storage
+      # migrations that move user data between SQLite files. Both must archive
+      # the source as .migrated.bak (never unlink), be idempotent on re-run,
+      # and split must not discard rows whose workspace_id matches no known
+      # workspace — it leaves them in place and reports them.
+      - name: DB relocation/split contract (archive, idempotent, unknown-ws)
+        run: npm run test:contract:db-relocation-split
+
+      # restoreBackup swaps the live DB under every connected client. The
+      # onDatabaseRestored callback must fire after a successful restore so
+      # webviews/WS clients reload; it must NOT fire on failure.
+      - name: DB restore broadcast contract (onDatabaseRestored callback)
+        run: npm run test:contract:db-restore-broadcast
+
+      # RetentionService._rotatePlanEvents implements copy-verify-delete: archive
+      # to DuckDB, verify IDs, then delete only verified IDs from SQLite. The
+      # conservation law: archived IDs == deleted IDs. No event lost, no event
+      # silently destroyed. Zero verified → zero deletes.
+      - name: DB rotation conservation contract (archived==deleted, minPerPlan)
+        run: npm run test:contract:db-rotation-conservation
+
+      # adoptPresetDatabase merges a cloud-synced preset DB (Dropbox/Google Drive/
+      # iCloud) into the global store. Negative cases must NOT silently succeed:
+      # source not found, integrity failure, divergence, non-preset path rejection.
+      - name: DB cloud-preset adoption contract (negative cases)
+        run: npm run test:contract:db-cloud-preset-adoption
+
+      # exportProject/importProject round-trip: every plan, project, worktree,
+      # plan_event, and plan_dependency that was exported must be importable into
+      # a fresh workspace without loss. Also pins that the export DB schema is
+      # synced (migration-added columns) and corrupt sources are rejected.
+      - name: DB export/import round-trip contract (plans preserved, rebind ws)
+        run: npm run test:contract:db-export-import-roundtrip
+
+      # Control-plane override preservation: upsertControlPlaneEntry must NOT
+      # clobber an existing override_body when the upsert doesn't provide one
+      # (COALESCE). setControlPlaneOverride must set and clear without losing
+      # the base body. getControlPlaneEntries returns all entries consistently.
+      - name: DB control-plane override contract (preservation, atomicity)
+        run: npm run test:contract:db-control-plane-override
+
+      # BackupService hygiene: every backup set has a manifest with required
+      # fields, failed sets are marked .FAILED and never evict good sets,
+      # retention prunes oldest-first, listBackups distinguishes verified/failed.
+      - name: DB backup hygiene contract (manifest, retention, failed sets)
+        run: npm run test:contract:db-backup-hygiene
+
+      # Every test:contract:db-* script in package.json must have a matching
+      # step in this workflow file. A script not wired into CI is a silent gap.
+      - name: Storage scripts parity contract (package.json vs workflow)
+        run: npm run test:contract:storage-scripts-parity
+
       # V70 scopes ten previously-unscoped tables by workspace_id and rebuilds three
       # colliding constraints. Two things this pins that nothing else did: the rebuild
       # re-emits column defaults from PRAGMA table_info, which strips the parentheses

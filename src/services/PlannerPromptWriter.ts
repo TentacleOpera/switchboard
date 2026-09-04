@@ -40,9 +40,14 @@ export class PlannerPromptWriter {
             if (err instanceof Error && err.message.includes('No workspace_id configured')) {
                 throw err;
             }
-            // Otherwise it's a structural failure (require failed, etc.) - use hash as last resort
+            // Otherwise it's a structural failure (require failed, etc.) - use canonical resolver as last resort
         }
-        return crypto.createHash('sha256').update(workspaceRoot).digest('hex').slice(0, 16);
+        try {
+            const { resolveCanonicalWorkspaceIdSync } = require('./WorkspaceIdentityService');
+            return resolveCanonicalWorkspaceIdSync(workspaceRoot).value;
+        } catch {
+            return 'default';
+        }
     }
 
     /**

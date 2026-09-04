@@ -32,6 +32,13 @@ const path = require('path');
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const read = (rel) => fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8');
 
+/** Extract a protocol body from bundledProtocols.ts (the files were retired from disk). */
+const _bundledSrc = read('src/services/bundledProtocols.ts');
+function readBundledProtocol(name) {
+    const m = _bundledSrc.match(new RegExp(`"${name}":\\s*\\{[^}]*"body":\\s*"((?:[^"\\\\]|\\\\.)*)"`, 's'));
+    return m ? JSON.parse('"' + m[1] + '"') : '';
+}
+
 const TVP = read('src/services/TaskViewerProvider.ts');
 const BOOT = read('src/standalone/bootstrap.ts');
 const LAS = read('src/services/LocalApiServer.ts');
@@ -204,16 +211,16 @@ test('RATCHET: the agent-facing dispatch recipes declare kind:"dispatch"', () =>
     // A recipe an agent copies verbatim is a send site like any other. An
     // external lead dispatching work from a recipe with no kind hands its
     // worker a prompt with no GIT POLICY and no subagent policy.
-    for (const rel of [
-        '.agents/skills/external-team-lead/SKILL.md',
-        '.agents/protocols/external-team-lead/SKILL.md',
-    ]) {
-        const doc = read(rel);
+    const docs = [
+        ['.agents/skills/external-team-lead/SKILL.md', read('.agents/skills/external-team-lead/SKILL.md')],
+        ['external-team-lead (bundled)', readBundledProtocol('external-team-lead')],
+    ];
+    for (const [label, doc] of docs) {
         const recipe = /Send prompt to a worker terminal[\s\S]{0,1200}?```bash([\s\S]{0,600}?)```/.exec(doc);
-        assert.ok(recipe, `${rel} must carry a worker dispatch recipe`);
+        assert.ok(recipe, `${label} must carry a worker dispatch recipe`);
         assert.ok(
             /"kind":\s*"dispatch"/.test(recipe[0]),
-            `${rel}: the worker dispatch recipe must set "kind": "dispatch" or the worker loses its seat directive block`
+            `${label}: the worker dispatch recipe must set "kind": "dispatch" or the worker loses its seat directive block`
         );
     }
 });

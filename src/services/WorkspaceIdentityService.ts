@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import type { WorkspaceDatabaseMapping } from './KanbanDatabase';
-import { getGlobalDbPath } from './globalStore';
+import { resolveBoardDbPath } from './globalStore';
 
 /**
  * Expand a `~`-prefixed path and resolve it to an absolute path.
@@ -25,13 +25,17 @@ export function isHostRoot(_p: string): boolean {
 
 /**
  * Resolves the database path for a workspace folder.
- * Following consolidation, all workspaces resolve to the single global database.
+ * One board per project: `~/.switchboard/boards/<workspace-id>.db`.
  */
 export function resolveWorkspaceDbPath(
-    _folderPath: string,
-    _getConfigDbPath?: (folderPath: string) => string | undefined
+    folderPath: string,
+    getConfigDbPath?: (folderPath: string) => string | undefined
 ): string {
-    return getGlobalDbPath();
+    const explicit = getConfigDbPath ? getConfigDbPath(folderPath) : undefined;
+    const wsId = readCommittedWorkspaceIdSync(folderPath)
+        || readLegacyWorkspaceIdSync(folderPath)
+        || crypto.createHash('sha256').update(path.resolve(folderPath)).digest('hex').slice(0, 12);
+    return resolveBoardDbPath(wsId, explicit).path;
 }
 
 export function clearMappingCache(): void {
@@ -147,9 +151,105 @@ export function resolveEffectiveWorkspaceRootFromMappings(workspaceRoot: string)
 }
 
 const WORKSPACE_ID_PATTERN = /^[0-9a-f]{8,36}(?:-[0-9a-f]{4,})*$/i;
+// Broader pattern for the canonical resolver: the id is now a filename component,
+// so it must satisfy the path-join character class (`[A-Za-z0-9_-]{8,64}`), not
+// just hex. A legacy `workspace_identity.json` id may not be a hash.
+const CANONICAL_ID_PATTERN = /^[A-Za-z0-9_-]{8,64}$/;
 
 function isValidWorkspaceId(value: string): boolean {
     return WORKSPACE_ID_PATTERN.test(value) && value.length >= 8;
+}
+
+function isValidCanonicalId(value: string): boolean {
+    return CANONICAL_ID_PATTERN.test(value)
+        && !value.includes('/') && !value.includes('\\')
+        && !value.includes('..') && !value.includes('\0');
+}
+
+/**
+ * Read the committed `.switchboard/workspace-id` (line 1) synchronously.
+ * Returns the trimmed value or '' when absent/invalid.
+ */
+function readCommittedWorkspaceIdSync(workspaceRoot: string): string {
+    try {
+        const committedPath = path.join(path.resolve(workspaceRoot), '.switchboard', 'workspace-id');
+        const content = fs.readFileSync(committedPath, 'utf8');
+        const firstLine = content.split('\n')[0]?.trim() ?? '';
+        if (firstLine && isValidCanonicalId(firstLine)) return firstLine;
+    } catch { /* absent */ }
+    return '';
+}
+
+/**
+ * Read the legacy `.switchboard/workspace_identity.json` synchronously.
+ * Returns the workspaceId or '' when absent/invalid.
+ */
+function readLegacyWorkspaceIdSync(workspaceRoot: string): string {
+    try {
+        const legacyPath = path.join(path.resolve(workspaceRoot), '.switchboard', 'workspace_identity.json');
+        const migratedPath = legacyPath + '.migrated.bak';
+        const effectivePath = fs.existsSync(legacyPath) ? legacyPath
+            : (fs.existsSync(migratedPath) ? migratedPath : null);
+        if (effectivePath) {
+            const data = JSON.parse(fs.readFileSync(effectivePath, 'utf8'));
+            const id = typeof data?.workspaceId === 'string' ? data.workspaceId.trim() : '';
+            if (id && isValidCanonicalId(id)) return id;
+        }
+    } catch { /* ignore */ }
+    return '';
+}
+
+/**
+ * The canonical workspace id resolver. This is the ONLY generator.
+ *
+ * Resolution order:
+ * 1. Committed `.switchboard/workspace-id` (line 1) — repository state, PRIORITY 1.
+ * 2. Legacy `workspace_identity.json` — written back to the committed file.
+ * 3. `sha256(root).slice(0, 12)` — written back to the committed file.
+ *
+ * Returns `{value, source}` so "which source answered?" is answerable.
+ */
+export async function resolveCanonicalWorkspaceId(
+    workspaceRoot: string
+): Promise<{ value: string; source: 'committed_file' | 'legacy_json' | 'hash_fallback' }> {
+    const resolvedRoot = path.resolve(workspaceRoot);
+
+    // PRIORITY 1: committed file
+    const committed = readCommittedWorkspaceIdSync(resolvedRoot);
+    if (committed) {
+        return { value: committed, source: 'committed_file' };
+    }
+
+    // PRIORITY 2: legacy workspace_identity.json
+    const legacy = readLegacyWorkspaceIdSync(resolvedRoot);
+    if (legacy) {
+        await tryWriteCommittedWorkspaceIdIfDifferent(resolvedRoot, legacy);
+        return { value: legacy, source: 'legacy_json' };
+    }
+
+    // PRIORITY 3: sha256(root).slice(0, 12)
+    const hashId = crypto.createHash('sha256').update(resolvedRoot).digest('hex').slice(0, 12);
+    await tryWriteCommittedWorkspaceIdIfDifferent(resolvedRoot, hashId);
+    return { value: hashId, source: 'hash_fallback' };
+}
+
+/**
+ * Synchronous variant for call sites that cannot await (e.g. path resolution
+ * inside a constructor). Same resolution order, same generator.
+ */
+export function resolveCanonicalWorkspaceIdSync(
+    workspaceRoot: string
+): { value: string; source: 'committed_file' | 'legacy_json' | 'hash_fallback' } {
+    const resolvedRoot = path.resolve(workspaceRoot);
+
+    const committed = readCommittedWorkspaceIdSync(resolvedRoot);
+    if (committed) return { value: committed, source: 'committed_file' };
+
+    const legacy = readLegacyWorkspaceIdSync(resolvedRoot);
+    if (legacy) return { value: legacy, source: 'legacy_json' };
+
+    const hashId = crypto.createHash('sha256').update(resolvedRoot).digest('hex').slice(0, 12);
+    return { value: hashId, source: 'hash_fallback' };
 }
 
 export async function tryWriteCommittedWorkspaceId(workspaceRoot: string, workspaceId: string): Promise<void> {
@@ -211,41 +311,10 @@ async function tryWriteCommittedWorkspaceIdIfDifferent(
 /**
  * Ensure workspace identity: the repository holds identity, the home store holds state.
  * Returns the stable workspace identifier, writing .switchboard/workspace-id if absent.
+ *
+ * Delegates to `resolveCanonicalWorkspaceId` — the single generator.
  */
 export async function ensureWorkspaceIdentity(workspaceRoot: string): Promise<string> {
-    const resolvedRoot = path.resolve(workspaceRoot);
-    const committedPath = path.join(resolvedRoot, '.switchboard', 'workspace-id');
-    const legacyPath = path.join(resolvedRoot, '.switchboard', 'workspace_identity.json');
-
-    // PRIORITY 1: Check local committed workspace-id file
-    try {
-        const fileContent = await fs.promises.readFile(committedPath, 'utf8');
-        const lines = fileContent.split('\n');
-        const trimmed = (lines[0] ?? '').trim();
-        if (isValidWorkspaceId(trimmed)) {
-            await tryWriteCommittedWorkspaceIdIfDifferent(resolvedRoot, trimmed);
-            return trimmed;
-        }
-    } catch {
-        // File does not exist or is unreadable
-    }
-
-    // PRIORITY 2: Legacy workspace_identity.json file
-    try {
-        if (fs.existsSync(legacyPath)) {
-            const data = JSON.parse(await fs.promises.readFile(legacyPath, 'utf8'));
-            const legacyWorkspaceId = typeof data?.workspaceId === 'string' ? data.workspaceId.trim() : '';
-            if (isValidWorkspaceId(legacyWorkspaceId)) {
-                await tryWriteCommittedWorkspaceIdIfDifferent(resolvedRoot, legacyWorkspaceId);
-                return legacyWorkspaceId;
-            }
-        }
-    } catch (error) {
-        console.error('[WorkspaceIdentityService] Failed to read legacy workspace identity:', error);
-    }
-
-    // PRIORITY 3: Generate new stable ID from workspace root hash
-    const hashId = crypto.createHash('sha256').update(resolvedRoot).digest('hex').slice(0, 12);
-    await tryWriteCommittedWorkspaceIdIfDifferent(resolvedRoot, hashId);
-    return hashId;
+    const { value } = await resolveCanonicalWorkspaceId(workspaceRoot);
+    return value;
 }

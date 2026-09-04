@@ -4,7 +4,8 @@ import * as os from 'os';
 import * as fs from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { getGlobalArchiveDbPath, validateGlobalDbPath } from './globalStore';
+import { resolveArchiveDbPath, validateGlobalDbPath } from './globalStore';
+import { resolveCanonicalWorkspaceIdSync } from './WorkspaceIdentityService';
 
 const execFileAsync = promisify(execFile);
 
@@ -58,7 +59,7 @@ export class ArchiveManager {
                 // Standalone / headless mode outside VS Code
                 configuredPath = process.env.SWITCHBOARD_ARCHIVE_DB_PATH || '';
             }
-            this._archivePath = this._resolveArchivePath(configuredPath, workspaceRoot || process.cwd()) || getGlobalArchiveDbPath();
+            this._archivePath = this._resolveArchivePath(configuredPath, workspaceRoot || process.cwd()) || resolveArchiveDbPath(resolveCanonicalWorkspaceIdSync(workspaceRoot || process.cwd()).value);
         }
         this._outputChannel = outputChannel;
     }

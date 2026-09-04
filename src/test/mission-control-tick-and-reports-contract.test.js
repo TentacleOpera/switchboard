@@ -41,6 +41,13 @@ const path = require('path');
 const ROOT = process.cwd();
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
 
+/** Extract a protocol body from bundledProtocols.ts (the files were retired from disk). */
+const _bundledSrc = read('src/services/bundledProtocols.ts');
+function readBundledProtocol(name) {
+    const m = _bundledSrc.match(new RegExp(`"${name}":\\s*\\{[^}]*"body":\\s*"((?:[^"\\\\]|\\\\.)*)"`, 's'));
+    return m ? JSON.parse('"' + m[1] + '"') : '';
+}
+
 /** Every .ts/.js under src/, repo-relative. Used by the no-stray-caller greps. */
 function srcFiles(dir = 'src') {
     const out = [];
@@ -52,10 +59,11 @@ function srcFiles(dir = 'src') {
     return out;
 }
 
-const PERSONA = '.agents/protocols/switchboard-mission-control/SKILL.md';
-const EXTERNAL_RUNSHEET = '.agents/protocols/switchboard-mission-control-external/SKILL.md';
-const INTERNAL_RUNSHEET = '.agents/protocols/switchboard-mission-control-internal/SKILL.md';
-const ORCHESTRATION = '.agents/protocols/switchboard-mission-control-http/SKILL.md';
+// Protocol files were retired from disk — bodies live in bundledProtocols.ts now.
+const PERSONA = 'switchboard-mission-control';
+const EXTERNAL_RUNSHEET = 'switchboard-mission-control-external';
+const INTERNAL_RUNSHEET = 'switchboard-mission-control-internal';
+const ORCHESTRATION = 'switchboard-mission-control-http';
 const LAUNCHER = '.agents/workflows/switchboard.md';
 const GROUPING = '.agents/skills/manage-features/SKILL.md';
 
@@ -78,9 +86,9 @@ async function run() {
     console.log('mission-control tick + reports channel contract\n');
 
     // ─── 1. Persona: the tick, and the two sections it does not own ──────────
-    const persona = read(PERSONA);
-    const externalRunsheet = read(EXTERNAL_RUNSHEET);
-    const internalRunsheet = read(INTERNAL_RUNSHEET);
+    const persona = readBundledProtocol(PERSONA);
+    const externalRunsheet = readBundledProtocol(EXTERNAL_RUNSHEET);
+    const internalRunsheet = readBundledProtocol(INTERNAL_RUNSHEET);
 
     await check('persona keeps the two sections owned by the pre-flight subtask', () => {
         assert.ok(persona.includes('\n## Pre-flight\n'), 'persona lost ## Pre-flight');
@@ -324,7 +332,7 @@ async function run() {
     });
 
     // ─── 3. The relocated verb-rail traps (launcher verifications 7 and 8) ───
-    const missionControlHttp = read(ORCHESTRATION);
+    const missionControlHttp = readBundledProtocol(ORCHESTRATION);
 
     await check('trap 1 — the read-verb rule survives the console deletion', () => {
         assert.ok(

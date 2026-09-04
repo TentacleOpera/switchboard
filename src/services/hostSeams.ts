@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { showTemporaryNotification } from '../utils/showTemporaryNotification';
 import { SwitchboardCommandRegistry, switchboardCommandRegistry } from './commandRegistry';
+import { readConfigValueSync, writeConfigValueSync } from './configJsonBridge';
 
 /**
  * Host Seams — Feature A · A2a
@@ -67,46 +68,21 @@ export class VscodeHostPathConfigProvider implements HostPathConfigProvider {
         return vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this.workspaceRoot));
     }
 
-    private _configPath(): string {
-        return path.join(this.workspaceRoot, '.switchboard', 'config.json');
-    }
-
-    private _readConfigFile(): Record<string, any> {
-        try {
-            const p = this._configPath();
-            if (fs.existsSync(p)) {
-                const raw = fs.readFileSync(p, 'utf8');
-                return JSON.parse(raw) || {};
-            }
-        } catch {}
-        return {};
-    }
-
     private _readConfigValue(key: string): any {
-        const fileConfig = this._readConfigFile();
-        if (fileConfig[key] !== undefined) return fileConfig[key];
-        const prefixed = `switchboard.${key}`;
-        if (fileConfig[prefixed] !== undefined) return fileConfig[prefixed];
+        // config.json has been migrated to the kanban.db config table. The db
+        // stores each original key as `config.<key>` (and `config.switchboard.<key>`
+        // for prefixed writes). Sync read returns undefined if the db is not yet
+        // open — callers fall back to the vscode WorkspaceConfiguration below.
+        const dbVal = readConfigValueSync(this.workspaceRoot, key);
+        if (dbVal !== undefined && dbVal !== null) return dbVal;
         return undefined;
     }
 
     private _writeConfigFile(key: string, value: any): void {
         try {
-            const p = this._configPath();
-            const dir = path.dirname(p);
-            if (!fs.existsSync(dir)) {
-                fs.mkdirSync(dir, { recursive: true });
-            }
-            let cfg: Record<string, any> = {};
-            try {
-                if (fs.existsSync(p)) {
-                    cfg = JSON.parse(fs.readFileSync(p, 'utf8')) || {};
-                }
-            } catch {}
-            cfg[`switchboard.${key}`] = value;
-            fs.writeFileSync(p, JSON.stringify(cfg, null, 2), 'utf8');
+            writeConfigValueSync(this.workspaceRoot, key, value);
         } catch (err) {
-            console.error('[VscodeHostPathConfigProvider] Failed to write config.json:', err);
+            console.error('[VscodeHostPathConfigProvider] Failed to write config to db:', err);
         }
     }
 

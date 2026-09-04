@@ -83,6 +83,28 @@ export async function exportProject(options: ProjectExportOptions): Promise<Proj
             } catch { /* best effort on indexes */ }
         }
 
+        // Sync any migration-added columns from source to export DB so the
+        // INSERT statements below don't fail with "no such column" on columns
+        // added by migrations after SCHEMA_TABLES_SQL was authored.
+        // We use PRAGMA table_info on the source driver (sql.js) to discover
+        // columns, then ALTER TABLE ADD COLUMN on the export driver (better-sqlite3).
+        for (const tbl of ['plans', 'projects', 'worktrees', 'plan_events', 'plan_dependencies', 'config', 'project_config', 'control_plane']) {
+            try {
+                const sourceCols = sourceDriver.all<{ name: string; type: string; dflt_value: string | null }>(
+                    `PRAGMA table_info(${tbl})`
+                );
+                const targetCols = exportDriver.all<{ name: string }>(`PRAGMA table_info(${tbl})`);
+                const targetColNames = new Set(targetCols.map(c => c.name.toLowerCase()));
+                for (const col of sourceCols) {
+                    if (!targetColNames.has(col.name.toLowerCase())) {
+                        const colType = col.type || 'TEXT';
+                        const defaultClause = col.dflt_value !== null && col.dflt_value !== undefined ? ` DEFAULT ${col.dflt_value}` : '';
+                        exportDriver.exec(`ALTER TABLE ${tbl} ADD COLUMN ${col.name} ${colType}${defaultClause}`);
+                    }
+                }
+            } catch { /* table may not exist in source */ }
+        }
+
         // Remap dictionaries for integer IDs
         const projectIdRemap = new Map<number, number>();
         const worktreeIdRemap = new Map<number, number>();
@@ -144,17 +166,17 @@ export async function exportProject(options: ProjectExportOptions): Promise<Proj
             const remappedWtId = plan.worktree_id ? (worktreeIdRemap.get(Number(plan.worktree_id)) ?? null) : null;
 
             exportDriver.run(
-                'INSERT INTO plans (plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies, repo_scope, workspace_id, created_at, updated_at, last_action, source_type, brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide, clickup_task_id, linear_issue_id, needs_path_fix, needs_relative_conversion, project, has_worktree, worktree_id, worktree_status, is_epic, epic_id, workspace_name, project_id, notion_page_id, is_feature, feature_id, dispatched_at, dispatched_terminal, last_liveness_at, blocked_at, queue_position, column_entered_at, completed_at, priority_starred, column_order, map_fingerprint, priority) ' +
-                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                'INSERT INTO plans (plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies, repo_scope, workspace_id, created_at, updated_at, last_action, source_type, brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide, clickup_task_id, linear_issue_id, needs_path_fix, needs_relative_conversion, project, worktree_id, worktree_status, workspace_name, project_id, notion_page_id, is_feature, feature_id, dispatched_at, dispatched_terminal, last_liveness_at, blocked_at, queue_position, column_entered_at, completed_at, priority_starred, column_order, map_fingerprint, priority) ' +
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 [
                     plan.plan_id, plan.session_id, plan.topic, plan.plan_file, plan.kanban_column,
                     plan.status, plan.complexity, plan.tags, plan.dependencies, plan.repo_scope,
                     plan.workspace_id, plan.created_at, plan.updated_at, plan.last_action,
                     plan.source_type, plan.brain_source_path, plan.mirror_path, plan.routed_to,
                     plan.dispatched_agent, plan.dispatched_ide, plan.clickup_task_id,
-                    plan.linear_issue_id, plan.needs_path_fix, plan.needs_relative_conversion,
-                    plan.project, plan.has_worktree, remappedWtId, plan.worktree_status,
-                    plan.is_epic, plan.epic_id, plan.workspace_name, remappedProjId,
+                    plan.linear_issue_id, plan.needs_path_fix ?? 0, plan.needs_relative_conversion ?? 0,
+                    plan.project, remappedWtId, plan.worktree_status,
+                    plan.workspace_name, remappedProjId,
                     plan.notion_page_id, plan.is_feature, plan.feature_id, plan.dispatched_at,
                     plan.dispatched_terminal, plan.last_liveness_at, plan.blocked_at,
                     plan.queue_position, plan.column_entered_at, plan.completed_at,
@@ -438,17 +460,17 @@ export async function importProject(options: ProjectImportOptions): Promise<Proj
             const remappedWtId = plan.worktree_id ? (wtIdRemap.get(Number(plan.worktree_id)) ?? (Number(plan.worktree_id) + wtIdOffset)) : null;
 
             targetDriver.run(
-                'INSERT OR REPLACE INTO plans (plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies, repo_scope, workspace_id, created_at, updated_at, last_action, source_type, brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide, clickup_task_id, linear_issue_id, needs_path_fix, needs_relative_conversion, project, has_worktree, worktree_id, worktree_status, is_epic, epic_id, workspace_name, project_id, notion_page_id, is_feature, feature_id, dispatched_at, dispatched_terminal, last_liveness_at, blocked_at, queue_position, column_entered_at, completed_at, priority_starred, column_order, map_fingerprint, priority) ' +
-                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                'INSERT OR REPLACE INTO plans (plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies, repo_scope, workspace_id, created_at, updated_at, last_action, source_type, brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide, clickup_task_id, linear_issue_id, needs_path_fix, needs_relative_conversion, project, worktree_id, worktree_status, workspace_name, project_id, notion_page_id, is_feature, feature_id, dispatched_at, dispatched_terminal, last_liveness_at, blocked_at, queue_position, column_entered_at, completed_at, priority_starred, column_order, map_fingerprint, priority) ' +
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 [
                     plan.plan_id, plan.session_id, plan.topic, plan.plan_file, plan.kanban_column,
                     plan.status, plan.complexity, plan.tags, plan.dependencies, plan.repo_scope,
                     effectiveTargetWorkspaceId, plan.created_at, plan.updated_at, plan.last_action,
                     plan.source_type, plan.brain_source_path, plan.mirror_path, plan.routed_to,
                     plan.dispatched_agent, plan.dispatched_ide, plan.clickup_task_id,
-                    plan.linear_issue_id, plan.needs_path_fix, plan.needs_relative_conversion,
-                    plan.project, plan.has_worktree, remappedWtId, plan.worktree_status,
-                    plan.is_epic, plan.epic_id, plan.workspace_name, remappedProjId,
+                    plan.linear_issue_id, plan.needs_path_fix ?? 0, plan.needs_relative_conversion ?? 0,
+                    plan.project, remappedWtId, plan.worktree_status,
+                    plan.workspace_name, remappedProjId,
                     plan.notion_page_id, plan.is_feature, plan.feature_id, plan.dispatched_at,
                     plan.dispatched_terminal, plan.last_liveness_at, plan.blocked_at,
                     plan.queue_position, plan.column_entered_at, plan.completed_at,

@@ -14,7 +14,7 @@ import {
     pruneNonExistentMappings,
     expandAndResolve
 } from '../services/WorkspaceIdentityService';
-import { getGlobalDbPath, resolveGlobalDbPath, validateGlobalDbPath } from '../services/globalStore';
+import { getGlobalDbPath, resolveGlobalDbPath, validateGlobalDbPath, resolveBoardDbPath } from '../services/globalStore';
 
 /**
  * Consolidation invariants for the storage overhaul.
@@ -82,27 +82,31 @@ suite('Storage consolidation invariants', () => {
         return hits;
     };
 
-    test('1. every workspace folder resolves to the one global database', () => {
-        const globalPath = getGlobalDbPath();
+    test('1. each workspace folder resolves to its own per-project board database', () => {
         const repoA = path.join(tmpDir, 'repoA');
         const repoB = path.join(tmpDir, 'nested', 'repoB');
         fs.mkdirSync(repoB, { recursive: true });
         fs.mkdirSync(repoA, { recursive: true });
 
-        assert.strictEqual(
-            resolveWorkspaceDbPath(repoA),
-            globalPath,
-            'repoA must resolve to the global store, not a per-repo kanban.db'
-        );
-        assert.strictEqual(
-            resolveWorkspaceDbPath(repoB),
-            globalPath,
-            'a nested repo must resolve to the same global store'
+        const pathA = resolveWorkspaceDbPath(repoA);
+        const pathB = resolveWorkspaceDbPath(repoB);
+
+        // Each workspace resolves to its own board file, not a shared global file
+        assert.notStrictEqual(pathA, pathB, 'two different roots must resolve to two different board paths');
+
+        // Neither path is inside the workspace repository
+        assert.ok(
+            !pathA.startsWith(path.resolve(repoA) + path.sep),
+            'repoA board must not live inside the workspace repository'
         );
         assert.ok(
-            !resolveWorkspaceDbPath(repoA).startsWith(path.resolve(repoA) + path.sep),
-            'the resolved database must not live inside the workspace repository'
+            !pathB.startsWith(path.resolve(repoB) + path.sep),
+            'repoB board must not live inside the workspace repository'
         );
+
+        // Both paths are under ~/.switchboard/boards/
+        assert.ok(pathA.includes(path.join('.switchboard', 'boards')), `pathA must be under boards/: ${pathA}`);
+        assert.ok(pathB.includes(path.join('.switchboard', 'boards')), `pathB must be under boards/: ${pathB}`);
     });
 
     test('2. the global path is tagged with its source, so "which store answered?" is answerable', () => {
@@ -135,7 +139,8 @@ suite('Storage consolidation invariants', () => {
 
     test('5. a cloud-sync destination is refused', () => {
         for (const folder of ['Dropbox', 'Google Drive', 'OneDrive', 'iCloud']) {
-            const check = validateGlobalDbPath(path.join(tmpDir, folder, 'switchboard.db'));
+            const userPath = path.join(tmpDir, folder, 'switchboard.db');
+            const check = validateGlobalDbPath(userPath, { userSuppliedPath: userPath });
             assert.strictEqual(check.ok, false, `${folder} must be refused as a database destination`);
         }
     });

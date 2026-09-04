@@ -143,6 +143,40 @@
         const linear = projections.linear || {};
         const clickup = projections.clickup || {};
 
+        // Scheduled Work — Ownership & Skip Log
+        const schedule = status.schedule || {};
+        const ownerBadge = document.getElementById('schedule-owner-badge');
+        function renderScheduleEntry(entry) {
+            if (!entry) return '—';
+            const ts = formatDate(entry.atMs);
+            if (entry.ok === true) return `${ts} • ${escapeHtml(entry.detail || 'ok')}`;
+            if (entry.ok === false) return `${ts} • FAILED: ${escapeHtml(entry.detail || 'error')}`;
+            return `${ts} • ${escapeHtml(entry.reason || '')}`;
+        }
+        const backupRun = schedule.backup?.lastRun || null;
+        const backupSkip = schedule.backup?.lastSkip || null;
+        const rotationRun = schedule.rotation?.lastRun || null;
+        const rotationSkip = schedule.rotation?.lastSkip || null;
+        const setEl = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+        setEl('schedule-backup-last-run', renderScheduleEntry(backupRun));
+        setEl('schedule-backup-last-skip', renderScheduleEntry(backupSkip));
+        setEl('schedule-rotation-last-run', renderScheduleEntry(rotationRun));
+        setEl('schedule-rotation-last-skip', renderScheduleEntry(rotationSkip));
+        if (ownerBadge) {
+            const anySkip = backupSkip || rotationSkip;
+            const anyRun = backupRun || rotationRun;
+            if (anySkip) {
+                ownerBadge.textContent = 'SKIP RECORDED';
+                ownerBadge.className = 'badge info';
+            } else if (anyRun) {
+                ownerBadge.textContent = 'ACTIVE';
+                ownerBadge.className = 'badge reachable';
+            } else {
+                ownerBadge.textContent = 'NO RUNS YET';
+                ownerBadge.className = 'badge neutral';
+            }
+        }
+
         const notionBadge = document.getElementById('notion-status-badge');
         if (notion.configured) {
             notionBadge.textContent = 'CONFIGURED';

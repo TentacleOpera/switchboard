@@ -555,7 +555,8 @@ export class ClickUpDocsAdapter implements ResearchSourceAdapter {
      * Includes error logging to diagnose cache issues.
      */
     private async _getCachedDocumentIdMapRobust(): Promise<Array<{ docId: string; title: string; url?: string }> | null> {
-        // Try cache service first
+        // Try cache service first (now reads from imported_docs — the sidecar
+        // has been folded into the database).
         if (this._cacheService) {
             try {
                 const map = await this._cacheService.getCachedDocumentIdMap('clickup');
@@ -565,18 +566,6 @@ export class ClickUpDocsAdapter implements ResearchSourceAdapter {
             } catch (err) {
                 console.warn('[ClickUpDocsAdapter] Cache service read failed:', err);
             }
-        }
-
-        // Fallback: direct file read
-        try {
-            const mapPath = path.join(this.workspaceRoot, '.switchboard', 'planning-cache', 'clickup', 'documentIdMap.json');
-            const raw = await fs.promises.readFile(mapPath, 'utf8');
-            const data = JSON.parse(raw);
-            if (data.idMap && Array.isArray(data.idMap) && data.idMap.length > 0) {
-                return data.idMap;
-            }
-        } catch (err) {
-            console.warn('[ClickUpDocsAdapter] Direct cache file read failed:', err);
         }
 
         return null;

@@ -23,7 +23,9 @@ import {
 import { AgentSkillExporter } from './AgentSkillExporter';
 import { deriveAgentDisplayName } from './cliIdentity';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
-import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, partitionPlansByFeature, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, PHONE_A_FRIEND_DIRECTIVE, SWITCHBOARD_LIVENESS_DIRECTIVE, SWITCHBOARD_CLI_DIRECTIVE, resolvePlanPathForWorktree, resolveWorkingDirForWorktree, normalizeRetiredWorkflowPath, buildAnalysisScopeLine, SeatDirectiveOptions, STAGE_BY_ROLE, TEAM_BATCH_PLAN_CAP, applyBatchCap } from './agentPromptBuilder';
+import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, partitionPlansByFeature, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, PHONE_A_FRIEND_DIRECTIVE, SWITCHBOARD_LIVENESS_DIRECTIVE, SWITCHBOARD_CLI_DIRECTIVE, resolvePlanPathForWorktree, resolveWorkingDirForWorktree, normalizeRetiredWorkflowPath, buildAnalysisScopeLine, SeatDirectiveOptions, STAGE_BY_ROLE, TEAM_BATCH_PLAN_CAP, applyBatchCap, DIRECTIVE_PROTOCOL_NAMES, resolveProtocolSet } from './agentPromptBuilder';
+import type { ProtocolResolution } from './protocolDirectives';
+import { renderPlannerWorkflowRef } from './protocolDirectives';
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord, type WorktreeRow, type ColumnUpdateOutcome } from './KanbanDatabase';
 import { compareByPrecedence, type SortMode } from './kanbanOrdering';
 import type { FeatureWatchRecord } from './PlanIngestionEngine';
@@ -6241,11 +6243,14 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             }
             const promptTab = this._getRoleConfig(role)?.prompt?.trim() || '';
             const instructions = promptTab || agentConfig?.promptInstructions || '';
+            const customDb = this._getKanbanDb(workspaceRoot);
+            const customResolved = await resolveProtocolSet([...DIRECTIVE_PROTOCOL_NAMES], workspaceRoot, customDb || undefined);
             const customBuilt = buildCustomAgentPrompt(
                 plans,
                 instructions || undefined,
                 mergedAddons,
-                workspaceRoot
+                workspaceRoot,
+                customResolved as ProtocolResolution
             );
             // This branch returns early, before the built-in feature-directive block
             // below — so custom agents must have their own opt-in prepend here or
@@ -6299,8 +6304,13 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const dispatchContext = buildPromptDispatchContext(effectivePlans);
             const apiPort = this._taskViewerProvider?.getLocalApiServerPort() ?? 0;
             const scopeLine = buildAnalysisScopeLine(overrides?.analysisScope);
+            // Resolve the dispatch-analysis protocol (materialize delivery) so the
+            // emitted reference is an absolute on-disk path, not a deleted relative one.
+            const analysisDb = this._getKanbanDb(workspaceRoot);
+            const analysisResolved = await resolveProtocolSet(['dispatch-analysis'], workspaceRoot, analysisDb || undefined);
+            const analysisRef = renderPlannerWorkflowRef('dispatch-analysis', analysisResolved);
             const dispatchPrompt =
-                `Read and follow .agents/protocols/dispatch-analysis/SKILL.md now.\n` +
+                `${analysisRef} now.\n` +
                 `This is a read-only analysis pass — do not modify any plan file.\n` +
                 `WORKSPACE_ROOT=${workspaceRoot}\n` +
                 `API_PORT=${apiPort}\n` +
@@ -6486,6 +6496,20 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             ...resolvedOptions,
             ...overrides,
         };
+
+        // Resolve the directive-carrying protocols once (async) so the sync
+        // builder can inline bodies / emit materialised paths without awaiting.
+        // Also resolve a bare planner-workflow protocol name (a retired path
+        // normalised to a name) so renderPlannerWorkflowRef can inline it.
+        const directiveNames = new Set<string>(DIRECTIVE_PROTOCOL_NAMES);
+        const collectBareName = (p: string | undefined) => {
+            if (p && !p.includes('/') && !/\.md$/i.test(p)) directiveNames.add(p);
+        };
+        collectBareName(batchOptions.plannerWorkflowPath);
+        collectBareName(batchOptions.plannerFeatureWorkflowPath);
+        batchOptions.resolvedProtocols = await resolveProtocolSet(
+            Array.from(directiveNames), workspaceRoot, db || undefined
+        ) as ProtocolResolution;
         let orderedPlans = [
             ...partition.featureGroups.flatMap(g => [g.feature, ...g.subtasks]),
             ...partition.loosePlans,
@@ -16127,9 +16151,11 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
                 continue;
             }
             // Use planId, with sessionId as explicit fallback parameter (not coalesced)
-            const linkOk = await db.updateFeatureStatus(st.planId, 0, effectiveFeaturePlanId, st.sessionId);
-            if (!linkOk) {
-                console.warn(`[KanbanProvider] createFeatureFromPlanIds: updateFeatureStatus failed for subtask ${targetId}`);
+            const linkResult = await db.updateFeatureStatus(st.planId, 0, effectiveFeaturePlanId, st.sessionId);
+            // 'refused' is not a link failure — the subtask was a feature-directory file
+            // that was correctly refused demotion. Only 'not_found' and 'error' are failures.
+            if (linkResult !== 'applied' && linkResult !== 'refused') {
+                console.warn(`[KanbanProvider] createFeatureFromPlanIds: updateFeatureStatus ${linkResult} for subtask ${targetId}`);
                 if (targetId && !skippedPlanIds.includes(targetId)) {
                     skippedPlanIds.push(targetId);
                 }

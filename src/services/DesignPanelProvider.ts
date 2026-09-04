@@ -2977,7 +2977,7 @@ setTimeout(report,500);setTimeout(report,2000);setTimeout(report,5000);
                 await fs.promises.writeFile(candidate, STARTER_DESIGN_SYSTEM_HTML, 'utf8');
                 await this._sendDesignDocsReady();
 
-                const kickoffPrompt = `Read and follow .agents/protocols/design-system-builder/SKILL.md to interactively interview me and customize the design system template at ${candidate}. If I want to derive it from an existing app instead of starting from scratch, ask me for the stylesheets, components, or screenshots to read first.`;
+                const kickoffPrompt = `Follow the \`design-system-builder\` protocol (resolve via \`switchboard api GET /protocol/design-system-builder\`) to interactively interview me and customize the design system template at ${candidate}. If I want to derive it from an existing app instead of starting from scratch, ask me for the stylesheets, components, or screenshots to read first.`;
                 await this._seams().clipboard.writeText(kickoffPrompt);
                 this._seams().ui.showTemporaryNotification('Created design system starter template and copied kickoff prompt to clipboard.');
 

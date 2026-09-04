@@ -4,8 +4,9 @@ import { createRequire } from 'module';
 import * as os from 'os';
 import * as path from 'path';
 import { ISqliteDriver, ISqliteStatement, BetterSqliteDriver } from './sqliteDriver';
-import { getGlobalDbPath, getGlobalArchiveDbPath, getGlobalStoreDir } from './globalStore';
-import { mergeDatabase } from './dbMerge';
+import { resolveBoardDbPath, resolveArchiveDbPath, getGlobalStoreDir } from './globalStore';
+import { relocateBoardDatabase } from './dbMerge';
+import { resolveCanonicalWorkspaceIdSync } from './WorkspaceIdentityService';
 import { STATE_KEY_TO_CONFIG } from './stateConfigBridge';
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { generateCodename } from './codenameGenerator';
@@ -793,7 +794,14 @@ const MIGRATION_V70_INDEXES_SQL = [
     `CREATE INDEX IF NOT EXISTS idx_kanban_meta_workspace ON kanban_meta(workspace_id)`,
 ];
 
-
+// V71: Collapse workspace_override into override_body. Both columns were dual-written
+// to the same value since V69; this migration copies any divergent workspace_override
+// into override_body (defensive — they cannot differ today) so reads can stop
+// consulting the redundant column. The column itself is NOT dropped: that would be
+// a destructive migration for no benefit, and older binaries may still write it.
+const MIGRATION_V71_SQL = [
+    `UPDATE control_plane SET override_body = workspace_override WHERE override_body IS NULL AND workspace_override IS NOT NULL`,
+];
 
 const MIGRATION_V13_SQL = [
     `ALTER TABLE plans ADD COLUMN repo_scope TEXT DEFAULT ''`,
@@ -1327,12 +1335,14 @@ export class KanbanDatabase {
         }
         const stable = validation.resolved!;
 
-        // On-open migration: merge any unmigrated database found in this workspace
+        // On-open migration: relocate any unmigrated per-repo database to the
+        // per-project board file (1:1, integrity-checked, .migrated.bak, resumable).
         const localDb = path.join(stable, '.switchboard', 'kanban.db');
         if (fs.existsSync(localDb) && (!customDbPath || path.resolve(customDbPath) !== path.resolve(localDb))) {
             try {
-                void mergeDatabase(localDb, stable).catch(err => {
-                    console.error(`[KanbanDatabase] On-open migration error for ${localDb}:`, err);
+                const wsId = resolveCanonicalWorkspaceIdSync(stable).value;
+                void relocateBoardDatabase(localDb, stable, wsId).catch(err => {
+                    console.error(`[KanbanDatabase] On-open relocation error for ${localDb}:`, err);
                 });
             } catch { /* best effort */ }
         }
@@ -1342,7 +1352,10 @@ export class KanbanDatabase {
             const expanded = KanbanDatabase._expandHome(customDbPath.trim());
             resolvedDbPath = path.isAbsolute(expanded) ? expanded : path.join(stable, expanded);
         } else {
-            resolvedDbPath = getGlobalDbPath();
+            // One board per project: resolve the canonical workspace id, then
+            // the per-project board path under ~/.switchboard/boards/<id>.db.
+            const wsId = resolveCanonicalWorkspaceIdSync(stable).value;
+            resolvedDbPath = resolveBoardDbPath(wsId).path;
         }
 
         resolvedDbPath = path.resolve(KanbanDatabase._expandHome(resolvedDbPath));
@@ -1386,17 +1399,19 @@ export class KanbanDatabase {
     }
 
     /**
-     * Get the cold (archive) store instance. Sibling of hot DB in global store.
+     * Get the cold (archive) store instance. Per-board archive, derived from the
+     * board target: `~/.switchboard/boards/<workspace-id>-archive.db`.
      */
     public static getArchiveInstance(workspaceRoot?: string): KanbanDatabase {
-        const archiveDbPath = getGlobalArchiveDbPath();
+        const stable = workspaceRoot ? path.resolve(workspaceRoot) : os.homedir();
+        const wsId = resolveCanonicalWorkspaceIdSync(stable).value;
+        const archiveDbPath = resolveArchiveDbPath(wsId);
         const cached = KanbanDatabase._archiveInstancesByDbPath.get(archiveDbPath);
         if (cached) {
             if (workspaceRoot) cached.setWorkspaceRoot(workspaceRoot);
             return cached;
         }
 
-        const stable = workspaceRoot ? path.resolve(workspaceRoot) : os.homedir();
         const created = new KanbanDatabase(stable, archiveDbPath);
         created._isArchiveInstance = true;
         KanbanDatabase._archiveInstancesByDbPath.set(archiveDbPath, created);
@@ -1404,22 +1419,28 @@ export class KanbanDatabase {
     }
 
     /**
-     * Resolve the on-disk path of the cold store.
+     * Resolve the on-disk path of the cold store (per-board).
      */
-    public static resolveArchiveDbPath(_workspaceRoot?: string): string {
-        return getGlobalArchiveDbPath();
+    public static resolveArchiveDbPath(workspaceRoot?: string): string {
+        const stable = workspaceRoot ? path.resolve(workspaceRoot) : os.homedir();
+        const wsId = resolveCanonicalWorkspaceIdSync(stable).value;
+        return resolveArchiveDbPath(wsId);
     }
 
     /** Whether a cold (archive) store is currently open in-process. */
-    public static hasArchiveInstance(_workspaceRoot?: string): boolean {
-        return KanbanDatabase._archiveInstancesByDbPath.has(getGlobalArchiveDbPath());
+    public static hasArchiveInstance(workspaceRoot?: string): boolean {
+        const stable = workspaceRoot ? path.resolve(workspaceRoot) : os.homedir();
+        const wsId = resolveCanonicalWorkspaceIdSync(stable).value;
+        return KanbanDatabase._archiveInstancesByDbPath.has(resolveArchiveDbPath(wsId));
     }
 
     /** Whether the cold store file exists. */
     public static archiveAvailable(workspaceRoot?: string): boolean {
         if (KanbanDatabase.hasArchiveInstance(workspaceRoot)) return true;
         try {
-            return fs.existsSync(getGlobalArchiveDbPath());
+            const stable = workspaceRoot ? path.resolve(workspaceRoot) : os.homedir();
+            const wsId = resolveCanonicalWorkspaceIdSync(stable).value;
+            return fs.existsSync(resolveArchiveDbPath(wsId));
         } catch {
             return false;
         }
@@ -1440,7 +1461,8 @@ export class KanbanDatabase {
      */
     public static async invalidateWorkspace(workspaceRoot: string): Promise<void> {
         const stable = path.resolve(workspaceRoot);
-        const dbPath = getGlobalDbPath();
+        const wsId = resolveCanonicalWorkspaceIdSync(stable).value;
+        const dbPath = resolveBoardDbPath(wsId).path;
         const existing = KanbanDatabase._instancesByDbPath.get(dbPath);
         if (existing) {
             try { await existing._writeTail; } catch { /* swallow */ }
@@ -1465,6 +1487,29 @@ export class KanbanDatabase {
             } catch (e) {
                 console.error(`[KanbanDatabase] Failed to sync workspace identity after invalidation:`, e);
             }
+        }
+    }
+
+    /**
+     * Dispose ALL cached database instances. Used by test suites to ensure every
+     * better-sqlite3 driver is closed (and its statement cache cleared) before the
+     * process exits, preventing the `(env) != nullptr` core dump in
+     * Statement::~Statement during Node environment teardown.
+     */
+    public static async disposeAll(): Promise<void> {
+        const instances = Array.from(KanbanDatabase._instancesByDbPath.values());
+        for (const inst of instances) {
+            try { await inst._writeTail; } catch { /* swallow */ }
+            try { await inst.flushPersist(); } catch { /* best effort */ }
+            inst._disposed = true;
+            if (inst._localMirrorDebounce) {
+                clearTimeout(inst._localMirrorDebounce);
+                inst._localMirrorDebounce = null;
+            }
+            KanbanDatabase._instancesByDbPath.delete(inst.dbPath);
+            inst._closeDb(inst._db);
+            inst._db = null;
+            inst._initPromise = null;
         }
     }
 
@@ -1697,10 +1742,11 @@ export class KanbanDatabase {
     }
 
     /**
-     * Returns the default local DB path for a workspace.
+     * Returns the default board DB path for a workspace (per-project).
      */
     public static defaultDbPath(workspaceRoot: string): string {
-        return path.join(path.resolve(workspaceRoot), '.switchboard', 'kanban.db');
+        const wsId = resolveCanonicalWorkspaceIdSync(path.resolve(workspaceRoot)).value;
+        return resolveBoardDbPath(wsId).path;
     }
 
     private readonly _dbPath: string;
@@ -1914,7 +1960,8 @@ export class KanbanDatabase {
             //     absent from SCHEMA_TABLES entirely (getStitchProjects would throw
             //     "no such table" on every fresh install);
             //   - plan_events.plan_id — V20 steps 9-12 rebuild the table off plan_id,
-            //     while SCHEMA_TABLES still declares the deprecated session_id column;
+            //     while SCHEMA_TABLES already declares plan_id (post-V20 shape); V20
+            //     detects this and skips the rebuild on fresh DBs;
             //   - imported_docs.content_type / url / needs_file_path_relative;
             //   - idx_plans_worktree (V26), idx_plans_feature_id + idx_plans_is_feature
             //     (V29), idx_stitch_screens_project (V32), idx_imported_docs_type.
@@ -1941,7 +1988,7 @@ export class KanbanDatabase {
             // V15: Trigger background migration from JSON registry if needed
             let wsId = await this.getWorkspaceId();
             if (!wsId) {
-                wsId = crypto.createHash('sha256').update(this._workspaceRoot).digest('hex').slice(0, 16);
+                wsId = this._getWorkspaceIdFallback();
             }
             await this._runConfigMigrations();
 
@@ -2546,12 +2593,12 @@ export class KanbanDatabase {
         isFeature: number,
         featureId: string,
         sessionId?: string
-    ): Promise<boolean> {
+    ): Promise<'applied' | 'refused' | 'not_found' | 'error'> {
         const cleanPlanId = (planId || '').trim();
         const cleanSessionId = (sessionId || '').trim();
         if (!cleanPlanId && !cleanSessionId) {
             console.warn('[KanbanDatabase] updateFeatureStatus: rejected empty or whitespace id');
-            return false;
+            return 'not_found';
         }
 
         let plan: KanbanPlanRecord | null = null;
@@ -2579,12 +2626,12 @@ export class KanbanDatabase {
         }
 
         if (!plan) {
-            return false;
+            return 'not_found';
         }
 
         if (!plan.planFile || !plan.planFile.trim()) {
             console.error(`[KanbanDatabase] updateFeatureStatus: plan ${plan.planId} has no planFile`);
-            return false;
+            return 'not_found';
         }
 
         const relativePlanFile = this._ensureRelativePlanFile(plan.planFile);
@@ -2595,7 +2642,7 @@ export class KanbanDatabase {
             console.error(
                 `[KanbanDatabase] updateFeatureStatus: resolved plan_file '${relativePlanFile}' does not belong to plan ${plan.planId} (belongs to ${verifyPlan?.planId ?? 'none'})`
             );
-            return false;
+            return 'not_found';
         }
 
         // Structural guard: A feature file in .switchboard/features/ is structurally a feature.
@@ -2613,10 +2660,10 @@ export class KanbanDatabase {
                         await this._persist();
                     } catch (err) {
                         console.error('[KanbanDatabase] updateFeatureStatus feature_id update failed:', err);
-                        return false;
+                        return 'error';
                     }
                 }
-                return true;
+                return 'refused';
             }
         }
 
@@ -2626,7 +2673,7 @@ export class KanbanDatabase {
         if (plan.isFeature === 1 && isFeature === 0) {
             const stack = new Error().stack;
             console.error(
-                `[KanbanDatabase] ⚠️ FEATURE CLOBBER on instance ${this.instanceId}: updateFeatureStatus(${cleanPlanId || cleanSessionId}, 0, '${featureId}') would clear is_feature on feature "${plan.topic}" (plan_file=${plan.planFile}). Stack:`,
+                `[KanbanDatabase] ⚠️ FEATURE CLOBBER: updateFeatureStatus(${cleanPlanId || cleanSessionId}, 0, '${featureId}') would clear is_feature on feature "${plan.topic}" (plan_file=${plan.planFile}). Stack:`,
                 stack
             );
         }
@@ -2642,7 +2689,7 @@ export class KanbanDatabase {
                 await this._persist();
             } catch (error) {
                 console.error('[KanbanDatabase] updateFeatureStatus failed:', error);
-                return false;
+                return 'error';
             }
         }
         if (affected === 0) {
@@ -2653,7 +2700,7 @@ export class KanbanDatabase {
             if (oldFeatureId && oldFeatureId !== featureId) { await this.recomputeFeatureComplexity(oldFeatureId); }
             if (featureId && isFeature === 0) { await this.recomputeFeatureComplexity(featureId); }
         }
-        return ok;
+        return ok ? 'applied' : 'not_found';
     }
 
     /**
@@ -3519,7 +3566,7 @@ export class KanbanDatabase {
             `SELECT * FROM imported_docs WHERE workspace_id = ? AND content_type = 'doc' ORDER BY imported_at DESC`,
             [workspaceId]
         );
-        
+
         const results: ImportedDocEntry[] = [];
         try {
             while (stmt.step()) {
@@ -3542,6 +3589,12 @@ export class KanbanDatabase {
             stmt.free();
         }
         return results;
+    }
+
+    /** Batched read of all imported docs for a given source — single query, no N+1. */
+    public async getImportedDocsBySource(workspaceId: string, sourceId: string): Promise<ImportedDocEntry[]> {
+        const all = await this.getImportedDocs(workspaceId);
+        return all.filter(e => e.sourceId === sourceId);
     }
 
     public async getImportBySlug(slugPrefix: string, workspaceId: string, contentType: string = 'doc'): Promise<ImportedDocEntry | null> {
@@ -4100,7 +4153,7 @@ export class KanbanDatabase {
         if (!(await this.ensureReady()) || !this._db) return 0;
         let wsId = workspaceId || await this.getWorkspaceId() || this._getWorkspaceIdFallback();
         if (!wsId && this._workspaceRoot) {
-            wsId = crypto.createHash('sha256').update(this._workspaceRoot).digest('hex').slice(0, 16);
+            wsId = this._getWorkspaceIdFallback();
         }
         const result = this._db.run(
             `INSERT INTO worktrees (branch, path, feature_id, project, subtask_plan_id, base_branch, tier, agents_open_with_grid, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`,
@@ -4116,7 +4169,7 @@ export class KanbanDatabase {
             ]
         );
         await this._persist();
-        return Number(result?.lastInsertRowid ?? this._db.lastInsertRowid() ?? 0);
+        return Number(result?.lastInsertRowid ?? 0);
     }
 
     // ── Job-activity store ───────────────────────────────────────────────────
@@ -5612,6 +5665,22 @@ export class KanbanDatabase {
         }
     }
 
+    /** Sync twin of getAllConfig(). Returns [] if the db handle is not open. */
+    public getAllConfigSync(): Array<{ key: string; value: string }> {
+        if (!this._db) return [];
+        const stmt = this._db.prepare('SELECT key, value FROM config', []);
+        const rows: Array<{ key: string; value: string }> = [];
+        try {
+            while (stmt.step()) {
+                const obj = stmt.getAsObject();
+                rows.push({ key: String(obj.key ?? ''), value: String(obj.value ?? '') });
+            }
+        } finally {
+            stmt.free();
+        }
+        return rows;
+    }
+
     public getConfigJsonSync<T>(key: string, defaultValue: T): T {
         const raw = this.getConfigSync(key);
         if (raw === null) { return defaultValue; }
@@ -5734,14 +5803,15 @@ export class KanbanDatabase {
     public async getControlPlaneEntries(kind?: string): Promise<ControlPlaneEntry[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
         const sql = kind
-            ? 'SELECT name, kind, version, content_hash, body, delivery, override_body, workspace_override, updated_at FROM control_plane WHERE kind = ?'
-            : 'SELECT name, kind, version, content_hash, body, delivery, override_body, workspace_override, updated_at FROM control_plane';
+            ? 'SELECT name, kind, version, content_hash, body, delivery, override_body, updated_at FROM control_plane WHERE kind = ?'
+            : 'SELECT name, kind, version, content_hash, body, delivery, override_body, updated_at FROM control_plane';
         const params = kind ? [kind] : [];
         const stmt = this._db.prepare(sql, params);
         const entries: ControlPlaneEntry[] = [];
         try {
             while (stmt.step()) {
                 const r = stmt.getAsObject();
+                const overrideBody = r.override_body !== null && r.override_body !== undefined ? String(r.override_body) : null;
                 entries.push({
                     name: String(r.name),
                     kind: String(r.kind),
@@ -5749,8 +5819,11 @@ export class KanbanDatabase {
                     contentHash: String(r.content_hash),
                     body: String(r.body),
                     delivery: r.delivery ? (String(r.delivery) as 'inline' | 'materialize') : 'materialize',
-                    overrideBody: r.override_body !== null && r.override_body !== undefined ? String(r.override_body) : null,
-                    workspaceOverride: r.workspace_override !== null && r.workspace_override !== undefined ? String(r.workspace_override) : null,
+                    overrideBody,
+                    // workspaceOverride is kept as an alias for overrideBody so callers
+                    // that read it (ClaudeCodeMirrorService, ProtocolService) still work
+                    // after the V71 column collapse.
+                    workspaceOverride: overrideBody,
                     updatedAt: String(r.updated_at)
                 });
             }
@@ -5763,12 +5836,13 @@ export class KanbanDatabase {
     public async getControlPlaneEntry(name: string, kind: string): Promise<ControlPlaneEntry | null> {
         if (!(await this.ensureReady()) || !this._db) return null;
         const stmt = this._db.prepare(
-            'SELECT name, kind, version, content_hash, body, delivery, override_body, workspace_override, updated_at FROM control_plane WHERE name = ? AND kind = ? LIMIT 1',
+            'SELECT name, kind, version, content_hash, body, delivery, override_body, updated_at FROM control_plane WHERE name = ? AND kind = ? LIMIT 1',
             [name, kind]
         );
         try {
             if (!stmt.step()) return null;
             const r = stmt.getAsObject();
+            const overrideBody = r.override_body !== null && r.override_body !== undefined ? String(r.override_body) : null;
             return {
                 name: String(r.name),
                 kind: String(r.kind),
@@ -5776,8 +5850,8 @@ export class KanbanDatabase {
                 contentHash: String(r.content_hash),
                 body: String(r.body),
                 delivery: r.delivery ? (String(r.delivery) as 'inline' | 'materialize') : 'materialize',
-                overrideBody: r.override_body !== null && r.override_body !== undefined ? String(r.override_body) : null,
-                workspaceOverride: r.workspace_override !== null && r.workspace_override !== undefined ? String(r.workspace_override) : null,
+                overrideBody,
+                workspaceOverride: overrideBody,
                 updatedAt: String(r.updated_at)
             };
         } finally {
@@ -5789,15 +5863,14 @@ export class KanbanDatabase {
         if (!(await this.ensureReady()) || !this._db) return;
         const override = entry.overrideBody ?? entry.workspaceOverride ?? null;
         this._db.run(
-            `INSERT INTO control_plane (name, kind, version, content_hash, body, delivery, override_body, workspace_override, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `INSERT INTO control_plane (name, kind, version, content_hash, body, delivery, override_body, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(name, kind) DO UPDATE SET
                version = excluded.version,
                content_hash = excluded.content_hash,
                body = excluded.body,
                delivery = excluded.delivery,
                override_body = COALESCE(excluded.override_body, control_plane.override_body),
-               workspace_override = COALESCE(excluded.workspace_override, control_plane.workspace_override),
                updated_at = excluded.updated_at`,
             [
                 entry.name,
@@ -5806,7 +5879,6 @@ export class KanbanDatabase {
                 entry.contentHash,
                 entry.body,
                 entry.delivery || 'materialize',
-                override,
                 override,
                 entry.updatedAt || new Date().toISOString()
             ]
@@ -5817,8 +5889,8 @@ export class KanbanDatabase {
     public async setControlPlaneOverride(name: string, kind: string, override: string | null): Promise<void> {
         if (!(await this.ensureReady()) || !this._db) return;
         this._db.run(
-            'UPDATE control_plane SET override_body = ?, workspace_override = ?, updated_at = ? WHERE name = ? AND kind = ?',
-            [override, override, new Date().toISOString(), name, kind]
+            'UPDATE control_plane SET override_body = ?, updated_at = ? WHERE name = ? AND kind = ?',
+            [override, new Date().toISOString(), name, kind]
         );
         await this._persist();
     }
@@ -5836,7 +5908,7 @@ export class KanbanDatabase {
                 await this.upsertControlPlaneEntry({
                     ...entry,
                     overrideBody: existing.overrideBody ?? existing.workspaceOverride,
-                    workspaceOverride: existing.workspaceOverride ?? existing.overrideBody
+                    workspaceOverride: existing.overrideBody ?? existing.workspaceOverride
                 });
                 updated++;
             }
@@ -6082,7 +6154,7 @@ export class KanbanDatabase {
         // run the registry→db migration — import before archiving, never delete.
         let wsId = await this.getConfig('workspace_id');
         if (!wsId) {
-            wsId = crypto.createHash('sha256').update(this._workspaceRoot).digest('hex').slice(0, 16);
+            wsId = this._getWorkspaceIdFallback();
         }
         await this.migrateFromJsonRegistry(this._workspaceRoot, wsId);
 
@@ -6226,10 +6298,45 @@ export class KanbanDatabase {
             return map;
         });
 
-        // 3. Migrate workspace-local integration-config.json (legacy)
-        await this.migrateJsonFileToConfig(path.join(sbDir, 'integration-config.json'), (parsed) => {
-            return { 'legacy.integrationConfig': parsed };
-        });
+        // 3. Migrate workspace-local integration-config.json (legacy).
+        // Split by AGENT_GLOBAL_FILE_KEYS: machine-global keys (startupCommands,
+        // visibleAgents, customAgents) go to GlobalIntegrationConfigService; the
+        // rest land in the per-workspace config table. Unknown keys are preserved
+        // under legacy.integrationConfig so nothing is dropped.
+        const legacyIntegrationConfig = path.join(sbDir, 'integration-config.json');
+        if (fs.existsSync(legacyIntegrationConfig)) {
+            try {
+                const content = fs.readFileSync(legacyIntegrationConfig, 'utf8');
+                const parsed = JSON.parse(content);
+                const globalKeys = new Set<string>(['startupCommands', 'visibleAgents', 'customAgents']);
+                const globalSlice: Record<string, unknown> = {};
+                const workspaceSlice: Record<string, unknown> = {};
+                for (const [k, v] of Object.entries(parsed || {})) {
+                    if (globalKeys.has(k)) {
+                        globalSlice[k] = v;
+                    } else {
+                        workspaceSlice[k] = v;
+                    }
+                }
+                // Machine-global keys → ~/.switchboard/integration-config.json
+                if (Object.keys(globalSlice).length > 0) {
+                    const existing = await GlobalIntegrationConfigService.loadGlobal();
+                    const agents: Record<string, unknown> = { ...(existing.agents || {}) };
+                    for (const [k, v] of Object.entries(globalSlice)) {
+                        agents[k] = v;
+                    }
+                    await GlobalIntegrationConfigService.saveGlobal({ ...existing, agents: agents as any });
+                }
+                // Per-workspace keys → config table, preserving unknowns
+                if (Object.keys(workspaceSlice).length > 0) {
+                    await this.setConfigJson('legacy.integrationConfig', workspaceSlice);
+                }
+                fs.renameSync(legacyIntegrationConfig, legacyIntegrationConfig + '.migrated.bak');
+                console.log(`[KanbanDatabase] Migrated legacy config file: ${legacyIntegrationConfig}`);
+            } catch (err) {
+                console.error(`[KanbanDatabase] Failed to migrate JSON file ${legacyIntegrationConfig}:`, err);
+            }
+        }
 
         // 4. Archive kanban-state.json
         const legacyKanbanState = path.join(sbDir, 'kanban-state.json');
@@ -6365,39 +6472,28 @@ export class KanbanDatabase {
      * `getWorkspaceId()` with its provenance attached, so "which source answered?"
      * is answerable after the fact rather than inferred from behaviour.
      *
-     * ⚠️ The `config` row is asked FIRST and that ordering is deliberate — do not
-     * "fix" it by preferring the committed `.switchboard/workspace-id` file.
-     *
-     * The reasoning that suggests flipping it is real: `config` is keyed
-     * `(key TEXT PRIMARY KEY)` with no workspace scope, so in the one global store
-     * `config['workspace_id']` is a single machine-wide slot, and the repo file is
-     * the per-workspace identity by design. But the file is NOT interchangeable with
-     * the row. Measured on a real run: the file held `b3cf17eada21` while the row
-     * held `b3cf17eada211ca3` — a truncated legacy variant of the same id. Preferring
-     * the file therefore splits reads and writes across two different workspace_id
-     * values, and rows written under one become invisible under the other (observed
-     * as features and inline plans importing to zero rows).
-     *
-     * So the collision is real and the fix is NOT here: it needs `config` scoped by
-     * workspace_id, with a per-key machine-global-vs-workspace decision. Recorded in
-     * the storage-overhaul review as a deferred CRITICAL rather than papered over
-     * with a precedence flip that breaks the working path today.
+     * One board per project: the committed `.switchboard/workspace-id` file is the
+     * canonical id (resolved through `resolveCanonicalWorkspaceIdSync`). The
+     * `config['workspace_id']` row is no longer consulted first — in the per-project
+     * topology the file IS the identity and the board path is derived from it, so
+     * the file must win. A stale `config` row from a prior consolidation era that
+     * disagrees with the file would otherwise split reads and writes across two
+     * different workspace_id values.
      */
     public async getWorkspaceIdTagged(): Promise<{ value: string | null; source: 'db_config' | 'committed_file' | 'none' }> {
+        if (this._workspaceRoot) {
+            try {
+                const { value, source } = resolveCanonicalWorkspaceIdSync(this._workspaceRoot);
+                if (value) {
+                    return { value, source: 'committed_file' };
+                }
+            } catch { /* fall through */ }
+        }
+        // Fall back to the db config row for databases that have no committed file
+        // (e.g. an archive instance opened without a workspace root).
         const fromConfig = await this.getConfig('workspace_id');
         if (fromConfig) {
             return { value: fromConfig, source: 'db_config' };
-        }
-        if (this._workspaceRoot) {
-            try {
-                const wsIdFile = path.join(this._workspaceRoot, '.switchboard', 'workspace-id');
-                if (fs.existsSync(wsIdFile)) {
-                    const content = fs.readFileSync(wsIdFile, 'utf8').trim();
-                    if (content) {
-                        return { value: content, source: 'committed_file' };
-                    }
-                }
-            } catch { /* fall through */ }
         }
         return { value: null, source: 'none' };
     }
@@ -7151,8 +7247,8 @@ export class KanbanDatabase {
             // V15: Trigger background migration from JSON registry if needed
             let wsId = await this.getWorkspaceId();
             if (!wsId) {
-                // Fallback: derived from root if not yet in config
-                wsId = crypto.createHash('sha256').update(this._workspaceRoot).digest('hex').slice(0, 16);
+                // Fallback: canonical resolver (committed file → legacy json → sha256 slice(0,12))
+                wsId = this._getWorkspaceIdFallback();
             }
             await this._runConfigMigrations();
 
@@ -7508,51 +7604,39 @@ export class KanbanDatabase {
             );
         } catch { /* best effort */ }
 
-        // V3: consolidate workspace_ids — config is authoritative.
-        // If config has no workspace_id, generate a stable SHA256 from workspaceRoot
-        // and unify ALL plans under it (plans must follow config, not vice versa).
+        // V3: consolidate workspace_ids — the committed file is authoritative.
+        // The canonical id comes from `resolveCanonicalWorkspaceIdSync` (committed
+        // file → legacy json → sha256 slice(0,12)). Unify ALL plans under it.
+        // DELIBERATELY does NOT write the id into `config` — the committed file is
+        // the identity, and writing a migration-local value to config reintroduces
+        // the collision class the per-project topology exists to eliminate.
         try {
-            const cfgStmt = this._db.prepare("SELECT value FROM config WHERE key = 'workspace_id'");
-            const hasWsId = cfgStmt.step();
-            cfgStmt.free();
-
-            let canonicalWsId = '';
-            if (hasWsId) {
-                canonicalWsId = String(this._db.prepare("SELECT value FROM config WHERE key = 'workspace_id'").getAsObject().value);
-            } else {
-                // Generate stable SHA256 from workspaceRoot (same as V15 new DB path)
-                canonicalWsId = crypto.createHash('sha256').update(this._workspaceRoot).digest('hex').slice(0, 16);
-                this._db.run(
-                    "INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)",
-                    ['workspace_id', canonicalWsId]
-                );
-            }
+            const canonicalWsId = this._getWorkspaceIdFallback();
 
             if (canonicalWsId) {
                 this._db.run(
                     "UPDATE plans SET workspace_id = ? WHERE workspace_id != ?",
                     [canonicalWsId, canonicalWsId]
                 );
-                console.log(`[KanbanDatabase] V3 migration: unified all plans under config workspace_id ${canonicalWsId}`);
+                console.log(`[KanbanDatabase] V3 migration: unified all plans under canonical workspace_id ${canonicalWsId}`);
             }
         } catch (e) {
             console.error('[KanbanDatabase] V3 migration workspace consolidation failed:', e);
         }
 
-        // V6: fix workspace_id mismatch — config is authoritative.
-        // If any plans have a different workspace_id than config, update plans to match config.
+        // V6: fix workspace_id mismatch — the committed file is authoritative.
+        // If any plans have a different workspace_id than the canonical id, update
+        // plans to match. Uses the canonical resolver, not the config row, because
+        // the config['workspace_id'] write was deleted in the per-project topology.
         try {
-            const cfgStmt = this._db.prepare("SELECT value FROM config WHERE key = 'workspace_id'");
-            const hasCfgWsId = cfgStmt.step();
-            const cfgWsId = hasCfgWsId ? String(cfgStmt.getAsObject().value) : null;
-            cfgStmt.free();
+            const canonicalWsId = this._getWorkspaceIdFallback();
 
-            if (cfgWsId) {
+            if (canonicalWsId) {
                 this._db.run(
                     "UPDATE plans SET workspace_id = ? WHERE workspace_id != ?",
-                    [cfgWsId, cfgWsId]
+                    [canonicalWsId, canonicalWsId]
                 );
-                console.log(`[KanbanDatabase] V6 migration: unified all plans under config workspace_id ${cfgWsId}`);
+                console.log(`[KanbanDatabase] V6 migration: unified all plans under canonical workspace_id ${canonicalWsId}`);
             }
         } catch (e) {
             console.error('[KanbanDatabase] V6 migration workspace_id fix failed:', e);
@@ -7679,13 +7763,34 @@ export class KanbanDatabase {
         // V20: Remove session_id UNIQUE constraint; add UNIQUE(plan_file, workspace_id).
         // Recreates plans and plan_events tables. Version-gated because destructive.
         // Wrapped in a transaction so any step failure rolls back safely.
+        //
+        // SCHEMA_TABLES_SQL creates plan_events with plan_id (post-V20 shape, no
+        // session_id column). On a fresh DB, steps 9-12 would fail at step 10
+        // (`e.session_id` — no such column) and roll back the entire migration,
+        // leaving the DB unstamped and causing a segfault on retry. Detect the
+        // post-V20 shape and skip the plan_events rebuild when it is already
+        // in the target shape.
         const v20 = await this.getMigrationVersion();
         if (v20 < 20) {
             try {
                 this._db.exec('BEGIN');
+
+                // Check whether plan_events already has the post-V20 shape.
+                // If session_id does not exist, the table was created by
+                // SCHEMA_TABLES_SQL and steps 9-12 must be skipped.
+                const peColCheck = this._db.prepare(`SELECT COUNT(*) as c FROM pragma_table_info('plan_events') WHERE name = 'session_id'`);
+                let planEventsHasSessionId = false;
+                try { if (peColCheck.step()) { planEventsHasSessionId = Number((peColCheck.getAsObject() as any).c) > 0; } } finally { peColCheck.free(); }
+
                 let step = 0;
                 for (const sql of MIGRATION_V20_SQL) {
                     step++;
+                    // Steps 14-19 rebuild plan_events from session_id → plan_id.
+                    // Skip them when plan_events was created with plan_id by
+                    // SCHEMA_TABLES_SQL (no session_id column).
+                    if (!planEventsHasSessionId && step >= 14 && step <= 19) {
+                        continue;
+                    }
                     try {
                         // No per-step success log. V20 now runs to completion on every
                         // freshly created DB (the INSERT below is column-explicit), so a
@@ -7794,24 +7899,19 @@ export class KanbanDatabase {
 
         // V22: Repair workspace_id fragmentation and invalid kanban_column values.
         // Some DBs have plans stored with multiple workspace_ids (timestamps, UUIDs)
-        // instead of the single config workspace_id. This causes the board query
+        // instead of the single canonical workspace_id. This causes the board query
         // (WHERE workspace_id = ?) to miss most plans, showing empty columns.
+        // Uses the canonical resolver (committed file), not the config row.
         const v22 = await this.getMigrationVersion();
         if (v22 < 22) {
             try {
                 this._db.exec('BEGIN');
 
-                // Step 1: Get the canonical workspace_id from config.
-                const wsStmt = this._db.prepare("SELECT value FROM config WHERE key = 'workspace_id' LIMIT 1");
-                let canonicalWsId = '';
-                try {
-                    if (wsStmt.step()) {
-                        canonicalWsId = String(wsStmt.getAsObject().value || '');
-                    }
-                } finally { wsStmt.free(); }
+                // Step 1: Get the canonical workspace_id from the committed file.
+                const canonicalWsId = this._getWorkspaceIdFallback();
 
                 if (!canonicalWsId) {
-                    console.warn('[KanbanDatabase] V22 migration: no workspace_id in config, skipping repair');
+                    console.warn('[KanbanDatabase] V22 migration: no canonical workspace_id, skipping repair');
                     this._db.exec('COMMIT');
                     await this.setMigrationVersion(22);
                 } else {
@@ -8964,6 +9064,16 @@ export class KanbanDatabase {
             await this.setMigrationVersion(70);
             console.log('[KanbanDatabase] V70 migration completed: ten unscoped tables scoped by workspace_id, unique constraints rebuilt');
         }
+
+        // V71: Collapse workspace_override into override_body (stop dual-writing).
+        const v71 = await this.getMigrationVersion();
+        if (v71 < 71) {
+            for (const sql of MIGRATION_V71_SQL) {
+                try { this._db.exec(sql); } catch (e) { console.warn('[KanbanDatabase] V71 migration step failed:', e); }
+            }
+            await this.setMigrationVersion(71);
+            console.log('[KanbanDatabase] V71 migration completed: workspace_override collapsed into override_body');
+        }
     }
 
     private async _backfillStagedCardsToMissions(): Promise<void> {
@@ -9242,13 +9352,8 @@ export class KanbanDatabase {
     private _getWorkspaceIdFallback(): string {
         if (this._workspaceRoot) {
             try {
-                const wsIdFile = path.join(this._workspaceRoot, '.switchboard', 'workspace-id');
-                if (fs.existsSync(wsIdFile)) {
-                    const content = fs.readFileSync(wsIdFile, 'utf8').trim();
-                    if (content) return content;
-                }
+                return resolveCanonicalWorkspaceIdSync(this._workspaceRoot).value;
             } catch { /* ignore */ }
-            return crypto.createHash('sha256').update(this._workspaceRoot).digest('hex').slice(0, 16);
         }
         return '';
     }
@@ -9270,7 +9375,7 @@ export class KanbanDatabase {
             wsId = await this.getDominantWorkspaceId();
         }
         if (!wsId && this._workspaceRoot) {
-            wsId = crypto.createHash('sha256').update(this._workspaceRoot).digest('hex').slice(0, 16);
+            wsId = this._getWorkspaceIdFallback();
         }
         if (!wsId) {
             wsId = 'default';
@@ -9278,16 +9383,14 @@ export class KanbanDatabase {
 
         // DELIBERATELY does not write wsId into `config`.
         //
-        // `wsId` above may be a migration-local fallback — a `sha256(root).slice(0,16)`
-        // hash minted right here when nothing else answered. Persisting that as the
-        // workspace's identity makes a fabricated value indistinguishable from a
-        // configured one, and it does not even agree with the canonical id: the
-        // committed `.switchboard/workspace-id` that `ensureWorkspaceIdentity()` writes
-        // is `slice(0, 12)` (WorkspaceIdentityService.ts:248), so the row and the file
-        // disagree by width for the same input. Measured consequence: the importer wrote
-        // rows under `c1d1bf576ad7` while scoped readers queried `c1d1bf576ad7d229`, and
-        // `getPlanByPlanFile(rel, workspaceId)` returned null for a plan that was on
-        // disk and in the table — inline subtask plans "written but did not import".
+        // The canonical id is the committed `.switchboard/workspace-id` file, resolved
+        // through `resolveCanonicalWorkspaceIdSync` (committed file → legacy json →
+        // sha256 slice(0,12)). Persisting a migration-local value to config
+        // reintroduces the collision class the per-project topology eliminates: the
+        // file and the row disagreeing on width (slice(0,12) vs slice(0,16)), which
+        // caused inline subtask plans to "write but not import" because
+        // `getPlanByPlanFile(rel, workspaceId)` returned null for a row that was on
+        // disk and in the table.
         //
         // A backfill needs *an* id to write into its own rows; it does not get to decide
         // the workspace's identity. `ensureWorkspaceIdentity()` owns that.
@@ -9295,11 +9398,12 @@ export class KanbanDatabase {
         // Step 0: drop the legacy global UNIQUE index on plans.session_id.
         //
         // V20 step 8 already does `DROP INDEX IF EXISTS idx_plans_session_id_unique`,
-        // but on a FRESH database V20's earlier steps abort (its plan_events copy joins
+        // but on a FRESH database V20 previously aborted (its plan_events copy joined
         // `e.session_id`, a column the modern SCHEMA_TABLES shape does not have), so the
-        // drop never runs and the index V19 created survives to head. Measured on a
-        // freshly created DB: `CREATE UNIQUE INDEX idx_plans_session_id_unique ON
-        // plans(session_id)` is still present.
+        // drop never ran and the index V19 created survived to head. V20 now detects the
+        // post-V20 plan_events shape and skips the rebuild, so the drop runs — but this
+        // manual drop remains as a belt-and-suspenders guard for any DB that ran V20
+        // before the fix.
         //
         // Per-workspace databases made that survivable — the collision space was one
         // project, and session_id is deprecated in favour of plan_id, so repeated or
@@ -9335,7 +9439,6 @@ export class KanbanDatabase {
             'board_move_requests',
             'job_runs',
             'plan_events',
-            'plan_events_v20',
             'stitch_projects',
             'stitch_screens',
         ];
@@ -9774,52 +9877,6 @@ FROM plans
         } catch (error) {
             try { this._db.exec('ROLLBACK'); } catch { /* ignore rollback failure */ }
             throw error;
-        }
-    }
-
-    private get _kanbanStateBackupPath(): string {
-        return path.join(this._workspaceRoot, '.switchboard', 'kanban-state-backup.json');
-    }
-
-    private async _writeKanbanStateBackup(): Promise<void> {
-        if (!this._workspaceRoot || !this._db) return;
-        try {
-            const switchboardDir = path.join(this._workspaceRoot, '.switchboard');
-            const stat = await fs.promises.stat(switchboardDir);
-            if (!stat.isDirectory()) return;
-        } catch {
-            return;
-        }
-        try {
-            const workspaceId = await this.getWorkspaceId();
-            if (!workspaceId) return;
-
-            const stmt = this._db.prepare(
-                `SELECT plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
-                        repo_scope, workspace_id, created_at, updated_at, last_action, source_type,
-                        brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
-                        clickup_task_id, linear_issue_id, feature_id, project, is_feature` +
-                ` FROM plans WHERE workspace_id = ? AND status = 'active'`,
-                [workspaceId]
-            );
-            const plans: any[] = [];
-            while (stmt.step()) {
-                plans.push(stmt.getAsObject());
-            }
-            stmt.free();
-
-            const backup = {
-                workspaceId,
-                exportedAt: new Date().toISOString(),
-                version: 1,
-                plans
-            };
-
-            const tmpPath = this._kanbanStateBackupPath + '.tmp';
-            await fs.promises.writeFile(tmpPath, JSON.stringify(backup, null, 2), 'utf8');
-            await fs.promises.rename(tmpPath, this._kanbanStateBackupPath);
-        } catch (error) {
-            console.error('[KanbanDatabase] Failed to write kanban state backup:', error);
         }
     }
 

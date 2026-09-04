@@ -3,8 +3,9 @@ import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import { BetterSqliteDriver } from './sqliteDriver';
-import { getGlobalDbPath, getGlobalStoreDir, ensureGlobalStoreDir, ensureDbPermissions } from './globalStore';
+import { getGlobalDbPath, ensureDbPermissions, resolveBoardDbPath, ensureBoardsDir } from './globalStore';
 import { SCHEMA_TABLES_SQL, SCHEMA_INDEX_STATEMENTS } from './KanbanDatabase';
+import { tryAcquireStoreLock } from './storeLock';
 
 export interface MergeResult {
     success: boolean;
@@ -22,7 +23,6 @@ export interface MergeSummary {
     results: MergeResult[];
 }
 
-const MERGE_LOCK_FILE = 'db-merge.lock';
 const MERGED_SOURCES_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS merged_source_databases (
     source_path TEXT PRIMARY KEY,
@@ -33,64 +33,6 @@ CREATE TABLE IF NOT EXISTS merged_source_databases (
     plans_count INTEGER NOT NULL DEFAULT 0
 );
 `;
-
-/**
- * Acquire file-based merge lock in ~/.switchboard.
- * Protects against concurrent processes attempting to merge the same database.
- */
-class MergeLock {
-    private lockPath: string;
-    private acquired = false;
-
-    constructor() {
-        ensureGlobalStoreDir();
-        this.lockPath = path.join(getGlobalStoreDir(), MERGE_LOCK_FILE);
-    }
-
-    public async acquire(timeoutMs = 15000): Promise<boolean> {
-        const startTime = Date.now();
-        while (Date.now() - startTime < timeoutMs) {
-            try {
-                const pidContent = `${process.pid}:${Date.now()}\n`;
-                await fs.promises.writeFile(this.lockPath, pidContent, { flag: 'wx' });
-                this.acquired = true;
-                return true;
-            } catch (err: any) {
-                if (err.code === 'EEXIST') {
-                    // Check if stale (older than 30s)
-                    try {
-                        const content = await fs.promises.readFile(this.lockPath, 'utf8');
-                        const parts = content.trim().split(':');
-                        const ts = parts[1] ? Number(parts[1]) : 0;
-                        if (Date.now() - ts > 30000) {
-                            // Lock is stale, remove and retry
-                            await fs.promises.unlink(this.lockPath);
-                            continue;
-                        }
-                    } catch {
-                        // Retry on read error
-                    }
-                    await new Promise(r => setTimeout(r, 200));
-                } else {
-                    throw err;
-                }
-            }
-        }
-        return false;
-    }
-
-    public async release(): Promise<void> {
-        if (!this.acquired) return;
-        try {
-            if (fs.existsSync(this.lockPath)) {
-                await fs.promises.unlink(this.lockPath);
-            }
-        } catch {
-            // Best-effort release
-        }
-        this.acquired = false;
-    }
-}
 
 /**
  * Helper to ensure a database has all tables and columns from the head schema.
@@ -111,7 +53,7 @@ function ensureHeadSchema(driver: BetterSqliteDriver): void {
  * Sync legacy / unknown columns from source table to target table.
  * If source has columns missing in target, ALTER TABLE ADD COLUMN on target.
  */
-function syncTableColumns(sourceDriver: BetterSqliteDriver, targetDriver: BetterSqliteDriver, tableName: string): void {
+export function syncTableColumns(sourceDriver: BetterSqliteDriver, targetDriver: BetterSqliteDriver, tableName: string): void {
     try {
         const sourceCols = sourceDriver.all<{ name: string; type: string; dflt_value: string | null }>(
             `PRAGMA table_info(${tableName})`
@@ -228,10 +170,13 @@ export async function mergeDatabase(
         };
     }
 
-    const lock = new MergeLock();
-    const locked = await lock.acquire();
-    if (!locked) {
-        throw new Error(`Failed to acquire merge lock for ${resolvedSource}`);
+    // Use the shared store lock (keyed on the resolved target store path) so a
+    // merge cannot interleave with a scheduled backup or rotation. Skip-rather-
+    // than-queue: a merge that loses the lock throws and the on-open migration
+    // caller retries next open.
+    const acquire = await tryAcquireStoreLock({ storePath: resolvedTarget });
+    if (!acquire.acquired) {
+        throw new Error(`Failed to acquire store lock for merge into ${resolvedTarget}: ${acquire.skip.reason}`);
     }
 
     let sourceDriver: BetterSqliteDriver | null = null;
@@ -596,13 +541,14 @@ export async function mergeDatabase(
         if (targetDriver) {
             try { targetDriver.close(); } catch {}
         }
-        await lock.release();
+        await acquire.release();
     }
 }
 
 /**
  * Repeatable source discovery scan:
- * Checks candidate directories for unmigrated kanban.db files and merges them.
+ * Checks candidate directories for unmigrated kanban.db files and relocates them
+ * to per-project board files (1:1 relocation, not N-to-1 merge).
  */
 export async function discoverAndMergeDatabases(candidateRoots: string[]): Promise<MergeSummary> {
     const summary: MergeSummary = {
@@ -623,13 +569,24 @@ export async function discoverAndMergeDatabases(candidateRoots: string[]): Promi
         if (fs.existsSync(candidateDb)) {
             summary.sourcesFound++;
             try {
-                const res = await mergeDatabase(candidateDb, resolvedRoot);
+                // Resolve the canonical workspace id for this root
+                const { resolveCanonicalWorkspaceIdSync } = require('./WorkspaceIdentityService');
+                const wsId = resolveCanonicalWorkspaceIdSync(resolvedRoot).value;
+                const res = await relocateBoardDatabase(candidateDb, resolvedRoot, wsId);
                 if (res.success) {
                     summary.sourcesMerged++;
                 }
-                summary.results.push(res);
+                summary.results.push({
+                    success: res.success,
+                    sourceDbPath: res.sourceDbPath,
+                    sourceWorkspaceId: wsId,
+                    targetWorkspaceId: wsId,
+                    disambiguated: false,
+                    rowsMerged: res.rowsRelocated,
+                    error: res.error,
+                });
             } catch (e: any) {
-                console.error(`[dbMerge] Failed to merge database at ${candidateDb}:`, e);
+                console.error(`[dbMerge] Failed to relocate database at ${candidateDb}:`, e);
                 summary.results.push({
                     success: false,
                     sourceDbPath: candidateDb,
@@ -644,4 +601,519 @@ export async function discoverAndMergeDatabases(candidateRoots: string[]): Promi
     }
 
     return summary;
+}
+
+// ── Per-project relocation and split ──────────────────────────────────────
+
+export interface RelocateResult {
+    success: boolean;
+    sourceDbPath: string;
+    targetDbPath: string;
+    workspaceId: string;
+    rowsRelocated: Record<string, number>;
+    skipped?: boolean;
+    error?: string;
+}
+
+/**
+ * 1:1 relocation of a per-repo `kanban.db` to the per-project board file.
+ *
+ * Idempotent, resumable and non-destructive:
+ * - If the source is already archived as `.migrated.bak`, the relocation is a no-op.
+ * - Copies the source to the target, runs `PRAGMA integrity_check` on both.
+ * - Archives the source as `kanban.db.migrated.bak` (never unlink without backup).
+ * - A crash at any point leaves both files readable and the operation re-runnable.
+ *
+ * This replaces the N-to-1 `mergeDatabase` for the per-project topology. The
+ * source database already belongs to exactly one workspace, so there is no id
+ * remapping, no collision detection, and no cross-workspace write — just a
+ * verified copy.
+ */
+export async function relocateBoardDatabase(
+    sourceDbPath: string,
+    workspaceRoot: string,
+    workspaceId: string
+): Promise<RelocateResult> {
+    const resolvedSource = path.resolve(sourceDbPath);
+    const resolvedTarget = path.resolve(resolveBoardDbPath(workspaceId).path);
+    const bakPath = `${resolvedSource}.migrated.bak`;
+
+    // Resumable: if the source is already archived, this is a no-op
+    if (!fs.existsSync(resolvedSource) && fs.existsSync(bakPath)) {
+        return {
+            success: true,
+            sourceDbPath: resolvedSource,
+            targetDbPath: resolvedTarget,
+            workspaceId,
+            rowsRelocated: {},
+            skipped: true,
+        };
+    }
+
+    if (!fs.existsSync(resolvedSource)) {
+        return {
+            success: true,
+            sourceDbPath: resolvedSource,
+            targetDbPath: resolvedTarget,
+            workspaceId,
+            rowsRelocated: {},
+            skipped: true,
+        };
+    }
+
+    const stat = await fs.promises.stat(resolvedSource);
+    if (stat.size === 0) {
+        // Zero-byte stray DB: archive directly
+        await fs.promises.rename(resolvedSource, bakPath);
+        return {
+            success: true,
+            sourceDbPath: resolvedSource,
+            targetDbPath: resolvedTarget,
+            workspaceId,
+            rowsRelocated: {},
+            skipped: true,
+        };
+    }
+
+    // If target already exists and source is not yet archived, the target may
+    // have been written by a previous run that crashed before archiving. In that
+    // case, archive the source and report success (the target already has the data).
+    if (fs.existsSync(resolvedTarget)) {
+        const targetStat = await fs.promises.stat(resolvedTarget);
+        if (targetStat.size > 0) {
+            // Target already populated — just archive the source
+            if (!fs.existsSync(bakPath)) {
+                await fs.promises.copyFile(resolvedSource, bakPath);
+            }
+            await fs.promises.unlink(resolvedSource).catch(() => {});
+            // Clean up WAL/SHM sidecars
+            for (const ext of ['-wal', '-shm']) {
+                if (fs.existsSync(`${resolvedSource}${ext}`)) {
+                    try { await fs.promises.unlink(`${resolvedSource}${ext}`); } catch {}
+                }
+            }
+            console.log(`[dbMerge] Relocation: target already exists at ${resolvedTarget}, archived source to ${bakPath}`);
+            return {
+                success: true,
+                sourceDbPath: resolvedSource,
+                targetDbPath: resolvedTarget,
+                workspaceId,
+                rowsRelocated: {},
+                skipped: true,
+            };
+        }
+    }
+
+    // Acquire the store lock keyed on the target board path
+    const acquire = await tryAcquireStoreLock({ storePath: resolvedTarget });
+    if (!acquire.acquired) {
+        throw new Error(`Failed to acquire store lock for relocation to ${resolvedTarget}: ${acquire.skip.reason}`);
+    }
+
+    let sourceDriver: BetterSqliteDriver | null = null;
+    let targetDriver: BetterSqliteDriver | null = null;
+
+    try {
+        // Open source and verify integrity
+        sourceDriver = new BetterSqliteDriver(resolvedSource, { fileMustExist: true });
+        const sourceIntegrity = sourceDriver.get<{ integrity_check?: string }>('PRAGMA integrity_check');
+        if (sourceIntegrity?.integrity_check !== 'ok') {
+            throw new Error(`Source database failed integrity check: ${sourceIntegrity?.integrity_check}`);
+        }
+
+        // Migrate source schema to head
+        ensureHeadSchema(sourceDriver);
+
+        // Count rows for reporting
+        const rowsRelocated: Record<string, number> = {};
+        const countTables = ['plans', 'projects', 'worktrees', 'activity_log', 'job_runs',
+            'job_instructions', 'board_move_requests', 'plan_events', 'plan_dependencies',
+            'missions', 'mission_members', 'mission_milestones', 'project_config',
+            'kanban_meta', 'stitch_projects', 'stitch_screens', 'imported_docs',
+            'import_sync_meta', 'control_plane', 'config'];
+        for (const tbl of countTables) {
+            try {
+                const row = sourceDriver.get<{ cnt: number }>(`SELECT COUNT(*) as cnt FROM ${tbl}`);
+                rowsRelocated[tbl] = row?.cnt ?? 0;
+            } catch { /* table may not exist */ }
+        }
+
+        // Close source before copying (release the file handle)
+        sourceDriver.close();
+        sourceDriver = null;
+
+        // Ensure the boards directory exists
+        ensureBoardsDir();
+
+        // Copy source to target
+        await fs.promises.copyFile(resolvedSource, resolvedTarget);
+        ensureDbPermissions(resolvedTarget);
+
+        // Verify target integrity
+        targetDriver = new BetterSqliteDriver(resolvedTarget, { fileMustExist: true });
+        const targetIntegrity = targetDriver.get<{ integrity_check?: string }>('PRAGMA integrity_check');
+        if (targetIntegrity?.integrity_check !== 'ok') {
+            throw new Error(`Target database failed integrity check after copy: ${targetIntegrity?.integrity_check}`);
+        }
+
+        // Close target
+        targetDriver.close();
+        targetDriver = null;
+
+        // Archive source as .migrated.bak (never unlink without backup)
+        if (!fs.existsSync(bakPath)) {
+            await fs.promises.copyFile(resolvedSource, bakPath);
+        }
+        await fs.promises.unlink(resolvedSource);
+
+        // Clean up WAL/SHM sidecars
+        for (const ext of ['-wal', '-shm']) {
+            if (fs.existsSync(`${resolvedSource}${ext}`)) {
+                try { await fs.promises.unlink(`${resolvedSource}${ext}`); } catch {}
+            }
+        }
+
+        console.log(`[dbMerge] Relocated ${resolvedSource} to ${resolvedTarget}. Archived to ${bakPath}`);
+
+        return {
+            success: true,
+            sourceDbPath: resolvedSource,
+            targetDbPath: resolvedTarget,
+            workspaceId,
+            rowsRelocated,
+        };
+    } finally {
+        if (sourceDriver) {
+            try { sourceDriver.close(); } catch {}
+        }
+        if (targetDriver) {
+            try { targetDriver.close(); } catch {}
+        }
+        await acquire.release();
+    }
+}
+
+// ── Split of a consolidated global file ───────────────────────────────────
+
+/**
+ * Machine-global config keys: copied to every produced board file.
+ * Everything else in `config` is treated as per-workspace and duplicated.
+ */
+const MACHINE_GLOBAL_CONFIG_KEYS = new Set([
+    'workspace_mappings',
+]);
+
+/**
+ * Once-per-workspace migration guards that must be CLEARED on every produced
+ * board file so each workspace re-runs its own backfill rather than inheriting
+ * a flag set by another project.
+ */
+const MIGRATION_GUARD_KEYS = new Set([
+    'kanban.complexityBackfillV1Done',
+    'import_registry_migrated',
+    'ds_legacy_migration_done',
+]);
+
+export interface SplitResult {
+    success: boolean;
+    globalDbPath: string;
+    workspacesSplit: number;
+    boardFiles: string[];
+    unknownWorkspaceIds: string[];
+    skipped?: boolean;
+    error?: string;
+}
+
+/**
+ * Split a consolidated global database (population (b): installs that ran
+ * `8258ce4b`) into per-project board files.
+ *
+ * For each distinct `workspace_id` in the global file, extract that workspace's
+ * rows into its own board file at `~/.switchboard/boards/<workspace-id>.db`.
+ *
+ * - `config` rows are unattributable (no `workspace_id` column). Machine-global
+ *   keys are copied to every board file; per-workspace keys are duplicated to
+ *   every board file (the shared file's single value goes to all).
+ * - The three once-per-workspace migration guards are CLEARED on every produced
+ *   board file so no project inherits another's flag.
+ * - A row whose `workspace_id` matches no known workspace is left in place and
+ *   reported, never discarded.
+ * - The global file is archived as `switchboard.db.migrated.bak`, never unlinked.
+ * - Reuses the runtime column enumeration (`PRAGMA table_info`) and the existing
+ *   store lock.
+ */
+export async function splitConsolidatedDatabase(
+    globalDbPath?: string,
+    knownWorkspaceIds?: string[]
+): Promise<SplitResult> {
+    const resolvedGlobal = path.resolve(globalDbPath || getGlobalDbPath());
+
+    if (!fs.existsSync(resolvedGlobal)) {
+        return {
+            success: true,
+            globalDbPath: resolvedGlobal,
+            workspacesSplit: 0,
+            boardFiles: [],
+            unknownWorkspaceIds: [],
+            skipped: true,
+        };
+    }
+
+    const stat = await fs.promises.stat(resolvedGlobal);
+    if (stat.size === 0) {
+        return {
+            success: true,
+            globalDbPath: resolvedGlobal,
+            workspacesSplit: 0,
+            boardFiles: [],
+            unknownWorkspaceIds: [],
+        };
+    }
+
+    const bakPath = `${resolvedGlobal}.migrated.bak`;
+
+    // Resumable: if the global file is already archived, this is a no-op
+    if (!fs.existsSync(resolvedGlobal) && fs.existsSync(bakPath)) {
+        return {
+            success: true,
+            globalDbPath: resolvedGlobal,
+            workspacesSplit: 0,
+            boardFiles: [],
+            unknownWorkspaceIds: [],
+        };
+    }
+
+    // Acquire the store lock keyed on the global file
+    const acquire = await tryAcquireStoreLock({ storePath: resolvedGlobal });
+    if (!acquire.acquired) {
+        throw new Error(`Failed to acquire store lock for split of ${resolvedGlobal}: ${acquire.skip.reason}`);
+    }
+
+    let globalDriver: BetterSqliteDriver | null = null;
+
+    try {
+        globalDriver = new BetterSqliteDriver(resolvedGlobal, { fileMustExist: true });
+        const integrity = globalDriver.get<{ integrity_check?: string }>('PRAGMA integrity_check');
+        if (integrity?.integrity_check !== 'ok') {
+            throw new Error(`Global database failed integrity check: ${integrity?.integrity_check}`);
+        }
+
+        // Ensure head schema
+        ensureHeadSchema(globalDriver);
+
+        // Discover all distinct workspace_ids in the plans table
+        const wsRows = globalDriver.all<{ workspace_id: string }>(
+            "SELECT DISTINCT workspace_id FROM plans WHERE workspace_id IS NOT NULL AND workspace_id != ''"
+        );
+        const workspaceIds = wsRows.map(r => r.workspace_id);
+
+        // Also check workspace_ids in other scoped tables
+        const scopedTables = ['projects', 'worktrees', 'activity_log', 'job_runs',
+            'job_instructions', 'board_move_requests', 'plan_events',
+            'missions', 'mission_milestones', 'kanban_meta', 'stitch_projects',
+            'stitch_screens', 'imported_docs', 'import_sync_meta'];
+        for (const tbl of scopedTables) {
+            try {
+                const rows = globalDriver.all<{ workspace_id: string }>(
+                    `SELECT DISTINCT workspace_id FROM ${tbl} WHERE workspace_id IS NOT NULL AND workspace_id != ''`
+                );
+                for (const r of rows) {
+                    if (!workspaceIds.includes(r.workspace_id)) {
+                        workspaceIds.push(r.workspace_id);
+                    }
+                }
+            } catch { /* table may not exist */ }
+        }
+
+        const knownSet = new Set(knownWorkspaceIds || []);
+        const unknownWorkspaceIds: string[] = [];
+        const boardFiles: string[] = [];
+
+        // Read all config rows (unattributable — applied per the per-key rule)
+        let allConfigRows: any[] = [];
+        try {
+            allConfigRows = globalDriver.all<any>('SELECT * FROM config');
+        } catch { /* config may not exist */ }
+
+        for (const wsId of workspaceIds) {
+            // Validate the workspace id for path safety
+            if (!/^[A-Za-z0-9_-]{8,64}$/.test(wsId)) {
+                console.warn(`[dbMerge] Split: workspace_id '${wsId}' is not path-safe, skipping`);
+                unknownWorkspaceIds.push(wsId);
+                continue;
+            }
+
+            // If knownWorkspaceIds was provided and this id is not in it, report and leave in place
+            if (knownSet.size > 0 && !knownSet.has(wsId)) {
+                console.warn(`[dbMerge] Split: workspace_id '${wsId}' matches no known workspace, leaving in place`);
+                unknownWorkspaceIds.push(wsId);
+                continue;
+            }
+
+            const boardPath = path.resolve(resolveBoardDbPath(wsId).path);
+            ensureBoardsDir();
+
+            // Create the board file with head schema
+            const boardDriver = new BetterSqliteDriver(boardPath, { fileMustExist: false });
+            ensureHeadSchema(boardDriver);
+
+            try {
+                // Copy all rows for this workspace_id from each scoped table
+                const copyTables = [
+                    'plans', 'projects', 'worktrees', 'activity_log', 'job_runs',
+                    'job_instructions', 'board_move_requests', 'plan_events',
+                    'missions', 'mission_milestones', 'kanban_meta',
+                    'stitch_projects', 'stitch_screens', 'imported_docs',
+                    'import_sync_meta',
+                ];
+
+                for (const tbl of copyTables) {
+                    try {
+                        // Sync columns from global to board
+                        syncTableColumns(globalDriver!, boardDriver, tbl);
+
+                        const rows = globalDriver!.all<any>(
+                            `SELECT * FROM ${tbl} WHERE workspace_id = ?`,
+                            [wsId]
+                        );
+                        for (const row of rows) {
+                            const cols = Object.keys(row);
+                            const placeholders = cols.map(() => '?').join(', ');
+                            const colNames = cols.join(', ');
+                            boardDriver.run(
+                                `INSERT OR REPLACE INTO ${tbl} (${colNames}) VALUES (${placeholders})`,
+                                cols.map(c => row[c])
+                            );
+                        }
+                    } catch (e) {
+                        console.warn(`[dbMerge] Split: table ${tbl} copy skipped:`, e);
+                    }
+                }
+
+                // Copy unscoped tables (plan_dependencies, mission_members)
+                for (const tbl of ['plan_dependencies', 'mission_members']) {
+                    try {
+                        syncTableColumns(globalDriver!, boardDriver, tbl);
+                        const rows = globalDriver!.all<any>(`SELECT * FROM ${tbl}`);
+                        for (const row of rows) {
+                            const cols = Object.keys(row);
+                            const placeholders = cols.map(() => '?').join(', ');
+                            const colNames = cols.join(', ');
+                            boardDriver.run(
+                                `INSERT OR REPLACE INTO ${tbl} (${colNames}) VALUES (${placeholders})`,
+                                cols.map(c => row[c])
+                            );
+                        }
+                    } catch (e) {
+                        console.warn(`[dbMerge] Split: table ${tbl} copy skipped:`, e);
+                    }
+                }
+
+                // Copy project_config (unattributable — copy all)
+                try {
+                    syncTableColumns(globalDriver!, boardDriver, 'project_config');
+                    const pcRows = globalDriver!.all<any>('SELECT * FROM project_config');
+                    for (const row of pcRows) {
+                        const cols = Object.keys(row);
+                        const placeholders = cols.map(() => '?').join(', ');
+                        const colNames = cols.join(', ');
+                        boardDriver.run(
+                            `INSERT OR REPLACE INTO project_config (${colNames}) VALUES (${placeholders})`,
+                            cols.map(c => row[c])
+                        );
+                    }
+                } catch { /* ignore */ }
+
+                // Apply per-key config rule
+                try {
+                    syncTableColumns(globalDriver!, boardDriver, 'config');
+                    for (const cfgRow of allConfigRows) {
+                        // Skip migration guards — they are cleared on every board file
+                        if (MIGRATION_GUARD_KEYS.has(cfgRow.key)) continue;
+                        // Skip workspace_id — the committed file is the identity now
+                        if (cfgRow.key === 'workspace_id') continue;
+                        // Machine-global keys and per-workspace keys are both copied
+                        boardDriver.run(
+                            'INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)',
+                            [cfgRow.key, cfgRow.value]
+                        );
+                    }
+                } catch { /* ignore */ }
+
+                // Copy control_plane rows for this workspace
+                try {
+                    syncTableColumns(globalDriver!, boardDriver, 'control_plane');
+                    const cpRows = globalDriver!.all<any>(
+                        'SELECT * FROM control_plane WHERE workspace_id = ?',
+                        [wsId]
+                    );
+                    for (const row of cpRows) {
+                        const cols = Object.keys(row);
+                        const placeholders = cols.map(() => '?').join(', ');
+                        const colNames = cols.join(', ');
+                        boardDriver.run(
+                            `INSERT OR REPLACE INTO control_plane (${colNames}) VALUES (${placeholders})`,
+                            cols.map(c => row[c])
+                        );
+                    }
+                } catch { /* control_plane may not have workspace_id */ }
+
+                ensureDbPermissions(boardPath);
+                boardDriver.close();
+                boardFiles.push(boardPath);
+                console.log(`[dbMerge] Split: created board file ${boardPath} for workspace ${wsId}`);
+            } catch (e) {
+                try { boardDriver.close(); } catch {}
+                throw e;
+            }
+        }
+
+        // Archive the global file
+        if (!fs.existsSync(bakPath)) {
+            await fs.promises.copyFile(resolvedGlobal, bakPath);
+        }
+        await fs.promises.unlink(resolvedGlobal);
+        for (const ext of ['-wal', '-shm']) {
+            if (fs.existsSync(`${resolvedGlobal}${ext}`)) {
+                try { await fs.promises.unlink(`${resolvedGlobal}${ext}`); } catch {}
+            }
+        }
+
+        console.log(`[dbMerge] Split complete: ${boardFiles.length} board files created. Global archived to ${bakPath}`);
+
+        return {
+            success: true,
+            globalDbPath: resolvedGlobal,
+            workspacesSplit: boardFiles.length,
+            boardFiles,
+            unknownWorkspaceIds,
+        };
+    } catch (e: any) {
+        return {
+            success: false,
+            globalDbPath: resolvedGlobal,
+            workspacesSplit: 0,
+            boardFiles: [],
+            unknownWorkspaceIds: [],
+            error: e?.message || String(e),
+        };
+    } finally {
+        if (globalDriver) {
+            try { globalDriver.close(); } catch {}
+        }
+        await acquire.release();
+    }
+}
+
+/**
+ * Detect whether a consolidated global database exists at the legacy path.
+ * Used by composition roots to decide whether to run the split.
+ */
+export function consolidatedGlobalDbExists(): boolean {
+    try {
+        const globalPath = getGlobalDbPath();
+        return fs.existsSync(globalPath) && fs.statSync(globalPath).size > 0;
+    } catch {
+        return false;
+    }
 }

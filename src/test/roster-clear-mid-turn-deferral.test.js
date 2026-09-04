@@ -29,6 +29,13 @@ const assert = require('assert');
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const read = (rel) => fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8');
 
+/** Extract a protocol body from bundledProtocols.ts (the files were retired from disk). */
+const _bundledSrc = read('src/services/bundledProtocols.ts');
+function readBundledProtocol(name) {
+    const m = _bundledSrc.match(new RegExp(`"${name}":\\s*\\{[^}]*"body":\\s*"((?:[^"\\\\]|\\\\.)*)"`, 's'));
+    return m ? JSON.parse('"' + m[1] + '"') : '';
+}
+
 const TVP = read('src/services/TaskViewerProvider.ts');
 const BOOT = read('src/standalone/bootstrap.ts');
 const WCR_SRC = read('src/services/workContextResolver.ts');
@@ -852,25 +859,25 @@ test('ptySendPrompt declares an `origin` string field in the verb schema', () =>
 });
 
 test('the agent-facing HTTP contract documents `origin` on ptySendPrompt', () => {
-    for (const rel of [
-        '.agents/skills/switchboard-orchestration/SKILL.md',
-        '.agents/protocols/switchboard-mission-control-http/SKILL.md',
-    ]) {
-        const doc = read(rel);
+    const docs = [
+        ['.agents/skills/switchboard-orchestration/SKILL.md', read('.agents/skills/switchboard-orchestration/SKILL.md')],
+        ['switchboard-mission-control-http (bundled)', readBundledProtocol('switchboard-mission-control-http')],
+    ];
+    for (const [label, doc] of docs) {
         // Assert origin is IN the payload-shape cell, not that the cell equals a
         // frozen field list. The exhaustive pin this replaces went red the moment
         // ptySendPrompt gained `kind`/`machineOrigin` — a doc row correctly
         // gaining a field is not an origin regression, and a gate that cannot
         // tell those apart trains people to edit the test.
         const shapeCell = /ptySendPrompt`? \| `\{([^`]*)\}`/.exec(doc);
-        assert.ok(shapeCell, `${rel} must document a ptySendPrompt payload shape`);
+        assert.ok(shapeCell, `${label} must document a ptySendPrompt payload shape`);
         assert.ok(
             /\borigin\?/.test(shapeCell[1]) && /\bdispatch\?/.test(shapeCell[1]),
-            `${rel} must list origin in the ptySendPrompt payload shape`
+            `${label} must list origin in the ptySendPrompt payload shape`
         );
         assert.ok(
             /Pass `origin:/.test(doc),
-            `${rel} must tell a dispatching seat to pass its own name as origin`
+            `${label} must tell a dispatching seat to pass its own name as origin`
         );
     }
 });

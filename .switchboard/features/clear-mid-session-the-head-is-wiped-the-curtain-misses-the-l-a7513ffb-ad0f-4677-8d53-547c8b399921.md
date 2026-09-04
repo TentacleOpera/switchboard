@@ -77,7 +77,6 @@ The open mid-session clear defects. A roster clear still clears the team head; t
 - [ ] [A Team Seat Is Cleared on Every Dispatch, Because the Team Branch Never Compares the Work Context](../plans/a-team-seat-is-cleared-on-every-dispatch-because-the-team-branch-never-compares-the-work-context.md) — **CODE REVIEWED** — ID: a29bed0f-2fec-4117-8576-ba9fcc2556dc
 - [ ] [A Lead's Completion Post Must Clear the Seat — `completed_at` Is a Latch That Is Never Reset](../plans/a-lead-completion-post-must-clear-the-seat-completed-at-is-a-latch-that-is-never-reset.md) — **CODE REVIEWED** — ID: 711fa15e-0fc0-4e9f-bf6d-28c0169dde13
 - [ ] [Completion Has No Round or Feature Scope, So the Lead Clears Seats One at a Time — or Not at All](../plans/completion-has-no-round-or-feature-scope-so-the-lead-clears-seats-one-at-a-time-or-not-at-all.md) — **CODE REVIEWED** — ID: 39e9f9f6-d83e-4f8d-bd35-85fb130c8a4e
-- [ ] [The After-Clear Orders Delivery Bypasses Clear Readiness](../plans/the-after-clear-orders-delivery-bypasses-clear-readiness.md) — **CREATED** — ID: 948968f2-a1ce-4250-9b7a-c128b26c3907
 <!-- END SUBTASKS -->
 
 ## Implementation Summary

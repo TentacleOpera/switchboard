@@ -19,7 +19,7 @@ of truth; the UI is just one view of it.
 > **Behavior vs. invocation.** This skill is the *invocation* authority (endpoints, verbs,
 > payload fields). For *behavior* contracts — how the system behaves (cards move on coding
 > start, completion = plan-file mtime advance, plan files are write-once-at-the-end, subtask
-> column exclusion) — consult **`.agents/protocols/switchboard-contracts/SKILL.md`**. Never consult that skill
+> column exclusion) — consult the **`switchboard-contracts`** protocol (`switchboard api GET /protocol/switchboard-contracts`). Never consult that skill
 > for invocation; never consult this skill for behavior conventions.
 
 ---

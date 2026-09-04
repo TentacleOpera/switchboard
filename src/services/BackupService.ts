@@ -4,6 +4,10 @@ import * as os from 'os';
 import * as crypto from 'crypto';
 import { KanbanDatabase } from './KanbanDatabase';
 import { BetterSqliteDriver } from './sqliteDriver';
+import { resolveBoardDbPath } from './globalStore';
+import { resolveCanonicalWorkspaceIdSync } from './WorkspaceIdentityService';
+import { tryAcquireStoreLock } from './storeLock';
+import { readScheduleState, writeLastRun, writeLastSkip, LastRunRecord } from './scheduleState';
 
 export interface BackupPlanEntry {
     relativePath: string;
@@ -42,6 +46,14 @@ export interface BackupServiceOptions {
     backupDir?: string;
     maxHourly?: number;
     maxDaily?: number;
+    /**
+     * Called after a successful restore, before the database is reopened.
+     * The extension host and standalone host wire this to BroadcastHub so
+     * every connected client is told to reload rather than continuing against
+     * a swapped-out file — "a client holding a stale handle across a restore
+     * is the clobber bug again, in a new costume".
+     */
+    onDatabaseRestored?: (info: { restoredBackupId: string; workspaceRoot: string }) => void;
 }
 
 export class BackupService {
@@ -51,6 +63,7 @@ export class BackupService {
     private _hourlyTimer: NodeJS.Timeout | null = null;
     private _maxHourly: number;
     private _maxDaily: number;
+    private _onDatabaseRestored?: (info: { restoredBackupId: string; workspaceRoot: string }) => void;
     private _lock: Promise<void> = Promise.resolve();
 
     public static getInstance(options?: BackupServiceOptions): BackupService {
@@ -65,6 +78,7 @@ export class BackupService {
         this._backupDir = options?.backupDir || BackupService.resolveDefaultBackupDir();
         this._maxHourly = options?.maxHourly ?? 24;
         this._maxDaily = options?.maxDaily ?? 7;
+        this._onDatabaseRestored = options?.onDatabaseRestored;
     }
 
     public static resolveDefaultBackupDir(): string {
@@ -76,6 +90,15 @@ export class BackupService {
 
     public setWorkspaceRoot(workspaceRoot: string): void {
         this._workspaceRoot = workspaceRoot;
+    }
+
+    /**
+     * Wire the restore-notification callback after construction. Both
+     * composition roots call this to connect BroadcastHub so connected
+     * clients are told to reload after a restore.
+     */
+    public setOnDatabaseRestored(callback: (info: { restoredBackupId: string; workspaceRoot: string }) => void): void {
+        this._onDatabaseRestored = callback;
     }
 
     public getBackupDir(): string {
@@ -111,16 +134,84 @@ export class BackupService {
 
     /**
      * Start scheduled hourly backups.
+     *
+     * The timer is per-process; the schedule is per-machine. On each tick the
+     * service acquires the store lock (skip-rather-than-queue) and checks the
+     * last-run timestamp persisted in the store. If another host already ran a
+     * backup within the interval, this tick records a schedule-skip and does
+     * nothing — so N windows produce one backup per interval, not N.
      */
     public startScheduledBackups(intervalMs: number = 3600000): void {
         if (this._hourlyTimer) return;
+        this._scheduledIntervalMs = intervalMs;
         this._hourlyTimer = setInterval(() => {
-            void this.createBackup({ type: 'scheduled', reason: 'hourly' }).catch((err) => {
+            void this._runScheduledBackup(intervalMs).catch((err) => {
                 console.error('[BackupService] Scheduled backup error:', err);
             });
         }, intervalMs);
         // Don't keep event loop alive for timer
         this._hourlyTimer.unref();
+    }
+
+    private _scheduledIntervalMs: number = 3600000;
+
+    /**
+     * One scheduled tick. Acquires the store lock, honours the per-machine
+     * schedule from persisted last-run state, and records every skip with a
+     * reason on the skip surface.
+     */
+    private async _runScheduledBackup(intervalMs: number): Promise<void> {
+        const storePath = this._resolveStorePath();
+        const acquire = await tryAcquireStoreLock({ storePath });
+        if (!acquire.acquired) {
+            const db = this._openDbForState();
+            await writeLastSkip(db, 'backup', { atMs: Date.now(), reason: acquire.skip.reason });
+            console.log(`[BackupService] Scheduled backup skipped: ${acquire.skip.reason}`);
+            return;
+        }
+        try {
+            const db = this._openDbForState();
+            const state = await readScheduleState(db, 'backup');
+            const lastRunAt = state.lastRun?.atMs ?? 0;
+            // Honour the per-machine interval: if another host ran a backup
+            // recently, this tick is a schedule-skip, not a new backup.
+            if (lastRunAt && Date.now() - lastRunAt < intervalMs * 0.9) {
+                await writeLastSkip(db, 'backup', {
+                    atMs: Date.now(),
+                    reason: `another host ran backup at ${new Date(lastRunAt).toISOString()} (within ${intervalMs}ms interval)`,
+                });
+                console.log(`[BackupService] Scheduled backup skipped: recent last-run at ${new Date(lastRunAt).toISOString()}`);
+                return;
+            }
+            try {
+                const info = await this._executeCreateBackup({ type: 'scheduled', reason: 'hourly' });
+                const record: LastRunRecord = { atMs: Date.now(), ok: true, detail: info.id };
+                await writeLastRun(db, 'backup', record);
+            } catch (err: any) {
+                const record: LastRunRecord = { atMs: Date.now(), ok: false, detail: err?.message || String(err) };
+                await writeLastRun(db, 'backup', record);
+                throw err;
+            }
+        } finally {
+            await acquire.release();
+        }
+    }
+
+    private _resolveStorePath(): string {
+        try {
+            const wsId = resolveCanonicalWorkspaceIdSync(this._workspaceRoot).value;
+            return resolveBoardDbPath(wsId).path;
+        } catch {
+            return path.join(this._workspaceRoot, '.switchboard', 'kanban.db');
+        }
+    }
+
+    private _openDbForState(): KanbanDatabase | null {
+        try {
+            return KanbanDatabase.forWorkspace(this._workspaceRoot);
+        } catch {
+            return null;
+        }
     }
 
     public stopScheduledBackups(): void {
@@ -141,19 +232,44 @@ export class BackupService {
 
     /**
      * Create a backup set.
+     *
+     * Takes the store lock so a manual / shutdown / pre-restore backup cannot
+     * interleave with a scheduled rotation on another window. If the lock is
+     * held, the backup is skipped and the skip is recorded on the skip surface
+     * — a manual backup that loses to a rotation is visible to the user, who
+     * can retry, rather than silently racing copy-verify-delete.
      */
     public async createBackup(options?: {
         reason?: string;
         type?: 'scheduled' | 'shutdown' | 'pre-restore' | 'manual';
         workspaceRoot?: string;
     }): Promise<BackupInfo> {
-        // Queue under lock
+        // Queue under in-process lock first so two calls in the same process
+        // do not race each other for the store lock.
         const prevLock = this._lock;
         let releaseLock: () => void = () => {};
         this._lock = new Promise<void>((resolve) => { releaseLock = resolve; });
         try {
             await prevLock;
-            return await this._executeCreateBackup(options);
+            const storePath = this._resolveStorePath();
+            const acquire = await tryAcquireStoreLock({ storePath });
+            if (!acquire.acquired) {
+                const db = this._openDbForState();
+                await writeLastSkip(db, 'backup', { atMs: Date.now(), reason: acquire.skip.reason });
+                throw new Error(`Backup skipped — store lock held: ${acquire.skip.reason}`);
+            }
+            try {
+                const info = await this._executeCreateBackup(options);
+                const db = this._openDbForState();
+                await writeLastRun(db, 'backup', { atMs: Date.now(), ok: true, detail: info.id });
+                return info;
+            } catch (err: any) {
+                const db = this._openDbForState();
+                await writeLastRun(db, 'backup', { atMs: Date.now(), ok: false, detail: err?.message || String(err) });
+                throw err;
+            } finally {
+                await acquire.release();
+            }
         } finally {
             releaseLock();
         }
@@ -551,6 +667,17 @@ export class BackupService {
         // 5. Reopen database
         await liveDb.ensureReady(true);
 
+        // 6. Notify connected clients to reload — a client holding a stale handle
+        // across a restore is the clobber bug again, in a new costume. The callback
+        // is wired by both composition roots to BroadcastHub.push({type:'databaseRestored'}).
+        if (this._onDatabaseRestored) {
+            try {
+                this._onDatabaseRestored({ restoredBackupId: path.basename(setDir), workspaceRoot: wsRoot });
+            } catch (e) {
+                console.warn('[BackupService] onDatabaseRestored callback failed:', e);
+            }
+        }
+
         return {
             success: true,
             restoredBackupId: path.basename(setDir),
@@ -584,6 +711,14 @@ export class BackupService {
         await fs.promises.unlink(`${liveDbPath}-shm`).catch(() => {});
 
         await liveDb.ensureReady(true);
+
+        if (this._onDatabaseRestored) {
+            try {
+                this._onDatabaseRestored({ restoredBackupId: path.basename(legacyFile), workspaceRoot: wsRoot });
+            } catch (e) {
+                console.warn('[BackupService] onDatabaseRestored callback failed:', e);
+            }
+        }
 
         return {
             success: true,

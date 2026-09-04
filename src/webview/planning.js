@@ -5264,9 +5264,10 @@
     }
 
     // Research Tab: Prompt Generation Functions
-    // The canonical research-prompt template now lives in .agents/protocols/advise_research/SKILL.md.
-    // This webview function embeds the same structure independently (it cannot read the extension-side
-    // skill file at runtime). Keep the field list below in sync with the skill file.
+    // The canonical research-prompt template now lives in the `advise_research` protocol
+    // (a control_plane row resolved through ProtocolService). This webview function embeds
+    // the same structure independently (it cannot call the extension-side resolver at
+    // runtime). Keep the field list below in sync with the protocol body.
     function generateResearchPrompt() {
         const promptInput = document.getElementById('research-prompt-input');
 

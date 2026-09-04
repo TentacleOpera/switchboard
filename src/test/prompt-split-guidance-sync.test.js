@@ -35,7 +35,6 @@ function run() {
     const remoteWorkflowPath = path.join(root, '.agents', 'workflows', 'switchboard-remote.md');
     const agentsMdPath = path.join(root, 'AGENTS.md');
     const claudeMdPath = path.join(root, 'CLAUDE.md');
-    const deepPlanningSkillPath = path.join(root, '.agents', 'protocols', 'deep-planning', 'SKILL.md');
     const improvePlanSkillPath = path.join(root, '.agents', 'protocols', 'improve-plan', 'SKILL.md');
 
     const promptBuilderSource = fs.readFileSync(promptBuilderPath, 'utf8');
@@ -45,7 +44,10 @@ function run() {
     const remoteWorkflow = fs.readFileSync(remoteWorkflowPath, 'utf8');
     const agentsMd = fs.readFileSync(agentsMdPath, 'utf8');
     const claudeMd = fs.readFileSync(claudeMdPath, 'utf8');
-    const deepPlanningSkill = fs.readFileSync(deepPlanningSkillPath, 'utf8');
+    // deep-planning was retired from disk — its body lives in bundledProtocols.ts now.
+    const bundledSrc = fs.readFileSync(path.join(root, 'src', 'services', 'bundledProtocols.ts'), 'utf8');
+    const _dpMatch = bundledSrc.match(/"deep-planning":\s*\{[^}]*"body":\s*"((?:[^"\\]|\\.)*)"/s);
+    const deepPlanningSkill = _dpMatch ? JSON.parse('"' + _dpMatch[1] + '"') : '';
     const improvePlanSkill = fs.readFileSync(improvePlanSkillPath, 'utf8');
 
     // --- Shared splitting-signal anchors (must appear in every surface) ---

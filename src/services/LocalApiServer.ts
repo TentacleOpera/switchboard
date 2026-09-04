@@ -13,6 +13,7 @@ import { importPlanFiles } from './PlanFileImporter';
 import { BackupService } from './BackupService';
 import { exportProject, importProject } from './projectExport';
 import { RetentionService } from './RetentionService';
+import { readScheduleState } from './scheduleState';
 // The fence discipline the terminal log is WRITTEN with is the same one the read
 // path has to honour, so the balance pass ships with the writer rather than
 // being re-derived (and drifting) here.
@@ -213,8 +214,8 @@ interface LocalApiServerOptions {
      * moment the operator goes remote.
      */
     bindPolicy?: BindPolicy;
-    clickupMetadataPath: string;
-    linearMetadataPath: string;
+    /** Returns the PlanningPanelCacheService for the effective workspace root, or null. */
+    getCacheService?: () => { getTaskMetadataForSource(sourceId: string): { version: number; sourceId: string; metadata: any[]; writtenAt: number } } | null;
     getClickUpService: () => ClickUpSyncService | null;
     getLinearService: () => LinearSyncService | null;
     getNotionService: () => NotionFetchService | null;
@@ -1684,14 +1685,29 @@ export class LocalApiServer {
             console.warn('[LocalApiServer] Failed to read backups:', err);
         }
 
-        // State backup JSON
+        // Scheduled-work skip surface: last-run / last-skip-with-reason for
+        // backup and rotation, persisted in the store so the user can see why a
+        // scheduled run did not happen (one-owner-for-scheduled-storage-work.md).
+        let schedule: { backup: any; rotation: any } = { backup: null, rotation: null };
+        try {
+            const backupState = await readScheduleState(db, 'backup');
+            const rotationState = await readScheduleState(db, 'rotation');
+            schedule = { backup: backupState, rotation: rotationState };
+        } catch (err) {
+            console.warn('[LocalApiServer] Failed to read schedule state:', err);
+        }
+
+        // State backup JSON (check both the live path and the .migrated.bak archive)
         let stateBackupExists = false;
         let stateBackupMtime: number | null = null;
         try {
             const stateBackupPath = path.join(wsRoot, '.switchboard', 'kanban-state-backup.json');
-            if (fsSync.existsSync(stateBackupPath)) {
+            const migratedPath = stateBackupPath + '.migrated.bak';
+            const effective = fsSync.existsSync(stateBackupPath) ? stateBackupPath
+                : (fsSync.existsSync(migratedPath) ? migratedPath : null);
+            if (effective) {
                 stateBackupExists = true;
-                stateBackupMtime = fsSync.statSync(stateBackupPath).mtimeMs;
+                stateBackupMtime = fsSync.statSync(effective).mtimeMs;
             }
         } catch { /* ignore */ }
 
@@ -1735,6 +1751,7 @@ export class LocalApiServer {
                 stateBackupExists,
                 stateBackupMtime,
             },
+            schedule,
             projections: {
                 notion: {
                     configured: notionConfigured,
@@ -10053,22 +10070,26 @@ export class LocalApiServer {
 
     /**
      * Handle GET /metadata/{source} requests.
+     * Task metadata JSON sidecars have been retired — the in-memory LRU cache in
+     * PlanningPanelCacheService is the sole home. The cache service is fetched
+     * via the getCacheService option; if unavailable, empty metadata is returned.
      */
     private async _handleGetMetadata(sourceId: string, res: http.ServerResponse): Promise<void> {
-        const filePath = sourceId === 'clickup'
-            ? this._options.clickupMetadataPath
-            : this._options.linearMetadataPath;
-
         try {
-            const content = await fs.readFile(filePath, 'utf8');
-            const data = JSON.parse(content);
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(data));
-        } catch {
-            // File doesn't exist or is invalid — return empty metadata
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ version: 1, sourceId, metadata: [], writtenAt: Date.now() }));
+            const cacheService = this._options.getCacheService?.();
+            if (cacheService) {
+                const data = cacheService.getTaskMetadataForSource(sourceId);
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(data));
+                return;
+            }
+        } catch (err) {
+            console.warn('[LocalApiServer] Failed to read task metadata from cache service:', err);
         }
+        // No cache service available — return empty metadata (same shape the old
+        // files carried when absent).
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ version: 1, sourceId, metadata: [], writtenAt: Date.now() }));
     }
 
     /**

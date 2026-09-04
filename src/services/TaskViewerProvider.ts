@@ -93,6 +93,8 @@ import {
     PHONE_A_FRIEND_DONE_DIRECTIVE,
     TEAM_BATCH_PLAN_CAP
 } from './agentPromptBuilder';
+import { buildAccuracyDirective, resolveProtocolSet, DIRECTIVE_PROTOCOL_NAMES } from './protocolDirectives';
+import type { ProtocolResolution } from './protocolDirectives';
 import { extractDispatchIdentity } from './dispatchIdentity';
 import type { NotionFetchService } from './NotionFetchService';
 let NotionFetchServiceClass: any;
@@ -1157,8 +1159,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             // by the stripStandingOrdersBlock call at the top of this
                             // branch), which is what we want to test against — the SO
                             // block is handled by applyStandingOrders' own strip below.
+                            const seatResolved = effectiveOpts?.accurateCoding
+                                ? await resolveProtocolSet(['accuracy'], this._apiServerWorkspaceRoot || this._getWorkspaceRoot() || '', db || undefined)
+                                : undefined;
                             const seatBlock = effectiveOpts
-                                ? buildSeatDirectiveBlock({ ...effectiveOpts, planIds }, data)
+                                ? buildSeatDirectiveBlock({ ...effectiveOpts, planIds, resolvedProtocols: seatResolved as ProtocolResolution | undefined }, data)
                                 : '';
                             if (seatBlock) {
                                 const instanceId = targetRow?.agentInstanceId;
@@ -2835,13 +2840,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
             const settingsDir = path.join(workspaceRoot, '.switchboard');
             await fs.promises.mkdir(settingsDir, { recursive: true });
-            const targetPath = path.join(settingsDir, 'settings.json');
-            const tmpPath = path.join(settingsDir, '.settings.json.tmp');
+            const targetPath = path.join(settingsDir, 'prompt-settings-export.json');
+            const tmpPath = path.join(settingsDir, '.prompt-settings-export.json.tmp');
 
             await fs.promises.writeFile(tmpPath, JSON.stringify(data, null, 2), 'utf8');
             await fs.promises.rename(tmpPath, targetPath);
 
-            this._seams().ui.showInformationMessage('Prompt settings exported to .switchboard/settings.json');
+            this._seams().ui.showInformationMessage('Prompt settings exported to .switchboard/prompt-settings-export.json');
             return true;
         } catch (error: any) {
             this._seams().ui.showErrorMessage(`Failed to export prompt settings: ${error.message || error}`);
@@ -2856,11 +2861,18 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             return false;
         }
 
-        const settingsPath = path.join(workspaceRoot, '.switchboard', 'settings.json');
-        try {
-            await fs.promises.access(settingsPath);
-        } catch {
-            this._seams().ui.showWarningMessage('No settings file found at .switchboard/settings.json');
+        const exportPath = path.join(workspaceRoot, '.switchboard', 'prompt-settings-export.json');
+        const legacyPath = path.join(workspaceRoot, '.switchboard', 'settings.json');
+        let settingsPath: string | null = null;
+        for (const candidate of [exportPath, legacyPath]) {
+            try {
+                await fs.promises.access(candidate);
+                settingsPath = candidate;
+                break;
+            } catch { /* try next */ }
+        }
+        if (!settingsPath) {
+            this._seams().ui.showWarningMessage('No settings file found at .switchboard/prompt-settings-export.json');
             return false;
         }
 
@@ -2887,7 +2899,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             await this._seams().commands.executeCommand('switchboard.refreshUI');
             this._kanbanProvider?.postMessage({ type: 'reloadRoleConfigs' });
 
-            this._seams().ui.showInformationMessage('Prompt settings imported from .switchboard/settings.json');
+            this._seams().ui.showInformationMessage(`Prompt settings imported from ${path.basename(settingsPath)}`);
             return true;
         } catch (error: any) {
             this._seams().ui.showErrorMessage(`Failed to import prompt settings: ${error.message || error}`);
@@ -3221,12 +3233,27 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         // Enumerate roots: active root first, then other open folders (de-duped) —
         // the pattern from _migrateStartupCommandsToGlobalFile.
+        //
+        // Routed through _getWorkspaceRoots() (seam-aware) and wrapped in a
+        // try/catch so a headless host with no vscode.workspace (the verb-engine
+        // booby trap, or a standalone host before the seam is wired) does not
+        // produce an unhandled rejection that is fatal on Node 24. The migration
+        // is per-DB gated by a marker, so skipping it here is safe — it runs on
+        // the next startup when the host seam is available. This is the fix for
+        // the pre-existing test:contract:verb-engine failure (2026-07-09
+        // _migratePlannerWorkflowPathDbTiers reached vscode.workspace during
+        // headless execution; the storage commit touches none of its stack).
         const roots: string[] = [];
-        const activeRoot = this._resolveWorkspaceRoot() ?? undefined;
-        if (activeRoot) roots.push(activeRoot);
-        for (const folder of vscode.workspace.workspaceFolders ?? []) {
-            const r = folder.uri.fsPath;
-            if (r && !roots.includes(r)) roots.push(r);
+        try {
+            const activeRoot = this._resolveWorkspaceRoot() ?? undefined;
+            if (activeRoot) roots.push(activeRoot);
+            for (const r of this._getWorkspaceRoots()) {
+                if (r && !roots.includes(r)) roots.push(r);
+            }
+        } catch {
+            // vscode not available (headless test trap or seam not yet wired).
+            // Migration is per-DB gated and will run on the next startup.
+            return;
         }
 
         for (const root of roots) {
@@ -3290,12 +3317,19 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const OLD_DEFAULT = '.agents/workflows/improve-plan.md';
         const NEW_DEFAULT = '.agents/protocols/improve-plan/SKILL.md';
 
+        // Routed through _getWorkspaceRoots() (seam-aware) and wrapped in a
+        // try/catch — same fix as _migratePlannerWorkflowPathDbTiers above.
+        // The vscode.workspace access in the constructor's fire-and-forget path
+        // is what made test:contract:verb-engine fail on Node 24.
         const roots: string[] = [];
-        const activeRoot = this._resolveWorkspaceRoot() ?? undefined;
-        if (activeRoot) roots.push(activeRoot);
-        for (const folder of vscode.workspace.workspaceFolders ?? []) {
-            const r = folder.uri.fsPath;
-            if (r && !roots.includes(r)) roots.push(r);
+        try {
+            const activeRoot = this._resolveWorkspaceRoot() ?? undefined;
+            if (activeRoot) roots.push(activeRoot);
+            for (const r of this._getWorkspaceRoots()) {
+                if (r && !roots.includes(r)) roots.push(r);
+            }
+        } catch {
+            return;
         }
 
         for (const root of roots) {
@@ -3520,7 +3554,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (!this._apiServerWorkspaceRoot) {
             this._apiServerWorkspaceRoot = effectiveRoot;
         }
-        const cacheService = this._getCacheService(effectiveRoot);
         const allRoots = this._filterMappedRoots(this._getWorkspaceRoots());
 
         // Fleet construction is deliberately ONE-SHOT per extension-host lifetime.
@@ -4019,8 +4052,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             // option is a dead seam and changing the setting changes nothing
             // inside LocalApiServer.
             livenessWindowMs: vscode.workspace.getConfiguration('switchboard').get<number>('activityLight.livenessWindowMs', 90000),
-            clickupMetadataPath: cacheService['_clickupMetadataPath'],
-            linearMetadataPath: cacheService['_linearMetadataPath'],
+            // Task metadata JSON sidecars are retired — the in-memory LRU cache
+            // in PlanningPanelCacheService is the sole home. LocalApiServer reads
+            // it through this callback (replaces the old file-path properties).
+            getCacheService: () => this._getCacheService(effectiveRoot),
             getClickUpService: () => this._getClickUpService(effectiveRoot),
             getLinearService: () => this._getLinearService(effectiveRoot),
             getNotionService: () => this._getNotionService(effectiveRoot),
@@ -12184,10 +12219,11 @@ Each plan file must include:
             terminal.show();
         }
 
-        // Inject the kickoff prompt. The persona workflow (.agents/protocols/switchboard-mission-control/SKILL.md)
-        // encodes the full pre-flight + Kickoff Protocol; this prompt points the agent at it and injects
-        // the runtime context (UNATTENDED flag, workspace root, active project filter). The dispatch
-        // path uses sendRobustText (clipboard-paste for long payloads).
+        // Inject the kickoff prompt. The persona workflow (the `switchboard-mission-control`
+        // protocol, resolved through ProtocolService) encodes the full pre-flight + Kickoff
+        // Protocol; this prompt points the agent at it and injects the runtime context
+        // (UNATTENDED flag, workspace root, active project filter). The dispatch path uses
+        // sendRobustText (clipboard-paste for long payloads).
         //
         // Start no longer arms. It seats Mission Control and delivers one of three
         // prompts chosen by two facts: does .switchboard/mission-control/session.md exist,
@@ -21356,7 +21392,7 @@ Each plan file must include:
             return basePayload;
         }
 
-        const accuracyInstruction = `\n\nAccuracy Mode: Before coding, read and follow the workflow at .agents/protocols/accuracy/SKILL.md step-by-step while implementing this task.`;
+        const accuracyInstruction = `\n\n${buildAccuracyDirective()}`;
         return `${basePayload}${accuracyInstruction}`;
     }
 

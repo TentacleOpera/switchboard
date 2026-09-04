@@ -317,7 +317,8 @@ role on dispatch. Its text:
 
 > REMOTE MODE: You are running under remote control — the user is NOT at the terminal. If you need
 > to ask the user anything or report a blocker, post it as a comment on the linked issue using
-> `.agents/protocols/linear-api/SKILL.md` (or `.agents/protocols/clickup-api/SKILL.md`). Do NOT
+> the `linear-api` protocol (or `clickup-api` protocol) via `switchboard api GET /protocol/linear-api`
+> (or `switchboard api GET /protocol/clickup-api`). Do NOT
 > wait on terminal input. Continue with any work you can do without the answer.
 
 So the question-and-answer loop already exists and is bidirectional:

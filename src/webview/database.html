@@ -607,6 +607,30 @@
                 </div>
             </div>
 
+            <!-- Scheduled Work Ownership & Skip Surface -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">Scheduled Work — Ownership &amp; Skip Log</div>
+                    <span id="schedule-owner-badge" class="badge neutral">Checking…</span>
+                </div>
+                <div style="font-size: 11px; color: var(--text-secondary); line-height: 1.4; margin-bottom: 8px;">
+                    One owner per machine for backup and rotation (store lock). A scheduled run that lost the lock is recorded here with its reason, so a missing backup is never indistinguishable from one that never ran.
+                </div>
+                <div class="prop-grid">
+                    <div class="prop-label">Backup Last Run:</div>
+                    <div id="schedule-backup-last-run" class="prop-value">—</div>
+
+                    <div class="prop-label">Backup Last Skip:</div>
+                    <div id="schedule-backup-last-skip" class="prop-value">—</div>
+
+                    <div class="prop-label">Rotation Last Run:</div>
+                    <div id="schedule-rotation-last-run" class="prop-value">—</div>
+
+                    <div class="prop-label">Rotation Last Skip:</div>
+                    <div id="schedule-rotation-last-skip" class="prop-value">—</div>
+                </div>
+            </div>
+
             <div class="card">
                 <div class="card-header">
                     <div class="card-title">Project Export & Import</div>

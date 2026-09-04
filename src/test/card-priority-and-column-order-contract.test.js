@@ -37,7 +37,10 @@ const kanbanHtml = read('src/webview/kanban.html');
 const allowlist = read('src/generated/verbAllowlist.ts');
 const verbSchemas = read('src/services/verbSchemas.ts');
 const orchestrationSkill = read('.agents/skills/switchboard-orchestration/SKILL.md');
-const orchestrationProtocol = read('.agents/protocols/switchboard-mission-control-http/SKILL.md');
+// The protocol file was retired from disk — its body lives in bundledProtocols.ts now.
+const bundledSrc = read('src/services/bundledProtocols.ts');
+const mHttpMatch = bundledSrc.match(/"switchboard-mission-control-http":\s*\{[^}]*"body":\s*"((?:[^"\\]|\\.)*)"/s);
+const orchestrationProtocol = mHttpMatch ? JSON.parse('"' + mHttpMatch[1] + '"') : '';
 
 let failed = 0;
 function check(name, fn) {

@@ -236,21 +236,11 @@ export function createStandalonePlanIngestionHost(opts: StandalonePlanIngestionH
     });
 
     const envHandlers = new Set<(kind: PlanIngestionEnvironmentChange) => void>();
-    // Watch the standalone config file so config edits mid-run fire 'config' (matches the
-    // VS Code onDidChangeConfiguration bridge). Best-effort — failures are logged, not fatal.
-    const configPath = path.join(workspaceRoot, '.switchboard', 'config.json');
-    let configWatcher: fs.FSWatcher | undefined;
-    try {
-        if (fs.existsSync(configPath)) {
-            configWatcher = fs.watch(configPath, { persistent: false }, () => {
-                // Reload the provider's in-memory cache so subsequent reads see the new values.
-                try { (config as any)._load?.(); } catch {}
-                for (const h of envHandlers) { try { h('config'); } catch {} }
-            });
-        }
-    } catch (e) {
-        log(`[standalone-planIngestionHost] config.json watch failed: ${e}`);
-    }
+    // config.json has been migrated to the kanban.db config table. The standalone
+    // provider reads directly from the db on each access (no in-memory cache to
+    // reload), so a file watcher is no longer needed — config edits are visible
+    // immediately. The VS Code host fires onDidChangeConfiguration through the
+    // provider's listener mechanism instead.
 
     const host: PlanIngestionHost = {
         watcher,
@@ -269,10 +259,6 @@ export function createStandalonePlanIngestionHost(opts: StandalonePlanIngestionH
             return {
                 dispose: () => {
                     envHandlers.delete(handler);
-                    if (envHandlers.size === 0 && configWatcher) {
-                        try { configWatcher.close(); } catch {}
-                        configWatcher = undefined;
-                    }
                 },
             };
         },

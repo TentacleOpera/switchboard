@@ -118,7 +118,10 @@ async function main() {
     });
 
     await test('switchboard-contracts carries the never-ask-in-chat behavioural rule', () => {
-        const contracts = read('.agents/protocols/switchboard-contracts/SKILL.md');
+        // The protocol file was retired from disk — its body lives in bundledProtocols.ts now.
+        const bundledSrc = read('src/services/bundledProtocols.ts');
+        const m = bundledSrc.match(/"switchboard-contracts":\s*\{[^}]*"body":\s*"((?:[^"\\]|\\.)*)"/s);
+        const contracts = m ? JSON.parse('"' + m[1] + '"') : '';
         assert.ok(/Outstanding Questions/.test(contracts), 'the behaviour contract does not mention `## Outstanding Questions`');
         assert.ok(/never asks in chat|Never ask/i.test(contracts), 'the never-ask-in-chat rule is missing from the behaviour contract');
     });
