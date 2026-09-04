@@ -1,6 +1,6 @@
 # The multi-agent planning team plans as a team
 
-**Complexity:** 5
+**Complexity:** 6
 
 ## Goal
 
@@ -19,6 +19,8 @@ The Multi-agent planning team currently spawns a planner head plus two researche
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
+- [ ] [Multi-Agent Planning 02 — Divergence Map Before Synthesis](../plans/multi-agent-planning-02-divergence-map.md) — **PLAN REVIEWED** — ID: d5839664-b471-48cf-bb03-1beb8e9a6b36
+- [ ] [Multi-Agent Planning 03 — Adjudication Round: Resolving Divergence Against the Code](../plans/multi-agent-planning-03-adjudication-round.md) — **PLAN REVIEWED** — ID: c8575419-5018-49d6-9ca4-a1f7bacd01fe
 - [ ] [Team Member Seats Can Run Their Own Agent CLI Instead of Inheriting the Role's](../plans/feature_plan_20260817174454_team-member-seats-can-run-their-own-agent-cli.md) — **PLAN REVIEWED** — ID: 6a2920e6-9842-40ac-86f4-73ea54694bf5
 - [ ] [Multi-Agent Planning Team — Fan-Out Head Prompt and Peer-Planner Roster](../plans/feature_plan_20260819_multi-agent-planning-team-fan-out-head-and-peer-planner-roster.md) — **PLAN REVIEWED** — ID: 8d250d8d-803f-4308-8bf0-b56f3b85d0f7
 <!-- END SUBTASKS -->

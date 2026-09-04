@@ -1,5 +1,11 @@
 # Multi-Agent Planning 03 — Adjudication Round: Resolving Divergence Against the Code
 
+<!-- board-collapse-09 -->
+> **RE-HOMED 2026-09-04 (Board Collapse 09).** Moved into *The multi-agent planning team plans as a team*; *Multi-Agent Planning Runs* is dissolved and its *Fan-In Dispatch* subtask deleted. See the note on *Divergence Map*: the run directory and manifest that 01 would have created are now owned by whichever of 02 or 03 lands first.
+> 
+> Two facts from the deleted 01 that this plan depends on and must now carry itself: a team `prompt` override **replaces** the defaults, so `AGENT_GROUP_CALLBACK_INSTRUCTION` and `GIT_SAFETY_DIRECTIVE` must be re-included by hand; and the adjudicator is counted by `instantiateAgentGroupCore`'s pre-flight, so investigators plus adjudicator must stay within the seat ceiling.
+
+
 ## Goal
 
 Resolve the split, contradicted and singleton claims surfaced by the divergence map by dispatching bounded, self-contained verification tasks back to the fleet, folding the verdicts into the map, and re-running synthesis with fewer open questions.

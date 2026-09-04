@@ -1,5 +1,9 @@
 # The CLI is a peer control surface — every board operation with terminal meaning is a named command, for agents and humans alike
 
+<!-- board-collapse-09 -->
+> **VOCABULARY NOTE 2026-09-04 (Board Collapse 09).** This plan's `star` command must take a **priority level**, not a bare boolean. *Agents can set a card's priority level* adds a 1–4 level (plus null) to the same endpoint, and a CLI command that can only toggle a boolean would be a dead end the day it ships. Same applies to the parked *Board control instructions* plan's `star` action.
+
+
 <!-- board-collapse-01 -->
 > **RESCOPED 2026-09-04 (Board Collapse 01).** The `switchboard api` escape hatch **landed** in commit `96fb16df`, and all eight `kanban_operations/*.js` now route through `_lib/cli-call.js`. Remove that from the proposed scope. What remains: the named board commands (`advance` as the primary verb), the substitution rule, and the generated docs-site reference.
 

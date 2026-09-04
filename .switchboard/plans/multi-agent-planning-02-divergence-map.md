@@ -1,5 +1,11 @@
 # Multi-Agent Planning 02 — Divergence Map Before Synthesis
 
+<!-- board-collapse-09 -->
+> **RE-HOMED 2026-09-04 (Board Collapse 09).** Moved into *The multi-agent planning team plans as a team*. Its former parent, *Multi-Agent Planning Runs*, is dissolved, and that feature's first subtask — *Multi-Agent Planning 01, Fan-In Dispatch* — is **deleted**: the fan-out head prompt in the surviving feature dispatches N planners at one problem through the shipped teams mechanism, which is what 01 was building in parallel. 01's investigators were also coder-role seats, which the role-scoped completion standing order would wrongly reach.
+> 
+> **Read the run directory as this plan's own responsibility now.** 01 created `.switchboard/planning-runs/<run-id>/` and its manifest; with 01 gone, whichever of 02 or 03 lands first creates them. State that explicitly before coding.
+
+
 ## Goal
 
 Have the lead consume a planning run's N independent drafts and emit a **divergence map** — a typed table of who claimed what and who contradicted it — *before* producing any merged plan, then synthesize the final plan(s) from that map with every claim carrying a `file:line` citation.

@@ -1,5 +1,13 @@
 # Agents can set a card's priority level, and can tell whether it changed anything
 
+<!-- board-collapse-09 -->
+> **VOCABULARY NOTE 2026-09-04 (Board Collapse 09).** Two other plans define an agent-facing board-write vocabulary containing a `star` action: *The CLI is a peer control surface* and *Board control instructions* (the latter now parked in Backlog). Both express `star` as a **bare boolean**, which cannot carry the 1–4 priority level this plan adds to the same `PUT /kanban/plans/priority` endpoint. Whichever lands second would otherwise ship a command that can only half-address the field.
+> 
+> Add the level argument to both when they are coded. They also cite the same handler at two different line ranges (`:6505-6528` and `:7077-7143`), so at least one is stale — re-derive rather than trust either.
+> 
+> Also verify before dispatch: `c0eb26ea`/`4df54319` shipped priority as a native card field with a board-wide order-by, so this plan's parent field may already exist. Its own text flags this.
+
+
 ## Goal
 
 Let an agent mark a card Urgent / High / Normal / Low over HTTP, and have that

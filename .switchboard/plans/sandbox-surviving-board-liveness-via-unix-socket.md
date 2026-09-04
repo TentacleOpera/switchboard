@@ -1,5 +1,18 @@
 # Sandbox-Surviving Board Liveness via a Unix Domain Socket
 
+<!-- board-collapse-09 -->
+> **MERGE TARGET 2026-09-04 (Board Collapse 09).** *A detached board can spin at 100% CPU holding its port, and every way of asking "is it running" says yes* has been **merged into this plan and deleted**. Both answered "is the board alive", both edited the same region of `bootstrap.ts` around the port and pid write, and each called the other complementary without either owning the result.
+> 
+> One plan, two states to distinguish:
+> 
+> 1. **Dead** — an AF_UNIX listener at `.switchboard/daemon.sock` serving `GET /health`. A socket dies with the process, so a sandbox that cannot reach loopback TCP can still tell a live board from a stale port file. Measured: live returns 200, SIGKILLed leaves a stale inode and curl exits 7. Use a dedicated small handler, not `_handleRequest`: `req.socket.remoteAddress` is `undefined` on AF_UNIX and the peer guard must not be widened.
+> 2. **Alive but not serving** — a heartbeat file written every 2 s at `.switchboard/api-server-heartbeat.txt`, deliberately **on** the main loop so it starves when the loop does, with a 15 s wedge threshold. `switchboard status` reports a third state, wedged, and `switchboard stop` is **ungated from `/health`**: it reads the port file directly, takes the pid from `api-server.pid`, and detects exit with `isPortFree` / `process.kill(pid, 0)` — never `probeHealth`, which is false by definition when wedged. The SIGTERM-then-SIGKILL escalation already exists at `cli.ts:1167-1195`; the defect is that it is unreachable.
+> 
+> **Two corrections carried from the deleted plan and from *Attribute Switchboard's CPU*:** the freeze was observed in **attached** mode, so the detach-specific framing is wrong — drop it; and the `stop` ungating has not shipped (`cli.ts:1147` still gates on `findRunningInstance`), so pull it forward regardless of the rest.
+> 
+> `flock` was rejected: Node has no advisory-lock primitive, `fs.flock` is undefined, and a native addon is impossible in the VSIX.
+
+
 <!-- board-collapse-01 -->
 > **RESCOPED 2026-09-04 (Board Collapse 01).** `.agents/skills/_lib/sb_api_call.sh` was deleted in `96fb16df`; retarget that touched file to `.agents/skills/_lib/cli-call.js`. The socket design is unaffected.
 

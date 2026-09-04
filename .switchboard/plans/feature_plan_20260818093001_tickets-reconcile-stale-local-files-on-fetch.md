@@ -1,5 +1,11 @@
 # Reconcile and Delete Stale Local Ticket Markdown Files on Fetch
 
+<!-- board-collapse-09 -->
+> **CROSS-REFERENCE 2026-09-04 (Board Collapse 09).** This plan removes the `parentId:` skip in `_collectDeletionCandidates`, so **subtask files become candidates for the probe-and-delete sweep**. In a different feature, *Replace embedded subtask content with file references* starts **creating** subtask files on the single-ticket import path.
+> 
+> A file one plan writes is a file this one will probe. Neither names the other today. Verify the joint behaviour before either lands: a freshly created subtask file must not be deleted by the next fetch because the remote probe raced its creation.
+
+
 ## Goal
 In `tickets.html`, neither "Refetch" nor "Refresh" deletes stale local markdown (`.md`) files from the workspace tickets directory. When tickets are moved to a different list/project remotely, closed (when closed tickets are excluded), or deleted remotely, the local `.md` files remain on disk indefinitely. Agents consulting `.switchboard/tickets/` find orphaned, out-of-date ticket files and make incorrect assumptions about the current backlog.
 

@@ -1,5 +1,13 @@
 # Replace embedded subtask content with file references in parent ticket docs
 
+<!-- board-collapse-09 -->
+> **SCOPE WIDENED 2026-09-04 (Board Collapse 09).** Three plans across three features act on a parent ticket's embedded `## Subtasks` block. This one wins and absorbs the second.
+> 
+> *Prune Deleted Subtasks From A Ticket's Embedded Checklist* becomes **this plan's migration step**, not a separate card. It is being kept as a card for now only because it also hooks the 404-proven deletion sweep; when coding, treat its checklist rewrite as the strip-and-replace migration for the ~4,000 installs that already carry embedded content, matching id first, then Linear identifier, then title key, with a strict single match and no restamping of `last_synced_at` on an already-modified parent.
+> 
+> *Reconcile and Delete Stale Local Ticket Markdown Files* removes the `parentId:` skip so subtask files become deletion candidates. **This plan creates subtask files on the single-ticket import path.** Those two behaviours meet: a file this plan writes is a file that plan will probe and may delete. Verify them jointly before either lands, and cross-reference in both.
+
+
 ## Goal
 
 ### Problem

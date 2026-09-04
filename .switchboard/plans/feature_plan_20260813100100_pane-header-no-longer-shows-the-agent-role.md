@@ -1,5 +1,13 @@
 # The Terminal Pane Header Shows the CLI Brand and the Handle, But No Longer Shows the Agent Role
 
+<!-- board-collapse-09 -->
+> **MERGE TARGET 2026-09-04 (Board Collapse 09).** *A Team Lead's Terminal Header Names The Feature It Was Dispatched* has been **merged into this plan and deleted**. Both answer "what does a pane header show", both edit `updatePaneElement`'s title row, and neither named the other.
+> 
+> This plan restores the **agent role** to the header, tooltip and aria-label, rendering `fleetItem.role` as raw text gated on `role && role !== NO_ROLE`, with terse layouts showing the role instead of the brand. Carry from the merged plan the **attribution** half: a feature dispatched to a lead should keep `dispatched_at` so `getLiveDispatchAttribution` returns the feature row and the lead's header names the feature, the way a coder's header names its subtask. Its recommended fix is that `cascadeFeatureByPlanId` stops clearing the feature row's `dispatched_at` while `dispatched_terminal` is still set, with `completion-asserted-never-inferred.test.js:295` updated to match.
+> 
+> **Diagnose before fixing:** the merged plan required establishing whether the timestamp is never stamped or stamped-then-wiped, and withdrew its own re-import hypothesis after checking that neither `insertFileDerivedPlan` nor `UPSERT_PLAN_SQL` nulls it. Keep that step. It also noted an optional cleanup of 111 stale feature rows holding a terminal with no timestamp.
+
+
 ## Goal
 
 Restore the agent **role** (planner / coder / reviewer / lead / …) to the pane header in

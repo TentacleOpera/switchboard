@@ -1,5 +1,13 @@
 # Copy-prompt button "copied" feedback fires late and flashes green instead of a subtle press
 
+<!-- board-collapse-09 -->
+> **MERGE TARGET 2026-09-04 (Board Collapse 09).** *Copy Dispatch Prompt must not flash "Copied!" on every card's coder-prompt button* has been **merged into this plan and deleted**. Both are about what the copy-prompt affordance says when it fires, from two different features, and both touch the same feedback path.
+> 
+> This plan owns the feedback shape: apply `.pressed` in `runCopyPrompt` on click with a ~300ms scale/tint animation, remove the green `copyFlash` and the "Copied!" text swap, and keep `copyPlanLinkResult` only to reset on failure. Feedback is click-gated, not backend-gated.
+> 
+> Carry from the merged plan the **batch** case: `copyDispatchPromptSelected` emits a per-card `copyPlanLinkResult` in a loop inherited from `promptSelected`, so a single batch copy flashes every card in the column. Delete that loop (about four lines) and add the regression test asserting it is absent there while remaining present at the five legitimate `promptSelected`/`promptAll` sites. Without this, the new press animation fires on every card instead of the one button that was pressed.
+
+
 ## Goal
 
 ### Problem

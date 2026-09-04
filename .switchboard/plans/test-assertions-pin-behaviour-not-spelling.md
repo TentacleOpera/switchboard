@@ -122,3 +122,30 @@ Record the criterion, the three rewrite shapes, the preserve-by-default categori
 ## Outstanding Questions
 
 None.
+
+
+## Inherited: the first-clause anchoring failure mode (2026-09-04, Board Collapse 09)
+
+*Audit source-pin regexes for first-clause anchoring false-reds* has been **merged into this plan
+and deleted**. It censused 43 test files using `.split()` or `indexOf().slice()` source pins; this
+plan's sweep covers 82 of the 95 CI-reachable source-reading files, so its population is a subset.
+One thing it named that this plan did not, and which the sweep must therefore look for explicitly:
+
+**First-clause anchoring.** A pin that splits on the opening of a multi-line expression and asserts
+only over what follows, up to the first delimiter, silently stops covering the rest of the
+predicate. It does not fail — it passes while checking almost nothing, which is worse than a red
+test. The reference repair is `completion-asserted-never-inferred.test.js:323-329`, rewritten to
+split on `const inFlight = board.some(p =>` and assert over the **whole** predicate body.
+
+Classify each pin three ways, per the deleted plan: **whole-body** (correct, leave alone),
+**first-clause** (rewrite), **string-constant** (not a source pin, out of scope). Not every
+`.split()` is a defect; many correctly extract a function body. Distinguishing them is the work.
+
+Named candidates from its census, to check first: `stage-marker-commit-contract`,
+`terminal-plan-attribution-contract`, `seat-safeguards-fleet-prompt-path`,
+`mission-control-tick-and-reports-contract`, `autoban-state-regression`.
+
+**`seat-safeguards-fleet-prompt-path` is claimed by another plan.** See the ownership note in the
+*Red at HEAD* feature: *Two reviewer→coder relays pass `promptComposed: true`* owns that gate's
+counts and re-pins them. Do not re-baseline it here; rewrite its pin shape only if that plan has
+already landed, and coordinate either way.

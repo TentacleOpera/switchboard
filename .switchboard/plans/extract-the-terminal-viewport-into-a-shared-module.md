@@ -1,5 +1,13 @@
 # Extract the terminal viewport out of the 13,000-line Terminals panel into a module anything can embed
 
+<!-- board-collapse-09 -->
+> **LANDING RULE 2026-09-04 (Board Collapse 09).** About 25 cards across ten features edit `src/webview/terminals.js`, and this plan moves roughly 1,700 lines of it **by cited line range**.
+> 
+> **Every smaller `terminals.js` plan lands before this extraction.** Its section-map line numbers are already recorded as stale in this file (`init()` at 841, not 757), which is the proof that citing ranges across other people's edits does not survive. At coding time, **re-derive every range from the file as it then is** rather than trusting the numbers written here.
+> 
+> Known concurrent streams to clear first: the Terminals Sidebar and Group Selection feature (three subtasks rewriting `renderSidebarList`), Per-Terminal Controls (three, including a Chat button whose handler depends on positional `actionsEl.children` indices), Pane Fidelity (three), Terminal Groups (two), the scroll-position invariant, and the dock containment plan's `isDockFrame` guards.
+
+
 ## Goal
 
 Lift the code that renders and streams **one terminal** — xterm setup, sizing, theme, view

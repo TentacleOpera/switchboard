@@ -14,7 +14,6 @@ Make inline images in the ticket editor work for someone sitting in front of a b
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
 - [ ] [Tickets attach-image opens the file picker in VS Code, not in the browser](../plans/feature_plan_20260817160854_tickets-attach-image-opens-the-file-picker-in-vs-code-not-the-browser.md) — **PLAN REVIEWED** — ID: 7047ad7f-0634-446e-83e6-6d6f91c0a0e8
-- [ ] [Refetch Leaves Inline Images Blank Until Second Click — Refresh Detail Pane in importAllTicketsComplete](../plans/feature_plan_20260818084137_refetch-leaves-inline-images-blank-until-second-click.md) — **PLAN REVIEWED** — ID: 4372a279-b912-4fc6-b417-642e7b8d1616
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

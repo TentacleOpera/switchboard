@@ -1,5 +1,9 @@
 # A keystroke echo waits on two frame boundaries it does not need
 
+<!-- board-collapse-09 -->
+> **PARKED BEHIND A MEASUREMENT 2026-09-04 (Board Collapse 09).** Not cancelled. *Attribute Switchboard's CPU before optimising it, and catch the wedge in the act* must land first: it makes CPU attributable per process and per terminal, and times the log-writer passes separately. Four terminal-stream optimisation plans exist and none of them knows what it is buying. That plan's own instruction is explicit — the **only** pre-measurement change permitted is hoisting the client filter above the frame encode, which is a pure win; every other optimisation waits for data. It also records a measurement that contradicts a neighbouring plan's premise, which is the argument for measuring rather than reasoning. Move this back when the numbers exist.
+
+
 ## Goal
 
 Deliver a small, lone output frame straight to xterm instead of holding it for the next animation

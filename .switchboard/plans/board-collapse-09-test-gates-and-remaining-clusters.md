@@ -63,7 +63,7 @@ Then remove the emptied feature shells among *Red contract gate triage*, *Red ga
 
 - Write into the viewport-extraction plan: **every small terminals plan lands before the extraction**, and the extraction re-cites its line ranges at coding time rather than trusting those in the file. Its own section map is already noted as stale.
 - **Merge** the two pane-header plans — *The Terminal Pane Header Shows the CLI Brand and the Handle, But No Longer Shows the Agent Role* and *A Team Lead's Terminal Header Names The Feature It Was Dispatched* — into one plan about what a pane header shows.
-- Re-link the missing fourth subtask of *Terminals panel: panes, groups and the empty slot*: `feature_plan_20260817141600_new-agent-ignores-the-empty-slot-and-hijacks-another-group.md`, id `b48afe52`, exists on disk and is named in the feature file but is not linked in the database. Without it the empty-pane subtask's third `index` argument and the group-switch subtask's `isSlotFree` extraction ship as inert scaffolding.
+- ~~Re-link the missing fourth subtask~~ **CORRECTED 2026-09-04 during execution.** `b48afe52` is **not orphaned**: it carries this feature's id and always has. It sits in **Coder Coded** because it has been worked, which is why it fell outside the New-and-Planned survey and looked absent. Nothing to re-link. The feature is left column-mixed on purpose — dragging a coded card back to Planned to satisfy containment would destroy real progress, and containment exists to stop a feature being *formed* mixed, not to undo work in flight. Recorded in the feature file.
 
 ### 5. The smaller pairs
 

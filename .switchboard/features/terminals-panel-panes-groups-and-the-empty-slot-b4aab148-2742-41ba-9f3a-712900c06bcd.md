@@ -1,5 +1,13 @@
 # Terminals panel: panes, groups and the empty slot
 
+<!-- board-collapse-09 -->
+> **COLUMN NOTE 2026-09-04 (Board Collapse 09).** This feature is column-mixed and is **deliberately left that way**. Three subtasks sit in Planned with the feature; the fourth, *A New Agent Ignores the Empty Slot You Aimed At*, is in **Coder Coded** because it has been worked.
+> 
+> The containment rule signed on 2026-09-04 aligns subtasks to their feature, which here would mean dragging a coded card backwards and losing real progress. That rule exists to stop a feature being formed or linked into a mixed state, not to undo work already in flight. When the enforcement lands (*A Subtask's Column Is Its Feature's Column*), this is the shape its refusal must tolerate: **a subtask ahead of its feature is not the defect**; a subtask behind it, or moved alone by an automated path, is.
+> 
+> A correction of record: a Board Collapse note claimed this subtask was named in this file but not linked in the database. That was wrong — it has always carried this feature's id. It was simply outside the New and Planned scope being audited, which is why it did not appear in the survey. The dependency the feature file describes still holds: without it, the empty-pane subtask's third `index` argument and the group-switch subtask's `isSlotFree` extraction ship as inert scaffolding.
+
+
 **Complexity:** 6
 
 ## Goal
@@ -38,6 +46,6 @@ Three of the four share one root cause worth naming up front: **the rule "a slot
 - [ ] [Kanban Pane's Workspace › Project Picker Is Too Narrow To Read](../plans/feature_plan_20260817141100_kanban-pane-workspace-project-picker-truncates.md) — **PLAN REVIEWED** — ID: 52059eef-905e-47f9-a57d-048ae8cf81fb
 - [ ] [Switching to a Terminal Group Destroys a Pane's Kanban Mode](../plans/feature_plan_20260817141400_terminal-groups-destroy-a-panes-kanban-mode.md) — **PLAN REVIEWED** — ID: a5d593b1-3c29-4209-9d04-40845a3c42f5
 - [ ] [The Whole Empty Pane Is a Hidden Hotspot That Fires the Agent Picker](../plans/feature_plan_20260817141500_empty-pane-is-one-giant-hidden-hotspot-for-the-agent-picker.md) — **PLAN REVIEWED** — ID: 20c89767-94aa-417b-9b73-b7392ba3d6d9
-- [ ] [A New Agent Ignores the Empty Slot You Aimed At and Hijacks Another Group's Grid](../plans/feature_plan_20260817141600_new-agent-ignores-the-empty-slot-and-hijacks-another-group.md) — **PLAN REVIEWED** — ID: b48afe52-b803-4299-a0e9-f2c64c2fb418
+- [ ] [A New Agent Ignores the Empty Slot You Aimed At and Hijacks Another Group's Grid](../plans/feature_plan_20260817141600_new-agent-ignores-the-empty-slot-and-hijacks-another-group.md) — **CODER CODED** — ID: b48afe52-b803-4299-a0e9-f2c64c2fb418
 <!-- END SUBTASKS -->
 

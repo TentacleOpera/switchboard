@@ -1,5 +1,13 @@
 # .agents file lifecycle fixes
 
+<!-- board-collapse-09 -->
+> **RETURNED TO NEW FOR RE-REVIEW 2026-09-04 (Board Collapse 09).** This feature had two subtasks and now has one. *`.claude/` mirror keeps retired skill until next version bump* was **deleted** by Board Collapse 02: it exists only to re-run `generateClaudeMirror` so its stale-skill cleanup fires, and that generator is being removed.
+> 
+> The survivor was **materially rescoped** by the same pass. It previously inherited a `deletionSkipped` flag from the deleted sibling; it must now add that flag itself, and its mirror-regeneration step is dropped, because with `.claude/skills/` committed as source a skill deleted from `.agents/` is deleted from `.claude/` in the same commit.
+> 
+> Half the content gone and the remainder rewritten is not a reviewed feature. The containment reconcile would have aligned the subtask **forward** into Planned; that would have marked rewritten work as reviewed when nobody has read it. The feature moves back to New instead, and both cards are re-read together.
+
+
 **Complexity:** 6
 
 ## Goal
