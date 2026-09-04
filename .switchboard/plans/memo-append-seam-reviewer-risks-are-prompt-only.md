@@ -1,5 +1,14 @@
 # Reviewer Risks Reach the Memo Through a Sentence, Not a Seam — Give `memo.md` a Real Append Verb
 
+<!-- board-collapse-08 -->
+> **MERGE TARGET 2026-09-04 (Board Collapse 08).** *Process Memo Clears the Whole File but Only Ever Read the Panel's Copy of It* has been **merged into this plan and deleted**. All three memo subtasks proposed creating `src/services/memoFile.ts` under a "whichever lands first creates it" rule, which is a merge hazard, not a plan. **This plan creates that module**, and it carries both operations:
+> 
+> 1. **`memoAppend`** — an `O_APPEND` write server-side through one shared helper wired in both composition roots, with the separator computed on a single `a+` handle (stat, read the last two bytes, write) so the whole file is never read. `REVIEWER_RISKS_TO_MEMO_DIRECTIVE` is repointed at it, HTTP primary with a shell `>>` fallback, and whole-file writes are forbidden.
+> 2. **Prefix-consume** — memo processing reads the file server-side and clears only the consumed prefix: `remainder = fresh.slice(consumed.length)` guarded by `fresh.startsWith(consumed)`. On guard failure preserve the whole file and report; never `writeFile('')`. The duplicated `_parseMemoEntries` in both hosts is unified here, with the capital-letter entry heuristic narrowed to `ENTRY_PREFIXES` where present and one paragraph otherwise.
+> 
+> The explicit Clear button stays destructive with no confirm gate. Also carried: the note that the standalone prompt builder has drifted from the extension's project-pin resolution, and that `.claude/skills/switchboard-memo/SKILL.md` documents echo-before-clear as the stronger path.
+
+
 ## Goal
 
 Add a `memoAppend` verb that performs an `O_APPEND` write server-side, wire it into both composition roots through one shared helper, and repoint the reviewer's risks-to-memo directive at it so appends stop being a read-modify-write performed by an LLM with generic file tools.

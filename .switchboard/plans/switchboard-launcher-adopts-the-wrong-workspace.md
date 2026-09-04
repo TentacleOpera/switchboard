@@ -1,5 +1,13 @@
 # `/switchboard` accepts any board on the shared port and adopts the wrong workspace — verify identity on both sides of the adopt call
 
+<!-- board-collapse-08 -->
+> **MERGE TARGET 2026-09-04 (Board Collapse 08).** *Orchestrator adopt call drops workspaceRoot — orchestrator scopes to the wrong workspace* has been **merged into this plan and deleted**. Both fixed the workspace scoping of the same adopt call from two different features.
+> 
+> Carry these from it: pass `"workspaceRoot": "$ROOT"` in the `/switchboard` workflow's adopt curl (`:93-94`); warn server-side in `_handleMissionControlAdopt` when the fallback to `this._options.workspaceRoot` fires, rather than silently scoping to the wrong board; and add the `pwd -P` pre-flight mismatch check to the orchestration skill, with its own caveat that the check runs on all orchestrator doors and may false-positive on the AUTOMATION-tab start door.
+> 
+> This plan's own contribution is the stronger half and stays the headline: identity by verified `health.roots` membership before any board is used, on **both** sides of the adopt call, plus the two nonexistent `/orchestration/*` endpoint names it corrects.
+
+
 <!-- board-collapse-01b -->
 > **PATH CORRECTION 2026-09-04 (Board Collapse 01).** This file names `.agents/skills/_lib/sb_api_call.sh`, which was **deleted** in commit `96fb16df`. All eight `kanban_operations/*.js` scripts now share `.agents/skills/_lib/cli-call.js`, and `switchboard api` is the shell-side escape hatch. Read every `sb_api_call` reference below as `cli-call.js` / `switchboard api`, and do not restore the shell helper.
 

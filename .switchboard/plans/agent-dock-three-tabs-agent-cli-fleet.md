@@ -1,5 +1,13 @@
 # The agent dock becomes three tabs — Agent, CLI, Fleet — and drops the Kanban pane
 
+<!-- board-collapse-08 -->
+> **FOLDED IN 2026-09-04 (Board Collapse 08).** *The Agent Dock Opens Below The Top-Right Cluster Instead Of Displacing It* has been **merged into this plan and deleted**. It was a loose card whose entire collision analysis was written against a **two-tab** dock (`#dock-tabs` holding Agent and Kanban) — which is what `shell.html` still has at HEAD, and which this plan replaces with three tabs. Landing it separately would have meant redoing that analysis twice.
+> 
+> Carry from it: keep the top-right control cluster anchored to the shell's right edge and open the dock **below** it rather than sliding the cluster by `--dock-width`; introduce `--cluster-band: calc(6px + 36px + 4px)` consumed by both `#agent-dock` and `#dock-splitter`; delete `--dock-width` together with its four writers in `shell.js`; and rewrite `shell-terminal-strip.test.js:1116-1132` to assert both the negative and the positive. The 648px dock width is unchanged.
+> 
+> **Re-derive the geometry against three tabs**, not two. The tab strip this plan builds is wider than the one that analysis measured.
+
+
 ## Goal
 
 Restructure the right-hand agent dock from its current two tabs (Agent, Kanban) to three: **Agent**

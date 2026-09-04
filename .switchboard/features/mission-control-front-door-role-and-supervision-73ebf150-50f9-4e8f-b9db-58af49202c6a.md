@@ -4,7 +4,7 @@ description: 'Mission Control — the front door, the role, and how missions sta
 
 # Mission Control — the front door, the role, and how missions start and are watched
 
-**Complexity:** 6
+**Complexity:** 5
 
 ## Goal
 
@@ -41,9 +41,7 @@ a gate that stops a user launching a mission on purpose.
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
 - [ ] [The ready flag gates the Launch button, turning an explicit mission start into a two-click pattern](../plans/ready-filters-bulk-start-it-should-not-gate-an-explicit-launch.md) — **PLAN REVIEWED** — ID: 86af94b7-55e4-4387-a9d7-6c0a56a557a9
-- [ ] [Replace the Mission Control persona with a run sheet that asks what you want and loads only that protocol](../plans/replace-the-mission-control-persona-with-a-run-sheet.md) — **PLAN REVIEWED** — ID: 254f724e-df9c-45e4-b4fc-e9c400eadc99
 - [ ] [A supervised mission has no supervision: `type` is stored, shown and reported, but nothing wakes on a transition](../plans/supervised-missions-wake-the-controller-on-transitions.md) — **PLAN REVIEWED** — ID: 9516c942-a3af-42d3-8607-f904ac4113be
-- [ ] [The /switchboard front door arms against an endpoint that does not exist, delivers the persona twice, and hardcodes the wrong posture](../plans/the-mission-control-front-door-delivers-twice-and-lies-about-the-posture.md) — **PLAN REVIEWED** — ID: 135f2c7b-a953-4a03-ba70-5e20928b97e3
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

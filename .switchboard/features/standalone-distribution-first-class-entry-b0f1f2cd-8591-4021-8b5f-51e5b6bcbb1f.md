@@ -47,7 +47,6 @@ Attach & lifecycle ─────┘
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
 - [ ] [Feature B · B4 — npx Distribution (publish the standalone CLI to npm)](../plans/b4-npx-distribution-publish.md) — **PLAN REVIEWED** — ID: 9329d926-0999-442c-9b00-47e32f490f11
-- [ ] [Make standalone the first-class entry point: `/switchboard` launches or attaches instead of demanding an IDE](../plans/standalone-first-launch-instead-of-demanding-an-ide.md) — **PLAN REVIEWED** — ID: 0c2eb71d-9f39-4f6e-8841-c4a241874ef0
 - [ ] [Standalone CLI: attach to a running server, and give a detached server a way to die](../plans/standalone-cli-attach-and-lifecycle.md) — **PLAN REVIEWED** — ID: 1924d598-f384-496b-a31e-17e00440a42f
 <!-- END SUBTASKS -->
 
