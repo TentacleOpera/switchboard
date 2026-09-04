@@ -13,6 +13,7 @@ The menu:
                     Monitor
                     Teams
                     Agents
+                    Missions
                     Set Filters
   Sync           →  fetch tickets
                     push board state
@@ -35,6 +36,7 @@ Today the menu is a flat list whose contents change with server state (`cli.ts:1
 - **Filters are one-shot menu items**, not a set. Project and search are picked, used, and lost on the way back.
 - **Numbers shift meaning with server state** — offline `[3]` is Setup, online `[3]` is Help — so learned keys are wrong half the time.
 - **Stopping a running server is not offered at all.**
+- **Missions are unreachable from the CLI.** `/mission-control/start`, `/stop`, `/adopt`, `/confirm`, `/handoff` and `/session-log` all exist (`LocalApiServer.ts:9887-9961`) plus a verb rail, and `grep -i mission` in `cli.ts` returns only comments about the protocol's jq reads. An operator over ssh can neither start a mission nor see one running.
 - **A card has exactly one action: dispatch.** Picking a card in a column goes straight to `doDispatch` (`:2183-2186`). There is no way to star, unstar, inspect or move it. Starred is the headline view of this menu and nothing in the CLI can put a card into it — that requires the browser.
 - **Tracker sync is not reachable from the CLI.** The capability itself is well covered — `e7e9f2f5` (*Board sync is a capability all three providers implement*, Planned) carries five subtasks on the provider seam, its contract test, Notion's misnamed backup, ClickUp restore orchestration and the Linear planId anchor. What none of that touches is the CLI: `grep` for a sync, tickets or integration subcommand in `cli.ts` returns nothing. Sync exists through the panel and the HTTP verb rail (`_handleTicketsVerb`, `LocalApiServer.ts:6117`) only, so an operator over ssh cannot reach any of it.
 
@@ -87,6 +89,7 @@ Star is what this menu needs: Starred is a view, and a flag is what puts a card 
 | **Monitor** | the same status, refreshing on a timer — **new** |
 | **Teams** | view teams, start a team |
 | **Agents** | the agent roster |
+| **Missions** | running missions — start, watch, stop |
 | **Set Filters** | the filters applied to everything above |
 
 Starred is first because it is the view the operator opens most and cannot currently reach at all.
@@ -94,6 +97,10 @@ Starred is first because it is the view the operator opens most and cannot curre
 **Status and Monitor are two entries, not one.** Status answers "what is the fleet doing right now" and returns to the menu. Monitor is the one an operator leaves open on a second screen or a phone while a feature runs — the same content, redrawn on an interval, until a key exits. Only Status exists today.
 
 Monitor is the one genuinely new capability in this sub menu. Keep it small: an interval, a redraw, and a key to leave. It does not need its own filters, its own layout language, or alerting — it is Status on a loop, and anything more is a different feature.
+
+**Missions** exposes the mission-control routes that already exist: start one, watch its session log, stop it. The useful three for a human at a terminal; `adopt`, `confirm` and `handoff` are specialised and can wait until asked for.
+
+`73ebf150` (*Mission Control — the front door, the role, and how missions start and are watched*, Planned) owns how missions work, and `d2953390` records that **a mission cannot currently be opened, its launch is not scoped to it, and nothing watches it**. That defect gates the watch half of this entry — start and stop are reachable now, watching is not until it lands.
 
 ### 3. Set Filters holds what the others narrow by
 
@@ -126,7 +133,8 @@ Direct actions, unchanged behaviour, at the bottom. **Setup**, not "First time s
 ## Edge-Case & Dependency Audit
 
 1. **Nothing loses its capability.** Column browsing, fleet inspection, project filtering and search all survive — as Columns, Monitor, and values under Set Filters.
-2. **Teams, Agents and Sync depend on commands that may not exist yet.** Building them is `ef40963b`'s remit (and `e7e9f2f5`'s for sync), not this card's. An entry with nothing behind it is left out until its command lands — an entry that errors is worse than an absent one.
+2. **Teams, Agents, Sync and Missions depend on commands that may not exist yet.** Building them is `ef40963b`'s remit — `e7e9f2f5`'s for sync, `73ebf150`'s for missions — not this card's. An entry with nothing behind it is left out until its command lands; an entry that errors is worse than an absent one.
+2b. **The watch half of Missions is gated on `d2953390`**, which records that a mission cannot be opened and nothing watches it. Start and stop can ship before it; watching cannot.
 3. **Server-offline state** greys entries with their keys intact; it never renumbers.
 4. **Stop needs to be a real shutdown**, not a signal kill — see `8eba302d`, which covers exactly this on Windows.
 5. **`9572d35f`** fixes what a column listing contains (excluding subtasks). Independent of this and still needed.
@@ -142,7 +150,7 @@ Direct actions, unchanged behaviour, at the bottom. **Setup**, not "First time s
 ## Verification Plan
 
 1. The menu is the five entries above, in that order, with stable keys.
-2. Fleet command opens the seven entries listed.
+2. Fleet command opens the eight entries listed.
 2b. Status reports once and returns; Monitor redraws on an interval until a key exits.
 2c. Monitor with the server stopped reports that and stops, rather than looping on failures.
 3. Starred shows only starred cards, across all columns, with no column step.
@@ -154,7 +162,8 @@ Direct actions, unchanged behaviour, at the bottom. **Setup**, not "First time s
 4. Set Filters narrows every view under Fleet command, and each says what is filtering it.
 5. One key clears all filters.
 6. Launch offers Local and Remote; with a server running the entry reads Stop and stops it.
-7. Teams and Agents perform real actions.
+7. Teams, Agents and Missions perform real actions.
+7b. Missions can start and stop a mission from the CLI; watching works once `d2953390` lands.
 8. Sync fetches tickets and reports what changed, and names the active provider.
 9. Sync against an unconfigured tracker explains that and offers the configuration path.
 10. Keys mean the same thing whether or not a server is running.
