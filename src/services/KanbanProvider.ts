@@ -27,7 +27,6 @@ import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, pa
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord, type WorktreeRow, type ColumnUpdateOutcome } from './KanbanDatabase';
 import { compareByPrecedence, type SortMode } from './kanbanOrdering';
 import type { FeatureWatchRecord } from './PlanIngestionEngine';
-import { appendFeatureClobberDiag } from './featureClobberDiag'; // DIAGNOSTIC (is_feature clobber) — remove with the probes
 import { GlobalIntegrationConfigService, type ScheduledJob, type SchedulerConfig } from './GlobalIntegrationConfigService';
 import { BOARD_DRIVING_CONTRACT as SHARED_BOARD_DRIVING_CONTRACT } from './schedulerPresets';
 import { KanbanMigration } from './KanbanMigration';
@@ -533,9 +532,6 @@ export class KanbanProvider implements vscode.Disposable {
         const persistedWorkspace = this._context.workspaceState.get<{ index: number; name: string } | null>('kanban.lastSelectedWorkspace', null);
         this._currentWorkspaceRoot = this._resolvePersistedWorkspace(persistedWorkspace);
         if (this._currentWorkspaceRoot) {
-            // Phase 1 Workstream A: mark this workspace as active so the idle-eviction
-            // sweep exempts it (the board the user is looking at stays resident).
-            KanbanDatabase.setActiveWorkspaceRoot(this._currentWorkspaceRoot);
             // The active-project filter lives in ONE store: the per-workspace DB
             // config row `kanban.activeProjectFilter`. It survives restarts by
             // itself — nothing about it ever needs restoring from workspaceState.
@@ -1600,9 +1596,6 @@ export class KanbanProvider implements vscode.Disposable {
         }
         if (this._currentWorkspaceRoot !== resolved) {
             this._currentWorkspaceRoot = resolved;
-            // Phase 1 Workstream A: update the active-workspace exemption so the eviction
-            // sweep now protects the newly-focused workspace and may evict the previous one.
-            KanbanDatabase.setActiveWorkspaceRoot(resolved);
             this._onWorkspaceChangeEmitter.fire(resolved);
             void this._drainRetiredWorktreeModeStash(resolved)
                 .catch(e => console.warn('[KanbanProvider] setCurrentWorkspaceRoot: failed to drain retired worktree mode stash:', e));
@@ -15973,18 +15966,6 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
         if (!db || !(await db.ensureReady())) {
             return { success: false, error: 'Kanban database not available.' };
         }
-        // DIAGNOSTIC (is_feature clobber investigation): is the Provider writing is_feature=1 to the
-        // SAME in-memory sql.js instance the GlobalPlanWatcherService reads/persists? The watcher
-        // resolves its DB via KanbanDatabase.forWorkspace(workspaceRoot) (GlobalPlanWatcherService.ts:451).
-        // If these two are NOT ===, the watcher can flush a stale snapshot over this write —
-        // clobber candidate ❷. If they ARE ===, ❷ is dead and the clobber is an explicit demotion
-        // (watch for the FEATURE CLOBBER log). See docs/investigation-feature-is_feature-clobber.md.
-        const watcherDb = KanbanDatabase.forWorkspace(workspaceRoot);
-        const instanceCheck =
-            `createFeatureFromPlanIds DB-instance check: provider=${db.instanceId} (dbPath=${db.dbPath}), ` +
-            `watcher=${watcherDb.instanceId} (dbPath=${watcherDb.dbPath}), sameInstance=${db === watcherDb}`;
-        console.log(`[KanbanProvider] ${instanceCheck}`);
-        appendFeatureClobberDiag(workspaceRoot, instanceCheck);
         const workspaceId = await db.getWorkspaceId();
         if (!workspaceId) {
             return { success: false, error: 'Workspace ID not found. Cannot create feature.' };
@@ -16128,12 +16109,28 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
         GlobalPlanWatcherService.registerPendingCreation(featurePath);
         await fs.promises.writeFile(featurePath, featureContent, 'utf8');
 
+        const successfullyLinked: string[] = [];
         for (const st of subtasks) {
-            // Use planId (not sessionId) — file-watcher-imported plans have session_id=''
-            // and getPlanBySessionId('') would find an arbitrary other plan instead.
-            const linkOk = await db.updateFeatureStatus(st.planId || st.sessionId, 0, effectiveFeaturePlanId);
+            const targetId = String(st.planId || st.sessionId || '');
+            // Guard: skip any subtask whose resolved row is the feature itself.
+            if (st.planId === effectiveFeaturePlanId || st.sessionId === effectiveFeaturePlanId || (st.planFile && st.planFile === featurePlanFile)) {
+                console.warn(`[KanbanProvider] createFeatureFromPlanIds: skipping subtask that matches feature itself (${targetId})`);
+                if (targetId && !skippedPlanIds.includes(targetId)) {
+                    skippedPlanIds.push(targetId);
+                }
+                continue;
+            }
+            // Use planId, with sessionId as explicit fallback parameter (not coalesced)
+            const linkOk = await db.updateFeatureStatus(st.planId, 0, effectiveFeaturePlanId, st.sessionId);
             if (!linkOk) {
-                console.warn(`[KanbanProvider] createFeatureFromPlanIds: updateFeatureStatus failed for subtask ${st.planId}`);
+                console.warn(`[KanbanProvider] createFeatureFromPlanIds: updateFeatureStatus failed for subtask ${targetId}`);
+                if (targetId && !skippedPlanIds.includes(targetId)) {
+                    skippedPlanIds.push(targetId);
+                }
+            } else {
+                if (targetId) {
+                    successfullyLinked.push(targetId);
+                }
             }
         }
         // Propagate the feature's resolved project onto every subtask (invariant: a
@@ -16180,7 +16177,7 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
             success: true,
             featurePlanId: effectiveFeaturePlanId,
             featureSessionId: sessionId,
-            linked: subtasks.map((st: any) => String(st.planId)),
+            linked: successfullyLinked,
             skipped: skippedPlanIds,
         };
     }

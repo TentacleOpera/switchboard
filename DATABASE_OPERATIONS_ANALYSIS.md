@@ -20,7 +20,7 @@ The panel is divided into 4 subsections:
 - **Edit Path** button (`db-edit-path-btn`)
 - **Test** button (`db-test-connection-btn`)
 - **Use Local DB** button (`db-use-local-btn`)
-- Cloud preset buttons: Google Drive, Dropbox, iCloud
+- Cloud preset buttons: *Retired* (Google Drive, Dropbox, iCloud presets removed; cloud sync folder warnings active)
 
 ### 2. Archive Storage (lines 1720-1730)
 **UI Elements:**
@@ -104,24 +104,9 @@ document.getElementById('db-use-local-btn')?.addEventListener('click', () => {
 
 ---
 
-### 4. Cloud Preset Buttons
+### 4. Cloud Preset Buttons (RETIRED)
 
-**Frontend Handlers** (`implementation.html:3965-3973`):
-```javascript
-document.getElementById('db-preset-google-btn')?.addEventListener('click', () => {
-    vscode.postMessage({ type: 'setPresetDbPath', preset: 'google-drive' });
-});
-document.getElementById('db-preset-dropbox-btn')?.addEventListener('click', () => {
-    vscode.postMessage({ type: 'setPresetDbPath', preset: 'dropbox' });
-});
-document.getElementById('db-preset-icloud-btn')?.addEventListener('click', () => {
-    vscode.postMessage({ type: 'setPresetDbPath', preset: 'icloud' });
-});
-```
-
-**Expected Behavior:** Set database path to common cloud storage locations.
-
-**Status:** Needs verification - handlers may be missing.
+**Status:** Retired. The preset buttons (`db-preset-google-btn`, `db-preset-dropbox-btn`, `db-preset-icloud-btn`) and the `setPresetDbPath` verb have been removed. Cloud sync folders (Google Drive, Dropbox, iCloud, OneDrive) are incompatible with SQLite full-file replacement and cause corruption/conflicts. Users pointed at presets are automatically migrated to the global store on launch with sources preserved as `.migrated.bak`. Custom paths inside sync folders trigger a warning with an explicit override.
 
 ---
 
@@ -353,7 +338,8 @@ const resetKanbanDbDisposable = vscode.commands.registerCommand('switchboard.res
 - [ ] Edit Path button opens file picker and updates path
 - [ ] Test button validates database connectivity
 - [ ] Use Local DB resets to default location
-- [ ] Cloud preset buttons set correct paths
+- [x] Cloud preset buttons retired; preset paths migrate to global store on launch
+- [x] Custom sync-folder DB paths warn with explicit override
 - [ ] Set Archive Path configures DuckDB archive location
 - [ ] Install DuckDB button guides installation
 - [ ] Open DuckDB Terminal launches CLI

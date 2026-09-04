@@ -4,6 +4,7 @@ import * as os from 'os';
 import * as fs from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { getGlobalArchiveDbPath, validateGlobalDbPath } from './globalStore';
 
 const execFileAsync = promisify(execFile);
 
@@ -45,10 +46,20 @@ export class ArchiveManager {
     private _archivePath: string | null;
     private _outputChannel?: vscode.OutputChannel;
 
-    constructor(workspaceRoot: string, outputChannel?: vscode.OutputChannel) {
-        const config = vscode.workspace.getConfiguration('switchboard');
-        const configuredPath = config.get<string>('archive.dbPath', '');
-        this._archivePath = this._resolveArchivePath(configuredPath, workspaceRoot);
+    constructor(workspaceRoot?: string, outputChannel?: vscode.OutputChannel, explicitArchivePath?: string) {
+        if (explicitArchivePath && explicitArchivePath.trim()) {
+            this._archivePath = path.resolve(explicitArchivePath.trim());
+        } else {
+            let configuredPath = '';
+            try {
+                const config = vscode.workspace.getConfiguration('switchboard');
+                configuredPath = config.get<string>('archive.dbPath', '') || '';
+            } catch {
+                // Standalone / headless mode outside VS Code
+                configuredPath = process.env.SWITCHBOARD_ARCHIVE_DB_PATH || '';
+            }
+            this._archivePath = this._resolveArchivePath(configuredPath, workspaceRoot || process.cwd()) || getGlobalArchiveDbPath();
+        }
         this._outputChannel = outputChannel;
     }
 
@@ -292,6 +303,272 @@ ON CONFLICT (review_id) DO UPDATE SET
             const msg = error instanceof Error ? error.message : String(error);
             this._log(`Failed to archive review outcome ${outcome.reviewId}: ${msg}`);
             return false;
+        }
+    }
+
+    /**
+     * Archive event/log rows in batches to DuckDB.
+     */
+    public async archivePlanEvents(events: any[]): Promise<number> {
+        if (!this._archivePath || events.length === 0) return 0;
+        const cli = await this.checkDuckDbCli();
+        if (!cli.installed) return 0;
+        await this.ensureArchiveSchema();
+
+        let inserted = 0;
+        const BATCH = 100;
+        for (let i = 0; i < events.length; i += BATCH) {
+            const batch = events.slice(i, i + BATCH);
+            const valStrings = batch.map(e => `(
+                ${Number(e.event_id)},
+                ${this._escapeDuckDb(e.plan_id)},
+                ${this._escapeDuckDb(e.event_type || 'workflow_event')},
+                ${this._escapeDuckDb(e.workflow || '')},
+                ${this._escapeDuckDb(e.action || '')},
+                ${this._escapeDuckDb(e.timestamp)},
+                ${this._escapeDuckDb(e.device_id || '')},
+                ${this._escapeDuckDb(e.vector_clock || '')},
+                ${this._escapeDuckDb(e.payload || '{}')},
+                ${this._escapeDuckDb(e.workspace_id || '')},
+                CURRENT_TIMESTAMP
+            )`).join(',\n');
+
+            const sql = `INSERT INTO plan_events (event_id, plan_id, event_type, workflow, action, timestamp, device_id, vector_clock, payload, workspace_id, archived_at)
+            VALUES ${valStrings}
+            ON CONFLICT (event_id) DO NOTHING;`;
+
+            try {
+                await execFileAsync('duckdb', [this._archivePath, '-c', sql]);
+                inserted += batch.length;
+            } catch (err: any) {
+                this._log(`archivePlanEvents batch error: ${err?.message || err}`);
+            }
+        }
+        return inserted;
+    }
+
+    public async archiveActivityLogs(logs: any[]): Promise<number> {
+        if (!this._archivePath || logs.length === 0) return 0;
+        const cli = await this.checkDuckDbCli();
+        if (!cli.installed) return 0;
+        await this.ensureArchiveSchema();
+
+        let inserted = 0;
+        const BATCH = 100;
+        for (let i = 0; i < logs.length; i += BATCH) {
+            const batch = logs.slice(i, i + BATCH);
+            const valStrings = batch.map(l => `(
+                ${Number(l.id)},
+                ${this._escapeDuckDb(l.timestamp)},
+                ${this._escapeDuckDb(l.event_type)},
+                ${this._escapeDuckDb(l.payload || '{}')},
+                ${this._escapeDuckDb(l.correlation_id || null)},
+                ${this._escapeDuckDb(l.session_id || null)},
+                ${this._escapeDuckDb(l.workspace_id || null)},
+                CURRENT_TIMESTAMP
+            )`).join(',\n');
+
+            const sql = `INSERT INTO activity_log (id, timestamp, event_type, payload, correlation_id, session_id, workspace_id, archived_at)
+            VALUES ${valStrings}
+            ON CONFLICT (id) DO NOTHING;`;
+
+            try {
+                await execFileAsync('duckdb', [this._archivePath, '-c', sql]);
+                inserted += batch.length;
+            } catch (err: any) {
+                this._log(`archiveActivityLogs batch error: ${err?.message || err}`);
+            }
+        }
+        return inserted;
+    }
+
+    public async archiveJobRuns(runs: any[]): Promise<number> {
+        if (!this._archivePath || runs.length === 0) return 0;
+        const cli = await this.checkDuckDbCli();
+        if (!cli.installed) return 0;
+        await this.ensureArchiveSchema();
+
+        let inserted = 0;
+        const BATCH = 100;
+        for (let i = 0; i < runs.length; i += BATCH) {
+            const batch = runs.slice(i, i + BATCH);
+            const valStrings = batch.map(r => `(
+                ${Number(r.id)},
+                ${this._escapeDuckDb(r.timestamp)},
+                ${this._escapeDuckDb(r.job)},
+                ${this._escapeDuckDb(r.summary)},
+                ${this._escapeDuckDb(r.source || '')},
+                ${this._escapeDuckDb(r.workspace_id || '')},
+                CURRENT_TIMESTAMP
+            )`).join(',\n');
+
+            const sql = `INSERT INTO job_runs (id, timestamp, job, summary, source, workspace_id, archived_at)
+            VALUES ${valStrings}
+            ON CONFLICT (id) DO NOTHING;`;
+
+            try {
+                await execFileAsync('duckdb', [this._archivePath, '-c', sql]);
+                inserted += batch.length;
+            } catch (err: any) {
+                this._log(`archiveJobRuns batch error: ${err?.message || err}`);
+            }
+        }
+        return inserted;
+    }
+
+    public async archiveBoardMoveRequests(moves: any[]): Promise<number> {
+        if (!this._archivePath || moves.length === 0) return 0;
+        const cli = await this.checkDuckDbCli();
+        if (!cli.installed) return 0;
+        await this.ensureArchiveSchema();
+
+        let inserted = 0;
+        const BATCH = 100;
+        for (let i = 0; i < moves.length; i += BATCH) {
+            const batch = moves.slice(i, i + BATCH);
+            const valStrings = batch.map(m => `(
+                ${Number(m.id)},
+                ${this._escapeDuckDb(m.file)},
+                ${this._escapeDuckDb(m.plan_id)},
+                ${this._escapeDuckDb(m.to_column)},
+                ${this._escapeDuckDb(m.status)},
+                ${this._escapeDuckDb(m.reason || '')},
+                ${this._escapeDuckDb(m.timestamp)},
+                ${this._escapeDuckDb(m.workspace_id || '')},
+                CURRENT_TIMESTAMP
+            )`).join(',\n');
+
+            const sql = `INSERT INTO board_move_requests (id, file, plan_id, to_column, status, reason, timestamp, workspace_id, archived_at)
+            VALUES ${valStrings}
+            ON CONFLICT (id) DO NOTHING;`;
+
+            try {
+                await execFileAsync('duckdb', [this._archivePath, '-c', sql]);
+                inserted += batch.length;
+            } catch (err: any) {
+                this._log(`archiveBoardMoveRequests batch error: ${err?.message || err}`);
+            }
+        }
+        return inserted;
+    }
+
+    public async archiveDormantWorkspace(record: {
+        workspaceId: string;
+        name?: string;
+        exportPath: string;
+        lastActivityAt?: string;
+        metadata?: any;
+    }): Promise<boolean> {
+        if (!this._archivePath) return false;
+        const cli = await this.checkDuckDbCli();
+        if (!cli.installed) return false;
+        await this.ensureArchiveSchema();
+
+        const metaJson = JSON.stringify(record.metadata || {});
+        const sql = `INSERT INTO dormant_workspaces (workspace_id, name, archived_at, export_path, last_activity_at, metadata)
+        VALUES (
+            ${this._escapeDuckDb(record.workspaceId)},
+            ${this._escapeDuckDb(record.name || '')},
+            CURRENT_TIMESTAMP,
+            ${this._escapeDuckDb(record.exportPath)},
+            ${this._escapeDuckDb(record.lastActivityAt || null)},
+            ${this._escapeDuckDb(metaJson)}
+        )
+        ON CONFLICT (workspace_id) DO UPDATE SET
+            export_path = EXCLUDED.export_path,
+            archived_at = CURRENT_TIMESTAMP,
+            metadata = EXCLUDED.metadata;`;
+
+        try {
+            await execFileAsync('duckdb', [this._archivePath, '-c', sql]);
+            this._log(`Archived dormant workspace: ${record.workspaceId} (${record.exportPath})`);
+            return true;
+        } catch (err: any) {
+            this._log(`Failed to archive dormant workspace: ${err?.message || err}`);
+            return false;
+        }
+    }
+
+    /**
+     * Verify presence of IDs in DuckDB archive table. Key to copy-verify-delete transaction.
+     */
+    public async verifyArchivedIds(table: string, idColumn: string, ids: (number | string)[]): Promise<(number | string)[]> {
+        if (!this._archivePath || ids.length === 0) return [];
+        const cli = await this.checkDuckDbCli();
+        if (!cli.installed) return [];
+
+        const verified: (number | string)[] = [];
+        const isNumeric = typeof ids[0] === 'number';
+        const BATCH = 200;
+
+        for (let i = 0; i < ids.length; i += BATCH) {
+            const chunk = ids.slice(i, i + BATCH);
+            const idList = chunk.map(id => isNumeric ? id : this._escapeDuckDb(String(id))).join(',');
+            const sql = `SELECT ${idColumn} FROM ${table} WHERE ${idColumn} IN (${idList})`;
+            try {
+                const { stdout } = await execFileAsync('duckdb', [
+                    '-readonly',
+                    '-json',
+                    this._archivePath,
+                    sql
+                ]);
+                const rows = JSON.parse(stdout || '[]');
+                for (const r of rows) {
+                    const val = r[idColumn];
+                    if (val !== undefined && val !== null) {
+                        verified.push(isNumeric ? Number(val) : String(val));
+                    }
+                }
+            } catch (err) {
+                this._log(`Failed to verify IDs in ${table}: ${err}`);
+            }
+        }
+        return verified;
+    }
+
+    /**
+     * Retrieve archived plan events for history views (opt-in archive join).
+     */
+    public async getArchivedPlanEvents(planId: string): Promise<any[]> {
+        if (!this._archivePath || !planId) return [];
+        const cli = await this.checkDuckDbCli();
+        if (!cli.installed || !fs.existsSync(this._archivePath)) return [];
+
+        const sql = `SELECT * FROM plan_events WHERE plan_id = ${this._escapeDuckDb(planId)} ORDER BY timestamp ASC`;
+        try {
+            const { stdout } = await execFileAsync('duckdb', [
+                '-readonly',
+                '-json',
+                this._archivePath,
+                sql
+            ]);
+            return JSON.parse(stdout || '[]');
+        } catch (err) {
+            this._log(`getArchivedPlanEvents failed: ${err}`);
+            return [];
+        }
+    }
+
+    /**
+     * Retrieve list of dormant workspaces recorded in DuckDB archive.
+     */
+    public async getArchivedDormantWorkspaces(): Promise<any[]> {
+        if (!this._archivePath) return [];
+        const cli = await this.checkDuckDbCli();
+        if (!cli.installed || !fs.existsSync(this._archivePath)) return [];
+
+        const sql = `SELECT * FROM dormant_workspaces ORDER BY archived_at DESC`;
+        try {
+            const { stdout } = await execFileAsync('duckdb', [
+                '-readonly',
+                '-json',
+                this._archivePath,
+                sql
+            ]);
+            return JSON.parse(stdout || '[]');
+        } catch (err) {
+            this._log(`getArchivedDormantWorkspaces failed: ${err}`);
+            return [];
         }
     }
 

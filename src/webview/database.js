@@ -108,17 +108,34 @@
         backupCountBadge.textContent = `${backups.length} snapshot${backups.length === 1 ? '' : 's'}`;
 
         if (backups.length === 0) {
-            backupsContainer.innerHTML = '<div style="padding: 12px; text-align: center; color: var(--text-secondary); font-size: 11px;">No backups found in .switchboard/dbbackup/</div>';
+            backupsContainer.innerHTML = '<div style="padding: 12px; text-align: center; color: var(--text-secondary); font-size: 11px;">No backups found</div>';
         } else {
-            backupsContainer.innerHTML = backups.map(b => `
-                <div class="backup-item">
-                    <div>
-                        <div style="font-weight: 500; color: var(--text-primary);">${escapeHtml(b.filename)}</div>
-                        <div class="backup-meta">Reason: ${escapeHtml(b.reason)} • ${formatBytes(b.sizeBytes)}</div>
+            backupsContainer.innerHTML = backups.map(b => {
+                const badge = b.failed
+                    ? '<span class="badge danger" style="margin-left: 6px; font-size: 9px; padding: 1px 4px;">FAILED</span>'
+                    : (b.verified
+                        ? '<span class="badge info" style="margin-left: 6px; font-size: 9px; padding: 1px 4px; color: var(--accent-green);">VERIFIED</span>'
+                        : '<span class="badge neutral" style="margin-left: 6px; font-size: 9px; padding: 1px 4px;">LEGACY</span>');
+                const plansPart = b.planCount ? ` • ${b.planCount} plan${b.planCount === 1 ? '' : 's'}` : '';
+                const restoreBtn = !b.failed
+                    ? `<button class="btn btn-restore-backup" data-backup-id="${escapeHtml(b.filename)}" style="padding: 2px 6px; font-size: 10px; margin-left: 8px;">RESTORE</button>`
+                    : '';
+                return `
+                    <div class="backup-item" style="display: flex; align-items: center; justify-content: space-between; padding: 6px 8px; border-bottom: 1px solid var(--border-color);">
+                        <div style="flex: 1; min-width: 0;">
+                            <div style="font-weight: 500; color: var(--text-primary); display: flex; align-items: center;">
+                                <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(b.filename)}</span>
+                                ${badge}
+                            </div>
+                            <div class="backup-meta">Reason: ${escapeHtml(b.reason)} • ${formatBytes(b.sizeBytes)}${plansPart}</div>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 6px;">
+                            <div class="backup-meta">${formatDate(b.timestamp)}</div>
+                            ${restoreBtn}
+                        </div>
                     </div>
-                    <div class="backup-meta">${formatDate(b.timestamp)}</div>
-                </div>
-            `).join('');
+                `;
+            }).join('');
         }
 
         // 3. Projections Section
@@ -268,6 +285,128 @@
         await loadStatus();
     });
 
+    // ─── Backup & Restore Actions ──────────────────────────────────────────────
+    const btnBackupNow = document.getElementById('btn-backup-now');
+    if (btnBackupNow) {
+        btnBackupNow.addEventListener('click', async () => {
+            btnBackupNow.disabled = true;
+            btnBackupNow.textContent = 'BACKING UP…';
+            try {
+                if (typeof vscode !== 'undefined' && vscode.postMessage) {
+                    vscode.postMessage({ type: 'createBackup', reason: 'manual-ui' });
+                } else {
+                    await fetch('/database/backup', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ reason: 'manual-ui' }),
+                    });
+                }
+            } finally {
+                setTimeout(async () => {
+                    btnBackupNow.disabled = false;
+                    btnBackupNow.textContent = 'BACKUP NOW';
+                    await loadStatus();
+                }, 1000);
+            }
+        });
+    }
+
+    // Immediate-acting restore on backup item click (per project rule, no confirmation dialog)
+    document.getElementById('backups-container').addEventListener('click', async (e) => {
+        const target = e.target;
+        if (!target || !target.classList.contains('btn-restore-backup')) return;
+        const backupId = target.getAttribute('data-backup-id');
+        if (!backupId) return;
+
+        target.disabled = true;
+        target.textContent = 'RESTORING…';
+        try {
+            if (typeof vscode !== 'undefined' && vscode.postMessage) {
+                vscode.postMessage({ type: 'restoreBackup', backupId });
+            } else {
+                await fetch('/database/restore', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ backupId }),
+                });
+            }
+        } finally {
+            setTimeout(loadStatus, 1000);
+        }
+    });
+
+    // ─── Project Export & Import Actions ────────────────────────────────────────
+    const exportPanel = document.getElementById('export-flow-panel');
+    const importPanel = document.getElementById('import-flow-panel');
+    const exportStatusDiv = document.getElementById('project-export-import-status');
+
+    document.getElementById('btn-export-project').addEventListener('click', () => {
+        exportPanel.classList.toggle('hidden');
+        importPanel.classList.add('hidden');
+    });
+
+    document.getElementById('btn-cancel-export').addEventListener('click', () => {
+        exportPanel.classList.add('hidden');
+    });
+
+    document.getElementById('btn-confirm-export').addEventListener('click', async () => {
+        const destPath = document.getElementById('export-dest-input').value.trim();
+        if (!destPath) return;
+
+        exportStatusDiv.style.display = 'block';
+        exportStatusDiv.textContent = 'Exporting workspace…';
+        try {
+            const res = await fetch('/database/export', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ destPath, workspaceId: window.__switchboardWorkspaceId || 'default' }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                exportStatusDiv.textContent = `Export complete: ${destPath}`;
+                exportPanel.classList.add('hidden');
+            } else {
+                exportStatusDiv.textContent = `Export error: ${data.error || 'Failed'}`;
+            }
+        } catch (err) {
+            exportStatusDiv.textContent = `Export failed: ${err.message || err}`;
+        }
+    });
+
+    document.getElementById('btn-import-project').addEventListener('click', () => {
+        importPanel.classList.toggle('hidden');
+        exportPanel.classList.add('hidden');
+    });
+
+    document.getElementById('btn-cancel-import').addEventListener('click', () => {
+        importPanel.classList.add('hidden');
+    });
+
+    document.getElementById('btn-confirm-import').addEventListener('click', async () => {
+        const srcPath = document.getElementById('import-src-input').value.trim();
+        if (!srcPath) return;
+
+        exportStatusDiv.style.display = 'block';
+        exportStatusDiv.textContent = 'Importing workspace…';
+        try {
+            const res = await fetch('/database/import', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ srcPath }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                exportStatusDiv.textContent = `Import complete: imported ${data.result?.importedWorkspaceId || 'workspace'}`;
+                importPanel.classList.add('hidden');
+                setTimeout(loadStatus, 1000);
+            } else {
+                exportStatusDiv.textContent = `Import error: ${data.error || 'Failed'}`;
+            }
+        } catch (err) {
+            exportStatusDiv.textContent = `Import failed: ${err.message || err}`;
+        }
+    });
+
     // Rebuild Reinitialization Flow (Explicit multi-step flow)
     const rebuildConfirmBox = document.getElementById('rebuild-confirm-box');
     document.getElementById('btn-start-rebuild-flow').addEventListener('click', () => {
@@ -309,6 +448,196 @@
         setTimeout(loadStatus, 1000);
     });
 
+    // ─── Storage Stats & Retention ───────────────────────────────────────────
+    async function loadStorageStats() {
+        try {
+            let stats = null;
+            try {
+                const res = await fetch('/database/storage-stats');
+                const data = await res.json();
+                if (data.success) stats = data.stats;
+            } catch {
+                if (typeof vscode !== 'undefined' && vscode.postMessage) {
+                    vscode.postMessage({ type: 'getDatabaseStorageStats' });
+                }
+            }
+
+            if (stats) {
+                renderStorageStats(stats);
+            }
+        } catch (err) {
+            console.warn('[Database] Failed to load storage stats:', err);
+        }
+    }
+
+    function renderStorageStats(stats) {
+        if (!stats) return;
+        const totalSizeEl = document.getElementById('storage-total-size');
+        const growthDeltaEl = document.getElementById('storage-growth-delta');
+        const lastAuditedEl = document.getElementById('storage-last-audited');
+        const badgeEl = document.getElementById('retention-status-badge');
+
+        if (totalSizeEl) totalSizeEl.textContent = formatBytes(stats.totalBytes);
+        if (growthDeltaEl) {
+            const delta = stats.growthBytes || 0;
+            const prefix = delta > 0 ? '+' : '';
+            growthDeltaEl.textContent = `${prefix}${formatBytes(delta)}`;
+            growthDeltaEl.style.color = delta > 0 ? 'var(--accent-orange, #ed8936)' : 'var(--text-primary)';
+        }
+        if (lastAuditedEl) lastAuditedEl.textContent = formatDate(stats.checkedAt);
+
+        const policy = stats.retentionPolicy || {};
+        if (badgeEl) {
+            if (policy.enabled) {
+                badgeEl.textContent = 'Retention: Active';
+                badgeEl.className = 'badge info';
+            } else {
+                badgeEl.textContent = 'Retention: Disabled';
+                badgeEl.className = 'badge neutral';
+            }
+        }
+        const enabledCheckbox = document.getElementById('retention-enabled-input');
+        if (enabledCheckbox) enabledCheckbox.checked = policy.enabled === true;
+        const daysInput = document.getElementById('retention-days-input');
+        if (daysInput && policy.eventRetentionDays) daysInput.value = policy.eventRetentionDays;
+        const monthsInput = document.getElementById('retention-months-input');
+        if (monthsInput && policy.dormantWorkspaceMonths) monthsInput.value = policy.dormantWorkspaceMonths;
+
+        const tablesTbody = document.getElementById('storage-tables-tbody');
+        if (tablesTbody && Array.isArray(stats.tables)) {
+            tablesTbody.innerHTML = stats.tables.map(t => {
+                const deltaPrefix = t.rowDelta > 0 ? '+' : '';
+                const deltaColor = t.rowDelta > 0 ? 'var(--accent-orange, #ed8936)' : 'var(--text-secondary)';
+                return `
+                    <tr style="border-bottom: 1px solid var(--border-color);">
+                        <td style="padding: 4px 8px; font-weight: 500;">${escapeHtml(t.tableName)}</td>
+                        <td style="padding: 4px 8px; text-align: right;">${t.rowCount.toLocaleString()}</td>
+                        <td style="padding: 4px 8px; text-align: right;">${formatBytes(t.estimatedBytes)}</td>
+                        <td style="padding: 4px 8px; text-align: right; color: ${deltaColor};">${deltaPrefix}${t.rowDelta}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        const wsTbody = document.getElementById('storage-workspaces-tbody');
+        if (wsTbody && Array.isArray(stats.workspaces)) {
+            wsTbody.innerHTML = stats.workspaces.map(w => {
+                const statusBadge = w.isDormant
+                    ? `<span class="badge danger" style="padding: 1px 4px; font-size: 9px;">DORMANT</span> <button class="btn btn-reactivate-ws" data-ws="${escapeHtml(w.workspaceId)}" style="padding: 1px 4px; font-size: 9px; margin-left: 4px;">REACTIVATE</button>`
+                    : '<span class="badge reachable" style="padding: 1px 4px; font-size: 9px;">ACTIVE</span>';
+                const idDisplay = w.workspaceId.length > 20 ? `${w.workspaceId.slice(0, 18)}…` : w.workspaceId;
+                return `
+                    <tr style="border-bottom: 1px solid var(--border-color);">
+                        <td style="padding: 4px 8px; font-weight: 500;" title="${escapeHtml(w.workspaceId)}">${escapeHtml(idDisplay)}</td>
+                        <td style="padding: 4px 8px; text-align: right;">${w.plansCount.toLocaleString()}</td>
+                        <td style="padding: 4px 8px; text-align: right;">${w.eventsCount.toLocaleString()}</td>
+                        <td style="padding: 4px 8px; text-align: right;">${w.activityCount.toLocaleString()}</td>
+                        <td style="padding: 4px 8px; text-align: right;">${statusBadge}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+    }
+
+    const btnRefreshStorageStats = document.getElementById('btn-refresh-storage-stats');
+    if (btnRefreshStorageStats) {
+        btnRefreshStorageStats.addEventListener('click', () => loadStorageStats());
+    }
+
+    const retentionStatusEl = document.getElementById('retention-action-status');
+    const btnSaveRetention = document.getElementById('btn-save-retention-config');
+    if (btnSaveRetention) {
+        btnSaveRetention.addEventListener('click', async () => {
+            const enabled = document.getElementById('retention-enabled-input').checked;
+            const eventRetentionDays = parseInt(document.getElementById('retention-days-input').value, 10) || 180;
+            const dormantWorkspaceMonths = parseInt(document.getElementById('retention-months-input').value, 10) || 12;
+
+            retentionStatusEl.style.display = 'block';
+            retentionStatusEl.textContent = 'Saving policy…';
+            try {
+                const res = await fetch('/database/retention/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled, eventRetentionDays, dormantWorkspaceMonths }),
+                });
+                const data = await res.json();
+                if (data.success) {
+                    retentionStatusEl.textContent = 'Policy saved successfully.';
+                    setTimeout(loadStorageStats, 500);
+                } else {
+                    retentionStatusEl.textContent = `Error: ${data.error || 'Failed to save policy'}`;
+                }
+            } catch (err) {
+                retentionStatusEl.textContent = `Error: ${err.message || err}`;
+            }
+        });
+    }
+
+    const btnRunRotation = document.getElementById('btn-run-rotation-now');
+    if (btnRunRotation) {
+        btnRunRotation.addEventListener('click', async () => {
+            btnRunRotation.disabled = true;
+            btnRunRotation.textContent = 'ROTATING…';
+            retentionStatusEl.style.display = 'block';
+            retentionStatusEl.textContent = 'Running retention rotation…';
+            try {
+                const res = await fetch('/database/retention/rotate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ force: true }),
+                });
+                const data = await res.json();
+                if (data.success && data.report?.ran) {
+                    retentionStatusEl.textContent = `Rotation complete: rotated ${data.report.rotated.planEvents} events, ${data.report.rotated.activityLog} logs.`;
+                    setTimeout(() => {
+                        loadStatus();
+                        loadStorageStats();
+                    }, 1000);
+                } else {
+                    retentionStatusEl.textContent = `Rotation skipped/failed: ${data.report?.reason || data.error || 'Check log'}`;
+                }
+            } catch (err) {
+                retentionStatusEl.textContent = `Error: ${err.message || err}`;
+            } finally {
+                btnRunRotation.disabled = false;
+                btnRunRotation.textContent = 'RUN ROTATION NOW';
+            }
+        });
+    }
+
+    // Reactivate workspace delegation
+    const workspacesTable = document.getElementById('storage-workspaces-tbody');
+    if (workspacesTable) {
+        workspacesTable.addEventListener('click', async (e) => {
+            const target = e.target;
+            if (!target || !target.classList.contains('btn-reactivate-ws')) return;
+            const wsId = target.getAttribute('data-ws');
+            if (!wsId) return;
+
+            target.disabled = true;
+            target.textContent = 'REACTIVATING…';
+            try {
+                const res = await fetch('/database/retention/reactivate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ workspaceId: wsId }),
+                });
+                const data = await res.json();
+                if (data.success) {
+                    setTimeout(loadStorageStats, 1000);
+                } else {
+                    alert(`Reactivation failed: ${data.error || 'Unknown error'}`);
+                    target.disabled = false;
+                    target.textContent = 'REACTIVATE';
+                }
+            } catch (err) {
+                alert(`Reactivation failed: ${err.message || err}`);
+                target.disabled = false;
+                target.textContent = 'REACTIVATE';
+            }
+        });
+    }
+
     // ─── Message Handling from Backend ────────────────────────────────────────
     window.addEventListener('message', event => {
         const message = event.data;
@@ -318,6 +647,10 @@
             case 'dbConnectionTested':
             case 'notionConfigUpdated':
                 loadStatus();
+                loadStorageStats();
+                break;
+            case 'databaseStorageStats':
+                if (message.stats) renderStorageStats(message.stats);
                 break;
             default:
                 break;
@@ -326,4 +659,5 @@
 
     // Boot
     loadStatus();
+    loadStorageStats();
 })();

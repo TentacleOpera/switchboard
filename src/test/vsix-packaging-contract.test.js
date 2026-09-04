@@ -218,19 +218,24 @@ check('the .agents control plane the extension seeds WOULD be packaged', () => {
     );
 });
 
-check('protocol files referenced by path live under a packaged root', () => {
-    // Protocols are delivered by path reference rather than CLI skill discovery, so
-    // there is no discovery-time error to notice when one is absent — the agent is
-    // simply told to read a file that is not there. Pin the two facts that keep the
-    // delivery honest: the directory exists, and it ships.
+check('surviving protocol files (improve-plan, improve-feature) live under a packaged root and non-survivors are removed', () => {
+    // Protocols are database rows; only the two user-configurable extension point
+    // defaults (improve-plan and improve-feature) remain as committed files.
     const PROTOCOLS = path.join(REPO_ROOT, '.agents', 'protocols');
     assert.ok(
         fs.existsSync(PROTOCOLS),
-        'protocols must live under .agents/protocols/ — .switchboard/** is excluded from the VSIX, '
-        + 'so a protocol placed there ships to nobody.'
+        'protocols must live under .agents/protocols/'
     );
     const files = walkRel(PROTOCOLS, REPO_ROOT);
-    assert.ok(files.length > 0, '.agents/protocols/ is empty — no protocol would be seeded.');
+    assert.ok(files.length > 0, '.agents/protocols/ must contain surviving protocols.');
+
+    const protocolEntries = fs.readdirSync(PROTOCOLS);
+    assert.deepStrictEqual(
+        protocolEntries.sort(),
+        ['improve-feature', 'improve-plan'].sort(),
+        'Only improve-plan and improve-feature should remain committed in .agents/protocols/ — all others moved to control_plane rows'
+    );
+
     const excluded = files.filter(f => !included(f));
     assert.deepStrictEqual(
         excluded, [],

@@ -136,3 +136,7 @@ Per source database: migrate to head, merge under a transaction with id remappin
 - Is there any reliable enumeration of "workspaces this user has opened", or is discovery necessarily best-effort plus on-open?
 - Should a workspace be removable from the global DB (a "forget this project" operation), and does that cascade to its plans, worktrees, and events?
 - Multi-user machines: is a per-user home store sufficient, or does anyone run Switchboard under a shared account?
+
+## Implementation Summary
+
+Consolidated the Switchboard database topology into a single global store at `~/.switchboard/switchboard.db` (and `kanban-archive.db`), validated with 0700 permissions and security checks against git worktrees. Implemented robust N-to-1 transactional database migration in `dbMerge.ts` handling schema upgrades to head, autoincrement ID remapping, workspace ID collision disambiguation, and legacy column preservation with `.migrated.bak` backups. Completely eliminated `switchboardLocationGuard`, `db-pointer`, and the database-resolution half of `WorkspaceIdentityService` across both VS Code extension and standalone composition roots. Updated standalone CLI and query-kanban skills to resolve the global store path while preserving per-repo markdown mirrors.

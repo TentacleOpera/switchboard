@@ -26,6 +26,10 @@ node_modules/**
 !node_modules/node-pty/prebuilds/**/*.dll
 !node_modules/node-pty/prebuilds/**/*.exe
 !node_modules/node-pty/prebuilds/*/spawn-helper
+# better-sqlite3 native module: same allowlist discipline as node-pty.
+!node_modules/better-sqlite3/package.json
+!node_modules/better-sqlite3/lib/**/*.js
+!node_modules/better-sqlite3/build/Release/**/*.node
 **/*.pdb
 
 # Source files

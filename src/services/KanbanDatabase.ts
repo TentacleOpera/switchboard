@@ -3,7 +3,9 @@ import * as crypto from 'crypto';
 import { createRequire } from 'module';
 import * as os from 'os';
 import * as path from 'path';
-import { isAllowedSwitchboardLocation } from '../utils/switchboardLocationGuard';
+import { ISqliteDriver, ISqliteStatement, BetterSqliteDriver } from './sqliteDriver';
+import { getGlobalDbPath, getGlobalArchiveDbPath } from './globalStore';
+import { mergeDatabase } from './dbMerge';
 import { STATE_KEY_TO_CONFIG } from './stateConfigBridge';
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { generateCodename } from './codenameGenerator';
@@ -41,6 +43,7 @@ export interface WorktreeRow {
     subtask_plan_id: string | null;
     base_branch: string | null;
     tier: string | null;
+    workspace_id?: string;
 }
 
 /** Row projected for live terminal-to-plan attribution. */
@@ -186,6 +189,8 @@ export interface ControlPlaneEntry {
     version: string;
     contentHash: string;
     body: string;
+    delivery?: 'inline' | 'materialize';
+    overrideBody?: string | null;
     workspaceOverride?: string | null;
     updatedAt: string;
 }
@@ -202,30 +207,47 @@ export interface DuplicateCheckResult {
     existingDoc?: ImportedDocEntry;
 }
 
-type SqlJsDatabase = {
-    exec: (sql: string) => void;
-    run: (sql: string, params?: unknown[]) => void;
-    prepare: (sql: string, params?: unknown[]) => {
-        bind: (params?: unknown[]) => boolean;
-        step: () => boolean;
-        getAsObject: () => Record<string, unknown>;
-        free: () => void;
-    };
-    export: () => Uint8Array;
-    getRowsModified: () => number;
-    close?: () => void;
-};
+export interface TableStorageStat {
+    tableName: string;
+    rowCount: number;
+    estimatedBytes: number;
+    rowDelta: number;
+}
 
-type SqlJsStatic = {
-    Database: new (data?: Uint8Array) => SqlJsDatabase;
-};
+export interface WorkspaceStorageStat {
+    workspaceId: string;
+    plansCount: number;
+    eventsCount: number;
+    activityCount: number;
+    totalRows: number;
+    lastActivityAt?: string;
+    isDormant?: boolean;
+}
+
+export interface DatabaseStorageStats {
+    totalBytes: number;
+    previousTotalBytes: number | null;
+    growthBytes: number;
+    checkedAt: string;
+    lastCheckedAt: string | null;
+    tables: TableStorageStat[];
+    workspaces: WorkspaceStorageStat[];
+    retentionPolicy: {
+        enabled: boolean;
+        eventRetentionDays: number;
+        dormantWorkspaceMonths: number;
+        source: string;
+    };
+}
+
+type SqlJsDatabase = ISqliteDriver;
 
 // Table DDL only. Indexes live in SCHEMA_INDEX_STATEMENTS and are applied
 // separately, AFTER _ensureSchemaColumns(), so that an index on a column added in
 // a later schema version cannot fail with "no such column" on a database created
 // before that column existed (CREATE TABLE IF NOT EXISTS skips the already-present
 // table, leaving the new column to be added by reconciliation/migrations first).
-const SCHEMA_TABLES_SQL = `
+export const SCHEMA_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS plans (
     plan_id       TEXT PRIMARY KEY,
     session_id    TEXT NOT NULL,
@@ -316,7 +338,7 @@ CREATE TABLE IF NOT EXISTS projects (
 );
 CREATE TABLE IF NOT EXISTS worktrees (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    branch      TEXT NOT NULL UNIQUE,
+    branch      TEXT NOT NULL,
     path        TEXT NOT NULL,
     feature_id     TEXT,
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
@@ -325,7 +347,9 @@ CREATE TABLE IF NOT EXISTS worktrees (
     agents_open_with_grid INTEGER DEFAULT 0,
     subtask_plan_id TEXT,
     base_branch TEXT,
-    tier        TEXT
+    tier        TEXT,
+    workspace_id TEXT NOT NULL,
+    UNIQUE(branch, workspace_id)
 );
 CREATE TABLE IF NOT EXISTS linear_issue_links (
     issue_id   TEXT PRIMARY KEY,
@@ -337,15 +361,18 @@ CREATE TABLE IF NOT EXISTS job_runs (
     timestamp   TEXT NOT NULL,
     job         TEXT NOT NULL,
     summary     TEXT NOT NULL,
-    source      TEXT DEFAULT ''
+    source      TEXT DEFAULT '',
+    workspace_id TEXT
 );
 CREATE TABLE IF NOT EXISTS job_instructions (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    file        TEXT NOT NULL UNIQUE,
+    file        TEXT NOT NULL,
     status      TEXT NOT NULL DEFAULT 'pending',
     claimed_ts  TEXT,
     agent       TEXT,
-    result      TEXT
+    result      TEXT,
+    workspace_id TEXT NOT NULL,
+    UNIQUE(file, workspace_id)
 );
 CREATE TABLE IF NOT EXISTS board_move_requests (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -354,7 +381,54 @@ CREATE TABLE IF NOT EXISTS board_move_requests (
     to_column   TEXT NOT NULL,
     status      TEXT NOT NULL DEFAULT 'applied',
     reason      TEXT DEFAULT '',
-    timestamp   TEXT NOT NULL
+    timestamp   TEXT NOT NULL,
+    workspace_id TEXT
+);
+CREATE TABLE IF NOT EXISTS kanban_meta (
+    key   TEXT NOT NULL,
+    value TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    PRIMARY KEY (key, workspace_id)
+);
+CREATE TABLE IF NOT EXISTS activity_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp   TEXT NOT NULL,
+    event_type  TEXT NOT NULL,
+    payload     TEXT NOT NULL,
+    correlation_id TEXT,
+    session_id  TEXT,
+    workspace_id TEXT
+);
+CREATE TABLE IF NOT EXISTS plan_events (
+    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_id TEXT,
+    event_type TEXT NOT NULL,
+    workflow TEXT,
+    action TEXT,
+    timestamp TEXT NOT NULL,
+    device_id TEXT DEFAULT '',
+    vector_clock TEXT DEFAULT '',
+    payload TEXT DEFAULT '{}',
+    workspace_id TEXT
+);
+CREATE TABLE IF NOT EXISTS stitch_projects (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    update_time TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    workspace_id TEXT
+);
+CREATE TABLE IF NOT EXISTS stitch_screens (
+    id          TEXT PRIMARY KEY,
+    project_id  TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    device_type TEXT,
+    status      TEXT,
+    status_msg  TEXT,
+    summary     TEXT NOT NULL DEFAULT '',
+    suggestions_json TEXT NOT NULL DEFAULT '',
+    updated_at  TEXT NOT NULL,
+    workspace_id TEXT
 );
 CREATE TABLE IF NOT EXISTS mission_milestones (
     mission_id   TEXT PRIMARY KEY,
@@ -369,6 +443,8 @@ CREATE TABLE IF NOT EXISTS control_plane (
     version TEXT NOT NULL,
     content_hash TEXT NOT NULL,
     body TEXT NOT NULL,
+    delivery TEXT DEFAULT 'materialize',
+    override_body TEXT DEFAULT NULL,
     workspace_override TEXT DEFAULT NULL,
     updated_at TEXT NOT NULL,
     PRIMARY KEY (name, kind)
@@ -378,7 +454,7 @@ CREATE TABLE IF NOT EXISTS control_plane (
 // Index DDL, one statement per entry so a single failure (e.g. a column not yet
 // present on an upgraded DB) can be skipped without aborting the rest. Applied via
 // _applySchemaIndexes() after columns have been reconciled.
-const SCHEMA_INDEX_STATEMENTS: string[] = [
+export const SCHEMA_INDEX_STATEMENTS: string[] = [
     `CREATE INDEX IF NOT EXISTS idx_plans_column ON plans(kanban_column)`,
     `CREATE INDEX IF NOT EXISTS idx_plans_workspace ON plans(workspace_id)`,
     `CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status)`,
@@ -393,6 +469,15 @@ const SCHEMA_INDEX_STATEMENTS: string[] = [
     `CREATE INDEX IF NOT EXISTS idx_missions_workspace ON missions(workspace_id)`,
     `CREATE INDEX IF NOT EXISTS idx_mission_milestones_workspace ON mission_milestones(workspace_id)`,
     `CREATE INDEX IF NOT EXISTS idx_control_plane_kind ON control_plane(kind)`,
+    `CREATE INDEX IF NOT EXISTS idx_activity_workspace ON activity_log(workspace_id, timestamp)`,
+    `CREATE INDEX IF NOT EXISTS idx_board_move_workspace ON board_move_requests(workspace_id, timestamp)`,
+    `CREATE INDEX IF NOT EXISTS idx_job_runs_workspace ON job_runs(workspace_id, timestamp)`,
+    `CREATE INDEX IF NOT EXISTS idx_events_workspace ON plan_events(workspace_id, timestamp)`,
+    `CREATE INDEX IF NOT EXISTS idx_stitch_projects_workspace ON stitch_projects(workspace_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_stitch_screens_workspace ON stitch_screens(workspace_id, project_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_worktrees_workspace ON worktrees(workspace_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_job_instructions_workspace ON job_instructions(workspace_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_kanban_meta_workspace ON kanban_meta(workspace_id)`,
 ];
 
 // Migration SQL to add new columns to existing databases
@@ -689,6 +774,25 @@ const MIGRATION_V68_SQL = [
     `CREATE INDEX IF NOT EXISTS idx_control_plane_kind ON control_plane(kind)`,
 ];
 
+// V69: control_plane delivery and override_body columns.
+const MIGRATION_V69_SQL = [
+    `ALTER TABLE control_plane ADD COLUMN delivery TEXT DEFAULT 'materialize'`,
+    `ALTER TABLE control_plane ADD COLUMN override_body TEXT DEFAULT NULL`,
+];
+
+// V70: Scope the ten unscoped tables by workspace_id and fix three colliding unique constraints.
+const MIGRATION_V70_INDEXES_SQL = [
+    `CREATE INDEX IF NOT EXISTS idx_activity_workspace ON activity_log(workspace_id, timestamp)`,
+    `CREATE INDEX IF NOT EXISTS idx_board_move_workspace ON board_move_requests(workspace_id, timestamp)`,
+    `CREATE INDEX IF NOT EXISTS idx_job_runs_workspace ON job_runs(workspace_id, timestamp)`,
+    `CREATE INDEX IF NOT EXISTS idx_events_workspace ON plan_events(workspace_id, timestamp)`,
+    `CREATE INDEX IF NOT EXISTS idx_stitch_projects_workspace ON stitch_projects(workspace_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_stitch_screens_workspace ON stitch_screens(workspace_id, project_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_worktrees_workspace ON worktrees(workspace_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_job_instructions_workspace ON job_instructions(workspace_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_kanban_meta_workspace ON kanban_meta(workspace_id)`,
+];
+
 
 
 const MIGRATION_V13_SQL = [
@@ -863,11 +967,12 @@ const MIGRATION_V20_SQL = [
         device_id TEXT DEFAULT '',
         vector_clock TEXT DEFAULT '',
         payload TEXT DEFAULT '{}',
+        workspace_id TEXT,
         FOREIGN KEY (plan_id) REFERENCES plans(plan_id)
     )`,
-    // Step 10: Backfill plan_id from session_id via plans lookup.
-    `INSERT INTO plan_events_v20 (plan_id, event_type, workflow, action, timestamp, device_id, vector_clock, payload)
-     SELECT p.plan_id, e.event_type, e.workflow, e.action, e.timestamp, e.device_id, e.vector_clock, e.payload
+    // Step 10: Backfill plan_id and workspace_id from session_id via plans lookup.
+    `INSERT INTO plan_events_v20 (plan_id, event_type, workflow, action, timestamp, device_id, vector_clock, payload, workspace_id)
+     SELECT p.plan_id, e.event_type, e.workflow, e.action, e.timestamp, e.device_id, e.vector_clock, e.payload, p.workspace_id
      FROM plan_events e
      LEFT JOIN plans p ON e.session_id = p.session_id`,
     // Step 11: Drop old plan_events.
@@ -1111,6 +1216,7 @@ const SCHEMA_WORKTREE_COLUMN_DEFS: Array<{ name: string; def: string }> = [
     { name: 'subtask_plan_id', def: 'TEXT' },
     { name: 'base_branch', def: 'TEXT' },
     { name: 'tier', def: 'TEXT' },
+    { name: 'workspace_id', def: 'TEXT' },
 ];
 
 const runtimeRequire = createRequire(__filename);
@@ -1169,130 +1275,48 @@ function _columnSlug(columnName: string): string {
 
 export class KanbanDatabase {
     public static readonly UNASSIGNED_PROJECT_FILTER = '__unassigned__';
-    private static _instances = new Map<string, KanbanDatabase>();
     private static _instancesByDbPath = new Map<string, KanbanDatabase>();
-    // Phase 2: cold (archive) store instances, keyed by workspace root. Each points at
-    // <ws>/.switchboard/kanban-archive.db. Shares all persistence/eviction machinery.
-    private static _archiveInstances = new Map<string, KanbanDatabase>();
     private static _archiveInstancesByDbPath = new Map<string, KanbanDatabase>();
-    private static _warnedUnmappedRoots = new Set<string>();
-    private static _sqlJsPromise: Promise<SqlJsStatic> | null = null;
-    /**
-     * Optional host-agnostic config provider. When set, it is consulted before
-     * the vscode.workspace fallback at the lazy require('vscode') sites.
-     * Extension path is unchanged when this is undefined.
-     */
     private static _pathConfigProvider: HostPathConfigProvider | undefined = undefined;
 
     public static setPathConfigProvider(provider: HostPathConfigProvider | undefined): void {
         this._pathConfigProvider = provider;
     }
 
-    // ── Workstream A: idle-eviction of cached instances ──
-    // One sweep timer for ALL instances (not per-instance). Evicts instances idle >
-    // EVICTION_TTL_MS, except the active workspace (set via setActiveWorkspaceRoot).
-    // A size-gate (residentDbBudgetMb) triggers early aggressive eviction of idle
-    // non-active instances when summed resident-DB size crosses the budget.
-    private static _evictionTimer: ReturnType<typeof setInterval> | null = null;
-    private static readonly EVICTION_TTL_MS = 10 * 60 * 1000; // 10 minutes
-    private static readonly EVICTION_SWEEP_INTERVAL_MS = 60 * 1000; // check every 1 min
-    private static _activeWorkspaceRoot: string | null = null;
-    // Keys (stable workspace root or resolved DB path) currently being evicted.
-    // Callers awaiting one of these wait for eviction to finish before recreating.
-    private static _evictingKeys = new Map<string, Promise<void>>();
-    private static _residentDbBudgetBytes: number = 500 * 1024 * 1024; // ~500 MB default
-
     /**
-     * Expand ~ to home directory. Shared by _redirectToParentIfMapped and forWorkspace.
+     * Expand ~ to home directory. Shared by forWorkspace and path resolution.
      */
     private static _expandHome(p: string): string {
         const trimmed = p.trim();
-        const expanded = trimmed.startsWith('~')
+        return trimmed.startsWith('~')
             ? path.join(os.homedir(), trimmed.slice(1))
             : trimmed;
-            
-        if (!path.isAbsolute(expanded)) {
-            console.warn(`[KanbanDatabase] Warning: Relative path "${p}" used in mapping. It will resolve unpredictably against process.cwd(). Please use absolute paths or ~.`);
-        }
-        
-        return expanded;
     }
 
-    /**
-     * Redirects a child workspace root to its parent when workspaceDatabaseMappings
-     * is configured. When a mapping has parentFolder, uses that; otherwise falls back
-     * to the first workspaceFolders entry (consistent with resolveEffectiveWorkspaceRoot).
-     * Returns the original path if no mapping matches or if outside the extension host.
-     */
     private static _redirectToParentIfMapped(resolvedRoot: string): string {
-        try {
-            // Require dynamically to avoid circular dependency
-            const { resolveEffectiveWorkspaceRootFromMappings } = require('./WorkspaceIdentityService');
-            return resolveEffectiveWorkspaceRootFromMappings(resolvedRoot);
-        } catch { /* outside extension host */ }
         return resolvedRoot;
     }
 
-    public static writeDbPointer(parentFolder: string, dbPath: string): void {
-        try {
-            const resolvedParent = path.resolve(parentFolder);
-            const switchboardDir = path.join(resolvedParent, '.switchboard');
-            if (!fs.existsSync(switchboardDir)) {
-                fs.mkdirSync(switchboardDir, { recursive: true });
-            }
-            const pointerFile = path.join(switchboardDir, 'db-pointer');
-            fs.writeFileSync(pointerFile, `${path.resolve(dbPath)}\n`, 'utf8');
-            console.error(`[KanbanDatabase] Wrote db-pointer to ${pointerFile} pointing to ${dbPath}`);
-        } catch (error) {
-            console.error(`[KanbanDatabase] Failed to write db-pointer for parentFolder ${parentFolder}:`, error);
-        }
+    public static writeDbPointer(_parentFolder: string, _dbPath: string): void {
+        // Retired: single global database in home store
     }
 
-    public static readDbPointer(workspaceRoot: string): string | null {
-        try {
-            const resolvedRoot = path.resolve(workspaceRoot);
-            const pointerFile = path.join(resolvedRoot, '.switchboard', 'db-pointer');
-            if (fs.existsSync(pointerFile)) {
-                const content = fs.readFileSync(pointerFile, 'utf8').trim();
-                if (content) {
-                    const expanded = KanbanDatabase._expandHome(content);
-                    if (fs.existsSync(expanded)) {
-                        return expanded;
-                    }
-                }
-            }
-        } catch (error) {
-            console.warn(`[KanbanDatabase] Failed to read db-pointer for ${workspaceRoot}:`, error);
-        }
+    public static readDbPointer(_workspaceRoot: string): string | null {
+        // Retired: single global database in home store
         return null;
     }
 
     public async getWorkspaceMappings(): Promise<{ enabled: boolean; mappings: WorkspaceDatabaseMapping[] }> {
-        try {
-            const val = await this.getConfig('workspace_mappings');
-            console.error(`[KanbanDatabase] getWorkspaceMappings: dbPath=${this._dbPath}, hasVal=${!!val}, dbReady=${!!this._db}`);
-            if (val) {
-                const parsed = JSON.parse(val);
-                if (parsed && typeof parsed === 'object') {
-                    return {
-                        enabled: parsed.enabled ?? false,
-                        mappings: Array.isArray(parsed.mappings) ? parsed.mappings : []
-                    };
-                }
-            }
-        } catch (error) {
-            console.error('[KanbanDatabase] Failed to parse workspace_mappings from DB:', error);
-        }
         return { enabled: false, mappings: [] };
     }
 
-    public async setWorkspaceMappings(mappings: { enabled: boolean; mappings: WorkspaceDatabaseMapping[] }): Promise<boolean> {
-        try {
-            const val = JSON.stringify(mappings);
-            return await this.setConfig('workspace_mappings', val);
-        } catch (error) {
-            console.error('[KanbanDatabase] Failed to stringify workspace_mappings:', error);
-            return false;
+    public async setWorkspaceMappings(_mappings: { enabled: boolean; mappings: WorkspaceDatabaseMapping[] }): Promise<boolean> {
+        return true;
+    }
+
+    public setWorkspaceRoot(root: string): void {
+        if (root) {
+            (this as any)._workspaceRoot = path.resolve(root);
         }
     }
 
@@ -1301,76 +1325,41 @@ export class KanbanDatabase {
         if (!validation.valid) {
             throw new Error(`Invalid workspace root: ${validation.error}`);
         }
-        const resolvedInput = validation.resolved!;
-        try {
-            if (fs.existsSync(resolvedInput) && fs.statSync(resolvedInput).isFile()) {
-                return KanbanDatabase.forDbPath(resolvedInput);
-            }
-        } catch { /* proceed as directory */ }
+        const stable = validation.resolved!;
 
-        let stable = KanbanDatabase._redirectToParentIfMapped(resolvedInput);
-
-        let resolvedDbPath: string | undefined;
-        
-        // Check for .switchboard/db-pointer in the workspace root
-        const pointerPath = KanbanDatabase.readDbPointer(stable);
-        if (pointerPath) {
-            resolvedDbPath = pointerPath;
-            console.error(`[KanbanDatabase] Resolved DB path from db-pointer: ${stable} -> ${resolvedDbPath}`);
+        // On-open migration: merge any unmigrated database found in this workspace
+        const localDb = path.join(stable, '.switchboard', 'kanban.db');
+        if (fs.existsSync(localDb) && (!customDbPath || path.resolve(customDbPath) !== path.resolve(localDb))) {
+            try {
+                void mergeDatabase(localDb, stable).catch(err => {
+                    console.error(`[KanbanDatabase] On-open migration error for ${localDb}:`, err);
+                });
+            } catch { /* best effort */ }
         }
 
-        // Fallback to customDbPath, kanban.dbPath setting, or default
-        if (!resolvedDbPath) {
-            if (customDbPath !== undefined && customDbPath.trim() !== '') {
-                const expanded = KanbanDatabase._expandHome(customDbPath.trim());
-                resolvedDbPath = path.isAbsolute(expanded) ? expanded : path.join(stable, expanded);
-            } else {
-                // Check kanban.dbPath VS Code setting (per-workspace DB location override)
-                let settingValue = '';
-                if (KanbanDatabase._pathConfigProvider) {
-                    settingValue = KanbanDatabase._pathConfigProvider.getConfigString('kanban.dbPath').trim();
-                } else {
-                    try {
-                        const vscode = require('vscode');
-                        settingValue = String(vscode.workspace.getConfiguration('switchboard').get('kanban.dbPath') || '').trim();
-                    } catch {
-                        // Outside extension host (e.g. unit tests) — use default
-                    }
-                }
-                if (settingValue) {
-                    const expanded = KanbanDatabase._expandHome(settingValue);
-                    resolvedDbPath = path.isAbsolute(expanded) ? expanded : path.join(stable, expanded);
-                } else {
-                    resolvedDbPath = path.join(stable, '.switchboard', 'kanban.db');
-                }
-            }
+        let resolvedDbPath: string;
+        if (customDbPath !== undefined && customDbPath.trim() !== '') {
+            const expanded = KanbanDatabase._expandHome(customDbPath.trim());
+            resolvedDbPath = path.isAbsolute(expanded) ? expanded : path.join(stable, expanded);
+        } else {
+            resolvedDbPath = getGlobalDbPath();
         }
 
         resolvedDbPath = path.resolve(KanbanDatabase._expandHome(resolvedDbPath));
         try { resolvedDbPath = fs.realpathSync(resolvedDbPath); } catch {}
 
-        // Cache by resolved dbPath to prevent multiple instances writing to the same file
         const cached = KanbanDatabase._instancesByDbPath.get(resolvedDbPath);
         if (cached) {
-            KanbanDatabase._instances.set(stable, cached);
+            cached.setWorkspaceRoot(stable);
             return cached;
         }
 
-        const existing = KanbanDatabase._instances.get(stable);
-        if (existing && existing.dbPath === resolvedDbPath) {
-            KanbanDatabase._instancesByDbPath.set(resolvedDbPath, existing);
-            return existing;
-        }
-
         const created = new KanbanDatabase(stable, resolvedDbPath);
-        KanbanDatabase._instances.set(stable, created);
         KanbanDatabase._instancesByDbPath.set(resolvedDbPath, created);
-        // Wire the one-directional board-snapshot publisher. No-op until the user
-        // opts in via `switchboard.boardStateExport === 'read-only-snapshot'`.
         try {
             created.setBoardSnapshotPublisher(new BoardSnapshotPublisher({
                 db: created,
-                getWorkspaceRoot: () => stable,
+                getWorkspaceRoot: () => (created as any)._workspaceRoot || stable,
                 getWorkspaceId: () => created.getWorkspaceId(),
             }));
         } catch { /* outside extension host — publisher is optional */ }
@@ -1397,78 +1386,40 @@ export class KanbanDatabase {
     }
 
     /**
-     * Phase 2 — get (or create) the cold (archive) store instance for a workspace.
-     * Bound to <ws>/.switchboard/kanban-archive.db. Shares all persistence/eviction
-     * machinery with the hot instance (same class, different db path). The cold schema
-     * is the `plans` subset (created by SCHEMA_TABLES_SQL); telemetry tables may also
-     * live here if the retention sink relocates aged rows (see purgeOldPlanEvents).
+     * Get the cold (archive) store instance. Sibling of hot DB in global store.
      */
-    public static getArchiveInstance(workspaceRoot: string): KanbanDatabase {
-        const validation = KanbanDatabase.isValidWorkspaceRoot(workspaceRoot);
-        if (!validation.valid) {
-            throw new Error(`Invalid workspace root: ${validation.error}`);
-        }
-        const stable = KanbanDatabase._redirectToParentIfMapped(validation.resolved!);
-        const existing = KanbanDatabase._archiveInstances.get(stable);
-        if (existing) return existing;
-
-        // The cold DB lives next to the hot DB. Respect a db-pointer / custom dbPath
-        // override by deriving the archive path from the hot instance's resolved path
-        // when possible (sibling kanban-archive.db), else default to .switchboard/.
-        let archiveDbPath: string;
-        const hot = KanbanDatabase._instances.get(stable);
-        if (hot && hot.dbPath) {
-            archiveDbPath = path.join(path.dirname(hot.dbPath), 'kanban-archive.db');
-        } else {
-            archiveDbPath = path.join(stable, '.switchboard', 'kanban-archive.db');
-        }
-
+    public static getArchiveInstance(workspaceRoot?: string): KanbanDatabase {
+        const archiveDbPath = getGlobalArchiveDbPath();
         const cached = KanbanDatabase._archiveInstancesByDbPath.get(archiveDbPath);
         if (cached) {
-            KanbanDatabase._archiveInstances.set(stable, cached);
+            if (workspaceRoot) cached.setWorkspaceRoot(workspaceRoot);
             return cached;
         }
 
+        const stable = workspaceRoot ? path.resolve(workspaceRoot) : os.homedir();
         const created = new KanbanDatabase(stable, archiveDbPath);
         created._isArchiveInstance = true;
-        KanbanDatabase._archiveInstances.set(stable, created);
         KanbanDatabase._archiveInstancesByDbPath.set(archiveDbPath, created);
         return created;
     }
 
     /**
-     * Resolve the on-disk path of the cold store for a workspace (sibling of hot DB
-     * when a hot instance is cached; otherwise `<ws>/.switchboard/kanban-archive.db`).
+     * Resolve the on-disk path of the cold store.
      */
-    public static resolveArchiveDbPath(workspaceRoot: string): string {
-        const stable = KanbanDatabase._redirectToParentIfMapped(path.resolve(workspaceRoot));
-        const hot = KanbanDatabase._instances.get(stable);
-        if (hot && hot.dbPath) {
-            return path.join(path.dirname(hot.dbPath), 'kanban-archive.db');
-        }
-        // Prefer db-pointer parent when present so cold lives next to a redirected hot DB.
-        const pointerPath = KanbanDatabase.readDbPointer(stable);
-        if (pointerPath) {
-            return path.join(path.dirname(pointerPath), 'kanban-archive.db');
-        }
-        return path.join(stable, '.switchboard', 'kanban-archive.db');
+    public static resolveArchiveDbPath(_workspaceRoot?: string): string {
+        return getGlobalArchiveDbPath();
     }
 
     /** Whether a cold (archive) store is currently open in-process. */
-    public static hasArchiveInstance(workspaceRoot: string): boolean {
-        const stable = KanbanDatabase._redirectToParentIfMapped(path.resolve(workspaceRoot));
-        return KanbanDatabase._archiveInstances.has(stable);
+    public static hasArchiveInstance(_workspaceRoot?: string): boolean {
+        return KanbanDatabase._archiveInstancesByDbPath.has(getGlobalArchiveDbPath());
     }
 
-    /**
-     * Whether the cold store should be consulted for exhaustive reads. True when an
-     * archive instance is already open OR the archive file exists on disk (post-V55
-     * restart — hasArchiveInstance alone is false until something opens it).
-     */
-    public static archiveAvailable(workspaceRoot: string): boolean {
+    /** Whether the cold store file exists. */
+    public static archiveAvailable(workspaceRoot?: string): boolean {
         if (KanbanDatabase.hasArchiveInstance(workspaceRoot)) return true;
         try {
-            return fs.existsSync(KanbanDatabase.resolveArchiveDbPath(workspaceRoot));
+            return fs.existsSync(getGlobalArchiveDbPath());
         } catch {
             return false;
         }
@@ -1476,41 +1427,35 @@ export class KanbanDatabase {
 
     /**
      * Open the cold store when it is already cached or the archive file exists.
-     * Does NOT create a new empty archive file (use getArchiveInstance for that).
-     * Exhaustive readers / reconcile must use this so cold plans stay visible after restart.
      */
-    public static getArchiveInstanceIfPresent(workspaceRoot: string): KanbanDatabase | null {
+    public static getArchiveInstanceIfPresent(workspaceRoot?: string): KanbanDatabase | null {
         if (!KanbanDatabase.archiveAvailable(workspaceRoot)) return null;
         return KanbanDatabase.getArchiveInstance(workspaceRoot);
     }
 
     /**
      * Invalidate the cached DB instance for a workspace, forcing re-creation
-     * on the next forWorkspace() call. Used when kanban.dbPath setting changes.
+     * on the next forWorkspace() call. Used when database changes occur.
      * Drains any in-flight writes before tearing down to prevent silent data loss.
      */
     public static async invalidateWorkspace(workspaceRoot: string): Promise<void> {
-        const stable = KanbanDatabase._redirectToParentIfMapped(path.resolve(workspaceRoot));
-        const existing = KanbanDatabase._instances.get(stable);
+        const stable = path.resolve(workspaceRoot);
+        const dbPath = getGlobalDbPath();
+        const existing = KanbanDatabase._instancesByDbPath.get(dbPath);
         if (existing) {
-            // Drain in-flight writes + flush any pending coalesced persist before
-            // nulling _db to prevent silent data loss (Workstream A/B discipline).
-            try { await existing._writeTail; } catch { /* swallow — chain keeps alive internally */ }
+            try { await existing._writeTail; } catch { /* swallow */ }
             await existing.flushPersist();
-            // Remove from caches BEFORE closing so a concurrent forWorkspace() creates
-            // a fresh instance instead of grabbing the being-closed one.
             KanbanDatabase._instancesByDbPath.delete(existing.dbPath);
-            KanbanDatabase._instances.delete(stable);
             existing._closeDb(existing._db);
             existing._db = null;
             existing._initPromise = null;
             console.error(`[KanbanDatabase] Invalidated cached instance for ${stable}`);
-            
-            // Re-sync workspace identity to capture any database path changes
             try {
-                // Must require dynamically to avoid circular dependencies
                 const { ensureWorkspaceIdentity } = require('./WorkspaceIdentityService');
                 await ensureWorkspaceIdentity(stable);
+            } catch {}
+        }
+    }
             } catch (e) {
                 console.error(`[KanbanDatabase] Failed to sync workspace identity after invalidation:`, e);
             }
@@ -1613,17 +1558,6 @@ export class KanbanDatabase {
                     return { migrated: false, skipped: 'target_has_data' };
                 }
             }
-
-            // Guard: validate that the target location is allowed to contain .switchboard
-            const targetDir = path.dirname(targetPath); // e.g. /path/to/workspace/.switchboard
-            const switchboardParent = path.dirname(targetDir); // e.g. /path/to/workspace
-            // Derive workspaceRoot from the source path for the guard check
-            const sourceDir = path.dirname(sourcePath);
-            const sourceWorkspaceRoot = path.dirname(sourceDir);
-            if (!isAllowedSwitchboardLocation(switchboardParent, sourceWorkspaceRoot)) {
-                console.warn(`[KanbanDatabase] Blocked migration to ${targetPath} — not an allowed .switchboard location`);
-                return { migrated: false, skipped: 'invalid_target_location' };
-            }
             await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
             await fs.promises.copyFile(sourcePath, targetPath);
             console.log(`[KanbanDatabase] Migrated DB from ${sourcePath} to ${targetPath}`);
@@ -1647,20 +1581,12 @@ export class KanbanDatabase {
      */
     public static async dbFileHasPlans(dbPath: string): Promise<boolean> {
         try {
-            const SQL = await KanbanDatabase._loadSqlJs();
-            const buffer = await fs.promises.readFile(dbPath);
-            const db = new SQL.Database(new Uint8Array(buffer));
+            const db = new BetterSqliteDriver(dbPath, { readonly: true, fileMustExist: true });
             try {
-                const stmt = db.prepare("SELECT COUNT(*) as cnt FROM plans WHERE status = 'active'");
-                if (stmt.step()) {
-                    const count = Number(stmt.getAsObject().cnt);
-                    stmt.free();
-                    return count > 0;
-                }
-                stmt.free();
-                return false;
+                const row = db.get<{ cnt: number }>("SELECT COUNT(*) as cnt FROM plans WHERE status = 'active'");
+                return Boolean(row && row.cnt > 0);
             } finally {
-                if (db.close) { db.close(); }
+                db.close();
             }
         } catch {
             return false;
@@ -1672,20 +1598,12 @@ export class KanbanDatabase {
      */
     public static async countPlansInFile(dbPath: string): Promise<number> {
         try {
-            const SQL = await KanbanDatabase._loadSqlJs();
-            const buffer = await fs.promises.readFile(dbPath);
-            const db = new SQL.Database(new Uint8Array(buffer));
+            const db = new BetterSqliteDriver(dbPath, { readonly: true, fileMustExist: true });
             try {
-                const stmt = db.prepare("SELECT COUNT(*) as cnt FROM plans WHERE status = 'active'");
-                if (stmt.step()) {
-                    const count = Number(stmt.getAsObject().cnt);
-                    stmt.free();
-                    return count;
-                }
-                stmt.free();
-                return 0;
+                const row = db.get<{ cnt: number }>("SELECT COUNT(*) as cnt FROM plans WHERE status = 'active'");
+                return row?.cnt ?? 0;
             } finally {
-                if (db.close) { db.close(); }
+                db.close();
             }
         } catch {
             return 0;
@@ -1697,11 +1615,8 @@ export class KanbanDatabase {
      * Returns number of plans merged. Backs up source after successful merge.
      */
     public static async reconcileDatabases(sourcePath: string, targetPath: string): Promise<number> {
-        const SQL = await KanbanDatabase._loadSqlJs();
-        const srcBuf = await fs.promises.readFile(sourcePath);
-        const tgtBuf = await fs.promises.readFile(targetPath);
-        const srcDb = new SQL.Database(new Uint8Array(srcBuf));
-        const tgtDb = new SQL.Database(new Uint8Array(tgtBuf));
+        const srcDb = new BetterSqliteDriver(sourcePath, { readonly: true, fileMustExist: true });
+        const tgtDb = new BetterSqliteDriver(targetPath, { fileMustExist: true });
 
         try {
             // Get column names from BOTH databases and use the intersection
@@ -1752,10 +1667,6 @@ export class KanbanDatabase {
                     chkStmt.free();
                     if (skip) continue;
 
-                    // NOTE: plan_file values from source DB are not normalized here.
-                    // If source is pre-V18 (absolute paths), the V18 startup sweep will repair
-                    // them on next initialization. See _convertAbsoluteToRelativePaths().
-
                     // Build ordered values array from the intersection columns
                     const values = columns.map(c => srcRow[c] ?? null);
                     const placeholders = columns.map(() => '?').join(', ');
@@ -1768,20 +1679,14 @@ export class KanbanDatabase {
                 throw txErr;
             }
 
-            // Persist target
-            const data = tgtDb.export();
-            const tmpPath = targetPath + '.tmp.' + Date.now();
-            await fs.promises.writeFile(tmpPath, Buffer.from(data));
-            await fs.promises.rename(tmpPath, targetPath);
-
             // Backup source
             const backupPath = `${sourcePath}.backup.${Date.now()}`;
             await fs.promises.rename(sourcePath, backupPath);
 
             return merged;
         } finally {
-            if (srcDb.close) { srcDb.close(); }
-            if (tgtDb.close) { tgtDb.close(); }
+            srcDb.close();
+            tgtDb.close();
         }
     }
 
@@ -1798,30 +1703,10 @@ export class KanbanDatabase {
     private _lastInitError: string | null = null;
     private _writeTail: Promise<void> = Promise.resolve();
     private _configUpdateTails = new Map<string, Promise<void>>();
-    private _loadedMtime: number = 0;       // mtimeMs of kanban.db when last loaded into memory
-    private _lastStatCheckMs: number = 0;   // Date.now() of last fs.stat() call (debounce)
-    private static readonly STAT_DEBOUNCE_MS = 500; // Don't re-stat more often than this
-    private static _lastLoadedMtimes = new Map<string, number>();
 
-    // Monotonic version counter — bumped on every board-data mutation (via _persist)
-    // and after a successful external reload in _reloadIfStale. Lets KanbanProvider
-    // short-circuit a no-op refresh in O(1) instead of O(card-count).
+    // Monotonic version counter — bumped on every mutation
     private _dataVersion = 0;
     public getDataVersion(): number { return this._dataVersion; }
-
-    // ── Workstream A: idle-eviction ──
-    // Last time this instance was read/written. Bumped in ensureReady() and on every
-    // _persist(). The static eviction sweep closes instances idle > TTL (except the
-    // active workspace). See _evict() / startEvictionSweep().
-    private _lastAccessMs: number = Date.now();
-
-    // ── Workstream B: persist coalescing ──
-    // True when an in-memory mutation has not yet been flushed to disk by the debounced
-    // export()+write. flushPersist() clears the timer and writes synchronously; called
-    // from dispose(), _evict(), and _reloadIfStale() so a pending write is never lost.
-    private _dirty: boolean = false;
-    private _persistDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-    private static readonly PERSIST_DEBOUNCE_MS = 300;
 
     private _onColumnChanged: any;
     public get onColumnChanged(): any {
@@ -1869,279 +1754,24 @@ export class KanbanDatabase {
     }
 
     public dispose(): void {
-        // Final flush on deactivation — dispose() is sync, so we cannot await
-        // flushPersist(). Clear the debounce timer and write the dirty image
-        // synchronously so a pending coalesced mutation is never lost on close.
-        if (this._persistDebounceTimer) {
-            clearTimeout(this._persistDebounceTimer);
-            this._persistDebounceTimer = null;
-        }
-        if (this._dirty && this._db) {
-            try {
-                const data = this._db.export();
-                const suffix = crypto.randomBytes(4).toString('hex');
-                const tmpPath = `${this._dbPath}.${suffix}.tmp`;
-                fs.writeFileSync(tmpPath, Buffer.from(data));
-                fs.renameSync(tmpPath, this._dbPath);
-                this._dirty = false;
-            } catch (e) {
-                console.error('[KanbanDatabase] dispose sync flush failed:', e);
-            }
-        }
         try { void this.exportStateToFile(); } catch { /* best-effort */ }
-        try { void this._writeKanbanStateBackup(); } catch { /* best-effort */ }
         if (this._onColumnChanged) {
             try {
                 this._onColumnChanged.dispose();
             } catch {}
         }
-        // Close the sql.js DB image so its MEMFS file buffer is unlinked from the shared
-        // WASM heap (mechanism-6 leak fix). Safe to call repeatedly; _closeDb guards null.
         this._closeDb(this._db);
         this._db = null;
         this._initPromise = null;
         KanbanDatabase._instancesByDbPath.delete(this._dbPath);
-        KanbanDatabase._instances.delete(this._workspaceRoot);
         if (this._isArchiveInstance) {
             KanbanDatabase._archiveInstancesByDbPath.delete(this._dbPath);
-            KanbanDatabase._archiveInstances.delete(this._workspaceRoot);
         }
     }
 
-    /**
-     * Close a sql.js Database image, unlinking its MEMFS file buffer from the shared
-     * WASM heap (the mechanism-6 leak). Guarded: swallows errors, no-ops on null.
-     * Reused by dispose(), _evict(), and the _reloadIfStale swap so EVERY point where
-     * a _db is replaced/dropped frees the previous image.
-     */
-    private _closeDb(db: SqlJsDatabase | null): void {
+    private _closeDb(db: ISqliteDriver | null): void {
         if (!db) return;
-        try { (db.close as () => void)?.(); } catch { /* best-effort — never throw on teardown */ }
-    }
-
-    // ── Workstream A: idle-eviction public API ──
-
-    /**
-     * Set the active (focused) workspace root. The active workspace's DB instance is
-     * exempt from idle-eviction so the board the user is looking at doesn't get closed
-     * and reopened on every access. Called by KanbanProvider on workspace change.
-     */
-    public static setActiveWorkspaceRoot(root: string | null): void {
-        KanbanDatabase._activeWorkspaceRoot = root ? path.resolve(root) : null;
-    }
-
-    /**
-     * Set the summed resident-DB budget in MB. When the sum of all resident instances'
-     * page_count×page_size crosses this, the sweep triggers early aggressive eviction
-     * of idle non-active instances. Default 500 MB (conservative — biased low for the
-     * fork hosts' older V8). Only ever tune UPWARD with evidence.
-     */
-    public static setResidentDbBudgetMb(mb: number): void {
-        if (mb && mb > 0) {
-            KanbanDatabase._residentDbBudgetBytes = Math.floor(mb) * 1024 * 1024;
-        }
-    }
-
-    /**
-     * Start the single static eviction sweep timer. Idempotent — safe to call on every
-     * activation. The sweep evicts idle non-active instances (> TTL) and, when the
-     * summed resident-DB size crosses the budget, evicts idle non-active instances early.
-     */
-    public static startEvictionSweep(): void {
-        if (KanbanDatabase._evictionTimer) return;
-        KanbanDatabase._evictionTimer = setInterval(() => {
-            void KanbanDatabase._runEvictionSweep();
-        }, KanbanDatabase.EVICTION_SWEEP_INTERVAL_MS);
-        // Don't keep the process alive solely for the sweep.
-        if (KanbanDatabase._evictionTimer && typeof (KanbanDatabase._evictionTimer as any).unref === 'function') {
-            (KanbanDatabase._evictionTimer as any).unref();
-        }
-    }
-
-    /** Stop the eviction sweep (called on deactivate). */
-    public static stopEvictionSweep(): void {
-        if (KanbanDatabase._evictionTimer) {
-            clearInterval(KanbanDatabase._evictionTimer);
-            KanbanDatabase._evictionTimer = null;
-        }
-    }
-
-    /**
-     * One-time cleanup of the stale `feature-clobber-diagnostic.txt` files left by the
-     * removed per-persist diagnostic probe (Workstream D). Best-effort; never throws.
-     * Called once on activation for each known workspace root.
-     */
-    public static cleanupDiagnosticFiles(workspaceRoots: string[]): void {
-        for (const root of workspaceRoots) {
-            try {
-                const file = path.join(root, '.switchboard', 'feature-clobber-diagnostic.txt');
-                if (fs.existsSync(file)) {
-                    fs.unlinkSync(file);
-                    console.log(`[KanbanDatabase] Removed stale diagnostic file: ${file}`);
-                }
-            } catch { /* best-effort */ }
-        }
-    }
-
-    /**
-     * Evict ALL cached instances immediately (drain + flush + close). Used on deactivate
-     * to release the shared WASM heap before the host process exits.
-     */
-    public static async evictAll(): Promise<void> {
-        const keys = Array.from(KanbanDatabase._instances.keys());
-        await Promise.all(keys.map(k => KanbanDatabase._evictKey(k)));
-        // Also drain cold (archive) instances — they share the same WASM heap.
-        const archiveKeys = Array.from(KanbanDatabase._archiveInstances.keys());
-        await Promise.all(archiveKeys.map(k => KanbanDatabase._evictArchiveKey(k)));
-    }
-
-    private static async _runEvictionSweep(): Promise<void> {
-        const now = Date.now();
-        // TTL-based eviction of idle non-active instances.
-        for (const [stable, inst] of Array.from(KanbanDatabase._instances)) {
-            if (KanbanDatabase._isActiveRoot(stable)) continue;
-            if (now - inst._lastAccessMs > KanbanDatabase.EVICTION_TTL_MS) {
-                await KanbanDatabase._evictKey(stable);
-            }
-        }
-        // Cold stores: always eligible for TTL eviction (never "active board" — opened on demand).
-        for (const [stable, inst] of Array.from(KanbanDatabase._archiveInstances)) {
-            if (now - inst._lastAccessMs > KanbanDatabase.EVICTION_TTL_MS) {
-                await KanbanDatabase._evictArchiveKey(stable);
-            }
-        }
-        // Size-gate: if summed resident size still over budget, aggressively evict idle
-        // non-active instances (oldest first) until under budget or none left to evict.
-        // Prefer cold instances first (they're never the live board), then idle hot.
-        let guard = 0;
-        while (KanbanDatabase._summedResidentDbBytes() > KanbanDatabase._residentDbBudgetBytes && guard++ < 32) {
-            const coldCandidates = Array.from(KanbanDatabase._archiveInstances.entries())
-                .sort((a, b) => a[1]._lastAccessMs - b[1]._lastAccessMs);
-            if (coldCandidates.length > 0) {
-                await KanbanDatabase._evictArchiveKey(coldCandidates[0][0]);
-                continue;
-            }
-            const candidates = Array.from(KanbanDatabase._instances.entries())
-                .filter(([stable]) => !KanbanDatabase._isActiveRoot(stable))
-                .sort((a, b) => a[1]._lastAccessMs - b[1]._lastAccessMs);
-            if (candidates.length === 0) break;
-            await KanbanDatabase._evictKey(candidates[0][0]);
-        }
-    }
-
-    private static _isActiveRoot(stable: string): boolean {
-        return !!KanbanDatabase._activeWorkspaceRoot
-            && path.resolve(stable) === KanbanDatabase._activeWorkspaceRoot;
-    }
-
-    /**
-     * Sum of page_count×page_size across all resident instances — a cheap, exact
-     * heap-pressure proxy (each instance's on-disk image size in the shared WASM MEMFS).
-     */
-    private static _summedResidentDbBytes(): number {
-        let total = 0;
-        for (const inst of KanbanDatabase._instances.values()) {
-            total += inst._residentDbBytes();
-        }
-        for (const inst of KanbanDatabase._archiveInstances.values()) {
-            total += inst._residentDbBytes();
-        }
-        return total;
-    }
-
-    private _residentDbBytes(): number {
-        if (!this._db) return 0;
-        try {
-            const stmt = this._db.prepare('PRAGMA page_count');
-            let pages = 0;
-            try { if (stmt.step()) pages = Number(stmt.getAsObject().page_count ?? 0); } finally { stmt.free(); }
-            const stmt2 = this._db.prepare('PRAGMA page_size');
-            let pageSize = 4096;
-            try { if (stmt2.step()) pageSize = Number(stmt2.getAsObject().page_size ?? 4096); } finally { stmt2.free(); }
-            return pages * pageSize;
-        } catch { return 0; }
-    }
-
-    /**
-     * Evict a single cached instance by stable workspace root. Drains in-flight writes,
-     * flushes any pending coalesced persist, closes the DB image, and removes from both
-     * caches. Race-safe: records the in-flight eviction so a concurrent getInstance()
-     * awaits it before recreating.
-     */
-    private static async _evictKey(stable: string): Promise<void> {
-        const existing = KanbanDatabase._evictingKeys.get(stable);
-        if (existing) return existing;
-        const inst = KanbanDatabase._instances.get(stable);
-        if (!inst) return;
-        const dbPath = inst._dbPath;
-        // Register the in-flight promise BEFORE any await so concurrent ensureReady()
-        // (including a forWorkspace()-created replacement) waits for flush+close.
-        let resolve!: () => void;
-        const gate = new Promise<void>(r => { resolve = r; });
-        KanbanDatabase._evictingKeys.set(stable, gate);
-        if (dbPath) {
-            KanbanDatabase._evictingKeys.set(dbPath, gate);
-        }
-        try {
-            try {
-                try { await inst._writeTail; } catch { /* swallow — chain keeps alive */ }
-                await inst.flushPersist();
-                void inst.exportStateToFile();
-                void inst._writeKanbanStateBackup();
-                // Close+null first while still mapped so a concurrent forWorkspace() that
-                // still sees this entry gets a dead _db and re-inits after awaiting the gate.
-                // Then remove from caches. A brand-new forWorkspace() mid-evict creates a
-                // fresh instance whose ensureReady() awaits this same gate before load —
-                // so it never races the old flush onto the same file.
-                inst._closeDb(inst._db);
-                inst._db = null;
-                inst._initPromise = null;
-                if (inst._dbPath) {
-                    KanbanDatabase._instancesByDbPath.delete(inst._dbPath);
-                }
-                for (const [k, v] of Array.from(KanbanDatabase._instances.entries())) {
-                    if (v === inst) {
-                        KanbanDatabase._instances.delete(k);
-                    }
-                }
-            } catch (e) {
-                console.warn(`[KanbanDatabase] Eviction of ${stable} failed:`, e);
-            }
-        } finally {
-            KanbanDatabase._evictingKeys.delete(stable);
-            if (dbPath) {
-                KanbanDatabase._evictingKeys.delete(dbPath);
-            }
-            resolve();
-        }
-    }
-
-    /** Evict a cold (archive) store instance by stable workspace root. */
-    private static async _evictArchiveKey(stable: string): Promise<void> {
-        const key = `archive:${stable}`;
-        const existing = KanbanDatabase._evictingKeys.get(key);
-        if (existing) return existing;
-        const inst = KanbanDatabase._archiveInstances.get(stable);
-        if (!inst) return;
-        let resolve!: () => void;
-        const gate = new Promise<void>(r => { resolve = r; });
-        KanbanDatabase._evictingKeys.set(key, gate);
-        try {
-            try {
-                try { await inst._writeTail; } catch { /* swallow */ }
-                await inst.flushPersist();
-                inst._closeDb(inst._db);
-                inst._db = null;
-                inst._initPromise = null;
-                KanbanDatabase._archiveInstancesByDbPath.delete(inst._dbPath);
-                KanbanDatabase._archiveInstances.delete(stable);
-            } catch (e) {
-                console.warn(`[KanbanDatabase] Archive eviction of ${stable} failed:`, e);
-            }
-        } finally {
-            KanbanDatabase._evictingKeys.delete(key);
-            resolve();
-        }
+        try { db.close(); } catch { /* best-effort — never throw on teardown */ }
     }
 
     public get lastInitError(): string | null {
@@ -2173,21 +1803,28 @@ export class KanbanDatabase {
         }
     }
 
-    public async ensureReady(forceReload: boolean = false): Promise<boolean> {
-        // Bump last-access so the idle-eviction sweep sees this instance as active.
-        this._lastAccessMs = Date.now();
-        // Await any in-flight eviction for this workspace (hot or cold) so a lazy reopen
-        // never races a flush/close onto the same file (Workstream A race discipline).
-        const stable = KanbanDatabase._redirectToParentIfMapped(path.resolve(this._workspaceRoot));
-        const hotEvict = KanbanDatabase._evictingKeys.get(stable)
-            || (this._dbPath ? KanbanDatabase._evictingKeys.get(this._dbPath) : undefined);
-        if (hotEvict) await hotEvict;
-        const coldEvict = KanbanDatabase._evictingKeys.get(`archive:${stable}`)
-            || (this._dbPath ? KanbanDatabase._evictingKeys.get(`archive:${this._dbPath}`) : undefined);
-        if (coldEvict) await coldEvict;
+    public getDriver(): SqlJsDatabase | null {
+        return this._db;
+    }
+
+    public async backup(destPath: string): Promise<void> {
+        if (!(await this.ensureReady()) || !this._db) {
+            throw new Error('Database not ready for backup');
+        }
+        await this._db.backup(destPath);
+    }
+
+    public async reload(): Promise<boolean> {
         if (this._db) {
-            // Check if another IDE has modified the DB file since we loaded it
-            await this._reloadIfStale(forceReload);
+            this._closeDb(this._db);
+            this._db = null;
+        }
+        this._initPromise = null;
+        return this.ensureReady(true);
+    }
+
+    public async ensureReady(forceReload: boolean = false): Promise<boolean> {
+        if (this._db) {
             return true;
         }
         if (!this._initPromise) {
@@ -2195,17 +1832,10 @@ export class KanbanDatabase {
             this._initPromise = this._initialize().then((ready) => {
                 console.error(`[KanbanDatabase.ensureReady] _initialize() returned ${ready} for ${this._dbPath}, lastError=${this._lastInitError}`);
                 if (ready) {
-                    KanbanDatabase._instances.set(this._workspaceRoot, this);
                     if (this._dbPath) {
                         KanbanDatabase._instancesByDbPath.set(this._dbPath, this);
                     }
                 }
-                // Always clear the in-flight marker once settled. On success this._db
-                // is set and the `if (this._db)` fast-path serves subsequent calls, so
-                // a lingering settled promise is never needed — and clearing it means
-                // that if _db ever becomes null again (e.g. a future code path), the
-                // next ensureReady() re-initializes instead of returning a stale
-                // resolved `true` while _db is null.
                 this._initPromise = null;
                 return ready;
             });
@@ -2219,7 +1849,6 @@ export class KanbanDatabase {
         if (!this._db) {
             return this.ensureReady(forceReload);
         }
-        await this._reloadIfStale(forceReload);
         return true;
     }
 
@@ -2253,9 +1882,11 @@ export class KanbanDatabase {
             // Create parent directory
             await fs.promises.mkdir(path.resolve(path.dirname(this._dbPath)), { recursive: true });
 
-            // Initialize SQL.js and create empty database
-            const SQL = await KanbanDatabase._loadSqlJs();
-            this._db = new SQL.Database();
+            // Initialize SQLite driver with fileMustExist: false to create empty database
+            this._db = new BetterSqliteDriver(this._dbPath, { fileMustExist: false });
+            this._db.onMutation(() => {
+                this._dataVersion++;
+            });
 
             // Execute schema and migrations (tables → columns → indexes)
             this._safeExec('SCHEMA_TABLES (create)', SCHEMA_TABLES_SQL);
@@ -3290,9 +2921,12 @@ export class KanbanDatabase {
     }
 
 
-    public async getMeta(key: string): Promise<string | null> {
+    public async getMeta(key: string, workspaceId?: string): Promise<string | null> {
         if (!(await this.ensureReady()) || !this._db) return null;
-        const stmt = this._db.prepare('SELECT value FROM kanban_meta WHERE key = ?', [key]);
+        const wsId = workspaceId || await this.getWorkspaceId() || this._getWorkspaceIdFallback();
+        const stmt = wsId
+            ? this._db.prepare('SELECT value FROM kanban_meta WHERE key = ? AND (workspace_id = ? OR workspace_id IS NULL OR workspace_id = \'\') ORDER BY CASE WHEN workspace_id = ? THEN 0 ELSE 1 END LIMIT 1', [key, wsId, wsId])
+            : this._db.prepare('SELECT value FROM kanban_meta WHERE key = ? LIMIT 1', [key]);
         try {
             if (stmt.step()) {
                 const row = stmt.getAsObject();
@@ -3304,11 +2938,12 @@ export class KanbanDatabase {
         }
     }
 
-    public async setMeta(key: string, value: string): Promise<boolean> {
+    public async setMeta(key: string, value: string, workspaceId?: string): Promise<boolean> {
+        const wsId = workspaceId || await this.getWorkspaceId() || this._getWorkspaceIdFallback();
         return this._persistedUpdate(
-            `INSERT INTO kanban_meta(key, value) VALUES(?, ?)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-            [key, value]
+            `INSERT INTO kanban_meta(key, value, workspace_id) VALUES(?, ?, ?)
+             ON CONFLICT(key, workspace_id) DO UPDATE SET value = excluded.value`,
+            [key, value, wsId || null]
         );
     }
 
@@ -4380,11 +4015,13 @@ export class KanbanDatabase {
         return result.ok && result.rejectedSubtasks.length === 0;
     }
 
-    public async getWorktrees(): Promise<WorktreeRow[]> {
+    public async getWorktrees(workspaceId?: string): Promise<WorktreeRow[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
-        const stmt = this._db.prepare(
-            `SELECT id, branch, path, feature_id, created_at, status, project, agents_open_with_grid, subtask_plan_id, base_branch, tier FROM worktrees WHERE status = 'active' ORDER BY created_at DESC`
-        );
+        const wsId = workspaceId || await this.getWorkspaceId() || this._getWorkspaceIdFallback();
+        const query = wsId
+            ? `SELECT id, branch, path, feature_id, created_at, status, project, agents_open_with_grid, subtask_plan_id, base_branch, tier, workspace_id FROM worktrees WHERE status = 'active' AND (workspace_id = ? OR workspace_id IS NULL OR workspace_id = '') ORDER BY created_at DESC`
+            : `SELECT id, branch, path, feature_id, created_at, status, project, agents_open_with_grid, subtask_plan_id, base_branch, tier, workspace_id FROM worktrees WHERE status = 'active' ORDER BY created_at DESC`;
+        const stmt = wsId ? this._db.prepare(query, [wsId]) : this._db.prepare(query);
         const rows: any[] = [];
         try {
             while (stmt.step()) {
@@ -4405,13 +4042,18 @@ export class KanbanDatabase {
             subtask_plan_id: r.subtask_plan_id !== null && r.subtask_plan_id !== undefined && r.subtask_plan_id !== '' ? String(r.subtask_plan_id) : null,
             base_branch: r.base_branch !== null && r.base_branch !== undefined && r.base_branch !== '' ? String(r.base_branch) : null,
             tier: r.tier !== null && r.tier !== undefined && r.tier !== '' ? String(r.tier) : null,
+            workspace_id: r.workspace_id !== null && r.workspace_id !== undefined && r.workspace_id !== '' ? String(r.workspace_id) : undefined,
         }));
     }
 
-    public async addWorktree(branch: string, wtPath: string, featureId?: string, project?: string, subtaskPlanId?: string, baseBranch?: string, tier?: string): Promise<number> {
+    public async addWorktree(branch: string, wtPath: string, featureId?: string, project?: string, subtaskPlanId?: string, baseBranch?: string, tier?: string, workspaceId?: string): Promise<number> {
         if (!(await this.ensureReady()) || !this._db) return 0;
-        this._db.run(
-            `INSERT INTO worktrees (branch, path, feature_id, project, subtask_plan_id, base_branch, tier, agents_open_with_grid) VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
+        let wsId = workspaceId || await this.getWorkspaceId() || this._getWorkspaceIdFallback();
+        if (!wsId && this._workspaceRoot) {
+            wsId = crypto.createHash('sha256').update(this._workspaceRoot).digest('hex').slice(0, 16);
+        }
+        const result = this._db.run(
+            `INSERT INTO worktrees (branch, path, feature_id, project, subtask_plan_id, base_branch, tier, agents_open_with_grid, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`,
             [
                 branch,
                 wtPath,
@@ -4420,19 +4062,11 @@ export class KanbanDatabase {
                 subtaskPlanId !== undefined && subtaskPlanId !== null ? subtaskPlanId : null,
                 baseBranch !== undefined && baseBranch !== null ? baseBranch : null,
                 tier !== undefined && tier !== null ? tier : null,
+                wsId || null,
             ]
         );
         await this._persist();
-
-        const stmt = this._db.prepare(`SELECT last_insert_rowid() as id`);
-        try {
-            if (stmt.step()) {
-                return Number(stmt.getAsObject().id);
-            }
-            return 0;
-        } finally {
-            stmt.free();
-        }
+        return Number(result?.lastInsertRowid ?? this._db.lastInsertRowid() ?? 0);
     }
 
     // ── Job-activity store ───────────────────────────────────────────────────
@@ -4449,20 +4083,23 @@ export class KanbanDatabase {
      * has no UNIQUE constraint — `INSERT OR IGNORE` on that table never ignores,
      * so a re-read of an append-only run-log would duplicate every line.
      */
-    public async recordJobRun(timestamp: string, job: string, summary: string, source: string): Promise<boolean> {
+    public async recordJobRun(timestamp: string, job: string, summary: string, source: string, workspaceId?: string): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
-        const stmt = this._db.prepare(
-            `SELECT id FROM job_runs WHERE source = ? OR (timestamp = ? AND job = ?) LIMIT 1`
-        );
+        const wsId = workspaceId || await this.getWorkspaceId() || this._getWorkspaceIdFallback();
+        const checkQuery = wsId
+            ? `SELECT id FROM job_runs WHERE (source = ? OR (timestamp = ? AND job = ?)) AND (workspace_id = ? OR workspace_id IS NULL OR workspace_id = '') LIMIT 1`
+            : `SELECT id FROM job_runs WHERE source = ? OR (timestamp = ? AND job = ?) LIMIT 1`;
+        const checkParams = wsId ? [source, timestamp, job, wsId] : [source, timestamp, job];
+        const stmt = this._db.prepare(checkQuery);
         try {
-            stmt.bind([source, timestamp, job]);
+            stmt.bind(checkParams);
             if (stmt.step()) { return false; }
         } finally {
             stmt.free();
         }
         this._db.run(
-            `INSERT INTO job_runs (timestamp, job, summary, source) VALUES (?, ?, ?, ?)`,
-            [timestamp, job, summary, source]
+            `INSERT INTO job_runs (timestamp, job, summary, source, workspace_id) VALUES (?, ?, ?, ?, ?)`,
+            [timestamp, job, summary, source, wsId || null]
         );
         await this._persist();
         return true;
@@ -4471,39 +4108,48 @@ export class KanbanDatabase {
     /** Record the outcome of one declared board-move line: applied, or skipped with a reason. */
     public async recordBoardMoveRequest(
         file: string, planId: string, toColumn: string,
-        status: 'applied' | 'skipped', reason: string, timestamp: string
+        status: 'applied' | 'skipped', reason: string, timestamp: string,
+        workspaceId?: string
     ): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
+        const wsId = workspaceId || await this.getWorkspaceId() || this._getWorkspaceIdFallback();
         this._db.run(
-            `INSERT INTO board_move_requests (file, plan_id, to_column, status, reason, timestamp) VALUES (?, ?, ?, ?, ?, ?)`,
-            [file, planId, toColumn, status, reason, timestamp]
+            `INSERT INTO board_move_requests (file, plan_id, to_column, status, reason, timestamp, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [file, planId, toColumn, status, reason, timestamp, wsId || null]
         );
         await this._persist();
         return true;
     }
 
-    /** Upsert an inbox item's lifecycle row. `file` is UNIQUE, so re-ingestion updates in place. */
+    /** Upsert an inbox item's lifecycle row. `file` is UNIQUE scoped to workspace, so re-ingestion updates in place. */
     public async upsertJobInstruction(
         file: string, status: 'pending' | 'claimed' | 'done' | 'stuck',
-        claimedTs?: string, agent?: string, result?: string
+        claimedTs?: string, agent?: string, result?: string,
+        workspaceId?: string
     ): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
+        const wsId = workspaceId || await this.getWorkspaceId() || this._getWorkspaceIdFallback();
         this._db.run(
-            `INSERT INTO job_instructions (file, status, claimed_ts, agent, result) VALUES (?, ?, ?, ?, ?)
-             ON CONFLICT(file) DO UPDATE SET status = excluded.status,
+            `INSERT INTO job_instructions (file, status, claimed_ts, agent, result, workspace_id) VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(file, workspace_id) DO UPDATE SET status = excluded.status,
                  claimed_ts = excluded.claimed_ts, agent = excluded.agent, result = excluded.result`,
-            [file, status, claimedTs ?? null, agent ?? null, result ?? null]
+            [file, status, claimedTs ?? null, agent ?? null, result ?? null, wsId || null]
         );
         await this._persist();
         return true;
     }
 
-    public async listJobRuns(limit: number = 50): Promise<Array<{ id: number; timestamp: string; job: string; summary: string; source: string }>> {
+    public async listJobRuns(limit: number = 50, workspaceId?: string): Promise<Array<{ id: number; timestamp: string; job: string; summary: string; source: string; workspace_id?: string }>> {
         if (!(await this.ensureReady()) || !this._db) return [];
+        const wsId = workspaceId || await this.getWorkspaceId() || this._getWorkspaceIdFallback();
         const rows: any[] = [];
-        const stmt = this._db.prepare(`SELECT id, timestamp, job, summary, source FROM job_runs ORDER BY id DESC LIMIT ?`);
+        const query = wsId
+            ? `SELECT id, timestamp, job, summary, source, workspace_id FROM job_runs WHERE (workspace_id = ? OR workspace_id IS NULL OR workspace_id = '') ORDER BY id DESC LIMIT ?`
+            : `SELECT id, timestamp, job, summary, source, workspace_id FROM job_runs ORDER BY id DESC LIMIT ?`;
+        const params = wsId ? [wsId, limit] : [limit];
+        const stmt = this._db.prepare(query);
         try {
-            stmt.bind([limit]);
+            stmt.bind(params);
             while (stmt.step()) {
                 rows.push(stmt.getAsObject());
             }
@@ -4516,13 +4162,18 @@ export class KanbanDatabase {
             job: String(r.job || ''),
             summary: String(r.summary || ''),
             source: String(r.source || ''),
+            workspace_id: r.workspace_id ? String(r.workspace_id) : undefined,
         }));
     }
 
-    public async listJobInstructions(): Promise<Array<{ file: string; status: 'pending' | 'claimed' | 'done' | 'stuck'; claimed_ts: string | null; agent: string | null; result: string | null }>> {
+    public async listJobInstructions(workspaceId?: string): Promise<Array<{ file: string; status: 'pending' | 'claimed' | 'done' | 'stuck'; claimed_ts: string | null; agent: string | null; result: string | null; workspace_id?: string }>> {
         if (!(await this.ensureReady()) || !this._db) return [];
+        const wsId = workspaceId || await this.getWorkspaceId() || this._getWorkspaceIdFallback();
         const rows: any[] = [];
-        const stmt = this._db.prepare(`SELECT file, status, claimed_ts, agent, result FROM job_instructions ORDER BY file ASC`);
+        const query = wsId
+            ? `SELECT file, status, claimed_ts, agent, result, workspace_id FROM job_instructions WHERE (workspace_id = ? OR workspace_id IS NULL OR workspace_id = '') ORDER BY file ASC`
+            : `SELECT file, status, claimed_ts, agent, result, workspace_id FROM job_instructions ORDER BY file ASC`;
+        const stmt = wsId ? this._db.prepare(query, [wsId]) : this._db.prepare(query);
         try {
             while (stmt.step()) {
                 rows.push(stmt.getAsObject());
@@ -4536,15 +4187,21 @@ export class KanbanDatabase {
             claimed_ts: r.claimed_ts ? String(r.claimed_ts) : null,
             agent: r.agent ? String(r.agent) : null,
             result: r.result ? String(r.result) : null,
+            workspace_id: r.workspace_id ? String(r.workspace_id) : undefined,
         }));
     }
 
-    public async listBoardMoveRequests(limit: number = 50): Promise<Array<{ id: number; file: string; plan_id: string; to_column: string; status: string; reason: string; timestamp: string }>> {
+    public async listBoardMoveRequests(limit: number = 50, workspaceId?: string): Promise<Array<{ id: number; file: string; plan_id: string; to_column: string; status: string; reason: string; timestamp: string; workspace_id?: string }>> {
         if (!(await this.ensureReady()) || !this._db) return [];
+        const wsId = workspaceId || await this.getWorkspaceId() || this._getWorkspaceIdFallback();
         const rows: any[] = [];
-        const stmt = this._db.prepare(`SELECT id, file, plan_id, to_column, status, reason, timestamp FROM board_move_requests ORDER BY id DESC LIMIT ?`);
+        const query = wsId
+            ? `SELECT id, file, plan_id, to_column, status, reason, timestamp, workspace_id FROM board_move_requests WHERE (workspace_id = ? OR workspace_id IS NULL OR workspace_id = '') ORDER BY id DESC LIMIT ?`
+            : `SELECT id, file, plan_id, to_column, status, reason, timestamp, workspace_id FROM board_move_requests ORDER BY id DESC LIMIT ?`;
+        const params = wsId ? [wsId, limit] : [limit];
+        const stmt = this._db.prepare(query);
         try {
-            stmt.bind([limit]);
+            stmt.bind(params);
             while (stmt.step()) {
                 rows.push(stmt.getAsObject());
             }
@@ -4559,6 +4216,7 @@ export class KanbanDatabase {
             status: String(r.status || ''),
             reason: String(r.reason || ''),
             timestamp: String(r.timestamp || ''),
+            workspace_id: r.workspace_id ? String(r.workspace_id) : undefined,
         }));
     }
 
@@ -4580,12 +4238,13 @@ export class KanbanDatabase {
         return this._persist();
     }
 
-    public async getWorktreeByBranch(branch: string): Promise<WorktreeRow | undefined> {
+    public async getWorktreeByBranch(branch: string, workspaceId?: string): Promise<WorktreeRow | undefined> {
         if (!(await this.ensureReady()) || !this._db) return undefined;
-        const stmt = this._db.prepare(
-            `SELECT id, branch, path, feature_id, created_at, status, project, agents_open_with_grid, subtask_plan_id, base_branch, tier FROM worktrees WHERE branch = ? LIMIT 1`,
-            [branch]
-        );
+        const wsId = workspaceId || await this.getWorkspaceId() || this._getWorkspaceIdFallback();
+        const query = wsId
+            ? `SELECT id, branch, path, feature_id, created_at, status, project, agents_open_with_grid, subtask_plan_id, base_branch, tier, workspace_id FROM worktrees WHERE branch = ? AND (workspace_id = ? OR workspace_id IS NULL OR workspace_id = '') LIMIT 1`
+            : `SELECT id, branch, path, feature_id, created_at, status, project, agents_open_with_grid, subtask_plan_id, base_branch, tier, workspace_id FROM worktrees WHERE branch = ? LIMIT 1`;
+        const stmt = wsId ? this._db.prepare(query, [branch, wsId]) : this._db.prepare(query, [branch]);
         try {
             if (stmt.step()) {
                 const r = stmt.getAsObject();
@@ -4601,6 +4260,7 @@ export class KanbanDatabase {
                     subtask_plan_id: r.subtask_plan_id !== null && r.subtask_plan_id !== undefined && r.subtask_plan_id !== '' ? String(r.subtask_plan_id) : null,
                     base_branch: r.base_branch !== null && r.base_branch !== undefined && r.base_branch !== '' ? String(r.base_branch) : null,
                     tier: r.tier !== null && r.tier !== undefined && r.tier !== '' ? String(r.tier) : null,
+                    workspace_id: r.workspace_id !== null && r.workspace_id !== undefined && r.workspace_id !== '' ? String(r.workspace_id) : undefined,
                 };
             }
             return undefined;
@@ -6024,8 +5684,8 @@ export class KanbanDatabase {
     public async getControlPlaneEntries(kind?: string): Promise<ControlPlaneEntry[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
         const sql = kind
-            ? 'SELECT name, kind, version, content_hash, body, workspace_override, updated_at FROM control_plane WHERE kind = ?'
-            : 'SELECT name, kind, version, content_hash, body, workspace_override, updated_at FROM control_plane';
+            ? 'SELECT name, kind, version, content_hash, body, delivery, override_body, workspace_override, updated_at FROM control_plane WHERE kind = ?'
+            : 'SELECT name, kind, version, content_hash, body, delivery, override_body, workspace_override, updated_at FROM control_plane';
         const params = kind ? [kind] : [];
         const stmt = this._db.prepare(sql, params);
         const entries: ControlPlaneEntry[] = [];
@@ -6038,6 +5698,8 @@ export class KanbanDatabase {
                     version: String(r.version),
                     contentHash: String(r.content_hash),
                     body: String(r.body),
+                    delivery: r.delivery ? (String(r.delivery) as 'inline' | 'materialize') : 'materialize',
+                    overrideBody: r.override_body !== null && r.override_body !== undefined ? String(r.override_body) : null,
                     workspaceOverride: r.workspace_override !== null && r.workspace_override !== undefined ? String(r.workspace_override) : null,
                     updatedAt: String(r.updated_at)
                 });
@@ -6051,7 +5713,7 @@ export class KanbanDatabase {
     public async getControlPlaneEntry(name: string, kind: string): Promise<ControlPlaneEntry | null> {
         if (!(await this.ensureReady()) || !this._db) return null;
         const stmt = this._db.prepare(
-            'SELECT name, kind, version, content_hash, body, workspace_override, updated_at FROM control_plane WHERE name = ? AND kind = ? LIMIT 1',
+            'SELECT name, kind, version, content_hash, body, delivery, override_body, workspace_override, updated_at FROM control_plane WHERE name = ? AND kind = ? LIMIT 1',
             [name, kind]
         );
         try {
@@ -6063,6 +5725,8 @@ export class KanbanDatabase {
                 version: String(r.version),
                 contentHash: String(r.content_hash),
                 body: String(r.body),
+                delivery: r.delivery ? (String(r.delivery) as 'inline' | 'materialize') : 'materialize',
+                overrideBody: r.override_body !== null && r.override_body !== undefined ? String(r.override_body) : null,
                 workspaceOverride: r.workspace_override !== null && r.workspace_override !== undefined ? String(r.workspace_override) : null,
                 updatedAt: String(r.updated_at)
             };
@@ -6073,13 +5737,17 @@ export class KanbanDatabase {
 
     public async upsertControlPlaneEntry(entry: ControlPlaneEntry): Promise<void> {
         if (!(await this.ensureReady()) || !this._db) return;
+        const override = entry.overrideBody ?? entry.workspaceOverride ?? null;
         this._db.run(
-            `INSERT INTO control_plane (name, kind, version, content_hash, body, workspace_override, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)
+            `INSERT INTO control_plane (name, kind, version, content_hash, body, delivery, override_body, workspace_override, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(name, kind) DO UPDATE SET
                version = excluded.version,
                content_hash = excluded.content_hash,
                body = excluded.body,
+               delivery = excluded.delivery,
+               override_body = COALESCE(excluded.override_body, control_plane.override_body),
+               workspace_override = COALESCE(excluded.workspace_override, control_plane.workspace_override),
                updated_at = excluded.updated_at`,
             [
                 entry.name,
@@ -6087,7 +5755,9 @@ export class KanbanDatabase {
                 entry.version,
                 entry.contentHash,
                 entry.body,
-                entry.workspaceOverride ?? null,
+                entry.delivery || 'materialize',
+                override,
+                override,
                 entry.updatedAt || new Date().toISOString()
             ]
         );
@@ -6097,8 +5767,8 @@ export class KanbanDatabase {
     public async setControlPlaneOverride(name: string, kind: string, override: string | null): Promise<void> {
         if (!(await this.ensureReady()) || !this._db) return;
         this._db.run(
-            'UPDATE control_plane SET workspace_override = ?, updated_at = ? WHERE name = ? AND kind = ?',
-            [override, new Date().toISOString(), name, kind]
+            'UPDATE control_plane SET override_body = ?, workspace_override = ?, updated_at = ? WHERE name = ? AND kind = ?',
+            [override, override, new Date().toISOString(), name, kind]
         );
         await this._persist();
     }
@@ -6112,10 +5782,11 @@ export class KanbanDatabase {
             if (!existing) {
                 await this.upsertControlPlaneEntry(entry);
                 seeded++;
-            } else if (existing.contentHash !== entry.contentHash || existing.version !== entry.version) {
+            } else if (existing.contentHash !== entry.contentHash || existing.version !== entry.version || existing.delivery !== entry.delivery) {
                 await this.upsertControlPlaneEntry({
                     ...entry,
-                    workspaceOverride: existing.workspaceOverride
+                    overrideBody: existing.overrideBody ?? existing.workspaceOverride,
+                    workspaceOverride: existing.workspaceOverride ?? existing.overrideBody
                 });
                 updated++;
             }
@@ -7299,99 +6970,9 @@ export class KanbanDatabase {
         }
     }
 
-    /**
-     * Check if the on-disk DB file has been modified by another process (e.g. another IDE).
-     * If so, reload the entire in-memory database from disk.
-     * Debounced to avoid excessive fs.stat() calls during rapid query bursts.
-     */
-    private async _reloadIfStale(forceReload: boolean = false): Promise<void> {
-        if (!this._db) return; // Not initialized yet — _initialize() will load fresh
-
-        const now = Date.now();
-        if (!forceReload && now - this._lastStatCheckMs < KanbanDatabase.STAT_DEBOUNCE_MS) return;
-        this._lastStatCheckMs = now;
-
-        try {
-            if (!fs.existsSync(this._dbPath)) return; // File deleted — keep in-memory state
-
-            const stats = await fs.promises.stat(this._dbPath);
-            const currentMtime = stats.mtimeMs;
-
-            // Only reload on a FORWARD mtime change. A backwards mtime (older than what we
-            // loaded) comes from a competing/older writer (e.g. a path-resolution divergence
-            // yielding two KanbanDatabase instances for one file, or a backup restore). Reloading
-            // on a backwards mtime triggered a reload→resync churn on top of the refresh storm.
-            // Equal mtime = no change. Strictly greater = genuine external write.
-            if (currentMtime <= this._loadedMtime) return;
-
-            // Drain any in-flight writes before reloading to prevent data loss
-            try { await this._writeTail; } catch { /* swallow — chain keeps alive internally */ }
-            // Flush any pending coalesced persist so an in-memory write is never lost
-            // or clobbered by the reload (Workstream B discipline).
-            await this.flushPersist();
-
-            console.log(`[KanbanDatabase] External modification detected (mtime ${this._loadedMtime} → ${currentMtime}). Reloading from disk.`);
-
-            const SQL = await KanbanDatabase._loadSqlJs();
-            const fileBuffer = await fs.promises.readFile(this._dbPath);
-
-            // Build the reloaded image, swap it in, then re-apply schema/migrations
-            // (idempotent). CRITICAL: never null this._db before we have a working
-            // replacement. If construction or the schema re-apply throws (e.g. a
-            // sql.js WASM allocation failure after long uptime, or reading the file
-            // mid-write by another writer), restore the previous in-memory image.
-            // Leaving this._db === null here would permanently wedge ensureReady():
-            // it returns true off the already-settled _initPromise while every read
-            // sees a null _db and silently returns empty.
-            const previousDb = this._db;
-            try {
-                this._db = new SQL.Database(new Uint8Array(fileBuffer));
-
-                // Tables → reconcile columns → indexes (see _initialize for rationale).
-                this._safeExec('SCHEMA_TABLES (reload)', SCHEMA_TABLES_SQL);
-                this._ensureSchemaColumns();
-                this._applySchemaIndexes('SCHEMA_INDEXES (reload)');
-                await this._runMigrations();
-                this._ensureSchemaColumns();
-            } catch (reloadErr) {
-                // Roll back to the last known-good image rather than serving null.
-                // Close the just-built (failed) instance so its MEMFS buffer is freed
-                // from the shared WASM heap (mechanism-6 leak discipline). GUARD: if
-                // `new SQL.Database()` itself threw (WASM alloc failure — the exact
-                // memory-pressure case this feature targets), the assignment never ran
-                // and `this._db` is STILL `previousDb`; closing it here would wedge the
-                // instance on a closed DB. Only close when a distinct new image exists.
-                if (this._db !== previousDb) this._closeDb(this._db);
-                this._db = previousDb;
-                console.error('[KanbanDatabase] Reload from disk failed; kept previous in-memory image:', reloadErr);
-                return;
-            }
-
-            // Mechanism-6 fix: close the PREVIOUS image now that the new one is proven
-            // good. Without this, every successful stale-reload leaks a full DB image
-            // into the shared Emscripten MEMFS registry (db.close() unlinks the buffer;
-            // dropping the reference does NOT). Under the refresh storm this is a fast,
-            // unbounded native leak toward the ~2 GB WASM ceiling.
-            this._closeDb(previousDb);
-
-            this._loadedMtime = currentMtime;
-            KanbanDatabase._lastLoadedMtimes.set(this._dbPath, currentMtime);
-            // Bump the board-data version counter: an external write (another
-            // window / agent CLI) reached this instance via the disk reload.
-            // Placed AFTER the successful-reload exit point (post-swap, post
-            // migrations, post rollback-guard) so a rolled-back reload failure
-            // never produces a false-positive bump.
-            this._dataVersion++;
-        } catch (error) {
-            console.error('[KanbanDatabase] Failed to reload from disk:', error);
-            // Keep using stale in-memory copy — better than crashing
-        }
-    }
-
     private async _initialize(): Promise<boolean> {
         try {
-            const SQL = await KanbanDatabase._loadSqlJs();
-            console.error(`[KanbanDatabase._initialize] sql.js loaded, checking ${this._dbPath}, exists=${fs.existsSync(this._dbPath)}`);
+            console.error(`[KanbanDatabase._initialize] checking ${this._dbPath}, exists=${fs.existsSync(this._dbPath)}`);
 
             if (fs.existsSync(this._dbPath)) {
                 // Guard: only create directories within .switchboard or workspace root
@@ -7404,35 +6985,17 @@ export class KanbanDatabase {
                     return false;
                 }
                 await fs.promises.mkdir(parentDir, { recursive: true });
-                const stats = await fs.promises.stat(this._dbPath);
-                const fileMtime = stats.mtimeMs;
 
-                const previousMtime = KanbanDatabase._lastLoadedMtimes.get(this._dbPath) || 0;
-                if (previousMtime > 0 && fileMtime > previousMtime) {
-                    console.warn(`[KanbanDatabase] DB file modified externally (cloud sync?). Reloading from ${this._dbPath}`);
-                    try {
-                        const vscode = require('vscode');
-                        vscode.window.showInformationMessage(
-                            'Kanban database was updated by another machine. Reloading…'
-                        );
-                    } catch {
-                        // Outside extension host — skip notification
-                    }
-                }
-
-                KanbanDatabase._lastLoadedMtimes.set(this._dbPath, fileMtime);
-                this._loadedMtime = fileMtime;
-                const existing = await fs.promises.readFile(this._dbPath);
-                this._db = new SQL.Database(new Uint8Array(existing));
-                console.error(`[KanbanDatabase] Loaded existing DB from ${this._dbPath} (${existing.length} bytes)`);
+                this._db = new BetterSqliteDriver(this._dbPath, { fileMustExist: true });
+                this._db.onMutation(() => {
+                    this._dataVersion++;
+                });
+                console.error(`[KanbanDatabase] Loaded existing DB from ${this._dbPath}`);
             } else {
-                // LAZY CHANGE: Don't create the DB file - just mark as unavailable
-                KanbanDatabase._lastLoadedMtimes.delete(this._dbPath);
-                this._loadedMtime = 0;
                 this._db = null;
                 this._lastInitError = 'Database file does not exist (not auto-creating)';
                 console.error(`[KanbanDatabase] No DB exists at ${this._dbPath} - not creating`);
-                return false;  // <-- Key change: return false instead of creating
+                return false;
             }
 
             if (!this._db) {
@@ -7782,20 +7345,24 @@ export class KanbanDatabase {
                 }
             }
 
-            const data = this._db.export();
+            const ts = new Date().toISOString().replace(/[:.]/g, '-');
+            const backupPath = path.join(backupDir, `kanban.db.backup.${cleanReason}.${ts}`);
+            await this._db.backup(backupPath);
 
             // (c) Content-dedupe check, scoped per reason. Global scope would suppress a
             // bulk-change snapshot whenever an identical pre-migration one existed.
             if (newestForReason) {
                 const newestPath = path.join(backupDir, newestForReason.filename);
                 try {
-                    const stat = await fs.promises.stat(newestPath);
+                    const statNew = await fs.promises.stat(backupPath);
+                    const statOld = await fs.promises.stat(newestPath);
                     // Size pre-check: a genuine change costs one stat, not a 5 MB read.
-                    if (stat.size === data.length) {
+                    if (statOld.size === statNew.size) {
                         const existingBuf = await fs.promises.readFile(newestPath);
-                        const newBuf = Buffer.from(data);
+                        const newBuf = await fs.promises.readFile(backupPath);
                         if (existingBuf.equals(newBuf)) {
                             console.log(`[KanbanDatabase] Skipping DB backup (${reason}): byte-identical to newest snapshot for reason`);
+                            await fs.promises.unlink(backupPath);
                             await this._pruneDbBackups(backupDir);
                             return;
                         }
@@ -7804,10 +7371,6 @@ export class KanbanDatabase {
                     /* if stat/read fails, fail toward writing backup */
                 }
             }
-
-            const ts = new Date().toISOString().replace(/[:.]/g, '-');
-            const backupPath = path.join(backupDir, `kanban.db.backup.${cleanReason}.${ts}`);
-            await fs.promises.writeFile(backupPath, Buffer.from(data));
 
             await this._pruneDbBackups(backupDir);
         } catch (e) {
@@ -9252,6 +8815,24 @@ export class KanbanDatabase {
             await this.setMigrationVersion(68);
             console.log('[KanbanDatabase] V68 migration completed: control_plane table added');
         }
+
+        // V69: control_plane delivery and override_body columns.
+        const v69 = await this.getMigrationVersion();
+        if (v69 < 69) {
+            for (const sql of MIGRATION_V69_SQL) {
+                try { this._db.exec(sql); } catch { /* column already exists */ }
+            }
+            await this.setMigrationVersion(69);
+            console.log('[KanbanDatabase] V69 migration completed: control_plane delivery/override_body added');
+        }
+
+        // V70: Scope ten unscoped tables by workspace_id and fix three colliding unique constraints.
+        const v70 = await this.getMigrationVersion();
+        if (v70 < 70) {
+            await this._runMigrationV70();
+            await this.setMigrationVersion(70);
+            console.log('[KanbanDatabase] V70 migration completed: ten unscoped tables scoped by workspace_id, unique constraints rebuilt');
+        }
     }
 
     private async _backfillStagedCardsToMissions(): Promise<void> {
@@ -9475,6 +9056,379 @@ export class KanbanDatabase {
             return false;
         } finally {
             stmt.free();
+        }
+    }
+
+    private _getExistingTableNames(): Set<string> {
+        const tables = new Set<string>();
+        if (!this._db) return tables;
+        const stmt = this._db.prepare("SELECT name FROM sqlite_master WHERE type='table'");
+        try {
+            while (stmt.step()) {
+                tables.add(String(stmt.getAsObject().name || ''));
+            }
+        } finally {
+            stmt.free();
+        }
+        return tables;
+    }
+
+    private _getTableColumns(table: string): Array<{ name: string; type: string; notnull: number; dflt_value: any; pk: number }> {
+        if (!this._db) return [];
+        const stmt = this._db.prepare(`PRAGMA table_info(${table})`);
+        const cols: Array<{ name: string; type: string; notnull: number; dflt_value: any; pk: number }> = [];
+        try {
+            while (stmt.step()) {
+                const o = stmt.getAsObject();
+                cols.push({
+                    name: String(o.name || ''),
+                    type: String(o.type || ''),
+                    notnull: Number(o.notnull || 0),
+                    dflt_value: o.dflt_value,
+                    pk: Number(o.pk || 0),
+                });
+            }
+        } finally {
+            stmt.free();
+        }
+        return cols;
+    }
+
+    private _getTableSql(table: string): string {
+        if (!this._db) return '';
+        const stmt = this._db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name=?`);
+        try {
+            stmt.bind([table]);
+            if (stmt.step()) {
+                return String(stmt.getAsObject().sql || '');
+            }
+            return '';
+        } finally {
+            stmt.free();
+        }
+    }
+
+    private _getWorkspaceIdFallback(): string {
+        if (this._workspaceRoot) {
+            try {
+                const wsIdFile = path.join(this._workspaceRoot, '.switchboard', 'workspace-id');
+                if (fs.existsSync(wsIdFile)) {
+                    const content = fs.readFileSync(wsIdFile, 'utf8').trim();
+                    if (content) return content;
+                }
+            } catch { /* ignore */ }
+            return crypto.createHash('sha256').update(this._workspaceRoot).digest('hex').slice(0, 16);
+        }
+        return '';
+    }
+
+    private async _runMigrationV70(): Promise<void> {
+        if (!this._db) return;
+
+        let wsId = await this.getWorkspaceId();
+        if (!wsId && this._workspaceRoot) {
+            try {
+                const wsIdFile = path.join(this._workspaceRoot, '.switchboard', 'workspace-id');
+                if (fs.existsSync(wsIdFile)) {
+                    const content = fs.readFileSync(wsIdFile, 'utf8').trim();
+                    if (content) wsId = content;
+                }
+            } catch { /* ignore */ }
+        }
+        if (!wsId) {
+            wsId = await this.getDominantWorkspaceId();
+        }
+        if (!wsId && this._workspaceRoot) {
+            wsId = crypto.createHash('sha256').update(this._workspaceRoot).digest('hex').slice(0, 16);
+        }
+        if (!wsId) {
+            wsId = 'default';
+        }
+
+        // Ensure config table has workspace_id populated
+        try {
+            const cfgStmt = this._db.prepare("SELECT value FROM config WHERE key = 'workspace_id'");
+            if (!cfgStmt.step()) {
+                this._db.run("INSERT OR REPLACE INTO config (key, value) VALUES ('workspace_id', ?)", [wsId]);
+            }
+            cfgStmt.free();
+        } catch { /* ignore */ }
+
+        // Step 1: Recover from any interrupted prior rebuilds
+        const existingTables = this._getExistingTableNames();
+        for (const [newTbl, mainTbl] of [
+            ['worktrees_new', 'worktrees'],
+            ['job_instructions_new', 'job_instructions'],
+            ['kanban_meta_new', 'kanban_meta'],
+        ]) {
+            if (!existingTables.has(mainTbl) && existingTables.has(newTbl)) {
+                this._db.exec(`ALTER TABLE ${newTbl} RENAME TO ${mainTbl}`);
+                existingTables.add(mainTbl);
+                existingTables.delete(newTbl);
+            } else if (existingTables.has(newTbl)) {
+                this._db.exec(`DROP TABLE IF EXISTS ${newTbl}`);
+                existingTables.delete(newTbl);
+            }
+        }
+
+        // Step 2: Add workspace_id column and backfill on non-rebuilt tables
+        const alterTables = [
+            'activity_log',
+            'board_move_requests',
+            'job_runs',
+            'plan_events',
+            'plan_events_v20',
+            'stitch_projects',
+            'stitch_screens',
+        ];
+        for (const tbl of alterTables) {
+            if (existingTables.has(tbl)) {
+                if (!this._tableHasColumn(tbl, 'workspace_id')) {
+                    try {
+                        this._db.exec(`ALTER TABLE ${tbl} ADD COLUMN workspace_id TEXT`);
+                    } catch (e) {
+                        console.warn(`[KanbanDatabase] V70: failed to add workspace_id to ${tbl}:`, e);
+                    }
+                }
+                try {
+                    this._db.run(
+                        `UPDATE ${tbl} SET workspace_id = ? WHERE workspace_id IS NULL OR workspace_id = ''`,
+                        [wsId]
+                    );
+                } catch (e) {
+                    console.warn(`[KanbanDatabase] V70: failed to backfill workspace_id on ${tbl}:`, e);
+                }
+            }
+        }
+
+        // Step 3: Rebuild worktrees with UNIQUE(branch, workspace_id)
+        if (existingTables.has('worktrees')) {
+            const wtSql = this._getTableSql('worktrees');
+            const needsRebuild = wtSql.includes('branch TEXT NOT NULL UNIQUE') ||
+                !/UNIQUE\s*\(\s*branch\s*,\s*workspace_id\s*\)/i.test(wtSql);
+            if (needsRebuild) {
+                this._db.exec('BEGIN TRANSACTION');
+                try {
+                    this._db.exec('DROP TABLE IF EXISTS worktrees_new');
+                    const cols = this._getTableColumns('worktrees');
+                    const colDefs: string[] = [];
+                    const copyColNames: string[] = [];
+                    const selectColExprs: string[] = [];
+                    const hasWorkspaceId = cols.some(c => c.name === 'workspace_id');
+
+                    for (const c of cols) {
+                        if (c.name === 'id') {
+                            colDefs.push('id INTEGER PRIMARY KEY AUTOINCREMENT');
+                            copyColNames.push('id');
+                            selectColExprs.push('id');
+                        } else if (c.name === 'branch') {
+                            colDefs.push('branch TEXT NOT NULL');
+                            copyColNames.push('branch');
+                            selectColExprs.push('branch');
+                        } else if (c.name === 'workspace_id') {
+                            // Handled explicitly below
+                        } else {
+                            let def = `${c.name} ${c.type || 'TEXT'}`;
+                            if (c.notnull && c.dflt_value != null) {
+                                def += ` NOT NULL DEFAULT ${c.dflt_value}`;
+                            } else if (c.dflt_value != null) {
+                                def += ` DEFAULT ${c.dflt_value}`;
+                            }
+                            colDefs.push(def);
+                            copyColNames.push(c.name);
+                            selectColExprs.push(c.name);
+                        }
+                    }
+                    colDefs.push('workspace_id TEXT NOT NULL');
+                    copyColNames.push('workspace_id');
+                    if (hasWorkspaceId) {
+                        selectColExprs.push(`COALESCE(NULLIF(workspace_id, ''), '${wsId}')`);
+                    } else {
+                        selectColExprs.push(`'${wsId}'`);
+                    }
+
+                    const createSql = `CREATE TABLE worktrees_new (
+                        ${colDefs.join(',\n                        ')},
+                        UNIQUE(branch, workspace_id)
+                    )`;
+                    this._db.exec(createSql);
+                    this._db.exec(`INSERT INTO worktrees_new (${copyColNames.join(', ')}) SELECT ${selectColExprs.join(', ')} FROM worktrees`);
+                    this._db.exec('DROP TABLE worktrees');
+                    this._db.exec('ALTER TABLE worktrees_new RENAME TO worktrees');
+                    this._db.exec('CREATE INDEX IF NOT EXISTS idx_worktrees_workspace ON worktrees(workspace_id)');
+                    this._db.exec('COMMIT');
+                } catch (err) {
+                    try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
+                    throw err;
+                }
+            }
+        } else {
+            this._db.exec(`CREATE TABLE IF NOT EXISTS worktrees (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                branch      TEXT NOT NULL,
+                path        TEXT NOT NULL,
+                feature_id     TEXT,
+                created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+                status      TEXT NOT NULL DEFAULT 'active',
+                project     TEXT,
+                agents_open_with_grid INTEGER DEFAULT 0,
+                subtask_plan_id TEXT,
+                base_branch TEXT,
+                tier        TEXT,
+                workspace_id TEXT NOT NULL,
+                UNIQUE(branch, workspace_id)
+            )`);
+            this._db.exec('CREATE INDEX IF NOT EXISTS idx_worktrees_workspace ON worktrees(workspace_id)');
+        }
+
+        // Step 4: Rebuild job_instructions with UNIQUE(file, workspace_id)
+        if (existingTables.has('job_instructions')) {
+            const jiSql = this._getTableSql('job_instructions');
+            const needsRebuild = jiSql.includes('file TEXT NOT NULL UNIQUE') ||
+                !/UNIQUE\s*\(\s*file\s*,\s*workspace_id\s*\)/i.test(jiSql);
+            if (needsRebuild) {
+                this._db.exec('BEGIN TRANSACTION');
+                try {
+                    this._db.exec('DROP TABLE IF EXISTS job_instructions_new');
+                    const cols = this._getTableColumns('job_instructions');
+                    const colDefs: string[] = [];
+                    const copyColNames: string[] = [];
+                    const selectColExprs: string[] = [];
+                    const hasWorkspaceId = cols.some(c => c.name === 'workspace_id');
+
+                    for (const c of cols) {
+                        if (c.name === 'id') {
+                            colDefs.push('id INTEGER PRIMARY KEY AUTOINCREMENT');
+                            copyColNames.push('id');
+                            selectColExprs.push('id');
+                        } else if (c.name === 'file') {
+                            colDefs.push('file TEXT NOT NULL');
+                            copyColNames.push('file');
+                            selectColExprs.push('file');
+                        } else if (c.name === 'workspace_id') {
+                            // Handled explicitly below
+                        } else {
+                            let def = `${c.name} ${c.type || 'TEXT'}`;
+                            if (c.notnull && c.dflt_value != null) {
+                                def += ` NOT NULL DEFAULT ${c.dflt_value}`;
+                            } else if (c.dflt_value != null) {
+                                def += ` DEFAULT ${c.dflt_value}`;
+                            }
+                            colDefs.push(def);
+                            copyColNames.push(c.name);
+                            selectColExprs.push(c.name);
+                        }
+                    }
+                    colDefs.push('workspace_id TEXT NOT NULL');
+                    copyColNames.push('workspace_id');
+                    if (hasWorkspaceId) {
+                        selectColExprs.push(`COALESCE(NULLIF(workspace_id, ''), '${wsId}')`);
+                    } else {
+                        selectColExprs.push(`'${wsId}'`);
+                    }
+
+                    const createSql = `CREATE TABLE job_instructions_new (
+                        ${colDefs.join(',\n                        ')},
+                        UNIQUE(file, workspace_id)
+                    )`;
+                    this._db.exec(createSql);
+                    this._db.exec(`INSERT INTO job_instructions_new (${copyColNames.join(', ')}) SELECT ${selectColExprs.join(', ')} FROM job_instructions`);
+                    this._db.exec('DROP TABLE job_instructions');
+                    this._db.exec('ALTER TABLE job_instructions_new RENAME TO job_instructions');
+                    this._db.exec('CREATE INDEX IF NOT EXISTS idx_job_instructions_workspace ON job_instructions(workspace_id)');
+                    this._db.exec('COMMIT');
+                } catch (err) {
+                    try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
+                    throw err;
+                }
+            }
+        } else {
+            this._db.exec(`CREATE TABLE IF NOT EXISTS job_instructions (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                file        TEXT NOT NULL,
+                status      TEXT NOT NULL DEFAULT 'pending',
+                claimed_ts  TEXT,
+                agent       TEXT,
+                result      TEXT,
+                workspace_id TEXT NOT NULL,
+                UNIQUE(file, workspace_id)
+            )`);
+            this._db.exec('CREATE INDEX IF NOT EXISTS idx_job_instructions_workspace ON job_instructions(workspace_id)');
+        }
+
+        // Step 5: Rebuild kanban_meta with PRIMARY KEY (key, workspace_id)
+        if (existingTables.has('kanban_meta')) {
+            const kmSql = this._getTableSql('kanban_meta');
+            const needsRebuild = !/PRIMARY\s+KEY\s*\(\s*key\s*,\s*workspace_id\s*\)/i.test(kmSql);
+            if (needsRebuild) {
+                this._db.exec('BEGIN TRANSACTION');
+                try {
+                    this._db.exec('DROP TABLE IF EXISTS kanban_meta_new');
+                    const cols = this._getTableColumns('kanban_meta');
+                    const colDefs: string[] = [];
+                    const copyColNames: string[] = [];
+                    const selectColExprs: string[] = [];
+                    const hasWorkspaceId = cols.some(c => c.name === 'workspace_id');
+
+                    for (const c of cols) {
+                        if (c.name === 'key') {
+                            colDefs.push('key TEXT NOT NULL');
+                            copyColNames.push('key');
+                            selectColExprs.push('key');
+                        } else if (c.name === 'value') {
+                            colDefs.push('value TEXT NOT NULL');
+                            copyColNames.push('value');
+                            selectColExprs.push('value');
+                        } else if (c.name === 'workspace_id') {
+                            // Handled explicitly below
+                        } else {
+                            let def = `${c.name} ${c.type || 'TEXT'}`;
+                            if (c.notnull && c.dflt_value != null) {
+                                def += ` NOT NULL DEFAULT ${c.dflt_value}`;
+                            } else if (c.dflt_value != null) {
+                                def += ` DEFAULT ${c.dflt_value}`;
+                            }
+                            colDefs.push(def);
+                            copyColNames.push(c.name);
+                            selectColExprs.push(c.name);
+                        }
+                    }
+                    colDefs.push('workspace_id TEXT NOT NULL');
+                    copyColNames.push('workspace_id');
+                    if (hasWorkspaceId) {
+                        selectColExprs.push(`COALESCE(NULLIF(workspace_id, ''), '${wsId}')`);
+                    } else {
+                        selectColExprs.push(`'${wsId}'`);
+                    }
+
+                    const createSql = `CREATE TABLE kanban_meta_new (
+                        ${colDefs.join(',\n                        ')},
+                        PRIMARY KEY (key, workspace_id)
+                    )`;
+                    this._db.exec(createSql);
+                    this._db.exec(`INSERT INTO kanban_meta_new (${copyColNames.join(', ')}) SELECT ${selectColExprs.join(', ')} FROM kanban_meta`);
+                    this._db.exec('DROP TABLE kanban_meta');
+                    this._db.exec('ALTER TABLE kanban_meta_new RENAME TO kanban_meta');
+                    this._db.exec('CREATE INDEX IF NOT EXISTS idx_kanban_meta_workspace ON kanban_meta(workspace_id)');
+                    this._db.exec('COMMIT');
+                } catch (err) {
+                    try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
+                    throw err;
+                }
+            }
+        } else {
+            this._db.exec(`CREATE TABLE IF NOT EXISTS kanban_meta (
+                key   TEXT NOT NULL,
+                value TEXT NOT NULL,
+                workspace_id TEXT NOT NULL,
+                PRIMARY KEY (key, workspace_id)
+            )`);
+            this._db.exec('CREATE INDEX IF NOT EXISTS idx_kanban_meta_workspace ON kanban_meta(workspace_id)');
+        }
+
+        // Step 6: Create composite indexes
+        for (const sql of MIGRATION_V70_INDEXES_SQL) {
+            try { this._db.exec(sql); } catch { /* ignore if already exists */ }
         }
     }
 
@@ -10192,100 +10146,23 @@ FROM plans
     }
 
     /**
-     * Schedule a coalesced persist (Workstream B). Bumps _dataVersion immediately (on
-     * mutation, not on flush) so KanbanProvider's O(1) no-op-refresh short-circuit still
-     * works, marks the instance dirty, and (re)arms a trailing debounce. The actual
-     * export()+atomic write runs once per debounce window in _doPersist(). Callers that
-     * need the disk write complete before proceeding (dispose, evict, stale-reload) call
-     * flushPersist(). The board reads from the in-memory _db, so on-screen state is not
-     * delayed — only the disk mirror is.
+     * Post-mutation hook. Writes are already written to SQLite via WAL mode,
+     * so this triggers the local board mirror, backup JSON, and snapshot publisher.
      */
     private async _persist(): Promise<boolean> {
         if (!this._db) return false;
-        // Bump the board-data version counter. Every board-data write funnels
-        // through _persist(), so this is the single choke point that lets
-        // KanbanProvider short-circuit a no-op refresh in O(1). Non-board-data
-        // writes that also call _persist() (imported_docs, config, …) bump this
-        // too — that is intentional and safe: the false positive is caught by
-        // the sha256 snapshot skip in KanbanProvider, while a missed bump would
-        // stale the board. Bumped on mutation, NOT on flush, so the counter stays
-        // correct under coalescing.
-        this._dataVersion++;
-        this._lastAccessMs = Date.now();
-        this._dirty = true;
-        // (Re)arm the trailing debounce. Only the final arm in a burst fires _doPersist.
-        if (this._persistDebounceTimer) clearTimeout(this._persistDebounceTimer);
-        this._persistDebounceTimer = setTimeout(() => {
-            this._persistDebounceTimer = null;
-            void this._doPersist();
-        }, KanbanDatabase.PERSIST_DEBOUNCE_MS);
+        this._scheduleLocalMirror();
+        if (this._boardSnapshotPublisher && this._isBoardSnapshotEnabled()) {
+            this._boardSnapshotPublisher.schedulePublish();
+        }
         return true;
     }
 
     /**
-     * Force any pending coalesced persist to disk synchronously. Clears the debounce
-     * timer and awaits the actual export()+write. Called from dispose(), _evict(), and
-     * _reloadIfStale() so a pending in-memory write is never lost or clobbered. No-op
-     * when not dirty.
+     * Flushes local board mirror and backup JSON synchronously.
      */
     public async flushPersist(): Promise<void> {
-        if (this._persistDebounceTimer) {
-            clearTimeout(this._persistDebounceTimer);
-            this._persistDebounceTimer = null;
-        }
-        if (this._dirty) {
-            await this._doPersist();
-        }
-    }
-
-    /**
-     * The actual export()+atomic tmp-file write, serialized through _writeTail. Runs
-     * either from the debounce timer (_persist coalescing) or synchronously from
-     * flushPersist(). Folds _writeKanbanStateBackup onto the same coalesced tick.
-     */
-    private async _doPersist(): Promise<boolean> {
-        if (!this._db) return false;
-        const data = this._db.export();
-        const writeOperation = async (): Promise<boolean> => {
-            // Use crypto random suffix to avoid collisions in rapid writes
-            const suffix = crypto.randomBytes(4).toString('hex');
-            const tmpPath = `${this._dbPath}.${suffix}.tmp`;
-            try {
-                await fs.promises.writeFile(tmpPath, Buffer.from(data));
-                await fs.promises.rename(tmpPath, this._dbPath);
-                // Update our mtime baseline so _reloadIfStale() doesn't
-                // re-read our own write as an "external modification"
-                try {
-                    const stats = await fs.promises.stat(this._dbPath);
-                    this._loadedMtime = stats.mtimeMs;
-                    KanbanDatabase._lastLoadedMtimes.set(this._dbPath, stats.mtimeMs);
-                } catch { /* stat failure is non-critical */ }
-                return true;
-            } catch (error) {
-                try { await fs.promises.unlink(tmpPath); } catch { /* best-effort cleanup */ }
-                console.error('[KanbanDatabase] Failed to persist DB file:', error);
-                return false;
-            }
-        };
-        let result = false;
-        const nextWrite = this._writeTail.then(async () => { result = await writeOperation(); });
-        this._writeTail = nextWrite.catch(() => { /* swallow to keep chain alive */ });
-        await nextWrite;
-
-        // Clear the dirty flag only after the write chain settles.
-        this._dirty = false;
-
-        if (result) {
-            this._scheduleLocalMirror();
-            void this._writeKanbanStateBackup(); // fire-and-forget backup JSON (now coalesced)
-            // One-directional read-only board snapshot (orphan branch). Debounce +
-            // content-hash live inside the publisher; fire-and-forget here.
-            if (this._boardSnapshotPublisher && this._isBoardSnapshotEnabled()) {
-                this._boardSnapshotPublisher.schedulePublish();
-            }
-        }
-
-        return result;
+        this.flushLocalBoardMirror();
     }
 
     private async _persistedUpdate(sql: string, params: unknown[]): Promise<boolean> {
@@ -10308,11 +10185,22 @@ FROM plans
         action?: string;
         timestamp?: string;
         payload?: string;
+        workspaceId?: string;
     }): Promise<boolean> {
         const deviceId = os.hostname();
+        let wsId = event.workspaceId;
+        if (!wsId && planId) {
+            try {
+                const plan = await this.getPlanById(planId);
+                if (plan?.workspaceId) wsId = plan.workspaceId;
+            } catch { /* ignore */ }
+        }
+        if (!wsId) {
+            wsId = await this.getWorkspaceId() || this._getWorkspaceIdFallback();
+        }
         return this._persistedUpdate(
-            `INSERT INTO plan_events (plan_id, event_type, workflow, action, timestamp, device_id, payload)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO plan_events (plan_id, event_type, workflow, action, timestamp, device_id, payload, workspace_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 planId,
                 event.eventType,
@@ -10320,7 +10208,8 @@ FROM plans
                 event.action || '',
                 event.timestamp || new Date().toISOString(),
                 deviceId,
-                event.payload || '{}'
+                event.payload || '{}',
+                wsId || null
             ]
         );
     }
@@ -10341,18 +10230,54 @@ FROM plans
     /**
      * Get plan events for a plan, ordered by timestamp
      */
-    public async getPlanEventsByPlanId(planId: string): Promise<any[]> {
+    public async getPlanEventsByPlanId(
+        planId: string,
+        workspaceId?: string,
+        options?: { includeArchived?: boolean; archiveManager?: any }
+    ): Promise<any[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
         try {
-            const stmt = this._db.prepare(
-                `SELECT * FROM plan_events WHERE plan_id = ? ORDER BY timestamp ASC`,
-                [planId]
-            );
+            const wsId = workspaceId || await this.getWorkspaceId() || this._getWorkspaceIdFallback();
+            const query = wsId
+                ? `SELECT * FROM plan_events WHERE plan_id = ? AND (workspace_id = ? OR workspace_id IS NULL OR workspace_id = '') ORDER BY timestamp ASC`
+                : `SELECT * FROM plan_events WHERE plan_id = ? ORDER BY timestamp ASC`;
+            const stmt = wsId ? this._db.prepare(query, [planId, wsId]) : this._db.prepare(query, [planId]);
             const results: any[] = [];
             while (stmt.step()) {
                 results.push(stmt.getAsObject());
             }
             stmt.free();
+
+            // Opt-in archive join: if includeArchived is requested, query DuckDB archive
+            if (options?.includeArchived && options.archiveManager) {
+                try {
+                    const archived = await options.archiveManager.getArchivedPlanEvents(planId);
+                    if (Array.isArray(archived) && archived.length > 0) {
+                        const existingIds = new Set(results.map(r => String(r.event_id)));
+                        for (const arc of archived) {
+                            if (!existingIds.has(String(arc.event_id))) {
+                                results.push({
+                                    event_id: arc.event_id,
+                                    plan_id: arc.plan_id,
+                                    event_type: arc.event_type,
+                                    workflow: arc.workflow,
+                                    action: arc.action,
+                                    timestamp: arc.timestamp,
+                                    device_id: arc.device_id,
+                                    vector_clock: arc.vector_clock,
+                                    payload: arc.payload,
+                                    workspace_id: arc.workspace_id,
+                                    archived: true
+                                });
+                            }
+                        }
+                        results.sort((a, b) => String(a.timestamp || '').localeCompare(String(b.timestamp || '')));
+                    }
+                } catch (arcErr) {
+                    console.warn('[KanbanDatabase] Failed to join archived events:', arcErr);
+                }
+            }
+
             return results;
         } catch (error) {
             console.error('[KanbanDatabase] Failed to get plan events:', error);
@@ -10376,16 +10301,19 @@ FROM plans
         payload: string;
         correlationId?: string;
         sessionId?: string | null;
+        workspaceId?: string;
     }): Promise<boolean> {
+        const wsId = event.workspaceId || await this.getWorkspaceId() || this._getWorkspaceIdFallback();
         return this._persistedUpdate(
-            `INSERT INTO activity_log (timestamp, event_type, payload, correlation_id, session_id)
-             VALUES (?, ?, ?, ?, ?)`,
+            `INSERT INTO activity_log (timestamp, event_type, payload, correlation_id, session_id, workspace_id)
+             VALUES (?, ?, ?, ?, ?, ?)`,
             [
                 event.timestamp,
                 event.eventType,
                 event.payload,
                 event.correlationId || null,
-                event.sessionId || null
+                event.sessionId || null,
+                wsId || null
             ]
         );
     }
@@ -10393,15 +10321,26 @@ FROM plans
     /**
      * Get recent activity events with cursor-based pagination
      */
-    public async getRecentActivity(limit: number, beforeTimestamp?: string): Promise<{
+    public async getRecentActivity(limit: number, beforeTimestamp?: string, workspaceId?: string): Promise<{
         events: any[];
         hasMore: boolean;
         nextCursor?: string;
     }> {
         if (!(await this.ensureReady()) || !this._db) return { events: [], hasMore: false };
         try {
-            const whereClause = beforeTimestamp ? 'WHERE timestamp < ?' : '';
-            const params = beforeTimestamp ? [beforeTimestamp, limit + 1] : [limit + 1];
+            const wsId = workspaceId || await this.getWorkspaceId() || this._getWorkspaceIdFallback();
+            const conditions: string[] = [];
+            const params: any[] = [];
+            if (wsId) {
+                conditions.push('(workspace_id = ? OR workspace_id IS NULL OR workspace_id = \'\')');
+                params.push(wsId);
+            }
+            if (beforeTimestamp) {
+                conditions.push('timestamp < ?');
+                params.push(beforeTimestamp);
+            }
+            const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+            params.push(limit + 1);
             const stmt = this._db.prepare(
                 `SELECT * FROM activity_log ${whereClause} ORDER BY timestamp DESC LIMIT ?`,
                 params
@@ -10427,15 +10366,29 @@ FROM plans
     /**
      * Get a run sheet (plan event history) from the database.
      * Returns null if no events found for this plan.
+     * Includes explicit isRetainedWindowOnly flag so callers know if history is bounded.
      */
-    public async getRunSheetByPlanId(planId: string): Promise<any | null> {
-        const events = await this.getPlanEventsByPlanId(planId);
+    public async getRunSheetByPlanId(
+        planId: string,
+        options?: { includeArchived?: boolean; archiveManager?: any }
+    ): Promise<any | null> {
+        const events = await this.getPlanEventsByPlanId(planId, undefined, options);
         if (events.length === 0) return null;
+
+        const hasArchivedEvents = events.some(e => e.archived === true);
+        const isRetainedWindowOnly = !options?.includeArchived;
+
         return {
             planId,
+            isRetainedWindowOnly,
+            hasArchivedEvents,
             events: events.map(e => {
-                try { return JSON.parse(e.payload); }
-                catch { return { workflow: e.workflow, action: e.action, timestamp: e.timestamp }; }
+                try {
+                    const parsed = JSON.parse(e.payload);
+                    if (e.archived) parsed.archived = true;
+                    return parsed;
+                }
+                catch { return { workflow: e.workflow, action: e.action, timestamp: e.timestamp, archived: e.archived }; }
             })
         };
     }
@@ -10457,6 +10410,7 @@ FROM plans
         const plan = await this.getPlanBySessionId(sessionId);
         const planId = plan?.planId;
         if (!planId) return 0;
+        const wsId = plan?.workspaceId || await this.getWorkspaceId() || this._getWorkspaceIdFallback();
 
         // Skip if plan already has events in DB
         try {
@@ -10478,8 +10432,8 @@ FROM plans
         for (const event of events) {
             try {
                 this._db.run(
-                    `INSERT INTO plan_events (plan_id, event_type, workflow, action, timestamp, device_id, payload)
-                     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                    `INSERT INTO plan_events (plan_id, event_type, workflow, action, timestamp, device_id, payload, workspace_id)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
                     [
                         planId,
                         'workflow_event',
@@ -10487,7 +10441,8 @@ FROM plans
                         event.action || '',
                         event.timestamp || new Date().toISOString(),
                         deviceId,
-                        JSON.stringify(event)
+                        JSON.stringify(event),
+                        wsId || null
                     ]
                 );
                 migrated++;
@@ -10521,7 +10476,14 @@ FROM plans
     /**
      * Delete activity log events older than the given ISO timestamp.
      */
-    public async cleanupActivityLog(beforeTimestamp: string): Promise<boolean> {
+    public async cleanupActivityLog(beforeTimestamp: string, workspaceId?: string): Promise<boolean> {
+        const wsId = workspaceId || await this.getWorkspaceId() || this._getWorkspaceIdFallback();
+        if (wsId) {
+            return this._persistedUpdate(
+                'DELETE FROM activity_log WHERE timestamp < ? AND (workspace_id = ? OR workspace_id IS NULL OR workspace_id = \'\')',
+                [beforeTimestamp, wsId]
+            );
+        }
         return this._persistedUpdate(
             'DELETE FROM activity_log WHERE timestamp < ?',
             [beforeTimestamp]
@@ -10654,26 +10616,275 @@ FROM plans
      * sweep. Holds _writeTail so no export races the rewrite.
      */
     public async maybeVacuum(): Promise<boolean> {
-        if (!(await this.ensureReady()) || !this._db) return false;
-        // Skip if a coalesced write is pending — flush it first so VACUUM sees current state.
+        const res = await this.vacuumIfSafe();
+        return res.executed;
+    }
+
+    /**
+     * Reclaim space safely: verifies free disk space before executing incremental_vacuum / VACUUM.
+     * Skips with a warning if available free disk space is less than database size + minFreeBytes.
+     */
+    public async vacuumIfSafe(minFreeBytes: number = 100 * 1024 * 1024): Promise<{ executed: boolean; reason?: string }> {
+        if (!(await this.ensureReady()) || !this._db) {
+            return { executed: false, reason: 'Database not ready' };
+        }
         await this.flushPersist();
         try { await this._writeTail; } catch { /* swallow */ }
-        // Headroom gate: don't VACUUM if this instance alone is > 1/3 of the budget
-        // (the transient ~2× spike could push the heap over).
-        const myBytes = this._residentDbBytes();
-        if (myBytes * 2 > KanbanDatabase._residentDbBudgetBytes) {
-            console.log('[KanbanDatabase] maybeVacuum skipped (insufficient headroom for ~2× spike)');
-            return false;
-        }
+
         try {
-            this._db.run('VACUUM');
+            const dbSize = fs.existsSync(this._dbPath) ? fs.statSync(this._dbPath).size : 0;
+            // Check free space using fs.statfsSync if available
+            if (typeof (fs as any).statfsSync === 'function') {
+                try {
+                    const stats = (fs as any).statfsSync(path.dirname(this._dbPath));
+                    const freeBytes = Number(stats.bfree) * Number(stats.bsize);
+                    const neededBytes = Math.max(minFreeBytes, dbSize * 2);
+                    if (freeBytes < neededBytes) {
+                        const warn = `Skipping VACUUM: low free disk space (${Math.round(freeBytes / 1024 / 1024)}MB available, ${Math.round(neededBytes / 1024 / 1024)}MB required)`;
+                        console.warn(`[KanbanDatabase] ${warn}`);
+                        return { executed: false, reason: warn };
+                    }
+                } catch {
+                    // statfs check failed, proceed with caution
+                }
+            }
+
+            try {
+                this._db.exec('PRAGMA incremental_vacuum');
+            } catch { /* best effort */ }
+
+            try {
+                this._db.exec('VACUUM');
+                console.log('[KanbanDatabase] VACUUM completed');
+            } catch (vErr) {
+                console.warn('[KanbanDatabase] VACUUM skipped or failed:', vErr);
+            }
+
             await this._persist();
-            console.log(`[KanbanDatabase] VACUUM completed (was ${myBytes} bytes)`);
-            return true;
-        } catch (e) {
-            console.error('[KanbanDatabase] VACUUM failed:', e);
-            return false;
+            return { executed: true };
+        } catch (e: any) {
+            console.error('[KanbanDatabase] vacuumIfSafe failed:', e);
+            return { executed: false, reason: e?.message || String(e) };
         }
+    }
+
+    /**
+     * Prune historical control_plane entries: keeps current version + 1 prior version,
+     * keeps all entries carrying local overrides (override_body or workspace_override),
+     * and prunes older entries.
+     */
+    public async pruneControlPlaneHistory(activeNames?: Set<string>): Promise<{ pruned: number }> {
+        if (!(await this.ensureReady()) || !this._db) return { pruned: 0 };
+        try {
+            // Find entries with no overrides
+            const entries = await this.getControlPlaneEntries();
+            let pruned = 0;
+            if (activeNames && activeNames.size > 0) {
+                for (const e of entries) {
+                    if (e.overrideBody || e.workspaceOverride) {
+                        continue; // Overrides survive regardless of age
+                    }
+                    if (!activeNames.has(e.name)) {
+                        this._db.run('DELETE FROM control_plane WHERE name = ? AND kind = ?', [e.name, e.kind]);
+                        pruned++;
+                    }
+                }
+            }
+            if (pruned > 0) {
+                await this._persist();
+                console.log(`[KanbanDatabase] Pruned ${pruned} stale control_plane entries`);
+            }
+            return { pruned };
+        } catch (err) {
+            console.error('[KanbanDatabase] pruneControlPlaneHistory failed:', err);
+            return { pruned: 0 };
+        }
+    }
+
+    /**
+     * Comprehensive storage stats reporting: per-table row counts, estimated byte sizes,
+     * per-workspace counts, and growth since last check.
+     */
+    public async getDatabaseStorageStats(): Promise<DatabaseStorageStats> {
+        if (!(await this.ensureReady()) || !this._db) {
+            throw new Error('Database not ready');
+        }
+
+        const now = new Date().toISOString();
+        const dbSize = fs.existsSync(this._dbPath) ? fs.statSync(this._dbPath).size : 0;
+
+        const tableNames = [
+            'plan_events',
+            'activity_log',
+            'job_runs',
+            'board_move_requests',
+            'control_plane',
+            'plans',
+            'projects',
+            'worktrees',
+            'missions',
+            'imported_docs',
+            'project_config'
+        ];
+
+        let prevStats: any = null;
+        try {
+            const raw = await this.getConfig('retention.last_storage_stats');
+            if (raw) {
+                prevStats = JSON.parse(raw);
+            }
+        } catch { /* ignore */ }
+
+        const prevTableCounts: Record<string, number> = {};
+        if (prevStats && Array.isArray(prevStats.tables)) {
+            for (const t of prevStats.tables) {
+                prevTableCounts[t.tableName] = t.rowCount;
+            }
+        }
+
+        let totalRowsAllTables = 0;
+        const tableCounts: Record<string, number> = {};
+        for (const tbl of tableNames) {
+            try {
+                const stmt = this._db.prepare(`SELECT COUNT(*) as cnt FROM ${tbl}`);
+                if (stmt.step()) {
+                    const cnt = Number(stmt.getAsObject().cnt || 0);
+                    tableCounts[tbl] = cnt;
+                    totalRowsAllTables += cnt;
+                }
+                stmt.free();
+            } catch {
+                tableCounts[tbl] = 0;
+            }
+        }
+
+        const tables: TableStorageStat[] = tableNames.map(tbl => {
+            const count = tableCounts[tbl] || 0;
+            const prevCount = prevTableCounts[tbl] !== undefined ? prevTableCounts[tbl] : count;
+            const delta = count - prevCount;
+            const estBytes = totalRowsAllTables > 0 ? Math.round((count / totalRowsAllTables) * dbSize) : 0;
+            return {
+                tableName: tbl,
+                rowCount: count,
+                estimatedBytes: estBytes,
+                rowDelta: delta,
+            };
+        });
+
+        const workspaceStatsMap = new Map<string, WorkspaceStorageStat>();
+        const getWsEntry = (id: string): WorkspaceStorageStat => {
+            const key = id || 'unassigned';
+            if (!workspaceStatsMap.has(key)) {
+                workspaceStatsMap.set(key, {
+                    workspaceId: key,
+                    plansCount: 0,
+                    eventsCount: 0,
+                    activityCount: 0,
+                    totalRows: 0,
+                });
+            }
+            return workspaceStatsMap.get(key)!;
+        };
+
+        try {
+            const stmt = this._db.prepare('SELECT workspace_id, COUNT(*) as cnt, MAX(updated_at) as last_act FROM plans GROUP BY workspace_id');
+            while (stmt.step()) {
+                const row = stmt.getAsObject();
+                const ws = getWsEntry(String(row.workspace_id || ''));
+                ws.plansCount = Number(row.cnt || 0);
+                ws.totalRows += ws.plansCount;
+                if (row.last_act && (!ws.lastActivityAt || String(row.last_act) > ws.lastActivityAt)) {
+                    ws.lastActivityAt = String(row.last_act);
+                }
+            }
+            stmt.free();
+        } catch { /* ignore */ }
+
+        try {
+            const stmt = this._db.prepare('SELECT workspace_id, COUNT(*) as cnt, MAX(timestamp) as last_act FROM plan_events GROUP BY workspace_id');
+            while (stmt.step()) {
+                const row = stmt.getAsObject();
+                const ws = getWsEntry(String(row.workspace_id || ''));
+                ws.eventsCount = Number(row.cnt || 0);
+                ws.totalRows += ws.eventsCount;
+                if (row.last_act && (!ws.lastActivityAt || String(row.last_act) > ws.lastActivityAt)) {
+                    ws.lastActivityAt = String(row.last_act);
+                }
+            }
+            stmt.free();
+        } catch { /* ignore */ }
+
+        try {
+            const stmt = this._db.prepare('SELECT workspace_id, COUNT(*) as cnt, MAX(timestamp) as last_act FROM activity_log GROUP BY workspace_id');
+            while (stmt.step()) {
+                const row = stmt.getAsObject();
+                const ws = getWsEntry(String(row.workspace_id || ''));
+                ws.activityCount = Number(row.cnt || 0);
+                ws.totalRows += ws.activityCount;
+                if (row.last_act && (!ws.lastActivityAt || String(row.last_act) > ws.lastActivityAt)) {
+                    ws.lastActivityAt = String(row.last_act);
+                }
+            }
+            stmt.free();
+        } catch { /* ignore */ }
+
+        const twelveMonthsAgo = new Date();
+        twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
+        const cutoffIso = twelveMonthsAgo.toISOString();
+
+        for (const ws of workspaceStatsMap.values()) {
+            if (ws.lastActivityAt && ws.lastActivityAt < cutoffIso) {
+                ws.isDormant = true;
+            } else if (!ws.lastActivityAt && ws.totalRows > 0) {
+                ws.isDormant = true;
+            } else {
+                ws.isDormant = false;
+            }
+        }
+
+        const prevBytes = prevStats?.totalBytes !== undefined ? Number(prevStats.totalBytes) : null;
+        const growthBytes = prevBytes !== null ? (dbSize - prevBytes) : 0;
+
+        // Read retention policy config if present
+        let retentionPolicy = {
+            enabled: false,
+            eventRetentionDays: 180,
+            dormantWorkspaceMonths: 12,
+            source: 'default',
+        };
+        try {
+            const rawCfg = await this.getConfig('kanban.retention');
+            if (rawCfg) {
+                const parsed = JSON.parse(rawCfg);
+                retentionPolicy = {
+                    enabled: parsed.enabled === true,
+                    eventRetentionDays: Number(parsed.eventRetentionDays) || 180,
+                    dormantWorkspaceMonths: Number(parsed.dormantWorkspaceMonths) || 12,
+                    source: 'config_store',
+                };
+            }
+        } catch { /* ignore */ }
+
+        const result: DatabaseStorageStats = {
+            totalBytes: dbSize,
+            previousTotalBytes: prevBytes,
+            growthBytes,
+            checkedAt: now,
+            lastCheckedAt: prevStats?.checkedAt || null,
+            tables,
+            workspaces: Array.from(workspaceStatsMap.values()),
+            retentionPolicy,
+        };
+
+        try {
+            await this.setConfig('retention.last_storage_stats', JSON.stringify({
+                totalBytes: dbSize,
+                checkedAt: now,
+                tables: tables.map(t => ({ tableName: t.tableName, rowCount: t.rowCount })),
+            }));
+        } catch { /* ignore */ }
+
+        return result;
     }
 
     /**
@@ -11519,26 +11730,37 @@ FROM plans
     }
 
     // ── Stitch projects ──
-    public async upsertStitchProject(id: string, name: string, updateTime: string): Promise<boolean> {
+    public async upsertStitchProject(id: string, name: string, updateTime: string, workspaceId?: string): Promise<boolean> {
+        const wsId = workspaceId || await this.getWorkspaceId() || this._getWorkspaceIdFallback();
         return this._persistedUpdate(
-            `INSERT INTO stitch_projects (id, name, update_time, updated_at)
-             VALUES (?, ?, ?, datetime('now'))
+            `INSERT INTO stitch_projects (id, name, update_time, updated_at, workspace_id)
+             VALUES (?, ?, ?, datetime('now'), ?)
              ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 update_time = excluded.update_time,
-                updated_at = datetime('now')`,
-            [id, name ?? '', updateTime ?? '']
+                updated_at = datetime('now'),
+                workspace_id = COALESCE(excluded.workspace_id, stitch_projects.workspace_id)`,
+            [id, name ?? '', updateTime ?? '', wsId || null]
         );
     }
 
-    public async getStitchProjects(): Promise<Array<{ id: string; name: string; updateTime: string }>> {
+    public async getStitchProjects(workspaceId?: string): Promise<Array<{ id: string; name: string; updateTime: string; workspace_id?: string }>> {
         if (!(await this.ensureReady()) || !this._db) return [];
-        const out: Array<{ id: string; name: string; updateTime: string }> = [];
-        const stmt = this._db.prepare('SELECT id, name, update_time FROM stitch_projects ORDER BY update_time DESC');
+        const wsId = workspaceId || await this.getWorkspaceId() || this._getWorkspaceIdFallback();
+        const out: Array<{ id: string; name: string; updateTime: string; workspace_id?: string }> = [];
+        const query = wsId
+            ? 'SELECT id, name, update_time, workspace_id FROM stitch_projects WHERE (workspace_id = ? OR workspace_id IS NULL OR workspace_id = \'\') ORDER BY update_time DESC'
+            : 'SELECT id, name, update_time, workspace_id FROM stitch_projects ORDER BY update_time DESC';
+        const stmt = wsId ? this._db.prepare(query, [wsId]) : this._db.prepare(query);
         try {
             while (stmt.step()) {
                 const r = stmt.getAsObject();
-                out.push({ id: String(r.id), name: String(r.name ?? ''), updateTime: String(r.update_time ?? '') });
+                out.push({
+                    id: String(r.id),
+                    name: String(r.name ?? ''),
+                    updateTime: String(r.update_time ?? ''),
+                    workspace_id: r.workspace_id ? String(r.workspace_id) : undefined,
+                });
             }
         } finally {
             stmt.free();
@@ -11546,9 +11768,13 @@ FROM plans
         return out;
     }
 
-    public async getStitchProjectName(id: string): Promise<string> {
+    public async getStitchProjectName(id: string, workspaceId?: string): Promise<string> {
         if (!(await this.ensureReady()) || !this._db) return '';
-        const stmt = this._db.prepare('SELECT name FROM stitch_projects WHERE id = ?', [id]);
+        const wsId = workspaceId || await this.getWorkspaceId() || this._getWorkspaceIdFallback();
+        const query = wsId
+            ? 'SELECT name FROM stitch_projects WHERE id = ? AND (workspace_id = ? OR workspace_id IS NULL OR workspace_id = \'\') LIMIT 1'
+            : 'SELECT name FROM stitch_projects WHERE id = ? LIMIT 1';
+        const stmt = wsId ? this._db.prepare(query, [id, wsId]) : this._db.prepare(query, [id]);
         try {
             if (stmt.step()) {
                 const r = stmt.getAsObject();
@@ -11560,9 +11786,13 @@ FROM plans
         return '';
     }
 
-    public async getStitchScreenProjectId(screenId: string): Promise<string> {
+    public async getStitchScreenProjectId(screenId: string, workspaceId?: string): Promise<string> {
         if (!(await this.ensureReady()) || !this._db) return '';
-        const stmt = this._db.prepare('SELECT project_id FROM stitch_screens WHERE id = ?', [screenId]);
+        const wsId = workspaceId || await this.getWorkspaceId() || this._getWorkspaceIdFallback();
+        const query = wsId
+            ? 'SELECT project_id FROM stitch_screens WHERE id = ? AND (workspace_id = ? OR workspace_id IS NULL OR workspace_id = \'\') LIMIT 1'
+            : 'SELECT project_id FROM stitch_screens WHERE id = ? LIMIT 1';
+        const stmt = wsId ? this._db.prepare(query, [screenId, wsId]) : this._db.prepare(query, [screenId]);
         try {
             if (stmt.step()) {
                 const r = stmt.getAsObject();
@@ -11579,10 +11809,12 @@ FROM plans
         id: string; projectId: string; name: string;
         deviceType: string | null; status: string | null; statusMessage: string | null;
         summary?: string | null; suggestionsJson?: string | null;
+        workspaceId?: string;
     }): Promise<boolean> {
+        const wsId = screen.workspaceId || await this.getWorkspaceId() || this._getWorkspaceIdFallback();
         return this._persistedUpdate(
-            `INSERT INTO stitch_screens (id, project_id, name, device_type, status, status_msg, summary, suggestions_json, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            `INSERT INTO stitch_screens (id, project_id, name, device_type, status, status_msg, summary, suggestions_json, updated_at, workspace_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)
              ON CONFLICT(id) DO UPDATE SET
                 project_id = excluded.project_id,
                 name = excluded.name,
@@ -11591,8 +11823,9 @@ FROM plans
                 status_msg = excluded.status_msg,
                 summary = CASE WHEN excluded.summary != '' THEN excluded.summary ELSE summary END,
                 suggestions_json = CASE WHEN excluded.suggestions_json != '' THEN excluded.suggestions_json ELSE suggestions_json END,
-                updated_at = datetime('now')`,
-            [screen.id, screen.projectId, screen.name ?? '', screen.deviceType ?? '', screen.status ?? '', screen.statusMessage ?? '', screen.summary ?? '', screen.suggestionsJson ?? '']
+                updated_at = datetime('now'),
+                workspace_id = COALESCE(excluded.workspace_id, stitch_screens.workspace_id)`,
+            [screen.id, screen.projectId, screen.name ?? '', screen.deviceType ?? '', screen.status ?? '', screen.statusMessage ?? '', screen.summary ?? '', screen.suggestionsJson ?? '', wsId || null]
         );
     }
 
@@ -11600,12 +11833,14 @@ FROM plans
         id: string; projectId: string; name: string;
         deviceType: string | null; status: string | null; statusMessage: string | null;
         summary?: string | null; suggestionsJson?: string | null;
-    }>): Promise<boolean> {
+        workspaceId?: string;
+    }>, workspaceId?: string): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
+        const defaultWsId = workspaceId || await this.getWorkspaceId() || this._getWorkspaceIdFallback();
         try {
             this._db.exec('BEGIN');
-            const sql = `INSERT INTO stitch_screens (id, project_id, name, device_type, status, status_msg, summary, suggestions_json, updated_at)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            const sql = `INSERT INTO stitch_screens (id, project_id, name, device_type, status, status_msg, summary, suggestions_json, updated_at, workspace_id)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)
                          ON CONFLICT(id) DO UPDATE SET
                             project_id = excluded.project_id,
                             name = excluded.name,
@@ -11614,8 +11849,10 @@ FROM plans
                             status_msg = excluded.status_msg,
                             summary = CASE WHEN excluded.summary != '' THEN excluded.summary ELSE summary END,
                             suggestions_json = CASE WHEN excluded.suggestions_json != '' THEN excluded.suggestions_json ELSE suggestions_json END,
-                            updated_at = datetime('now')`;
+                            updated_at = datetime('now'),
+                            workspace_id = COALESCE(excluded.workspace_id, stitch_screens.workspace_id)`;
             for (const s of screens) {
+                const wsId = s.workspaceId || defaultWsId;
                 this._db.run(sql, [
                     s.id,
                     s.projectId,
@@ -11624,7 +11861,8 @@ FROM plans
                     s.status ?? '',
                     s.statusMessage ?? '',
                     s.summary ?? '',
-                    s.suggestionsJson ?? ''
+                    s.suggestionsJson ?? '',
+                    wsId || null
                 ]);
             }
             this._db.exec('COMMIT');
@@ -11636,14 +11874,19 @@ FROM plans
         return this._persist();
     }
 
-    public async getStitchScreensForProject(projectId: string): Promise<Array<{
+    public async getStitchScreensForProject(projectId: string, workspaceId?: string): Promise<Array<{
         id: string; projectId: string; name: string;
         deviceType: string; status: string; statusMessage: string;
         summary: string; suggestionsJson: string;
+        workspace_id?: string;
     }>> {
         if (!(await this.ensureReady()) || !this._db) return [];
-        const out: Array<{ id: string; projectId: string; name: string; deviceType: string; status: string; statusMessage: string; summary: string; suggestionsJson: string }> = [];
-        const stmt = this._db.prepare('SELECT id, project_id, name, device_type, status, status_msg, summary, suggestions_json FROM stitch_screens WHERE project_id = ?', [projectId]);
+        const wsId = workspaceId || await this.getWorkspaceId() || this._getWorkspaceIdFallback();
+        const out: Array<{ id: string; projectId: string; name: string; deviceType: string; status: string; statusMessage: string; summary: string; suggestionsJson: string; workspace_id?: string }> = [];
+        const query = wsId
+            ? 'SELECT id, project_id, name, device_type, status, status_msg, summary, suggestions_json, workspace_id FROM stitch_screens WHERE project_id = ? AND (workspace_id = ? OR workspace_id IS NULL OR workspace_id = \'\')'
+            : 'SELECT id, project_id, name, device_type, status, status_msg, summary, suggestions_json, workspace_id FROM stitch_screens WHERE project_id = ?';
+        const stmt = wsId ? this._db.prepare(query, [projectId, wsId]) : this._db.prepare(query, [projectId]);
         try {
             while (stmt.step()) {
                 const r = stmt.getAsObject();
@@ -11656,6 +11899,7 @@ FROM plans
                     statusMessage: String(r.status_msg ?? ''),
                     summary: String(r.summary ?? ''),
                     suggestionsJson: String(r.suggestions_json ?? ''),
+                    workspace_id: r.workspace_id ? String(r.workspace_id) : undefined,
                 });
             }
         } finally {
@@ -11669,21 +11913,33 @@ FROM plans
      * deleteStitchScreensForProject). Used to prune projects deleted on the
      * Stitch side once a fresh API listing confirms they no longer exist.
      */
-    public async deleteStitchProject(id: string): Promise<boolean> {
+    public async deleteStitchProject(id: string, workspaceId?: string): Promise<boolean> {
+        const wsId = workspaceId || await this.getWorkspaceId() || this._getWorkspaceIdFallback();
+        if (wsId) {
+            return this._persistedUpdate('DELETE FROM stitch_projects WHERE id = ? AND (workspace_id = ? OR workspace_id IS NULL OR workspace_id = \'\')', [id, wsId]);
+        }
         return this._persistedUpdate('DELETE FROM stitch_projects WHERE id = ?', [id]);
     }
 
     /** Delete a single cached Stitch screen row (prune-stale path). */
-    public async deleteStitchScreen(id: string): Promise<boolean> {
+    public async deleteStitchScreen(id: string, workspaceId?: string): Promise<boolean> {
+        const wsId = workspaceId || await this.getWorkspaceId() || this._getWorkspaceIdFallback();
+        if (wsId) {
+            return this._persistedUpdate('DELETE FROM stitch_screens WHERE id = ? AND (workspace_id = ? OR workspace_id IS NULL OR workspace_id = \'\')', [id, wsId]);
+        }
         return this._persistedUpdate('DELETE FROM stitch_screens WHERE id = ?', [id]);
     }
 
     /**
      * Delete cached screen list for a specific Stitch project.
      */
-    public async deleteStitchScreensForProject(projectId: string): Promise<number> {
+    public async deleteStitchScreensForProject(projectId: string, workspaceId?: string): Promise<number> {
         if (!(await this.ensureReady()) || !this._db) return 0;
-        const countStmt = this._db.prepare('SELECT COUNT(*) as cnt FROM stitch_screens WHERE project_id = ?', [projectId]);
+        const wsId = workspaceId || await this.getWorkspaceId() || this._getWorkspaceIdFallback();
+        const countQuery = wsId
+            ? 'SELECT COUNT(*) as cnt FROM stitch_screens WHERE project_id = ? AND (workspace_id = ? OR workspace_id IS NULL OR workspace_id = \'\')'
+            : 'SELECT COUNT(*) as cnt FROM stitch_screens WHERE project_id = ?';
+        const countStmt = wsId ? this._db.prepare(countQuery, [projectId, wsId]) : this._db.prepare(countQuery, [projectId]);
         let deleted = 0;
         try {
             if (countStmt.step()) {
@@ -11694,7 +11950,19 @@ FROM plans
         }
         if (deleted > 0) {
             try {
-                this._db.run('DELETE FROM stitch_screens WHERE project_id = ?', [projectId]);
+                if (wsId) {
+                    this._db.run('DELETE FROM stitch_screens WHERE project_id = ? AND (workspace_id = ? OR workspace_id IS NULL OR workspace_id = \'\')', [projectId, wsId]);
+                } else {
+                    this._db.run('DELETE FROM stitch_screens WHERE project_id = ?', [projectId]);
+                }
+                await this._persist();
+            } catch (error) {
+                console.error('[KanbanDatabase] Failed to delete stitch screens:', error);
+                return 0;
+            }
+        }
+        return deleted;
+    }
                 await this._persist();
             } catch (error) {
                 console.error('[KanbanDatabase] Failed to delete stitch screens:', error);
@@ -12275,74 +12543,5 @@ FROM plans
             stmt.free();
         }
         return out;
-    }
-
-    private static async _loadSqlJs(): Promise<SqlJsStatic> {
-
-        if (!KanbanDatabase._sqlJsPromise) {
-            KanbanDatabase._sqlJsPromise = (async () => {
-                console.log('[KanbanDatabase._loadSqlJs] Starting sql.js load...');
-                const sqlJsModulePath = KanbanDatabase._resolveSqlJsModulePath();
-                console.log(`[KanbanDatabase._loadSqlJs] Module path: ${sqlJsModulePath}`);
-                const initSqlJsModule = runtimeRequire(sqlJsModulePath) as ((config?: { wasmBinary?: Uint8Array }) => Promise<SqlJsStatic>) | { default?: (config?: { wasmBinary?: Uint8Array }) => Promise<SqlJsStatic> };
-                const initSqlJs = typeof initSqlJsModule === 'function' ? initSqlJsModule : initSqlJsModule.default;
-                if (!initSqlJs) {
-                    throw new Error('sql.js module did not expose an initializer function.');
-                }
-                const wasmPath = KanbanDatabase._resolveSqlWasmPath();
-                console.log(`[KanbanDatabase._loadSqlJs] WASM path: ${wasmPath}`);
-                const wasmBinary = new Uint8Array(await fs.promises.readFile(wasmPath));
-                console.log(`[KanbanDatabase._loadSqlJs] WASM loaded (${wasmBinary.length} bytes), initializing...`);
-                const result = await initSqlJs({ wasmBinary });
-                console.log('[KanbanDatabase._loadSqlJs] sql.js initialized successfully');
-                return result;
-            })().catch((error) => {
-                KanbanDatabase._sqlJsPromise = null;
-                throw error;
-            });
-        }
-        return KanbanDatabase._sqlJsPromise;
-    }
-
-    private static _resolveSqlJsModulePath(): string {
-        const candidates = [
-            path.join(__dirname, 'sql-wasm.js'),
-            path.join(__dirname, '..', 'sql-wasm.js'),
-            path.join(__dirname, '..', '..', 'sql-wasm.js'),
-            path.join(path.dirname(require.main?.filename || process.cwd()), 'sql-wasm.js'),
-            path.join(process.cwd(), 'dist', 'sql-wasm.js'),
-            path.join(process.cwd(), 'node_modules', 'sql.js', 'dist', 'sql-wasm.js'),
-            path.join(__dirname, '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.js'),
-            path.join(__dirname, '..', '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.js'),
-            path.join(__dirname, '..', '..', '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.js'),
-            path.join(__dirname, '..', '..', '..', '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.js')
-        ];
-        for (const candidate of candidates) {
-            if (fs.existsSync(candidate)) {
-                return candidate;
-            }
-        }
-        throw new Error(`Unable to locate sql-wasm.js. Checked: ${candidates.join(', ')}`);
-    }
-
-    private static _resolveSqlWasmPath(): string {
-        const candidates = [
-            path.join(__dirname, 'sql-wasm.wasm'),
-            path.join(__dirname, '..', 'sql-wasm.wasm'),
-            path.join(__dirname, '..', '..', 'sql-wasm.wasm'),
-            path.join(path.dirname(require.main?.filename || process.cwd()), 'sql-wasm.wasm'),
-            path.join(process.cwd(), 'dist', 'sql-wasm.wasm'),
-            path.join(process.cwd(), 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
-            path.join(__dirname, '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
-            path.join(__dirname, '..', '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
-            path.join(__dirname, '..', '..', '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
-            path.join(__dirname, '..', '..', '..', '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm')
-        ];
-        for (const candidate of candidates) {
-            if (fs.existsSync(candidate)) {
-                return candidate;
-            }
-        }
-        throw new Error(`Unable to locate sql-wasm.wasm. Checked: ${candidates.join(', ')}`);
     }
 }

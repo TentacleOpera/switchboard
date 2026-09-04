@@ -19,6 +19,9 @@ import type { KanbanProvider } from './KanbanProvider';
 import { getMappingsFromIndex, resolveEffectiveWorkspaceRootFromMappings } from './WorkspaceIdentityService';
 import { LAUNCHER_REGISTRY, composeExternalPrompt } from './externalAgentPrompts';
 import { generateSparkContext } from './SparkContextExporter';
+import { BackupService } from './BackupService';
+import { exportProject, importProject } from './projectExport';
+import { RetentionService } from './RetentionService';
 
 /**
  * The running extension's version, read from the packaged `package.json`.
@@ -979,17 +982,91 @@ export class SetupPanelProvider implements vscode.Disposable {
                         typeof message.targetWorkspaceRoot === 'string' ? message.targetWorkspaceRoot : undefined
                     );
                     return { success: true };
-                case 'setPresetDbPath':
-                    await this._taskViewerProvider.handleSetPresetDbPath(
-                        message.preset,
-                        typeof message.targetWorkspaceRoot === 'string' ? message.targetWorkspaceRoot : undefined
-                    );
-                    return { success: true };
                 case 'resetDatabase':
                     await this._taskViewerProvider.handleResetDatabase(
                         typeof message.targetWorkspaceRoot === 'string' ? message.targetWorkspaceRoot : undefined
                     );
                     return { success: true };
+                case 'listBackups': {
+                    const wsRoot = typeof message.workspaceRoot === 'string' ? message.workspaceRoot : (this._getCurrentWorkspaceRoot() || undefined);
+                    const backups = await BackupService.getInstance({ workspaceRoot: wsRoot }).listBackups(wsRoot);
+                    this.postMessage({ type: 'backupsList', backups });
+                    return { success: true, backups };
+                }
+                case 'createBackup': {
+                    const wsRoot = typeof message.workspaceRoot === 'string' ? message.workspaceRoot : (this._getCurrentWorkspaceRoot() || undefined);
+                    const result = await BackupService.getInstance({ workspaceRoot: wsRoot }).createBackup({
+                        reason: typeof message.reason === 'string' ? message.reason : 'manual',
+                        type: typeof message.type === 'string' ? message.type : 'manual',
+                        workspaceRoot: wsRoot,
+                    });
+                    this.postMessage({ type: 'backupCreated', backup: result });
+                    return { success: true, backup: result };
+                }
+                case 'restoreBackup': {
+                    const wsRoot = typeof message.workspaceRoot === 'string' ? message.workspaceRoot : (this._getCurrentWorkspaceRoot() || undefined);
+                    const result = await BackupService.getInstance({ workspaceRoot: wsRoot }).restoreBackup(
+                        message.backupId,
+                        wsRoot
+                    );
+                    this.postMessage({ type: 'backupRestored', result });
+                    return { success: true, result };
+                }
+                case 'exportProject': {
+                    const wsRoot = typeof message.workspaceRoot === 'string' ? message.workspaceRoot : (this._getCurrentWorkspaceRoot() || undefined);
+                    const result = await exportProject({
+                        workspaceId: message.workspaceId,
+                        workspaceRoot: wsRoot || '',
+                        destPath: message.destPath,
+                    });
+                    this.postMessage({ type: 'projectExported', result });
+                    return { success: true, result };
+                }
+                case 'importProject': {
+                    const wsRoot = typeof message.workspaceRoot === 'string' ? message.workspaceRoot : (this._getCurrentWorkspaceRoot() || undefined);
+                    const result = await importProject({
+                        srcPath: message.srcPath,
+                        targetWorkspaceRoot: wsRoot || '',
+                        targetWorkspaceId: typeof message.targetWorkspaceId === 'string' ? message.targetWorkspaceId : undefined,
+                    });
+                    this.postMessage({ type: 'projectImported', result });
+                    return { success: true, result };
+                }
+                case 'getDatabaseStorageStats': {
+                    const wsRoot = typeof message.workspaceRoot === 'string' ? message.workspaceRoot : (this._getCurrentWorkspaceRoot() || undefined);
+                    const retentionSvc = RetentionService.getInstance({ workspaceRoot: wsRoot });
+                    const stats = await retentionSvc.getStorageStats();
+                    this.postMessage({ type: 'databaseStorageStats', stats });
+                    return { success: true, stats };
+                }
+                case 'getRetentionConfig': {
+                    const wsRoot = typeof message.workspaceRoot === 'string' ? message.workspaceRoot : (this._getCurrentWorkspaceRoot() || undefined);
+                    const retentionSvc = RetentionService.getInstance({ workspaceRoot: wsRoot });
+                    const config = await retentionSvc.getConfig();
+                    this.postMessage({ type: 'retentionConfig', config });
+                    return { success: true, ...config };
+                }
+                case 'saveRetentionConfig': {
+                    const wsRoot = typeof message.workspaceRoot === 'string' ? message.workspaceRoot : (this._getCurrentWorkspaceRoot() || undefined);
+                    const retentionSvc = RetentionService.getInstance({ workspaceRoot: wsRoot });
+                    const updated = await retentionSvc.setConfig(message.config || message);
+                    this.postMessage({ type: 'retentionConfigSaved', updated });
+                    return { success: true, ...updated };
+                }
+                case 'runRetentionRotation': {
+                    const wsRoot = typeof message.workspaceRoot === 'string' ? message.workspaceRoot : (this._getCurrentWorkspaceRoot() || undefined);
+                    const retentionSvc = RetentionService.getInstance({ workspaceRoot: wsRoot });
+                    const report = await retentionSvc.runRotation({ force: message.force === true });
+                    this.postMessage({ type: 'retentionRotationFinished', report });
+                    return { success: true, report };
+                }
+                case 'reactivateWorkspace': {
+                    const wsRoot = typeof message.workspaceRoot === 'string' ? message.workspaceRoot : (this._getCurrentWorkspaceRoot() || undefined);
+                    const retentionSvc = RetentionService.getInstance({ workspaceRoot: wsRoot });
+                    const result = await retentionSvc.reactivateWorkspace(message.workspaceId);
+                    this.postMessage({ type: 'workspaceReactivated', result });
+                    return result;
+                }
                 case 'getPlanningSources': {
                     // NOTE: intentionally folder-scoped — this setting is per-project, not shared across workspaces
                     const pathConfig = this._seams().pathConfig;
@@ -1657,7 +1734,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                 return false;
             }
 
-            const markers = ['kanban.db', 'db-pointer'];
+            const markers = ['kanban.db'];
             return markers.some(name => fs.existsSync(path.join(switchboardDir, name)));
         } catch {
             return false;

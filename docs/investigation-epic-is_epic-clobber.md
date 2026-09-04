@@ -1,7 +1,7 @@
 # Investigation: `is_feature` Clobbered to 0 on Feature Creation
 
 **Date:** 2025-07-05
-**Status:** Root cause candidates identified, fix not yet written
+**Status:** Resolved (2026-09-04)
 **Symptom:** Press "GROUP INTO FEATURE" → feature file lands in `.switchboard/features/` → board shows it as a plain plan (is_feature=0 in DB) → ~15 min later self-heals to feature
 
 ---
@@ -203,9 +203,20 @@ Add `is_feature`, `feature_id`, `project_id` to the `exportStateToFile` SELECT a
 
 ---
 
-## Next Steps
+## Resolution (2026-09-04)
 
-1. **Deploy the diagnostic log** (Step 1) and reproduce the bug — the stack trace will name the exact caller.
-2. **Implement the structural guard** (Step 2) in `updateFeatureStatus` to prevent `.switchboard/features/` files from being demoted.
-3. **Fix the backup gap** (Step 3) so restore operations preserve feature state.
-4. **(User decision)** Whether to also add a board-refresh healer as defense-in-depth, despite the user's preference to fix the clobber at the source. A cheap `plan_file LIKE '.switchboard/features/%' AND is_feature = 0` query on refresh would catch any future regressions without masking the root cause.
+Both Candidate ❶ and Candidate ❷ have been resolved:
+
+1. **Candidate ❶ (Logic Bug & ID Namespace Collision Fixes):**
+   - `KanbanDatabase.updateFeatureStatus` rejects empty or whitespace IDs outright.
+   - It separates `planId` and `sessionId` lookups into distinct, explicit queries instead of accepting a coalesced argument. It logs whenever the fallback `sessionId` arm resolves a plan.
+   - It asserts that the resolved plan's `plan_file` actually maps back to the requested `planId` via `getPlanByPlanFile` before executing the UPDATE.
+   - The UPDATE query now specifies `WHERE plan_file = ? AND workspace_id = ? AND plan_id = ?` preventing collateral row modification.
+   - Structural guard implemented: `updateFeatureStatus` refuses to clear `is_feature` on files located in `.switchboard/features/`.
+   - In `KanbanProvider.createFeatureFromPlanIds`, any subtask that resolves to the feature itself (by planId, sessionId, or planFile) is skipped.
+   - `linkOk` is now load-bearing: failed subtask links are captured into `skipped` rather than reported as `linked`.
+
+2. **Candidate ❷ (Stale Snapshot & Multiple In-Memory Instances):**
+   - `KanbanDatabase.forWorkspace` and `KanbanDatabase.forDbPath` enforce strict single-instance identity per resolved DB path. Any acquisition path (workspace root, custom dbPath, or direct db file path) resolves to the exact same canonical `KanbanDatabase` in-memory instance.
+   - Eviction handling (`_evictKey`, `ensureReady`) gates on both workspace root and resolved DB path, preventing race conditions, deadlocks, or split-brain instances across in-flight eviction.
+   - The diagnostic `_nextInstanceId` counter and probe checks have been removed.

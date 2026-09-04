@@ -1685,6 +1685,8 @@ export const RETIRED_WORKFLOW_PATH_MAP: Record<string, string> = {
     // Protocol directory renamed from switchboard-orchestrator → switchboard-mission-control.
     // The old protocol path is a stale ref after the rename; normalize it to the new path.
     '.agents/protocols/switchboard-orchestrator/SKILL.md': '.agents/protocols/switchboard-mission-control/SKILL.md',
+    '.agents/protocols/improve-plan/SKILL.md': DEFAULT_PLANNER_WORKFLOW,
+    '.agents/protocols/improve-feature/SKILL.md': DEFAULT_FEATURE_PLANNER_WORKFLOW,
 };
 
 /** Rewrite a retired relocated workflow path to its new skills path. Any other

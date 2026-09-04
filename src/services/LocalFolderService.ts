@@ -49,25 +49,32 @@ export class LocalFolderService {
         } catch { /* outside extension host or module unavailable */ }
         this._effectiveWorkspaceRoot = effective;
         this._configPath = path.join(effective, '.switchboard', 'local-folder-config.json');
-        this._cachePath = path.join(effective, '.switchboard', 'local-folder-cache.md');
+        let cachePath = path.join(effective, '.switchboard', 'local-folder-cache.md');
+        try {
+            const { stateFile } = require('../utils/stateHome');
+            const wsIdFile = path.join(effective, '.switchboard', 'workspace-id');
+            if (fs.existsSync(wsIdFile)) {
+                const wsId = fs.readFileSync(wsIdFile, 'utf8').split('\n')[0].trim();
+                if (wsId) {
+                    const globalCachePath = stateFile('cache', wsId, 'local-folder-cache.md');
+                    if (!fs.existsSync(globalCachePath) && fs.existsSync(cachePath)) {
+                        try {
+                            fs.mkdirSync(path.dirname(globalCachePath), { recursive: true });
+                            fs.renameSync(cachePath, globalCachePath);
+                        } catch {}
+                    }
+                    cachePath = globalCachePath;
+                }
+            }
+        } catch {}
+        this._cachePath = cachePath;
         this.loadFolderPathsConfig().then(cfg => {
             this._folderPathsCache = cfg;
         }).catch(() => {});
     }
 
     private _assertAllowedWrite(): void {
-        try {
-            const { isAllowedSwitchboardLocation } = require('../utils/switchboardLocationGuard');
-            if (!isAllowedSwitchboardLocation(this._effectiveWorkspaceRoot, this._rawWorkspaceRoot)) {
-                throw new Error('Blocked: attempted to write .switchboard data to a child workspace folder');
-            }
-        } catch (err) {
-            if (err instanceof Error && err.message.startsWith('Blocked:')) {
-                throw err;
-            }
-            // Guard unavailable — log warning but allow write to proceed
-            console.warn('[LocalFolderService] isAllowedSwitchboardLocation guard unavailable, allowing write to', this._effectiveWorkspaceRoot);
-        }
+        // Retired with switchboardLocationGuard: single global database in home store
     }
 
     // ── Config ──────────────────────────────────────────────────

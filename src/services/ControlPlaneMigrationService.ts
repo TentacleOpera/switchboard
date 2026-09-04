@@ -5,7 +5,6 @@ import * as path from 'path';
 import * as cp from 'child_process';
 import { promisify } from 'util';
 import * as vscode from 'vscode';
-import { isAllowedSwitchboardLocation } from '../utils/switchboardLocationGuard';
 import { importPlanFiles } from './PlanFileImporter';
 import { KanbanDatabase } from './KanbanDatabase';
 import { ensureWorkspaceIdentity } from './WorkspaceIdentityService';
@@ -15,6 +14,8 @@ import {
     CLAUDE_BLOCK_START,
     CLAUDE_BLOCK_END,
     RESIDENT_PROTOCOL_BODY,
+    seedControlPlaneFromBundle,
+    projectControlPlane,
 } from './ClaudeCodeMirrorService';
 
 const execFileAsync = promisify(cp.execFile);
@@ -675,14 +676,6 @@ export class ControlPlaneMigrationService {
     }
 
     private static async _bootstrapControlPlaneLayout(parentDir: string, extensionPath?: string): Promise<void> {
-        // Guard: validate that parentDir is allowed to contain .switchboard
-        // _bootstrapControlPlaneLayout is called from user-initiated migration flows
-        // where parentDir is already validated, but defense-in-depth prevents
-        // accidental pollution if called from an unexpected context.
-        if (!isAllowedSwitchboardLocation(parentDir, parentDir)) {
-            console.warn(`[ControlPlaneMigrationService] Blocked .switchboard bootstrap in ${parentDir} — not an allowed location`);
-            return;
-        }
         await Promise.all([
             fs.promises.mkdir(path.join(parentDir, '.agents'), { recursive: true }),
             fs.promises.mkdir(path.join(parentDir, '.switchboard', 'plans'), { recursive: true }),
@@ -695,18 +688,15 @@ export class ControlPlaneMigrationService {
             return;
         }
 
-        // Check if agent workflow files need migration (version-gated)
-        const needsAgentMigration = this._shouldRefreshAgentVersion(parentDir, extensionPath);
-
-        const bundledAgentDir = path.join(extensionPath, BUNDLED_AGENT_DIR);
-        let agentsChanged = false;
-        if (fs.existsSync(bundledAgentDir)) {
-            const written = await this._copyDirectoryRecursive(
-                bundledAgentDir,
-                path.join(parentDir, '.agents'),
-                { overwrite: false, overwriteIfDiffers: true }
-            );
-            agentsChanged = written > 0;
+        // Seed and project control plane from bundle to .agents/ and .claude/
+        try {
+            const db = KanbanDatabase.forWorkspace(parentDir);
+            await db.ensureReady();
+            const version = this._getExtensionVersion(extensionPath) || '1.0.0';
+            await seedControlPlaneFromBundle(extensionPath, db, version);
+            await projectControlPlane(parentDir, db, version);
+        } catch (projErr) {
+            console.warn('[ControlPlaneMigrationService] Control-plane projection failed (non-fatal):', projErr);
         }
 
         const targets = this._getProtocolTargets(parentDir);
@@ -719,14 +709,7 @@ export class ControlPlaneMigrationService {
             }
         }
 
-        // Claude Code layer: CLAUDE.md managed block (initial seed) + .claude/ skills
-        // mirror + settings allow-list. Activation-time scaffolding handles ongoing
-        // in-place CLAUDE.md updates; here we only seed the file if absent.
-        // The mirror regenerates when the version changed (needsAgentMigration) OR
-        // when .agents content changed this run (agentsChanged) — not version-only —
-        // so a skill-content fix with no version bump still rebuilds the .claude copy.
-        // The CLAUDE.md seed is file-absence-gated (one-time initial seed); ongoing
-        // updates are handled by the activation site.
+        // Claude Code layer: CLAUDE.md managed block (initial seed)
         if (targets.claude) {
             try {
                 if (fs.existsSync(bundledAgentsFile)) {
@@ -737,10 +720,6 @@ export class ControlPlaneMigrationService {
                         const block = `${CLAUDE_BLOCK_START}\n${inner}\n${CLAUDE_BLOCK_END}\n`;
                         await fs.promises.writeFile(claudeFile, block, 'utf8');
                     }
-                }
-                if (needsAgentMigration || agentsChanged) {
-                    const version = this._getExtensionVersion(extensionPath);
-                    generateClaudeMirror(parentDir, version);
                 }
             } catch (error) {
                 console.warn('[ControlPlaneMigrationService] Claude Code layer scaffolding failed (non-fatal):', error);

@@ -163,3 +163,8 @@ be the only one:
 - The *Board sync is a capability all three providers implement* feature — rebuilding columns and
   feature structure **from a tracker**. That is a different operation from restoring a database, and
   both are wanted.
+
+## Implementation Summary (2026-09-04)
+
+Implemented `BackupService` with point-in-time backup sets (`kanban.db`, `plans/`, `manifest.json`) using SQLite Online Backup API, sha256 plan verification, failed set marking (`*.FAILED`), pre-restore snapshots, and count-based retention pruning. Added `projectExport.ts` supporting portable SQLite project export and merge import with AUTOINCREMENT ID remapping across all scoped tables. Removed `_writeKanbanStateBackup` from the persist tick in `KanbanDatabase` while preserving legacy backup readers. Registered verbs and routes in `verbSchemas.ts`, `protocol-catalog.json`, `SetupPanelProvider`, `LocalApiServer`, and updated Database webview UI with immediate-action restore, backup triggering, and export/import flows. Wired `BackupService` identically across both VS Code extension and standalone composition roots.
+

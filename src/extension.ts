@@ -10,6 +10,8 @@ import { SessionActionLog } from './services/SessionActionLog';
 import { KanbanProvider } from './services/KanbanProvider';
 import { GlobalPlanWatcherService } from './services/GlobalPlanWatcherService';
 import { KanbanDatabase, type WorkspaceDatabaseMapping } from './services/KanbanDatabase';
+import { BackupService } from './services/BackupService';
+import { RetentionService } from './services/RetentionService';
 import { TransferBundleService } from './services/TransferBundleService';
 import { resolveEffectiveWorkspaceRootFromMappings, getMappingsFromIndex } from './services/WorkspaceIdentityService';
 import { SetupPanelProvider } from './services/SetupPanelProvider';
@@ -30,6 +32,8 @@ import {
     RESIDENT_PROTOCOL_BODY,
     buildManagedInner,
     generateClaudeMirror,
+    seedControlPlaneFromBundle,
+    projectControlPlane,
 } from './services/ClaudeCodeMirrorService';
 import { WorkspaceExcludeService } from './services/WorkspaceExcludeService';
 import { cleanWorkspace, pruneZombieTerminalEntries } from './lifecycle/cleanWorkspace';
@@ -147,88 +151,56 @@ function setLastCopiedAgentVersion(workspaceRoot: string, version: string): void
     }
 }
 
-/**
- * One-shot bootstrap: if VS Code config has mappings but DB doesn't yet,
- * copy them into the DB and write pointer files. Runs once, then sets a
- * globalState flag so it never runs again. This is NOT a migration period —
- * it's a single bridge for existing config → DB on first activation.
- */
-async function bootstrapMappingsToDb(context: vscode.ExtensionContext): Promise<void> {
-    const bootstrapped = context.globalState.get<boolean>('mappings_db_bootstrapped', false);
-    if (bootstrapped) {
-        return;
-    }
-
-    try {
-        const workspaceCfg = vscode.workspace.getConfiguration('switchboard');
-        const configValue = workspaceCfg.get<{ enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] }>('workspaceDatabaseMappings');
-        if (!configValue || !configValue.enabled || !Array.isArray(configValue.mappings) || configValue.mappings.length === 0) {
-            // Nothing to bootstrap
-            await context.globalState.update('mappings_db_bootstrapped', true);
-            return;
-        }
-
-        // If any DB already has workspace_mappings, skip — user has already saved from setup.html
-        for (const mapping of configValue.mappings) {
-            if (mapping.parentFolder && mapping.dbPath) {
-                try {
-                    const db = KanbanDatabase.forWorkspace(mapping.parentFolder, mapping.dbPath);
-                    const existing = await db.getWorkspaceMappings();
-                    if (existing.enabled && Array.isArray(existing.mappings) && existing.mappings.length > 0) {
-                        // DB already has mappings — bootstrap not needed
-                        await context.globalState.update('mappings_db_bootstrapped', true);
-                        return;
-                    }
-                } catch {}
-            }
-        }
-
-        console.log('[Switchboard] Bootstrapping workspaceDatabaseMappings from VS Code config to database...');
-
-        for (const mapping of configValue.mappings) {
-            if (mapping.parentFolder && mapping.dbPath) {
-                KanbanDatabase.writeDbPointer(mapping.parentFolder, mapping.dbPath);
-                const db = KanbanDatabase.forWorkspace(mapping.parentFolder, mapping.dbPath);
-                await db.setWorkspaceMappings({
-                    enabled: configValue.enabled ?? false,
-                    mappings: configValue.mappings
-                });
-            }
-        }
-
-        await context.globalState.update('mappings_db_bootstrapped', true);
-        console.log('[Switchboard] Bootstrap complete. Mappings now live in DB.');
-    } catch (err) {
-        console.error('[Switchboard] Error during one-time mapping bootstrap:', err);
-    }
+async function bootstrapMappingsToDb(_context: vscode.ExtensionContext): Promise<void> {
+    // Retired with single-global-database: mappings no longer written to DB pointers
 }
 
 async function initializeMappingIndex(outputChannel?: vscode.OutputChannel): Promise<void> {
     const folders = vscode.workspace.workspaceFolders ?? [];
     const rootPaths = folders.map(folder => path.resolve(folder.uri.fsPath));
-    const { setHostWorkspaceRoots, buildMappingIndexFromDbs, getMappingsFromIndex, resolveWorkspaceDbPath } = require('./services/WorkspaceIdentityService');
+    const { setHostWorkspaceRoots } = require('./services/WorkspaceIdentityService');
+    const { discoverAndMergeDatabases } = require('./services/dbMerge');
+    const { adoptPresetDbOnLaunch, isKnownPresetDbPath } = require('./services/cloudSyncMigration');
     setHostWorkspaceRoots(rootPaths);
 
-    const dbs = new Map<string, KanbanDatabase>();
+    // Adopt cloud preset DB paths on launch
     for (const folder of folders) {
-        const folderPath = path.resolve(folder.uri.fsPath);
-        const dbPath = resolveWorkspaceDbPath(folderPath, () => {
-            return vscode.workspace.getConfiguration('switchboard', folder.uri).get('kanban.dbPath');
-        });
-
-        // If the database file exists, open it and read mappings
-        if (dbPath && fs.existsSync(dbPath)) {
-            const db = KanbanDatabase.forWorkspace(folderPath, dbPath);
-            dbs.set(folderPath, db);
-            outputChannel?.appendLine(`[initializeMappingIndex] Found DB for ${path.basename(folderPath)} at ${dbPath}`);
-        } else {
-            outputChannel?.appendLine(`[initializeMappingIndex] No DB for ${path.basename(folderPath)} (dbPath=${dbPath}, exists=${dbPath ? fs.existsSync(dbPath) : false})`);
+        try {
+            const folderPath = path.resolve(folder.uri.fsPath);
+            const cfg = vscode.workspace.getConfiguration('switchboard', folder.uri);
+            const configuredPresetDbPath = cfg.get<string>('kanban.dbPath');
+            if (configuredPresetDbPath && isKnownPresetDbPath(configuredPresetDbPath)) {
+                await adoptPresetDbOnLaunch(configuredPresetDbPath, {
+                    clearDbPathConfig: async () => {
+                        await cfg.update('kanban.dbPath', undefined, vscode.ConfigurationTarget.Workspace);
+                    },
+                    notify: (msg: string) => {
+                        outputChannel?.appendLine(`[adoptPresetDb] ${msg}`);
+                        vscode.window.showInformationMessage(msg);
+                    },
+                    warn: (msg: string) => {
+                        outputChannel?.appendLine(`[adoptPresetDb] WARNING: ${msg}`);
+                        vscode.window.showWarningMessage(msg);
+                    },
+                    error: (msg: string) => {
+                        outputChannel?.appendLine(`[adoptPresetDb] ERROR: ${msg}`);
+                        vscode.window.showErrorMessage(msg);
+                    },
+                }, folderPath);
+            }
+        } catch (err) {
+            outputChannel?.appendLine(`[initializeMappingIndex] Cloud preset DB adoption error: ${err}`);
         }
     }
-    outputChannel?.appendLine(`[initializeMappingIndex] Found ${dbs.size} DB(s), calling buildMappingIndexFromDbs`);
-    await buildMappingIndexFromDbs(dbs, outputChannel);
-    const result = getMappingsFromIndex();
-    outputChannel?.appendLine(`[initializeMappingIndex] After build: enabled=${result.enabled}, mappings=${result.mappings?.length ?? 0}`);
+
+    try {
+        const merged = await discoverAndMergeDatabases(rootPaths);
+        if (merged > 0) {
+            outputChannel?.appendLine(`[initializeMappingIndex] Discovered and merged ${merged} database(s)`);
+        }
+    } catch (err) {
+        outputChannel?.appendLine(`[initializeMappingIndex] Database discovery error: ${err}`);
+    }
 }
 
 function shouldRefreshAgentWorkspaceFiles(extensionPath: string, workspaceRoot: string): boolean {
@@ -289,11 +261,10 @@ function isSwitchboardManagedFolder(root: string): boolean {
         // bail (WorkspaceIdentityService), so it proves nothing about deliberate
         // setup and kept re-arming littered roots for full scaffold refreshes
         // (UAT 2026-07-13: analytics-dashboard). A genuine workspace always has
-        // kanban.db (standalone) or db-pointer (redirected parent); a root with
-        // only workspace-id self-heals into managed the moment its board is used.
+        // kanban.db (legacy standalone); a root with only workspace-id self-heals
+        // into managed the moment its board is used.
         const markers = [
             path.join(dir, 'kanban.db'),
-            path.join(dir, 'db-pointer'),
         ];
         return markers.some(p => fs.existsSync(p));
     } catch {
@@ -689,22 +660,6 @@ export async function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    // Phase 1 Workstream A: start the idle-eviction sweep + apply the resident-DB budget
-    // from settings. The sweep evicts cached KanbanDatabase instances idle > 10 min
-    // (except the active workspace) and aggressively evicts when summed resident size
-    // crosses the budget — the primary defense against sql.js WASM heap exhaustion.
-    KanbanDatabase.startEvictionSweep();
-    const budgetMb = vscode.workspace.getConfiguration('switchboard').get<number>('kanban.residentDbBudgetMb', 500) ?? 500;
-    KanbanDatabase.setResidentDbBudgetMb(budgetMb);
-
-    // Phase 1 Workstream D: one-time cleanup of stale diagnostic files left by the
-    // removed per-persist feature-clobber probe.
-    const allRoots = (kanbanProvider as any)._getWorkspaceRoots?.() as string[] | undefined;
-    if (allRoots && allRoots.length > 0) {
-        KanbanDatabase.cleanupDiagnosticFiles(allRoots);
-    } else if (workspaceRoot) {
-        KanbanDatabase.cleanupDiagnosticFiles([workspaceRoot]);
-    }
 
     // Migrate any cards stranded in deprecated columns (CONTEXT GATHERER, CODE_RESEARCHER, SPLITTER)
     // to PLAN REVIEWED. Runs once at activation; idempotent (no-op once no cards remain).
@@ -790,6 +745,23 @@ export async function activate(context: vscode.ExtensionContext) {
     );
     await globalPlanWatcher.initialize();
     context.subscriptions.push(globalPlanWatcher);
+
+    const firstWsFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const backupService = BackupService.getInstance({ workspaceRoot: firstWsFolder });
+    backupService.startScheduledBackups();
+    context.subscriptions.push({
+        dispose: () => {
+            backupService.stopScheduledBackups();
+        }
+    });
+
+    const retentionService = RetentionService.getInstance({ workspaceRoot: firstWsFolder });
+    retentionService.startScheduledRotation();
+    context.subscriptions.push({
+        dispose: () => {
+            retentionService.stopScheduledRotation();
+        }
+    });
 
     // Wire the watcher into the already-created KanbanProvider
     await kanbanProvider!.setGlobalPlanWatcher(globalPlanWatcher);
@@ -4162,10 +4134,13 @@ async function scaffoldProtocolLayers(
         }
         try {
             const version = getExtensionVersion(extensionUri.fsPath);
-            const m = generateClaudeMirror(workspaceUri.fsPath, version);
-            outputChannel?.appendLine(`[${logPrefix}] .claude/skills mirror: ${m.status} — ${m.reason}`);
+            const db = KanbanDatabase.forWorkspace(workspaceUri.fsPath);
+            await db.ensureReady();
+            await seedControlPlaneFromBundle(extensionUri.fsPath, db, version);
+            const m = await projectControlPlane(workspaceUri.fsPath, db, version);
+            outputChannel?.appendLine(`[${logPrefix}] Control-plane projection: ${m.status} — ${m.reason}`);
         } catch (e) {
-            outputChannel?.appendLine(`[${logPrefix}] .claude/skills mirror error (non-fatal): ${e}`);
+            outputChannel?.appendLine(`[${logPrefix}] Control-plane projection error (non-fatal): ${e}`);
         }
     }
 }
@@ -4406,67 +4381,16 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
     // Migrate legacy plan subdirectories into unified .switchboard/plans/ root
     await migrateLegacyPlans(workspaceUri.fsPath);
 
-    // 2. Discover and Copy .agents assets (Recursive & Depth-Limited)
-    const agentSourceUri = vscode.Uri.joinPath(extensionUri, '.agents');
-    const agentFiles = await crawlDirectory(agentSourceUri);
-
-    // 2a. Version-gated workflow migration (retained as a redundant fast path for
-    // any migration side effects, but no longer the sole delivery trigger —
-    // workflow .md files now also flow through the content-hash path below so a
-    // door rename lands on same-version installs).
-    const needsWorkflowMigration = shouldRefreshAgentWorkspaceFiles(extensionUri.fsPath, workspaceUri.fsPath);
-
-    for (const relativePath of agentFiles) {
-        const srcUri = vscode.Uri.joinPath(agentSourceUri, relativePath);
-        const destUri = vscode.Uri.joinPath(workspaceUri, '.agents', relativePath);
-
-        // Ensure parent directory exists
-        await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(destUri.fsPath)));
-
-        const isWorkflowFile = relativePath.startsWith('workflows' + path.sep) && relativePath.endsWith('.md');
-
-        if (isWorkflowFile && needsWorkflowMigration) {
-            // Workflow files are canonical extension definitions — always overwrite on version change.
-            // Per-file failure tolerance: one unwritable file must not abort setup for the rest.
-            // (Content-hash path below also runs for workflows, so same-version installs self-heal too.)
-            try {
-                await vscode.workspace.fs.copy(srcUri, destUri, { overwrite: true });
-            } catch (copyErr) {
-                console.warn(`[Setup] Workflow copy failed for ${relativePath}, skipping:`, copyErr);
-            }
-            continue;
-        }
-
-        // Content-hash self-healing for all agent files (skills AND workflows when
-        // the version gate did not fire): copy if absent, overwrite iff bundle
-        // content differs from workspace content. Fail-safe: skip on hash error,
-        // never clobber blindly. User-authored (non-bundled) files are never
-        // touched — the loop only iterates files present in the bundle. This is
-        // the delivery guarantee for workflow door renames on same-version installs.
-        try {
-            await vscode.workspace.fs.stat(destUri);
-            // dest exists → overwrite iff content differs
-            try {
-                const [srcHash, destHash] = await Promise.all([
-                    ControlPlaneMigrationService.hashFile(srcUri.fsPath),
-                    ControlPlaneMigrationService.hashFile(destUri.fsPath),
-                ]);
-                if (srcHash !== destHash) {
-                    await vscode.workspace.fs.copy(srcUri, destUri, { overwrite: true });
-                }
-            } catch (hashErr) {
-                // Fail-safe: skip on hash error/write error, never clobber blindly,
-                // never abort the loop — remaining files still refresh.
-                console.warn(`[Setup] Agent file content-hash refresh failed for ${relativePath}, skipping:`, hashErr);
-            }
-        } catch {
-            // dest absent → copy new file. Per-file failure tolerance as above.
-            try {
-                await vscode.workspace.fs.copy(srcUri, destUri, { overwrite: false });
-            } catch (copyErr) {
-                console.warn(`[Setup] Agent file copy failed for ${relativePath}, skipping:`, copyErr);
-            }
-        }
+    // 2. Discover, seed, and project .agents assets via ControlPlaneProjection
+    try {
+        const version = getExtensionVersion(extensionUri.fsPath);
+        const db = KanbanDatabase.forWorkspace(workspaceUri.fsPath);
+        await db.ensureReady();
+        await seedControlPlaneFromBundle(extensionUri.fsPath, db, version);
+        const projection = await projectControlPlane(workspaceUri.fsPath, db, version);
+        outputChannel?.appendLine(`[Setup] Control-plane projection: ${projection.status} — ${projection.reason}`);
+    } catch (projErr) {
+        outputChannel?.appendLine(`[Setup] Control-plane projection failed (non-fatal): ${projErr}`);
     }
 
     // Update agent version tracking after successful copy
@@ -4609,13 +4533,6 @@ export function deactivate() {
     }
     registeredTerminals.clear();
 
-    // Phase 1 Workstream A: stop the idle-eviction sweep and evict ALL cached
-    // KanbanDatabase instances (drain + flush + close) so the shared WASM heap is
-    // released before the host process exits. Without this, sql.js MEMFS buffers
-    // persist until the extension host process is torn down.
-    KanbanDatabase.stopEvictionSweep();
-    void KanbanDatabase.evictAll();
-
     // Cleanup other resources
     if (setupStatusBarItem) {
         setupStatusBarItem.dispose();
@@ -4624,4 +4541,6 @@ export function deactivate() {
         outputChannel.dispose();
         outputChannel = null;
     }
+    try { void BackupService.getInstance().shutdown(); } catch { /* best effort */ }
+    try { RetentionService.getInstance().stopScheduledRotation(); } catch { /* best effort */ }
 }

@@ -109,3 +109,7 @@ Import before delete, archive as `.migrated.bak`, never unlink, preserve unknown
 
 - Is there telemetry or any signal for how many installs currently use a preset path? It changes how prominent the release note needs to be.
 - Should the adoption path also handle a synced *archive* (DuckDB) path, or is that rare enough to leave to the general archive repointing in the consolidation plan?
+
+## Implementation Summary
+
+Retired the cloud-storage database-path presets and removed `setPresetDbPath`, `handleSetPresetDbPath`, and dead preset path construction code across the codebase. Implemented `cloudSyncMigration.ts` providing sync folder heuristics (`detectSyncFolder`, `isKnownPresetDbPath`), pre-adoption integrity verification with retry, and divergence detection between preset sources and the global store. Wired automated launch-time preset adoption in both VS Code extension and standalone hosts identically to merge valid preset databases into the global store and archive originals as `.migrated.bak`. Added non-blocking sync folder warnings with explicit user overrides to custom DB path configuration.

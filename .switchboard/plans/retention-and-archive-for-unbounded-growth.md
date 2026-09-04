@@ -123,3 +123,7 @@ Non-destructive by construction. Existing per-repo DuckDB archives are left in p
 - What are the actual row rates? Unknown until the reporting surface ships — every window number in this plan is provisional until then.
 - Should the archive be per-workspace or global? Global is simpler and matches the hot DB; per-workspace makes "take my project elsewhere" include its history.
 - Does anything query `plan_events` expecting completeness for correctness rather than display (for example, vector-clock or device-id reconciliation)? Those call sites must never see a truncated set.
+
+## Implementation Summary
+
+Implemented global retention and archive subsystem for unbounded working set growth. Added `RetentionService` with transactional copy-verify-delete rotation into DuckDB for event tables and dormant workspace lifecycle management, wired symmetrically into both VS Code extension and standalone composition roots. Enhanced `KanbanDatabase` with detailed storage breakdown statistics, safety-checked free disk space vacuuming, and explicit `isRetainedWindowOnly` flags to prevent silent truncation. Added storage observability and retention policy controls to the Database UI surface backed by typed LocalApiServer endpoints and SetupPanelProvider verbs.

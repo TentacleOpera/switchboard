@@ -51,3 +51,71 @@ CREATE TABLE IF NOT EXISTS conversations (
 
 CREATE INDEX IF NOT EXISTS idx_conversations_date ON conversations(conversation_date DESC);
 CREATE INDEX IF NOT EXISTS idx_conversations_project ON conversations(project);
+
+-- Plan events archive table
+CREATE TABLE IF NOT EXISTS plan_events (
+    event_id BIGINT PRIMARY KEY,
+    plan_id VARCHAR,
+    event_type VARCHAR NOT NULL,
+    workflow VARCHAR,
+    action VARCHAR,
+    timestamp TIMESTAMP NOT NULL,
+    device_id VARCHAR,
+    vector_clock VARCHAR,
+    payload TEXT,
+    workspace_id VARCHAR,
+    archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_plan_events_plan_id ON plan_events(plan_id);
+CREATE INDEX IF NOT EXISTS idx_plan_events_workspace ON plan_events(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_plan_events_timestamp ON plan_events(timestamp);
+
+-- Activity log archive table
+CREATE TABLE IF NOT EXISTS activity_log (
+    id BIGINT PRIMARY KEY,
+    timestamp TIMESTAMP NOT NULL,
+    event_type VARCHAR NOT NULL,
+    payload TEXT NOT NULL,
+    correlation_id VARCHAR,
+    session_id VARCHAR,
+    workspace_id VARCHAR,
+    archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_activity_log_workspace ON activity_log(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_activity_log_timestamp ON activity_log(timestamp);
+
+-- Job runs archive table
+CREATE TABLE IF NOT EXISTS job_runs (
+    id BIGINT PRIMARY KEY,
+    timestamp TIMESTAMP NOT NULL,
+    job VARCHAR NOT NULL,
+    summary TEXT NOT NULL,
+    source VARCHAR,
+    workspace_id VARCHAR,
+    archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Board move requests archive table
+CREATE TABLE IF NOT EXISTS board_move_requests (
+    id BIGINT PRIMARY KEY,
+    file VARCHAR NOT NULL,
+    plan_id VARCHAR NOT NULL,
+    to_column VARCHAR NOT NULL,
+    status VARCHAR NOT NULL,
+    reason TEXT,
+    timestamp TIMESTAMP NOT NULL,
+    workspace_id VARCHAR,
+    archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Dormant workspaces archive table
+CREATE TABLE IF NOT EXISTS dormant_workspaces (
+    workspace_id VARCHAR PRIMARY KEY,
+    name VARCHAR,
+    archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    export_path TEXT NOT NULL,
+    last_activity_at TIMESTAMP,
+    metadata JSON
+);

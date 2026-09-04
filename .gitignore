@@ -61,21 +61,19 @@ list_output.txt
 !.switchboard/reviews/
 !.switchboard/plans/
 !.switchboard/features/
-!.switchboard/sessions/
-!.switchboard/CLIENT_CONFIG.md
-!.switchboard/README.md
-!.switchboard/SWITCHBOARD_PROTOCOL.md
+
+# Agent and CLI control-plane definitions (projected, gitignored)
+.agents/
+.claude/
 
 # Notion page content cache
 .switchboard/notion-cache.md
 
-# kanban.db is machine-local state that differs per developer — never commit it.
-# The recursive globs also block a stray SQLite DB accidentally created in a
-# subdir (e.g. plans/ or features/) when sqlite3 is run from the wrong cwd.
-.switchboard/kanban.db
+# Stray/backup SQLite databases — never commit these if accidentally created
 .switchboard/**/*.db
 .switchboard/**/*.db-shm
 .switchboard/**/*.db-wal
+.switchboard/**/*.bak
 
 # Encrypted secret store and its master key. The live store is machine-global
 # (~/.switchboard) but legacy per-workspace stores — plus the .migrated.bak and

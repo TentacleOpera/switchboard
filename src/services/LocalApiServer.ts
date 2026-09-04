@@ -10,6 +10,9 @@ import type { ClickUpSyncService } from './ClickUpSyncService';
 import type { LinearSyncService } from './LinearSyncService';
 import type { NotionFetchService } from './NotionFetchService';
 import { importPlanFiles } from './PlanFileImporter';
+import { BackupService } from './BackupService';
+import { exportProject, importProject } from './projectExport';
+import { RetentionService } from './RetentionService';
 // The fence discipline the terminal log is WRITTEN with is the same one the read
 // path has to honour, so the balance pass ships with the writer rather than
 // being re-derived (and drifting) here.
@@ -1566,35 +1569,35 @@ export class LocalApiServer {
             }
         }
 
-        // Backups list from .switchboard/dbbackup/
-        const backupDir = path.join(wsRoot, '.switchboard', 'dbbackup');
-        const backups: Array<{ filename: string; reason: string; timestamp: number; sizeBytes: number }> = [];
+        // Backups list from BackupService (includes new sets and legacy snapshots)
+        const backups: Array<{ filename: string; reason: string; timestamp: number; sizeBytes: number; verified?: boolean; failed?: boolean; planCount?: number; type?: string }> = [];
         let lastVerifiedBackup: { filename: string; timestamp: number; sizeBytes: number } | null = null;
         try {
-            if (fsSync.existsSync(backupDir)) {
-                const files = fsSync.readdirSync(backupDir).filter(f => f.startsWith('kanban.db.backup.'));
-                for (const file of files) {
-                    try {
-                        const filePath = path.join(backupDir, file);
-                        const stat = fsSync.statSync(filePath);
-                        const parts = file.slice('kanban.db.backup.'.length).split('.');
-                        const tsStr = parts.pop() || '';
-                        const reason = parts.join('.') || 'unknown';
-                        const timestamp = parseInt(tsStr, 10) || stat.mtimeMs;
-                        backups.push({
-                            filename: file,
-                            reason,
-                            timestamp,
-                            sizeBytes: stat.size,
-                        });
-                    } catch { /* ignore individual stat failures */ }
-                }
-                backups.sort((a, b) => b.timestamp - a.timestamp);
-                if (backups.length > 0) {
-                    lastVerifiedBackup = backups[0];
-                }
+            const backupSvc = BackupService.getInstance({ workspaceRoot: wsRoot });
+            const list = await backupSvc.listBackups(wsRoot);
+            for (const b of list) {
+                backups.push({
+                    filename: b.id,
+                    reason: b.reason || b.type,
+                    timestamp: b.timestampMs,
+                    sizeBytes: b.sizeBytes,
+                    verified: b.verified,
+                    failed: b.failed,
+                    planCount: b.planCount,
+                    type: b.type,
+                });
             }
-        } catch { /* ignore */ }
+            const firstVerified = list.find(b => b.verified && !b.failed);
+            if (firstVerified) {
+                lastVerifiedBackup = {
+                    filename: firstVerified.id,
+                    timestamp: firstVerified.timestampMs,
+                    sizeBytes: firstVerified.sizeBytes,
+                };
+            }
+        } catch (err) {
+            console.warn('[LocalApiServer] Failed to read backups:', err);
+        }
 
         // State backup JSON
         let stateBackupExists = false;
@@ -1671,6 +1674,216 @@ export class LocalApiServer {
 
         res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
         res.end(JSON.stringify(payload, null, 2));
+    }
+
+    private async _handleDatabaseBackups(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const url = new URL(req.url || '', `http://${req.headers.host || '127.0.0.1'}`);
+            const wsRoot = (url.searchParams.get('workspaceRoot') || this._options.workspaceRoot || '').trim();
+            const backupSvc = BackupService.getInstance({ workspaceRoot: wsRoot });
+            const backups = await backupSvc.listBackups(wsRoot);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, backups }));
+        } catch (err: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err?.message || 'Failed to list backups' }));
+        }
+    }
+
+    private async _handleDatabaseBackupCreate(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const body = await this._parseJsonBody(req);
+            const wsRoot = (body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const backupSvc = BackupService.getInstance({ workspaceRoot: wsRoot });
+            const backup = await backupSvc.createBackup({
+                reason: body?.reason || 'manual',
+                type: body?.type || 'manual',
+                workspaceRoot: wsRoot,
+            });
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, backup }));
+        } catch (err: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err?.message || 'Failed to create backup' }));
+        }
+    }
+
+    private async _handleDatabaseRestore(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const body = await this._parseJsonBody(req);
+            if (!body?.backupId) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'backupId is required' }));
+                return;
+            }
+            const wsRoot = (body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const backupSvc = BackupService.getInstance({ workspaceRoot: wsRoot });
+            const result = await backupSvc.restoreBackup(body.backupId, wsRoot);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, result }));
+        } catch (err: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err?.message || 'Failed to restore backup' }));
+        }
+    }
+
+    private async _handleDatabaseExport(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const body = await this._parseJsonBody(req);
+            if (!body?.workspaceId || !body?.destPath) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'workspaceId and destPath are required' }));
+                return;
+            }
+            const wsRoot = (body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const result = await exportProject({
+                workspaceId: body.workspaceId,
+                workspaceRoot: wsRoot,
+                destPath: body.destPath,
+            });
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, result }));
+        } catch (err: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err?.message || 'Failed to export project' }));
+        }
+    }
+
+    private async _handleDatabaseImport(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const body = await this._parseJsonBody(req);
+            if (!body?.srcPath) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'srcPath is required' }));
+                return;
+            }
+            const wsRoot = (body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const result = await importProject({
+                srcPath: body.srcPath,
+                targetWorkspaceRoot: wsRoot,
+                targetWorkspaceId: body?.targetWorkspaceId,
+            });
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, result }));
+        } catch (err: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err?.message || 'Failed to import project' }));
+        }
+    }
+
+    private async _handleDatabaseStorageStats(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const url = new URL(req.url || '', `http://${req.headers.host || '127.0.0.1'}`);
+            const wsRoot = (url.searchParams.get('workspaceRoot') || this._options.workspaceRoot || '').trim();
+            const retentionSvc = RetentionService.getInstance({ workspaceRoot: wsRoot });
+            const stats = await retentionSvc.getStorageStats();
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, stats }));
+        } catch (err: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err?.message || 'Failed to get storage stats' }));
+        }
+    }
+
+    private async _handleGetRetentionConfig(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const url = new URL(req.url || '', `http://${req.headers.host || '127.0.0.1'}`);
+            const wsRoot = (url.searchParams.get('workspaceRoot') || this._options.workspaceRoot || '').trim();
+            const retentionSvc = RetentionService.getInstance({ workspaceRoot: wsRoot });
+            const config = await retentionSvc.getConfig();
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, ...config }));
+        } catch (err: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err?.message || 'Failed to get retention config' }));
+        }
+    }
+
+    private async _handleSetRetentionConfig(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const body = await this._parseJsonBody(req);
+            const wsRoot = (body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const retentionSvc = RetentionService.getInstance({ workspaceRoot: wsRoot });
+            const updated = await retentionSvc.setConfig(body || {});
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, ...updated }));
+        } catch (err: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err?.message || 'Failed to set retention config' }));
+        }
+    }
+
+    private async _handleRunRetentionRotate(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const body = await this._parseJsonBody(req);
+            const wsRoot = (body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const retentionSvc = RetentionService.getInstance({ workspaceRoot: wsRoot });
+            const report = await retentionSvc.runRotation({ force: body?.force === true });
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, report }));
+        } catch (err: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err?.message || 'Failed to run rotation' }));
+        }
+    }
+
+    private async _handleReactivateWorkspace(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const body = await this._parseJsonBody(req);
+            if (!body?.workspaceId) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'workspaceId is required' }));
+                return;
+            }
+            const wsRoot = (body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const retentionSvc = RetentionService.getInstance({ workspaceRoot: wsRoot });
+            const result = await retentionSvc.reactivateWorkspace(body.workspaceId);
+            res.writeHead(result.success ? 200 : 400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result));
+        } catch (err: any) {
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err?.message || 'Failed to reactivate workspace' }));
+        }
     }
 
     private async _handleServeManifest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -7337,6 +7550,34 @@ export class LocalApiServer {
         });
     }
 
+    private async _handleGetProtocol(req: http.IncomingMessage, res: http.ServerResponse, protocolName: string): Promise<void> {
+        if (!protocolName || protocolName.includes('..') || protocolName.includes('/') || protocolName.includes('\\')) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid protocol name' }));
+            return;
+        }
+
+        if (protocolName === 'improve-remote-plan') {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Protocol not found: improve-remote-plan has been deleted' }));
+            return;
+        }
+
+        const { ProtocolService } = require('./ProtocolService');
+        const resolved = await ProtocolService.resolveProtocol(protocolName, this._options.workspaceRoot, this._kanbanDb);
+        if (!resolved) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: `Protocol '${protocolName}' not found` }));
+            return;
+        }
+
+        res.writeHead(200, {
+            'Content-Type': 'text/markdown; charset=utf-8',
+            'Content-Length': Buffer.byteLength(resolved.body, 'utf8'),
+        });
+        res.end(resolved.body);
+    }
+
     private async _handleGetPlans(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         await this._handleReadEndpoint(req, res, async () => {
             const db = await this._resolveDbFromQuery(req);
@@ -9308,6 +9549,9 @@ export class LocalApiServer {
                 await this._handleGetMissionControlSessionLog(req, res);
             } else if (pathname === '/catalog' && req.method === 'GET') {
                 await this._handleGetCatalog(req, res);
+            } else if (pathname.startsWith('/protocol/') && req.method === 'GET') {
+                const protocolName = decodeURIComponent(pathname.substring('/protocol/'.length));
+                await this._handleGetProtocol(req, res, protocolName);
             } else if ((pathname === '/' || pathname === '/index.html') && req.method === 'GET') {
                 // Headless app-shell (Feature: Headless Browser UI). When a
                 // shell getter is wired, `/` serves the shell and the board
@@ -9345,6 +9589,26 @@ export class LocalApiServer {
                 await this._handleServePanelById('database', req, res);
             } else if (pathname === '/database/status' && req.method === 'GET') {
                 await this._handleDatabaseStatus(req, res);
+            } else if (pathname === '/database/backups' && req.method === 'GET') {
+                await this._handleDatabaseBackups(req, res);
+            } else if (pathname === '/database/backup' && req.method === 'POST') {
+                await this._handleDatabaseBackupCreate(req, res);
+            } else if (pathname === '/database/restore' && req.method === 'POST') {
+                await this._handleDatabaseRestore(req, res);
+            } else if (pathname === '/database/export' && req.method === 'POST') {
+                await this._handleDatabaseExport(req, res);
+            } else if (pathname === '/database/import' && req.method === 'POST') {
+                await this._handleDatabaseImport(req, res);
+            } else if (pathname === '/database/storage-stats' && req.method === 'GET') {
+                await this._handleDatabaseStorageStats(req, res);
+            } else if (pathname === '/database/retention/config' && req.method === 'GET') {
+                await this._handleGetRetentionConfig(req, res);
+            } else if (pathname === '/database/retention/config' && req.method === 'POST') {
+                await this._handleSetRetentionConfig(req, res);
+            } else if (pathname === '/database/retention/rotate' && req.method === 'POST') {
+                await this._handleRunRetentionRotate(req, res);
+            } else if (pathname === '/database/retention/reactivate' && req.method === 'POST') {
+                await this._handleReactivateWorkspace(req, res);
             } else if ((pathname === '/connections' || pathname === '/connections.html') && req.method === 'GET') {
                 await this._handleServePanelById('connections', req, res);
             } else if ((pathname === '/terminals' || pathname === '/terminals.html') && req.method === 'GET') {

@@ -341,7 +341,7 @@ Webview: `src/webview/setup.html` (inline JS). Provider: `src/services/SetupPane
 | `getGitIgnoreConfig` / `updateGitIgnoreConfig` | ~906 / ~911 | .gitignore config. |
 | `updateKanbanStructure` / `restoreKanbanDefaults` | ~916 / ~919 | Kanban structure/defaults. |
 | `savePlanningSources` / `getPlanningSources` | ~924 / ~970 | Planning sources save/get. |
-| `getDbPath` / `getAllDbPaths` / `setLocalDb` / `setCustomDbPath` / `setPresetDbPath` / `resetDatabase` | ~938 / ~943 / ~948 / ~953 / ~959 / ~965 | DB path ops. |
+| `getDbPath` / `getAllDbPaths` / `setLocalDb` / `setCustomDbPath` / `resetDatabase` | ~938 / ~943 / ~948 / ~953 / ~965 | DB path ops. |
 | `getWorkspaceMappings` / `setWorkspaceMappingEnabled` / `saveWorkspaceMappings` / `initializeWorkspaceDatabase` / `browseWorkspaceMappingDbPath` / `browseWorkspaceMappingFolder` / `browseParentFolder` | ~985 / ~1013 / ~1050 / ~1128 / ~1215 / ~1232 / ~1249 | Workspace mapping ops. |
 | `getRemoteConfig` / `setRemoteConfig` / `runNotionRemoteSetup` / `startRemoteControl` / `stopRemoteControl` / `getRemoteHealth` | ~1270 / ~1275 / ~1280 / ~1289 / ~1294 / ~1299 | Remote config/control. |
 | `copyLinearAgentSkill` | ~1304 | Copy Linear agent skill. |

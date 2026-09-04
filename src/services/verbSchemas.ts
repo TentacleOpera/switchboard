@@ -1843,12 +1843,39 @@ export const TASK_VIEWER_VERB_SCHEMAS: Record<string, VerbSchema> = {
             path: { type: 'string', required: true },
         },
     },
-    setPresetDbPath: {
+    resetDatabase: {},
+    listBackups: {
         fields: {
-            preset: { type: 'string', required: true },
+            workspaceRoot: { type: 'string' },
         },
     },
-    resetDatabase: {},
+    createBackup: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            reason: { type: 'string' },
+            type: { type: 'string' },
+        },
+    },
+    restoreBackup: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            backupId: { type: 'string', required: true },
+        },
+    },
+    exportProject: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            workspaceId: { type: 'string', required: true },
+            destPath: { type: 'string', required: true },
+        },
+    },
+    importProject: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            srcPath: { type: 'string', required: true },
+            targetWorkspaceId: { type: 'string' },
+        },
+    },
     jobsList: {
         fields: {
             workspaceRoot: { type: 'string' },

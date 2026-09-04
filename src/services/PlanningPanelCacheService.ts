@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import { stateFile } from '../utils/stateHome';
 import { KanbanDatabase, ImportedDocEntry, DuplicateCheckResult } from './KanbanDatabase';
 
 export interface ImportRegistryEntry {
@@ -10,7 +11,8 @@ export interface ImportRegistryEntry {
   slugPrefix: string;     // filename prefix used in .switchboard/docs/ (e.g., 'my_doc_')
   importedAt: string;     // ISO timestamp
   lastSyncedAt?: string;  // ISO timestamp of last successful sync
-  remoteContentHash?: string;  // SHA-256 hash of content at last sync, for conflict detection
+  contentHash?: string;   // SHA-256 hash of content at last sync, for conflict detection
+  remoteContentHash?: string; // Legacy alias for contentHash
 }
 
 export interface TaskCacheEntry<T> {
@@ -22,7 +24,7 @@ export interface TaskCacheEntry<T> {
 
 /**
  * PlanningPanelCacheService manages local caching of Planning Panel documents.
- * Documents are cached in .switchboard/planning-cache/{sourceId}/{docId}.md
+ * Documents are cached in ~/.switchboard/cache/{workspaceId}/planning-cache/{sourceId}/{docId}.md
  * for AI collaboration and offline access.
  */
 export class PlanningPanelCacheService {
@@ -45,10 +47,34 @@ export class PlanningPanelCacheService {
 
     constructor(workspaceRoot: string, kanbanDb?: KanbanDatabase) {
         this._workspaceRoot = workspaceRoot;
-        this._cacheBaseDir = path.join(workspaceRoot, '.switchboard', 'planning-cache');
+        this._kanbanDb = kanbanDb;
+
+        let wsId: string | null = null;
+        if (kanbanDb) {
+            try { wsId = kanbanDb.getWorkspaceIdSync?.() ?? null; } catch {}
+        }
+        if (!wsId) {
+            const wsIdFile = path.join(workspaceRoot, '.switchboard', 'workspace-id');
+            if (fs.existsSync(wsIdFile)) {
+                try {
+                    const firstLine = fs.readFileSync(wsIdFile, 'utf8').split('\n')[0].trim();
+                    if (firstLine) wsId = firstLine;
+                } catch {}
+            }
+        }
+
+        let resolvedCacheDir = path.join(workspaceRoot, '.switchboard', 'planning-cache');
+        if (wsId) {
+            try {
+                resolvedCacheDir = stateFile('cache', wsId, 'planning-cache');
+            } catch {
+                // In un-sandboxed test environments where stateHome() refuses
+                resolvedCacheDir = path.join(workspaceRoot, '.switchboard', 'planning-cache');
+            }
+        }
+        this._cacheBaseDir = resolvedCacheDir;
         this._clickupMetadataPath = path.join(this._cacheBaseDir, 'clickup-tasks.json');
         this._linearMetadataPath = path.join(this._cacheBaseDir, 'linear-tasks.json');
-        this._kanbanDb = kanbanDb;
     }
 
     private async _getEffectiveWorkspaceId(workspaceId?: string): Promise<string> {
@@ -96,8 +122,17 @@ export class PlanningPanelCacheService {
      */
     public getCachePath(sourceId: string, docId: string): string {
         const sanitizedFilename = PlanningPanelCacheService.sanitizeFilename(docId);
-        const sourceCacheDir = path.join(this._cacheBaseDir, sourceId);
-        return path.join(sourceCacheDir, `${sanitizedFilename}.md`);
+        const targetPath = path.join(this._cacheBaseDir, sourceId, `${sanitizedFilename}.md`);
+        const legacyPath = path.join(this._workspaceRoot, '.switchboard', 'planning-cache', sourceId, `${sanitizedFilename}.md`);
+        if (!fs.existsSync(targetPath) && fs.existsSync(legacyPath)) {
+            try {
+                fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+                fs.renameSync(legacyPath, targetPath);
+            } catch {
+                return legacyPath;
+            }
+        }
+        return targetPath;
     }
 
     /**

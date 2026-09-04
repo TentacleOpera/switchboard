@@ -53,6 +53,7 @@ import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, loadEffecti
 import { installReviewerCallbackOrder, removeReviewerCallbackOrder } from './standingOrders';
 import { resolveWorkContext, resolveTeamGroupForTerminal, computeRosterClearTargets, dropDeferredClear, renameDeferredClear } from './workContextResolver';
 import { ORIENTATION_PREAMBLE, waitForSeatQuiescence } from './startupOrientation';
+import { detectSyncFolder } from './cloudSyncMigration';
 
 import * as cp from 'child_process';
 import { promisify } from 'util';
@@ -10508,15 +10509,11 @@ Each plan file must include:
      */
     private async _getKanbanDbIfPresent(root: string): Promise<KanbanDatabase | undefined> {
         const resolved = this._kanbanProvider?.resolveEffectiveWorkspaceRoot(root) ?? path.resolve(root);
-        // readDbPointer already verifies the pointed-to file exists, so a non-null
-        // return needs no second stat; the setting path does.
-        const dbPath = KanbanDatabase.readDbPointer(resolved)
-            ?? this._resolveDbPathSetting(
-                vscode.workspace.getConfiguration('switchboard').get<string>('kanban.dbPath'),
-                resolved
-            );
-        if (!fs.existsSync(dbPath)) { return undefined; }
-        return this._getKanbanDb(resolved);
+        const db = this._getKanbanDb(resolved);
+        if (await db.ensureReady()) {
+            return db;
+        }
+        return undefined;
     }
 
     /**
@@ -13659,6 +13656,17 @@ Each plan file must include:
             return;
         }
 
+        const syncFolder = detectSyncFolder(customPath);
+        if (syncFolder) {
+            const choice = await this._seams().ui.showWarningMessage(
+                `The selected path is inside a cloud-synced folder (${syncFolder}). Storing SQLite databases in file-sync folders can cause corruption and sync conflicts. Do you want to proceed anyway?`,
+                'Proceed Anyway', 'Cancel'
+            );
+            if (choice !== 'Proceed Anyway') {
+                return;
+            }
+        }
+
         const wsRoot = this._resolveWorkspaceRoot(targetWorkspaceRoot) || this._getWorkspaceRoot();
         if (!wsRoot) {
             this._seams().ui.showErrorMessage(targetWorkspaceRoot ? `Workspace root not found: ${targetWorkspaceRoot}` : 'No workspace root found.');
@@ -13688,157 +13696,6 @@ Each plan file must include:
         await KanbanDatabase.invalidateWorkspace(wsRoot);
         this._postSharedWebviewMessage({ type: 'dbPathUpdated', path: customPath, workspaceRoot: wsRoot });
         this._showTemporaryNotification('✅ Database location set to custom path.');
-        void this._refreshSessionStatus();
-    }
-
-    public async handleSetPresetDbPath(preset: string, targetWorkspaceRoot?: string): Promise<void> {
-        const homedir = os.homedir();
-        let presetPath = '';
-        switch (preset) {
-            case 'google-drive': {
-                if (process.platform === 'darwin') {
-                    const cloudStorage = path.join(homedir, 'Library', 'CloudStorage');
-                    if (fs.existsSync(cloudStorage)) {
-                        try {
-                            const entries = fs.readdirSync(cloudStorage);
-                            const gdEntry = entries.find((entry: string) => entry.startsWith('GoogleDrive-'));
-                            if (gdEntry) {
-                                presetPath = path.join(cloudStorage, gdEntry, 'My Drive', 'Switchboard', 'kanban.db');
-                            }
-                        } catch { /* ignore */ }
-                    }
-                }
-                if (!presetPath) {
-                    const fallback = path.join(homedir, 'Google Drive', 'Switchboard', 'kanban.db');
-                    const parentDir = path.dirname(fallback);
-                    if (fs.existsSync(path.dirname(parentDir))) {
-                        presetPath = fallback;
-                    }
-                }
-                break;
-            }
-            case 'dropbox':
-                presetPath = path.join(homedir, 'Dropbox', 'Switchboard', 'kanban.db');
-                break;
-            case 'icloud':
-                if (process.platform === 'darwin') {
-                    presetPath = path.join(homedir, 'Library', 'Mobile Documents', 'com~apple~CloudDocs', 'Switchboard', 'kanban.db');
-                } else {
-                    this._seams().ui.showWarningMessage('iCloud Drive preset is only available on macOS.');
-                }
-                break;
-            default:
-                break;
-        }
-
-        if (!presetPath) {
-            let errorMsg = '';
-            switch (preset) {
-                case 'google-drive':
-                    errorMsg = 'Google Drive not found. Please install Google Drive Desktop app or manually set the path.';
-                    break;
-                case 'dropbox':
-                    errorMsg = 'Dropbox folder not found at ~/Dropbox. Please install Dropbox or manually set the path.';
-                    break;
-                case 'icloud':
-                    errorMsg = 'iCloud Drive not found. Please enable iCloud Drive in System Preferences.';
-                    break;
-                default:
-                    errorMsg = `Cloud storage preset "${preset}" not found.`;
-                    break;
-            }
-            this._seams().ui.showErrorMessage(errorMsg);
-            return;
-        }
-
-        const parentDir = path.dirname(presetPath);
-        if (!fs.existsSync(parentDir)) {
-            if (this._isCloudStoragePath(parentDir)) {
-                const folderName = path.basename(parentDir);
-                const isMac = process.platform === 'darwin';
-                const actions: string[] = isMac ? ['Open in Finder', 'Cancel'] : ['Cancel'];
-                const msgSuffix = isMac
-                    ? `Please create a folder named "${folderName}" in the location opened by Finder, then click Continue.`
-                    : `Please create the folder manually at:\n${parentDir}`;
-                const choice = await this._seams().ui.showWarningMessage(
-                    `The "${folderName}" folder does not exist in your cloud storage. ` +
-                    `This extension cannot create it automatically due to OS restrictions. ` +
-                    msgSuffix,
-                    ...actions
-                );
-                if (choice === 'Open in Finder') {
-                    const grandparentDir = path.dirname(parentDir);
-                    let openDir = grandparentDir;
-                    if (parentDir.toLowerCase().includes('googledrive')) {
-                        const myDrivePath = path.join(grandparentDir, 'My Drive');
-                        if (fs.existsSync(myDrivePath)) {
-                            openDir = myDrivePath;
-                        }
-                    }
-                    if (fs.existsSync(openDir)) {
-                        await this._seams().commands.executeCommand('revealFileInOS', vscode.Uri.file(openDir));
-                    }
-                    const retryChoice = await this._seams().ui.showInformationMessage(
-                        `Create the "${folderName}" folder in the My Drive folder then click Continue.`,
-                        'Continue', 'Cancel'
-                    );
-                    if (retryChoice !== 'Continue') {
-                        return;
-                    }
-                    if (!fs.existsSync(parentDir)) {
-                        this._seams().ui.showErrorMessage(
-                            `Folder "${folderName}" still not found. Please create it and try again.`
-                        );
-                        return;
-                    }
-                } else {
-                    return;
-                }
-            } else {
-                const choice = await this._seams().ui.showWarningMessage(
-                    `Directory not found at ${parentDir}. Create it?`,
-                    'Create Directory', 'Cancel'
-                );
-                if (choice === 'Create Directory') {
-                    try {
-                        fs.mkdirSync(parentDir, { recursive: true });
-                    } catch (error) {
-                        this._seams().ui.showErrorMessage(`Failed to create directory: ${error instanceof Error ? error.message : String(error)}`);
-                        return;
-                    }
-                } else {
-                    return;
-                }
-            }
-        }
-
-        const presetConfig = vscode.workspace.getConfiguration('switchboard');
-        const wsRoot = this._resolveWorkspaceRoot(targetWorkspaceRoot) || this._getWorkspaceRoot();
-
-        if (wsRoot) {
-            const oldDbPath = presetConfig.get<string>('kanban.dbPath', '');
-            const oldResolvedPath = this._resolveDbPathSetting(oldDbPath, wsRoot);
-            const migResult = await KanbanDatabase.migrateIfNeeded(oldResolvedPath, presetPath);
-            if (migResult.skipped === 'target_has_data') {
-                const migChoice = await this._seams().ui.showWarningMessage(
-                    'Both the current and target databases contain plans. Automatic migration skipped.',
-                    'Open Reconciliation', 'Continue Anyway'
-                );
-                if (migChoice === 'Open Reconciliation') {
-                    this._seams().commands.executeCommand('switchboard.reconcileKanbanDbs');
-                    return;
-                }
-            } else if (migResult.migrated) {
-                this._showTemporaryNotification(`✅ Migrated plans to ${preset} database.`);
-            }
-        }
-
-        await presetConfig.update('kanban.dbPath', presetPath, vscode.ConfigurationTarget.Workspace);
-        if (wsRoot) {
-            await KanbanDatabase.invalidateWorkspace(wsRoot);
-        }
-        this._postSharedWebviewMessage({ type: 'dbPathUpdated', path: presetPath });
-        this._showTemporaryNotification(`✅ Database location set to ${preset}.`);
         void this._refreshSessionStatus();
     }
 
@@ -15444,7 +15301,7 @@ Each plan file must include:
                         const dbResult = await this._seams().ui.showInputBox({
                             prompt: 'Enter path for kanban database (supports ~ for home dir)',
                             value: currentDbPath || '',
-                            placeHolder: '~/Google Drive/Switchboard/kanban.db',
+                            placeHolder: '~/.switchboard/kanban.db',
                         });
                         if (dbResult !== undefined) {
                             const trimmedPath = dbResult.trim();
@@ -15452,6 +15309,18 @@ Each plan file must include:
                             if (!validation.valid && trimmedPath !== '') {
                                 this._seams().ui.showErrorMessage(`❌ Invalid path: ${validation.error}`);
                                 return { success: false, error: validation.error };
+                            }
+                            if (trimmedPath) {
+                                const syncFolder = detectSyncFolder(trimmedPath);
+                                if (syncFolder) {
+                                    const choice = await this._seams().ui.showWarningMessage(
+                                        `The selected path is inside a cloud-synced folder (${syncFolder}). Storing SQLite databases in file-sync folders can cause corruption and sync conflicts. Do you want to proceed anyway?`,
+                                        'Proceed Anyway', 'Cancel'
+                                    );
+                                    if (choice !== 'Proceed Anyway') {
+                                        return { success: false, cancelled: true };
+                                    }
+                                }
                             }
                             const wsRoot = this._getWorkspaceRoot();
                             if (wsRoot) {
@@ -15508,10 +15377,6 @@ Each plan file must include:
                     }
                     case 'setCustomDbPath': {
                         await this.handleSetCustomDbPath(data.path);
-                        return { success: true };
-                    }
-                    case 'setPresetDbPath': {
-                        await this.handleSetPresetDbPath(data.preset);
                         return { success: true };
                     }
                     case 'resetDatabase': {
@@ -15766,11 +15631,7 @@ Each plan file must include:
             foldersToWatch.push(workspaceRoot);
         }
 
-        // Guard: filter out mapped child workspaceFolders — they must never get .switchboard/
-        const { isAllowedSwitchboardLocation } = require('../utils/switchboardLocationGuard');
-        const safeFolders = foldersToWatch.filter(folder =>
-            isAllowedSwitchboardLocation(folder, folder)
-        );
+        const safeFolders = foldersToWatch;
 
         // Initialize plans directories for all folders to watch
         const watchDirs: string[] = [];
@@ -15997,9 +15858,6 @@ Each plan file must include:
 
         const workspaceRoot = this._resolveWorkspaceRoot();
         if (!workspaceRoot) return;
-        // Guard: never scaffold .switchboard/ in a mapped child workspaceFolder
-        const { isAllowedSwitchboardLocation } = require('../utils/switchboardLocationGuard');
-        if (!isAllowedSwitchboardLocation(workspaceRoot, workspaceRoot)) return;
         const stagingDir = path.join(workspaceRoot, '.switchboard', 'plans');
         if (!fs.existsSync(stagingDir)) {
             try { fs.mkdirSync(stagingDir, { recursive: true }); } catch { }
@@ -16595,30 +16453,6 @@ Each plan file must include:
         const normalizedParent = this._getStablePath(path.resolve(parentDir));
         const normalizedFile = this._getStablePath(path.resolve(filePath));
         return normalizedFile === normalizedParent || normalizedFile.startsWith(normalizedParent + path.sep);
-    }
-
-    /**
-     * Returns true for paths that live inside cloud-synced directories where
-     * auto-creating folders via fs.mkdir may fail or is undesirable (macOS Google
-     * Drive CloudStorage daemon blocks mkdir; iCloud and Dropbox are treated
-     * conservatively to avoid unexpected EACCES on restricted plans).
-     * Used to skip auto-creation and prompt the user to create the folder manually.
-     */
-    private _isCloudStoragePath(dbPath: string): boolean {
-        const normalized = dbPath.toLowerCase();
-        // macOS Google Drive: ~/Library/CloudStorage/GoogleDrive-*/
-        if (normalized.includes('cloudstorage') && normalized.includes('googledrive')) {
-            return true;
-        }
-        // macOS iCloud Drive: ~/Library/Mobile Documents/com~apple~CloudDocs/
-        if (normalized.includes('mobile documents')) {
-            return true;
-        }
-        // Dropbox — conservative: treat as restricted to avoid EACCES surprises
-        if (normalized.includes('dropbox')) {
-            return true;
-        }
-        return false;
     }
 
     // ── Workspace Identity ──────────────────────────────────────────────

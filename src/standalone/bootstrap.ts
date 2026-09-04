@@ -7,18 +7,21 @@ import { URL } from 'url';
 import { JSDOM } from 'jsdom';
 import createDOMPurify = require('dompurify');
 import { LocalApiServer } from '../services/LocalApiServer';
+import { BackupService } from '../services/BackupService';
+import { RetentionService } from '../services/RetentionService';
 import { DEFAULT_KANBAN_COLUMNS } from '../services/agentConfig';
 import { KanbanDatabase } from '../services/KanbanDatabase';
 import {
     resolveParentsForTerminals,
     pruneNonExistentMappings,
     setHostWorkspaceRoots,
-    buildMappingIndexFromDbs,
-    getMappingsFromIndex,
-    resolveWorkspaceDbPath,
     clearMappingCache,
 } from '../services/WorkspaceIdentityService';
-import { isAllowedSwitchboardLocation } from '../utils/switchboardLocationGuard';
+import { discoverAndMergeDatabases } from '../services/dbMerge';
+import { adoptPresetDbOnLaunch, isKnownPresetDbPath } from '../services/cloudSyncMigration';
+import { getGlobalDbPath } from '../services/globalStore';
+import { WorkspaceExcludeService } from '../services/WorkspaceExcludeService';
+import { seedControlPlaneFromBundle, projectControlPlane } from '../services/ClaudeCodeMirrorService';
 import {
     columnToPromptRole,
     buildSeatDirectiveBlock,
@@ -200,20 +203,36 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     const configProvider = new StandaloneHostPathConfigProvider(workspaceRoot);
     KanbanDatabase.setPathConfigProvider(configProvider);
 
-    // Initialize mapping index for standalone host
-    setHostWorkspaceRoots([workspaceRoot]);
-    const mappingDbs = new Map<string, KanbanDatabase>();
-    const initialDbPath = resolveWorkspaceDbPath(workspaceRoot, () => configProvider.getConfigString('kanban.dbPath'));
-    if (initialDbPath && fs.existsSync(initialDbPath)) {
-        const initialDb = KanbanDatabase.forWorkspace(workspaceRoot, initialDbPath);
-        mappingDbs.set(workspaceRoot, initialDb);
-        console.log(`[bootstrap] [initializeMappingIndex] Found DB for ${path.basename(workspaceRoot)} at ${initialDbPath}`);
-    } else {
-        console.log(`[bootstrap] [initializeMappingIndex] No DB for ${path.basename(workspaceRoot)} (dbPath=${initialDbPath}, exists=${initialDbPath ? fs.existsSync(initialDbPath) : false})`);
+    // Adopt cloud preset DB path on launch if configured
+    const configuredPresetDbPath = configProvider.getConfigString('kanban.dbPath');
+    if (configuredPresetDbPath && isKnownPresetDbPath(configuredPresetDbPath)) {
+        try {
+            await adoptPresetDbOnLaunch(configuredPresetDbPath, {
+                clearDbPathConfig: async () => {
+                    await configProvider.updateConfigWorkspace('kanban.dbPath', undefined);
+                },
+                notify: (msg: string) => {
+                    console.log(`[bootstrap] [adoptPresetDb] ${msg}`);
+                },
+                warn: (msg: string) => {
+                    console.warn(`[bootstrap] [adoptPresetDb] WARNING: ${msg}`);
+                },
+                error: (msg: string) => {
+                    console.error(`[bootstrap] [adoptPresetDb] ERROR: ${msg}`);
+                },
+            }, workspaceRoot);
+        } catch (err) {
+            console.error('[bootstrap] Failed to adopt preset DB:', err);
+        }
     }
-    await buildMappingIndexFromDbs(mappingDbs);
-    const mappingResult = getMappingsFromIndex();
-    console.log(`[bootstrap] [initializeMappingIndex] After build: enabled=${mappingResult.enabled}, mappings=${mappingResult.mappings?.length ?? 0}`);
+
+    // Wire database source discovery on standalone startup
+    setHostWorkspaceRoots([workspaceRoot]);
+    try {
+        await discoverAndMergeDatabases([workspaceRoot]);
+    } catch (err) {
+        console.error('[bootstrap] Failed to discover and merge legacy databases:', err);
+    }
 
     /**
      * Clear-before-prompt parity with the extension's terminal dispatch, which
@@ -554,25 +573,37 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // group parent keeps the parent. Re-deriving the redirect here would restore
     // the child-wins behaviour this feature exists to remove.
     const db = KanbanDatabase.forWorkspace(workspaceRoot);
-
-    // The database must exist on disk before ensureReady() can initialise it.
-    // Guard on isAllowedSwitchboardLocation — never mint a `.switchboard/kanban.db`
-    // control-plane marker inside a mapped child. The guard governs `.switchboard`
-    // locations only: a `kanban.dbPath` override pointing outside one is not a
-    // marker and is created unconditionally, as it was before this guard existed.
     const dbPath = db.dbPath;
     const dbDir = path.dirname(dbPath);
-    const markerWorkspace = path.basename(dbDir) === '.switchboard' ? path.dirname(dbDir) : null;
-    if (!markerWorkspace || isAllowedSwitchboardLocation(markerWorkspace, workspaceRoot)) {
-        if (!fs.existsSync(dbDir)) {
-            fs.mkdirSync(dbDir, { recursive: true });
-        }
-        if (!fs.existsSync(dbPath)) {
-            fs.writeFileSync(dbPath, Buffer.alloc(0));
-        }
+    if (!fs.existsSync(dbDir)) {
+        fs.mkdirSync(dbDir, { recursive: true, mode: 0o700 });
     }
 
     await db.ensureReady();
+
+    // Apply workspace exclusions (managed gitignore for .agents, .claude, etc.)
+    try {
+        await new WorkspaceExcludeService(workspaceRoot).apply();
+    } catch (excludeErr) {
+        console.warn('[standalone] WorkspaceExcludeService apply failed (non-fatal):', excludeErr);
+    }
+
+    // Seed and project control-plane to .agents/ and .claude/
+    try {
+        const bundleDir = path.resolve(__dirname, '..', '..');
+        let version = '1.0.0';
+        try {
+            const pkgPath = path.join(bundleDir, 'package.json');
+            if (fs.existsSync(pkgPath)) {
+                version = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version || version;
+            }
+        } catch {}
+        await seedControlPlaneFromBundle(bundleDir, db, version);
+        const projection = await projectControlPlane(workspaceRoot, db, version);
+        console.log(`[standalone] Control-plane projection: ${projection.status} — ${projection.reason}`);
+    } catch (projErr) {
+        console.warn('[standalone] Control-plane projection failed (non-fatal):', projErr);
+    }
 
     // NOTE: the former `hostState = new StandaloneHostState(db)` is gone. Its sole
     // consumer was the hand-rolled `saveSetting` arm's `hostState.update('selectedRole', …)`
@@ -3810,6 +3841,12 @@ Each plan file must include:
     ticketsProvider.setApiServer(server);
     const port = await server.start();
 
+    const backupService = BackupService.getInstance({ workspaceRoot });
+    backupService.startScheduledBackups();
+
+    const retentionService = RetentionService.getInstance({ workspaceRoot });
+    retentionService.startScheduledRotation();
+
     // Write the discovery port file for external skills/scripts
     const portFile = path.join(switchboardDir, 'api-server-port.txt');
     fs.writeFileSync(portFile, String(port), 'utf8');
@@ -3902,6 +3939,8 @@ Each plan file must include:
             try { (setupProvider as any).dispose?.(); } catch { /* ignore */ }
             try { (taskViewerProvider as any).dispose?.(); } catch { /* ignore */ }
             try { (planningProvider as any).dispose?.(); } catch { /* ignore */ }
+            try { await backupService.shutdown(); } catch { /* ignore */ }
+            try { retentionService.stopScheduledRotation(); } catch { /* ignore */ }
             try { await server.stop(); } catch { /* ignore */ }
             try { if (fs.existsSync(portFile)) fs.unlinkSync(portFile); } catch { /* ignore */ }
             try { if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile); } catch { /* ignore */ }

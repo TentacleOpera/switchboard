@@ -498,17 +498,143 @@
                 </div>
             </div>
 
+            <!-- Storage Growth & Retention Policy Card -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">Database Storage & Working Set Retention</div>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span id="retention-status-badge" class="badge neutral">Retention: Disabled</span>
+                        <button id="btn-refresh-storage-stats" class="btn" style="padding: 2px 8px; font-size: 10px;">REFRESH STATS</button>
+                    </div>
+                </div>
+                <div style="font-size: 11px; color: var(--text-secondary); line-height: 1.4; margin-bottom: 12px;">
+                    Monitors append-only table growth across all workspaces and rotates historical event/log data to the DuckDB cold archive.
+                </div>
+
+                <!-- Growth summary metrics -->
+                <div class="prop-grid" style="margin-bottom: 16px;">
+                    <div class="prop-label">Working Set Size:</div>
+                    <div id="storage-total-size" class="prop-value">—</div>
+
+                    <div class="prop-label">Growth Since Check:</div>
+                    <div id="storage-growth-delta" class="prop-value">—</div>
+
+                    <div class="prop-label">Last Audited:</div>
+                    <div id="storage-last-audited" class="prop-value">—</div>
+                </div>
+
+                <!-- Per-Table breakdown table -->
+                <div style="font-size: 11px; font-weight: bold; margin-bottom: 6px; color: var(--accent-primary);">Table Working Sets</div>
+                <div style="overflow-x: auto; margin-bottom: 16px;">
+                    <table style="width: 100%; border-collapse: collapse; font-size: 11px; font-family: var(--font-code);">
+                        <thead>
+                            <tr style="border-bottom: 1px solid var(--border-color); color: var(--text-secondary); text-align: left;">
+                                <th style="padding: 4px 8px;">Table</th>
+                                <th style="padding: 4px 8px; text-align: right;">Rows</th>
+                                <th style="padding: 4px 8px; text-align: right;">Est Size</th>
+                                <th style="padding: 4px 8px; text-align: right;">Delta</th>
+                            </tr>
+                        </thead>
+                        <tbody id="storage-tables-tbody">
+                            <tr><td colspan="4" style="padding: 8px; text-align: center; color: var(--text-secondary);">Loading table metrics…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Per-Workspace breakdown table -->
+                <div style="font-size: 11px; font-weight: bold; margin-bottom: 6px; color: var(--accent-primary);">Workspace Breakdown</div>
+                <div style="overflow-x: auto; margin-bottom: 16px;">
+                    <table style="width: 100%; border-collapse: collapse; font-size: 11px; font-family: var(--font-code);">
+                        <thead>
+                            <tr style="border-bottom: 1px solid var(--border-color); color: var(--text-secondary); text-align: left;">
+                                <th style="padding: 4px 8px;">Workspace ID</th>
+                                <th style="padding: 4px 8px; text-align: right;">Plans</th>
+                                <th style="padding: 4px 8px; text-align: right;">Events</th>
+                                <th style="padding: 4px 8px; text-align: right;">Activity</th>
+                                <th style="padding: 4px 8px; text-align: right;">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="storage-workspaces-tbody">
+                            <tr><td colspan="5" style="padding: 8px; text-align: center; color: var(--text-secondary);">Loading workspace metrics…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Retention Policy Controls -->
+                <div style="border-top: 1px solid var(--border-color); padding-top: 12px; margin-top: 12px;">
+                    <div style="font-size: 11px; font-weight: bold; margin-bottom: 8px;">Retention Policy Configuration</div>
+                    <div style="display: flex; flex-direction: column; gap: 8px; max-width: 480px;">
+                        <label style="display: flex; align-items: center; gap: 8px; font-size: 11px; cursor: pointer;">
+                            <input type="checkbox" id="retention-enabled-input" />
+                            <span>Enable Automatic Scheduled Rotation (Default off)</span>
+                        </label>
+                        <div style="display: flex; gap: 12px; align-items: center;">
+                            <label style="font-size: 11px; color: var(--text-secondary); min-width: 180px;">Event Retention Window:</label>
+                            <div style="display: flex; align-items: center; gap: 4px;">
+                                <input type="number" id="retention-days-input" value="180" min="1" max="3650" style="width: 70px; padding: 4px; font-size: 11px; background: var(--panel-bg); color: var(--text-primary); border: 1px solid var(--border-color);" />
+                                <span style="font-size: 11px; color: var(--text-secondary);">days</span>
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 12px; align-items: center;">
+                            <label style="font-size: 11px; color: var(--text-secondary); min-width: 180px;">Dormant Workspace Window:</label>
+                            <div style="display: flex; align-items: center; gap: 4px;">
+                                <input type="number" id="retention-months-input" value="12" min="1" max="120" style="width: 70px; padding: 4px; font-size: 11px; background: var(--panel-bg); color: var(--text-primary); border: 1px solid var(--border-color);" />
+                                <span style="font-size: 11px; color: var(--text-secondary);">months</span>
+                            </div>
+                        </div>
+                        <div class="btn-row" style="margin-top: 8px;">
+                            <button id="btn-save-retention-config" class="btn primary">SAVE POLICY</button>
+                            <button id="btn-run-rotation-now" class="btn">RUN ROTATION NOW</button>
+                        </div>
+                    </div>
+                    <div id="retention-action-status" style="font-size: 11px; color: var(--accent-primary); display: none; margin-top: 8px;"></div>
+                </div>
+            </div>
+
             <div class="card">
                 <div class="card-header">
                     <div class="card-title">Automatic Rolling Backups</div>
-                    <span id="backup-count-badge" class="badge neutral">0 backups</span>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <button id="btn-backup-now" class="btn" style="padding: 2px 8px; font-size: 10px;">BACKUP NOW</button>
+                        <span id="backup-count-badge" class="badge neutral">0 backups</span>
+                    </div>
                 </div>
                 <div style="font-size: 11px; color: var(--text-secondary); line-height: 1.4; margin-bottom: 8px;">
-                    Switchboard maintains rolling snapshots in <code>.switchboard/dbbackup/</code> prior to bulk changes and at extension startup.
+                    Switchboard maintains point-in-time backup sets (database, markdown plans, verified manifest) with automated retention pruning.
                 </div>
                 <div id="backups-container" class="backup-list">
-                    <div style="padding: 12px; text-align: center; color: var(--text-secondary); font-size: 11px;">No backups found in .switchboard/dbbackup/</div>
+                    <div style="padding: 12px; text-align: center; color: var(--text-secondary); font-size: 11px;">No backups found</div>
                 </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">Project Export & Import</div>
+                </div>
+                <div style="font-size: 11px; color: var(--text-secondary); line-height: 1.4; margin-bottom: 8px;">
+                    Export this workspace's database state to a portable, self-contained SQLite file with remapped IDs, or import an exported workspace database.
+                </div>
+                <div style="display: flex; gap: 8px; margin-bottom: 10px;">
+                    <button id="btn-export-project" class="btn">EXPORT WORKSPACE…</button>
+                    <button id="btn-import-project" class="btn">IMPORT WORKSPACE…</button>
+                </div>
+                <div id="export-flow-panel" class="flow-container hidden" style="margin-bottom: 8px;">
+                    <div style="font-size: 11px; font-weight: bold; margin-bottom: 6px;">Export Workspace Database</div>
+                    <input type="text" id="export-dest-input" placeholder="Destination SQLite file path (e.g. ~/switchboard-export.sqlite)" style="width: 100%; box-sizing: border-box; margin-bottom: 8px; padding: 6px; font-size: 11px; background: var(--panel-bg); color: var(--text-primary); border: 1px solid var(--border-color);" />
+                    <div class="btn-row">
+                        <button id="btn-confirm-export" class="btn">EXPORT NOW</button>
+                        <button id="btn-cancel-export" class="btn">Cancel</button>
+                    </div>
+                </div>
+                <div id="import-flow-panel" class="flow-container hidden" style="margin-bottom: 8px;">
+                    <div style="font-size: 11px; font-weight: bold; margin-bottom: 6px;">Import Workspace Database</div>
+                    <input type="text" id="import-src-input" placeholder="Source SQLite file path" style="width: 100%; box-sizing: border-box; margin-bottom: 8px; padding: 6px; font-size: 11px; background: var(--panel-bg); color: var(--text-primary); border: 1px solid var(--border-color);" />
+                    <div class="btn-row">
+                        <button id="btn-confirm-import" class="btn">IMPORT NOW</button>
+                        <button id="btn-cancel-import" class="btn">Cancel</button>
+                    </div>
+                </div>
+                <div id="project-export-import-status" style="font-size: 11px; color: var(--accent-primary); display: none; margin-top: 6px;"></div>
             </div>
 
             <div class="card">

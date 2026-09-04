@@ -781,9 +781,16 @@ function formatConsoleCard(p: any, index?: number, showColumn = false): string {
  * helpers used here are static and side-effect-free.
  */
 function resolveBoardDbPath(workspaceRoot: string): string {
-    const { KanbanDatabase } = require('../services/KanbanDatabase');
-    return KanbanDatabase.readDbPointer(workspaceRoot)
-        || path.join(workspaceRoot, '.switchboard', 'kanban.db');
+    const { getGlobalDbPath } = require('../services/globalStore');
+    const globalPath = getGlobalDbPath();
+    if (fs.existsSync(globalPath)) {
+        return globalPath;
+    }
+    const localPath = path.join(workspaceRoot, '.switchboard', 'kanban.db');
+    if (fs.existsSync(localPath)) {
+        return localPath;
+    }
+    return globalPath;
 }
 
 /** A 0-byte file is not a board: standalone pre-creates the file and lets
@@ -907,8 +914,10 @@ async function firstRunDatabaseMenu(workspaceRoot: string): Promise<{ pendingBun
                 if (!answer) { console.log('  Enter a path, or 1 to start a new board.'); continue; }
                 const resolved = resolveUserPath(answer);
                 if (!fs.existsSync(resolved)) { console.log(`  Not found: ${resolved}`); continue; }
-                KanbanDatabase.writeDbPointer(workspaceRoot, resolved);
-                console.log(`[switchboard] This workspace now points at ${resolved}`);
+                const { mergeDatabase } = require('../services/dbMerge');
+                const { getGlobalDbPath } = require('../services/globalStore');
+                await mergeDatabase(resolved, getGlobalDbPath());
+                console.log(`[switchboard] Merged ${resolved} into global database`);
                 return {};
             }
             if (choice === '3') {
@@ -2626,7 +2635,7 @@ async function main() {
     // `scaffold` and `control-plane` operate on a directory named by their own
     // arguments and never touch the cwd. Creating .switchboard/ here would leave a
     // stray control-plane marker in whatever directory the command was launched from
-    // — including $HOME, which `isAllowedSwitchboardLocation` exists to keep out.
+    // — including $HOME, which the global store architecture keeps clean.
     // `stop`, `status`, `logs`, and the board commands (`plans`, `ready`,
     // `dispatch`, `clear`, `fleet`, `verb`, `api`, `help`, `about`, `version`, `setup`)
     // are read-only queries against an existing .switchboard/ — they must not
