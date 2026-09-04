@@ -34,7 +34,7 @@ Today the menu is a flat list whose contents change with server state (`cli.ts:1
 - **Filters are one-shot menu items**, not a set. Project and search are picked, used, and lost on the way back.
 - **Numbers shift meaning with server state** — offline `[3]` is Setup, online `[3]` is Help — so learned keys are wrong half the time.
 - **Stopping a running server is not offered at all.**
-- **Tracker sync is not on the CLI at all.** Board synchronisation with the issue trackers is a large part of what Switchboard does, and `grep` for a sync, tickets or integration subcommand in `cli.ts` returns nothing. The capability exists only through the panel and the HTTP verb rail (`_handleTicketsVerb`, `LocalApiServer.ts:6117`), so an operator working over ssh cannot reach it.
+- **Tracker sync is not reachable from the CLI.** The capability itself is well covered — `e7e9f2f5` (*Board sync is a capability all three providers implement*, Planned) carries five subtasks on the provider seam, its contract test, Notion's misnamed backup, ClickUp restore orchestration and the Linear planId anchor. What none of that touches is the CLI: `grep` for a sync, tickets or integration subcommand in `cli.ts` returns nothing. Sync exists through the panel and the HTTP verb rail (`_handleTicketsVerb`, `LocalApiServer.ts:6117`) only, so an operator over ssh cannot reach any of it.
 
 The structure above fixes each by being the structure, not by adding items to a list.
 
@@ -83,7 +83,9 @@ A top-level entry for board/tracker synchronisation, opening the operations an o
 
 **Name it for the capability, not the vendor.** Switchboard syncs against more than one tracker and the verb rail already reflects that — `linearLoadProject`, `clickupLoadLists`, `switchTicketsProvider` are all on the same surface. A menu entry named for one provider becomes wrong the moment the operator uses another, and the currently-selected provider is a setting, not a fixed fact. Show the active provider *inside* the Sync menu instead.
 
-**This is new CLI surface, not a menu change.** There is no sync subcommand today; the entry has to call the existing tickets verbs over HTTP. Scope accordingly — this is the largest single item on the menu, and it may warrant splitting out once the shape is settled.
+**Expose existing capability; do not build sync.** `e7e9f2f5` owns the sync model and is where any change to *how* syncing works belongs. This entry is a CLI client for it, calling the tickets verb rail over HTTP.
+
+It is still the largest item on the menu — no CLI sync surface exists today — and may warrant splitting out once the shape is settled. But the split is "add a CLI client", not "design sync".
 
 ### 5. Launch, and Stop when it is running
 
@@ -104,6 +106,7 @@ Direct actions, unchanged behaviour, at the bottom. **Setup**, not "First time s
 7. **`759c05b5`** proposed a GUI/CLI split of this menu. This supersedes it — reconcile before either is coded.
 8. **Sync depends on a reachable provider.** An unconfigured or unauthenticated tracker must say so and offer the configuration path, not fail with a transport error.
 9. **Do not build a second provider-selection model.** The active provider is already a setting behind `switchTicketsProvider`; read it, show it, and change it through the same verb.
+9b. **Do not duplicate `e7e9f2f5`.** If a sync operation the CLI wants does not exist yet, it belongs on that feature, not here. This card adds a surface, never a capability.
 10. **Non-TTY unaffected.**
 
 ## Verification Plan
