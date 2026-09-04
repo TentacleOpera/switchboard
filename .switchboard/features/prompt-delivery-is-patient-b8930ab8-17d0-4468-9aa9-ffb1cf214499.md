@@ -81,8 +81,10 @@ possible. Land it first.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Explain the seat-clear session-restart toll where seat CLIs are configured](../plans/devin-clear-reauth-toll-visibility.md) — **CREATED** — ID: fe5daf69-426e-4b5a-92b0-da1df24fe6cd
-- [ ] [A delay setting must not be able to defeat known-CLI readiness detection](../plans/a-delay-setting-must-not-be-able-to-defeat-known-cli-readiness.md) — **CREATED** — ID: 4570333b-0cce-4e40-b8a0-8da118d86191
-- [ ] [A seat's CLI family is derived once at spawn and frozen, so every Devin readiness fix silently misses any seat not classified as Devin](../plans/a-seats-cli-family-is-frozen-at-spawn-so-devin-timing-fixes-never-reach-it.md) — **CREATED** — ID: d8f86774-a517-4040-b9aa-513decfaae17
-- [ ] [Prompt delivery should be patient, not precise — an unknown seat gets the fastest profile and deliveries 2..N get no gate at all](../plans/prompt-delivery-should-be-patient-not-precise.md) — **CREATED** — ID: c11ab0cd-0370-44d8-a33d-58a875d2cd18
+- [ ] [Explain the seat-clear session-restart toll where seat CLIs are configured](../plans/devin-clear-reauth-toll-visibility.md) — **PLAN REVIEWED** — ID: fe5daf69-426e-4b5a-92b0-da1df24fe6cd
+- [ ] [A delay setting must not be able to defeat known-CLI readiness detection](../plans/a-delay-setting-must-not-be-able-to-defeat-known-cli-readiness.md) — **PLAN REVIEWED** — ID: 4570333b-0cce-4e40-b8a0-8da118d86191
+- [ ] [A seat's CLI family is derived once at spawn and frozen, so every Devin readiness fix silently misses any seat not classified as Devin](../plans/a-seats-cli-family-is-frozen-at-spawn-so-devin-timing-fixes-never-reach-it.md) — **PLAN REVIEWED** — ID: d8f86774-a517-4040-b9aa-513decfaae17
+- [ ] [Prompt delivery should be patient, not precise — an unknown seat gets the fastest profile and deliveries 2..N get no gate at all](../plans/prompt-delivery-should-be-patient-not-precise.md) — **PLAN REVIEWED** — ID: c11ab0cd-0370-44d8-a33d-58a875d2cd18
+- [ ] [A Half-Delivered Dispatch Has No Safe Recovery — Retry Is the Only Lever, and It Destroys State](../plans/a-half-delivered-dispatch-has-no-safe-recovery-retry-is-the-only-lever-and-it-destroys-state.md) — **CREATED** — ID: ba068390-01cb-4832-a805-c924e2ccdc71
 <!-- END SUBTASKS -->
+
