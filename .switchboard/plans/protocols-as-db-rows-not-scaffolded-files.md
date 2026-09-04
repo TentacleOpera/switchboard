@@ -249,3 +249,7 @@ Import from all three historical locations, hash-compare, preserve mismatches as
 ### Verified CI note
 
 Every contract test in this repo is enumerated by hand in the single `.github/workflows/integration-tests.yml` — there is no `test:contract:*` sweeper. `test:contract:vsix-packaging` runs at line 295, so the existing packaging assertions do gate this plan. But any new contract test this plan adds needs both a `package.json` script and a workflow step, or it silently never runs.
+
+## Implementation Summary
+
+Migrated all 31 active protocols into database rows within the `control_plane` table via bundled protocols (`bundledProtocols.ts`) and seeded through `ProtocolService.seedProtocols()`. Only `improve-plan/SKILL.md` and `improve-feature/SKILL.md` remain committed under `.agents/protocols/` to support configurable user-editable paths, while all other scaffolded protocols have been deleted from disk and `improve-remote-plan` was completely eliminated across the codebase. Resolution is handled by `ProtocolService.resolveProtocol()` (with `inline` content delivery and `materialize` mode caching files to `~/.switchboard/cache/protocols/<hash>/SKILL.md`) and exposed through the new HTTP route `GET /protocol/:name` in `LocalApiServer.ts`. Packaging contracts in `vsix-packaging-contract.test.js` and schema migrations (V69 adding `delivery` and `override_body` columns) were updated to enforce the new protocol storage model.
