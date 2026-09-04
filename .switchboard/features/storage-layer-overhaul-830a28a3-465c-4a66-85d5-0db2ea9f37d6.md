@@ -102,3 +102,7 @@ features, and the loose plans for the state home, the bundle ledger and board-co
 One card moved the other way. *Global settings are a JSON file two boards can both write* waits only
 on **step 1**, not step 4 as it claimed — the blocker is the engine, not the store's location — so
 it stays available in New.
+
+## Implementation Summary
+
+All 9 subtasks implemented and committed (8258ce4b). The storage layer now uses better-sqlite3 with WAL mode instead of sql.js in-memory images, consolidates to a single global database in ~/.switchboard/switchboard.db, and scopes all previously unscoped tables by workspace_id with compound unique constraints. Durable backups use the SQLite Online Backup API with integrity verification and retention pruning. Per-project export/import and N-to-1 merge machinery support both the consolidation migration and dormant-workspace archival. The control-plane scaffold (.agents/ and .claude/) is now a gitignored projection regenerated from the control_plane DB table, with 29 protocols moved to database rows. Cloud-sync DB path presets (Google Drive, Dropbox, iCloud) are retired with automatic migration to the global store. The is_feature clobber is fixed with empty-ID rejection, plan_file ownership assertion, and a structural guard on .switchboard/features/ files. Retention and archive policy ships with size reporting, 6-hour rotation for append-only tables, dormant-workspace archival, and reactivation support. Both the VS Code extension and standalone host wire all new services with parity maintained throughout.

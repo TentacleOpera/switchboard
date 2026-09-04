@@ -70,12 +70,12 @@ The open mid-session clear defects. A roster clear still clears the team head; t
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [The after-clear standing-orders block is a task-less prompt, so the lead wakes, inspects, and stops](../plans/after-clear-standing-orders-block-is-a-taskless-prompt.md) — **PLAN REVIEWED** — ID: 7dae7ef2-5792-4814-b77f-aa45c6147f26
-- [ ] [The dispatch curtain is armed from intent, not from a clear that actually runs — so it covers dispatches and misses real clears](../plans/the-curtain-is-armed-from-intent-not-from-a-clear-that-happened.md) — **PLAN REVIEWED** — ID: 2e648081-3693-4485-8c74-777dd7118ed8
-- [ ] [An idempotent completion skips the clear, so a seat that reported its own done is never stood down](../plans/an-idempotent-completion-skips-the-clear-so-a-seat-is-never-stood-down.md) — **PLAN REVIEWED** — ID: 16bdde5d-1749-4ab5-b41a-248df79e81d6
-- [ ] [The Roster Clear Barrier Defers Forever, Clears the Head Anyway, and Measures Busy With a Hardcoded Window](../plans/memo-the-roster-clear-barrier-defers-forever-and-clears-the-head-anyway.md) — **PLAN REVIEWED** — ID: 01e5bcef-c4cf-4603-afdc-26cd5235daae
-- [ ] [A Team Seat Is Cleared on Every Dispatch, Because the Team Branch Never Compares the Work Context](../plans/a-team-seat-is-cleared-on-every-dispatch-because-the-team-branch-never-compares-the-work-context.md) — **CREATED** — ID: a29bed0f-2fec-4117-8576-ba9fcc2556dc
-- [ ] [A Lead's Completion Post Must Clear the Seat — `completed_at` Is a Latch That Is Never Reset](../plans/a-lead-completion-post-must-clear-the-seat-completed-at-is-a-latch-that-is-never-reset.md) — **CREATED** — ID: 711fa15e-0fc0-4e9f-bf6d-28c0169dde13
-- [ ] [Completion Has No Round or Feature Scope, So the Lead Clears Seats One at a Time — or Not at All](../plans/completion-has-no-round-or-feature-scope-so-the-lead-clears-seats-one-at-a-time-or-not-at-all.md) — **CREATED** — ID: 39e9f9f6-d83e-4f8d-bd35-85fb130c8a4e
+- [ ] [The after-clear standing-orders block is a task-less prompt, so the lead wakes, inspects, and stops](../plans/after-clear-standing-orders-block-is-a-taskless-prompt.md) — **CODER CODED** — ID: 7dae7ef2-5792-4814-b77f-aa45c6147f26
+- [ ] [The dispatch curtain is armed from intent, not from a clear that actually runs — so it covers dispatches and misses real clears](../plans/the-curtain-is-armed-from-intent-not-from-a-clear-that-happened.md) — **CODER CODED** — ID: 2e648081-3693-4485-8c74-777dd7118ed8
+- [ ] [An idempotent completion skips the clear, so a seat that reported its own done is never stood down](../plans/an-idempotent-completion-skips-the-clear-so-a-seat-is-never-stood-down.md) — **CODER CODED** — ID: 16bdde5d-1749-4ab5-b41a-248df79e81d6
+- [ ] [The Roster Clear Barrier Defers Forever, Clears the Head Anyway, and Measures Busy With a Hardcoded Window](../plans/memo-the-roster-clear-barrier-defers-forever-and-clears-the-head-anyway.md) — **CODER CODED** — ID: 01e5bcef-c4cf-4603-afdc-26cd5235daae
+- [ ] [A Team Seat Is Cleared on Every Dispatch, Because the Team Branch Never Compares the Work Context](../plans/a-team-seat-is-cleared-on-every-dispatch-because-the-team-branch-never-compares-the-work-context.md) — **CODER CODED** — ID: a29bed0f-2fec-4117-8576-ba9fcc2556dc
+- [ ] [A Lead's Completion Post Must Clear the Seat — `completed_at` Is a Latch That Is Never Reset](../plans/a-lead-completion-post-must-clear-the-seat-completed-at-is-a-latch-that-is-never-reset.md) — **CODER CODED** — ID: 711fa15e-0fc0-4e9f-bf6d-28c0169dde13
+- [ ] [Completion Has No Round or Feature Scope, So the Lead Clears Seats One at a Time — or Not at All](../plans/completion-has-no-round-or-feature-scope-so-the-lead-clears-seats-one-at-a-time-or-not-at-all.md) — **CODER CODED** — ID: 39e9f9f6-d83e-4f8d-bd35-85fb130c8a4e
 <!-- END SUBTASKS -->
 
