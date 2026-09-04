@@ -273,10 +273,17 @@ async function run() {
 
         // 13. Best-effort contract: a write failure must not throw out of writeDbBackup.
         await mutate('best-effort-plan');
-        const origWriteFile = fs.promises.writeFile;
+        // Inject the failure through the path writeDbBackup ACTUALLY uses. It no longer
+        // does `fs.promises.writeFile` — a WAL-mode database copied byte-wise while the
+        // owner holds it open produces a torn file, so the snapshot goes through
+        // SQLite's Online Backup API (driver.backup()). Stubbing writeFile here left
+        // the real path untouched, so the assertion passed on a backup that never
+        // failed, and would have kept passing if the best-effort catch were deleted.
+        const driver = db._db;
+        const origBackup = driver.backup.bind(driver);
         const origConsoleError = console.error;
         let loggedError = false;
-        fs.promises.writeFile = async () => { throw new Error('EACCES: simulated unwritable dbbackup'); };
+        driver.backup = async () => { throw new Error('EIO: simulated Online Backup API failure'); };
         console.error = (...args) => {
             if (String(args[0] || '').includes('Failed to write DB backup')) { loggedError = true; }
             origConsoleError(...args);
@@ -284,7 +291,7 @@ async function run() {
         try {
             await db.writeDbBackup('bulk-change');
         } finally {
-            fs.promises.writeFile = origWriteFile;
+            driver.backup = origBackup;
             console.error = origConsoleError;
         }
         assert.ok(loggedError, 'writeDbBackup resolves on failure and logs an error instead of throwing');

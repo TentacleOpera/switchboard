@@ -33,7 +33,7 @@ export interface SqliteDriverOptions {
 }
 
 class BetterSqliteStatementShim implements ISqliteStatement {
-    private _rawStmt: any;
+    private _rawStmt: any | null;
     private _params: unknown[] | null = null;
     private _rows: Record<string, unknown>[] | null = null;
     private _index: number = -1;
@@ -59,10 +59,12 @@ class BetterSqliteStatementShim implements ISqliteStatement {
     }
 
     public step(): boolean {
-        if (this._rows === null) {
+        let rows = this._rows;
+        if (rows === null) {
             try {
                 const args = this._params ? this._params : [];
-                this._rows = this._rawStmt.all(...args);
+                rows = this._stmt().all(...args) as Record<string, unknown>[];
+                this._rows = rows;
             } catch (err) {
                 this._rows = [];
                 throw err;
@@ -71,7 +73,7 @@ class BetterSqliteStatementShim implements ISqliteStatement {
         } else {
             this._index++;
         }
-        return this._index < this._rows.length;
+        return this._index < rows.length;
     }
 
     public getAsObject(): Record<string, unknown> {
@@ -84,13 +86,26 @@ class BetterSqliteStatementShim implements ISqliteStatement {
     public free(): void {
         this._rows = null;
         this._index = -1;
+        // Drop the raw better-sqlite3 Statement too. Keeping a reference here pinned
+        // it until GC, and a Statement destructor that runs during Node's environment
+        // teardown aborts the process (`Assertion failed: (env) != nullptr` inside
+        // Statement::~Statement, via RemoveEnvironmentCleanupHook). free() is the
+        // sql.js cursor idiom's release point, so this is where it belongs.
+        this._rawStmt = null;
+    }
+
+    private _stmt(): any {
+        if (!this._rawStmt) {
+            throw new Error('Statement has been freed');
+        }
+        return this._rawStmt;
     }
 
     public run(params?: unknown[]): { changes: number; lastInsertRowid: number | bigint } {
         const args = params !== undefined && params !== null
             ? (Array.isArray(params) ? params : [params])
             : (this._params ? this._params : []);
-        const info = this._rawStmt.run(...args);
+        const info = this._stmt().run(...args);
         const changes = Number(info?.changes ?? 0);
         const lastInsertRowid = info?.lastInsertRowid ?? 0;
         this._driver.recordLastMutation(changes, lastInsertRowid);
@@ -101,15 +116,38 @@ class BetterSqliteStatementShim implements ISqliteStatement {
         const args = params !== undefined && params !== null
             ? (Array.isArray(params) ? params : [params])
             : (this._params ? this._params : []);
-        return this._rawStmt.get(...args) as T | undefined;
+        return this._stmt().get(...args) as T | undefined;
     }
 
     public all<T = Record<string, unknown>>(params?: unknown[]): T[] {
         const args = params !== undefined && params !== null
             ? (Array.isArray(params) ? params : [params])
             : (this._params ? this._params : []);
-        return this._rawStmt.all(...args) as T[];
+        return this._stmt().all(...args) as T[];
     }
+}
+
+/**
+ * Every open driver, so the databases are closed while the Node environment is still
+ * alive. better-sqlite3 finalizes a Database's statements in Database#close(); left to
+ * GC at teardown, the Statement destructor calls RemoveEnvironmentCleanupHook after the
+ * env is gone and Node aborts with `Assertion failed: (env) != nullptr` — a core dump
+ * rather than an exception, which no try/catch can contain. sql.js had no native
+ * handles and so needed nothing like this.
+ */
+const OPEN_DRIVERS = new Set<BetterSqliteDriver>();
+let exitHookInstalled = false;
+
+function installExitHook(): void {
+    if (exitHookInstalled) {
+        return;
+    }
+    exitHookInstalled = true;
+    process.on('exit', () => {
+        for (const drv of Array.from(OPEN_DRIVERS)) {
+            try { drv.close(); } catch { /* teardown is best effort */ }
+        }
+    });
 }
 
 export class BetterSqliteDriver implements ISqliteDriver {
@@ -134,6 +172,9 @@ export class BetterSqliteDriver implements ISqliteDriver {
             fileMustExist: options?.fileMustExist ?? false,
             timeout: options?.timeout ?? 5000,
         });
+
+        OPEN_DRIVERS.add(this);
+        installExitHook();
 
         // Set mandatory WAL pragmas unless opened readonly
         if (!options?.readonly) {
@@ -171,11 +212,35 @@ export class BetterSqliteDriver implements ISqliteDriver {
         }
     }
 
+    /**
+     * Prepared statements are cached by SQL text and the cache is held strongly for the
+     * life of the driver, then dropped in close().
+     *
+     * Two reasons, one of them a crash. (1) Every read on the old path re-compiled its
+     * SQL: `get`/`all`/`run` each call prepare(), and the ~780 migrated sql.js
+     * touchpoints hit this constantly. (2) better-sqlite3 destroys a Statement's C++
+     * object when the JS wrapper is collected, and a wrapper collected during Node's
+     * environment teardown aborts the process outright — `Assertion failed: (env) !=
+     * nullptr` in Statement::~Statement, a core dump no try/catch can see. Uncached
+     * statements became garbage on every call, so the collection sometimes landed in
+     * teardown (measured: 2 aborts in 5 runs of the backup-retention suite). Holding
+     * them until close() keeps destruction inside a live environment.
+     *
+     * Reuse is safe here because the cursor shim materialises rows with `.all()` rather
+     * than streaming with `.iterate()`, so a cached statement carries no cross-call
+     * position. DDL invalidates the cache — see exec().
+     */
+    private _stmtCache: Map<string, any> = new Map();
+
     public prepare(sql: string, params?: unknown[]): ISqliteStatement {
         if (!this._db) {
             throw new Error('Database is closed');
         }
-        const rawStmt = this._db.prepare(sql);
+        let rawStmt = this._stmtCache.get(sql);
+        if (!rawStmt) {
+            rawStmt = this._db.prepare(sql);
+            this._stmtCache.set(sql, rawStmt);
+        }
         return new BetterSqliteStatementShim(this, rawStmt, params);
     }
 
@@ -229,6 +294,12 @@ export class BetterSqliteDriver implements ISqliteDriver {
             return;
         }
 
+        // DDL can drop, rename or reshape a table a cached statement was compiled
+        // against (V70 does exactly that to worktrees, job_instructions and
+        // kanban_meta), so the cache is discarded before the schema moves under it.
+        if (/\b(CREATE|DROP|ALTER)\b/i.test(sql)) {
+            this._stmtCache.clear();
+        }
         this._db.exec(sql);
         // If SQL contained mutation statements, notify
         if (/INSERT\s+|UPDATE\s+|DELETE\s+|REPLACE\s+|CREATE\s+|DROP\s+|ALTER\s+/i.test(sql)) {
@@ -287,6 +358,10 @@ export class BetterSqliteDriver implements ISqliteDriver {
     }
 
     public close(): void {
+        OPEN_DRIVERS.delete(this);
+        // Drop the statement cache BEFORE closing, so the wrappers become collectable
+        // while the Node environment is still alive (see the note on _stmtCache).
+        this._stmtCache.clear();
         if (this._db) {
             try {
                 this._db.close();
@@ -295,6 +370,11 @@ export class BetterSqliteDriver implements ISqliteDriver {
             }
             this._db = null;
         }
+        // A half-open transaction must not survive the handle: leaving the depth
+        // non-zero would make the next BEGIN on a reopened driver emit a SAVEPOINT
+        // against no transaction.
+        this._transactionDepth = 0;
+        this._mutationListeners.clear();
     }
 
     public async backup(destPath: string): Promise<void> {

@@ -23,7 +23,14 @@ const extensionConfig = {
     },
     externals: {
         vscode: 'commonjs vscode', // the vscode-module is created on-the-fly and must be excluded. Add other modules that cannot be webpack'ed, 📖 -> https://webpack.js.org/configuration/externals/
-        'node-pty': 'commonjs node-pty'
+        'node-pty': 'commonjs node-pty',
+        // better-sqlite3 loads its native addon through `require('bindings')`, which
+        // walks up from ITS OWN __dirname looking for build/Release/better_sqlite3.node.
+        // Bundled, that __dirname becomes dist/, the lookup misses, and the board dies
+        // on open with no fallback (unlike node-pty, which degrades behind
+        // isPtyAvailable()). Webpack also flags the dynamic require as a critical
+        // dependency. Keep it external so it loads from node_modules at runtime.
+        'better-sqlite3': 'commonjs better-sqlite3'
         // modules added here also need to be added in the .vscodeignore file
     },
     resolve: {
@@ -168,7 +175,10 @@ const standaloneConfig = {
         __dirname: false
     },
     externals: {
-        'node-pty': 'commonjs node-pty'
+        'node-pty': 'commonjs node-pty',
+        // Same reason as the extension config above: the native addon is resolved at
+        // runtime relative to better-sqlite3's own directory, so it must not be bundled.
+        'better-sqlite3': 'commonjs better-sqlite3'
     },
     plugins: [
         new webpack.BannerPlugin({

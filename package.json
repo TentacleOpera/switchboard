@@ -909,6 +909,8 @@
     "test:contract:broadcast-hub-headless": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/broadcast-hub-headless-contract.test.js",
     "test:contract:setup-panel-element-ids": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/setup-panel-element-ids.test.js",
     "test:contract:db-backup-retention": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/kanban-db-backup-retention.test.js",
+    "test:contract:schema-workspace-id": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/schema-workspace-id-invariant.test.js",
+    "test:contract:feature-status-clobber": "mocha --ui tdd --require ./src/test/bootstrap/sandboxStateHome.js out/services/__tests__/KanbanDatabase.epicStatus.test.js",
     "test:contract:panel-scrollbars": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/browser-panel-scrollbar-contract.test.js",
     "test:contract:browser-kanban-pane-order": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/browser-kanban-pane-order.test.js",
     "test:contract:html-preview-fluid-width": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/html-preview-fluid-width-regression.test.js",
@@ -1057,7 +1059,7 @@
     "test:contract:team-release-control": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/team-release-control-contract.test.js",
     "test:contract:roster-clear-mid-turn": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/roster-clear-mid-turn-deferral.test.js",
     "test:contract:mobile-command-route": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/mobile-command-route-contract.test.js",
-    "test:contract:workspace-mappings": "mocha --ui tdd --require ./src/test/bootstrap/sandboxStateHome.js --require ./src/test/bootstrap/vscodeStub.js out/test/workspace-identity-precedence.test.js out/test/browser-host-workspace-mappings.test.js out/test/child-switchboard-creation-regression.test.js"
+    "test:contract:workspace-mappings": "mocha --ui tdd --require ./src/test/bootstrap/sandboxStateHome.js --require ./src/test/bootstrap/vscodeStub.js out/test/workspace-identity-precedence.test.js"
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.0.0",
@@ -1091,7 +1093,7 @@
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-webgl": "^0.18.0",
     "@xterm/xterm": "^5.5.0",
-    "better-sqlite3": "11.8.1",
+    "better-sqlite3": "12.11.1",
     "docx": "^9.6.0",
     "dompurify": "^3.3.1",
     "js-yaml": "^4.2.0",

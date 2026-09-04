@@ -7,20 +7,41 @@ import {
     setHostWorkspaceRoots,
     isHostRoot,
     resolveEffectiveWorkspaceRootFromMappings,
+    resolveWorkspaceDbPath,
     buildMappingIndexFromDbs,
     getMappingsFromIndex,
+    getScopedMappingsForBoard,
+    pruneNonExistentMappings,
     expandAndResolve
 } from '../services/WorkspaceIdentityService';
+import { getGlobalDbPath, resolveGlobalDbPath, validateGlobalDbPath } from '../services/globalStore';
 
-suite('WorkspaceIdentityService Precedence & Openness Suite', () => {
-    // `getScopedMappingsForBoard` and `buildWorkspaceItems` prune mappings whose
-    // parentFolder is absent from disk, so any test that exercises the SCOPED path
-    // must use real directories — synthetic `/test/workspaces/...` paths are pruned
-    // and the assertion measures the prune, not the visibility rule.
+/**
+ * Consolidation invariants for the storage overhaul.
+ *
+ * This file used to test the workspace-mapping *database-resolution* subsystem —
+ * `buildMappingIndexFromDbs` precedence, the `_hostRoots` openness gate, the
+ * `db-pointer` resolution tier. Consolidation to one global database retired all
+ * of it, and the retired functions are now no-op stubs.
+ *
+ * Testing a stub against the old behaviour is worse than not testing it: the old
+ * assertions either fail (a red gate for work that shipped deliberately) or pass
+ * for the wrong reason, because a stub's identity return is indistinguishable
+ * from a real resolution. So the assertions here pin the *retirement* instead:
+ * every folder resolves to the one global store, the retired readers report
+ * "disabled" rather than something a caller could mistake for a real mapping, and
+ * the deleted subsystems are absent from `src/`.
+ *
+ * The two halves that survived consolidation — terminal parenting
+ * (`pruneNonExistentMappings`) and `~` expansion — keep real behavioural tests.
+ */
+suite('Storage consolidation invariants', () => {
+    const SRC_DIR = path.join(__dirname, '..', '..', 'src');
+
     let tmpDir: string;
 
     setup(() => {
-        tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-mapping-precedence-')));
+        tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'sb-consolidation-')));
     });
 
     teardown(() => {
@@ -29,319 +50,200 @@ suite('WorkspaceIdentityService Precedence & Openness Suite', () => {
         try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best effort */ }
     });
 
-    const realDir = (name: string): string => {
-        const p = path.join(tmpDir, name);
-        fs.mkdirSync(p, { recursive: true });
-        return p;
+    /** Recursively collect every .ts/.js source file under src/. */
+    const walkSrc = (dir: string, out: string[] = []): string[] => {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+                walkSrc(full, out);
+            } else if (/\.(ts|js)$/.test(entry.name)) {
+                out.push(full);
+            }
+        }
+        return out;
     };
 
-    test('1. resolveEffectiveWorkspaceRootFromMappings — parent precedence over child in both array orders', async () => {
-        const repoA = path.resolve('/test/workspaces/repoA');
-        const repoB = path.resolve('/test/workspaces/repoB');
-        const mega = path.resolve('/test/workspaces/mega');
+    // src/test/ is excluded: these assertions are about live code. A test file that
+    // NAMES a retired identifier in order to assert its absence is not a reference,
+    // and including it would make every one of these checks fail on itself.
+    const TEST_TREE = path.join(SRC_DIR, 'test') + path.sep;
 
-        // Mapping 1: repoA is parent of repoB
-        const mappingAIsParent = {
-            id: 'map-a',
-            parentFolder: repoA,
-            workspaceFolders: [repoB],
-            _enabled: true
-        };
+    const srcFilesContaining = (needle: string, exclude: RegExp[] = []): string[] => {
+        const hits: string[] = [];
+        for (const file of walkSrc(SRC_DIR)) {
+            if (file.startsWith(TEST_TREE)) continue;
+            if (exclude.some(re => re.test(file))) continue;
+            let text: string;
+            try { text = fs.readFileSync(file, 'utf8'); } catch { continue; }
+            if (text.includes(needle)) {
+                hits.push(path.relative(SRC_DIR, file));
+            }
+        }
+        return hits;
+    };
 
-        // Mapping 2: mega is parent of repoA and repoB (repoA is a child here)
-        const mappingAIsChild = {
-            id: 'map-mega',
-            parentFolder: mega,
-            workspaceFolders: [repoA, repoB],
-            _enabled: true
-        };
+    test('1. every workspace folder resolves to the one global database', () => {
+        const globalPath = getGlobalDbPath();
+        const repoA = path.join(tmpDir, 'repoA');
+        const repoB = path.join(tmpDir, 'nested', 'repoB');
+        fs.mkdirSync(repoB, { recursive: true });
+        fs.mkdirSync(repoA, { recursive: true });
 
-        // Order 1: [mappingAIsChild, mappingAIsParent] -> repoA listed as child first, parent second
-        const mockDbsOrder1 = new Map<string, any>([
-            [mega, {
-                ensureReady: async () => true,
-                dbPath: path.join(mega, '.switchboard', 'kanban.db'),
-                getWorkspaceMappings: async () => ({ enabled: true, mappings: [mappingAIsChild, mappingAIsParent] })
-            }]
-        ]);
-
-        setHostWorkspaceRoots(null); // Gate off
-        await buildMappingIndexFromDbs(mockDbsOrder1);
-
-        // repoA owns its own mapping (parent), so it MUST resolve to itself, not to mega
         assert.strictEqual(
-            resolveEffectiveWorkspaceRootFromMappings(repoA),
-            repoA,
-            'Order 1: repoA (parent of map-a, child of map-mega) must resolve to itself'
+            resolveWorkspaceDbPath(repoA),
+            globalPath,
+            'repoA must resolve to the global store, not a per-repo kanban.db'
         );
-
-        // Order 2: [mappingAIsParent, mappingAIsChild] -> repoA listed as parent first, child second
-        clearMappingCache();
-        const mockDbsOrder2 = new Map<string, any>([
-            [mega, {
-                ensureReady: async () => true,
-                dbPath: path.join(mega, '.switchboard', 'kanban.db'),
-                getWorkspaceMappings: async () => ({ enabled: true, mappings: [mappingAIsParent, mappingAIsChild] })
-            }]
-        ]);
-
-        await buildMappingIndexFromDbs(mockDbsOrder2);
-
         assert.strictEqual(
-            resolveEffectiveWorkspaceRootFromMappings(repoA),
-            repoA,
-            'Order 2: repoA (parent of map-a, child of map-mega) must resolve to itself'
+            resolveWorkspaceDbPath(repoB),
+            globalPath,
+            'a nested repo must resolve to the same global store'
+        );
+        assert.ok(
+            !resolveWorkspaceDbPath(repoA).startsWith(path.resolve(repoA) + path.sep),
+            'the resolved database must not live inside the workspace repository'
         );
     });
 
-    test('2. All three _hostRoots states: null (gate off), [] (gate on, empty), populated (gate on, filtered)', async () => {
-        const parent = path.resolve('/test/workspaces/parent');
-        const child = path.resolve('/test/workspaces/child');
+    test('2. the global path is tagged with its source, so "which store answered?" is answerable', () => {
+        const def = resolveGlobalDbPath();
+        assert.strictEqual(def.source, 'global_default', 'the no-argument resolution must report global_default');
+        assert.ok(path.isAbsolute(def.path), 'the resolved path must be absolute');
 
-        const mapping = {
-            id: 'map-1',
-            parentFolder: parent,
-            workspaceFolders: [child],
-            _enabled: true
-        };
+        const explicit = resolveGlobalDbPath(path.join(tmpDir, 'explicit.db'));
+        assert.strictEqual(explicit.source, 'explicit', 'an explicit path must report source=explicit, not be silently indistinguishable from the default');
+        assert.notStrictEqual(explicit.path, def.path);
+    });
 
-        const mockDbs = new Map<string, any>([
+    test('3. a dotfiles git repo at $HOME does not veto the default global path', () => {
+        // resolveGlobalDbPath() THROWS on a failed default, so a false positive here
+        // means the board never opens. A git repo at or above $HOME is common and
+        // must not disqualify ~/.switchboard.
+        const home = path.resolve(os.homedir());
+        const check = validateGlobalDbPath(path.join(home, '.switchboard', 'switchboard.db'));
+        assert.strictEqual(check.ok, true, `default global path must validate even with a repo at $HOME (got: ${check.reason})`);
+    });
+
+    test('4. a path inside a project checkout is still refused', () => {
+        const repo = path.join(tmpDir, 'projectRepo');
+        fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
+        fs.mkdirSync(path.join(repo, '.switchboard'), { recursive: true });
+        const check = validateGlobalDbPath(path.join(repo, '.switchboard', 'kanban.db'));
+        assert.strictEqual(check.ok, false, 'a database inside a git work tree must be refused');
+        assert.ok(/git work tree/.test(check.reason || ''), 'the refusal must name the reason');
+    });
+
+    test('5. a cloud-sync destination is refused', () => {
+        for (const folder of ['Dropbox', 'Google Drive', 'OneDrive', 'iCloud']) {
+            const check = validateGlobalDbPath(path.join(tmpDir, folder, 'switchboard.db'));
+            assert.strictEqual(check.ok, false, `${folder} must be refused as a database destination`);
+        }
+    });
+
+    test('6. retired mapping readers report disabled — never something mistakable for a real mapping', async () => {
+        const parent = path.join(tmpDir, 'parent');
+        const child = path.join(tmpDir, 'child');
+        fs.mkdirSync(parent, { recursive: true });
+        fs.mkdirSync(child, { recursive: true });
+
+        // Feed the retired builder a mapping that WOULD have produced an index entry.
+        await buildMappingIndexFromDbs(new Map<string, any>([
             [parent, {
                 ensureReady: async () => true,
-                dbPath: path.join(parent, '.switchboard', 'kanban.db'),
-                getWorkspaceMappings: async () => ({ enabled: true, mappings: [mapping] })
+                dbPath: getGlobalDbPath(),
+                getWorkspaceMappings: async () => ({
+                    enabled: true,
+                    mappings: [{ id: 'map-1', parentFolder: parent, workspaceFolders: [child], _enabled: true }]
+                })
             }]
-        ]);
+        ]));
 
-        // State A: null (gate off, backwards-compatible)
-        setHostWorkspaceRoots(null);
-        assert.strictEqual(isHostRoot(parent), true);
-        assert.strictEqual(isHostRoot(child), true);
-        await buildMappingIndexFromDbs(mockDbs);
-        assert.strictEqual(
-            resolveEffectiveWorkspaceRootFromMappings(child),
-            parent,
-            'State null: gate is disabled, child redirects to parent'
-        );
+        const index = getMappingsFromIndex();
+        assert.strictEqual(index.enabled, false, 'the retired mapping index must report enabled=false');
+        assert.deepStrictEqual(index.mappings, [], 'the retired mapping index must be empty');
 
-        // State B: [] (gate on, empty — no workspace folders open)
-        setHostWorkspaceRoots([]);
-        assert.strictEqual(isHostRoot(parent), false);
-        assert.strictEqual(isHostRoot(child), false);
-        await buildMappingIndexFromDbs(mockDbs);
-        assert.strictEqual(
-            resolveEffectiveWorkspaceRootFromMappings(child),
-            child,
-            'State []: gate is enabled but no host roots open, child resolves to itself'
-        );
+        const scoped = getScopedMappingsForBoard(parent);
+        assert.strictEqual(scoped.enabled, false, 'the retired scoped reader must report enabled=false');
+        assert.deepStrictEqual(scoped.mappings, []);
 
-        // State C1: Populated with child only (parent not open)
-        setHostWorkspaceRoots([child]);
-        assert.strictEqual(isHostRoot(parent), false);
-        assert.strictEqual(isHostRoot(child), true);
-        await buildMappingIndexFromDbs(mockDbs);
-        assert.strictEqual(
-            resolveEffectiveWorkspaceRootFromMappings(child),
-            child,
-            'State [child]: parent is NOT in host roots, child resolves to itself'
-        );
-
-        // State C2: Populated with parent (parent is open)
-        setHostWorkspaceRoots([parent, child]);
-        assert.strictEqual(isHostRoot(parent), true);
-        assert.strictEqual(isHostRoot(child), true);
-        await buildMappingIndexFromDbs(mockDbs);
-        assert.strictEqual(
-            resolveEffectiveWorkspaceRootFromMappings(child),
-            parent,
-            'State [parent, child]: parent IS open, child redirects to parent'
-        );
-    });
-
-    test('3. buildMappingIndexFromDbs two-pass precedence — index maps both-roles folder to itself', async () => {
-        const repoA = path.resolve('/test/workspaces/repoA');
-        const repoB = path.resolve('/test/workspaces/repoB');
-        const mega = path.resolve('/test/workspaces/mega');
-
-        const mappingMega = {
-            id: 'map-mega',
-            parentFolder: mega,
-            workspaceFolders: [repoA, repoB],
-            _enabled: true
-        };
-
-        const mappingA = {
-            id: 'map-a',
-            parentFolder: repoA,
-            workspaceFolders: [repoB],
-            _enabled: true
-        };
-
-        // Regardless of which order they are fed in
-        const mockDbs = new Map<string, any>([
-            [mega, {
-                ensureReady: async () => true,
-                dbPath: path.join(mega, '.switchboard', 'kanban.db'),
-                getWorkspaceMappings: async () => ({ enabled: true, mappings: [mappingMega, mappingA] })
-            }]
-        ]);
-
-        setHostWorkspaceRoots([mega, repoA, repoB]);
-        await buildMappingIndexFromDbs(mockDbs);
-
-        // repoA should map to repoA in cache/index
-        assert.strictEqual(
-            resolveEffectiveWorkspaceRootFromMappings(repoA),
-            repoA,
-            'Two-pass index build guarantees parent (repoA) maps to self even when child of mega'
-        );
-        // repoB (pure child) maps to parent
-        assert.strictEqual(
-            resolveEffectiveWorkspaceRootFromMappings(repoB),
-            repoA,
-            'repoB maps to repoA (or parent)'
-        );
-    });
-
-    test('4. setHostWorkspaceRoots clears mapping cache', async () => {
-        const parent = path.resolve('/test/workspaces/parent');
-        const child = path.resolve('/test/workspaces/child');
-
-        const mapping = {
-            id: 'map-1',
-            parentFolder: parent,
-            workspaceFolders: [child],
-            _enabled: true
-        };
-
-        const mockDbs = new Map<string, any>([
-            [parent, {
-                ensureReady: async () => true,
-                dbPath: path.join(parent, '.switchboard', 'kanban.db'),
-                getWorkspaceMappings: async () => ({ enabled: true, mappings: [mapping] })
-            }]
-        ]);
-
-        setHostWorkspaceRoots([child]); // parent not open
-        await buildMappingIndexFromDbs(mockDbs);
+        // Identity resolution is now the whole contract: a folder is its own root.
         assert.strictEqual(resolveEffectiveWorkspaceRootFromMappings(child), child);
+        assert.strictEqual(isHostRoot(child), true, 'the openness gate is retired and must not filter');
+    });
 
-        // Dynamically add parent to open roots
-        setHostWorkspaceRoots([parent, child]);
-        await buildMappingIndexFromDbs(mockDbs);
+    test('7. terminal parenting survives: pruneNonExistentMappings still prunes by disk presence', () => {
+        const present = path.join(tmpDir, 'present');
+        fs.mkdirSync(present, { recursive: true });
+        const absent = path.join(tmpDir, 'absent-not-created');
+
+        const kept = pruneNonExistentMappings([
+            { id: 'a', parentFolder: present, workspaceFolders: [] } as any,
+            { id: 'b', parentFolder: absent, workspaceFolders: [] } as any,
+            { id: 'c', workspaceFolders: [] } as any,
+        ]);
+
+        const ids = kept.map(m => m.id).sort();
+        assert.deepStrictEqual(ids, ['a', 'c'], 'only mappings whose parentFolder exists (or is unset) survive');
+    });
+
+    test('8. ~ expansion still resolves against the real home directory', () => {
+        assert.strictEqual(expandAndResolve('~/foo'), path.join(os.homedir(), 'foo'));
+        assert.strictEqual(expandAndResolve(path.join(tmpDir, 'bar')), path.join(tmpDir, 'bar'));
+    });
+
+    test('9. switchboardLocationGuard is absent from src/', () => {
+        const hits = srcFilesContaining('isAllowedSwitchboardLocation');
+        assert.deepStrictEqual(
+            hits, [],
+            `isAllowedSwitchboardLocation must be gone — the location guard existed only to answer `
+            + `"which database does this folder use?", which one global store answers by construction. Found in: ${hits.join(', ')}`
+        );
         assert.strictEqual(
-            resolveEffectiveWorkspaceRootFromMappings(child),
-            parent,
-            'Cache cleared and rebuilt: child now redirects to open parent'
+            fs.existsSync(path.join(SRC_DIR, 'utils', 'switchboardLocationGuard.ts')),
+            false,
+            'src/utils/switchboardLocationGuard.ts must be deleted'
         );
     });
 
-    test('5. getScopedMappingsForBoard accepts string or string[] and prunes non-qualifying mappings', async () => {
-        const parentA = realDir('parentA');
-        const childA = realDir('childA');
-        const parentB = realDir('parentB');
-        const childB = realDir('childB');
-
-        const { getScopedMappingsForBoard } = require('../services/WorkspaceIdentityService');
-
-        // Two separate DBs, so provenance (sourceFolder) does not pull map-b into
-        // parentA's scope. A mapping stored in parentA's OWN database is in scope for
-        // parentA's board by design — see the docstring on getScopedMappingsForBoard —
-        // so scoping can only be measured across distinct source DBs.
-        const mockDbs = new Map<string, any>([
-            [parentA, {
-                ensureReady: async () => true,
-                dbPath: path.join(parentA, '.switchboard', 'kanban.db'),
-                getWorkspaceMappings: async () => ({
-                    enabled: true,
-                    mappings: [{ id: 'map-a', parentFolder: parentA, workspaceFolders: [childA], _enabled: true }]
-                })
-            }],
-            [parentB, {
-                ensureReady: async () => true,
-                dbPath: path.join(parentB, '.switchboard', 'kanban.db'),
-                getWorkspaceMappings: async () => ({
-                    enabled: true,
-                    mappings: [{ id: 'map-b', parentFolder: parentB, workspaceFolders: [childB], _enabled: true }]
-                })
-            }]
-        ]);
-
-        await buildMappingIndexFromDbs(mockDbs);
-
-        // Single string root: parentA
-        const scopedA = getScopedMappingsForBoard(parentA);
-        assert.strictEqual(scopedA.enabled, true);
-        assert.strictEqual(scopedA.mappings.length, 1);
-        assert.strictEqual(scopedA.mappings[0].id, 'map-a');
-
-        // Multi-root string[]: [parentA, childB]
-        const scopedMulti = getScopedMappingsForBoard([parentA, childB]);
-        assert.strictEqual(scopedMulti.enabled, true);
-        assert.strictEqual(scopedMulti.mappings.length, 2);
-
-        // Unrelated root
-        const scopedOther = getScopedMappingsForBoard(path.join(tmpDir, 'unrelated'));
-        assert.strictEqual(scopedOther.enabled, false);
-        assert.strictEqual(scopedOther.mappings.length, 0);
+    test('10. the db-pointer indirection is absent from src/ code', () => {
+        // Prose in comments is not a live reference; the write/read/resolve paths are.
+        const hits = srcFilesContaining("'db-pointer'").concat(srcFilesContaining('"db-pointer"'));
+        assert.deepStrictEqual(
+            hits, [],
+            `the db-pointer indirection must be gone — a child repo no longer borrows a parent's database. Found in: ${hits.join(', ')}`
+        );
     });
 
-    test('6. buildWorkspaceItems visibility rule — never emits non-open parents', async () => {
-        const parent = realDir('parent');
-        const childA = realDir('childA');
-        const childB = realDir('childB');
+    test('11. the cloud-sync DB path presets are absent from src/', () => {
+        for (const needle of ['setPresetDbPath', 'db-preset-google-btn', 'db-preset-dropbox-btn', 'db-preset-icloud-btn']) {
+            const hits = srcFilesContaining(needle);
+            assert.deepStrictEqual(
+                hits, [],
+                `${needle} must be gone — a file-sync folder cannot hold the database. Found in: ${hits.join(', ')}`
+            );
+        }
+    });
 
-        const { buildWorkspaceItems } = require('../services/workspaceUtils');
+    test('12. the sql.js memory/eviction apparatus is absent from src/', () => {
+        for (const needle of ['_residentDbBudgetBytes', 'startEvictionSweep', '_summedResidentDbBytes', '_evictArchiveKey']) {
+            const hits = srcFilesContaining(needle);
+            assert.deepStrictEqual(
+                hits, [],
+                `${needle} must be gone — the 500MB resident budget and LRU eviction existed only to survive `
+                + `whole-database-in-memory. Found in: ${hits.join(', ')}`
+            );
+        }
+    });
 
-        const mockDbs = new Map<string, any>([
-            [parent, {
-                ensureReady: async () => true,
-                dbPath: path.join(parent, '.switchboard', 'kanban.db'),
-                getWorkspaceMappings: async () => ({
-                    enabled: true,
-                    mappings: [{
-                        id: 'map-1',
-                        name: 'My Group',
-                        parentFolder: parent,
-                        workspaceFolders: [childA, childB],
-                        _enabled: true
-                    }]
-                })
-            }]
-        ]);
-
-        await buildMappingIndexFromDbs(mockDbs);
-
-        // Case 1: Member opened alone — parent is NOT open
-        const itemsMemberAlone = buildWorkspaceItems([childA]);
-        assert.deepStrictEqual(
-            itemsMemberAlone,
-            [{ label: path.basename(childA), workspaceRoot: childA }],
-            'Member alone must only show itself; non-open parent must never be emitted'
+    test('13. no whole-file export() persist path remains in KanbanDatabase', () => {
+        const dbSrc = fs.readFileSync(path.join(SRC_DIR, 'services', 'KanbanDatabase.ts'), 'utf8');
+        assert.ok(
+            !/this\._db\.export\(\)/.test(dbSrc),
+            'KanbanDatabase must not call _db.export() — export-the-world on every write is the engine defect this replaced'
         );
-
-        // Case 2: Parent opened alone — parent is open, emits parent + children
-        const itemsParentAlone = buildWorkspaceItems([parent]);
-        assert.deepStrictEqual(
-            itemsParentAlone,
-            [
-                { label: 'My Group', workspaceRoot: parent },
-                { label: path.basename(childA), workspaceRoot: childA },
-                { label: path.basename(childB), workspaceRoot: childB }
-            ],
-            'Parent open alone emits parent + its member children'
-        );
-
-        // Case 3: Mega multi-root (parent + childA open)
-        const itemsMultiRoot = buildWorkspaceItems([parent, childA]);
-        assert.deepStrictEqual(
-            itemsMultiRoot,
-            [
-                { label: 'My Group', workspaceRoot: parent },
-                { label: path.basename(childA), workspaceRoot: childA },
-                { label: path.basename(childB), workspaceRoot: childB }
-            ],
-            'Multi-root emits parent + member children without duplicates'
+        assert.ok(
+            !/PERSIST_DEBOUNCE_MS/.test(dbSrc),
+            'the persist debounce must be gone — writes are now page-level statements, not coalesced full-image rewrites'
         );
     });
 });

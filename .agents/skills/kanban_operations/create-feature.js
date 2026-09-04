@@ -94,12 +94,25 @@ async function viaDirectFile() {
   }
   const featureFile = path.join(featuresDir, `${slug}-${featurePlanId}.md`);
 
-  // Query kanban.db if available to resolve plan_file paths and titles
-  let subtaskLines = [];
+  // Resolve every planId to a real plan_file. A planId that resolves to nothing
+  // must ABORT — it must never become a guessed `../plans/<planId>.md` link.
+  //
+  // That guess matches no row, so ingestion links nothing and the caller is handed
+  // an orphaned feature card while the script reports ok:true. The abort used to be
+  // supplied by accident: before consolidation `forWorkspace(workspaceRoot)` opened
+  // `<workspaceRoot>/.switchboard/kanban.db`, which does not exist outside a real
+  // workspace, so ensureReady() returned false and the whole thing failed loudly.
+  // Every workspace now resolves to the one global store, which always exists and is
+  // always ready — so the accident is gone and the guard has to be written down.
+  const subtaskLines = [];
+  const unresolved = [];
+  let resolverError = null;
   try {
     const { KanbanDatabase } = require('../../../out/services/KanbanDatabase');
     const db = KanbanDatabase.forWorkspace(workspaceRoot);
-    await db.ensureReady();
+    if (!(await db.ensureReady())) {
+      throw new Error(`kanban database not ready: ${db.lastInitError || 'unknown reason'}`);
+    }
     for (const pid of planIds) {
       const plan = await db.getPlanByPlanId(pid);
       if (plan && plan.planFile) {
@@ -107,13 +120,22 @@ async function viaDirectFile() {
         const topic = plan.topic || basename;
         subtaskLines.push(`- [ ] [${topic}](../plans/${basename})`);
       } else {
-        subtaskLines.push(`- [ ] [${pid}](../plans/${pid}.md)`);
+        unresolved.push(pid);
       }
     }
-    if (typeof db.close === 'function') db.close();
-  } catch {
-    // If KanbanDatabase module unavailable, write basic plan links
-    subtaskLines = planIds.map(pid => `- [ ] [${pid}](../plans/${pid}.md)`);
+    if (typeof db.dispose === 'function') db.dispose();
+    else if (typeof db.close === 'function') db.close();
+  } catch (e) {
+    // The resolver itself failed, so NOTHING is resolved. Writing basic plan links
+    // here was the same silent-orphan bug by another route.
+    resolverError = e && e.message ? e.message : String(e);
+  }
+
+  if (resolverError) {
+    return { ok: false, error: `Cannot resolve planIds — ${resolverError}` };
+  }
+  if (unresolved.length > 0) {
+    return { ok: false, error: `Cannot resolve planId(s): ${unresolved.join(', ')}` };
   }
 
   const descText = description || `Implementation plan for ${featureName}.`;
@@ -152,6 +174,10 @@ ${subtasksBlock}
 
   // Extension not reachable — fallback to direct markdown feature file creation
   const fallbackResult = await viaDirectFile();
+  if (!fallbackResult.ok) {
+    console.log(JSON.stringify({ ok: false, error: fallbackResult.error, fallback: true }));
+    process.exit(1);
+  }
   console.log(JSON.stringify({
     ok: true,
     featurePlanId: fallbackResult.featurePlanId,

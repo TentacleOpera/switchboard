@@ -15,7 +15,6 @@ import {
     resolveParentsForTerminals,
     pruneNonExistentMappings,
     setHostWorkspaceRoots,
-    clearMappingCache,
 } from '../services/WorkspaceIdentityService';
 import { discoverAndMergeDatabases } from '../services/dbMerge';
 import { adoptPresetDbOnLaunch, isKnownPresetDbPath } from '../services/cloudSyncMigration';
@@ -571,13 +570,10 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
 
     const secrets = createStandaloneHostSecrets(workspaceRoot);
 
-    // DB root resolution goes through KanbanDatabase.forWorkspace, which routes
-    // via resolveEffectiveWorkspaceRootFromMappings — the SAME resolver the
-    // extension uses, carrying the parent-first precedence rule and the openness
-    // gate. Standalone's root set is [workspaceRoot], so a mapped child launched
-    // alone resolves to ITSELF (its parent is not open) and a launch inside a
-    // group parent keeps the parent. Re-deriving the redirect here would restore
-    // the child-wins behaviour this feature exists to remove.
+    // DB resolution goes through KanbanDatabase.forWorkspace, which after
+    // consolidation resolves every workspace to the one global store. The mapping
+    // redirect and openness gate this block used to describe are retired — there is
+    // no per-folder database left to adjudicate.
     const db = KanbanDatabase.forWorkspace(workspaceRoot);
     const dbPath = db.dbPath;
     const dbDir = path.dirname(dbPath);
@@ -585,7 +581,13 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         fs.mkdirSync(dbDir, { recursive: true, mode: 0o700 });
     }
 
-    await db.ensureReady();
+    // createIfMissing, NOT ensureReady: _initialize() deliberately refuses to
+    // auto-create (`Database file does not exist (not auto-creating)`), so on a
+    // fresh install ensureReady() returns false and this host has no board at all.
+    // The extension host calls createIfMissing at its own bring-up; this is the
+    // standalone half of that seam. createIfMissing() loads an existing file
+    // unchanged, so it is safe on every subsequent launch.
+    await db.createIfMissing();
 
     // Apply workspace exclusions (managed gitignore for .agents, .claude, etc.)
     try {
@@ -597,16 +599,24 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // Seed and project control-plane to .agents/ and .claude/
     try {
         const bundleDir = path.resolve(__dirname, '..', '..');
-        let version = '1.0.0';
+        // No '1.0.0' default. The version stamps every control_plane row and drives
+        // the downgrade guard, so a fabricated version is indistinguishable from a
+        // real one and would let an older host read a newer projection. Skip loudly
+        // instead. (Matches the extension host's two projection sites.)
+        let version: string | undefined;
         try {
             const pkgPath = path.join(bundleDir, 'package.json');
             if (fs.existsSync(pkgPath)) {
-                version = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version || version;
+                version = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version || undefined;
             }
-        } catch {}
-        await seedControlPlaneFromBundle(bundleDir, db, version);
-        const projection = await projectControlPlane(workspaceRoot, db, version);
-        console.log(`[standalone] Control-plane projection: ${projection.status} — ${projection.reason}`);
+        } catch { /* reported below */ }
+        if (!version) {
+            console.warn(`[standalone] Control-plane projection SKIPPED: version unresolvable from ${bundleDir}/package.json — refusing to stamp rows with a guessed version.`);
+        } else {
+            await seedControlPlaneFromBundle(bundleDir, db, version);
+            const projection = await projectControlPlane(workspaceRoot, db, version);
+            console.log(`[standalone] Control-plane projection: ${projection.status} — ${projection.reason}`);
+        }
     } catch (projErr) {
         console.warn('[standalone] Control-plane projection failed (non-fatal):', projErr);
     }
@@ -1339,15 +1349,11 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         schedulePushFullState();
     });
     switchboardCommandRegistry.register('switchboard.mappingsChanged', async () => {
-        clearMappingCache();
-        setHostWorkspaceRoots([workspaceRoot]);
-        const dbs = new Map<string, KanbanDatabase>();
-        const mappingDbPath = resolveWorkspaceDbPath(workspaceRoot, () => configProvider.getConfigString('kanban.dbPath'));
-        if (mappingDbPath && fs.existsSync(mappingDbPath)) {
-            const reloadedDb = KanbanDatabase.forWorkspace(workspaceRoot, mappingDbPath);
-            dbs.set(workspaceRoot, reloadedDb);
-        }
-        await buildMappingIndexFromDbs(dbs);
+        // Consolidation retired the database-resolution half of the mapping
+        // subsystem: every workspace resolves to the one global store, so there is
+        // no per-folder DB path left to re-resolve and no mapping index to rebuild.
+        // What remains is the display refresh and the watcher re-scan, which the
+        // folder-layout settings still legitimately change.
         schedulePushFullState();
         if (ingestionEngine) {
             await ingestionEngine.refreshWatchers();

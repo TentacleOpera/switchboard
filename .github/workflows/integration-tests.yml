@@ -727,6 +727,24 @@ jobs:
       - name: Kanban DB backup retention contract (per-reason cap, throttle, dedupe)
         run: npm run test:contract:db-backup-retention
 
+      # V70 scopes ten previously-unscoped tables by workspace_id and rebuilds three
+      # colliding constraints. Two things this pins that nothing else did: the rebuild
+      # re-emits column defaults from PRAGMA table_info, which strips the parentheses
+      # SQLite REQUIRES around an expression default — so `DEFAULT (datetime('now'))`
+      # came back bare, threw `near "(": syntax error`, aborted _initialize(), and left
+      # ensureReady() false forever (a dead board on every install with a worktrees
+      # table). And the EXEMPT allowlist means a NEW unscoped table fails this test
+      # instead of quietly joining config/project_config in the known-gap list.
+      - name: Schema workspace_id invariant + V70 rebuild contract
+        run: npm run test:contract:schema-workspace-id
+
+      # The is_feature clobber (open since 2025-07-05): updateFeatureStatus resolved an
+      # id from two namespaces without asserting the row it landed on, so the subtask
+      # linking loop could demote the freshly created feature to a plain plan. These
+      # tests were written with the fix and were NOT wired to any gate.
+      - name: Feature status clobber contract (updateFeatureStatus wrong-row guard)
+        run: npm run test:contract:feature-status-clobber
+
       # The machine-global secrets store is the ONLY copy of a standalone user's API
       # tokens. Three separate paths silently destroyed them and all three read fine
       # in a diff: an un-awaited migration loop that renamed the legacy store away

@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { stateHome } from '../utils/stateHome';
 
 export interface ResolvedDbPath {
     path: string;
@@ -20,10 +21,18 @@ const CLOUD_SYNC_KEYWORDS = [
 
 /**
  * Returns the directory path for global machine storage (~/.switchboard).
+ *
+ * Resolved through `stateHome()`, NOT `os.homedir()` directly. `stateHome()` is the
+ * repo's single home-store accessor: it honours `SWITCHBOARD_STATE_HOME` and it
+ * deliberately THROWS in a test process rather than touching the developer's real
+ * `~/.switchboard`. Reading `os.homedir()` here bypassed both — so every test that
+ * opened the global store wrote to the real home, which made the suites mutate the
+ * developer's (and CI runner's) actual board and made them order-dependent on each
+ * other. The global store is the last place that should be exempt from the
+ * home-store accessor, since it IS the home store.
  */
 export function getGlobalStoreDir(): string {
-    const home = os.homedir();
-    return path.join(home, '.switchboard');
+    return path.join(stateHome(), '.switchboard');
 }
 
 /**
@@ -43,9 +52,20 @@ export function validateGlobalDbPath(targetPath: string): { ok: boolean; reason?
         }
     }
 
-    // Traverse upwards checking for .git (file or directory)
+    // Traverse upwards checking for .git (file or directory), but STOP at the home
+    // directory. A dotfiles repo at $HOME is common, and without this boundary the
+    // DEFAULT path (~/.switchboard/switchboard.db) fails validation on those
+    // machines — and resolveGlobalDbPath() throws on a failed default, so the board
+    // never opens at all. The rule this check exists to enforce is "the database is
+    // not inside a project checkout"; a repo at or above $HOME is not that.
+    // The same home the store itself resolves against, so the boundary below lines up
+    // with getGlobalStoreDir() under SWITCHBOARD_STATE_HOME as well as in production.
+    const home = path.resolve(stateHome());
     let cur = path.dirname(resolved);
     while (cur && cur !== path.dirname(cur)) {
+        if (cur === home || !cur.startsWith(home + path.sep)) {
+            break;
+        }
         const gitEntry = path.join(cur, '.git');
         if (fs.existsSync(gitEntry)) {
             return {
@@ -54,6 +74,22 @@ export function validateGlobalDbPath(targetPath: string): { ok: boolean; reason?
             };
         }
         cur = path.dirname(cur);
+    }
+
+    // A path outside the home tree still gets the full upward walk — that is where
+    // a deliberate relocation into a project checkout would land.
+    if (!resolved.startsWith(home + path.sep) && resolved !== home) {
+        let outside = path.dirname(resolved);
+        while (outside && outside !== path.dirname(outside)) {
+            const gitEntry = path.join(outside, '.git');
+            if (fs.existsSync(gitEntry)) {
+                return {
+                    ok: false,
+                    reason: `Global database path cannot be inside a git work tree at '${outside}': ${resolved}`,
+                };
+            }
+            outside = path.dirname(outside);
+        }
     }
 
     return { ok: true };

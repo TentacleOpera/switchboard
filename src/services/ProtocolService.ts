@@ -72,7 +72,15 @@ export class ProtocolService {
             return null;
         }
 
-        const body = (entry?.overrideBody ?? entry?.workspaceOverride) || entry?.body || bundled.body;
+        // `bundled` may be undefined here: line 71 returns early only when BOTH entry
+        // and bundled are missing, so a control_plane row with an empty body and no
+        // bundled counterpart (a retired protocol still in the table, or an
+        // override-only row) reached `bundled.body` and threw a TypeError instead of
+        // returning null.
+        const body = (entry?.overrideBody ?? entry?.workspaceOverride) || entry?.body || bundled?.body;
+        if (!body) {
+            return null;
+        }
         const delivery: "inline" | "materialize" = entry?.delivery || bundled?.delivery || "materialize";
         const contentHash = entry?.contentHash || bundled?.contentHash || crypto.createHash("sha256").update(body, "utf8").digest("hex");
 

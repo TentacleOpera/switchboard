@@ -4133,12 +4133,21 @@ async function scaffoldProtocolLayers(
             outputChannel?.appendLine(`[${logPrefix}] CLAUDE.md scaffolding error (non-fatal): ${e}`);
         }
         try {
+            // The version stamps every control_plane row and drives the
+            // downgrade guard (an older extension must refuse a newer
+            // projection). Substituting a plausible default here would make
+            // "could not read package.json" indistinguishable from a real
+            // version, so refuse to seed instead of guessing.
             const version = getExtensionVersion(extensionUri.fsPath);
-            const db = KanbanDatabase.forWorkspace(workspaceUri.fsPath);
-            await db.ensureReady();
-            await seedControlPlaneFromBundle(extensionUri.fsPath, db, version);
-            const m = await projectControlPlane(workspaceUri.fsPath, db, version);
-            outputChannel?.appendLine(`[${logPrefix}] Control-plane projection: ${m.status} — ${m.reason}`);
+            if (!version) {
+                outputChannel?.appendLine(`[${logPrefix}] Control-plane projection SKIPPED: extension version unresolvable from ${extensionUri.fsPath}/package.json — refusing to stamp rows with a guessed version.`);
+            } else {
+                const db = KanbanDatabase.forWorkspace(workspaceUri.fsPath);
+                await db.ensureReady();
+                await seedControlPlaneFromBundle(extensionUri.fsPath, db, version);
+                const m = await projectControlPlane(workspaceUri.fsPath, db, version);
+                outputChannel?.appendLine(`[${logPrefix}] Control-plane projection: ${m.status} — ${m.reason}`);
+            }
         } catch (e) {
             outputChannel?.appendLine(`[${logPrefix}] Control-plane projection error (non-fatal): ${e}`);
         }
@@ -4383,12 +4392,19 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
 
     // 2. Discover, seed, and project .agents assets via ControlPlaneProjection
     try {
+        // See the note at the other projection site: the version is the
+        // downgrade guard's input, so an unresolvable version skips seeding
+        // loudly rather than stamping rows with a fabricated one.
         const version = getExtensionVersion(extensionUri.fsPath);
-        const db = KanbanDatabase.forWorkspace(workspaceUri.fsPath);
-        await db.ensureReady();
-        await seedControlPlaneFromBundle(extensionUri.fsPath, db, version);
-        const projection = await projectControlPlane(workspaceUri.fsPath, db, version);
-        outputChannel?.appendLine(`[Setup] Control-plane projection: ${projection.status} — ${projection.reason}`);
+        if (!version) {
+            outputChannel?.appendLine(`[Setup] Control-plane projection SKIPPED: extension version unresolvable from ${extensionUri.fsPath}/package.json — refusing to stamp rows with a guessed version.`);
+        } else {
+            const db = KanbanDatabase.forWorkspace(workspaceUri.fsPath);
+            await db.ensureReady();
+            await seedControlPlaneFromBundle(extensionUri.fsPath, db, version);
+            const projection = await projectControlPlane(workspaceUri.fsPath, db, version);
+            outputChannel?.appendLine(`[Setup] Control-plane projection: ${projection.status} — ${projection.reason}`);
+        }
     } catch (projErr) {
         outputChannel?.appendLine(`[Setup] Control-plane projection failed (non-fatal): ${projErr}`);
     }

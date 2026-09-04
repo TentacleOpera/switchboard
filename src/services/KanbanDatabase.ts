@@ -4,7 +4,7 @@ import { createRequire } from 'module';
 import * as os from 'os';
 import * as path from 'path';
 import { ISqliteDriver, ISqliteStatement, BetterSqliteDriver } from './sqliteDriver';
-import { getGlobalDbPath, getGlobalArchiveDbPath } from './globalStore';
+import { getGlobalDbPath, getGlobalArchiveDbPath, getGlobalStoreDir } from './globalStore';
 import { mergeDatabase } from './dbMerge';
 import { STATE_KEY_TO_CONFIG } from './stateConfigBridge';
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
@@ -1445,6 +1445,15 @@ export class KanbanDatabase {
         if (existing) {
             try { await existing._writeTail; } catch { /* swallow */ }
             await existing.flushPersist();
+            // Mark it disposed and cancel the debounced mirror, for the same reason
+            // dispose() does: an armed timer surviving invalidation re-opens the
+            // database through _writeLocalBoardMirror -> getBoard -> ensureReady,
+            // after this method removed the instance from the registry.
+            existing._disposed = true;
+            if (existing._localMirrorDebounce) {
+                clearTimeout(existing._localMirrorDebounce);
+                existing._localMirrorDebounce = null;
+            }
             KanbanDatabase._instancesByDbPath.delete(existing.dbPath);
             existing._closeDb(existing._db);
             existing._db = null;
@@ -1751,6 +1760,14 @@ export class KanbanDatabase {
     }
 
     public dispose(): void {
+        this._disposed = true;
+        // Cancel the debounced per-repo mirror BEFORE closing the handle. A timer left
+        // armed here fires after teardown and resurrects the database (see _disposed).
+        if (this._localMirrorDebounce) {
+            clearTimeout(this._localMirrorDebounce);
+            this._localMirrorDebounce = null;
+        }
+        this._boardSnapshotPublisher = null;
         try { void this.exportStateToFile(); } catch { /* best-effort */ }
         if (this._onColumnChanged) {
             try {
@@ -6341,7 +6358,48 @@ export class KanbanDatabase {
 
     /** Get workspace ID from DB config, or null if not set. */
     public async getWorkspaceId(): Promise<string | null> {
-        return this.getConfig('workspace_id');
+        return (await this.getWorkspaceIdTagged()).value;
+    }
+
+    /**
+     * `getWorkspaceId()` with its provenance attached, so "which source answered?"
+     * is answerable after the fact rather than inferred from behaviour.
+     *
+     * ⚠️ The `config` row is asked FIRST and that ordering is deliberate — do not
+     * "fix" it by preferring the committed `.switchboard/workspace-id` file.
+     *
+     * The reasoning that suggests flipping it is real: `config` is keyed
+     * `(key TEXT PRIMARY KEY)` with no workspace scope, so in the one global store
+     * `config['workspace_id']` is a single machine-wide slot, and the repo file is
+     * the per-workspace identity by design. But the file is NOT interchangeable with
+     * the row. Measured on a real run: the file held `b3cf17eada21` while the row
+     * held `b3cf17eada211ca3` — a truncated legacy variant of the same id. Preferring
+     * the file therefore splits reads and writes across two different workspace_id
+     * values, and rows written under one become invisible under the other (observed
+     * as features and inline plans importing to zero rows).
+     *
+     * So the collision is real and the fix is NOT here: it needs `config` scoped by
+     * workspace_id, with a per-key machine-global-vs-workspace decision. Recorded in
+     * the storage-overhaul review as a deferred CRITICAL rather than papered over
+     * with a precedence flip that breaks the working path today.
+     */
+    public async getWorkspaceIdTagged(): Promise<{ value: string | null; source: 'db_config' | 'committed_file' | 'none' }> {
+        const fromConfig = await this.getConfig('workspace_id');
+        if (fromConfig) {
+            return { value: fromConfig, source: 'db_config' };
+        }
+        if (this._workspaceRoot) {
+            try {
+                const wsIdFile = path.join(this._workspaceRoot, '.switchboard', 'workspace-id');
+                if (fs.existsSync(wsIdFile)) {
+                    const content = fs.readFileSync(wsIdFile, 'utf8').trim();
+                    if (content) {
+                        return { value: content, source: 'committed_file' };
+                    }
+                }
+            } catch { /* fall through */ }
+        }
+        return { value: null, source: 'none' };
     }
 
     /** Derive workspace ID from the plans table (most-used workspace_id). */
@@ -7008,13 +7066,29 @@ export class KanbanDatabase {
             console.error(`[KanbanDatabase._initialize] checking ${this._dbPath}, exists=${fs.existsSync(this._dbPath)}`);
 
             if (fs.existsSync(this._dbPath)) {
-                // Guard: only create directories within .switchboard or workspace root
+                // Guard against scaffold litter: this method mkdir -p's the parent, so
+                // it must only ever do that in a sanctioned location. Post-consolidation
+                // the sanctioned location is the GLOBAL STORE (~/.switchboard), which is
+                // where every workspace's board now lives — the pre-consolidation list
+                // (<workspaceRoot>/.switchboard and the workspace root) is kept because
+                // an unmigrated per-repo kanban.db is still opened in place as a merge
+                // source. Omitting the global store here is not a cosmetic miss: every
+                // read and write in the product sits behind `await this.ensureReady()`,
+                // so refusing the global store's own directory returns false from all
+                // of them and the board is empty everywhere.
                 const parentDir = path.resolve(path.dirname(this._dbPath));
                 const switchboardDir = path.resolve(path.join(this._workspaceRoot, '.switchboard'));
                 const workspaceRoot = path.resolve(this._workspaceRoot);
-                if (parentDir !== switchboardDir && parentDir !== workspaceRoot && !parentDir.startsWith(switchboardDir + path.sep)) {
-                    console.error(`[KanbanDatabase] Refusing to create directory outside .switchboard: ${parentDir}`);
-                    this._lastInitError = `Database parent directory outside .switchboard: ${parentDir}`;
+                const globalStoreDir = path.resolve(getGlobalStoreDir());
+                const allowed =
+                    parentDir === globalStoreDir ||
+                    parentDir.startsWith(globalStoreDir + path.sep) ||
+                    parentDir === switchboardDir ||
+                    parentDir.startsWith(switchboardDir + path.sep) ||
+                    parentDir === workspaceRoot;
+                if (!allowed) {
+                    console.error(`[KanbanDatabase] Refusing to create directory outside the global store or .switchboard: ${parentDir}`);
+                    this._lastInitError = `Database parent directory outside the global store or .switchboard: ${parentDir}`;
                     return false;
                 }
                 await fs.promises.mkdir(parentDir, { recursive: true });
@@ -7991,17 +8065,41 @@ export class KanbanDatabase {
                     stmtPath.free();
                 }
 
+                // workspace_id is supplied only when the column is actually present.
+                // On an UPGRADE path V30 runs long before V70 adds it, so naming it
+                // unconditionally fails there. On a FRESH database the opposite holds:
+                // SCHEMA_TABLES already carries V70's shape (`workspace_id TEXT NOT
+                // NULL`) while the historical chain still runs, so omitting it fails
+                // the NOT NULL constraint — which rolled the whole of V30 back, skipped
+                // setMigrationVersion(30), and left V30 to fail again on every single
+                // open. Both directions have to be handled, hence the column probe.
+                const v30WsId = (await this.getWorkspaceId()) || this._getWorkspaceIdFallback() || 'default';
+
                 if (legacyBranchVal) {
-                    this._db.run(
-                        `INSERT OR IGNORE INTO worktrees (branch, path, status) VALUES (?, ?, 'active')`,
-                        [legacyBranchVal, legacyPathVal]
-                    );
+                    if (this._tableHasColumn('worktrees', 'workspace_id')) {
+                        this._db.run(
+                            `INSERT OR IGNORE INTO worktrees (branch, path, status, workspace_id) VALUES (?, ?, 'active', ?)`,
+                            [legacyBranchVal, legacyPathVal, v30WsId]
+                        );
+                    } else {
+                        this._db.run(
+                            `INSERT OR IGNORE INTO worktrees (branch, path, status) VALUES (?, ?, 'active')`,
+                            [legacyBranchVal, legacyPathVal]
+                        );
+                    }
                 }
 
-                this._db.run(
-                    `INSERT OR REPLACE INTO kanban_meta (key, value) VALUES ('active_safety_session_branch.migrated.bak', ?)`,
-                    [legacyBranchVal]
-                );
+                if (this._tableHasColumn('kanban_meta', 'workspace_id')) {
+                    this._db.run(
+                        `INSERT OR REPLACE INTO kanban_meta (key, value, workspace_id) VALUES ('active_safety_session_branch.migrated.bak', ?, ?)`,
+                        [legacyBranchVal, v30WsId]
+                    );
+                } else {
+                    this._db.run(
+                        `INSERT OR REPLACE INTO kanban_meta (key, value) VALUES ('active_safety_session_branch.migrated.bak', ?)`,
+                        [legacyBranchVal]
+                    );
+                }
                 this._db.exec(`DELETE FROM kanban_meta WHERE key IN ('active_safety_session_branch', 'active_safety_session_path', 'active_safety_session_started_at')`);
 
                 this._db.exec('COMMIT');
@@ -9178,14 +9276,41 @@ export class KanbanDatabase {
             wsId = 'default';
         }
 
-        // Ensure config table has workspace_id populated
-        try {
-            const cfgStmt = this._db.prepare("SELECT value FROM config WHERE key = 'workspace_id'");
-            if (!cfgStmt.step()) {
-                this._db.run("INSERT OR REPLACE INTO config (key, value) VALUES ('workspace_id', ?)", [wsId]);
-            }
-            cfgStmt.free();
-        } catch { /* ignore */ }
+        // DELIBERATELY does not write wsId into `config`.
+        //
+        // `wsId` above may be a migration-local fallback — a `sha256(root).slice(0,16)`
+        // hash minted right here when nothing else answered. Persisting that as the
+        // workspace's identity makes a fabricated value indistinguishable from a
+        // configured one, and it does not even agree with the canonical id: the
+        // committed `.switchboard/workspace-id` that `ensureWorkspaceIdentity()` writes
+        // is `slice(0, 12)` (WorkspaceIdentityService.ts:248), so the row and the file
+        // disagree by width for the same input. Measured consequence: the importer wrote
+        // rows under `c1d1bf576ad7` while scoped readers queried `c1d1bf576ad7d229`, and
+        // `getPlanByPlanFile(rel, workspaceId)` returned null for a plan that was on
+        // disk and in the table — inline subtask plans "written but did not import".
+        //
+        // A backfill needs *an* id to write into its own rows; it does not get to decide
+        // the workspace's identity. `ensureWorkspaceIdentity()` owns that.
+
+        // Step 0: drop the legacy global UNIQUE index on plans.session_id.
+        //
+        // V20 step 8 already does `DROP INDEX IF EXISTS idx_plans_session_id_unique`,
+        // but on a FRESH database V20's earlier steps abort (its plan_events copy joins
+        // `e.session_id`, a column the modern SCHEMA_TABLES shape does not have), so the
+        // drop never runs and the index V19 created survives to head. Measured on a
+        // freshly created DB: `CREATE UNIQUE INDEX idx_plans_session_id_unique ON
+        // plans(session_id)` is still present.
+        //
+        // Per-workspace databases made that survivable — the collision space was one
+        // project, and session_id is deprecated in favour of plan_id, so repeated or
+        // empty values were rare and local. One global store holding every workspace
+        // turns it into a machine-wide unique constraint on a deprecated column: the
+        // first row to claim a session_id blocks the insert for every other project,
+        // which surfaces as `UNIQUE constraint failed: plans.session_id` and a plan or
+        // feature that silently never lands. It is the same class as the three
+        // constraints this migration was written for, on the one table the plan
+        // believed was already safe.
+        this._db.exec('DROP INDEX IF EXISTS idx_plans_session_id_unique');
 
         // Step 1: Recover from any interrupted prior rebuilds
         const existingTables = this._getExistingTableNames();
@@ -9261,11 +9386,28 @@ export class KanbanDatabase {
                         } else if (c.name === 'workspace_id') {
                             // Handled explicitly below
                         } else {
+                            // NOT NULL must survive independently of DEFAULT. The
+                            // earlier form only emitted NOT NULL when a default was
+                            // also present, so a plain `path TEXT NOT NULL` column
+                            // came out of the rebuild nullable — a silent constraint
+                            // loss on a table this migration exists to strengthen.
+                            //
+                            // The default MUST be re-parenthesised. `PRAGMA table_info`
+                            // reports `dflt_value` with the outer parens stripped, so
+                            // `created_at TEXT NOT NULL DEFAULT (datetime('now'))` comes
+                            // back as `datetime('now')` and re-emitting it bare produces
+                            // `near "(": syntax error` — which aborts the rebuild, aborts
+                            // _initialize(), and leaves ensureReady() false forever, i.e.
+                            // a dead board on every install that has a worktrees table.
+                            // SQLite accepts parentheses around literal defaults too
+                            // (verified for strings, integers, NULL and CURRENT_TIMESTAMP),
+                            // so wrapping unconditionally is safe.
                             let def = `${c.name} ${c.type || 'TEXT'}`;
-                            if (c.notnull && c.dflt_value != null) {
-                                def += ` NOT NULL DEFAULT ${c.dflt_value}`;
-                            } else if (c.dflt_value != null) {
-                                def += ` DEFAULT ${c.dflt_value}`;
+                            if (c.notnull) {
+                                def += ' NOT NULL';
+                            }
+                            if (c.dflt_value != null) {
+                                def += ` DEFAULT (${c.dflt_value})`;
                             }
                             colDefs.push(def);
                             copyColNames.push(c.name);
@@ -9274,10 +9416,13 @@ export class KanbanDatabase {
                     }
                     colDefs.push('workspace_id TEXT NOT NULL');
                     copyColNames.push('workspace_id');
+                    // Bound, not interpolated: wsId can come from the committed
+                    // `.switchboard/workspace-id` file, so it is repo-controlled text.
+                    // A quote in it would break the migration mid-rebuild.
                     if (hasWorkspaceId) {
-                        selectColExprs.push(`COALESCE(NULLIF(workspace_id, ''), '${wsId}')`);
+                        selectColExprs.push(`COALESCE(NULLIF(workspace_id, ''), ?)`);
                     } else {
-                        selectColExprs.push(`'${wsId}'`);
+                        selectColExprs.push('?');
                     }
 
                     const createSql = `CREATE TABLE worktrees_new (
@@ -9285,7 +9430,7 @@ export class KanbanDatabase {
                         UNIQUE(branch, workspace_id)
                     )`;
                     this._db.exec(createSql);
-                    this._db.exec(`INSERT INTO worktrees_new (${copyColNames.join(', ')}) SELECT ${selectColExprs.join(', ')} FROM worktrees`);
+                    this._db.run(`INSERT INTO worktrees_new (${copyColNames.join(', ')}) SELECT ${selectColExprs.join(', ')} FROM worktrees`, [wsId]);
                     this._db.exec('DROP TABLE worktrees');
                     this._db.exec('ALTER TABLE worktrees_new RENAME TO worktrees');
                     this._db.exec('CREATE INDEX IF NOT EXISTS idx_worktrees_workspace ON worktrees(workspace_id)');
@@ -9341,11 +9486,28 @@ export class KanbanDatabase {
                         } else if (c.name === 'workspace_id') {
                             // Handled explicitly below
                         } else {
+                            // NOT NULL must survive independently of DEFAULT. The
+                            // earlier form only emitted NOT NULL when a default was
+                            // also present, so a plain `path TEXT NOT NULL` column
+                            // came out of the rebuild nullable — a silent constraint
+                            // loss on a table this migration exists to strengthen.
+                            //
+                            // The default MUST be re-parenthesised. `PRAGMA table_info`
+                            // reports `dflt_value` with the outer parens stripped, so
+                            // `created_at TEXT NOT NULL DEFAULT (datetime('now'))` comes
+                            // back as `datetime('now')` and re-emitting it bare produces
+                            // `near "(": syntax error` — which aborts the rebuild, aborts
+                            // _initialize(), and leaves ensureReady() false forever, i.e.
+                            // a dead board on every install that has a worktrees table.
+                            // SQLite accepts parentheses around literal defaults too
+                            // (verified for strings, integers, NULL and CURRENT_TIMESTAMP),
+                            // so wrapping unconditionally is safe.
                             let def = `${c.name} ${c.type || 'TEXT'}`;
-                            if (c.notnull && c.dflt_value != null) {
-                                def += ` NOT NULL DEFAULT ${c.dflt_value}`;
-                            } else if (c.dflt_value != null) {
-                                def += ` DEFAULT ${c.dflt_value}`;
+                            if (c.notnull) {
+                                def += ' NOT NULL';
+                            }
+                            if (c.dflt_value != null) {
+                                def += ` DEFAULT (${c.dflt_value})`;
                             }
                             colDefs.push(def);
                             copyColNames.push(c.name);
@@ -9354,10 +9516,13 @@ export class KanbanDatabase {
                     }
                     colDefs.push('workspace_id TEXT NOT NULL');
                     copyColNames.push('workspace_id');
+                    // Bound, not interpolated: wsId can come from the committed
+                    // `.switchboard/workspace-id` file, so it is repo-controlled text.
+                    // A quote in it would break the migration mid-rebuild.
                     if (hasWorkspaceId) {
-                        selectColExprs.push(`COALESCE(NULLIF(workspace_id, ''), '${wsId}')`);
+                        selectColExprs.push(`COALESCE(NULLIF(workspace_id, ''), ?)`);
                     } else {
-                        selectColExprs.push(`'${wsId}'`);
+                        selectColExprs.push('?');
                     }
 
                     const createSql = `CREATE TABLE job_instructions_new (
@@ -9365,7 +9530,7 @@ export class KanbanDatabase {
                         UNIQUE(file, workspace_id)
                     )`;
                     this._db.exec(createSql);
-                    this._db.exec(`INSERT INTO job_instructions_new (${copyColNames.join(', ')}) SELECT ${selectColExprs.join(', ')} FROM job_instructions`);
+                    this._db.run(`INSERT INTO job_instructions_new (${copyColNames.join(', ')}) SELECT ${selectColExprs.join(', ')} FROM job_instructions`, [wsId]);
                     this._db.exec('DROP TABLE job_instructions');
                     this._db.exec('ALTER TABLE job_instructions_new RENAME TO job_instructions');
                     this._db.exec('CREATE INDEX IF NOT EXISTS idx_job_instructions_workspace ON job_instructions(workspace_id)');
@@ -9415,11 +9580,28 @@ export class KanbanDatabase {
                         } else if (c.name === 'workspace_id') {
                             // Handled explicitly below
                         } else {
+                            // NOT NULL must survive independently of DEFAULT. The
+                            // earlier form only emitted NOT NULL when a default was
+                            // also present, so a plain `path TEXT NOT NULL` column
+                            // came out of the rebuild nullable — a silent constraint
+                            // loss on a table this migration exists to strengthen.
+                            //
+                            // The default MUST be re-parenthesised. `PRAGMA table_info`
+                            // reports `dflt_value` with the outer parens stripped, so
+                            // `created_at TEXT NOT NULL DEFAULT (datetime('now'))` comes
+                            // back as `datetime('now')` and re-emitting it bare produces
+                            // `near "(": syntax error` — which aborts the rebuild, aborts
+                            // _initialize(), and leaves ensureReady() false forever, i.e.
+                            // a dead board on every install that has a worktrees table.
+                            // SQLite accepts parentheses around literal defaults too
+                            // (verified for strings, integers, NULL and CURRENT_TIMESTAMP),
+                            // so wrapping unconditionally is safe.
                             let def = `${c.name} ${c.type || 'TEXT'}`;
-                            if (c.notnull && c.dflt_value != null) {
-                                def += ` NOT NULL DEFAULT ${c.dflt_value}`;
-                            } else if (c.dflt_value != null) {
-                                def += ` DEFAULT ${c.dflt_value}`;
+                            if (c.notnull) {
+                                def += ' NOT NULL';
+                            }
+                            if (c.dflt_value != null) {
+                                def += ` DEFAULT (${c.dflt_value})`;
                             }
                             colDefs.push(def);
                             copyColNames.push(c.name);
@@ -9428,10 +9610,13 @@ export class KanbanDatabase {
                     }
                     colDefs.push('workspace_id TEXT NOT NULL');
                     copyColNames.push('workspace_id');
+                    // Bound, not interpolated: wsId can come from the committed
+                    // `.switchboard/workspace-id` file, so it is repo-controlled text.
+                    // A quote in it would break the migration mid-rebuild.
                     if (hasWorkspaceId) {
-                        selectColExprs.push(`COALESCE(NULLIF(workspace_id, ''), '${wsId}')`);
+                        selectColExprs.push(`COALESCE(NULLIF(workspace_id, ''), ?)`);
                     } else {
-                        selectColExprs.push(`'${wsId}'`);
+                        selectColExprs.push('?');
                     }
 
                     const createSql = `CREATE TABLE kanban_meta_new (
@@ -9439,7 +9624,7 @@ export class KanbanDatabase {
                         PRIMARY KEY (key, workspace_id)
                     )`;
                     this._db.exec(createSql);
-                    this._db.exec(`INSERT INTO kanban_meta_new (${copyColNames.join(', ')}) SELECT ${selectColExprs.join(', ')} FROM kanban_meta`);
+                    this._db.run(`INSERT INTO kanban_meta_new (${copyColNames.join(', ')}) SELECT ${selectColExprs.join(', ')} FROM kanban_meta`, [wsId]);
                     this._db.exec('DROP TABLE kanban_meta');
                     this._db.exec('ALTER TABLE kanban_meta_new RENAME TO kanban_meta');
                     this._db.exec('CREATE INDEX IF NOT EXISTS idx_kanban_meta_workspace ON kanban_meta(workspace_id)');
@@ -9810,6 +9995,15 @@ FROM plans
         return false;
     }
     private _localMirrorDebounce: NodeJS.Timeout | null = null;
+    /**
+     * Set by dispose(). Without it a debounced mirror write fires AFTER dispose,
+     * and `_writeLocalBoardMirror()` -> `getBoard()` -> `ensureReady()` re-opens the
+     * database this instance just closed — after dispose() removed it from
+     * `_instancesByDbPath`. That is an untracked second handle on the file, i.e. the
+     * exact split-brain the single-instance work exists to prevent, arrived at from
+     * teardown instead of acquisition.
+     */
+    private _disposed: boolean = false;
     private _localMirrorLastHash: string | null = null;
     private _localMirrorInFlight = false;
     private _localMirrorPending = false;
@@ -9839,6 +10033,7 @@ FROM plans
     }
 
     private _scheduleLocalMirror(): void {
+        if (this._disposed) return;
         if (this._localMirrorDebounce) clearTimeout(this._localMirrorDebounce);
         this._localMirrorDebounce = setTimeout(() => {
             this._localMirrorDebounce = null;
@@ -10195,7 +10390,13 @@ FROM plans
      * Flushes local board mirror and backup JSON synchronously.
      */
     public async flushPersist(): Promise<void> {
-        this.flushLocalBoardMirror();
+        // AWAITED, not fire-and-forget. flushPersist() is the documented way to force
+        // the pending write to disk and it is awaited at ~15 call sites (including
+        // ControlPlaneMigrationService, whose own comment says it needs the file "on
+        // disk first"). Dropping the promise made `await db.flushPersist()` return
+        // before the mirror was written — a Promise<void> seam where "never awaited"
+        // and "working" are the same value to every caller and every gate.
+        await this.flushLocalBoardMirror();
     }
 
     private async _persistedUpdate(sql: string, params: unknown[]): Promise<boolean> {
@@ -10224,7 +10425,7 @@ FROM plans
         let wsId = event.workspaceId;
         if (!wsId && planId) {
             try {
-                const plan = await this.getPlanById(planId);
+                const plan = await this.getPlanByPlanId(planId);
                 if (plan?.workspaceId) wsId = plan.workspaceId;
             } catch { /* ignore */ }
         }

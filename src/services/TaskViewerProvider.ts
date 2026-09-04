@@ -10531,21 +10531,17 @@ Each plan file must include:
      * "this root has no answer" and moves on.
      *
      * The presence check must ask where the board ACTUALLY lives, not where it
-     * lives by default: a `.switchboard/db-pointer` (written by workspace
-     * mappings) and the shipped `switchboard.kanban.dbPath` setting both
-     * relocate the file (`KanbanDatabase.forWorkspace`:1089-1119). Gating on
-     * `<root>/.switchboard/kanban.db` alone would skip a root that DOES hold a
-     * board and re-create this plan's own bug — team never spawns, nothing
-     * logged — for every install that opted into a custom DB location,
-     * single-root ones included.
+     * lives by default. Consolidation retired the `db-pointer` indirection, so
+     * the board now resolves to the one global store — but `_getKanbanDb()` is
+     * still the only thing that knows that, which is why the check goes through
+     * it rather than stat-ing a path. Gating on `<root>/.switchboard/kanban.db`
+     * would skip a root that DOES hold a board and re-create this plan's own bug
+     * — team never spawns, nothing logged.
      */
     private async _getKanbanDbIfPresent(root: string): Promise<KanbanDatabase | undefined> {
-        const resolved = this._kanbanProvider?.resolveEffectiveWorkspaceRoot(root) ?? path.resolve(root);
-        const db = this._getKanbanDb(resolved);
-        if (await db.ensureReady()) {
-            return db;
-        }
-        return undefined;
+        // _getKanbanDb is async and already returns undefined when the DB cannot
+        // be made ready, so awaiting it IS the presence check.
+        return await this._getKanbanDb(root);
     }
 
     /**

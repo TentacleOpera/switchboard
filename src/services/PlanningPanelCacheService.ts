@@ -51,7 +51,11 @@ export class PlanningPanelCacheService {
 
         let wsId: string | null = null;
         if (kanbanDb) {
-            try { wsId = kanbanDb.getWorkspaceIdSync?.() ?? null; } catch {}
+            // getConfigSync is the sync twin of getWorkspaceId() (which is just
+            // getConfig('workspace_id')). Best-effort by contract: it returns null
+            // while the DB is still loading, which is why the file read below and
+            // the workspace-local cache dir remain the fallbacks.
+            try { wsId = kanbanDb.getConfigSync('workspace_id') || null; } catch {}
         }
         if (!wsId) {
             const wsIdFile = path.join(workspaceRoot, '.switchboard', 'workspace-id');

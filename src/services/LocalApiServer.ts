@@ -7969,7 +7969,11 @@ export class LocalApiServer {
         }
 
         const { ProtocolService } = require('./ProtocolService');
-        const resolved = await ProtocolService.resolveProtocol(protocolName, this._options.workspaceRoot, this._kanbanDb);
+        // Scoped through the same accessor every other read endpoint uses, so a
+        // `?workspaceRoot=` query resolves the right store rather than 404-ing on
+        // workspace scoping.
+        const db = await this._resolveDbFromQuery(req);
+        const resolved = await ProtocolService.resolveProtocol(protocolName, this._options.workspaceRoot, db || undefined);
         if (!resolved) {
             res.writeHead(404, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: `Protocol '${protocolName}' not found` }));
