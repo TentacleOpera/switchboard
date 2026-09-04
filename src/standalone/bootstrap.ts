@@ -1769,7 +1769,16 @@ Read the current content above. Deepen the problem analysis, verify every file p
      * PTY-backed verb arms, split out so the single `ptyReady` guard above covers
      * all of them rather than being repeated per case.
      */
-    const handlePtyVerb = async (verb: string, payload: any, root: string): Promise<any> => {
+    /**
+     * `hostOpts` is HOST-ONLY and deliberately a 4th ARGUMENT rather than a
+     * payload field: the payload strip in the ptySendPrompt case deletes
+     * `addonsComposed`/`seatBlock` because an HTTP caller must never opt a seat
+     * out of its own safety block, and an internal caller cannot distinguish
+     * itself inside the payload. Both HTTP entries (the `ptyVerb` option and
+     * `setFleetVerb`) call this with three arguments, so a remote caller can
+     * never reach `hostComposed`.
+     */
+    const handlePtyVerb = async (verb: string, payload: any, root: string, hostOpts?: { hostComposed?: boolean }): Promise<any> => {
         switch (verb) {
                 case 'ptyVisibleRoles': {
                     const roles = await GlobalIntegrationConfigService.getPtyVisibleRoles();
@@ -2379,6 +2388,13 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                     };
                                 }
                             }
+                            // Record the DESTINATION's per-terminal work-context key on the
+                            // team branch too. The barrier's already-clean filter reads this
+                            // map to mean "dispatched to since its last clear", and a clear
+                            // deletes the entry. Without this write a team seat never gets an
+                            // entry, so the filter emptied `toClear` on every team dispatch
+                            // and the roster barrier cleared nobody.
+                            lastWorkContextByTerminal.set(payload.name, workContextKey);
                         } else if (workContextKey && payload.name) {
                             // Compare the WORK CONTEXT key (featureId ?? planId), never planId:
                             // two subtasks of one feature are one work context. See the
@@ -2399,6 +2415,11 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         const isMessage = payload.kind === 'message'
                             || payload.machineOrigin === true
                             || (payload.kind !== 'dispatch' && !payload.dispatch && !extractDispatchIdentity(payload.data || ''));
+                        // A prompt generateUnifiedPrompt already composed carries the
+                        // git policy / skip / caveman directives and the dispatch-protocol
+                        // bundle in its body. Re-appending the seat block delivers them
+                        // twice — the positional twin of the extension's `addonsComposed`.
+                        const hostComposed = hostOpts?.hostComposed === true;
                         const receipt = await deliverPrompt(
                             handle,
                             payload.data || '',
@@ -2411,7 +2432,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                 operationId: payload.operationId,
                             },
                             payload.standingOrders !== false && !isMessage,
-                            !isMessage,
+                            !isMessage && !hostComposed,
                             payload.dispatch,
                             isMessage
                         );
@@ -2663,8 +2684,22 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     if (records[0]?.planId) {
                         sendPayload.dispatch = { planId: records[0].planId, role: targetRole };
                     }
-                    const sendResult = await handlePtyVerb('ptySendPrompt', sendPayload, root);
+                    const sendResult = await handlePtyVerb('ptySendPrompt', sendPayload, root, { hostComposed: true });
                     const deliveryReceipt = sendResult;
+
+                    // Routing through the verb replaced a throw with a returned
+                    // envelope: the roster barrier's abort and a delivery error both
+                    // come back as `{ success: false, error }`. Without this check the
+                    // card was stamped dispatched and moved for a prompt that never
+                    // landed — a success report for a lost dispatch.
+                    if (deliveryReceipt && deliveryReceipt.success === false) {
+                        return {
+                            success: false,
+                            error: deliveryReceipt.error || `Dispatch to '${terminal.friendlyName}' failed`,
+                            terminalName: terminal.friendlyName,
+                            ...(deliveryReceipt.deliveryReason ? { deliveryReason: deliveryReceipt.deliveryReason } : {}),
+                        };
+                    }
 
                     // A CLI that exits during boot (auth failure, bad command) aborts
                     // delivery — the prompt was never written. Report an error rather
@@ -3331,6 +3366,11 @@ Each plan file must include:
         allRoots: [workspaceRoot],
         getKanbanDatabase: async () => db,
         getFleetOrdersDatabase: async () => db,
+        // The roster-clear busy predicate's window. Read from the same setting
+        // the other three readers honour — without this wiring the option is a
+        // dead seam and changing the setting changes nothing inside
+        // LocalApiServer.
+        livenessWindowMs: configProvider.getConfigNumber('activityLight.livenessWindowMs', 90000),
         kanbanVerb,
         // Completion-callback parity with the file-watcher path. The API-based
         // queue/done path fires these so a seat reporting done via POST reaches
@@ -3375,10 +3415,13 @@ Each plan file must include:
             } catch (err: any) {
                 return { cleared: false, error: err instanceof Error ? err.message : String(err) };
             }
-            relayStartupOrientation([terminalName]);
             // Deliver standing orders after clear — the extension host calls
-            // deliverStandingOrdersAfterClear from its clearTerminalContext;
+            // deliverStandingOrdersAfterClear from its clearTerminalContext, and
             // standalone must do the same so a cleared seat gets its orders back.
+            // This REPLACES relayStartupOrientation rather than joining it: both
+            // deliver the same orders block, so keeping the relay sent the seat two
+            // prompts and one of them was the bare, task-less block the after-clear
+            // envelope exists to reframe.
             taskViewerProvider.deliverStandingOrdersAfterClear(terminalName);
             // The log session boundary is NOT rolled here. Every caller of this
             // seam (LocalApiServer's lead-acceptance clear, the queue/done pop,

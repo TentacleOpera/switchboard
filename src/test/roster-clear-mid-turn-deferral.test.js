@@ -470,24 +470,42 @@ test('bootstrap.ts checks deferred set in same-feature branch and overrides clea
     );
 });
 
-test('TaskViewerProvider.ts does NOT record work-context key when all active members are busy', () => {
-    // The no-key guard: only record when toClear > 0 OR deferred === 0.
+// REVERSED 2026-09-04 (feature a7513ffb, finding 1). These two tests used to
+// assert the opposite: that the work-context key is recorded ONLY when
+// `toClear > 0 || deferred === 0`. That guard was itself the defect. On a team
+// whose only idle seat is the head, `toClear` is empty and `deferred` is not, so
+// the key was NEVER recorded and the next dispatch re-ran the whole barrier —
+// permanently, on every dispatch, forever. The deferred seats it was trying to
+// protect are already caught by the same-feature branch intercept above (which
+// clears a deferred destination before its next delivery), so nothing is owed a
+// later pass; and a seat that becomes dirty after the barrier ran is dispatched
+// to, which writes its own per-terminal key and is caught by the next NEW work
+// context. The re-fire is the worse failure. Recording is now unconditional.
+test('TaskViewerProvider.ts records the work-context key unconditionally after the barrier', () => {
     const barrierStart = TVP.indexOf('if (teamInfo && teamInfo.id) {');
     const barrierEnd = TVP.indexOf('} else if (workContextKey && payload.name) {', barrierStart);
     const barrierSrc = TVP.slice(barrierStart, barrierEnd);
     assert.ok(
-        /toClear\.length > 0 \|\| deferred\.length === 0/.test(barrierSrc),
-        'TaskViewerProvider.ts must guard the work-context key recording on (toClear > 0 || deferred === 0)'
+        !/toClear\.length > 0 \|\| deferred\.length === 0/.test(barrierSrc),
+        'TaskViewerProvider.ts must NOT gate the work-context key recording on (toClear > 0 || deferred === 0) — that gate re-ran the barrier on every dispatch for a team whose only idle seat is the head'
+    );
+    assert.ok(
+        /this\._lastWorkContextByTeam\.set\(teamId, workContextKey\);/.test(barrierSrc),
+        'TaskViewerProvider.ts must still record the team work-context key after the barrier runs'
     );
 });
 
-test('bootstrap.ts does NOT record work-context key when all active members are busy', () => {
+test('bootstrap.ts records the work-context key unconditionally after the barrier', () => {
     const barrierStart = BOOT.indexOf('if (teamInfo && teamInfo.id) {');
     const barrierEnd = BOOT.indexOf('} else if (workContextKey && payload.name) {', barrierStart);
     const barrierSrc = BOOT.slice(barrierStart, barrierEnd);
     assert.ok(
-        /toClear\.length > 0 \|\| deferred\.length === 0/.test(barrierSrc),
-        'bootstrap.ts must guard the work-context key recording on (toClear > 0 || deferred === 0)'
+        !/toClear\.length > 0 \|\| deferred\.length === 0/.test(barrierSrc),
+        'bootstrap.ts must NOT gate the work-context key recording on (toClear > 0 || deferred === 0)'
+    );
+    assert.ok(
+        /lastWorkContextByTeam\.set\(teamId, workContextKey\);/.test(barrierSrc),
+        'bootstrap.ts must still record the team work-context key after the barrier runs'
     );
 });
 

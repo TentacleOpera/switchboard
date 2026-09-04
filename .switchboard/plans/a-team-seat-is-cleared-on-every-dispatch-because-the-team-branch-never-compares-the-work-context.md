@@ -82,3 +82,13 @@ Clear when the key changed. Do not clear when it is the same. That is the whole 
 ## Implementation Summary
 
 Implemented work-context comparison before clearing team destination seats in both hosts (`TaskViewerProvider.ts` and `bootstrap.ts`). The team destination clear now requires `clearEnabled && lastTeamWorkKey && lastTeamWorkKey !== workContextKey`, matching the non-team branch logic. Redispatching a feature or subtask to a team seat that already holds the work context will no longer trigger an unconditional terminal clear. Updated `host-auto-clear-on-plan-change.test.js` contract tests to verify that both hosts gate team seat clearing on work-context change and truthy previous key.
+
+## Review Findings
+
+Reviewed 2026-09-04. Goal achieved: both hosts now gate the team destination clear on `clearEnabled && lastTeamWorkKey && lastTeamWorkKey !== workContextKey`, matching the non-team sibling, and the comparison is on the work-context key rather than the plan id in both. One correction to the plan's model: the `lastTeamWorkKey !== workContextKey` half is unreachable-false at that site — the branch is only entered when the two differ, so only the truthiness check (verification step 4, first dispatch does not clear) actually discriminates. The reported 2026-09-04 incident was not caused by the missing comparison alone: the previous dispatch's barrier never *recorded* the team key, because the old `toClear.length > 0 || deferred.length === 0` gate skipped the record when the only idle seat was the head, so the redispatch re-entered the new-context branch. `01e5bcef` finding 1 (now unconditional recording) is the load-bearing fix; this plan's gate is defence in depth. Files changed: none beyond the coder's diff — no defects found in this subtask's own change. Verification: `test:contract:host-auto-clear` passes with the extended `lastTeamWorkKey` assertions the coder added, plus new ones pinning the per-terminal key the barrier's already-clean filter depends on.
+
+## Deferred Findings
+
+- NIT `src/services/TaskViewerProvider.ts:989` — `lastTeamWorkKey !== workContextKey` cannot be false at that site; a reader will assume it discriminates. Harmless, but the truthiness check is the whole behaviour.
+- MAJOR `src/services/TaskViewerProvider.ts:989` — verification steps 1-5 have no automated discriminator beyond the source-text patterns; nothing exercises a real redispatch and asserts no clear ran. Passing `host-auto-clear` is not evidence the runtime decision is right.
+- NIT `src/services/TaskViewerProvider.ts:989` — edge case 5 of this plan is still live: the barrier excludes the destination *before* its busy check, so a legitimate new-feature dispatch still clears a mid-turn lead immediately rather than deferring it.

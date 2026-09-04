@@ -1453,9 +1453,6 @@ export class KanbanDatabase {
             try {
                 const { ensureWorkspaceIdentity } = require('./WorkspaceIdentityService');
                 await ensureWorkspaceIdentity(stable);
-            } catch {}
-        }
-    }
             } catch (e) {
                 console.error(`[KanbanDatabase] Failed to sync workspace identity after invalidation:`, e);
             }
@@ -11991,14 +11988,6 @@ FROM plans
                 } else {
                     this._db.run('DELETE FROM stitch_screens WHERE project_id = ?', [projectId]);
                 }
-                await this._persist();
-            } catch (error) {
-                console.error('[KanbanDatabase] Failed to delete stitch screens:', error);
-                return 0;
-            }
-        }
-        return deleted;
-    }
                 await this._persist();
             } catch (error) {
                 console.error('[KanbanDatabase] Failed to delete stitch screens:', error);

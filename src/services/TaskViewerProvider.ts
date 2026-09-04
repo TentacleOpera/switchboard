@@ -712,6 +712,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         let parsedDispatchIdentity: { planIds: string[]; planFiles: string[] } | null = null;
         let parsedDispatchedAt: string | null = null;
         let parsedDispatchRole = '';
+        // ONE fleet list per send, owned by the composition block below and reused
+        // by the curtain arm. seat-safeguards-fleet-prompt-path forbids a second
+        // round-trip in that window, and the curtain only needs promptCount off
+        // the same rows. Declared at method scope because the arm sits after the
+        // composition block closes.
+        let fleetListed: any = null;
         if (verb === 'ptySendPrompt') {
             if (payload?.kind === 'orders-refresh') {
                 return { success: false, error: 'Payload kind "orders-refresh" is reserved for after-clear delivery path' };
@@ -1002,6 +1008,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             };
                         }
                     }
+                    // Record the DESTINATION's per-terminal work-context key on the team
+                    // branch too. The barrier's already-clean filter (:901) reads this map
+                    // to mean "dispatched to since its last clear" — and a clear deletes
+                    // the entry (:11282). Without this write a team seat NEVER gets an
+                    // entry, so the filter emptied `toClear` on every team dispatch and the
+                    // roster barrier cleared nobody. The write is the invariant the filter
+                    // depends on, not an optimisation.
+                    this._lastWorkContextByTerminal.set(payload.name, workContextKey);
                 } else if (workContextKey && payload.name) {
                     // Non-team terminal: compare terminal workContextKey and clear destination
                     // when changed. The comparison is on the WORK CONTEXT key
@@ -1034,6 +1048,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     // running fleet.
                     const db = await this._getKanbanDb(this._apiServerWorkspaceRoot || this._getWorkspaceRoot() || '');
                     const listed = await this._ptyHostVerb('ptyListTerminals', {});
+                    fleetListed = listed;
                     const terminals = listed?.terminals || [];
                     const live = new Set<string>(
                         terminals
@@ -1231,15 +1246,18 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         let isBooting = false;
         let startAt = 0;
         if (verb === 'ptySendPrompt' && typeof payload?.name === 'string') {
-            try {
-                const fleetRes = await this._ptyHostVerb('ptyListTerminals', {});
-                if (fleetRes?.success && Array.isArray(fleetRes.terminals)) {
-                    const target = fleetRes.terminals.find((t: any) => t.friendlyName === payload.name);
-                    if (target && target.promptCount === 0) {
-                        isBooting = true;
-                    }
+            // Boot phase off the SAME fleet rows the composition block fetched —
+            // never a second round-trip. When that block was skipped (a
+            // machine-origin notice, a pre-composed clear) there are no rows and
+            // isBooting stays false; a clear still arms via isClearing, and the
+            // boot curtain's only real consumer (a first dispatch or an
+            // orientation relay) always runs the composition block.
+            if (fleetListed?.success && Array.isArray(fleetListed.terminals)) {
+                const target = fleetListed.terminals.find((t: any) => t.friendlyName === payload.name);
+                if (target && target.promptCount === 0) {
+                    isBooting = true;
                 }
-            } catch { /* fleet query is best-effort for curtain phase */ }
+            }
             const isClearing = payload?.clearBeforePrompt === true;
             shouldArmCurtain = isClearing || isBooting;
             const curtainPhase = isBooting ? 'booting' : 'clearing';
@@ -3996,6 +4014,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         this._localApiServer = new LocalApiServer({
             workspaceRoot: effectiveRoot,
             port: preferredPort ?? 0,
+            // The roster-clear busy predicate's window. Read from the same
+            // setting the other three readers honour — without this wiring the
+            // option is a dead seam and changing the setting changes nothing
+            // inside LocalApiServer.
+            livenessWindowMs: vscode.workspace.getConfiguration('switchboard').get<number>('activityLight.livenessWindowMs', 90000),
             clickupMetadataPath: cacheService['_clickupMetadataPath'],
             linearMetadataPath: cacheService['_linearMetadataPath'],
             getClickUpService: () => this._getClickUpService(effectiveRoot),

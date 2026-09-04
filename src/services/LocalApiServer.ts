@@ -3691,10 +3691,15 @@ export class LocalApiServer {
                 if (check.movedTo) {
                     clearError = check.reason;
                 }
-            } else if (isIdempotent) {
-                cleared = false;
-                clearReason = `Card '${planId}' already completed at ${timestamp} — seat '${acceptedCodingSeat}' was already cleared`;
             } else {
+                // NO idempotency gate here. "Did this request write completed_at?"
+                // is not "is this seat still holding a finished card?" — binding the
+                // stand-down to the write transition is the defect this feature
+                // exists to remove. _isSeatCurrentDispatchedCard above is the whole
+                // idempotency guard: a seat already at rest, or one that has moved
+                // on to another card, returns shouldClear: false. A seat that is
+                // still holding THIS finished card is cleared, however many
+                // completion reports arrive.
                 try {
                     const clr = await this._options.clearTerminalContext(workspaceRoot, acceptedCodingSeat);
                     cleared = !!clr?.cleared;
@@ -3808,8 +3813,8 @@ export class LocalApiServer {
             // Reject a feature planId — use POST /kanban/feature/complete instead.
             try {
                 let isFeature = false;
-                if (typeof db.getSubtasksByFeaturePlanId === 'function') {
-                    const subs = await db.getSubtasksByFeaturePlanId(planId);
+                if (typeof db.getSubtasksByFeatureId === 'function') {
+                    const subs = await db.getSubtasksByFeatureId(planId);
                     isFeature = Array.isArray(subs) && subs.length > 0;
                 }
                 if (!isFeature && typeof db.getPlanByPlanId === 'function') {
@@ -3924,6 +3929,12 @@ export class LocalApiServer {
                 p && typeof p.dispatchedTerminal === 'string'
                 && rosterSet.has(p.dispatchedTerminal.trim())
                 && !p.completedAt
+                // Never the feature row. A feature dispatched to the lead has a
+                // dispatchedTerminal and no completedAt, so it matched here and got
+                // completed_at stamped — the exact write task/complete now rejects.
+                // A round completes subtasks; the feature is closed by
+                // POST /kanban/feature/complete.
+                && !p.isFeature
             );
 
             if (outstanding.length === 0) {
@@ -4029,10 +4040,8 @@ export class LocalApiServer {
             // Resolve the feature's subtasks.
             let subtasks: any[] = [];
             try {
-                if (typeof db.getSubtasksByFeaturePlanId === 'function') {
-                    subtasks = (await db.getSubtasksByFeaturePlanId(planId)) || [];
-                } else if (typeof db.getPlansByFeatureId === 'function') {
-                    subtasks = (await db.getPlansByFeatureId(planId)) || [];
+                if (typeof db.getSubtasksByFeatureId === 'function') {
+                    subtasks = (await db.getSubtasksByFeatureId(planId)) || [];
                 }
             } catch { /* best effort */ }
 
@@ -4043,6 +4052,20 @@ export class LocalApiServer {
             }
             if (!roster || roster.length === 0) {
                 roster = [from];
+            }
+
+            if (subtasks.length === 0) {
+                // No subtasks resolved — either the planId is not a feature or the
+                // feature is empty. Say so rather than clearing an entire roster and
+                // releasing the team on the strength of a planId nothing matched.
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: false,
+                    completed: [],
+                    cleared: [],
+                    error: `No subtasks resolved for planId '${planId}' — this endpoint takes a FEATURE planId. Nothing was completed and no seat was cleared.`
+                }));
+                return;
             }
 
             const completed: Array<{ planId: string; seat: string }> = [];

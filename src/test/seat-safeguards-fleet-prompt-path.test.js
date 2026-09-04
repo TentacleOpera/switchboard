@@ -809,10 +809,21 @@ test('standalone triggerAction calls generateUnifiedPrompt, not a local builder'
 });
 
 test('standalone dispatch does not re-append the seat directive block', () => {
-    const arm = BOOTSTRAP_SRC.slice(BOOTSTRAP_SRC.indexOf("case 'triggerAction'"));
+    // The arm no longer calls deliverPrompt directly — a board drag must run the
+    // roster-clear barrier, which lives in the ptySendPrompt case, so the arm
+    // routes through handlePtyVerb. The INVARIANT is unchanged and is what this
+    // asserts: a prompt generateUnifiedPrompt already composed must not have the
+    // seat block appended a second time. It travels as the host-only
+    // `hostComposed` ARGUMENT, not a payload field, because the ptySendPrompt
+    // boundary strip deletes `addonsComposed`/`seatBlock` from any payload.
+    const arm = BOOTSTRAP_SRC.slice(BOOTSTRAP_SRC.indexOf("case 'triggerAction': {"));
     const call = arm.slice(0, arm.indexOf('updateDispatchInfoByPlanFile'));
-    assert.ok(/deliverPrompt\(terminal, prompt, getPromptDeliveryOptions\(\), true, false\)/.test(call),
-        'a composed prompt must pass applySeatBlock=false or the git policy block is delivered twice');
+    assert.ok(!/deliverPrompt\(terminal, prompt/.test(call),
+        'the triggerAction arm must not call deliverPrompt directly — it bypasses the roster barrier');
+    assert.ok(/handlePtyVerb\('ptySendPrompt', sendPayload, root, \{ hostComposed: true \}\)/.test(call),
+        'a composed prompt must pass hostComposed:true or the git policy block is delivered twice');
+    assert.ok(/!isMessage && !hostComposed,/.test(BOOTSTRAP_SRC),
+        'the ptySendPrompt case must AND hostComposed into applySeatBlock, or the flag is inert');
 });
 
 test('getLocalApiServerPort resolves the standalone-wired server', () => {

@@ -155,3 +155,13 @@ Change the guard to clear team members too. The non-team clear path (`:4138-4141
 
 Separated the database write of `completed_at` from the seat stand-down and clear side-effects in `LocalApiServer.ts`. In `completeCardInternal`, repeat completion requests preserve `idempotent: true` while still resolving `acceptedCodingSeat` and executing `clearTerminalContext`, guarded by `_isSeatCurrentDispatchedCard` and seat rest tracking so already-cleared or re-dispatched seats are not erroneously cleared. The `!result.idempotent` gate on `onTeamReleased` was removed so idempotent completions correctly trigger team release, and the `!isTeamMember` guard in `_runQueueDone` was eliminated so finishing team members are properly stood down upon completion.
 
+
+## Review Findings
+
+Reviewed 2026-09-04. Two of five Goal Invariants held (`!result.idempotent` gate removed from `onTeamReleased`, `!isTeamMember` guard removed from the queue/done clear, `idempotent: true` still in the response); the central one did not. `completeCardInternal` grew an `else if (isIdempotent) { cleared = false }` arm asserting "seat was already cleared" — re-binding the stand-down to the write transition, which is the whole defect this plan names, and claiming a fact the code never checked (nothing marks a seat at rest unless `completeCardInternal` or a `/terminals/clear` route did the clearing, so a `queue/done` clear that failed left the seat dirty and the lead's post refused to clear it while reporting otherwise). Fixed by deleting the arm: `_isSeatCurrentDispatchedCard` — at-rest plus moved-on — is the entire idempotency guard the plan specified, and it checks the seat's current dispatched card, not "already cleared for this planId". Files changed: `src/services/LocalApiServer.ts`, `src/test/host-auto-clear-on-plan-change.test.js` (assertions that neither gate returns). Verification: `test:contract:task-complete`, `test:contract:queue-done-relay`, `test:contract:queue-pipeline`, `test:contract:team-release-control`, `test:contract:atomic-team-lifecycle` pass; `npx tsc --noEmit` clean of every touched line.
+
+## Deferred Findings
+
+- MAJOR `src/services/LocalApiServer.ts:3672` — none of this plan's eight verification steps has an automated discriminator: there is no test that posts two completions and asserts one clear. Passing `task-complete` and `queue-done-relay` is not evidence the ordering cases work; the verdict on steps 1-8 is provisional.
+- MAJOR `src/services/LocalApiServer.ts:864` — `_isSeatCurrentDispatchedCard` fails OPEN when `wsId` resolves to `''`, so the moved-on protection (step 8) silently never runs and nothing records that it did not.
+- NIT `src/services/LocalApiServer.ts:824` — `_seatsAtRest` is never pruned.

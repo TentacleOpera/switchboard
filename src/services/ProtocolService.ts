@@ -104,7 +104,7 @@ export class ProtocolService {
             materializedPath = path.join(cacheDir, "SKILL.md");
             if (!fs.existsSync(materializedPath)) {
                 fs.mkdirSync(cacheDir, { recursive: true });
-                const tmpFile = path.join(cacheDir, \`SKILL.md.tmp.\${process.pid}.\${Date.now()}\`);
+                const tmpFile = path.join(cacheDir, `SKILL.md.tmp.${process.pid}.${Date.now()}`);
                 fs.writeFileSync(tmpFile, body, "utf8");
                 fs.renameSync(tmpFile, materializedPath);
             }

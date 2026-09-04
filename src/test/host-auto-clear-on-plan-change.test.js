@@ -404,5 +404,157 @@ test('extension host abort message names the failed seat, not its error text', (
     );
 });
 
+// --- 14. The roster-clear barrier's stable-state invariants (feature a7513ffb) ---
+//
+// Nine barrier findings landed with manual verification only. These are the
+// cheap source-text discriminators for the ones a green suite could otherwise
+// hide — every one of them was a live defect at some point.
+
+test('the already-clean filter has the write it depends on, in both hosts', () => {
+    // The filter reads _lastWorkContextByTerminal to mean "dispatched to since
+    // its last clear". The team branch never wrote that map, so the filter
+    // emptied toClear on EVERY team dispatch and the barrier cleared nobody.
+    assert.ok(
+        /const toClear = rawToClear\.filter\(name => this\._lastWorkContextByTerminal\.has\(name\)\);/.test(PTY_HOST_VERB_SRC),
+        'extension barrier must exclude already-clean seats from toClear'
+    );
+    assert.ok(
+        /const toClear = rawToClear\.filter\(name => lastWorkContextByTerminal\.has\(name\)\);/.test(SEND_PROMPT_SRC),
+        'standalone barrier must exclude already-clean seats from toClear'
+    );
+    const extTeamBranch = PTY_HOST_VERB_SRC.slice(
+        PTY_HOST_VERB_SRC.indexOf('if (teamInfo && teamInfo.id)'),
+        PTY_HOST_VERB_SRC.indexOf('} else if (workContextKey && payload.name)')
+    );
+    assert.ok(
+        /this\._lastWorkContextByTerminal\.set\(payload\.name, workContextKey\)/.test(extTeamBranch),
+        'extension TEAM branch must record the destination per-terminal work-context key — without it the already-clean filter empties toClear forever'
+    );
+    const stdTeamBranch = SEND_PROMPT_SRC.slice(
+        SEND_PROMPT_SRC.indexOf('if (teamInfo && teamInfo.id)'),
+        SEND_PROMPT_SRC.indexOf('} else if (workContextKey && payload.name)')
+    );
+    assert.ok(
+        /lastWorkContextByTerminal\.set\(payload\.name, workContextKey\)/.test(stdTeamBranch),
+        'standalone TEAM branch must record the destination per-terminal work-context key'
+    );
+});
+
+test('the barrier prunes the deferred set for seats it cleared, in both hosts', () => {
+    assert.ok(
+        /for \(const name of toClear\) \{\s*\n\s*dropDeferredClear\(this\._deferredClearsByTeam, name\);/.test(PTY_HOST_VERB_SRC),
+        'extension barrier must call dropDeferredClear for each cleared seat — the set was add-only, so the barrier re-fired forever'
+    );
+    assert.ok(
+        /for \(const name of toClear\) \{\s*\n\s*dropDeferredClear\(deferredClearsByTeam, name\);/.test(SEND_PROMPT_SRC),
+        'standalone barrier must call dropDeferredClear for each cleared seat'
+    );
+});
+
+test('the work-context key is recorded unconditionally after the barrier, in both hosts', () => {
+    assert.ok(
+        !/if \(toClear\.length > 0 \|\| deferred\.length === 0\)/.test(PTY_HOST_VERB_SRC),
+        'extension barrier must NOT gate the work-context record on toClear/deferred — a team whose only idle seat is the head never recorded it and re-ran the barrier on every dispatch'
+    );
+    assert.ok(
+        !/if \(toClear\.length > 0 \|\| deferred\.length === 0\)/.test(SEND_PROMPT_SRC),
+        'standalone barrier must NOT gate the work-context record on toClear/deferred'
+    );
+});
+
+test('resolveTeamGroupForTerminal backfills head on the member branch', () => {
+    const wcr = read('src/services/workContextResolver.ts');
+    assert.ok(
+        /head: g\.head \|\| terminalName/.test(wcr),
+        'the member branch must backfill head — a legacy team row with no head made the head exclusion inert and an idle lead was cleared mid-feature'
+    );
+});
+
+test("LocalApiServer's busy window comes from an option that both roots wire", () => {
+    const lapi = read('src/services/LocalApiServer.ts');
+    assert.ok(
+        !/const livenessWindowMs = 90000/.test(lapi),
+        'the hardcoded 90000 literal must be gone from LocalApiServer'
+    );
+    assert.ok(
+        /livenessWindowMs\?: number;/.test(lapi),
+        'LocalApiServerOptions must declare livenessWindowMs'
+    );
+    // A declared option no root passes is a dead seam — the failure mode
+    // CLAUDE.md names: the setting moves and nothing changes.
+    assert.ok(
+        /livenessWindowMs: vscode\.workspace\.getConfiguration\('switchboard'\)\.get<number>\('activityLight\.livenessWindowMs'/.test(TVP),
+        'the extension composition root must pass livenessWindowMs to LocalApiServer'
+    );
+    assert.ok(
+        /livenessWindowMs: configProvider\.getConfigNumber\('activityLight\.livenessWindowMs'/.test(BOOT),
+        'the standalone composition root must pass livenessWindowMs to LocalApiServer'
+    );
+});
+
+test('standalone triggerAction dispatches through the roster barrier, not deliverPrompt', () => {
+    // Anchored on the brace form: a bare `case 'triggerAction':` also appears in
+    // the verb-name switch at :1700 and slicing from there reads the wrong body.
+    const triggerStart = BOOT.indexOf("case 'triggerAction': {");
+    assert.ok(triggerStart > 0, "triggerAction case must exist in bootstrap.ts");
+    const triggerEnd = BOOT.indexOf("\n                case '", triggerStart + 50);
+    const TRIGGER_SRC = BOOT.slice(triggerStart, triggerEnd > 0 ? triggerEnd : undefined);
+    assert.ok(
+        /handlePtyVerb\('ptySendPrompt'/.test(TRIGGER_SRC),
+        'the triggerAction case must route through ptySendPrompt so the roster barrier runs — calling deliverPrompt directly gave board drags no roster protection on this host'
+    );
+    assert.ok(
+        !/await deliverPrompt\(terminal, prompt/.test(TRIGGER_SRC),
+        'the triggerAction case must not call deliverPrompt directly'
+    );
+    assert.ok(
+        /deliveryReceipt\.success === false/.test(TRIGGER_SRC),
+        'routing through the verb replaced a throw with a returned envelope — triggerAction must check success:false or it stamps and moves a card for a prompt that never landed'
+    );
+});
+
+test('standalone clearTerminalContext delivers standing orders after a clear', () => {
+    const ctxStart = BOOT.indexOf('const clearTerminalContext');
+    const ctxSrc = ctxStart > 0
+        ? BOOT.slice(ctxStart, ctxStart + 6000)
+        : BOOT;
+    assert.ok(
+        /deliverStandingOrdersAfterClear\(terminalName\)/.test(ctxSrc),
+        'standalone clearTerminalContext must deliver standing orders after a clear — relayStartupOrientation alone left this host with no after-clear orders delivery'
+    );
+});
+
+test('the after-clear orders delivery is wrapped in a non-action envelope', () => {
+    assert.ok(
+        /No action is required\. Wait for your next dispatch\./.test(TVP),
+        'the after-clear envelope must carry an explicit imperative — a vague note does not suppress the verification impulse'
+    );
+    assert.ok(
+        /isAfterClear/.test(TVP),
+        'the envelope must be gated on the after-clear caller, not applied to every establish-time delivery'
+    );
+    const so = read('src/services/standingOrders.ts');
+    assert.ok(
+        !/No action is required/.test(so),
+        'the envelope must NOT leak into renderStandaloneOrdersBlock — that renderer is shared with applyStandingOrders, where the block IS appended to a real task'
+    );
+});
+
+test('completion side-effects are not gated on the write transition', () => {
+    const lapi = read('src/services/LocalApiServer.ts');
+    assert.ok(
+        !/if \(result\.success && !result\.idempotent && this\._options\.onTeamReleased\)/.test(lapi),
+        'onTeamReleased must not be gated on !idempotent — a team is released because the card is complete, not because a particular POST wrote the timestamp'
+    );
+    assert.ok(
+        !/if \(!isTeamMember && this\._options\.clearTerminalContext\)/.test(lapi),
+        'the queue/done clear must not exclude team members — that guard and the idempotent return formed a closed loop with no exit'
+    );
+    assert.ok(
+        /_isSeatCurrentDispatchedCard/.test(lapi),
+        'the clear must be guarded on the seat\'s CURRENT dispatched card, not on the write transition'
+    );
+});
+
 if (failures > 0) { console.error(`\n${failures} contract failure(s)`); process.exit(1); }
 console.log('\nAll host-auto-clear-on-plan-change contract assertions passed.');
