@@ -18,7 +18,9 @@ So the operator's actual question, *"show me my high-priority cards and let me d
 
 **This absorbs two narrower filter cards.** `9572d35f` proposes a starred filter and `07922522` a project filter; both become values in this set rather than separate mechanisms. What does not fold in is `9572d35f`'s subtask exclusion — that is a correctness fix to what a column *is*, not a preference, and should land on its own.
 
-**It is a front-door entry, one keystroke from the top.** Set filters and Commands (`5144f7ef`) are peers on the main menu — not nested under a branch — and everything the Commands submenu opens honours whatever is set here.
+**This is the board console's menu, not the top-level front door.** `cmdBoardConsole` (`cli.ts:2449`) currently lists Browse by Column, Search, Filter by Project, Inspect Fleet and Setup — three filters and two actions in one list. Set filters and Commands (`5144f7ef`) replace all five. The front door keeps its own job of starting servers and opening this console.
+
+`consoleSearch` (`:2242`) and `consoleFilterByProject` (`:2322`) already exist and become values in this set. Their code moves; the capability does not go away.
 
 ## Metadata
 

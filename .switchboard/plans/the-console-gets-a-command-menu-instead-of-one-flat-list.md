@@ -1,41 +1,30 @@
-# The Console Gets a Command Menu Instead of One Flat List
+# The Board Console's Menu Becomes Filters and Commands
 
 kanbanColumn: CREATED
 
 ## Goal
 
-The console's front door offers two things — what am I looking at, and what do I want to do — instead of one flat list mixing card browsing with server lifecycle and setup.
+The board console's menu offers two things — what am I looking at, and what do I want to do — instead of one flat list that mixes filters with actions.
 
 ### Problem analysis
 
-The front door (`cli.ts:1993-2012`) is a single list of five items that mixes categories: starting a server, running a setup wizard, reading help, checking diagnostics, and browsing the board. They have nothing in common except being things the binary can do.
-
-Meanwhile the operator's common actions are not on it at all. Viewing features, viewing the fleet, starting a team — all exist as separate subcommands or nowhere, and none is reachable from the interactive front door. So the operator either memorises the subcommand surface or uses the browser.
-
-The result is a menu that is simultaneously too long and missing the things it is wanted for.
-
-**This is the shape the operator asked for:** a command menu grouping the common actions, sitting beside the filter set. Both are one keystroke from the front door, and everything under the command menu honours the filters.
-
-**The shape.** Two entries on the front door itself. Filters lists what you can narrow by; Commands opens a submenu of the things an operator actually does:
+The board console's menu (`cmdBoardConsole`, `cli.ts:2449`) is a flat list of five items that mixes two different kinds of thing:
 
 ```
-switchboard
-  [f] Set filters       → starred | project | column | search      (8db0da5c)
-  [c] Commands          → view features
-                          view fleet
-                          view cards & dispatch
-                          start a team
-                          start server ─ local | tailnet           (759c05b5)
-                          diagnostics
-                          setup, help
-  [q] Exit
+  [1] Browse & Dispatch by Column
+  [2] Search Plans & Features
+  [3] Filter by Project
+  [4] Inspect Fleet Status
+  [5] Setup & Scaffolding Wizard
 ```
 
-Filters and Commands are peers at the top level, one keystroke each. Nothing the operator does daily sits deeper than the submenu.
+**Three of those five are filters, not actions.** Project, search, and column are all ways of narrowing what you are looking at. They sit as peers of "inspect fleet" and "run the setup wizard", which are things you *do*. An operator who wants their high-priority cards in one project has to pick one narrowing dimension, lose it when they back out, and pick another.
 
-**`759c05b5` supplies the server-start entry.** Its local-versus-tailnet choice is one item in the Commands submenu, not a branch wrapping the whole console. That card defines what starting a server offers; this card defines where it sits. Both land.
+**And the actions the operator actually wants are not there.** Viewing features has no entry at all. Starting a team has no entry. The two things on the menu that are genuinely actions are fleet status and a setup wizard nobody runs twice.
 
-**`5fb04de7`** binds Enter to the likely action and gives every key a stable meaning across states. **`9572d35f`** fixes what a column listing contains. Five cards, one structure.
+**The fix is to stop mixing them.** Filters become one entry that sets state applied to everything (`8db0da5c`). Commands becomes one entry opening a submenu of what an operator does. Two items where there were five, and both halves get bigger rather than the menu getting longer.
+
+This card is the Commands half. It replaces the board console's menu; it does not touch the top-level front door, which keeps its own job of starting servers and opening this console.
 
 ## Metadata
 
@@ -49,37 +38,42 @@ None.
 
 ## Proposed Changes
 
-### 1. A command menu, grouping what an operator actually does
+### 1. The console's menu becomes two entries
 
-One submenu holding the common actions, each already existing somewhere as a subcommand:
+```
+  [f] Set filters          → starred | project | column | search      (8db0da5c)
+  [c] Commands             → view features
+                             view cards & dispatch
+                             view fleet
+                             start a team
+                             more: setup & scaffolding
+  [b] Back
+```
 
-- view features
-- view the fleet
-- view cards and dispatch
-- start a team
-- server status and diagnostics
+Everything that was a filter moves under Set filters. Everything that was an action moves under Commands. Setup goes to the bottom of the submenu — it is run once, not every session.
 
-Setup, scaffolding and help are not common actions. They belong behind the same menu but at the bottom, or behind a single "more" entry — not competing for attention with the things done every session.
+### 2. Add the actions that are missing
 
-Server lifecycle is one entry in this submenu — `759c05b5` defines what it offers when opened. It is not a branch that contains the rest of the console.
+*View features* and *start a team* have no entry today. A command menu that lists only what already exists reproduces the current menu with extra nesting. These are the reason the operator wants the menu.
 
-### 2. Everything under it honours the session filters
+### 3. Everything under it honours the session filters
 
 A command menu that ignores the filter set is two features that do not compose. Viewing features, viewing cards and dispatching all apply whatever is currently set, and all say so.
 
-### 3. Do not add depth to the common path
+### 4. Do not add depth to the common path
 
-The operator's most frequent action must stay reachable in one keystroke from the front door. A menu that groups well but buries the daily action two levels down has traded one complaint for another — that is the exact failure noted against `759c05b5` in `5fb04de7`.
+Viewing cards and dispatching is the daily action. From the console's menu it must stay one keystroke into Commands and then the action — not deeper. Grouping that buries the daily path has traded one complaint for another.
 
-### 4. Actions the CLI does not have yet are out of scope here
+### 5. An entry must do something
 
 "Start a team" and "view features" must resolve to real behaviour, not a menu entry that errors. Where the underlying command does not exist, either it is built as part of this or it is not listed. A menu advertising an action it cannot perform is worse than a shorter menu.
 
 ## Edge-Case & Dependency Audit
 
 1. **Depends on the session filters card** for change 2. The menu can ship first with no filtering, but then must be revisited — say so rather than shipping it as finished.
-2. **Four cards touch `cmdMainMenu`** — `759c05b5` (the top split), this one (the `[C]` arm's contents), `5fb04de7` (Enter binding and stable keys), `9572d35f` (column listing). They compose, but they edit the same function: sequence them rather than dispatching in parallel.
-3. **This card defines the structure**; `759c05b5` fills in one entry of it. Order accordingly.
+2. **This card is `cmdBoardConsole` (`:2449`), not `cmdMainMenu`.** `759c05b5` and `5fb04de7` restructure the top-level front door and do not overlap with it — the front door keeps starting servers and opening this console.
+3. **`9572d35f` changes what Browse & Dispatch lists**; this changes where it is reached from. Both land, and 9572d35f's subtask exclusion is independent of either.
+4. **`consoleFilterByProject` (`:2322`) and `consoleSearch` (`:2242`) already exist** as menu targets. They become filter values under `8db0da5c`, not deletions — the code moves, the capability does not go away.
 4. **Server-offline state changes what is available.** Actions needing a running server are shown unavailable with their key, not renumbered away — same rule as `5fb04de7`.
 5. **Non-TTY is unaffected.**
 
@@ -91,4 +85,5 @@ The operator's most frequent action must stay reachable in one keystroke from th
 4. The most common action remains one keystroke from the front door.
 5. With no server running, unavailable entries are shown unavailable rather than removed.
 6. Setup, scaffolding and help are reachable but not competing with daily actions.
-7. Filters and Commands are both one keystroke from the front door, and starting a server is an entry inside the Commands submenu.
+7. The board console's menu has two entries plus Back, and the top-level front door is unchanged.
+8. Project filtering and search are still reachable — as filter values, not menu items.
