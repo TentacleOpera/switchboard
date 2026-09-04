@@ -22,7 +22,7 @@ e780ad93  {"success":true,"completed_at":"…05:57","idempotent":true}
 
 All three returned `success: true`. Two cleared nothing and said so only by omitting fields.
 
-Those two seats were in fact **paused waiting on a quota reset**, holding live context, with their subtasks unfinished — while their rows carried `completed_at` values of 05:57 and 07:05 from a previous run. Leaving them uncleared happened to be right, for the wrong reason. Any gesture that had trusted those timestamps would have wiped two seats mid-work.
+The lead was right about all three — those subtasks were finished, two of them by a previous team whose completion posts had already stamped the rows. The lead's judgment was never the problem. The stale `completed_at` silently discarding two of its three posts was.
 
 The operator's current workaround is a manual nuclear clear of every terminal at the round boundary. That workaround is the correct design — it is just not available as a gesture, so it is done by hand, outside the system, with nothing recorded.
 
@@ -50,19 +50,17 @@ None.
 
 ### 1. `POST /kanban/round/complete { from, workspaceRoot }`
 
-Completes the cards the team's seats have **reported finished**, clears those seats, runs the release check once, and returns one response naming what was completed, what was cleared, and what is still outstanding.
+Completes every outstanding card dispatched to the poster's team, clears those seats, runs the release check once, and returns one response naming what was completed and what was cleared.
 
-**It must never force-complete work that is not done.** A card whose seat has not reported stays open and its seat is left alone. The endpoint reports the round as incomplete rather than closing it — a lead can be wrong about a round being over, and the cost of believing it is a wiped seat.
+**The lead's post is the authority.** It decided the round was over; the system's job is to execute that, not to adjudicate it. The head's own standing order already says so — *"Your POST is the only fact the system acts on."* Do not add a check that re-derives whether the round is really finished.
 
 The lead does not enumerate subtask ids. The host already knows which cards are dispatched to which seats, and deriving them server-side removes the chance of the lead naming the wrong set — including naming the feature, which its standing order already forbids and nothing currently prevents.
 
-The clear is unconditional **across the seats whose work actually completed**. At a genuine round barrier that is every coder, so no busy check is needed and none should be added — the protection is that a seat with unfinished work is not in the set, not that the set is filtered afterwards.
-
-This distinction is not theoretical. On 2026-09-04 two seats were paused waiting on a quota reset, holding live context, while their rows carried stale `completed_at` values from a previous run. A round-complete that trusted those rows, or that force-completed by roster membership, would have destroyed both.
+The clear is unconditional across the coder seats. A round is a barrier, so nothing is mid-work — no busy check, no activity sampling, no filtering. The operator already does exactly this by hand and it is the right behaviour.
 
 ### 2. `POST /kanban/feature/complete { from, planId, workspaceRoot }`
 
-Same, at feature scope: completes the feature's reported-finished subtasks, clears **every** roster seat including the lead, and releases the team. As with change 1, an unfinished subtask blocks the close rather than being forced complete.
+Same, at feature scope: completes the feature's outstanding subtasks, clears **every** roster seat including the lead, and releases the team.
 
 Clearing the lead here is correct and is the one place it is. The lead holds context across a feature by design; when the feature ends that context is spent, and carrying it into the next feature is the stale-orchestration-state problem from the other direction.
 
@@ -80,16 +78,14 @@ Both endpoints return the set completed and the set cleared. A seat that was not
 2. **Per-subtask completion stays.** These are additional gestures for the boundaries that actually exist, not a replacement. A lead accepting one subtask mid-round still posts for that subtask.
 3. **The poster is never cleared by change 1.** `:3353` already drops `acceptedCodingSeat === from`. Round-complete keeps that. Feature-complete deliberately overrides it.
 4. **A round with no incomplete cards** is a no-op that must say so, not a `success: true` that looks like it cleared a team.
-4b. **A paused seat is not a finished seat.** A seat can hold live context while producing nothing — waiting on a quota reset, a rate limit, or an approval. It is indistinguishable from idle by activity alone, which is why the set is built from what was *reported done* rather than from the roster or from silence.
-4c. **A stale `completed_at` must not put a card in the completed set.** Until `711fa15e` change 1 lands, a re-dispatched card looks finished while its seat is still working it. That is the exact combination that would clear a paused seat.
+4b. **Scope is the team's own outstanding cards, nothing wider.** A seat working a card that is not part of this team's round is not in the set and is not cleared.
 5. **Roster resolution is the sole source.** Both endpoints clear from the resolved roster, never from a caller-supplied list. A caller must not be able to name a seat outside its own team.
 6. **Both hosts** need the routes and the seams wired in their own composition root.
 7. **Supersedes the manual workaround.** Once change 1 lands, the operator should not need to clear terminals by hand at a round boundary. That is the acceptance test.
 
 ## Verification Plan
 
-1. A lead posting round-complete after a genuinely finished three-subtask round clears three coder seats in one call.
-1b. A round-complete posted while a seat is paused mid-work leaves that seat untouched, its card open, and reports the round incomplete.
+1. A lead posting round-complete after a three-subtask round clears three coder seats in one call.
 2. That call leaves the lead holding its context.
 3. A lead posting feature-complete clears every roster seat including itself, and the team is released.
 4. A round containing a re-dispatched card completes it, once `711fa15e` change 1 has landed.
