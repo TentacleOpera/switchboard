@@ -38,6 +38,8 @@ Today the menu is a flat list whose contents change with server state (`cli.ts:1
 
 The structure above fixes each by being the structure, not by adding items to a list.
 
+**This card is the arrangement, not the command set.** `ef40963b` (*The CLI is a peer control surface*, starred, New) owns which commands exist: it measures the verb surface at 559 auto-generated UI affordances against ten named CLI commands, notes that `switchboard verb` reaches only two routes, and records agents falling back to unauthenticated `curl` as a result. Every entry on this menu is a command that plan does or does not provide. Where an entry has no command behind it, the command belongs there and the entry waits.
+
 ## Metadata
 
 - **Complexity:** 6
@@ -83,9 +85,9 @@ A top-level entry for board/tracker synchronisation, opening the operations an o
 
 **Name it for the capability, not the vendor.** Switchboard syncs against more than one tracker and the verb rail already reflects that — `linearLoadProject`, `clickupLoadLists`, `switchTicketsProvider` are all on the same surface. A menu entry named for one provider becomes wrong the moment the operator uses another, and the currently-selected provider is a setting, not a fixed fact. Show the active provider *inside* the Sync menu instead.
 
-**Expose existing capability; do not build sync.** `e7e9f2f5` owns the sync model and is where any change to *how* syncing works belongs. This entry is a CLI client for it, calling the tickets verb rail over HTTP.
+**Expose existing capability; do not build sync.** `e7e9f2f5` owns the sync model; `ef40963b` owns whether it has CLI commands. This entry is where those commands appear in the menu.
 
-It is still the largest item on the menu — no CLI sync surface exists today — and may warrant splitting out once the shape is settled. But the split is "add a CLI client", not "design sync".
+It is still the largest item — no CLI sync surface exists today — and may warrant splitting out once the shape is settled. But the split is "arrange the commands", not "design sync" and not "invent the command set".
 
 ### 5. Launch, and Stop when it is running
 
@@ -98,11 +100,12 @@ Direct actions, unchanged behaviour, at the bottom. **Setup**, not "First time s
 ## Edge-Case & Dependency Audit
 
 1. **Nothing loses its capability.** Column browsing, fleet inspection, project filtering and search all survive — as Columns, Monitor, and values under Set Filters.
-2. **Teams and Agents must do something before they are listed.** If the underlying command does not exist, build it here or leave the entry out. An entry that errors is worse than an absent one.
+2. **Teams, Agents and Sync depend on commands that may not exist yet.** Building them is `ef40963b`'s remit (and `e7e9f2f5`'s for sync), not this card's. An entry with nothing behind it is left out until its command lands — an entry that errors is worse than an absent one.
 3. **Server-offline state** greys entries with their keys intact; it never renumbers.
 4. **Stop needs to be a real shutdown**, not a signal kill — see `8eba302d`, which covers exactly this on Windows.
 5. **`9572d35f`** fixes what a column listing contains (excluding subtasks). Independent of this and still needed.
 6. **`5fb04de7`** binds Enter and stabilises keys on the same function. Same code, sequence them.
+6b. **`ef40963b` is the dependency.** It decides the command set this menu arranges. If it lands first, this card is a rearrangement; if it does not, this card ships with fewer entries and gains them later.
 7. **`759c05b5`** proposed a GUI/CLI split of this menu. This supersedes it — reconcile before either is coded.
 8. **Sync depends on a reachable provider.** An unconfigured or unauthenticated tracker must say so and offer the configuration path, not fail with a transport error.
 9. **Do not build a second provider-selection model.** The active provider is already a setting behind `switchTicketsProvider`; read it, show it, and change it through the same verb.
