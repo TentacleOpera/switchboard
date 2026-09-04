@@ -13,7 +13,6 @@ description: 'Mission Control — the front door, the role, and how missions sta
 > 
 > What remains here: **the ready flag gates the Launch button** and **a supervised mission has no supervision**. They are independent of each other; neither needs the other first.
 
-
 **Complexity:** 5
 
 ## Goal
@@ -52,6 +51,8 @@ a gate that stops a user launching a mission on purpose.
 ## Subtasks
 - [ ] [The ready flag gates the Launch button, turning an explicit mission start into a two-click pattern](../plans/ready-filters-bulk-start-it-should-not-gate-an-explicit-launch.md) — **PLAN REVIEWED** — ID: 86af94b7-55e4-4387-a9d7-6c0a56a557a9
 - [ ] [A supervised mission has no supervision: `type` is stored, shown and reported, but nothing wakes on a transition](../plans/supervised-missions-wake-the-controller-on-transitions.md) — **PLAN REVIEWED** — ID: 9516c942-a3af-42d3-8607-f904ac4113be
+- [ ] [A Mission Cannot Be Opened, Its Launch Is Not Scoped To It, and Nothing Tests the Mechanism](../plans/memo-missions-cannot-be-opened-scoped-or-tested.md) — **CREATED** — ID: d2953390-1622-4764-8c54-e44c91087082
+- [ ] [Mission Control Schedules Persists Four Fields Nothing Reads, Offers Four Actions That Do One Thing, and Loses Its Own Config](../plans/memo-mission-control-schedules-writes-four-fields-nothing-reads.md) — **CREATED** — ID: 3ff3e452-f985-423e-a4c2-1c3aa52a26bb
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -72,11 +73,9 @@ The ready-gate subtask is a one-line fix with no dependencies and may ship at an
 
 > **Struck 2026-09-04 (Board Collapse audit).** This plan belongs to the **/switchboard front door** feature, which holds its live seat brief. The brief below was left here when the card moved and would hand the same work to a second seat. It is removed rather than annotated, because a dispatcher reading this section does not necessarily read the top of the file.
 
-
 ### ~~Replace the Mission Control persona with a run sheet that asks what you want and loads only that protocol~~ — MOVED, DO NOT DISPATCH FROM HERE
 
 > **Struck 2026-09-04 (Board Collapse audit).** This plan belongs to the **/switchboard front door** feature, which holds its live seat brief. The brief below was left here when the card moved and would hand the same work to a second seat. It is removed rather than annotated, because a dispatcher reading this section does not necessarily read the top of the file.
-
 
 ### A supervised mission has no supervision: `type` is stored, shown and reported, but nothing wakes on a transition
 

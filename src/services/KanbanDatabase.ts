@@ -180,6 +180,16 @@ export interface ImportedDocEntry {
     url?: string;
 }
 
+export interface ControlPlaneEntry {
+    name: string;
+    kind: string; // 'workflow' | 'skill' | 'protocol' | 'persona' | 'rule' | 'script' | 'doc'
+    version: string;
+    contentHash: string;
+    body: string;
+    workspaceOverride?: string | null;
+    updatedAt: string;
+}
+
 export interface HealResult {
     orphanedEntries: number;
     orphanedFiles: number;
@@ -353,6 +363,16 @@ CREATE TABLE IF NOT EXISTS mission_milestones (
     workspace_id TEXT NOT NULL,
     synced_at    TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS control_plane (
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    version TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    body TEXT NOT NULL,
+    workspace_override TEXT DEFAULT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (name, kind)
+);
 `;
 
 // Index DDL, one statement per entry so a single failure (e.g. a column not yet
@@ -372,6 +392,7 @@ const SCHEMA_INDEX_STATEMENTS: string[] = [
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_mission_members_member ON mission_members(member_id)`,
     `CREATE INDEX IF NOT EXISTS idx_missions_workspace ON missions(workspace_id)`,
     `CREATE INDEX IF NOT EXISTS idx_mission_milestones_workspace ON mission_milestones(workspace_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_control_plane_kind ON control_plane(kind)`,
 ];
 
 // Migration SQL to add new columns to existing databases
@@ -651,6 +672,21 @@ const MIGRATION_V66_SQL = [
 // V67: plans.priority (1-4 or NULL for no priority).
 const MIGRATION_V67_SQL = [
     `ALTER TABLE plans ADD COLUMN priority INTEGER DEFAULT NULL`,
+];
+
+// V68: control_plane table for projected control-plane scaffold.
+const MIGRATION_V68_SQL = [
+    `CREATE TABLE IF NOT EXISTS control_plane (
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        version TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        body TEXT NOT NULL,
+        workspace_override TEXT DEFAULT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (name, kind)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_control_plane_kind ON control_plane(kind)`,
 ];
 
 
@@ -1161,17 +1197,10 @@ export class KanbanDatabase {
     private static readonly EVICTION_TTL_MS = 10 * 60 * 1000; // 10 minutes
     private static readonly EVICTION_SWEEP_INTERVAL_MS = 60 * 1000; // check every 1 min
     private static _activeWorkspaceRoot: string | null = null;
-    // Keys (stable workspace root) currently being evicted. getInstance() awaiting one
-    // of these waits for the eviction to finish before recreating, so a read arriving
-    // mid-eviction never operates on a half-closed _db.
+    // Keys (stable workspace root or resolved DB path) currently being evicted.
+    // Callers awaiting one of these wait for eviction to finish before recreating.
     private static _evictingKeys = new Map<string, Promise<void>>();
     private static _residentDbBudgetBytes: number = 500 * 1024 * 1024; // ~500 MB default
-    // DIAGNOSTIC (is_feature clobber investigation): monotonic id so we can tell whether the
-    // KanbanProvider and the GlobalPlanWatcherService are operating on the SAME in-memory
-    // sql.js instance. If they differ for the same on-disk DB, a stale-snapshot _persist()
-    // can silently overwrite an is_feature=1 write (clobber candidate ❷). See
-    // docs/investigation-feature-is_feature-clobber.md. Remove once the clobber is identified.
-    private static _nextInstanceId = 1;
 
     /**
      * Expand ~ to home directory. Shared by _redirectToParentIfMapped and forWorkspace.
@@ -1272,12 +1301,14 @@ export class KanbanDatabase {
         if (!validation.valid) {
             throw new Error(`Invalid workspace root: ${validation.error}`);
         }
-        let stable = KanbanDatabase._redirectToParentIfMapped(validation.resolved!);
+        const resolvedInput = validation.resolved!;
+        try {
+            if (fs.existsSync(resolvedInput) && fs.statSync(resolvedInput).isFile()) {
+                return KanbanDatabase.forDbPath(resolvedInput);
+            }
+        } catch { /* proceed as directory */ }
 
-        const existing = KanbanDatabase._instances.get(stable);
-        if (existing) {
-            return existing;
-        }
+        let stable = KanbanDatabase._redirectToParentIfMapped(resolvedInput);
 
         let resolvedDbPath: string | undefined;
         
@@ -1315,11 +1346,20 @@ export class KanbanDatabase {
             }
         }
 
+        resolvedDbPath = path.resolve(KanbanDatabase._expandHome(resolvedDbPath));
+        try { resolvedDbPath = fs.realpathSync(resolvedDbPath); } catch {}
+
         // Cache by resolved dbPath to prevent multiple instances writing to the same file
         const cached = KanbanDatabase._instancesByDbPath.get(resolvedDbPath);
         if (cached) {
             KanbanDatabase._instances.set(stable, cached);
             return cached;
+        }
+
+        const existing = KanbanDatabase._instances.get(stable);
+        if (existing && existing.dbPath === resolvedDbPath) {
+            KanbanDatabase._instancesByDbPath.set(resolvedDbPath, existing);
+            return existing;
         }
 
         const created = new KanbanDatabase(stable, resolvedDbPath);
@@ -1335,6 +1375,25 @@ export class KanbanDatabase {
             }));
         } catch { /* outside extension host — publisher is optional */ }
         return created;
+    }
+
+    /**
+     * Acquire a KanbanDatabase instance directly by its resolved database file path.
+     * Ensures strict 1-to-1 mapping between a database file and an in-memory instance.
+     */
+    public static forDbPath(dbPath: string): KanbanDatabase {
+        const expanded = KanbanDatabase._expandHome(dbPath.trim());
+        let resolved = path.resolve(expanded);
+        try { resolved = fs.realpathSync(resolved); } catch {}
+        const cached = KanbanDatabase._instancesByDbPath.get(resolved);
+        if (cached) {
+            return cached;
+        }
+        let wsRoot = path.dirname(resolved);
+        if (path.basename(wsRoot) === '.switchboard') {
+            wsRoot = path.dirname(wsRoot);
+        }
+        return KanbanDatabase.forWorkspace(wsRoot, resolved);
     }
 
     /**
@@ -1510,6 +1569,9 @@ export class KanbanDatabase {
             
             const stat = fs.statSync(resolved);
             if (!stat.isDirectory()) {
+                if (stat.isFile() && (resolved.endsWith('.db') || path.basename(resolved).includes('kanban'))) {
+                    return { valid: true, resolved };
+                }
                 return { valid: false, error: `Path is not a directory: ${resolved}`, resolved };
             }
             
@@ -1803,7 +1865,7 @@ export class KanbanDatabase {
 
     private constructor(private readonly _workspaceRoot: string, resolvedDbPath: string) {
         this._dbPath = resolvedDbPath;
-        this.instanceId = `#${KanbanDatabase._nextInstanceId++}(${path.basename(resolvedDbPath)})`;
+        this.instanceId = path.basename(resolvedDbPath);
     }
 
     public dispose(): void {
@@ -2011,11 +2073,15 @@ export class KanbanDatabase {
         if (existing) return existing;
         const inst = KanbanDatabase._instances.get(stable);
         if (!inst) return;
+        const dbPath = inst._dbPath;
         // Register the in-flight promise BEFORE any await so concurrent ensureReady()
         // (including a forWorkspace()-created replacement) waits for flush+close.
         let resolve!: () => void;
         const gate = new Promise<void>(r => { resolve = r; });
         KanbanDatabase._evictingKeys.set(stable, gate);
+        if (dbPath) {
+            KanbanDatabase._evictingKeys.set(dbPath, gate);
+        }
         try {
             try {
                 try { await inst._writeTail; } catch { /* swallow — chain keeps alive */ }
@@ -2030,13 +2096,22 @@ export class KanbanDatabase {
                 inst._closeDb(inst._db);
                 inst._db = null;
                 inst._initPromise = null;
-                KanbanDatabase._instancesByDbPath.delete(inst._dbPath);
-                KanbanDatabase._instances.delete(stable);
+                if (inst._dbPath) {
+                    KanbanDatabase._instancesByDbPath.delete(inst._dbPath);
+                }
+                for (const [k, v] of Array.from(KanbanDatabase._instances.entries())) {
+                    if (v === inst) {
+                        KanbanDatabase._instances.delete(k);
+                    }
+                }
             } catch (e) {
                 console.warn(`[KanbanDatabase] Eviction of ${stable} failed:`, e);
             }
         } finally {
             KanbanDatabase._evictingKeys.delete(stable);
+            if (dbPath) {
+                KanbanDatabase._evictingKeys.delete(dbPath);
+            }
             resolve();
         }
     }
@@ -2104,9 +2179,11 @@ export class KanbanDatabase {
         // Await any in-flight eviction for this workspace (hot or cold) so a lazy reopen
         // never races a flush/close onto the same file (Workstream A race discipline).
         const stable = KanbanDatabase._redirectToParentIfMapped(path.resolve(this._workspaceRoot));
-        const hotEvict = KanbanDatabase._evictingKeys.get(stable);
+        const hotEvict = KanbanDatabase._evictingKeys.get(stable)
+            || (this._dbPath ? KanbanDatabase._evictingKeys.get(this._dbPath) : undefined);
         if (hotEvict) await hotEvict;
-        const coldEvict = KanbanDatabase._evictingKeys.get(`archive:${stable}`);
+        const coldEvict = KanbanDatabase._evictingKeys.get(`archive:${stable}`)
+            || (this._dbPath ? KanbanDatabase._evictingKeys.get(`archive:${this._dbPath}`) : undefined);
         if (coldEvict) await coldEvict;
         if (this._db) {
             // Check if another IDE has modified the DB file since we loaded it
@@ -2117,6 +2194,12 @@ export class KanbanDatabase {
             console.error(`[KanbanDatabase.ensureReady] No _db and no _initPromise for ${this._dbPath}, calling _initialize()`);
             this._initPromise = this._initialize().then((ready) => {
                 console.error(`[KanbanDatabase.ensureReady] _initialize() returned ${ready} for ${this._dbPath}, lastError=${this._lastInitError}`);
+                if (ready) {
+                    KanbanDatabase._instances.set(this._workspaceRoot, this);
+                    if (this._dbPath) {
+                        KanbanDatabase._instancesByDbPath.set(this._dbPath, this);
+                    }
+                }
                 // Always clear the in-flight marker once settled. On success this._db
                 // is set and the `if (this._db)` fast-path serves subsequent calls, so
                 // a lingering settled promise is never needed — and clearing it means
@@ -2813,29 +2896,102 @@ export class KanbanDatabase {
         }
     }
 
-    public async updateFeatureStatus(planId: string, isFeature: number, featureId: string): Promise<boolean> {
-        const plan = await this.getPlanByPlanId(planId);
-        if (!plan) return false;
+    public async updateFeatureStatus(
+        planId: string,
+        isFeature: number,
+        featureId: string,
+        sessionId?: string
+    ): Promise<boolean> {
+        const cleanPlanId = (planId || '').trim();
+        const cleanSessionId = (sessionId || '').trim();
+        if (!cleanPlanId && !cleanSessionId) {
+            console.warn('[KanbanDatabase] updateFeatureStatus: rejected empty or whitespace id');
+            return false;
+        }
+
+        let plan: KanbanPlanRecord | null = null;
+        let resolvedBySessionId = false;
+
+        if (cleanPlanId) {
+            plan = await this.getPlanByPlanId(cleanPlanId);
+        }
+
+        if (!plan && cleanSessionId) {
+            plan = await this.getPlanBySessionId(cleanSessionId);
+            if (plan) {
+                resolvedBySessionId = true;
+                console.warn(`[KanbanDatabase] updateFeatureStatus: resolved via explicit sessionId=${cleanSessionId} (planId was '${cleanPlanId}')`);
+            }
+        }
+
+        // Fallback for callers passing legacy sessionId in the planId parameter
+        if (!plan && cleanPlanId) {
+            plan = await this.getPlanBySessionId(cleanPlanId);
+            if (plan) {
+                resolvedBySessionId = true;
+                console.warn(`[KanbanDatabase] updateFeatureStatus: resolved via legacy planId-as-sessionId fallback for id=${cleanPlanId}`);
+            }
+        }
+
+        if (!plan) {
+            return false;
+        }
+
+        if (!plan.planFile || !plan.planFile.trim()) {
+            console.error(`[KanbanDatabase] updateFeatureStatus: plan ${plan.planId} has no planFile`);
+            return false;
+        }
+
+        const relativePlanFile = this._ensureRelativePlanFile(plan.planFile);
+
+        // Assert the resolved plan_file corresponds to the requested id
+        const verifyPlan = await this.getPlanByPlanFile(relativePlanFile, plan.workspaceId);
+        if (!verifyPlan || verifyPlan.planId !== plan.planId) {
+            console.error(
+                `[KanbanDatabase] updateFeatureStatus: resolved plan_file '${relativePlanFile}' does not belong to plan ${plan.planId} (belongs to ${verifyPlan?.planId ?? 'none'})`
+            );
+            return false;
+        }
+
+        // Structural guard: A feature file in .switchboard/features/ is structurally a feature.
+        // Refuse to clear is_feature for it — callers must move the file first (promoteToFeature does this).
+        if (isFeature === 0 && (plan.isFeature === 1 || relativePlanFile.startsWith('.switchboard/features/'))) {
+            if (relativePlanFile.startsWith('.switchboard/features/')) {
+                console.warn(`[KanbanDatabase] updateFeatureStatus: refused to clear is_feature for feature-directory file ${relativePlanFile}`);
+                // Still allow setting feature_id (subtask linking) if caller also wanted that
+                if (featureId && featureId !== plan.featureId && (await this.ensureReady()) && this._db) {
+                    try {
+                        this._db.run(
+                            'UPDATE plans SET feature_id = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ? AND plan_id = ?',
+                            [featureId, new Date().toISOString(), relativePlanFile, plan.workspaceId, plan.planId]
+                        );
+                        await this._persist();
+                    } catch (err) {
+                        console.error('[KanbanDatabase] updateFeatureStatus feature_id update failed:', err);
+                        return false;
+                    }
+                }
+                return true;
+            }
+        }
+
         // Catch an explicit demotion of a live feature in the act. Fires only when this
         // instance currently sees the plan as a feature (is_feature=1) and the incoming
         // write would clear it (is_feature=0). The stack trace names the exact caller.
-        // (The file-append diagnostic probe was removed with the other probes; this
-        // console guard remains as a live signal.)
         if (plan.isFeature === 1 && isFeature === 0) {
             const stack = new Error().stack;
             console.error(
-                `[KanbanDatabase] ⚠️ FEATURE CLOBBER on instance ${this.instanceId}: updateFeatureStatus(${planId}, 0, '${featureId}') would clear is_feature on feature "${plan.topic}" (plan_file=${plan.planFile}). Stack:`,
+                `[KanbanDatabase] ⚠️ FEATURE CLOBBER on instance ${this.instanceId}: updateFeatureStatus(${cleanPlanId || cleanSessionId}, 0, '${featureId}') would clear is_feature on feature "${plan.topic}" (plan_file=${plan.planFile}). Stack:`,
                 stack
             );
         }
         const oldFeatureId = plan.featureId;
-        const relativePlanFile = this._ensureRelativePlanFile(plan.planFile);
         let affected = 0;
         if (await this.ensureReady() && this._db) {
             try {
                 this._db.run(
-                    'UPDATE plans SET is_feature = ?, feature_id = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
-                    [isFeature, featureId, new Date().toISOString(), relativePlanFile, plan.workspaceId]
+                    'UPDATE plans SET is_feature = ?, feature_id = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ? AND plan_id = ?',
+                    [isFeature, featureId, new Date().toISOString(), relativePlanFile, plan.workspaceId, plan.planId]
                 );
                 affected = this._db.getRowsModified();
                 await this._persist();
@@ -2845,7 +3001,7 @@ export class KanbanDatabase {
             }
         }
         if (affected === 0) {
-            console.warn(`[KanbanDatabase] updateFeatureStatus: 0 rows affected for planId=${planId} (race with delete?)`);
+            console.warn(`[KanbanDatabase] updateFeatureStatus: 0 rows affected for planId=${plan.planId} (race with delete?)`);
         }
         const ok = affected > 0;
         if (ok) {
@@ -5863,6 +6019,110 @@ export class KanbanDatabase {
         return out;
     }
 
+    // ── Control-plane registry ─────────────────────────────────────
+
+    public async getControlPlaneEntries(kind?: string): Promise<ControlPlaneEntry[]> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        const sql = kind
+            ? 'SELECT name, kind, version, content_hash, body, workspace_override, updated_at FROM control_plane WHERE kind = ?'
+            : 'SELECT name, kind, version, content_hash, body, workspace_override, updated_at FROM control_plane';
+        const params = kind ? [kind] : [];
+        const stmt = this._db.prepare(sql, params);
+        const entries: ControlPlaneEntry[] = [];
+        try {
+            while (stmt.step()) {
+                const r = stmt.getAsObject();
+                entries.push({
+                    name: String(r.name),
+                    kind: String(r.kind),
+                    version: String(r.version),
+                    contentHash: String(r.content_hash),
+                    body: String(r.body),
+                    workspaceOverride: r.workspace_override !== null && r.workspace_override !== undefined ? String(r.workspace_override) : null,
+                    updatedAt: String(r.updated_at)
+                });
+            }
+            return entries;
+        } finally {
+            stmt.free();
+        }
+    }
+
+    public async getControlPlaneEntry(name: string, kind: string): Promise<ControlPlaneEntry | null> {
+        if (!(await this.ensureReady()) || !this._db) return null;
+        const stmt = this._db.prepare(
+            'SELECT name, kind, version, content_hash, body, workspace_override, updated_at FROM control_plane WHERE name = ? AND kind = ? LIMIT 1',
+            [name, kind]
+        );
+        try {
+            if (!stmt.step()) return null;
+            const r = stmt.getAsObject();
+            return {
+                name: String(r.name),
+                kind: String(r.kind),
+                version: String(r.version),
+                contentHash: String(r.content_hash),
+                body: String(r.body),
+                workspaceOverride: r.workspace_override !== null && r.workspace_override !== undefined ? String(r.workspace_override) : null,
+                updatedAt: String(r.updated_at)
+            };
+        } finally {
+            stmt.free();
+        }
+    }
+
+    public async upsertControlPlaneEntry(entry: ControlPlaneEntry): Promise<void> {
+        if (!(await this.ensureReady()) || !this._db) return;
+        this._db.run(
+            `INSERT INTO control_plane (name, kind, version, content_hash, body, workspace_override, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(name, kind) DO UPDATE SET
+               version = excluded.version,
+               content_hash = excluded.content_hash,
+               body = excluded.body,
+               updated_at = excluded.updated_at`,
+            [
+                entry.name,
+                entry.kind,
+                entry.version,
+                entry.contentHash,
+                entry.body,
+                entry.workspaceOverride ?? null,
+                entry.updatedAt || new Date().toISOString()
+            ]
+        );
+        await this._persist();
+    }
+
+    public async setControlPlaneOverride(name: string, kind: string, override: string | null): Promise<void> {
+        if (!(await this.ensureReady()) || !this._db) return;
+        this._db.run(
+            'UPDATE control_plane SET workspace_override = ?, updated_at = ? WHERE name = ? AND kind = ?',
+            [override, new Date().toISOString(), name, kind]
+        );
+        await this._persist();
+    }
+
+    public async seedControlPlane(entries: ControlPlaneEntry[]): Promise<{ seeded: number; updated: number }> {
+        if (!(await this.ensureReady()) || !this._db) return { seeded: 0, updated: 0 };
+        let seeded = 0;
+        let updated = 0;
+        for (const entry of entries) {
+            const existing = await this.getControlPlaneEntry(entry.name, entry.kind);
+            if (!existing) {
+                await this.upsertControlPlaneEntry(entry);
+                seeded++;
+            } else if (existing.contentHash !== entry.contentHash || existing.version !== entry.version) {
+                await this.upsertControlPlaneEntry({
+                    ...entry,
+                    workspaceOverride: existing.workspaceOverride
+                });
+                updated++;
+            }
+        }
+        return { seeded, updated };
+    }
+
     /** Reads a legacy .switchboard JSON file, writes selected keys to the config
      *  table, then archives the file as `<name>.migrated.bak` so upgrading
      *  users keep a recoverable copy. No-op if the file is absent. A corrupt
@@ -6222,6 +6482,146 @@ export class KanbanDatabase {
             }
         }
         
+        // 1. Migrate config.json
+        await this.migrateJsonFileToConfig(path.join(sbDir, 'config.json'), (parsed) => {
+            const map: Record<string, unknown> = {};
+            for (const [k, v] of Object.entries(parsed || {})) {
+                map[`config.${k}`] = v;
+            }
+            return map;
+        });
+
+        // 2. Migrate settings.json
+        await this.migrateJsonFileToConfig(path.join(sbDir, 'settings.json'), (parsed) => {
+            const map: Record<string, unknown> = {};
+            if (parsed && typeof parsed === 'object') {
+                if (parsed.roleConfigs) {
+                    for (const [role, val] of Object.entries(parsed.roleConfigs)) {
+                        map[`prompts.roleConfig_${role}`] = val;
+                    }
+                }
+                map['legacy.settings'] = parsed;
+            }
+            return map;
+        });
+
+        // 3. Migrate workspace-local integration-config.json (legacy)
+        await this.migrateJsonFileToConfig(path.join(sbDir, 'integration-config.json'), (parsed) => {
+            return { 'legacy.integrationConfig': parsed };
+        });
+
+        // 4. Archive kanban-state.json
+        const legacyKanbanState = path.join(sbDir, 'kanban-state.json');
+        if (fs.existsSync(legacyKanbanState)) {
+            try {
+                fs.renameSync(legacyKanbanState, legacyKanbanState + '.migrated.bak');
+            } catch {}
+        }
+
+        // 5. Archive kanban-state-backup.json
+        const legacyKanbanBackup = path.join(sbDir, 'kanban-state-backup.json');
+        if (fs.existsSync(legacyKanbanBackup)) {
+            try {
+                fs.renameSync(legacyKanbanBackup, legacyKanbanBackup + '.migrated.bak');
+            } catch {}
+        }
+
+        // 6. Migrate workspace_identity.json
+        const legacyWorkspaceIdentity = path.join(sbDir, 'workspace_identity.json');
+        if (fs.existsSync(legacyWorkspaceIdentity)) {
+            try {
+                const parsed = JSON.parse(fs.readFileSync(legacyWorkspaceIdentity, 'utf8'));
+                if (parsed?.workspaceId) {
+                    await this.setWorkspaceId(parsed.workspaceId);
+                }
+                fs.renameSync(legacyWorkspaceIdentity, legacyWorkspaceIdentity + '.migrated.bak');
+            } catch {}
+        }
+
+        // 7. Migrate .agent_version.json
+        const legacyAgentVersion = path.join(sbDir, '.agent_version.json');
+        if (fs.existsSync(legacyAgentVersion)) {
+            try {
+                const parsed = JSON.parse(fs.readFileSync(legacyAgentVersion, 'utf8'));
+                if (parsed?.version) {
+                    await this.setConfigJson('agents.lastCopiedVersion', parsed);
+                }
+                fs.renameSync(legacyAgentVersion, legacyAgentVersion + '.migrated.bak');
+            } catch {}
+        }
+
+        // Fold 5 JSON sidecars into imported_docs and archive as .migrated.bak
+        const planningCacheDir = path.join(sbDir, 'planning-cache');
+        if (fs.existsSync(planningCacheDir)) {
+            for (const taskFile of ['clickup-tasks.json', 'linear-tasks.json']) {
+                const p = path.join(planningCacheDir, taskFile);
+                if (fs.existsSync(p)) {
+                    try { fs.renameSync(p, p + '.migrated.bak'); } catch {}
+                }
+            }
+            try {
+                const entries = fs.readdirSync(planningCacheDir, { withFileTypes: true });
+                for (const ent of entries) {
+                    if (!ent.isDirectory()) continue;
+                    const sourceDir = path.join(planningCacheDir, ent.name);
+
+                    const idMapFile = path.join(sourceDir, 'documentIdMap.json');
+                    if (fs.existsSync(idMapFile)) {
+                        try {
+                            const raw = JSON.parse(fs.readFileSync(idMapFile, 'utf8'));
+                            if (Array.isArray(raw?.idMap) && this._db) {
+                                for (const item of raw.idMap) {
+                                    if (item?.docId) {
+                                        this._db.run(
+                                            'UPDATE imported_docs SET remote_doc_id = ? WHERE (slug_prefix = ? OR remote_doc_id = ?) AND workspace_id = ?',
+                                            [item.docId, item.docId, item.docId, wsId]
+                                        );
+                                    }
+                                }
+                            }
+                            fs.renameSync(idMapFile, idMapFile + '.migrated.bak');
+                        } catch {}
+                    }
+
+                    const titlesFile = path.join(sourceDir, 'documentTitles.json');
+                    if (fs.existsSync(titlesFile)) {
+                        try {
+                            const raw = JSON.parse(fs.readFileSync(titlesFile, 'utf8'));
+                            if (Array.isArray(raw?.titles) && this._db) {
+                                for (const t of raw.titles) {
+                                    if (t?.docId && t?.title) {
+                                        this._db.run(
+                                            'UPDATE imported_docs SET doc_name = ? WHERE (slug_prefix = ? OR remote_doc_id = ?) AND workspace_id = ?',
+                                            [t.title, t.docId, t.docId, wsId]
+                                        );
+                                    }
+                                }
+                            }
+                            fs.renameSync(titlesFile, titlesFile + '.migrated.bak');
+                        } catch {}
+                    }
+
+                    const metaFile = path.join(sourceDir, 'cache-metadata.json');
+                    if (fs.existsSync(metaFile)) {
+                        try {
+                            const raw = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
+                            if (raw && typeof raw === 'object' && this._db) {
+                                for (const [docId, meta] of Object.entries(raw as Record<string, any>)) {
+                                    if (meta?.importedAt) {
+                                        this._db.run(
+                                            'UPDATE imported_docs SET last_synced_at = ? WHERE (slug_prefix = ? OR remote_doc_id = ?) AND workspace_id = ?',
+                                            [meta.importedAt, docId, docId, wsId]
+                                        );
+                                    }
+                                }
+                            }
+                            fs.renameSync(metaFile, metaFile + '.migrated.bak');
+                        } catch {}
+                    }
+                }
+            } catch {}
+        }
+
         // Delete legacy task caches if present
         const oldClickupCache = path.join(sbDir, 'clickup-tasks.json');
         if (fs.existsSync(oldClickupCache)) {
@@ -8841,6 +9241,16 @@ export class KanbanDatabase {
             }
             await this.setMigrationVersion(67);
             console.log('[KanbanDatabase] V67 migration completed: priority column added to plans');
+        }
+
+        // V68: control_plane table for projected control-plane scaffold.
+        const v68 = await this.getMigrationVersion();
+        if (v68 < 68) {
+            for (const sql of MIGRATION_V68_SQL) {
+                try { this._db.exec(sql); } catch { /* table or index already exists */ }
+            }
+            await this.setMigrationVersion(68);
+            console.log('[KanbanDatabase] V68 migration completed: control_plane table added');
         }
     }
 

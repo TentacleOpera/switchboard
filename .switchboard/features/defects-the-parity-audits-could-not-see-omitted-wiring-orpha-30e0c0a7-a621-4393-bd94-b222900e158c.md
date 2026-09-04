@@ -9,7 +9,6 @@
 > 
 > Five subtasks remain, matching the database.
 
-
 **Complexity:** 6
 
 ## Goal
@@ -96,6 +95,7 @@ parity gaps.
 - [ ] [Four Published Doc Pages Still Document Plan Auto-Fetch, Retired and Replaced by the `fetch-plans` Scheduler Source](../plans/docs-still-document-retired-plan-autofetch.md) — **PLAN REVIEWED** — ID: 375edd49-fcf9-40d4-a869-74b0696abc69
 - [ ] [Standalone Parity by Code Verification — Sweep for Stubs, Omitted Wiring, Discarded Values and Gates That Pass Vacuously](../plans/standalone-code-verification-sweep-stubs-and-omissions.md) — **PLAN REVIEWED** — ID: fd9e39e7-366d-433a-9ea9-3365d569a4b4
 - [ ] [Five Shipped `planAutoFetch` Settings Were Removed Outright, Leaving ~4,000 Installs With "Unknown Configuration Setting" Warnings and No Migration Path](../plans/planautofetch-settings-removed-without-deprecation-orphan-warnings.md) — **PLAN REVIEWED** — ID: 34c7a73f-d616-48e5-af0a-8ce944b4c098
+- [ ] [Six Host Divergences the Parity Gates Do Not See](../plans/memo-six-host-divergences-the-parity-gates-do-not-see.md) — **CREATED** — ID: 982bddcc-4225-407e-81b4-c903d3774a07
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

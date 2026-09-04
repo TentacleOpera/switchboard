@@ -40,15 +40,15 @@ Deliberately **not** a *foreign-dialect* networked database. The measured dialec
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Durable board backups and per-project export/import for the global database](../plans/board-backup-and-per-project-export.md) — **PLAN REVIEWED** — ID: ecc1b4c8-eaff-488e-b48f-e8972cd76de4
-- [ ] [Get the control-plane scaffold out of the repository](../plans/control-plane-scaffold-out-of-the-repo.md) — **PLAN REVIEWED** — ID: e780ad93-da05-4f85-87b7-8c16312851cb
-- [ ] [Protocols become database rows injected into prompts, not files scaffolded into every repo](../plans/protocols-as-db-rows-not-scaffolded-files.md) — **PLAN REVIEWED** — ID: db63be21-0fc1-49ea-9488-b63904d39183
-- [ ] [Retire the Google Drive, Dropbox and iCloud database-path presets](../plans/retire-cloud-file-sync-db-path-presets.md) — **PLAN REVIEWED** — ID: 0e011823-3a54-4680-91f7-884676bcd6ee
-- [ ] [Retention and archive policy for a global database that never gets deleted](../plans/retention-and-archive-for-unbounded-growth.md) — **PLAN REVIEWED** — ID: c5e07d36-5a87-43ac-bd22-d72523dc96b3
-- [ ] [Scope the ten unscoped tables by workspace_id and fix three colliding unique constraints](../plans/scope-unscoped-tables-by-workspace-id.md) — **PLAN REVIEWED** — ID: 8fd3b786-2dca-4936-bd58-51a0ccd462de
-- [ ] [Move the database behind a single sidecar owner and replace sql.js with a real SQLite binding](../plans/sidecar-owned-db-real-sqlite-binding.md) — **PLAN REVIEWED** — ID: cc0e2653-25dc-46e2-ac26-27deb842c34c
-- [ ] [Consolidate to one global database in ~/.switchboard and retire the location guard, db-pointer and mapping subsystem](../plans/single-global-database-in-home-store.md) — **PLAN REVIEWED** — ID: f9e5511c-c518-4624-a6db-c54e1dc2f24d
-- [ ] [Enforce one database instance per path and fix the is_feature clobber](../plans/single-instance-enforcement-and-is-feature-clobber.md) — **PLAN REVIEWED** — ID: ed40b1f1-d48e-42a5-94db-5aea91baecab
+- [ ] [Durable board backups and per-project export/import for the global database](../plans/board-backup-and-per-project-export.md) — **LEAD CODED** — ID: ecc1b4c8-eaff-488e-b48f-e8972cd76de4
+- [ ] [Get the control-plane scaffold out of the repository](../plans/control-plane-scaffold-out-of-the-repo.md) — **LEAD CODED** — ID: e780ad93-da05-4f85-87b7-8c16312851cb
+- [ ] [Protocols become database rows injected into prompts, not files scaffolded into every repo](../plans/protocols-as-db-rows-not-scaffolded-files.md) — **LEAD CODED** — ID: db63be21-0fc1-49ea-9488-b63904d39183
+- [ ] [Retire the Google Drive, Dropbox and iCloud database-path presets](../plans/retire-cloud-file-sync-db-path-presets.md) — **LEAD CODED** — ID: 0e011823-3a54-4680-91f7-884676bcd6ee
+- [ ] [Retention and archive policy for a global database that never gets deleted](../plans/retention-and-archive-for-unbounded-growth.md) — **LEAD CODED** — ID: c5e07d36-5a87-43ac-bd22-d72523dc96b3
+- [ ] [Scope the ten unscoped tables by workspace_id and fix three colliding unique constraints](../plans/scope-unscoped-tables-by-workspace-id.md) — **LEAD CODED** — ID: 8fd3b786-2dca-4936-bd58-51a0ccd462de
+- [ ] [Move the database behind a single sidecar owner and replace sql.js with a real SQLite binding](../plans/sidecar-owned-db-real-sqlite-binding.md) — **LEAD CODED** — ID: cc0e2653-25dc-46e2-ac26-27deb842c34c
+- [ ] [Consolidate to one global database in ~/.switchboard and retire the location guard, db-pointer and mapping subsystem](../plans/single-global-database-in-home-store.md) — **LEAD CODED** — ID: f9e5511c-c518-4624-a6db-c54e1dc2f24d
+- [ ] [Enforce one database instance per path and fix the is_feature clobber](../plans/single-instance-enforcement-and-is-feature-clobber.md) — **LEAD CODED** — ID: ed40b1f1-d48e-42a5-94db-5aea91baecab
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

@@ -14,6 +14,7 @@ Typing /switchboard must reach the right board, prove it is alive, and present o
 - [ ] [Replace the Mission Control persona with a run sheet that asks what you want and loads only that protocol](../plans/replace-the-mission-control-persona-with-a-run-sheet.md) — **CREATED** — ID: 254f724e-df9c-45e4-b4fc-e9c400eadc99
 - [ ] [The /switchboard front door arms against an endpoint that does not exist, delivers the persona twice, and hardcodes the wrong posture](../plans/the-mission-control-front-door-delivers-twice-and-lies-about-the-posture.md) — **CREATED** — ID: 135f2c7b-a953-4a03-ba70-5e20928b97e3
 - [ ] [Split the CLI Front-Door Menu into GUI and CLI Branches](../plans/split-cli-front-door-menu-into-gui-and-cli-branches.md) — **CREATED** — ID: 759c05b5-1092-45c6-869a-fc6726e4cb5e
+- [ ] [The CLI Front Door Exits Non-Zero, Its Setup Handler Silently Does Nothing, and Its Only Gate Cannot Run It](../plans/memo-the-cli-front-door-exits-non-zero-and-its-setup-handler-silently-does-nothing.md) — **CREATED** — ID: 5cc038b6-a729-433c-9a3f-ac53b79cbdae
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing (2026-09-04, Board Collapse 08)

@@ -14,6 +14,7 @@ A green gate that asserts nothing is worse than a red one. 95 of 208 test files 
 - [ ] [Triage the 45 Dark Test Files That Fail When Actually Run](../plans/triage-the-failing-dark-tests.md) — **CREATED** — ID: 38f01993-6e18-40d6-86fe-0a145f33cdc9
 - [ ] [Give the 12 BDD-Style Dark Test Files a Runner](../plans/give-the-bdd-style-dark-tests-a-runner.md) — **CREATED** — ID: c1ceb6aa-dc09-4b15-a87b-c79acfc3a93b
 - [ ] [A composition-root parity gate that actually fails](../plans/a-composition-root-parity-gate-that-actually-fails.md) — **CREATED** — ID: a82e0a62-9e12-4997-839a-2151c4d49f68
+- [ ] [Nine Gates That Pass Without Asserting Their Own Mechanism](../plans/memo-nine-gates-that-pass-without-asserting-their-own-mechanism.md) — **CREATED** — ID: a8423707-87cd-4d7d-86e8-bab1ebff0e4a
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing (2026-09-04, Board Collapse 09)

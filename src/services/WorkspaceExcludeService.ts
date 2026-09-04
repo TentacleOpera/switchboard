@@ -5,17 +5,16 @@ import * as path from 'path';
 export class WorkspaceExcludeService {
     private static readonly BLOCK_START = '# >>> Switchboard managed exclusions >>>';
     private static readonly BLOCK_END = '# <<< Switchboard managed exclusions <<<';
-    private static readonly DEFAULT_RULES: string[] = [];
     private static readonly TARGETED_RULES: string[] = [
         '# Switchboard runtime state (per-session, not shareable)',
         '.switchboard/*',
         '!.switchboard/reviews/',
         '!.switchboard/plans/',
         '!.switchboard/features/',
-        '!.switchboard/sessions/',
-        '!.switchboard/CLIENT_CONFIG.md',
-        '!.switchboard/README.md',
-        '!.switchboard/SWITCHBOARD_PROTOCOL.md',
+        '',
+        '# Agent and CLI control-plane definitions (projected, gitignored)',
+        '.agents/',
+        '.claude/',
         '',
         '# Notion page content cache',
         '.switchboard/notion-cache.md',
@@ -43,6 +42,8 @@ export class WorkspaceExcludeService {
         '# state, and committing it imposes one machine\'s settings on every clone.',
         'switchboard-transfer*.json',
     ];
+
+    private static readonly DEFAULT_RULES: string[] = [];
 
     constructor(private readonly workspaceRoot: string) {}
 
@@ -161,6 +162,7 @@ export class WorkspaceExcludeService {
         }
 
         if (strategy === 'none') {
+            console.warn('[WorkspaceExcludeService] WARNING: "none" ignore strategy selected. Runtime state, caches, and databases may be committed!');
             await this._removeManagedBlock(gitignoreFile);
             if (excludeFile) {
                 await this._removeManagedBlock(excludeFile);

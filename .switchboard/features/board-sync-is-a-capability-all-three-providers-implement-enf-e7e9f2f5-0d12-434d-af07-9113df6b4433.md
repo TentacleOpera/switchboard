@@ -19,6 +19,7 @@ Board sync — the half of provider integration that carries kanban columns and 
 - [ ] [Board sync is a seam with no interface — extend RemoteProviderCapabilities to cover it and add the contract test that keeps it symmetric](../plans/provider-capability-board-sync-and-contract-test.md) — **PLAN REVIEWED** — ID: cbba7fc1-2227-4eee-847b-10531983770c
 - [ ] [Notion's board sync is misnamed as "backup" and sits outside the provider seam — move it behind the interface without breaking shipped Notion databases](../plans/notion-board-sync-behind-the-seam.md) — **PLAN REVIEWED** — ID: 1ba7ecd9-04bb-4f15-a27d-cbf4f99642a4
 - [ ] [Linear issues carry no planId, so a board can never be rebuilt from Linear — add the anchor, then the restore](../plans/linear-board-restore-and-planid-anchor.md) — **PLAN REVIEWED** — ID: 91784573-2765-4442-916b-d3263b6661ae
+- [ ] [The Linear Agent Surface Reconciles Destructively, Never Ends a Session, and Cannot Authenticate at All](../plans/memo-the-linear-agent-surface-reconciles-destructively-and-cannot-authenticate.md) — **CREATED** — ID: 97a3d80b-47a1-4394-95ab-c5c54737e708
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

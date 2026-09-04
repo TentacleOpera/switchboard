@@ -209,7 +209,7 @@
         "switchboard.linear.oauthClientId": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Linear OAuth application client id used for the `actor=app` PKCE handshake. Public by design \u2014 no client secret is ever shipped or stored. Leave empty to keep using a personal API key; the OAuth connect action refuses rather than starting a flow Linear cannot answer. Headless hosts may set `SWITCHBOARD_LINEAR_CLIENT_ID` instead."
+          "markdownDescription": "Linear OAuth application client id used for the `actor=app` PKCE handshake. Public by design — no client secret is ever shipped or stored. Leave empty to keep using a personal API key; the OAuth connect action refuses rather than starting a flow Linear cannot answer. Headless hosts may set `SWITCHBOARD_LINEAR_CLIENT_ID` instead."
         },
         "switchboard.defaultMode": {
           "type": "string",
@@ -1049,7 +1049,7 @@
     "test:contract:dependency-gate": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/dependency-gate-contract.test.js",
     "test:contract:host-auto-clear": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/host-auto-clear-on-plan-change.test.js",
     "test:contract:cli-board-commands": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/cli-board-commands-contract.test.js",
-  "test:contract:transfer-bundle": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/transfer-bundle-contract.test.js",
+    "test:contract:transfer-bundle": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/transfer-bundle-contract.test.js",
     "test:contract:terminal-session-log": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-session-log-contract.test.js",
     "test:contract:queue-stall-watch": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/queue-stall-watch-contract.test.js",
     "test:contract:agents-seed-deletion-guard": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/agents-seed-deletion-guard-contract.test.js",
@@ -1062,6 +1062,7 @@
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.0.0",
     "@testing-library/react-native": "^12.7.0",
+    "@types/better-sqlite3": "^9.6.0",
     "@types/js-yaml": "^4.0.9",
     "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
@@ -1090,6 +1091,7 @@
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-webgl": "^0.18.0",
     "@xterm/xterm": "^5.5.0",
+    "better-sqlite3": "11.8.1",
     "docx": "^9.6.0",
     "dompurify": "^3.3.1",
     "js-yaml": "^4.2.0",

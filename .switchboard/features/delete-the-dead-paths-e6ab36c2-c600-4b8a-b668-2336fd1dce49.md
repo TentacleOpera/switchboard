@@ -5,8 +5,7 @@
 > 
 > The Goal paragraph was corrected when *Remove Retired-Mode UI Notices* was moved to Completed (it landed 2026-08-24 in `a42cad1f`), but **its bullet in the body was not removed**. That bullet describes delivered work as pending. The banner and the surviving two bullets are correct.
 
-
-**Complexity:** 2
+**Complexity:** 3
 
 ## Goal
 
@@ -22,6 +21,7 @@ Remove two code paths that serve nothing. (Corrected 2026-09-04, Board Collapse 
 ## Subtasks
 - [ ] [Delete the dead `.agent/` fallback paths, keep the `.agent/` migration](../plans/remove-dead-agent-singular-fallback-paths.md) — **CREATED** — ID: a7a89fa3-a4d0-43e0-b8d6-2171e1dbfcfe
 - [ ] [Remove the dead tickets ask-agent path](../plans/remove-dead-tickets-ask-agent-path.md) — **CREATED** — ID: bb3d0ad8-7094-40ca-adc2-2ed74ac9f71e
+- [ ] [Six Pieces of State and Code With No Reader, and Two Stores That Disagree](../plans/memo-six-pieces-of-state-and-code-with-no-reader.md) — **CREATED** — ID: 6117a6ef-68cd-4812-9fbb-218a4dee5740
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

@@ -9,12 +9,9 @@ Nine loose plans that are one lifecycle: a seat given work must have a holder, a
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
 - [ ] [Completion Directive Becomes a Standing Order, Not a Prompt-Injected Section](../plans/feature_plan_20260827172158_completion-directive-becomes-standing-order.md) — **CREATED** — ID: c0302557-8abf-404e-ab46-f0422003d5de
-- [ ] [The after-clear standing-orders block is a task-less prompt, so the lead wakes, inspects, and stops](../plans/after-clear-standing-orders-block-is-a-taskless-prompt.md) — **CREATED** — ID: 7dae7ef2-5792-4814-b77f-aa45c6147f26
 - [ ] [The lead's acceptance post is the only thing that releases a seat, and it silently releases nothing](../plans/lead-acceptance-post-silently-releases-no-seat.md) — **CREATED** — ID: 4431d447-b8ee-4969-9283-0354c76bee75
 - [ ] [Team lead escalation must exhaust cheap recovery before declaring a subtask blocked](../plans/team-lead-escalation-dead-end-recovery-ladder.md) — **CREATED** — ID: 3b387cf6-07a6-4d4b-952e-9b5f2fd873ee
-- [ ] [The dispatch curtain is armed from intent, not from a clear that actually runs — so it covers dispatches and misses real clears](../plans/the-curtain-is-armed-from-intent-not-from-a-clear-that-happened.md) — **CREATED** — ID: 2e648081-3693-4485-8c74-777dd7118ed8
 - [ ] [A column move orphans the dispatch holder, and the seat can never release it](../plans/a-column-move-orphans-the-dispatch-holder.md) — **CREATED** — ID: bf23c37f-d3d3-44b4-9378-340746214016
-- [ ] [An idempotent completion skips the clear, so a seat that reported its own done is never stood down](../plans/an-idempotent-completion-skips-the-clear-so-a-seat-is-never-stood-down.md) — **CREATED** — ID: 16bdde5d-1749-4ab5-b41a-248df79e81d6
 - [ ] [Status panes render an empty model — nothing records what a seat is working on](../plans/status-panes-render-an-empty-model-nothing-records-what-a-seat-is-doing.md) — **CREATED** — ID: 1b481ce7-bdba-4f6b-959e-a83b2713faeb
 - [ ] [A feature dispatch seats exactly one lead — make it an invariant, not an outcome](../plans/a-feature-dispatch-seats-one-lead-never-a-set.md) — **CREATED** — ID: 6a025695-3d8d-4a63-822b-5755cc6a2a6b
 <!-- END SUBTASKS -->

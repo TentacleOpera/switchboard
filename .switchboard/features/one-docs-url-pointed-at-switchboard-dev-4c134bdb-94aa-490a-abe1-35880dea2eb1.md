@@ -15,6 +15,7 @@ Consolidate the extension's docs URL into a single constant and retire the tutor
 ## Subtasks
 - [ ] [Consolidate the extension's docs URL and retire the tutorial prompt](../plans/consolidate-the-docs-url-in-the-extension.md) — **CREATED** — ID: 31dc334a-cd8f-4420-babb-65da087a7dab
 - [ ] [Move the docs site to switchboard.dev](../plans/move-the-docs-site-to-switchboard-dev.md) — **CREATED** — ID: e5c23780-8e2e-4384-b3ab-a4382bf62cdf
+- [ ] [The Docs Site Has Two Pages for One Feature, No Link Check, and No Release Surface](../plans/memo-the-docs-site-has-two-pages-for-one-feature-and-no-link-check.md) — **CREATED** — ID: 29c27ed7-c615-4ecc-a82b-f6008464663a
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
