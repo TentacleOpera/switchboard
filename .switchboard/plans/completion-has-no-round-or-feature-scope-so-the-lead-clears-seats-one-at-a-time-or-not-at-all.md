@@ -68,7 +68,18 @@ Clearing the lead here is correct and is the one place it is. The lead holds con
 
 With change 2 in place, a feature id posted to the per-subtask endpoint is a caller error, not a completion. Reject it and name the endpoint that does what the caller meant. Today it silently stamps the feature row.
 
-### 4. One response, and it says what did not happen
+### 4. Teach the lead the new gestures, or they are dead code
+
+The lead knows `/kanban/task/complete` exists for exactly one reason: `buildHeadCompletionFragment()` (`standingOrderFragments.ts:77-86`) spells out the verb, the path and the payload. It reaches the head as standing-order fragment `headCompletion` (`:146`), and `teamWiring.ts:192` pairs it with the next-item fragment.
+
+An endpoint the standing orders do not name will never be called. Rewrite that fragment so the lead's default close-out is the round post, with the per-subtask post kept for accepting a single subtask mid-round, and the feature post named as the end-of-work gesture.
+
+Two things to get right while editing it:
+
+- **The fragment is gated on `ctx.inTeam && ctx.isHead && ctx.headRole === 'lead'`.** A planning head (`headRole: 'planner'`) and a review head (`'reviewer'`) never receive it. Decide whether feature-complete belongs to them too; if it does, the gate has to widen, and that is a separate decision from adding the endpoints.
+- **Keep the existing contract sentence.** *"Your POST is the only fact that releases a seat"* is what stops a lead inferring completion from board position, and it stays true for all three gestures.
+
+### 5. One response, and it says what did not happen
 
 Both endpoints return the set completed and the set cleared. A seat that was not cleared appears with a reason. This is the whole reason the 2026-09-04 failure went unnoticed for a feature run — three `success: true` responses that differed only in which fields were absent.
 
@@ -93,3 +104,5 @@ Both endpoints return the set completed and the set cleared. A seat that was not
 6. Both responses list what was completed and what was cleared, with a reason for anything skipped.
 7. A round with nothing outstanding reports a no-op rather than success.
 8. The operator no longer clears terminals by hand between rounds.
+9. A lead's standing orders name the round and feature gestures, and a real lead uses the round post to close a round without being told to.
+10. A planning head and a review head receive whatever the `headRole` decision settled on — not silently nothing.
