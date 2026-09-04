@@ -76,7 +76,7 @@ Yes — three decisions.
 ## Dependencies
 
 - **Extends** `docs/REMOTE_ACCESS.md`, itself the product of `standalone-remote-access-story.md`.
-- **Each clause depends on its feature shipping.** The trigger lines belong in: `storage-topology-one-choice-three-stores.md`, `single-global-database-in-home-store.md`, `libsql-shared-store-turso-and-self-hosted-sqld.md`, `switchboard-as-a-local-app-and-a-self-hosted-remote.md`, `remote-authoring-over-the-shared-store-as-a-provider-kind.md`, `the-remote-command-vocabulary-is-closed.md`.
+- ~~**Each clause depends on its feature shipping.** The trigger lines belong in:~~ **REMOVED 2026-09-04 (Board Collapse audit): this plan does not edit six other plan files.** The dependency is real — document a clause when it ships — but track it here, not by planting a tripwire in someone else's Proposed Changes. Original list, for reference: `storage-topology-one-choice-three-stores.md`, `single-global-database-in-home-store.md`, `libsql-shared-store-turso-and-self-hosted-sqld.md`, `switchboard-as-a-local-app-and-a-self-hosted-remote.md`, `remote-authoring-over-the-shared-store-as-a-provider-kind.md`, `the-remote-command-vocabulary-is-closed.md`.
 - **Independent, and shippable now:** the `agy` pattern, the Linear notification loop, the mode vocabulary, the boundary paragraph.
 
 ## Adversarial Synthesis
@@ -88,7 +88,7 @@ Key risks: documenting planned rather than shipped behaviour, which makes a user
 **Now, no code required:**
 1. **`docs/REMOTE_ACCESS.md` — controller-seat section.** `agy` is a supported CLI (`terminalUtils.ts:213`), so the orchestrator seat can run the Antigravity CLI and inherit that host's Remote Control for browser access, while dispatching to any other CLI. Configuration, not a feature.
 2. **`docs/REMOTE_ACCESS.md` — notification section.** Completion comments via `postManagedComment` to Linear or Notion, plus Linear's own app, give phone notifications with no Switchboard notification system involved.
-3. **`docs/REMOTE_ACCESS.md` — deployment vocabulary.** The two axes and four combinations, which are supported today, and one paragraph on why board-local-with-remote-agents is refused.
+3. **`docs/REMOTE_ACCESS.md` — deployment vocabulary.** ~~The two axes and four combinations~~ **— THREE combinations (corrected 2026-09-04): board-local with agents-remote was REFUSED on 2026-09-01 and must not be documented as available.** The two axes and three combinations, which are supported today, and one paragraph on why board-local-with-remote-agents is refused.
 4. **A boundary paragraph** on what Switchboard constrains versus what remains the operator's.
 
 **Per feature, as each ships:**

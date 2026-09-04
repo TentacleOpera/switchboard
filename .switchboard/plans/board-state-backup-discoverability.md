@@ -53,7 +53,7 @@ None.
 ### Routine
 - A README section.
 - Command palette entries for operations that already exist and already have handlers.
-- Correcting the Setup panel copy.
+- ~~Correcting the Setup panel copy.~~ **RETARGET 2026-09-04 (Board Collapse audit): the Setup tab's DB section is retired**, shipped in `7d71ac56`. The corrected copy, and the cross-platform replacement for the POSIX-only cron snippet, belong in the **Database panel** (or the README). Do not edit `setup.html`'s retired section.
 
 ### Complex / Risky
 - **Getting the honesty right.** The copy must not overstate coverage. A user who reads "Switchboard backs up your board automatically" and concludes their state survives a new laptop has been actively misled by the fix. The in-project limitation is the single most important sentence in this plan.

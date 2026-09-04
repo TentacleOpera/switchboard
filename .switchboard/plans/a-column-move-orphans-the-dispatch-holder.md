@@ -291,23 +291,13 @@ predicate, that the release path is keyed on the same field this predicate is (`
 and that `queue/done` releasing a hold without writing `completed_at` is correct — the two facts
 answer different questions.
 
-### `src/services/agentPromptBuilder.ts` — the completion directives
+### ~~`src/services/agentPromptBuilder.ts` — the completion directives~~ — REMOVED
 
-**Logic.** In `CODING_COMPLETION_REPORT_DIRECTIVE` (`:1087`), `COMPLETION_STEP_FULL` (`:1154`)
-and `COMPLETION_STEP_COMPACT` (`:1156`):
-
-- POST body becomes `{"from":"<your terminal name>","planId":"<the PLAN_ID from your dispatch>"}`.
-  `agentPromptBuilder.ts:543` already emits a `PLAN_ID=` line per plan, so the value is in the
-  prompt the agent is reading.
-- Replace "This signals task completion to the kanban board" with a true description: the post
-  releases the seat's hold on that card and asks for the next item.
-
-Same two edits to the `queue/done` references in `STAGGERED_IMPLEMENTATION_DIRECTIVE` (`:1075`)
-and the completion fragment in `standingOrderFragments.ts:57-64`.
-
-**Edge case.** Batch dispatch is M plans : 1 prompt : 1 terminal, so a prompt can carry several
-`PLAN_ID=` lines. The directive must say: one POST per plan, using that plan's id. Do not invent
-a multi-id body — the endpoint takes one.
+> **Removed 2026-09-04 (Board Collapse audit).** The Approach step that introduced this was already struck; this Proposed Change is the half that a coder actually implements, and it was left live. **This plan makes no prompt change at all.**
+> 
+> `Completion Directive Becomes a Standing Order` owns the four directive constants and the standing-order fragment, and now carries the `planId` instruction itself. Two plans must not edit the same five copies.
+> 
+> The release fix does not depend on it: `planId` only disambiguates a seat holding more than one card, and the release already keys on `dispatched_terminal === from`.
 
 ### No change to `POST /kanban/task/complete`
 
@@ -334,9 +324,9 @@ scripts or workflow steps.
    orphan. With a `planId` the seat does not hold, refuses.
 4. **`test:contract:queue-pipeline`** — negative, pins the deleted valve as still deleted: moving a
    card between columns must NOT change `heldByTeam`'s answer.
-5. **`test:contract:reviewer-prompt-behaviour`** (`agentPromptBuilder.test.ts`, CI line 616) —
-   each of the three directive constants contains `planId` in its POST body and no longer contains
-   the string "signals task completion".
+5. ~~**`test:contract:reviewer-prompt-behaviour`**~~ — **removed 2026-09-04 (Board Collapse audit).**
+   This asserted the directive edit that this plan no longer makes. The assertion belongs to
+   *Completion Directive Becomes a Standing Order*, which owns that text.
 6. **`test:contract:completion-asserted-never-inferred`** (CI line 1283) — unchanged and still
    green: `completed_at` still has exactly one writer, and nothing infers completion from column,
    mtime or silence.

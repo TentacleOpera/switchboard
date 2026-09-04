@@ -49,7 +49,7 @@ Yes — the rewrite of the "After Writing" section changes the commit guidance f
 
 ### Routine
 - Editing markdown content in a single skill file (`.agents/skills/create-feature/SKILL.md`).
-- Adding one npm script entry to `package.json` (`mirror:generate`).
+- ~~Adding one npm script entry to `package.json` (`mirror:generate`).~~ **REMOVED 2026-09-04 (Board Collapse audit): the mirror generator is being deleted, not given a second entry point.** Every `mirror:generate` step, risk note and verification line below is void with it — including the ordering note about `npm run compile-tests`. Edit `.agents/skills/create-feature/SKILL.md` and its `.claude/` counterpart **directly, in the same commit**. The rest of this plan stands: the two stale sections on linking subtasks via `**Feature:**` frontmatter, and flipping "never commit the feature file" to "commit it in remote sessions".
 - Regenerating the mirror by running the new script — mechanical, idempotent.
 - Grep-based verification that stale claims are gone.
 

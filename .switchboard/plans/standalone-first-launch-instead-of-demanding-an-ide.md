@@ -298,8 +298,8 @@ Rewrite §1 step 1 so **Command A becomes "bring it up"**:
 - Mention `switchboard stop` (sibling plan) as the counterpart to launching, so an agent that started a
   server can be asked to stop it.
 
-**Then regenerate the mirror and commit both.** `.claude/skills/switchboard/SKILL.md` is generated from
-this file; `npm run mirror:check` fails CI on drift. Editing the mirror directly is the wrong door.
+**~~Then regenerate the mirror~~ **VOID 2026-09-04 (Board Collapse audit): the generator is being deleted.** Edit both files directly and commit both.** `.claude/skills/switchboard/SKILL.md` is generated from
+this file; `npm run mirror:check` fails CI on drift. ~~Editing the mirror directly is the wrong door~~ — **inverted 2026-09-04.** With `.claude/skills/` committed as source, editing both trees in one commit is the *only* door.
 
 - **Edge cases:** the workflow file is ~36 KB and the mirror wraps it with a preamble and frontmatter —
   do not hand-edit the generated header. The `allowedTools: 'Bash'` declaration in `MIRROR_ENTRIES`

@@ -29,7 +29,7 @@ A skill instruction reads as a command and is in fact a bash command. Nothing in
 
 ### Non-goals
 
-- Not rewriting `_lib/sb_api_call.sh` in Node. Marking it POSIX-only and naming the specific `.js` helpers that cover each operation is enough; it has one caller class.
+- ~~Not rewriting `_lib/sb_api_call.sh` in Node. Marking it POSIX-only~~ — **VOID 2026-09-04 (Board Collapse audit): that file was deleted in `96fb16df`.** All eight `kanban_operations/*.js` route through `.agents/skills/_lib/cli-call.js`, which is Node and cross-platform. There is nothing to mark and nothing to rewrite; drop it from the Touches list. Naming the specific `.js` helpers that cover each operation is still the right move for the three SKILL.md files. Original text: it has one caller class.
 - Not auditing every skill for platform assumptions — this plan covers the four files identified by a `sqlite3|curl|jq` sweep of `.agents/skills` and `.switchboard/protocols`.
 - Not writing a new `query-kanban.js` helper with filter parameters. The SQL templates will be rewritten as `get-state.js` output filtered through `node -e` one-liners, preserving capability without new scripts.
 

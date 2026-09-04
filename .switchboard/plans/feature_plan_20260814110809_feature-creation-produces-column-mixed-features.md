@@ -679,25 +679,9 @@ default (`'IN PROGRESS,CODE REVIEW,REVIEWED,DONE'`) matches no real built-in col
 therefore inert in a default workspace. Leave it in place (legacy keys are never dropped) but
 implement the post-coding refusal independently and ordinal-driven.
 
-### 3. One-shot reconcile for features that are already mixed
+### ~~3. One-shot startup reconcile of existing mixed features~~ — REMOVED
 
-Existing boards carry mixed features created before this change. Add a normalisation pass that
-runs once per workspace on startup (or on the next board refresh), applying the same
-earliest-wins rule and logging every demotion. Skip — and log — any feature caught by the
-post-coding refusal rule rather than demoting finished work.
-
-**Additions from this pass:**
-
-- Guard the pass with a DB `config` key (e.g. `feature_column_reconcile_v1`) so it runs once and
-  is not re-executed on every startup. The `config` table is the blessed home for this kind of
-  flag; do not add a state file.
-- Use `cascadeFeatureByPlanId` per mixed feature, guarded by the same pre-computed diff, so
-  already-uniform features are untouched (edge case 11).
-- The pass is a **repair**, not the invariant. Because the manual subtask drag remains open (see
-  *Known non-goal*), a one-shot pass will not keep the board clean forever. Log the result count
-  so a growing number on later runs is visible rather than silent.
-- Fan out `queueIntegrationSyncForPlanFile` for the rows it changes, for the same reason as
-  change 1 — otherwise the repair fixes the board and leaves the tracker wrong.
+> **Removed 2026-09-04 (Board Collapse audit).** The banner above deletes this change and its `feature_column_reconcile_v1` DB flag; both were left live in the body and in an automated test. This pass resolves a mixed feature to its **earliest** subtask column, while the sibling *Every Feature Move Carries Its Subtasks* aligns subtasks **to the feature**. Running both at startup gives different end columns, and this direction can demote a feature already in a coding column back to New. One reconcile, and it is the sibling's. This plan owns creation-time resolution only.
 
 ### 4. `.agents/skills/group-into-features/SKILL.md` — propose uniform groups, stop teaching the warning
 

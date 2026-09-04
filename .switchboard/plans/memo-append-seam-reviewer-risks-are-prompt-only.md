@@ -73,7 +73,7 @@ None.
 
 ## Dependencies
 
-None blocking. If `process-memo-clears-entries-it-never-read.md` lands first it will already have created `src/services/memoFile.ts`; otherwise this plan creates it.
+None blocking. ~~If `process-memo-clears-entries-it-never-read.md` lands first it will already have created `src/services/memoFile.ts`; otherwise this plan creates it~~ — **VOID 2026-09-04 (Board Collapse audit).** That plan was merged into this one and deleted, precisely because three plans claiming one module under a whichever-lands-first rule is a merge hazard rather than a plan. **This plan creates `src/services/memoFile.ts`**, unconditionally, and carries both the append verb and the prefix-consume.
 
 ## Proposed Changes
 

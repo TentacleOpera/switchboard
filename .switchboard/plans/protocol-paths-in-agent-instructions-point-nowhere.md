@@ -159,7 +159,7 @@ None. Instruction text and a new gate; no persisted state, no user files, no shi
 ### Automated Tests
 
 - `src/test/planner-workflow-path-migration.test.js` — must pass unchanged. This is the regression guard proving the `.switchboard/protocols/` migration keys survived.
-- `npm run mirror:check` and `npm run catalog:check` — unchanged and green; neither is affected, and neither would have caught this (worth asserting once so nobody later credits them with coverage they lack).
+- ~~`npm run mirror:check`~~ **(VOID 2026-09-04 — the mirror generator, its manifest and this gate are deleted by *Delete the Claude mirror generator*; the drift test that asserts each `.claude/skills/*/SKILL.md` equals its `.agents/` counterpart modulo frontmatter replaces it)** and `npm run catalog:check` — unchanged and green; neither is affected, and neither would have caught this (worth asserting once so nobody later credits them with coverage they lack).
 - New gate exercised both ways, per invariants 3 and 4.
 
 ### Manual Verification

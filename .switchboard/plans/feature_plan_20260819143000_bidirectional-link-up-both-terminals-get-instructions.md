@@ -49,7 +49,7 @@ A contract test (`src/test/link-presets-mirror-contract.test.js`) enforces that 
 After this fix, linking terminal A to terminal B via the Link-up modal will:
 - Send the primary instruction to the correct terminal (honoring `direction`)
 - Send a complementary instruction to the other terminal, describing the relationship from its perspective and including the `/terminals/relay` curl command so it can reach the primary
-- Do this in both instant mode (two `ptySendPrompt` calls) and standing mode (two standing orders — one for each direction)
+- ~~Do this in both instant mode (two `ptySendPrompt` calls) and~~ **standing mode only** (two standing orders, one for each direction). **Corrected 2026-09-04 (Board Collapse audit): Instant mode is deleted** by *Delete Link-Up's "Instant" Mode*, which also removes `buildLinkPrompt` and `syncModeAvailability`. Do not generalise a function that is being deleted, and treat every instant-mode acceptance test below as void
 
 Both terminals will know the relationship exists, what it means from their side, and how to communicate with the other.
 
@@ -69,7 +69,7 @@ Both terminals will know the relationship exists, what it means from their side,
 
 ### Complex / Risky
 - **Direction-aware argument swapping** in `applyPresetToMessage()` and `sendLinkMessage()` — the `member-receives` swap must match `wireSpawnedTeam`'s convention exactly, and must NOT affect the migration recogniser at `terminals.js:9345` which calls `resolvePreset('reviewer', o.parent, o.child)` for stale-order detection
-- **Dual-send sequencing in instant mode** — the current code closes the modal on primary success (line 9696) before any secondary send; restructuring to send-both-then-close requires careful ordering to avoid closing on partial failure
+- ~~**Dual-send sequencing in instant mode**~~ — void, Instant mode is deleted — the current code closes the modal on primary success (line 9696) before any secondary send; restructuring to send-both-then-close requires careful ordering to avoid closing on partial failure
 - **Contract test parser** — `extractPresets()` collects single-quoted fragments after `template:` until `}` or `id:`; adding `complementaryTemplate` after `template` will cause the parser to swallow complementary fragments into `template` unless the bounding logic is updated (see step 7)
 
 ## Edge-Case & Dependency Audit

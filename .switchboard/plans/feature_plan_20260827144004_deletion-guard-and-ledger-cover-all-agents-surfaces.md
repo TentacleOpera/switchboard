@@ -29,7 +29,7 @@ No — the fix extends a single proven pattern (the `seedBundleSurface` ledger g
 
 ## Dependencies
 
-- `feature_plan_20260827144002_claude-mirror-not-regenerating-on-deletion.md` — *.claude mirror regenerates on deletion-respected skip*. That plan introduces the `deletionSkipped` return flag on `seedBundleSurface` and the `deletionRespected` scaffold-gate branch in `refreshWorkspaceControlPlane`. **Ship it FIRST.** This plan then extends `seedBundleSurface`'s `surface` type to include `'protocols'` and wires `protocolResult.deletionSkipped` into the `deletionRespected` OR — both assume the flag already exists.
+- `feature_plan_20260827144002_claude-mirror-not-regenerating-on-deletion.md` — *.claude mirror regenerates on deletion-respected skip*. That plan introduces the `deletionSkipped` return flag on `seedBundleSurface` and the `deletionRespected` scaffold-gate branch in `refreshWorkspaceControlPlane`. **~~Ship it FIRST.~~ **VOID 2026-09-04 (Board Collapse audit): that plan is deleted.** This plan is unblocked and **adds the `deletionSkipped` return value itself**.** This plan then extends `seedBundleSurface`'s `surface` type to include `'protocols'` and wires `protocolResult.deletionSkipped` into the `deletionRespected` OR — both assume the flag already exists.
 
 ## Complexity Audit
 
@@ -171,7 +171,7 @@ if (fs.existsSync(bundledAgentDir)) {
 
 ### 4. `seedBundleSurface` — extend the surface type to `protocols` (src/services/ControlPlaneMigrationService.ts:1236–1241)
 
-This widens the `surface` type union. The `deletionSkipped` return field is introduced by the sibling plan (*claude-mirror-not-regenerating-on-deletion*); this plan assumes it already exists and only adds `'protocols'` to the surface type:
+This widens the `surface` type union. The `deletionSkipped` return field is **introduced by THIS plan** (corrected 2026-09-04; the sibling that would have introduced it is deleted, so the original text — "introduced by the sibling plan" — is void and would fail to compile) (*claude-mirror-not-regenerating-on-deletion*); this plan assumes it already exists and only adds `'protocols'` to the surface type:
 
 ```typescript
 public static async seedBundleSurface(
@@ -254,4 +254,4 @@ const scopes = ['skills', 'workflows', 'protocols'];
 
 ## Recommendation
 
-**Complexity 6 → Send to Coder.** Six touch points across two files, all extending one proven pattern (the `seedBundleSurface` ledger guard). The only design decision (guard-scope vs skip-protocols) is resolved in favor of the guard scope (see Superseded callout). Ship AFTER the sibling plan (*claude-mirror-not-regenerating-on-deletion*) so the `deletionSkipped` flag exists when this plan widens the surface type and wires `protocolResult.deletionSkipped` into `deletionRespected`.
+**Complexity 6 → Send to Coder.** Six touch points across two files, all extending one proven pattern (the `seedBundleSurface` ledger guard). The only design decision (guard-scope vs skip-protocols) is resolved in favor of the guard scope (see Superseded callout). ~~Ship AFTER the sibling plan~~ **VOID 2026-09-04** — no sibling; ship when convenient (*claude-mirror-not-regenerating-on-deletion*) so the `deletionSkipped` flag exists when this plan widens the surface type and wires `protocolResult.deletionSkipped` into `deletionRespected`.

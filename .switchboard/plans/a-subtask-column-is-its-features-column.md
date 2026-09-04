@@ -247,13 +247,9 @@ known-broken-text fix: confirm no skill or workflow text contradicts the refusal
 by instructing a direct subtask move. If any is found, fix it in the same change.
 If none is found (as expected), document the verification in the PR description.
 
-### 5. Reconcile before enforcing
+### ~~5. Reconcile before enforcing~~ — REMOVED
 
-Re-align already-diverged subtasks at startup, in **both** composition roots,
-before the refusal can strand them. If the sibling plan has landed, reuse its
-`reconcileFeatureSubtaskColumns`; if not, this plan brings it.
-
----
+> **Removed 2026-09-04 (Board Collapse audit).** The banner above deletes this change; it was left live in the body, wired into both composition roots, and asserted by verification 8 and goal invariant 5. This would have been the **third** startup reconcile of the same diverged state. The single pass belongs to *Every Feature Move Carries Its Subtasks*, which aligns subtasks **to** the feature and must land first. This plan enforces; it does not repair.
 
 ## Files Changed
 

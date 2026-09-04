@@ -115,7 +115,7 @@ Key risks: (1) the rule is added to step 2 alongside the existing *"not just tit
 
 **Logic:**
 
-> **Superseded:** Regenerate the mirror and confirm `npm run mirror:check` passes.
+> **Superseded:** Regenerate the mirror and confirm ~~`npm run mirror:check`~~ **(VOID 2026-09-04 — the mirror generator, its manifest and this gate are deleted by *Delete the Claude mirror generator*; the drift test that asserts each `.claude/skills/*/SKILL.md` equals its `.agents/` counterpart modulo frontmatter replaces it)** passes.
 > **Reason:** There is no `mirror:generate` script. `mirror:check` (`scripts/check-claude-mirror.js`) regenerates into a *temp directory* and diffs against the committed `.claude/skills/` — it does not write to `.claude/skills/`. The actual regeneration happens on extension activation (`generateClaudeMirror` at `src/extension.ts:4073`) or via the scaffold command (`switchboard.scaffoldMultiRepo`). Additionally, `mirror:check` requires the compiled module `out/services/ClaudeCodeMirrorService.js` — its header states "Run after `npm run compile-tests`" — so it fails with a module-not-found error unless the project is compiled first.
 > **Replaced with:** After editing `.agents/skills/manage-features/SKILL.md`, regenerate the `.claude/skills/` mirror by reloading the VS Code extension (which calls `generateClaudeMirror` on activation) or by running the scaffold command. Then run `npm run compile && npm run mirror:check` to confirm the committed mirror matches the regenerated source. Note: `mirror:check` requires a compiled `out/` tree — compile first.
 
