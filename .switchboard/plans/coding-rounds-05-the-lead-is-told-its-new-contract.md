@@ -22,17 +22,17 @@ Separately, a registered round is state nobody can see. The operator watching a 
 
 ## User Review Required
 
-Change 1 carries one decision: whether a planning head and a review head get any of this.
+None.
 
 ## Proposed Changes
 
-### 1. Rewrite the head's standing orders around rounds **[decision]**
+### 1. Rewrite the head's standing orders around rounds
 
 The lead's loop becomes: read the feature, decide the rounds, register them, then mark each one done as its seats report in. Remove the instructions telling it to dispatch subtasks to seats and to post per-subtask completions — leaving those live means two paths racing to seat the same work.
 
 Keep the contract sentence. *"Your POST is the only fact the system acts on"* is what stops a lead inferring completion from board position, and it is more load-bearing now, not less.
 
-**The decision:** the fragment is gated on `ctx.inTeam && ctx.isHead && ctx.headRole === 'lead'`, so a planning head (`'planner'`) and a review head (`'reviewer'`) receive none of it. Settle whether rounds apply to them before widening or leaving the gate.
+**Leave the gate exactly as it is.** `ctx.inTeam && ctx.isHead && ctx.headRole === 'lead'` is correct: rounds are a coding-team construct. A planning head (`'planner'`) and a review head (`'reviewer'`) do not get them and must not — do not widen the gate, and do not add a round path for either.
 
 ### 2. Per-subtask completion stays available
 
@@ -57,5 +57,5 @@ This is the visibility that would have made the 2026-09-04 incident obvious in s
 2. A real lead handed a feature registers rounds without being prompted to.
 3. The board shows the current round and the total for a team mid-feature.
 4. A round with an undelivered prompt is visibly distinct from a healthy one.
-5. A planning head and a review head receive whatever the decision settled — not silently nothing.
+5. A planning head and a review head receive no round instructions, and the gate is unchanged.
 6. Both hosts show the same round state.
