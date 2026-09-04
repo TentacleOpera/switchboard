@@ -121,3 +121,7 @@ Additive columns plus three transactional rebuilds, all under one new version ga
 
 - Does anything outside `KanbanDatabase` write to these ten tables directly (agent scripts under `scripts/`, `move-card.js`, `create-feature.js`)? Those writers need the new column too.
 - `plan_events` and `plan_events_v20` both exist — is the older one still read anywhere, or can this plan drop it after confirming the V20 copy completed on all install paths?
+
+## Implementation Summary
+
+Scoped all ten previously unscoped tables (`worktrees`, `job_instructions`, `kanban_meta`, `activity_log`, `board_move_requests`, `job_runs`, `plan_events`, `plan_events_v20`, `stitch_projects`, `stitch_screens`) to `workspace_id`. Executed migration V70 which safely rebuilds `worktrees`, `job_instructions`, and `kanban_meta` using `PRAGMA table_info` runtime column enumeration to preserve unknown/legacy columns and heal interrupted rebuilds while enforcing `NOT NULL` on rebuilt tables and compound uniqueness constraints (`(branch, workspace_id)`, `(file, workspace_id)`, and `PRIMARY KEY (key, workspace_id)`). Updated all reader and writer queries in `KanbanDatabase` to consistently filter and insert `workspace_id`. Created `src/test/schema-workspace-id-invariant.test.js` validating schema multi-tenancy invariants, collision handling, `NOT NULL` rejection of unattributable writes, and migration rebuild safety.
