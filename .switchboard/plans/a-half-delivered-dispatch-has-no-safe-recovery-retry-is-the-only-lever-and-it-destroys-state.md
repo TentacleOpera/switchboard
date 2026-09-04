@@ -60,7 +60,6 @@ Note that `f824db44` covers the adjacent defect — an unknown outcome re-arming
 3. **Depends on `a29bed0f` for the retry path.** Until the team branch compares the work context, any redispatch still clears. Both are in flight; neither blocks the other.
 4. **The root cause is `Prompt delivery should be patient, not precise`.** This card must not restate or re-fix it. Recovery exists because delivery can fail, not because it usually does.
 5. **Both hosts.** Whatever evidence and re-deliver path is added must be wired in the extension host and the standalone host, and the seam checked in each composition root.
-6. **Housekeeping:** *Prompt delivery is patient* exists twice on the board — once as a feature in Planned and once as a loose card of the same name. Resolve before either is dispatched.
 
 ## Verification Plan
 
