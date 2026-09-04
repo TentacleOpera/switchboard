@@ -9,6 +9,7 @@ The menu:
 ```
   Fleet command  →  Starred
                     Columns
+                    Status
                     Monitor
                     Teams
                     Agents
@@ -38,7 +39,9 @@ Today the menu is a flat list whose contents change with server state (`cli.ts:1
 
 The structure above fixes each by being the structure, not by adding items to a list.
 
-**This card is the arrangement, not the command set.** `ef40963b` (*The CLI is a peer control surface*, starred, New) owns which commands exist: it measures the verb surface at 559 auto-generated UI affordances against ten named CLI commands, notes that `switchboard verb` reaches only two routes, and records agents falling back to unauthenticated `curl` as a result. Every entry on this menu is a command that plan does or does not provide. Where an entry has no command behind it, the command belongs there and the entry waits.
+**This menu is for a human at a terminal, not for agents.** That is the line between this card and `ef40963b` (*The CLI is a peer control surface*, starred, New). That plan is about the agent-facing operation set — 559 auto-generated UI verbs against ten named commands, `switchboard verb` reaching only two routes, and agents falling back to unauthenticated `curl`. An agent never opens an interactive menu.
+
+They overlap only where an operation serves both audiences. Where an entry here needs a command that does not exist, the command belongs on `ef40963b`; but this menu is not blocked on that plan's agent-facing scope, and most of what it arranges is already reachable.
 
 ## Metadata
 
@@ -64,12 +67,17 @@ Keys are stable regardless of server state. Nothing renumbers.
 | :--- | :--- |
 | **Starred** | starred cards only, across all columns |
 | **Columns** | browse and dispatch by column — today's `consoleBrowseByColumn` (`:2191`) |
-| **Monitor** | fleet status — today's `consoleInspectFleet` (`:2403`) |
+| **Status** | fleet status, once — today's `consoleInspectFleet` (`:2403`) |
+| **Monitor** | the same status, refreshing on a timer — **new** |
 | **Teams** | view teams, start a team |
 | **Agents** | the agent roster |
 | **Set Filters** | the filters applied to everything above |
 
 Starred is first because it is the view the operator opens most and cannot currently reach at all.
+
+**Status and Monitor are two entries, not one.** Status answers "what is the fleet doing right now" and returns to the menu. Monitor is the one an operator leaves open on a second screen or a phone while a feature runs — the same content, redrawn on an interval, until a key exits. Only Status exists today.
+
+Monitor is the one genuinely new capability in this sub menu. Keep it small: an interval, a redraw, and a key to leave. It does not need its own filters, its own layout language, or alerting — it is Status on a loop, and anything more is a different feature.
 
 ### 3. Set Filters holds what the others narrow by
 
@@ -105,7 +113,8 @@ Direct actions, unchanged behaviour, at the bottom. **Setup**, not "First time s
 4. **Stop needs to be a real shutdown**, not a signal kill — see `8eba302d`, which covers exactly this on Windows.
 5. **`9572d35f`** fixes what a column listing contains (excluding subtasks). Independent of this and still needed.
 6. **`5fb04de7`** binds Enter and stabilises keys on the same function. Same code, sequence them.
-6b. **`ef40963b` is the dependency.** It decides the command set this menu arranges. If it lands first, this card is a rearrangement; if it does not, this card ships with fewer entries and gains them later.
+6b. **`ef40963b` overlaps but does not block.** It serves agents; this serves a human at a terminal. Where an entry needs a command that does not exist, that command belongs there — but the arrangement does not wait on its agent-facing scope.
+6c. **Monitor must not hold the terminal hostage.** A redraw loop needs a clean exit on a single key, must not accumulate scrollback on every tick, and must survive the server going away without spinning on errors.
 7. **`759c05b5`** proposed a GUI/CLI split of this menu. This supersedes it — reconcile before either is coded.
 8. **Sync depends on a reachable provider.** An unconfigured or unauthenticated tracker must say so and offer the configuration path, not fail with a transport error.
 9. **Do not build a second provider-selection model.** The active provider is already a setting behind `switchTicketsProvider`; read it, show it, and change it through the same verb.
@@ -115,7 +124,9 @@ Direct actions, unchanged behaviour, at the bottom. **Setup**, not "First time s
 ## Verification Plan
 
 1. The menu is the five entries above, in that order, with stable keys.
-2. Fleet command opens the six entries listed.
+2. Fleet command opens the seven entries listed.
+2b. Status reports once and returns; Monitor redraws on an interval until a key exits.
+2c. Monitor with the server stopped reports that and stops, rather than looping on failures.
 3. Starred shows only starred cards, across all columns.
 4. Set Filters narrows every view under Fleet command, and each says what is filtering it.
 5. One key clears all filters.
