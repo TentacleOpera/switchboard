@@ -18,7 +18,7 @@ So the operator's actual question, *"show me my high-priority cards and let me d
 
 **This absorbs two narrower filter cards.** `9572d35f` proposes a starred filter and `07922522` a project filter; both become values in this set rather than separate mechanisms. What does not fold in is `9572d35f`'s subtask exclusion — that is a correctness fix to what a column *is*, not a preference, and should land on its own.
 
-**It sits alongside the command menu, not above it.** The filter set is one entry on the board-work arm of the front door (`759c05b5`'s `[C]`), the command menu (`5144f7ef`) is the other, and everything the command menu opens honours whatever is set here.
+**It is a front-door entry, one keystroke from the top.** Set filters and Commands (`5144f7ef`) are peers on the main menu — not nested under a branch — and everything the Commands submenu opens honours whatever is set here.
 
 ## Metadata
 
