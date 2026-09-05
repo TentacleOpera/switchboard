@@ -59,6 +59,8 @@
     let reconnectDelay = 500;
     const maxReconnectDelay = 30000;
     const HANDSHAKE_TIMEOUT_MS = 10000;
+    const VERB_SIGNAL_TIMEOUT_MS = 5000;   // "still working" signal — no abort
+    const VERB_ABORT_TIMEOUT_MS = 60000;   // hard abort — bounds the wait
     let reconnectTimer;
     let intentionallyClosed = false;
     let handshakeDeadline = null;
@@ -342,6 +344,29 @@
         host._hideTimer = setTimeout(function () { host.style.display = 'none'; }, 8000);
     }
 
+    function showTransportPending(verb) {
+        let host = document.getElementById('sb-transport-pending');
+        if (!host) {
+            host = document.createElement('div');
+            host.id = 'sb-transport-pending';
+            host.style.cssText =
+                'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);' +
+                'z-index:2147483647;max-width:80vw;padding:10px 16px;border-radius:4px;' +
+                'background:#1a1a2e;color:#a0a0c0;border:1px solid #444466;' +
+                'font-size:12px;line-height:1.4;' +
+                'font-family:var(--font-family, var(--font, system-ui, sans-serif));' +
+                'white-space:pre-wrap;pointer-events:none;';
+            (document.body || document.documentElement).appendChild(host);
+        }
+        host.textContent = 'Working: ' + verb + '…';
+        host.style.display = 'block';
+    }
+
+    function clearTransportPending() {
+        const host = document.getElementById('sb-transport-pending');
+        if (host) { host.style.display = 'none'; }
+    }
+
     const vscodeShim = {
         postMessage: function (message) {
             if (!message || typeof message.type !== 'string') {
@@ -362,14 +387,35 @@
             const body = Object.assign({}, message);
             const url = `${routePrefix}/${encodeURIComponent(verb)}`;
 
+            const controller = new AbortController();
+            const startTime = Date.now();
+            let signalTimer = null;
+            let abortTimer = null;
+
+            signalTimer = setTimeout(function () {
+                showTransportPending(verb);
+            }, VERB_SIGNAL_TIMEOUT_MS);
+
+            abortTimer = setTimeout(function () {
+                controller.abort();
+            }, VERB_ABORT_TIMEOUT_MS);
+
+            function cleanupVerbTimers() {
+                if (signalTimer) { clearTimeout(signalTimer); signalTimer = null; }
+                if (abortTimer) { clearTimeout(abortTimer); abortTimer = null; }
+                clearTransportPending();
+            }
+
             fetch(url, {
                 method: 'POST',
                 credentials: 'same-origin',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
+                signal: controller.signal,
             })
                 .then(function (res) { return res.json(); })
                 .then(function (result) {
+                    cleanupVerbTimers();
                     if (result && result.prompt && window.sbCopyToClipboard) {
                         window.sbCopyToClipboard(result.prompt).catch(function (err) {
                             console.warn('[transport] Clipboard write failed:', err);
@@ -413,7 +459,31 @@
                     }
                 })
                 .catch(function (err) {
-                    console.error('[transport] postMessage fetch failed:', err);
+                    cleanupVerbTimers();
+                    const elapsed = Date.now() - startTime;
+                    if (err && err.name === 'AbortError') {
+                        console.error('[transport] verb timed out:', verb,
+                            'elapsed=' + elapsed + 'ms',
+                            'onLine=' + navigator.onLine,
+                            'wsReadyState=' + (ws ? ws.readyState : 'null'));
+                        const text = 'Action timed out: ' + verb + ' (' + elapsed + 'ms). Retry.';
+                        if (STATUS_MESSAGE_PANELS[panel]) {
+                            dispatchMessage({ type: 'showStatusMessage', message: text, isError: true });
+                        } else {
+                            showTransportError(text);
+                        }
+                    } else {
+                        console.error('[transport] postMessage fetch failed:', verb, err,
+                            'elapsed=' + elapsed + 'ms',
+                            'onLine=' + navigator.onLine,
+                            'wsReadyState=' + (ws ? ws.readyState : 'null'));
+                        const text = 'Action failed: ' + verb;
+                        if (STATUS_MESSAGE_PANELS[panel]) {
+                            dispatchMessage({ type: 'showStatusMessage', message: text, isError: true });
+                        } else {
+                            showTransportError(text);
+                        }
+                    }
                 });
         },
 

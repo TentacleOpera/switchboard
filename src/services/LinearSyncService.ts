@@ -17,6 +17,7 @@ import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService
 import { stampMarker, truncateForComment } from './commentMarker';
 import { localizeHttpError } from './errorMessages';
 import { isLoopbackHostHeader } from '../utils/loopbackHostname';
+import { syncOwnershipLease } from './SyncOwnershipLease';
 
 /** Escape untrusted text before it lands in the OAuth callback's HTML response. */
 function _escapeHtml(value: string): string {
@@ -2824,6 +2825,10 @@ export class LinearSyncService {
   }
 
   async syncPlan(plan: { planFile: string; topic: string; complexity: string }, newColumn: string): Promise<void> {
+    if (!(await syncOwnershipLease.isOwner())) {
+      console.log('[LinearSync] This machine is not the sync owner — outbound Linear push skipped');
+      return;
+    }
     const config = await this.loadConfig();
     if (!config?.setupComplete) { return; }
     if (!(await this.hasApiToken())) { return; }
@@ -2877,6 +2882,9 @@ export class LinearSyncService {
    */
   async syncPlanContent(issueId: string, markdownContent: string, signal?: AbortSignal): Promise<{ success: boolean; error?: string }> {
     try {
+      if (!(await syncOwnershipLease.isOwner())) {
+        return { success: false, error: 'This machine is not the sync owner — outbound Linear content push skipped' };
+      }
       const config = await this.loadConfig();
       if (!config?.setupComplete) {
         return { success: false, error: 'Linear not set up' };

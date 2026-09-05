@@ -116,12 +116,16 @@ test('the pop-out button is gated on not-kanban, so a status pane keeps it', () 
 
 /* ── The socket, not the view, is what a status pane gives up ───────────── */
 
-test('entering status suspends the stream and does not dispose the terminal', () => {
+test('a status pane still removes .active and never creates a terminal view', () => {
     const idx = src.indexOf('if (isStatusPane) {');
     const arm = src.slice(idx, idx + 1800);
-    assert.match(arm, /suspendTerminalStream\(entry\)/, 'a status pane must suspend its stream');
+    assert.match(arm, /entry\.container\.classList\.remove\('active'\)/,
+        'a status pane must remove .active — the predicate reads isRendered, and .active drives display:block');
     assert.ok(!/createTerminalView\(/.test(arm),
         'a status pane must never CREATE a terminal view — that opens the socket it exists to close');
+});
+
+test('suspendTerminalStream does not dispose the terminal and closes the socket', () => {
     const suspend = fnBody('suspendTerminalStream');
     assert.ok(!/term\.dispose\(\)/.test(suspend),
         'suspendTerminalStream must not dispose entry.term — the scrollback is what makes the toggle instant');
@@ -136,12 +140,125 @@ test('leaving status resumes the stream from lastSeq', () => {
     assert.match(src, /wsUrl \+= `&lastSeq=/, 'the reconnect must carry lastSeq so the gateway replays only the tail');
 });
 
-test('resume is invoked only after the container is marked active', () => {
-    const activeIdx = src.indexOf("entry.container.classList.add('active');");
-    const resumeIdx = src.indexOf('if (entry.suspended) { resumeTerminalStream(entry); }');
-    assert.ok(activeIdx > -1 && resumeIdx > -1, 'both the active class and the resume call must exist');
-    assert.ok(activeIdx < resumeIdx,
-        'resume must run AFTER .active — attachRenderer reads isRendered(), and a display:none host acquires no renderer');
+/* ── The rendered-slot predicate owns entry.suspended ───────────────────── */
+
+test('isTerminalRendered exists and tests all three clauses', () => {
+    const body = fnBody('isTerminalRendered');
+    // Clause 1: sliced assignment lookup (not a bare .includes).
+    assert.match(body, /paneAssignments\.slice\(0, slotCount\)\.indexOf\(name\)/,
+        "isTerminalRendered must slice paneAssignments to slotCount — a bare .includes() matches a terminal parked off-screen");
+    // Clause 2: isRendered on the container.
+    assert.match(body, /isRendered\(entry\.container\)/,
+        'isTerminalRendered must call isRendered on the container — a dropped pane has no box');
+    // Clause 3: status mode excludes the terminal.
+    assert.match(body, /paneModes\[slot\] === 'status'/,
+        "isTerminalRendered must reject a status slot — a status pane renders a card, not a viewport");
+});
+
+test('the suspend/resume call sites in updatePaneElement are gone', () => {
+    const body = fnBody('updatePaneElement');
+    assert.ok(!/suspendTerminalStream\(entry\)/.test(body),
+        'updatePaneElement must not call suspendTerminalStream — the predicate owns the flag now');
+    assert.ok(!/resumeTerminalStream\(entry\)/.test(body),
+        'updatePaneElement must not call resumeTerminalStream — the predicate owns the flag now');
+});
+
+test('the only callers of suspend/resume are inside the reconcile trailing loop', () => {
+    const grid = fnBody('renderPaneGrid');
+    assert.match(grid, /if \(isTerminalRendered\(name\)\) \{\s*resumeTerminalStream\(entry\);\s*\} else \{\s*suspendTerminalStream\(entry\);\s*\}/,
+        'the reconcile trailing loop must drive suspend/resume from isTerminalRendered');
+    // No other call site in the file outside the definitions and the loop.
+    const suspendDef = fnBody('suspendTerminalStream');
+    const resumeDef = fnBody('resumeTerminalStream');
+    const isRenderedFn = fnBody('isTerminalRendered');
+    // Strip the definitions, then count remaining call sites.
+    let stripped = src
+        .replace(suspendDef, '')
+        .replace(resumeDef, '')
+        .replace(isRenderedFn, '');
+    const suspendCalls = stripped.match(/suspendTerminalStream\(/g) || [];
+    const resumeCalls = stripped.match(/resumeTerminalStream\(/g) || [];
+    assert.equal(suspendCalls.length, 1,
+        `suspendTerminalStream must have exactly one call site (the loop), found ${suspendCalls.length}`);
+    assert.equal(resumeCalls.length, 1,
+        `resumeTerminalStream must have exactly one call site (the loop), found ${resumeCalls.length}`);
+});
+
+test('the suspend/resume loop appears after the updatePaneElement loop in source order', () => {
+    const grid = fnBody('renderPaneGrid');
+    const updateLoopIdx = grid.indexOf('updatePaneElement(paneGridEl.children[i], i);');
+    const suspendLoopIdx = grid.indexOf('if (isTerminalRendered(name)) {');
+    assert.ok(updateLoopIdx > -1 && suspendLoopIdx > -1, 'both loops must exist in renderPaneGrid');
+    assert.ok(updateLoopIdx < suspendLoopIdx,
+        'the suspend/resume loop must run AFTER the updatePaneElement loop — containers are appended/dropped and .active is set there');
+});
+
+test('the detach-timer arm/cancel still keys on the bare paneAssignments.includes(name)', () => {
+    const grid = fnBody('renderPaneGrid');
+    assert.match(grid, /if \(!paneAssignments\.includes\(name\)\)/,
+        'the detach predicate must stay a bare .includes() — a slice there would start destroying off-screen views');
+});
+
+test('suspend and resume remain idempotent and neither disposes entry.term', () => {
+    const suspend = fnBody('suspendTerminalStream');
+    const resume = fnBody('resumeTerminalStream');
+    assert.match(suspend, /if \(entry\.suspended\) \{ return; \}/,
+        'suspendTerminalStream must early-return on entry.suspended — markReplayGap re-enters renderPaneGrid, so a lost idempotency is a render loop');
+    assert.match(resume, /if \(!entry\.suspended\) \{ return; \}/,
+        'resumeTerminalStream must early-return on !entry.suspended — same idempotency contract');
+    assert.ok(!/term\.dispose\(\)/.test(suspend) && !/term\.dispose\(\)/.test(resume),
+        'neither suspend nor resume may dispose entry.term — a 3x3 -> 1 -> 3x3 round trip needs no rebuild');
+});
+
+test('the trailing loop skips unmaterialized entries (entry.term null)', () => {
+    // An entry whose term has not been constructed yet is under whenRendered →
+    // materializeTerminalView construction. Suspending it would set
+    // entry.suspended before that path opens the socket, and flushBatch would
+    // then skip the frames its own connect requested — a dead terminal on
+    // first reveal. The loop must continue past such entries.
+    const grid = fnBody('renderPaneGrid');
+    const guardIdx = grid.indexOf('if (!entry.term) { continue; }');
+    const suspendIdx = grid.indexOf('if (isTerminalRendered(name)) {');
+    assert.ok(guardIdx > -1, 'the trailing loop must guard on entry.term before suspend/resume');
+    assert.ok(suspendIdx > -1, 'the suspend/resume branch must exist');
+    assert.ok(guardIdx < suspendIdx,
+        'the entry.term guard must run BEFORE the suspend/resume branch — an unmaterialized entry must not be suspended');
+});
+
+test('no new argument on new TerminalWsGateway at either composition root', () => {
+    // The predicate is client-side only (it reads paneAssignments, paneModes,
+    // the container box — all webview state). The gateway constructor must not
+    // gain an argument or a setter for it. Both composition roots construct
+    // with exactly two args today; this pins that.
+    const bootstrap = fs.readFileSync(path.join(repoRoot, 'src', 'standalone', 'bootstrap.ts'), 'utf8');
+    const ptyHost = fs.readFileSync(path.join(repoRoot, 'src', 'standalone', 'ptyHost.ts'), 'utf8');
+    // Each root has exactly one `new TerminalWsGateway(...)` call with two args.
+    const bsCalls = bootstrap.match(/new TerminalWsGateway\(/g) || [];
+    const phCalls = ptyHost.match(/new TerminalWsGateway\(/g) || [];
+    assert.equal(bsCalls.length, 1, 'bootstrap.ts must have exactly one TerminalWsGateway construction');
+    assert.equal(phCalls.length, 1, 'ptyHost.ts must have exactly one TerminalWsGateway construction');
+    // No third argument: the call ends after the second arg's closing paren.
+    // A third arg would appear as a comma between the token function and the
+    // closing paren. Match the two-arg form exactly.
+    assert.match(bootstrap, /new TerminalWsGateway\(ptyFleetService, async \(\) => terminalSessionToken\)/,
+        'bootstrap.ts must construct TerminalWsGateway with exactly two args — no predicate arg');
+    assert.match(ptyHost, /new TerminalWsGateway\(fleet, async \(\) => token\);/,
+        'ptyHost.ts must construct TerminalWsGateway with exactly two args — no predicate arg');
+    // Negative: no three-arg form (a comma after the second arg's closing paren
+    // would indicate a third argument was added).
+    assert.ok(!/new TerminalWsGateway\([^)]*,[^)]*,/.test(bootstrap),
+        'bootstrap.ts must not add a third argument to TerminalWsGateway');
+    assert.ok(!/new TerminalWsGateway\([^)]*,[^)]*,/.test(ptyHost),
+        'ptyHost.ts must not add a third argument to TerminalWsGateway');
+    // No new setter for the predicate anywhere in the standalone layer.
+    assert.ok(!/setRenderedSlotPredicate|setIsTerminalRendered/.test(bootstrap),
+        'no new setter for the predicate in bootstrap.ts');
+    assert.ok(!/setRenderedSlotPredicate|setIsTerminalRendered/.test(ptyHost),
+        'no new setter for the predicate in ptyHost.ts');
+    // And the predicate did not leak into the gateway file itself.
+    const gateway = fs.readFileSync(path.join(repoRoot, 'src', 'standalone', 'terminalWsGateway.ts'), 'utf8');
+    assert.ok(!/isTerminalRendered/.test(gateway),
+        'isTerminalRendered must not appear in terminalWsGateway.ts — the predicate is client-side only');
 });
 
 /* ── Presentation: a toggle, never a third peer in a picker ─────────────── */

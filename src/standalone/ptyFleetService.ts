@@ -14,6 +14,15 @@ export const MAX_LIVE_DELEGATE_PTYS = 32;
 
 export const SHELL_READINESS_DELAY_MS = 750;
 export const SIGTERM_GRACE_MS = 3000;
+/**
+ * Window after spawn within which a code-0 exit with NO output is treated as a
+ * stale startup-command death rather than a real session ending. Sized to the
+ * longest first-readiness ceiling (DEVIN_FIRST_READINESS_TIMEOUT_MS = 20s) plus
+ * the shell readiness delay and boot slack, so a CLI that exits before its
+ * readiness gate fires is caught here. After the window a code 0 is a real
+ * session end; after any output it is a real session end regardless of timing.
+ */
+export const STARTUP_COMMAND_DEATH_WINDOW_MS = 30_000;
 
 /**
  * Singleton role identities. Roles mapped here share ONE seat across the fleet
@@ -62,6 +71,20 @@ export interface FleetTerminalInfo {
     agentInstanceId: string;
     parentInstanceId?: string | null;
     cliFamily?: CliFamily;
+    /**
+     * The startup command this seat actually launched with (after the
+     * `injectStartupCommand` re-read resolved the final value). Surfaced in the
+     * `ptyListTerminals` projection so the Agent Setup panel can show what a
+     * live seat launched without reading a log. Absent on handles created
+     * before the provenance-recording change landed.
+     */
+    startupCommand?: string;
+    /**
+     * Provenance of {@link startupCommand} — `argument` | `global-file` |
+     * `team-definition` | `none`. Surfaced alongside the command in the
+     * `ptyListTerminals` projection.
+     */
+    startupCommandSource?: string;
 }
 
 export interface ExtendedTerminalHandle extends TerminalHandle {
@@ -87,11 +110,28 @@ export interface ExtendedTerminalHandle extends TerminalHandle {
     startupCommand?: string;
     /**
      * Provenance of {@link startupCommand} — which source produced the string
-     * (`argument` | `global-file` | `team-definition` | `none`). Populated by
-     * the companion plan `two-stores-hold-agent-startup-commands-and-they-disagree`;
-     * absent until that lands. Logged at spawn when present.
+     * (`argument` | `global-file` | `team-definition` | `none`). Recorded AFTER
+     * `injectStartupCommand` resolves the actual command, so it reflects the
+     * command that was really injected (the re-read at `:513` can produce a
+     * different command if the file changed between the first resolution and
+     * injection). Logged at spawn and surfaced in `ptyListTerminals`.
      */
     startupCommandSource?: string;
+    /**
+     * True once the PTY has emitted ANY byte of output (shell banner, command
+     * output, error text). Keys the stale-command-death detection in `onExit`:
+     * a code-0 exit with `hasProducedOutput === false` inside
+     * {@link STARTUP_COMMAND_DEATH_WINDOW_MS} is reported as a stale startup
+     * command rather than a real session ending. Set from the fleet's own
+     * `onData` tap in `create()`.
+     */
+    hasProducedOutput?: boolean;
+    /**
+     * Wall-clock ms at which the handle was constructed (independent of the ISO
+     * `startTime` string). Used by the stale-command-death window check in
+     * `onExit`. Set once in `create()`.
+     */
+    startedAtMs: number;
     /**
      * Internal: marks a terminal spawned by spawnDelegates as a team member,
      * suppressing auto-start triggering. A shared member is unparented by
@@ -179,12 +219,21 @@ export interface CreateOptions {
     hidden?: boolean;
 }
 
-export type FleetChangeEvent = 
+export type FleetChangeEvent =
     | { type: 'created'; terminal: ExtendedTerminalHandle }
     // `code` is the process exit status when the PTY died on its own, and
     // undefined for an operator-initiated kill(). The gateway forwards it to
     // attached clients — without it every terminal reported "exited with code 0".
-    | { type: 'closed'; name: string; code?: number }
+    | { type: 'closed'; name: string; code?: number;
+        // Present ONLY when the seat died inside the first-readiness window with
+        // code 0 and no output — the stale startup-command death signature. The
+        // gateway forwards these so the webview can name the exit for what it is
+        // ("stale startup command 'agy' (source=global-file)") instead of the
+        // bare "Process Exited with code 0". Absent for every other exit path.
+        staleCommandDeath?: boolean;
+        startupCommand?: string;
+        startupCommandSource?: string;
+    }
     | { type: 'renamed'; oldName: string; newName: string };
 
 export class PtyFleetService {
@@ -461,18 +510,31 @@ export class PtyFleetService {
             env: { ...claudeEnvDefaults, ...process.env, ...switchboardEnv } as Record<string, string>,
         });
 
+        // Resolve the startup command AND its provenance. The explicit argument
+        // wins; a team-member argument came from the team definition
+        // (`spawnDelegates` passes `d.startupCommand`); otherwise the global file
+        // is the source of truth; otherwise nothing. The source is recorded on
+        // the handle so a seat that launched the wrong binary can be traced to
+        // the store that produced the string — see the plan
+        // `two-stores-hold-agent-startup-commands-and-they-disagree`.
         let effectiveStartupCommand = startupCommand;
-        if (!effectiveStartupCommand) {
+        let effectiveStartupSource: string;
+        if (effectiveStartupCommand) {
+            effectiveStartupSource = opts?._isTeamMember ? 'team-definition' : 'argument';
+        } else {
             try {
                 const commands = await GlobalIntegrationConfigService.getAgentStartupCommands() || {};
                 effectiveStartupCommand = commands[role];
+                effectiveStartupSource = effectiveStartupCommand ? 'global-file' : 'none';
             } catch {
                 effectiveStartupCommand = undefined;
+                effectiveStartupSource = 'none';
             }
         }
         const cliFamily = deriveCliFamily(effectiveStartupCommand);
 
         const startTime = new Date().toISOString();
+        const startedAtMs = Date.now();
         const handle: ExtendedTerminalHandle = {
             ...rawHandle,
             name,
@@ -498,28 +560,20 @@ export class PtyFleetService {
             // Recorded so the delivery path can re-derive cliFamily from the
             // CURRENT command under the terminal lock, instead of staying frozen
             // at the spawn-time classification. See ExtendedTerminalHandle.startupCommand.
+            // Provenance is the FIRST resolution; injectStartupCommand may overwrite
+            // both below when its re-read produces a different command.
             startupCommand: effectiveStartupCommand,
+            startupCommandSource: effectiveStartupSource,
+            // Wall-clock ms at construction — keys the stale-command-death window.
+            startedAtMs,
             // Initialise the heartbeat to creation time so a freshly-spawned shell
             // that has not yet emitted its banner still reads as "just heard from".
-            lastDataAt: Date.now(),
+            lastDataAt: startedAtMs,
             // Delivery count: 0 until the first prompt is delivered, increments on every send.
             // Keys the cold-boot first-readiness gate and the clear-suppression
             // on a seat that has no prior work context to clear.
             promptCount: 0,
         };
-
-        // Spawn-time family log — seat, role, resolved command, provenance
-        // (when the companion plan has populated startupCommandSource), and the
-        // derived family. This is the line that makes the next "the fix didn't
-        // take" report answerable: a seat classified `unknown` or `antigravity`
-        // here never enters the Devin readiness arm, no matter what later fixes
-        // apply to that arm. The command may carry flags like
-        // --dangerously-skip-permissions; keep this to the local console/log,
-        // never surface it anywhere that leaves the machine.
-        const provenanceSuffix = handle.startupCommandSource
-            ? ` source=${handle.startupCommandSource}`
-            : '';
-        console.log(`[cliFamily] spawn seat=${name} role=${role} family=${cliFamily} command=${effectiveStartupCommand ?? '<none>'}${provenanceSuffix}`);
 
         this.terminals.set(name, handle);
 
@@ -531,7 +585,12 @@ export class PtyFleetService {
         // no I/O — so this survives ~166 emits/sec without per-flush cost. This
         // subscription is independent of the gateway's; it stays live even when
         // ptyReady === false and the WS gateway is never constructed.
-        handle.onData(() => { handle.lastDataAt = Date.now(); });
+        // The same tap sets hasProducedOutput so the stale-command-death detector
+        // in onExit can distinguish "binary never printed" from "agent finished".
+        handle.onData(() => {
+            handle.lastDataAt = Date.now();
+            handle.hasProducedOutput = true;
+        });
 
         handle.onExit((code) => {
             handle.status = 'exited';
@@ -539,14 +598,60 @@ export class PtyFleetService {
             const wasPresent = this.terminals.has(handle.name);
             if (wasPresent) {
                 this.updateRegistryState();
-                this.emitter.emit('change', { type: 'closed', name: handle.name, code });
+                // Stale startup-command death: code 0, no output, inside the
+                // first-readiness window. The shell started, the startup command
+                // was injected, and a missing/non-functional binary exited
+                // cleanly with nothing printed. Forward the resolved command and
+                // its source so the webview names the exit for what it is
+                // instead of the bare "Process Exited with code 0". A real
+                // session that produced output, or one that outlived the window,
+                // is NOT flagged — those are legitimate exits.
+                const elapsedMs = Date.now() - handle.startedAtMs;
+                const staleCommandDeath = code === 0
+                    && handle.hasProducedOutput !== true
+                    && elapsedMs < STARTUP_COMMAND_DEATH_WINDOW_MS
+                    && !!handle.startupCommand;
+                this.emitter.emit('change', staleCommandDeath
+                    ? {
+                        type: 'closed', name: handle.name, code,
+                        staleCommandDeath: true,
+                        startupCommand: handle.startupCommand,
+                        startupCommandSource: handle.startupCommandSource,
+                    }
+                    : { type: 'closed', name: handle.name, code });
             }
         });
 
         this.updateRegistryState();
         this.emitter.emit('change', { type: 'created', terminal: handle });
 
-        await this.injectStartupCommand(handle, role, effectiveStartupCommand);
+        // Inject the startup command and re-record provenance AFTER injection.
+        // injectStartupCommand re-reads the global file when the first resolution
+        // was falsy, so the command actually injected can differ from the first
+        // resolution if the file changed between the two reads. The handle is the
+        // auditable fact — it must reflect what was really injected, not what the
+        // first resolution guessed.
+        const injected = await this.injectStartupCommand(handle, role, effectiveStartupCommand, effectiveStartupSource);
+        handle.startupCommand = injected.command;
+        handle.startupCommandSource = injected.source;
+        if (injected.command && injected.command !== effectiveStartupCommand) {
+            // The injected command diverged from the first resolution — re-derive
+            // cliFamily so the readiness arm matches the CLI that actually ran.
+            handle.cliFamily = deriveCliFamily(injected.command);
+        }
+
+        // Spawn-time family log — seat, role, resolved command, provenance and
+        // the derived family. Logged AFTER injection so the command and source
+        // reflect what was really injected. This is the line that makes the next
+        // "the fix didn't take" report answerable: a seat classified `unknown`
+        // or `antigravity` here never enters the Devin readiness arm, no matter
+        // what later fixes apply to that arm. The command may carry flags like
+        // --dangerously-skip-permissions; keep this to the local console/log,
+        // never surface it anywhere that leaves the machine.
+        const provenanceSuffix = handle.startupCommandSource
+            ? ` source=${handle.startupCommandSource}`
+            : '';
+        console.log(`[cliFamily] spawn seat=${name} role=${role} family=${handle.cliFamily} command=${handle.startupCommand ?? '<none>'}${provenanceSuffix}`);
 
         return handle;
     }
@@ -561,21 +666,35 @@ export class PtyFleetService {
      * lifecycle hooks; that was removed because hooks are a Claude-Code-only
      * mechanism, so it lit the board for one CLI and silently left every other
      * agent on the timeout path.
+     *
+     * Returns the command actually injected and its source so `create()` can
+     * record provenance AFTER injection. When the passed `startupCommand` is
+     * falsy this re-reads the global file — the command returned here (not the
+     * first resolution) is what the seat really launched.
      */
-    private async injectStartupCommand(handle: ExtendedTerminalHandle, role: string, startupCommand?: string): Promise<void> {
+    private async injectStartupCommand(
+        handle: ExtendedTerminalHandle,
+        role: string,
+        startupCommand?: string,
+        source?: string,
+    ): Promise<{ command?: string; source: string }> {
         try {
             let cmd = startupCommand;
+            let src = source ?? 'none';
             if (!cmd) {
                 const commands = await GlobalIntegrationConfigService.getAgentStartupCommands() || {};
                 cmd = commands[role];
+                src = cmd ? 'global-file' : 'none';
             }
-            if (!cmd) { return; }
+            if (!cmd) { return { command: undefined, source: 'none' }; }
             await new Promise(resolve => setTimeout(resolve, SHELL_READINESS_DELAY_MS));
             if (handle.status === 'active') {
                 handle.sendText(cmd, true);
             }
+            return { command: cmd, source: src };
         } catch (err) {
             console.warn(`[PtyFleetService] Failed to inject startup command for role ${role}:`, err);
+            return { command: undefined, source: 'none' };
         }
     }
 

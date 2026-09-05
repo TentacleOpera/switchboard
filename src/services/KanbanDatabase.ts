@@ -10,6 +10,8 @@ import { resolveCanonicalWorkspaceIdSync } from './WorkspaceIdentityService';
 import { STATE_KEY_TO_CONFIG } from './stateConfigBridge';
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { generateCodename } from './codenameGenerator';
+import { getMachineId, resolveUserId } from './machineAttribution';
+import { syncOwnershipLease, type SyncLeaseStatus } from './SyncOwnershipLease';
 import {
     DEFAULT_KANBAN_COLUMNS,
     parseCustomAgents,
@@ -408,6 +410,7 @@ CREATE TABLE IF NOT EXISTS plan_events (
     action TEXT,
     timestamp TEXT NOT NULL,
     device_id TEXT DEFAULT '',
+    user_id TEXT DEFAULT '',
     vector_clock TEXT DEFAULT '',
     payload TEXT DEFAULT '{}',
     workspace_id TEXT
@@ -801,6 +804,14 @@ const MIGRATION_V70_INDEXES_SQL = [
 // a destructive migration for no benefit, and older binaries may still write it.
 const MIGRATION_V71_SQL = [
     `UPDATE control_plane SET override_body = workspace_override WHERE override_body IS NULL AND workspace_override IS NOT NULL`,
+];
+
+// V72: Add user_id attribution to plan_events. Existing rows keep an empty value
+// and render as unknown; no backfill is performed because attributing historical
+// writes to the current operator would be a fabrication. Device_id is now a
+// stable machine id, but historical hostname values are intentionally tolerated.
+const MIGRATION_V72_SQL = [
+    `ALTER TABLE plan_events ADD COLUMN user_id TEXT DEFAULT ''`,
 ];
 
 const MIGRATION_V13_SQL = [
@@ -1759,6 +1770,11 @@ export class KanbanDatabase {
     // Monotonic version counter — bumped on every mutation
     private _dataVersion = 0;
     public getDataVersion(): number { return this._dataVersion; }
+
+    /** Current sync ownership and staleness for the Database panel. */
+    public getSyncOwnershipStatus(): SyncLeaseStatus {
+        return syncOwnershipLease.getStatus();
+    }
 
     private _onColumnChanged: any;
     public get onColumnChanged(): any {
@@ -5610,6 +5626,20 @@ export class KanbanDatabase {
     }
 
     /**
+     * Delete a config row by key. Used by the startup-commands reconcile pass
+     * (`_reconcileStartupCommandsDbRow`) to retire the legacy
+     * `agents.startupCommands` DB row once the machine-global file has a value
+     * for every role the row carries — the file is the source of truth and the
+     * row is archived as `.migrated.bak` first. Returns true when a row was
+     * removed (or was already absent). Idempotent.
+     */
+    public async deleteConfig(key: string): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        this._db.run('DELETE FROM config WHERE key = ?', [key]);
+        return this._persist();
+    }
+
+    /**
      * Read every config row (key + value). Used by the transfer-bundle exporter
      * to classify and filter the full settings set in one pass. Sync requires an
      * open handle (same contract as getConfigSync); returns [] otherwise.
@@ -9085,6 +9115,23 @@ export class KanbanDatabase {
             await this.setMigrationVersion(71);
             console.log('[KanbanDatabase] V71 migration completed: workspace_override collapsed into override_body');
         }
+
+        // V72: Add user_id attribution to plan_events (sync-owner-lease-and-write-attribution.md).
+        const v72 = await this.getMigrationVersion();
+        if (v72 < 72) {
+            try {
+                for (const sql of MIGRATION_V72_SQL) {
+                    this._db.exec(sql);
+                }
+                await this.setMigrationVersion(72);
+                console.log('[KanbanDatabase] V72 migration completed: user_id column added to plan_events');
+            } catch (e) {
+                const msg = e instanceof Error ? e.message : String(e);
+                if (!msg.includes('duplicate column') && !msg.includes('already exists')) {
+                    console.error('[KanbanDatabase] V72 migration failed:', e);
+                }
+            }
+        }
     }
 
     private async _backfillStagedCardsToMissions(): Promise<void> {
@@ -10492,7 +10539,11 @@ FROM plans
         payload?: string;
         workspaceId?: string;
     }): Promise<boolean> {
-        const deviceId = os.hostname();
+        const deviceId = getMachineId();
+        const { value: userId, source: userSource } = resolveUserId();
+        if (userSource === 'unknown') {
+            console.log(`[KanbanDatabase] plan_event user_id unresolved for plan ${planId} — attribution will show 'unknown'`);
+        }
         let wsId = event.workspaceId;
         if (!wsId && planId) {
             try {
@@ -10504,8 +10555,8 @@ FROM plans
             wsId = await this.getWorkspaceId() || this._getWorkspaceIdFallback();
         }
         return this._persistedUpdate(
-            `INSERT INTO plan_events (plan_id, event_type, workflow, action, timestamp, device_id, payload, workspace_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO plan_events (plan_id, event_type, workflow, action, timestamp, device_id, user_id, payload, workspace_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 planId,
                 event.eventType,
@@ -10513,6 +10564,7 @@ FROM plans
                 event.action || '',
                 event.timestamp || new Date().toISOString(),
                 deviceId,
+                userId,
                 event.payload || '{}',
                 wsId || null
             ]
@@ -10569,6 +10621,7 @@ FROM plans
                                     action: arc.action,
                                     timestamp: arc.timestamp,
                                     device_id: arc.device_id,
+                                    user_id: arc.user_id,
                                     vector_clock: arc.vector_clock,
                                     payload: arc.payload,
                                     workspace_id: arc.workspace_id,
@@ -10733,12 +10786,13 @@ FROM plans
         } catch { return 0; }
 
         let migrated = 0;
-        const deviceId = os.hostname();
+        const deviceId = getMachineId();
+        const { value: userId } = resolveUserId();
         for (const event of events) {
             try {
                 this._db.run(
-                    `INSERT INTO plan_events (plan_id, event_type, workflow, action, timestamp, device_id, payload, workspace_id)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                    `INSERT INTO plan_events (plan_id, event_type, workflow, action, timestamp, device_id, user_id, payload, workspace_id)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                     [
                         planId,
                         'workflow_event',
@@ -10746,6 +10800,7 @@ FROM plans
                         event.action || '',
                         event.timestamp || new Date().toISOString(),
                         deviceId,
+                        userId,
                         JSON.stringify(event),
                         wsId || null
                     ]

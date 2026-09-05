@@ -11,6 +11,7 @@ const CopyPlugin = require('copy-webpack-plugin');
 
 /** @type WebpackConfig */
 const extensionConfig = {
+    name: 'extension',
     target: 'node', // VS Code extensions run in a Node.js-context 📖 -> https://webpack.js.org/configuration/node/
     mode: 'none', // this leaves the source code as close as possible to the original (when packaging we set this to 'production')
 
@@ -142,6 +143,7 @@ const extensionConfig = {
 
 /** @type WebpackConfig */
 const standaloneConfig = {
+    name: 'standalone',
     target: 'node',
     mode: extensionConfig.mode,
     entry: {

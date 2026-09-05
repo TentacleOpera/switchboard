@@ -11,6 +11,7 @@ import type { RemoteProvider } from './remote/RemoteProvider';
 import type { RemoteProviderKind } from './RemoteControlService';
 import type { LiveSyncState, LiveSyncConfig, LiveSyncStatus } from '../models/LiveSyncTypes';
 import { DEFAULT_LIVE_SYNC_CONFIG } from '../models/LiveSyncTypes';
+import { syncOwnershipLease } from './SyncOwnershipLease';
 
 interface RateLimitWindow {
   service: 'clickup' | 'linear';
@@ -1032,6 +1033,10 @@ export class ContinuousSyncService implements vscode.Disposable {
     // For content sync via ContinuousSyncService, we check it here via the kanbanProvider.
 
     try {
+      const db = this._getKanbanDb ? this._getKanbanDb(workspaceRoot) : undefined;
+      if (!(await syncOwnershipLease.isOwner(db))) {
+        return { skipped: true, reason: 'This machine is not the sync owner' };
+      }
       await provider.pushContent(remoteId, content);
       // Cursor-advance-on-push: prevents the next poll from treating our own push as an
       // inbound edit. Linear: local clock is fine (byte-hash guard also covers it).

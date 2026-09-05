@@ -181,6 +181,14 @@ export async function runPtyHost(args: string[] = process.argv.slice(2)): Promis
                     // request payload — a caller-supplied family is not evidence.
                     // Omitting it left every curtain on the generic "CLI" label.
                     cliFamily: t.cliFamily,
+                    // The startup command this seat actually launched with and the
+                    // store it came from (`argument` | `global-file` |
+                    // `team-definition` | `none`). Surfaced so the Agent Setup panel
+                    // can show what a live seat launched without reading a log — a
+                    // stale seat is visible in the fleet list. See the plan
+                    // `two-stores-hold-agent-startup-commands-and-they-disagree`.
+                    startupCommand: t.startupCommand,
+                    startupCommandSource: t.startupCommandSource,
                     // Delivery count: 0 until the first prompt is delivered, increments on every send.
                     // The extension host's curtain reads this to arm the boot-phase
                     // curtain for a first dispatch to a fresh pool terminal.

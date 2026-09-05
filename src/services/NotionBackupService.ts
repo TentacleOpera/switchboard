@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import { NotionFetchService } from './NotionFetchService';
 import { KanbanDatabase, KanbanPlanRecord } from './KanbanDatabase';
 import { loadNotionRemoteSetup, saveNotionRemoteSetup } from './remote/notionRemoteConfig';
+import { syncOwnershipLease } from './SyncOwnershipLease';
 
 export interface NotionBackupConfig {
     databaseUrl?: string;
@@ -61,6 +62,9 @@ export class NotionBackupService {
         const workspaceId = await kanbanDb.getWorkspaceId();
         if (!workspaceId) {
             return { success: false, backedUp: 0, total: 0, error: 'Workspace ID not found in database' };
+        }
+        if (!(await syncOwnershipLease.isOwner())) {
+            return { success: false, backedUp: 0, total: 0, error: 'This machine is not the sync owner — Notion backup skipped' };
         }
 
         const allPlans = await kanbanDb.getAllPlans(workspaceId);
@@ -503,6 +507,9 @@ export class NotionBackupService {
 
     private async _upsertPlanToNotion(databaseId: string, plan: KanbanPlanRecord, featureIdToNotionPageId?: Map<string, string>): Promise<{ success: boolean; pageId?: string }> {
         try {
+            if (!(await syncOwnershipLease.isOwner())) {
+                return { success: false };
+            }
             // Query for existing page by Plan ID
             const queryResult = await this._notionFetchService.httpRequest('POST', `/databases/${databaseId}/query`, {
                 filter: { property: 'Plan ID', rich_text: { equals: plan.planId } }

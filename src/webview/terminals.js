@@ -411,6 +411,40 @@
     }
 
     /**
+     * The one authority on whether a terminal holds a live socket.
+     *
+     * A terminal is *live* — streaming, parsing, holding a renderer — when ALL
+     * three hold:
+     *
+     *   1. its name appears in `paneAssignments.slice(0, getSlotCount(...))` —
+     *      the slice is load-bearing because `paneAssignments` is padded to
+     *      `getMaxSlotCount()` and a bare `.includes()` would match a terminal
+     *      parked off-screen (the very case this predicate exists to suspend);
+     *   2. `isRendered(entry.container)` — the container has a box, which a
+     *      pane the reconcile dropped (or a status pane whose `.active` was
+     *      removed) does not;
+     *   3. `paneModes[<that slot>] !== 'status'` — a status pane renders a
+     *      card, not a viewport, so it is not rendering the terminal even
+     *      though its slot is on screen.
+     *
+     * This function is the SINGLE owner of `entry.suspended`. There is no
+     * second reason a terminal can be suspended, so nothing has to record
+     * *why* it was set. The reconcile's trailing loop calls
+     * `suspendTerminalStream` / `resumeTerminalStream` based on this
+     * predicate alone — no other call site exists.
+     */
+    function isTerminalRendered(name) {
+        if (!name) { return false; }
+        const slotCount = getSlotCount(effectiveLayout);
+        const slot = paneAssignments.slice(0, slotCount).indexOf(name);
+        if (slot < 0) { return false; }
+        if (paneModes[slot] === 'status') { return false; }
+        const entry = terminalsMap.get(name);
+        if (!entry) { return false; }
+        return isRendered(entry.container);
+    }
+
+    /**
      * Fit to the container and tell the pty the new size — but only ever from a
      * rendered box. `rendered: true` lets the gateway discount any client that gets
      * this wrong; see the resize arm of terminalWsGateway.
@@ -6115,12 +6149,44 @@
         // parked in slot 5 while the layout is `1` is still ASSIGNED: no detach timer,
         // keeps its active class, survives a 3x3 -> 1 -> 3x3 round trip instantly.
         // Narrowing this to the rendered slot count would start destroying those.
+        //
+        // The detach predicate (bare `paneAssignments.includes(name)`) and the
+        // stream predicate (`isTerminalRendered(name)`) are DIFFERENT by design:
+        // an off-screen but assigned terminal keeps its view (detach cancels)
+        // but loses its socket (stream suspends). Conflating them is how a
+        // 3x3 -> 1 -> 3x3 round trip starts rebuilding xterms.
+        //
+        // Placement is load-bearing: this loop runs AFTER the per-slot
+        // updatePaneElement calls above, which is the only point at which
+        // containers have been appended or dropped and `.active` has been set.
+        // Evaluating isRendered before that reads the previous frame's geometry
+        // and suspends the pane that is about to be shown.
+        //
+        // Both suspendTerminalStream and resumeTerminalStream early-return on
+        // their own flag, so this is safe on every reconcile — including the
+        // 5 s fleet poll. That idempotency is load-bearing: markReplayGap calls
+        // renderPaneGrid, so a resume that lands on an evicted ring re-enters
+        // here, and a lost idempotency would turn a scrollback gap into a
+        // render loop.
         for (const [name, entry] of terminalsMap.entries()) {
             if (!paneAssignments.includes(name)) {
                 entry.container.classList.remove('active');
                 armDetachTimer(name);
             } else {
                 cancelDetachTimer(name);
+            }
+            // An unmaterialized entry (entry.term null) is still under
+            // construction: whenRendered → materializeTerminalView opens its
+            // socket and renderer once the container gets a box. Suspending it
+            // here would set entry.suspended before that path runs, and
+            // flushBatch would then skip the very frames its own connect just
+            // asked for — a dead terminal on first reveal. The predicate takes
+            // over once the term exists.
+            if (!entry.term) { continue; }
+            if (isTerminalRendered(name)) {
+                resumeTerminalStream(entry);
+            } else {
+                suspendTerminalStream(entry);
             }
         }
 
@@ -7098,7 +7164,11 @@
             const entry = terminalsMap.get(assignedName);
             if (entry) {
                 entry.container.classList.remove('active');
-                suspendTerminalStream(entry);
+                // Stream suspension is driven by isTerminalRendered in the
+                // reconcile's trailing loop — the predicate's status clause
+                // closes this socket without an ad-hoc call here. Two call
+                // sites deciding one flag is the ownership problem this
+                // transfer exists to close.
             }
             // Curtains are opaque terminal-output overlays (z-index 4, inset 0) and
             // would cover the card completely. Working silence is cleared by
@@ -7130,11 +7200,12 @@
                     startFitLadder(entry.name);
                 }
                 entry.container.classList.add('active');
-                // Output back on. AFTER `.active`, because resumeTerminalStream
-                // reattaches a renderer and isRendered() reads a real box — a
-                // resume on a display:none host acquires nothing and leaves the
-                // pane on the fallback renderer for the life of the page.
-                if (entry.suspended) { resumeTerminalStream(entry); }
+                // Stream resume is driven by isTerminalRendered in the
+                // reconcile's trailing loop, which runs AFTER this loop — so
+                // `.active` is already on the container when the predicate
+                // reads its box. The ordering this branch used to enforce
+                // (resume AFTER .active) is now structural: updatePaneElement
+                // sets the class, the trailing loop reads it.
             }
 
             // A curtain left behind by a PREVIOUS occupant of this slot. Panes are
@@ -11024,11 +11095,13 @@
     /**
      * Suspend a terminal's live socket while keeping its xterm buffer intact.
      *
-     * Called when a pane enters status mode — the terminal is still assigned but
-     * its output is not rendered. The WebSocket is closed (keeping lastSeq for a
-     * clean resume), the renderer is released (freeing a WebGL context slot),
-     * and batch processing stops. entry.term and its scrollback survive so a
-     * toggle back to terminal mode is instant — the replay ring fills any gap.
+     * Called exclusively from the reconcile's trailing loop when
+     * `isTerminalRendered(name)` is false — the terminal is not on a rendered
+     * pane (narrowed out, parked off-screen, or toggled to status). The
+     * WebSocket is closed (keeping lastSeq for a clean resume), the renderer is
+     * released (freeing a WebGL context slot), and batch processing stops.
+     * entry.term and its scrollback survive so a 3x3 -> 1 -> 3x3 round trip is
+     * instant — the replay ring fills any gap.
      */
     function suspendTerminalStream(entry) {
         if (!entry || entry.disposed) { return; }
@@ -11072,9 +11145,10 @@
     /**
      * Resume a suspended terminal's live socket and renderer.
      *
-     * Called when a pane leaves status mode back to terminal. Reattaches a
-     * renderer, reconnects with ?lastSeq=, and lets the existing replay/gap
-     * machinery handle whatever the ring still holds.
+     * Called exclusively from the reconcile's trailing loop when
+     * `isTerminalRendered(name)` is true. Reattaches a renderer, reconnects
+     * with ?lastSeq=, and lets the existing replay/gap machinery handle
+     * whatever the ring still holds.
      */
     function resumeTerminalStream(entry) {
         if (!entry || entry.disposed) { return; }
@@ -11361,7 +11435,20 @@
                         clearWorkingSilence(entry.name);
                         const exitCode = typeof frame.code === 'number' ? frame.code : 0;
                         entry.exited = true;
-                        entry.term.write(`\r\n\x1b[31m[Process Exited with code ${exitCode}]\x1b[0m\r\n`);
+                        // A stale startup-command death (code 0, no output, inside
+                        // the first-readiness window) is named for what it is —
+                        // the seat launched a command that exited cleanly without
+                        // producing anything — rather than the bare
+                        // "Process Exited with code 0" that is indistinguishable
+                        // from a real session ending. The command and its source
+                        // are forwarded by the gateway from the fleet's exit event.
+                        if (frame.staleCommandDeath) {
+                            const cmd = frame.startupCommand || '<none>';
+                            const src = frame.startupCommandSource || 'none';
+                            entry.term.write(`\r\n\x1b[31m[Stale startup command exited with code ${exitCode}: '${cmd}' (source=${src})]\x1b[0m\r\n`);
+                        } else {
+                            entry.term.write(`\r\n\x1b[31m[Process Exited with code ${exitCode}]\x1b[0m\r\n`);
+                        }
                         entry.term.options.disableStdin = true;
                         refreshInputState(entry.name);
                         if (isDockFrame && window.parent && window.parent !== window) {
