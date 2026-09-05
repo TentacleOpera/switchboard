@@ -29,20 +29,25 @@ Give the shared tier two concrete targets an operator can actually point at: a l
 
 **Storage Topology and the Shared/Runtime Schema Split** is a hard prerequisite in full — it decides what a shared store is allowed to hold. Within this feature: the sync-owner lease lands before either store target goes multi-writer, and remote authoring lands last because it needs a store to write into. The two store targets are independent of each other and an operator will choose one, not both.
 
-## Open question, recorded not resolved (2026-09-04, Board Collapse 07)
+## Settled 2026-09-05: one identifier, hostname-derived, used by both
 
-**Which identifier does a snapshot entry carry?** Two subtasks of this feature answer differently and
-neither names the other:
+**Which identifier does a snapshot entry carry?** The same one the lease uses: a hostname-derived
+`device_id`. Both subtasks use it; there is no second machine id.
 
-- *Make the orphan-branch board snapshot bidirectional* adds a per-machine `device_id` to each entry.
-- *One machine owns provider sync, and every board write says who made it* states that
-  `device_id = os.hostname()` is **not unique** and introduces a separate stable machine id held in
-  the home store, alongside a `user_id` derived from `git config user.email`.
+The concern that prompted this — `os.hostname()` not being globally unique — is not worth a second
+identifier. Two machines a person actually works across have different names, and someone who gives
+two machines the same hostname has bigger problems than a board snapshot: SSH host keys, mDNS, and
+their own ability to tell the two apart all break first. Buying a stable uuid to survive that case
+costs an extra store, a mapping between the two ids, and the exact divergence this question was
+raised about — a lost-write detector and an ownership lease that disagree about who is who.
 
-If the snapshot carries a hostname-derived id while the lease uses a different stable id, two
-machines that happen to share a hostname are indistinguishable in the snapshot and distinguishable
-in the lease — a lost-write detector and an ownership lease disagreeing about who is who.
+**Consequences for the two subtasks, both of which must follow this:**
 
-This does **not** need resolving now: the whole feature is parked in Backlog behind the storage
-programme's first step. It must not be lost, which is why it is written here rather than left implied
-in two subtask files. Settle it once, for both subtasks, before either is coded.
+- *Make the orphan-branch board snapshot bidirectional* keeps `device_id` as it has it.
+- *One machine owns provider sync* drops its separate stable machine id and uses `device_id` too.
+  Its `user_id` from `git config user.email` is a different thing and stays — it identifies the
+  person, not the machine.
+
+**If the collision ever matters**, the fix is to tell the operator their two machines share a name,
+not to invent an id behind their back. A duplicate hostname is a misconfiguration to surface, not a
+condition to route around silently.
