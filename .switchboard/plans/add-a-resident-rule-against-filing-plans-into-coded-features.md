@@ -49,7 +49,19 @@ The managed block is regenerated from the constant. A hand-edit to either file i
 
 The rule must fit in that budget without consuming the docs pointer's reservation. If it cannot, shorten it — do not raise the gate. The block was cut from 14,826 characters deliberately, and every line in it is there because it must be re-presented every turn.
 
-### 4. Sequence against the mirror retirement
+### 4. The files on disk are stale — a scaffolder run is part of the verification
+
+Verified 2026-09-05. The managed blocks exist — `AGENTS.md:1-165` and `CLAUDE.md:76-250`, both bounded by their marker pairs — but **neither contains the shrunken body**. `grep -c "Plans reach the board on their own"` returns 0 in both files. They are still carrying the old ~14,800-character block that `843bae45` cut in code.
+
+So the constant and the files have diverged, and adding a rule to the constant changes nothing visible until the scaffolder rewrites them. Verification cannot be "read the file" — it has to be "run the scaffold, then read the file", or the rule will look absent when it is merely undelivered.
+
+### 5. The control plane is now a database table, and it is not this
+
+The storage overhaul (`8258ce4b`) added a `control_plane` table — 74 rows on this board, `kind` in {protocol 33, skill 17, persona 8, script 6, workflow 4, doc 3, rule 3}, each with a `delivery` of `materialize` (61) or `inline` (13). Those rows project into `.agents/`.
+
+**The AGENTS.md / CLAUDE.md managed block is not among them.** There is no row for either file, and the resident body remains a code constant. Do not retarget this card at `control_plane` — check for a row before assuming, but as of 2026-09-05 there is none.
+
+### 6. Sequence against the mirror retirement
 
 `6c25a1e1` (*Delete the Claude mirror generator*) may relocate the managed-block helpers and retire `ClaudeCodeMirrorService.ts`. Its change 5 is explicit that `buildManagedInner` and `stripProtocolMarkers` *"serve the AGENTS.md/CLAUDE.md managed block and are unrelated to skill mirroring"* and must survive — but they may move.
 
@@ -65,7 +77,7 @@ So: target the resident body wherever it lives when this is coded, not a hardcod
 
 ## Verification Plan
 
-1. The rule appears in the managed block of both `CLAUDE.md` and `AGENTS.md`, from one source.
+1. The rule appears in the managed block of both `CLAUDE.md` and `AGENTS.md`, from one source, **after a scaffolder run** — the files are stale before it.
 2. `claude-protocol-block-size-contract.test.js` passes, with the docs-pointer headroom intact.
 3. A scaffold run does not remove or duplicate the rule.
 4. Neither markdown file was hand-edited to achieve this.
