@@ -1,7 +1,7 @@
 # Shared Board Stores - libSQL and the Git-Carried Snapshot
 
 <!-- board-collapse-07 -->
-> **UNPARKED 2026-09-05.** The blocker named in the original park note — *Move the database behind a single sidecar owner and replace sql.js with a real SQLite binding* — landed in the Storage layer overhaul and is marked done. Subtasks moved to Plan Reviewed. The device_id question is settled below.
+> **PARKED IN BACKLOG.** Three of the four subtasks carry explicit operator rejections dated 2026-09-01 — see each plan's "Settled — do not re-raise" section. Do not start this feature, do not cite libSQL as a prerequisite, and do not propose it in a storage comparison. Briefly unparked in error on 2026-09-05 and reverted the same day.
 
 
 **Complexity:** 9

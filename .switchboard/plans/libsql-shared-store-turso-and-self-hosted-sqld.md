@@ -37,18 +37,6 @@ Board state was designed as single-machine state, so the only distribution chann
 - Moving the local tier remote. Only the shared tier travels (`split-shared-board-state-from-machine-local-runtime.md`).
 - Postgres, MySQL, or any foreign dialect **as the local engine**. The storage feature's rejection stands there, on the 52 dialect sites, offline operation and forced migration. It is *not* a non-goal of the wider storage topology to consider a foreign-dialect remote for the shared tier — that would be an operational choice (auth, hosting, cost, concurrency, mapping-layer ownership), and this plan does not pre-empt it. What this plan asserts is narrower: libSQL is a good target because of schema symmetry and a supplied sync engine, not because rival dialects are ineligible.
 
-### Verified against upstream 2026-09-05 — naming, stability, and where the server should run
-
-**The name in this plan is out of date.** The standalone `sqld` repository is reported archived; the server now lives as `libsql-server` inside `tursodatabase/libsql`. Distribution is Homebrew, Docker, or a Rust toolchain. Read replicas are documented. Rename before coding, or the install instructions will point at an archived repo.
-
-**Stability could not be established from the primary source.** The `libsql-server` README states no lifecycle designation — not beta, not production-ready, nothing. A secondary source puts it at v0.24.x and describes it as beta, and warns that libSQL moves fast and older write-ups disagree with current behaviour.
-
-That uncertainty is material for a store this plan proposes to make *authoritative* for board state. **Establish the current stability position from upstream before committing**, and record the answer here. If it is beta, that is not necessarily disqualifying — the embedded replica keeps a local SQLite file as the read path, so a remote outage degrades to offline rather than to data loss — but it must be a decision taken with the fact in hand, not by omission.
-
-**Put the server on the always-on machine, not the capable one.** The obvious instinct is to host it on the workstation. That is backwards for an operator whose reason for a second machine is powering the workstation down: the store would disappear exactly when running lean.
-
-Host it on the low-power always-on box — a Pi serving a 9 MB database is trivial work. The workstation then keeps an embedded replica, works offline from it when the store is unreachable, and syncs on return. The always-on box holds the truth; the powerful box does the work.
-
 ## Metadata
 
 **Complexity:** 9
