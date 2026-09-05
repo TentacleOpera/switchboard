@@ -265,3 +265,10 @@ const outcome = acked
 6. Rotation cursor persists across server restarts (verified by `fileBackedMemento` writing to `standalone-state.json`).
 
 **Recommendation: Send to Coder** (Complexity 5 — multi-file changes across CLI, API server, and standalone bootstrap, with moderate logic for the round-robin cursor integration).
+
+## Implementation Summary
+
+Implemented planner round-robin rotation and `--seat` targeting flag across CLI, LocalApiServer, and standalone bootstrap:
+1. `src/standalone/cli.ts`: Added `--seat <terminal>` flag parsing to `cmdDispatch` and threaded `seat` through `doDispatch` into the POST `/kanban/dispatch` payload.
+2. `src/services/LocalApiServer.ts`: Updated `_handleKanbanDispatch` to extract `seat` from request body and pass it as `targetTerminalOverride` into `performKanbanDispatch` and `performKanbanDispatchAcked`.
+3. `src/standalone/bootstrap.ts`: Fixed field name resolution in `handlePtyVerb`'s `triggerAction` case to accept `payload.targetTerminalOverride` alongside `payload.terminalName`. Added planner round-robin resolution via `taskViewerProvider.getRoleTerminalSet` and `getPlannerRotationCursor`, advancing the cursor via `advancePlannerRotationCursor` only after prompt delivery succeeds.

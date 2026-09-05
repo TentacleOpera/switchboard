@@ -40,20 +40,25 @@ WSID_FILE="$SB_ROOT/.switchboard/workspace-id"
 WORKSPACE_ID=$(sed -n '1p' "$WSID_FILE" 2>/dev/null)
 DB_PATH=$(sed -n '2p' "$WSID_FILE" 2>/dev/null)
 
-# Fallback if line 2 (DB path) is empty — old-format workspace-id file.
-[ -z "$DB_PATH" ] && DB_PATH="$SB_ROOT/.switchboard/kanban.db"
+# Fallback if line 2 (DB path) is empty — per-project board database.
+# One board per project: ~/.switchboard/boards/<workspace-id>.db
+[ -z "$DB_PATH" ] && DB_PATH="$HOME/.switchboard/boards/${WORKSPACE_ID}.db"
+# Legacy fallback: per-repo kanban.db (pre-migration)
+[ -f "$SB_ROOT/.switchboard/kanban.db" ] && [ ! -f "$DB_PATH" ] && DB_PATH="$SB_ROOT/.switchboard/kanban.db"
+# Legacy fallback: consolidated global database (pre-per-project)
+[ ! -f "$DB_PATH" ] && [ -f "$HOME/.switchboard/switchboard.db" ] && DB_PATH="$HOME/.switchboard/switchboard.db"
 
 # Guard: refuse to continue if the DB is missing, rather than querying (and thus
 # creating) a phantom empty database somewhere it should never exist.
 if [ ! -f "$DB_PATH" ]; then
   echo "ERROR: kanban DB not found at '$DB_PATH'" >&2
-  echo "Run this from the workspace root, or fix line 2 of .switchboard/workspace-id." >&2
+  echo "Run this from the workspace root, or check ~/.switchboard/boards/<workspace-id>.db." >&2
   exit 1
 fi
 ```
 
 - **Line 1**: Workspace ID (hex string like `038bffef-9842-4574-96a1-69a43a280b3c`)
-- **Line 2**: Database path (absolute path to kanban.db; empty if using default location)
+- **Line 2**: Database path (defaults to `~/.switchboard/boards/<workspace-id>.db` if empty)
 
 > **Always query with `sqlite3 -readonly "$DB_PATH" "<sql>"`.** This skill only
 > reads. `-readonly` prevents accidental writes and is a second guard against
@@ -175,7 +180,8 @@ while [ "$SB_ROOT" != "/" ] && [ ! -f "$SB_ROOT/.switchboard/workspace-id" ]; do
 done
 WORKSPACE_ID=$(sed -n '1p' "$SB_ROOT/.switchboard/workspace-id" 2>/dev/null)
 DB_PATH=$(sed -n '2p' "$SB_ROOT/.switchboard/workspace-id" 2>/dev/null)
-[ -z "$DB_PATH" ] && DB_PATH="$SB_ROOT/.switchboard/kanban.db"
+[ -z "$DB_PATH" ] && DB_PATH="$HOME/.switchboard/boards/${WORKSPACE_ID}.db"
+[ -f "$SB_ROOT/.switchboard/kanban.db" ] && [ ! -f "$DB_PATH" ] && DB_PATH="$SB_ROOT/.switchboard/kanban.db"
 [ -f "$DB_PATH" ] || { echo "ERROR: kanban DB not found at '$DB_PATH'" >&2; exit 1; }
 
 # Get plans in BACKLOG column — READ-ONLY (this skill never writes).

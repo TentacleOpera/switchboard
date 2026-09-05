@@ -249,3 +249,7 @@ which implemented and wired this plan's Changes 2, 3 and 4 in order to ship stat
 now covers only what that commit did not: the rendered-slot predicate, its single call site, and the
 transfer of `entry.suspended`'s ownership away from `updatePaneElement`. Nothing was dropped as
 unwanted — the removed scope is removed because it is done.
+
+## Completion Summary
+
+Implemented the rendered-slot predicate as the single owner of `entry.suspended`. Added `isTerminalRendered(name)` in `terminals.js` — three clauses: sliced assignment lookup, `isRendered(entry.container)`, and `paneModes[slot] !== 'status'`. The reconcile's trailing loop now drives `suspendTerminalStream`/`resumeTerminalStream` from this predicate, replacing the two ad-hoc call sites in `updatePaneElement` (status branch's suspend, terminal branch's resume). Added an `entry.term` guard in the loop to skip unmaterialized entries — without it, a terminal created into a hidden panel would be suspended before `materializeTerminalView` opens its socket, leaving `flushBatch` skipping every frame on first reveal. Updated `status-pane-mode-contract.test.js`: rewrote two tests that asserted the old ad-hoc calls, added eight new source-contract tests covering all six Verification Plan items plus the unmaterialized-entry guard and the gateway-constructor confinement. All 30 tests pass.

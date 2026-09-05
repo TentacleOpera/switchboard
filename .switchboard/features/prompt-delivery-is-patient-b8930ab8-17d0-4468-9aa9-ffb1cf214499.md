@@ -81,10 +81,14 @@ possible. Land it first.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Explain the seat-clear session-restart toll where seat CLIs are configured](../plans/devin-clear-reauth-toll-visibility.md) — **PLAN REVIEWED** — ID: fe5daf69-426e-4b5a-92b0-da1df24fe6cd
-- [ ] [A delay setting must not be able to defeat known-CLI readiness detection](../plans/a-delay-setting-must-not-be-able-to-defeat-known-cli-readiness.md) — **PLAN REVIEWED** — ID: 4570333b-0cce-4e40-b8a0-8da118d86191
-- [ ] [A seat's CLI family is derived once at spawn and frozen, so every Devin readiness fix silently misses any seat not classified as Devin](../plans/a-seats-cli-family-is-frozen-at-spawn-so-devin-timing-fixes-never-reach-it.md) — **PLAN REVIEWED** — ID: d8f86774-a517-4040-b9aa-513decfaae17
-- [ ] [Prompt delivery should be patient, not precise — an unknown seat gets the fastest profile and deliveries 2..N get no gate at all](../plans/prompt-delivery-should-be-patient-not-precise.md) — **PLAN REVIEWED** — ID: c11ab0cd-0370-44d8-a33d-58a875d2cd18
-- [ ] [A Half-Delivered Dispatch Has No Safe Recovery — Retry Is the Only Lever, and It Destroys State](../plans/a-half-delivered-dispatch-has-no-safe-recovery-retry-is-the-only-lever-and-it-destroys-state.md) — **CREATED** — ID: ba068390-01cb-4832-a805-c924e2ccdc71
+- [ ] [Explain the seat-clear session-restart toll where seat CLIs are configured](../plans/devin-clear-reauth-toll-visibility.md) — **CODER CODED** — ID: fe5daf69-426e-4b5a-92b0-da1df24fe6cd
+- [ ] [A delay setting must not be able to defeat known-CLI readiness detection](../plans/a-delay-setting-must-not-be-able-to-defeat-known-cli-readiness.md) — **CODER CODED** — ID: 4570333b-0cce-4e40-b8a0-8da118d86191
+- [ ] [A seat's CLI family is derived once at spawn and frozen, so every Devin readiness fix silently misses any seat not classified as Devin](../plans/a-seats-cli-family-is-frozen-at-spawn-so-devin-timing-fixes-never-reach-it.md) — **CODER CODED** — ID: d8f86774-a517-4040-b9aa-513decfaae17
+- [ ] [Prompt delivery should be patient, not precise — an unknown seat gets the fastest profile and deliveries 2..N get no gate at all](../plans/prompt-delivery-should-be-patient-not-precise.md) — **CODER CODED** — ID: c11ab0cd-0370-44d8-a33d-58a875d2cd18
+- [ ] [A Half-Delivered Dispatch Has No Safe Recovery — Retry Is the Only Lever, and It Destroys State](../plans/a-half-delivered-dispatch-has-no-safe-recovery-retry-is-the-only-lever-and-it-destroys-state.md) — **CODER CODED** — ID: ba068390-01cb-4832-a805-c924e2ccdc71
 <!-- END SUBTASKS -->
+
+## Completion Summary
+
+All four instructed subtasks implemented and committed (dc167800). Subtask 5 (ba068390, half-delivered dispatch) had no Team Dispatch Instructions or acceptance criteria in the feature file — a question report was filed at `.switchboard/orchestrator/reports/2026-09-05-half-delivered-dispatch-no-seat.md` and the subtask was held. The team's coders stopped mid-work after a terminal clear disrupted their context; the lead finished the remaining defects (re-derivation logic, awaitable standing-orders relay, ESTABLISH_ORDERS_READY_DELAY_MS family-aware floor, rule 4 deletion, manual-mode floor, late-signal detection) and updated the two affected contract tests. All 13 clear-readiness state machine tests and all 9 pty-clear-policy contract assertions pass.
 

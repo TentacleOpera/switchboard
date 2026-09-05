@@ -214,3 +214,9 @@ worth confirming once rather than trusting.
 - Assert the note text does NOT contain any of: "devin", "claude", "antigravity", "agy" — no specific CLI names.
 - Assert the note is placed within the `agents-tab-custom-agent-form` div, after the startup-command input field.
 - Assert the diff contains no `confirm(`, `window.confirm`, or `showWarningMessage` calls.
+
+---
+
+## Implementation Summary
+
+Added a static informational `<p>` to the AGENTS tab's custom-agent form in `src/webview/kanban.html`, immediately after the existing custom-agents note and before the error div. The note states that clearing a seat restarts its CLI session, that a restarted session re-initialises MCP servers and so OAuth-backed MCP servers prompt for authorisation again, that this is expected and recurs per work-context switch (not a broken token), and that the remedy is to remove unneeded OAuth-backed servers from the agent's own MCP config. Styling matches the existing note (`font-size:10px; color:var(--text-secondary); line-height:1.4`). No CLI names are mentioned; the remedy uses "remove", never "disable". Added a matching "Seat-clear session-restart toll" section to `docs/AGENT_CLI_CONSENT_FLAGS.md` so the explanation is findable by search. No runtime code, no `.ts` files, no confirm gates, no behavioural change. Both hosts render the note from the shared webview source, so no composition-root audit was required.

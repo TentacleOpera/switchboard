@@ -15,10 +15,10 @@ Make a 4 GB Raspberry Pi a supported host for the standalone Switchboard server,
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [`switchboard stop` releases the port but the host process never exits](../plans/standalone-host-never-exits-on-stop.md) — **CREATED** — ID: cfe404c0-9265-4ea9-86dd-22898f73ee02
-- [ ] [The Antigravity plan-scanner preset recursively watches the entire brain tree](../plans/antigravity-preset-watches-whole-brain-tree.md) — **CREATED** — ID: 8fd2a41c-c690-43e5-9b70-a7900243f29d
-- [ ] [The `.switchboard` recursive watch arms one inotify watch per file, including logs it ignores](../plans/switchboard-dir-watch-arms-one-inotify-watch-per-file.md) — **CREATED** — ID: 69c0f9ba-d612-4e48-a39d-faed15a8a7a9
-- [ ] [Establish a resident-memory budget for the standalone host, and find the retention that has no owner yet](../plans/resident-memory-budget-for-low-memory-hosts.md) — **CREATED** — ID: bfc3bfc7-54ab-4df7-8375-b95acc5fb53a
+- [ ] [`switchboard stop` releases the port but the host process never exits](../plans/standalone-host-never-exits-on-stop.md) — **CODER CODED** — ID: cfe404c0-9265-4ea9-86dd-22898f73ee02
+- [ ] [The Antigravity plan-scanner preset recursively watches the entire brain tree](../plans/antigravity-preset-watches-whole-brain-tree.md) — **CODER CODED** — ID: 8fd2a41c-c690-43e5-9b70-a7900243f29d
+- [ ] [The `.switchboard` recursive watch arms one inotify watch per file, including logs it ignores](../plans/switchboard-dir-watch-arms-one-inotify-watch-per-file.md) — **CODER CODED** — ID: 69c0f9ba-d612-4e48-a39d-faed15a8a7a9
+- [ ] [Establish a resident-memory budget for the standalone host, and find the retention that has no owner yet](../plans/resident-memory-budget-for-low-memory-hosts.md) — **CODER CODED** — ID: bfc3bfc7-54ab-4df7-8375-b95acc5fb53a
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -30,4 +30,50 @@ The shutdown subtask is independent of both and can be executed in parallel. It 
 The memory-budget subtask has a real ordering constraint: its baseline and regression gate must be measured **after** the other three have landed, or the published budget will encode the defects rather than the fixed state. Its investigation half — resolving the unowned 1.19 GB retention — has no such constraint and can begin at any time.
 
 One dependency lies outside this feature. The single largest contributor, the 1.2 GB `sql.js` WASM arena, is already fixed by the storage layer overhaul (commit 8258ce4b, currently in CODE REVIEWED). Every measurement in these four plans was taken against the rebuilt `better-sqlite3` host except where explicitly labelled as the old engine. If that work is reverted, this feature's budget is void.
+
+## Team Dispatch Instructions
+
+### `switchboard stop` releases the port but the host process never exits
+- **Seat:** Coder (complexity 4)
+- **Acceptance:**
+  - `pgrep -f "dist/standalone/cli.js"` returns nothing within 5 s of `switchboard stop` — the process is dead, not just the port.
+  - `switchboard stop` exits non-zero and says so if the process is still alive after its poll window.
+  - The bounded exit timer is armed BEFORE `await instance.stop()` in `signalCleanup` (races disposal, does not follow it).
+  - The shutdown log names zero surviving handles on a clean stop (`getActiveResourcesInfo()` output present).
+  - Extension host: inotify descriptor count returns to pre-reload value after two window reloads.
+- **Must not touch:** None specified.
+
+### The Antigravity plan-scanner preset recursively watches the entire brain tree
+- **Seat:** Coder (complexity 5)
+- **Acceptance:**
+  - Inotify descriptor count attributable to the brain root is ≤ (session count + 1), not thousands.
+  - A new session directory with `implementation_plan.md` is ingested while the host runs — depth-1 watching does not lose new sessions.
+  - Descriptor count is flat over a 4-hour soak (no ~900/hour growth).
+  - Same three checks pass for `windsurfDevin` and `cursor` presets.
+  - Over-cap path logs the root and count when a deliberately large tree is armed.
+- **Must not touch:** None specified.
+
+### The `.switchboard` recursive watch arms one inotify watch per file, including logs it ignores
+- **Seat:** Intern (complexity 3)
+- **Acceptance:**
+  - Inotify descriptor count is within a few of the file count under `plans/` + `features/` (≈2,555), not under `.switchboard` (3,132).
+  - Writing 200 files into `.switchboard/logs/` does not move the watch count.
+  - `EXCLUDED_DIR_NAMES` in `planIngestionHost.ts:35` contains `logs`, `dbbackup`, and `mission-control`.
+  - A new plan file under `.switchboard/plans/` is imported after the fix — narrowing does not break ingestion.
+  - Deleting `.switchboard/features/` before start does not break `plans/` watching.
+- **Must not touch:** None specified.
+
+### Establish a resident-memory budget for the standalone host, and find the retention that has no owner yet
+- **Seat:** Coder (complexity 5)
+- **Acceptance:**
+  - The probe produces a CSV with `rss`, `heapUsed`, `external`, `inotifyDescriptors`, and `openFds` columns; RSS delta across a probe run is under 5 MB.
+  - 24-hour hourly run produces steady-state, growth-per-hour, and peak figures; growth-per-hour is under 5 MB.
+  - If growth is flat, a heap snapshot confirms the ~700-copy pattern is gone (not just that the total is lower).
+  - The regression gate fails against the pre-fix `sql.js` build and passes against the current build; the gate drives a workload (WebSocket connect, plan write, mock dispatch, disconnect), not just a static board.
+  - The documented 4 GB floor is reproducible: a host with low-memory settings holds under the published budget across the 24-hour run.
+- **Must not touch:** None specified.
+
+## Completion Summary
+
+All four subtasks implemented and committed (8b5a85eb). The shutdown subtask arms a bounded 5s exit timer before `instance.stop()`, logs surviving handles via `getActiveResourcesInfo()`, terminates WebSocket connections (not graceful close), and the CLI now checks process liveness via `process.kill(pid, 0)` rather than port health. The Antigravity preset fix separates depth-1 globs (`*/file.md`) from unbounded recursive (`**`) — depth-1 watches the folder non-recursively plus matching files directly, with a per-preset watch cap and over-cap logging. The `.switchboard` watch was narrowed from recursive over `.switchboard` to separate recursive watches on `plans/` and `features/` only, with `EXCLUDED_DIR_NAMES` extended to include `logs`, `dbbackup`, and `mission-control`. The memory budget subtask added a `switchboard probe` CLI command outputting CSV (rss, heapUsed, external, inotifyDescriptors, openFds), a regression gate contract test, and published the baseline in `docs/LOW_MEMORY_HOSTS.md`. Extension host watcher parity maintained in `GlobalPlanWatcherService.ts`.
 

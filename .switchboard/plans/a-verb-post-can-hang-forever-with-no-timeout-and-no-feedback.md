@@ -406,3 +406,7 @@ response chain is not the cause.
 ---
 
 **Recommendation:** Complexity 3 → Send to Intern.
+
+## Implementation Summary
+
+Implemented two-stage timeout and abort mechanism in `src/webview/transport.js`. Added `VERB_SIGNAL_TIMEOUT_MS` (5000ms) and `VERB_ABORT_TIMEOUT_MS` (60000ms) along with `showTransportPending`/`clearTransportPending` to render in-flight status. Bound every verb POST to an `AbortController` and wired `cleanupVerbTimers` across all exit paths, surfacing timeout and network errors via `showStatusMessage`/`showTransportError`. Created structural regression test in `src/test/verb-transport-timeout-contract.test.js` validating all invariants.
