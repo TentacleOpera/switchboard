@@ -56,7 +56,13 @@ With CLI on its own tab, a terminal-backed Agent tab has no distinct job. Either
 
 Recommend removing it. Two backends for one tab means both are maintained, both are tested, and the terminal one drags in every pty concern this change exists to escape.
 
-### 5. The context lives in the request
+### 5. Reachable from the mobile command surface
+
+Because it renders no terminal, this is the one agent surface a phone can afford. Expose it on the command route.
+
+Separately, and not this card's work: the "no terminals on mobile" constraint was about the cost of rendering *many* terminals, not terminals in principle — a single pop-out terminal filling the screen is usable on a phone. So a focused single-terminal view on a team lead also belongs there. Recorded here because the two are easy to conflate and the second would otherwise be argued away by the first.
+
+### 6. The context lives in the request
 
 A pty seat carries its conversation in the terminal. An API seat has no such place, so the controller must hold its own history between turns and decide how much to send.
 
@@ -66,10 +72,11 @@ Small for a controller taking short commands, but it has no equivalent on the CL
 
 1. **The model will be unavailable.** A free tier exhausts, a key expires, an endpoint times out. The tab must say so plainly and keep whatever direct actions do not need the model — a control surface that goes blank is worse than a terminal.
 2. **Do not route mechanical actions through the model.** Moving a named card is a POST. The model earns its place on resolution and on multi-step operations; everything else should be a direct call, so a model outage costs fuzzy search rather than the whole tab.
-3. **This is a desktop surface.** The mobile command surface deliberately designed the keyboard out — taps and dropdowns, a fixed set of functions. Nothing here reopens that.
+3. **It suits mobile better than desktop, and should reach the command surface.** A pty controller cannot go on a phone because rendering terminals is what overloads the hardware. An API controller renders none, so it costs the phone nothing — it is the one agent surface that is *cheaper* on mobile than on the desktop. The command surface's no-text-input rule governs its four tap-and-dropdown functions and is a separate constraint; it does not argue against a controller reachable from there.
 4. **Depends on `c2502571`** for the CLI tab. Without it, removing the pty from Agent leaves no terminal in the dock at all.
 5. **Not a coding seat.** The controller drives the board. Code generation stays on CLI seats, where the capability and the review path already are.
 6. **Both hosts** render the dock.
+7. **Do not put a pty controller on the phone.** The mobile case works precisely because there is no terminal to render; a fallback that quietly opens one there reintroduces the load the constraint exists to avoid.
 
 ## Verification Plan
 
@@ -80,3 +87,4 @@ Small for a controller taking short commands, but it has no equivalent on the CL
 5. The controller's history survives across turns.
 6. The CLI tab still provides a full pty seat.
 7. Per change 4, either the pty controller is gone or its retention is recorded with a reason.
+8. The controller is reachable from the mobile command surface, and renders no terminal there.
