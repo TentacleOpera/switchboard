@@ -49,11 +49,15 @@ The managed block is regenerated from the constant. A hand-edit to either file i
 
 The rule must fit in that budget without consuming the docs pointer's reservation. If it cannot, shorten it — do not raise the gate. The block was cut from 14,826 characters deliberately, and every line in it is there because it must be re-presented every turn.
 
-### 4. The files on disk are stale — a scaffolder run is part of the verification
+### 4. On a standalone host this rule cannot be delivered at all — `eb2456e0` is a prerequisite
 
-Verified 2026-09-05. The managed blocks exist — `AGENTS.md:1-165` and `CLAUDE.md:76-250`, both bounded by their marker pairs — but **neither contains the shrunken body**. `grep -c "Plans reach the board on their own"` returns 0 in both files. They are still carrying the old ~14,800-character block that `843bae45` cut in code.
+Verified 2026-09-05. Adding the rule to the constant changes nothing on a standalone install, and there is no scaffold command that fixes it.
 
-So the constant and the files have diverged, and adding a rule to the constant changes nothing visible until the scaffolder rewrites them. Verification cannot be "read the file" — it has to be "run the scaffold, then read the file", or the rule will look absent when it is merely undelivered.
+`CLAUDE.md`'s managed block here is **18,407 chars / 174 lines** where the constant emits **527** — it was written before the 2026-08-23 cut and has never been refreshed. Both scaffold writes are gated on `!fs.existsSync` (`ControlPlaneMigrationService.ts:713`, `:731`), so with the file present there is nothing to run. The in-place refresh exists only in the extension host (`extension.ts:345`, `:4486` → `ensureAgentsProtocol` / `ensureClaudeProtocol`); `bootstrap.ts` has no reference to it.
+
+So verification is not "read the file", and it is not "run the scaffold, then read the file" — my earlier wording was wrong on both counts. **`eb2456e0` (starred, New) must land first**, and its problem 3 is exactly this. Until it does, a rule added here reaches extension users only.
+
+`AGENTS.md` is a separate matter and is not affected: it is `copyFile`d whole into target workspaces, so the constant never applies to it and its size is by design.
 
 ### 5. The control plane is now a database table, and it is not this
 
@@ -77,7 +81,8 @@ So: target the resident body wherever it lives when this is coded, not a hardcod
 
 ## Verification Plan
 
-1. The rule appears in the managed block of both `CLAUDE.md` and `AGENTS.md`, from one source, **after a scaffolder run** — the files are stale before it.
+1. The rule appears in the emitted `CLAUDE.md` managed block, from the constant, on a workspace whose block is being refreshed.
+1b. On a standalone install, the block refreshes at all — which requires `eb2456e0`.
 2. `claude-protocol-block-size-contract.test.js` passes, with the docs-pointer headroom intact.
 3. A scaffold run does not remove or duplicate the rule.
 4. Neither markdown file was hand-edited to achieve this.

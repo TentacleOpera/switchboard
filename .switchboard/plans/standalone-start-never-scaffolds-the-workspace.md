@@ -70,6 +70,30 @@ content does refresh when the version gate opens (`_copyDirectoryRecursive` with
 `{ overwrite: false, overwriteIfDiffers: true }`), but the managed blocks inside `AGENTS.md` / `CLAUDE.md`
 are absence-gated only — a protocol-block change in a later release never reaches a standalone user.
 
+**Confirmed instance, measured 2026-09-05 in the Switchboard repo itself.** This workspace is served by
+a standalone host (`dist/standalone/cli.js tailnet`), and its `CLAUDE.md` managed block has never been
+refreshed since before the 2026-08-23 cut:
+
+```
+CLAUDE.md block   18,407 chars, 174 lines   (markers at :76-250)
+expected           527 chars                 (RESIDENT_PROTOCOL_BODY)
+excess          17,880 chars of stale content
+```
+
+`843bae45` cut that block 14,826 → 611 chars in code. The constant is a `bodyOverride`, and
+`buildManagedInner` discards the source entirely when one is supplied (`bodyOverride ?? sourceContent`),
+so the correct emission is 527 characters. This install carries 35× that, re-presented to every agent on
+every turn.
+
+Two things this instance settles:
+
+- **Running the scaffold is not a workaround.** Both writes are gated on `!fs.existsSync`
+  (`ControlPlaneMigrationService.ts:713`, `:731`), so with the file present there is nothing to run. An
+  operator asking "why do I have to keep scaffolding" is describing a fix that cannot work.
+- **`AGENTS.md` is not affected and must not be "fixed".** It is `copyFile`d whole into target
+  workspaces; the constant never applies to it. Its 21,311 bytes are by design, and shrinking it would be
+  a different change with different consequences.
+
 **Why this is the whole difference between "the board loads" and "Switchboard works."** Nothing errors.
 The board renders, plans import once the folder exists, cards drag. But dispatch hands an agent a
 workspace with no `AGENTS.md`, no `CLAUDE.md` block and no `.agents/` skills — the agent has no
