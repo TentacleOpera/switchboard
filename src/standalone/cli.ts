@@ -5,7 +5,7 @@ import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import * as util from 'util';
-import { spawn } from 'child_process';
+import { spawn, execSync as cpExecSync } from 'child_process';
 import type { HeadlessSwitchboardOptions, HeadlessSwitchboardInstance } from './bootstrap';
 import { DEFAULT_DISPLAY_HOSTNAME, isLoopbackHostname } from '../utils/loopbackHostname';
 import { detectTailnetAddress, resolveMagicDnsNames } from '../utils/tailnetDetect';
@@ -2039,6 +2039,159 @@ async function cmdNext(workspaceRoot: string, argv: string[]): Promise<void> {
 }
 
 /**
+ * `switchboard setup host` — one interactive command to configure the
+ * systemd service on a Raspberry Pi or any Debian/arm64 host. Collects
+ * the workspace root, resolves the service user, writes
+ * /etc/switchboard/switchboard.env, and enables the service.
+ *
+ * See raspberry-pi-installs-switchboard-with-apt.md change 4.
+ */
+async function cmdSetupHost(_workspaceRoot: string, argv: string[]): Promise<void> {
+    const importPath = argv.includes('--import') ? argv[argv.indexOf('--import') + 1] : null;
+    const prompter = openPrompter();
+
+    try {
+        console.log('[switchboard] Host setup — configure the systemd service.\n');
+
+        // 1. Workspace root
+        let workspace = '';
+        if (importPath) {
+            workspace = process.cwd();
+        } else {
+            if (process.stdin.isTTY) {
+                workspace = (await prompter.ask('Workspace root (full path to the directory whose .switchboard/ holds the board): ')) || '';
+            } else {
+                console.error('[switchboard] Non-interactive setup host requires a workspace argument.');
+                console.error('  switchboard setup host --workspace /path/to/workspace');
+                exitFlushed(5);
+            }
+        }
+        if (!workspace || !fs.existsSync(workspace) || !fs.statSync(workspace).isDirectory()) {
+            console.error(`[switchboard] Workspace '${workspace}' does not exist or is not a directory.`);
+            console.error('  Do not create it here — a board pointed at the wrong tree is silent and wrong.');
+            exitFlushed(5);
+        }
+        console.log(`  Workspace: ${workspace}`);
+
+        // 2. Service user — resolve from SUDO_USER or current user. Never assume `pi`.
+        const serviceUser = process.env.SUDO_USER || os.userInfo().username;
+        console.log(`  Service user: ${serviceUser} (from ${process.env.SUDO_USER ? 'SUDO_USER' : 'current user'})`);
+
+        // 3. Serve mode — validate against exactly two words.
+        let serveMode = 'tailnet';
+        if (process.stdin.isTTY) {
+            const modeAnswer = await prompter.ask('Serve mode [local/tailnet] (default: tailnet): ');
+            if (modeAnswer && modeAnswer.trim()) {
+                const trimmed = modeAnswer.trim().toLowerCase();
+                if (trimmed !== 'local' && trimmed !== 'tailnet') {
+                    console.error(`[switchboard] Invalid serve mode '${trimmed}'. Must be 'local' or 'tailnet'.`);
+                    exitFlushed(5);
+                }
+                serveMode = trimmed;
+            }
+        }
+        console.log(`  Serve mode: ${serveMode}`);
+
+        // 4. Port
+        let port = '7777';
+        if (process.stdin.isTTY) {
+            const portAnswer = await prompter.ask('Port (default: 7777): ');
+            if (portAnswer && portAnswer.trim()) {
+                port = portAnswer.trim();
+            }
+        }
+        console.log(`  Port: ${port}`);
+
+        // 5. Extra PATH for agent CLIs
+        let extraPath = '';
+        if (process.stdin.isTTY) {
+            extraPath = (await prompter.ask('Extra PATH for agent CLIs (e.g. ~/.local/bin, nvm paths — leave empty if none): ')) || '';
+        }
+
+        // 6. Resolve Node path
+        const nodePath = process.execPath;
+        const nodeVersion = process.version;
+        console.log(`  Node: ${nodeVersion} at ${nodePath}`);
+        if (nodePath.includes('.nvm')) {
+            console.log('  Warning: Node is from nvm. The systemd unit uses an absolute path, but');
+            console.log('           if nvm updates Node, the path may break. Consider installing Node');
+            console.log('           from the distro package or NodeSource.');
+        }
+
+        // 7. Check for a second switchboard on PATH
+        try {
+            const whichResult = cpExecSync('which -a switchboard 2>/dev/null', { encoding: 'utf8' }).trim().split('\n').filter(Boolean);
+            const packageBin = '/usr/bin/switchboard';
+            const others = whichResult.filter((p: string) => p !== packageBin);
+            if (others.length > 0) {
+                console.log(`  Warning: another switchboard found on PATH: ${others.join(', ')}`);
+                console.log('           The systemd unit always uses /usr/bin/switchboard (the package binary).');
+            }
+        } catch { /* which not available or no results — ignore */ }
+
+        // 8. Write the env file
+        const envDir = '/etc/switchboard';
+        const envFile = path.join(envDir, 'switchboard.env');
+        const envContent = [
+            '# Switchboard service configuration.',
+            '# Written by `switchboard setup host`.',
+            `SWITCHBOARD_WORKSPACE=${workspace}`,
+            `SWITCHBOARD_PORT=${port}`,
+            `SWITCHBOARD_SERVE_MODE=${serveMode}`,
+            `SWITCHBOARD_USER=${serviceUser}`,
+            `SWITCHBOARD_EXTRA_PATH=${extraPath}`,
+        ].join('\n') + '\n';
+
+        try {
+            fs.mkdirSync(envDir, { recursive: true });
+            fs.writeFileSync(envFile, envContent, 'utf8');
+            console.log(`\n  Written: ${envFile}`);
+        } catch (writeErr) {
+            console.error(`\n[switchboard] Failed to write ${envFile}: ${writeErr}`);
+            console.error('  Run with sudo: sudo switchboard setup host');
+            exitFlushed(5);
+        }
+
+        // 9. Import an existing board if requested
+        if (importPath) {
+            console.log(`\n[switchboard] Importing board from ${importPath}...`);
+            // Stop the service before touching the file — a rename over a live
+            // database orphans the board onto an unlinked inode.
+            try { cpExecSync('systemctl stop switchboard.service', { stdio: 'inherit' }); } catch { /* not running */ }
+            const boardDir = path.join(workspace, '.switchboard', 'boards');
+            fs.mkdirSync(boardDir, { recursive: true });
+            const destPath = path.join(boardDir, path.basename(importPath));
+            fs.copyFileSync(importPath, destPath);
+            console.log(`  Board imported to ${destPath}`);
+        }
+
+        // 10. Enable and start the service
+        console.log('\n[switchboard] Enabling service...');
+        try {
+            cpExecSync('systemctl enable --now switchboard.service', { stdio: 'inherit' });
+            console.log('  Service enabled and started.');
+        } catch (enableErr) {
+            console.error(`  Failed to enable service: ${enableErr}`);
+            console.error('  Check the unit file at /lib/systemd/system/switchboard.service');
+            exitFlushed(5);
+        }
+
+        // 11. Print the URL
+        const hostname = os.hostname();
+        if (serveMode === 'tailnet') {
+            console.log(`\n[switchboard] Board is serving on your tailnet.`);
+            console.log(`  Open: http://${hostname}:${port}/  (or your tailnet machine name)`);
+        } else {
+            console.log(`\n[switchboard] Board is serving on loopback.`);
+            console.log(`  Open: http://127.0.0.1:${port}/`);
+        }
+        console.log('\n  Re-running `switchboard setup host` is a reconfigure, not an error.');
+    } finally {
+        prompter.close();
+    }
+}
+
+/**
  * `switchboard setup [init|scaffold|control-plane] [options]`
  *
  * Unified setup wizard. When run bare on a TTY, presents a numbered menu.
@@ -2057,6 +2210,14 @@ async function cmdSetup(workspaceRoot: string, argv: string[]): Promise<void> {
             process.argv.splice(setupIdx, 1);
         }
         return; // main() continues to the init/scaffold/control-plane handler
+    }
+
+    // `switchboard setup host` — one interactive command to configure the
+    // systemd service on a Raspberry Pi (or any Debian/arm64 host). Collects
+    // the workspace, resolves the service user, writes /etc/switchboard/switchboard.env,
+    // and enables the service. See raspberry-pi-installs-switchboard-with-apt.md change 4.
+    if (sub === 'host') {
+        return cmdSetupHost(workspaceRoot, argv.slice(1));
     }
 
     // Interactive menu (TTY only).

@@ -115,7 +115,7 @@ When generating multiple plans in a single response, you MUST use plan markers t
 [Full plan content following the template above]
 ~~~
 
-When Switchboard imports this content, it slugifies each H1 title (lowercase, non-alphanumeric runs collapsed to `_`) and writes one file per plan into `.switchboard/plans/` using the pattern `feature_plan_<YYYYMMDD_HHMMSS>_<slug>.md`. For the example above the outputs look like:
+When Switchboard imports this content, it slugifies each H1 title (lowercase, non-alphanumeric runs collapsed to `_`) and writes one file per plan into `.switchboard/plans/intake/` using the pattern `feature_plan_<YYYYMMDD_HHMMSS>_<slug>.md`. The scanner watches the intake folder and moves files to `.switchboard/plans/` on import. For the example above the outputs look like:
 - `feature_plan_20260417_101500_first_plan_title.md`
 - `feature_plan_20260417_101501_second_plan_title.md`
 

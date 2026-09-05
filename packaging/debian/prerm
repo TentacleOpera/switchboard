@@ -1,0 +1,16 @@
+#!/bin/sh
+# prerm: stop and disable the service on removal.
+# apt remove leaves the data (~/.switchboard/, board databases, the workspace).
+# apt purge additionally removes /etc/switchboard/ — handled by postrm purge.
+set -e
+
+if [ "$1" = "remove" ] || [ "$1" = "deconfigure" ]; then
+    if systemctl is-enabled switchboard.service >/dev/null 2>&1; then
+        systemctl disable switchboard.service || true
+    fi
+    systemctl stop switchboard.service || true
+fi
+
+#DEBHELPER#
+
+exit 0

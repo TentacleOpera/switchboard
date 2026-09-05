@@ -1,7 +1,12 @@
-# Two Machines, One Board - the Paired App and Its Command Loop
+# Switchboard Installs Like an Application — One Machine, or Two Paired
 
-<!-- board-collapse-07 -->
-> **PARKED IN BACKLOG 2026-09-04 (Board Collapse 07).** Not cancelled — **unreachable until the storage programme's first step lands**: *Move the database behind a single sidecar owner and replace sql.js with a real SQLite binding*. sql.js holds the whole database in memory and rewrites the entire image on each persist, so nothing here that assumes concurrent or remote writers can be built on it. The full seven-step order is stated once, in the *Storage layer overhaul* feature file. Leaving these in Planned invited a coder to start one; move it back when step 1 lands.
+> **Unparked 2026-09-06.** The park condition was *"move it back when step 1 lands"* — storage
+> step 1, *Move the database behind a single sidecar owner and replace sql.js with a real SQLite
+> binding*. It has landed: `sidecar-owned-db-real-sqlite-binding` and
+> `single-global-database-in-home-store` (step 4) are both **COMPLETED**, sql.js is gone from
+> production dependencies, `better-sqlite3` 12.11.1 is the only driver, and the board lives at
+> `~/.switchboard/boards/<workspaceId>.db`. Step 7 (shared stores) remains open and the park never
+> depended on it.
 
 **Complexity:** 9
 
@@ -16,9 +21,11 @@ Ship Switchboard as something you launch rather than something you open an IDE t
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [The remote command vocabulary is closed at two verbs, because the third one turns a reviewed-plan pipeline into a remote shell](../plans/the-remote-command-vocabulary-is-closed.md) — **BACKLOG** — ID: 767be11f-f733-4737-aafa-ff55ae188299
-- [ ] [An app that pairs two machines and lets you choose which one holds the board and which one runs the agents](../plans/switchboard-as-a-local-app-and-a-self-hosted-remote.md) — **BACKLOG** — ID: 9adefb23-5f90-4a9d-b8b7-f56ba1f78872
-- [ ] [The Plan Watcher Becomes a Setting, Because a Paired Board Does Not Own the Plans Tree](../plans/the-plan-watcher-is-a-setting-when-the-board-does-not-own-the-tree.md) — **BACKLOG** — ID: 65f5b055-ffae-443f-88d7-65e072daa8b1
+- [ ] [The remote command vocabulary is closed at two verbs, because the third one turns a reviewed-plan pipeline into a remote shell](../plans/the-remote-command-vocabulary-is-closed.md) — **LEAD CODED** — ID: 767be11f-f733-4737-aafa-ff55ae188299
+- [ ] [Switchboard Installs Like an Application — Desktop Entry, Settings GUI, and Pairing Only When You Want It](../plans/switchboard-as-a-local-app-and-a-self-hosted-remote.md) — **LEAD CODED** — ID: 9adefb23-5f90-4a9d-b8b7-f56ba1f78872
+- [ ] [Agents Write to an Intake Folder, and the Scanner Watches Only That](../plans/the-plan-watcher-is-a-setting-when-the-board-does-not-own-the-tree.md) — **LEAD CODED** — ID: 65f5b055-ffae-443f-88d7-65e072daa8b1
+- [ ] [A Raspberry Pi Installs Switchboard With `apt`, Not Six Manual Steps and a Template to Hand-Edit](../plans/raspberry-pi-installs-switchboard-with-apt.md) — **LEAD CODED** — ID: 179c1a28-df2b-4cf9-8e4f-d265adfe1964
+- [ ] [Every Shipped Autostart Template on All Three Platforms Invokes `switchboard start`, Which Was Removed and Exits 1](../plans/autostart-unit-invokes-removed-switchboard-start.md) — **LEAD CODED** — ID: bd730499-0f9d-4819-abac-158358dc0f09
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

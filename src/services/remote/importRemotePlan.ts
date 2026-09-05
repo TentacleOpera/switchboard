@@ -20,13 +20,20 @@ export async function importRemoteMarkdownPlan(opts: {
     const { db, workspaceId, plansDir, title, body, sourceType } = opts;
     const id = crypto.randomUUID();
     const slug = (title || 'untitled').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '').slice(0, 60) || 'plan';
-    const absPath = path.join(plansDir, `${slug}-${id}.md`);
-    await fs.promises.mkdir(plansDir, { recursive: true });
-    await fs.promises.writeFile(absPath, body, 'utf8');
+    const filename = `${slug}-${id}.md`;
+    // Write to the intake folder, then move to plans/ after the DB row is written.
+    // The record's planFile points to the archive destination, not intake.
+    const intakeDir = path.join(plansDir, 'intake');
+    const intakeAbsPath = path.join(intakeDir, filename);
+    const archiveAbsPath = path.join(plansDir, filename);
+    const provenance = `> **Provenance:** Author: remote (${sourceType || 'unknown'}) | Status: Unreviewed\n\n`;
+    const fullBody = body ? `${provenance}${body}` : `${provenance}# ${title || 'Untitled'}\n`;
+    await fs.promises.mkdir(intakeDir, { recursive: true });
+    await fs.promises.writeFile(intakeAbsPath, fullBody, 'utf8');
 
     const now = new Date().toISOString();
     const record: KanbanPlanRecord = {
-        planId: id, sessionId: id, topic: title || 'Untitled', planFile: absPath,
+        planId: id, sessionId: id, topic: title || 'Untitled', planFile: archiveAbsPath,
         kanbanColumn: 'CREATED', status: 'active', complexity: 'Unknown', tags: '',
         repoScope: '', project: '', workspaceId, createdAt: now, updatedAt: now,
         lastAction: 'imported from remote', sourceType, brainSourcePath: '', mirrorPath: '',
@@ -34,5 +41,14 @@ export async function importRemoteMarkdownPlan(opts: {
     };
     const ok = await db.insertFileDerivedPlan(record);
     if (!ok) { return null; }
-    return (await db.getPlanByPlanFile(absPath, workspaceId)) || record;
+    // Move from intake to archive after the DB row is committed.
+    try {
+        await fs.promises.rename(intakeAbsPath, archiveAbsPath);
+    } catch (moveErr) {
+        // Non-fatal: the file is in intake and the record points to the archive.
+        // The scanner will not re-import it (the record exists), but the file
+        // should be moved manually or on next scan.
+        console.warn(`[importRemotePlan] Intake move failed: ${moveErr}`);
+    }
+    return (await db.getPlanByPlanFile(archiveAbsPath, workspaceId)) || record;
 }

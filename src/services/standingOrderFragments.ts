@@ -135,7 +135,7 @@ const REVIEW_HEAD_WORK =
     + '"<fix instructions — name each file, the issue, and the fix needed. Tell the reviewer to run verification checks '
     + '(typecheck/tests as applicable) and include results in their report.>","clearBeforePrompt":false,"seatBlock":false}\'. '
     + 'Do not fix categories 1 or 4. Write one markdown artifact '
-    + 'to the plans folder (.switchboard/plans/) covering deferred items, remaining risks, and intent failures.';
+    + 'to the plans intake folder (.switchboard/plans/intake/) covering deferred items, remaining risks, and intent failures.';
 
 export const GLOBAL_QUEUE_COMPLETION_FRAGMENT_BODY =
     'When you finish the card you were dispatched, run node "<cliPath>" done --from "<your terminal name>". '

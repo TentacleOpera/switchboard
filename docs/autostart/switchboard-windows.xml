@@ -53,8 +53,11 @@
   <Actions>
     <Exec>
       <!-- EDIT: full path to npx.cmd (run `where npx` in cmd to find it) -->
+      <!-- Use `local` to serve on loopback only, or `tailnet` to also    -->
+      <!-- serve across your Tailscale network. Do NOT use `start` — it  -->
+      <!-- was removed and exits 1.                                       -->
       <Command>C:\Program Files\nodejs\npx.cmd</Command>
-      <Arguments>switchboard start --no-open --port 7777 --workspace "C:\Users\YOUR_USERNAME\path\to\workspace"</Arguments>
+      <Arguments>switchboard local --no-open --port 7777 --workspace "C:\Users\YOUR_USERNAME\path\to\workspace"</Arguments>
       <!-- EDIT: workspace directory -->
       <WorkingDirectory>C:\Users\YOUR_USERNAME\path\to\workspace</WorkingDirectory>
     </Exec>

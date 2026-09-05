@@ -999,22 +999,24 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // guard stops rapid clicks (same second + same title) from overwriting a fresh draft.
     const createAndIngestPlan = async (root: string, title: string, content: string): Promise<string> => {
         const plansDir = path.join(root, '.switchboard', 'plans');
-        await fs.promises.mkdir(plansDir, { recursive: true });
+        const intakeDir = path.join(plansDir, 'intake');
+        await fs.promises.mkdir(intakeDir, { recursive: true });
         const now = new Date();
         const pad = (n: number) => String(n).padStart(2, '0');
         const timestamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
         const slug = (title.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'new_plan').slice(0, 60);
         let fileName = `feature_plan_${timestamp}_${slug}.md`;
-        let absPath = path.join(plansDir, fileName);
+        let absPath = path.join(intakeDir, fileName);
         let counter = 2;
         while (fs.existsSync(absPath)) {
             fileName = `feature_plan_${timestamp}_${slug}_${counter}.md`;
-            absPath = path.join(plansDir, fileName);
+            absPath = path.join(intakeDir, fileName);
             counter++;
         }
         await fs.promises.writeFile(absPath, content, 'utf8');
         await ingestionEngine.ingestPlanFile(absPath, root);
-        return path.relative(root, absPath).replace(/\\/g, '/');
+        // ingestPlanFile moves the file from intake/ to plans/ and records the archive path.
+        return path.relative(root, path.join(plansDir, fileName)).replace(/\\/g, '/');
     };
 
     const repoRoot = resolveRepoRoot();
@@ -4040,6 +4042,14 @@ Each plan file must include:
         await kanbanProvider.listAgentGroups(workspaceRoot);
     } catch (e) {
         log(opts, `delegate import at startup failed: ${e}`);
+    }
+
+    // Reconcile remote status changes accumulated while the machine was off.
+    // Runs a single poll cycle (no timer) so cards advance from remote edits (extension parity).
+    try {
+        await kanbanProvider.reconcileRemoteOnStartup(workspaceRoot);
+    } catch (e) {
+        log(opts, `remote reconcile on startup failed: ${e}`);
     }
 
     // Restore Mission Control state and re-arm the survivor scheduler timer — the

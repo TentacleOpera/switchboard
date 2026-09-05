@@ -19,7 +19,7 @@ export const BOARD_DRIVING_CONTRACT = `Move cards on this workspace's board via 
 
 /**
  * The `fetch-plans` source preset: pull plan files authored on remote branches
- * (typically by a cloud VM) into the local `.switchboard/plans/` directory.
+ * (typically by a cloud VM) into the local `.switchboard/plans/intake/` directory.
  *
  * `job.id` is load-bearing — the summary path it emits must match the file
  * `.switchboard/scheduler-<job.id>-latest.md`, which the deleted output-capture
@@ -34,7 +34,7 @@ export function buildFetchPlansPrompt(job: { id?: string; sourceConfig?: Record<
         ? `.switchboard/scheduler-${jobId}-latest.md`
         : '.switchboard/scheduler-latest.md';
 
-    return `You are an automated plan fetch agent for Switchboard. Your task is to fetch remote branches and import any newly-authored plan files sitting on remote branches into local \`.switchboard/plans/\`.
+    return `You are an automated plan fetch agent for Switchboard. Your task is to fetch remote branches and import any newly-authored plan files sitting on remote branches into local \`.switchboard/plans/intake/\`.
 
 Steps (do them in order):
 
@@ -53,10 +53,10 @@ git for-each-ref --sort=-committerdate --format='%(refname:short)' 'refs/remotes
      \`\`\`bash
      git ls-tree --name-only '${remote}/<branch>' -- .switchboard/plans/
      \`\`\`
-   - For each plan file path (e.g. \`.switchboard/plans/some-plan.md\`), check if it exists locally in your working directory.
-   - If the file **does NOT exist locally**, copy it in:
+   - For each plan file path (e.g. \`.switchboard/plans/some-plan.md\`), check if it exists locally in your working directory under \`.switchboard/plans/\` (the archive, not intake).
+   - If the file **does NOT exist locally**, copy it into the intake folder:
      \`\`\`bash
-     git show '${remote}/<branch>:<path>' > '<path>'
+     git show '${remote}/<branch>:<path>' > '.switchboard/plans/intake/<basename>'
      \`\`\`
    - If the file **already exists locally**, SKIP it. Never overwrite an existing local plan file.
 

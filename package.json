@@ -697,6 +697,14 @@
           "description": "Include the workspace's own .switchboard/plans folder in periodic scans.",
           "scope": "resource"
         },
+        "switchboard.planScanner.maxWatchesPerPreset": {
+          "type": "integer",
+          "default": 2000,
+          "minimum": 100,
+          "maximum": 65536,
+          "description": "Maximum number of file watches a single plan scanner preset may arm before logging a warning and capping. Bounded to preserve system inotify descriptors.",
+          "scope": "resource"
+        },
         "switchboard.planScanner.customSources": {
           "type": "array",
           "default": [],
@@ -870,6 +878,7 @@
     "compile": "node scripts/sync-webview-vendor.js && webpack",
     "watch": "node scripts/sync-webview-vendor.js && webpack --watch",
     "package": "node scripts/sync-webview-vendor.js && webpack --mode production --devtool hidden-source-map",
+    "package:deb": "bash scripts/package-deb.sh",
     "compile-tests": "tsc -p tsconfig.test.json",
     "watch-tests": "tsc -p . -w --outDir out",
     "pretest": "npm run compile-tests && npm run compile && npm run lint",

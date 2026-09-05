@@ -572,10 +572,10 @@ async function seedDefaultStandingJobs(standingDir: string): Promise<void> {
 job: notes-to-plans
 schedule: daily
 reads: .switchboard/instructions/inbox/
-writes: .switchboard/plans/
+writes: .switchboard/plans/intake/
 ---
 
-Read uncollected note files in .switchboard/instructions/inbox/. Transform notes and raw briefs into complete plan files in .switchboard/plans/ following Switchboard authoring conventions.`
+Read uncollected note files in .switchboard/instructions/inbox/. Transform notes and raw briefs into complete plan files in .switchboard/plans/intake/ following Switchboard authoring conventions.`
         },
         {
             filename: 'memo-to-plans.md',
@@ -583,10 +583,10 @@ Read uncollected note files in .switchboard/instructions/inbox/. Transform notes
 job: memo-to-plans
 schedule: daily
 reads: .switchboard/memo.md
-writes: .switchboard/plans/
+writes: .switchboard/plans/intake/
 ---
 
-Read .switchboard/memo.md. Process each entry into a distinct plan file in .switchboard/plans/ following Switchboard authoring conventions. Clear or truncate .switchboard/memo.md on completion. Omit **Project:** pin unless specified.`
+Read .switchboard/memo.md. Process each entry into a distinct plan file in .switchboard/plans/intake/ following Switchboard authoring conventions. Clear or truncate .switchboard/memo.md on completion. Omit **Project:** pin unless specified.`
         },
         {
             filename: 'nightly-code-review.md',
@@ -594,7 +594,7 @@ Read .switchboard/memo.md. Process each entry into a distinct plan file in .swit
 job: nightly-code-review
 schedule: daily
 reads: .switchboard/kanban-state-coded.md
-writes: .switchboard/plans/
+writes: .switchboard/plans/intake/
 ---
 
 Parse plan paths from .switchboard/kanban-state-coded.md and mtime scan. Review each plan file for completeness and potential bugs. Append findings to the respective plan file. Do NOT move cards directly.`
@@ -605,7 +605,7 @@ Parse plan paths from .switchboard/kanban-state-coded.md and mtime scan. Review 
 job: research-unknowns
 schedule: daily
 reads: .switchboard/kanban-state-created.md
-writes: .switchboard/plans/
+writes: .switchboard/plans/intake/
 ---
 
 Scan new plans in CREATED. Identify ## Uncertain Assumptions. Dispatch your own research sub-agents to resolve each unknown, then rewrite ## Uncertain Assumptions in place with findings.`

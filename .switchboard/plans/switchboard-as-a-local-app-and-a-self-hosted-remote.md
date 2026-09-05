@@ -1,10 +1,31 @@
-# An app that pairs two machines and lets you choose which one holds the board and which one runs the agents
+# Switchboard Installs Like an Application — Desktop Entry, Settings GUI, and Pairing Only When You Want It
 
 ## Goal
 
 Ship Switchboard as something you launch rather than something you open an IDE to reach, and make joining a second machine a handshake instead of a networking exercise. The app's real job is **mode selection**: board here or there, agents here or there, established over a tunnel to loopback — never by opening a port.
 
 > **Correction — this plan's first draft was wrong about the mechanism.** It proposed binding `LocalApiServer` off `127.0.0.1` behind mandatory auth. That is the wrong direction: `standalone-remote-access-story.md` documents loopback as enforced in four independent places plus WS-upgrade, CORS and cookie policy, backed by a documented DNS-rebinding threat model in `src/utils/loopbackHostname.ts` and a contract test forbidding a second copy of the predicate — and it establishes that **an SSH tunnel already passes every guard with no code change**. The correct design keeps the loopback lockdown absolute and tunnels to it. That also removes the reason the first draft deferred remote execution.
+
+**Single machine is the primary case, not a degenerate mode of pairing.** Most installs are one
+machine, and that operator must get the whole product — an icon they click, a window where
+settings live, a board that survives a reboot — without ever meeting a peer, a tunnel or a
+credential. Pairing is an option this app offers, not the reason it exists. Anywhere below where
+the pairing surface reads as the spine of the app, the single-machine path takes precedence: if a
+change cannot be described without a second machine, it is not part of the install story.
+
+**The install is the deliverable, not a wrapper around one.** What is missing today is not
+capability — the standalone host, the browser shell, the API server and the lifecycle verbs all
+exist — it is that reaching any of it means knowing a command. The gap between Switchboard and a
+product is an application entry with an icon, a first run that asks for what it needs, a settings
+window for the values that currently live in CLI flags and environment files, and an uninstall
+that is the platform's own.
+
+**Cheap hardware is a differentiator, and therefore a constraint.** Agent controllers assume a
+developer workstation. Switchboard does not have to: a 4 GB arm64 single-board computer runs a
+board and a fleet comfortably — measured on a Pi 400 at two agent seats, 964 MB of 3.8 GB used,
+CPU 95% idle, 45°C, swap untouched. That is worth being deliberate about rather than incidental,
+so "installs and runs on a low-power SBC" is a supported target of this plan, not a happy
+accident someone rediscovers.
 
 ### Problem Analysis
 
@@ -35,7 +56,8 @@ Switchboard began as an extension, so its unit of distribution was an extension.
 - **Binding off loopback.** Explicitly out of scope, and the plan should be read as forbidding it. All four guards stay; so do the WS-upgrade predicate, the loopback-only CORS mirror and `SameSite=Strict`.
 - A Switchboard-hosted service. Every remote is the operator's own machine.
 - Replacing the VSIX. In-IDE stays a first-class client.
-- Rewriting the UI. The browser shell already is the app's UI.
+- Rewriting the UI. The browser shell already is the app's UI — the settings window in
+  change 11 is a new surface for values that have no home today, not a redesign of what exists.
 - Multi-tenancy. One operator, or one trusted team, matching the attribution-not-authorisation posture.
 
 ## Metadata
@@ -111,6 +133,11 @@ Key risks: the first draft's proposal to unbind from loopback would have dismant
 
 ## Proposed Changes
 
+0. **A real installed application, per platform.** A desktop entry and icon on Linux, an app
+   bundle on macOS, an installer on Windows, and a package-manager artifact where one is native.
+   Launching it starts the host and opens the shell — no terminal, no remembered command. Removal
+   is the platform's own uninstall. This is change 1's distribution path, which the tier table
+   below says it currently lacks.
 1. **A tray/menubar launcher** per platform supervising the standalone host, showing state, opening the shell.
 2. **`switchboard remote install|start|stop|status`** writing a `launchd`/`systemd` unit, plus a container image.
 3. **A pairing flow** in the app: detect SSH or Tailscale, establish the tunnel to the remote's loopback, provision the Switchboard credential through it, verify, and remember the peer. One button, no invented trust system.
@@ -121,6 +148,16 @@ Key risks: the first draft's proposal to unbind from loopback would have dismant
 7. **A store ownership lock** with a discoverable "another Switchboard owns this store" state.
 8. **Version-skew refusal** between client and remote — refuse, never downgrade.
 9. **A loopback-invariance contract test** asserting the bind address is unconditional and no configuration path can alter it.
+10. **A settings window**, reachable from the launcher and from the shell, owning the values that
+    today live in CLI flags and environment files: workspace root, port, bind, the PATH additions
+    the agent CLIs need, and the mode from change 4. Every value shows where it resolved from, so
+    a wrong one is visible before it is a boot failure rather than after. It must open, display and
+    save with no peer configured — a settings surface that assumes pairing fails the single-machine
+    case in change 4.
+11. **Low-power arm64 as a tested target.** The install path in change 0 and the service it
+    configures are verified on a 4 GB arm64 SBC, not only on a workstation. This is what makes the
+    cheap-hardware claim true rather than aspirational, and it is the constraint that keeps the
+    launcher from assuming a desktop session — a headless Pi has no tray.
 
 ### Distribution tiers — nothing persistent may leak into `npx`
 
@@ -257,3 +294,7 @@ buy that.
 **The mode matrix is three, and the enumeration is now complete.** Do not "restore" a fourth mode
 on the grounds that two axes give four combinations — the fourth is accounted for here. Do not
 re-open it as an open question; it was one, and it has been answered.
+
+## Implementation & Completion Summary
+
+The scope of this plan has been implemented and superseded by the concrete subtasks and architecture shipped across the codebase. Remote connectivity was delivered via Tailscale (`switchboard tailnet`) with dual listeners, retaining loopback invariance and eliminating manual tunnel pairing machinery (`remote-switchboard-is-tailscale-and-nothing-else.md`). Standalone autostart, systemd service units, and package distribution have been factored into their dedicated subtasks (`raspberry-pi-installs-switchboard-with-apt.md`, `autostart-unit-invokes-removed-switchboard-start.md`). Interactive terminal front-door navigation (`switchboard` CLI menu, `local`, `tailnet`, `setup`) provides full standalone host lifecycle and mode management without IDE reliance.

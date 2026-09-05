@@ -1,0 +1,10 @@
+#!/bin/sh
+# postinst: do NOT enable or start the service.
+# The package installs disabled — `switchboard setup host` enables it
+# after collecting the workspace, which is operator data the package
+# cannot guess. See raspberry-pi-installs-switchboard-with-apt.md change 4.
+set -e
+
+#DEBHELPER#
+
+exit 0

@@ -14,6 +14,7 @@ import {
     CustomAgentConfig,
     CustomKanbanColumnConfig,
     KanbanColumnDefinition,
+    DEFAULT_KANBAN_COLUMNS,
     parseCustomAgents,
     parseCustomKanbanColumns,
     parseDefaultPromptOverrides,
@@ -2680,6 +2681,13 @@ export class KanbanProvider implements vscode.Disposable {
             onColumnMove: async (plan, targetColumn) => {
                 return this._remoteApplyColumnMove(resolved, plan, targetColumn);
             },
+            // Review gate: provide column definitions so the gate can check
+            // whether a plan entering an execution column has passed review.
+            // Uses DEFAULT_KANBAN_COLUMNS synchronously — the standard columns
+            // cover all built-in execution and review stages. Custom columns
+            // are handled by the fallback naming convention check.
+            getColumns: () => DEFAULT_KANBAN_COLUMNS,
+            credentialSource: 'remote-control',
             // Queue-mode staging (subtask 7): stage a remote-arriving card into
             // the session queue (STAGING column) instead of dispatching. Reuses the same
             // stageForQueue the webview's drag-into-STAGING calls — one

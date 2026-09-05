@@ -658,7 +658,7 @@ export const NEW_REVIEW_TEAM_HEAD_PROMPT =
     + 'risks, (4) did not meet intent. Apportion categories 2 and 3 back to the reviewer that reviewed them '
     + '(file-disjoint where possible) via node "<cliPath>" verb ptySendPrompt \'{"name":"<reviewer seat>","data":"<fix instructions — name each file, the issue, and the fix needed. Tell the reviewer to run verification checks (typecheck/tests as applicable) and include results in their report.>","clearBeforePrompt":false,"seatBlock":false}\'. '
     + 'Do not fix categories 1 or 4. Write one markdown artifact to the plans '
-    + 'folder (.switchboard/plans/) covering deferred items, remaining risks, and intent failures. '
+    + 'folder (.switchboard/plans/intake/) covering deferred items, remaining risks, and intent failures. '
     + 'When review and fixes are complete, stage the files you changed by explicit path '
     + '— never `git add -A` or `git add .`. Then create a single commit with a '
     + 'descriptive message. '

@@ -626,9 +626,13 @@ export class PlanIngestionEngine {
     }
 
     private async _scanForNewFiles(workspaceRoot: string): Promise<void> {
-        const plansDir = path.join(workspaceRoot, '.switchboard', 'plans');
+        // The scanner watches the intake folder only — plans/intake/ — so its
+        // cost is proportional to arrivals, not to archive size. Existing plans
+        // in plans/ are never re-scanned; the board reads them on demand via
+        // record.planFile. See the-plan-watcher-is-a-setting-when-the-board-does-not-own-the-tree.md.
+        const intakeDir = path.join(workspaceRoot, '.switchboard', 'plans', 'intake');
         const featuresDir = path.join(workspaceRoot, '.switchboard', 'features');
-        if (!fs.existsSync(plansDir) && !fs.existsSync(featuresDir)) { return; }
+        if (!fs.existsSync(intakeDir) && !fs.existsSync(featuresDir)) { return; }
 
         try {
             const currentPaths = new Set<string>();
@@ -645,8 +649,8 @@ export class PlanIngestionEngine {
                 }
             };
 
-            if (fs.existsSync(plansDir)) {
-                await collectPaths(plansDir);
+            if (fs.existsSync(intakeDir)) {
+                await collectPaths(intakeDir);
             }
             if (fs.existsSync(featuresDir)) {
                 await collectPaths(featuresDir);
@@ -2000,11 +2004,19 @@ export class PlanIngestionEngine {
                         derivedPlanId = featureUuidMatch[1];
                     }
                 }
+                // Intake: the file arrived in plans/intake/ and must come to rest
+                // in plans/. The DB record carries the DESTINATION path (not the
+                // intake path) so every later read resolves. Read, insert, move —
+                // in that order. See the-plan-watcher-is-a-setting-when-the-board-does-not-own-the-tree.md.
+                const isIntakeFile = relativePath.startsWith('.switchboard/plans/intake/');
+                const archiveRelativePath = isIntakeFile
+                    ? relativePath.replace(/^\.switchboard\/plans\/intake\//, '.switchboard/plans/')
+                    : relativePath;
                 const newRecord: KanbanPlanRecord = {
                     planId: derivedPlanId,
                     sessionId: '',
                     topic: metadata.topic,
-                    planFile: relativePath,
+                    planFile: archiveRelativePath,
                     kanbanColumn: metadata.kanbanColumn || 'CREATED',
                     status: 'active',
                     complexity: metadata.complexity,
@@ -2030,27 +2042,46 @@ export class PlanIngestionEngine {
                     newRecord.isFeature = 1;
                 }
                 await db.insertFileDerivedPlan(newRecord);
+                // Move the file from intake/ to plans/ after the DB row is written.
+                // Read, insert, move — in that order. A crash here leaves the row
+                // pointing at the archive path with the file still in intake; the
+                // next scan re-discovers it, but the row already exists so it is
+                // skipped. A rename is atomic on the same filesystem.
+                if (isIntakeFile) {
+                    const destAbs = path.join(workspaceRoot, archiveRelativePath);
+                    try {
+                        await fs.promises.mkdir(path.dirname(destAbs), { recursive: true });
+                        await fs.promises.rename(fsPath, destAbs);
+                        this._host.logger.appendLine(
+                            `[GlobalPlanWatcher] Moved plan from intake to archive: ${archiveRelativePath}`
+                        );
+                    } catch (moveErr) {
+                        this._host.logger.appendLine(
+                            `[GlobalPlanWatcher] Intake move failed for ${relativePath}: ${moveErr}`
+                        );
+                    }
+                }
                 if (relativePath.startsWith('.switchboard/features/')) {
                     await db.updateFeatureStatus(newRecord.planId, 1, '');
                     await this._linkFeatureMarkdownSubtasks(db, newRecord.planId, content, workspaceId);
                     await this._retryPendingFeatureLinks(db, workspaceRoot);
                 } else if (metadata.feature) {
-                    await this._applyFeatureLink(db, newRecord.planId, metadata.feature, relativePath, workspaceId, workspaceRoot);
+                    await this._applyFeatureLink(db, newRecord.planId, metadata.feature, archiveRelativePath, workspaceId, workspaceRoot);
                 }
-                const tombKey = `${relativePath}|${workspaceId}`;
+                const tombKey = `${archiveRelativePath}|${workspaceId}`;
                 const tomb = this._recentlyDeletedColumns.get(tombKey);
                 let restoredFromTombstone = false;
                 if (tomb && Date.now() - tomb.ts < 5000 && tomb.column && tomb.column !== 'CREATED') {
-                    const moved = await db.movePlanByPlanFile(relativePath, workspaceId, tomb.column, relativePath);
+                    const moved = await db.movePlanByPlanFile(archiveRelativePath, workspaceId, tomb.column, archiveRelativePath);
                     if (moved) {
                         newRecord.kanbanColumn = tomb.column;
                         restoredFromTombstone = true;
                         this._host.logger.appendLine(
-                            `[GlobalPlanWatcher] Restored column '${tomb.column}' from delete-tombstone for: ${relativePath}`
+                            `[GlobalPlanWatcher] Restored column '${tomb.column}' from delete-tombstone for: ${archiveRelativePath}`
                         );
                     } else {
                         this._host.logger.appendLine(
-                            `[GlobalPlanWatcher] Tombstone column '${tomb.column}' rejected by movePlanByPlanFile (invalid/removed), plan stays at CREATED: ${relativePath}`
+                            `[GlobalPlanWatcher] Tombstone column '${tomb.column}' rejected by movePlanByPlanFile (invalid/removed), plan stays at CREATED: ${archiveRelativePath}`
                         );
                     }
                 }
@@ -2197,10 +2228,10 @@ export class PlanIngestionEngine {
 
     public async triggerScan(workspaceRoot: string): Promise<void> {
         this._host.logger.appendLine(`[GlobalPlanWatcher] Manual scan triggered for ${workspaceRoot}`);
-        const plansDir = path.join(workspaceRoot, '.switchboard', 'plans');
+        const intakeDir = path.join(workspaceRoot, '.switchboard', 'plans', 'intake');
         const featuresDir = path.join(workspaceRoot, '.switchboard', 'features');
 
-        if (!fs.existsSync(plansDir) && !fs.existsSync(featuresDir)) {
+        if (!fs.existsSync(intakeDir) && !fs.existsSync(featuresDir)) {
             this._host.logger.appendLine(`[GlobalPlanWatcher] Switchboard directories not found in ${workspaceRoot}`);
             return;
         }
@@ -2219,8 +2250,8 @@ export class PlanIngestionEngine {
                     }
                 }
             };
-            if (fs.existsSync(plansDir)) {
-                await scanDir(plansDir);
+            if (fs.existsSync(intakeDir)) {
+                await scanDir(intakeDir);
             }
             if (fs.existsSync(featuresDir)) {
                 await scanDir(featuresDir);

@@ -2667,7 +2667,7 @@ fields above, no speculative implementation detail. Comment only.${triagerRefs.b
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const destDirs = (options?.chatPlanDestinations && options.chatPlanDestinations.length > 0)
             ? options.chatPlanDestinations
-            : ['.switchboard/plans/'];
+            : ['.switchboard/plans/intake/'];
         const planDestinationBlock = destDirs.length === 1
             ? `PLAN DESTINATION: Write the plan to \`${destDirs[0]}\` (this location only; do not also copy it to a session/brain directory).`
             : `PLAN DESTINATION: Write the plan into one of these directories (this location only; do not also copy it elsewhere):\n${destDirs.map(d => `- ${d}`).join('\n')}`;

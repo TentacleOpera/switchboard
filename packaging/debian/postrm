@@ -1,0 +1,12 @@
+#!/bin/sh
+# postrm: on purge, remove /etc/switchboard/. Never remove board databases
+# or the workspace — that is the operator's data.
+set -e
+
+if [ "$1" = "purge" ]; then
+    rm -rf /etc/switchboard
+fi
+
+#DEBHELPER#
+
+exit 0

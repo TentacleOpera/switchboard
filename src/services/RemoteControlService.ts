@@ -3,6 +3,8 @@ import type { KanbanDatabase, KanbanPlanRecord } from './KanbanDatabase';
 import type { RemoteProvider, RemoteStateDelta } from './remote/RemoteProvider';
 import type { ContentConflictResolver } from './remote/ContentConflictResolver';
 import { LastWriteWinsResolver } from './remote/ContentConflictResolver';
+import { checkReviewGate, formatDispatchReceipt, formatRefusalReceipt } from './remote/RemoteCommandEnforcement';
+import type { KanbanColumnDefinition } from './agentConfig';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 
@@ -131,6 +133,20 @@ interface RemoteControlDeps {
     getProvider: (kind: RemoteProviderKind) => RemoteProvider | null;
     /** Apply a remote-driven column move + dispatch the destination column's agent (§9). */
     onColumnMove: (plan: KanbanPlanRecord, targetColumn: string) => Promise<{ dispatched: boolean }>;
+    /**
+     * Return the workspace's kanban column definitions, for the review gate
+     * (the-remote-command-vocabulary-is-closed.md). Optional — when absent,
+     * the review gate is skipped (legacy behaviour). When present, a move
+     * into an execution column is refused if the plan has not passed review.
+     */
+    getColumns?: () => KanbanColumnDefinition[];
+    /**
+     * Return the column history (runs) for a plan, for the review gate's
+     * "has this plan ever been in a reviewed column?" check. Optional.
+     */
+    getPlanRuns?: (planId: string) => Promise<Array<{ column?: string }>>;
+    /** Credential source label for receipts (e.g. 'linear', 'notion', 'store'). */
+    credentialSource?: string;
     /**
      * Stage a card into the session queue (STAGING column, next queue_position).
      * Called in `queue` mode instead of `onColumnMove`. Returns the position
@@ -819,11 +835,40 @@ export class RemoteControlService {
             }
 
             // ── Full mode: dispatch as today ───────────────────────────────
+            // Review gate: refuse dispatch to an execution column if the plan
+            // has not passed a reviewed column. The gate is transport-neutral
+            // (applies to every trigger path) and fails closed when columns
+            // cannot be resolved. See the-remote-command-vocabulary-is-closed.md.
+            const credSource = this._deps.credentialSource || provider.kind;
+            if (this._deps.getColumns) {
+                const columns = this._deps.getColumns();
+                let runs: Array<{ column?: string }> | undefined;
+                if (this._deps.getPlanRuns) {
+                    try { runs = await this._deps.getPlanRuns(plan.planId); } catch { runs = undefined; }
+                }
+                const gate = checkReviewGate({
+                    targetColumn,
+                    sourceColumn: plan.kanbanColumn,
+                    columns,
+                    runs,
+                    isRemote: true
+                });
+                if (!gate.allowed) {
+                    const refusal = formatRefusalReceipt(plan.planId, credSource, gate.refusalReason || 'unknown');
+                    provider.postComment(remoteId, refusal).catch(e =>
+                        this._log(`Refusal receipt comment failed for ${plan.planId}: ${e instanceof Error ? e.message : String(e)}`)
+                    );
+                    this._log(`Review gate REFUSED dispatch for ${plan.planId} → ${targetColumn}: ${gate.refusalReason}`);
+                    return;
+                }
+            }
+
             const { dispatched } = await this._deps.onColumnMove(plan, targetColumn);
             if (dispatched) {
+                const receipt = formatDispatchReceipt(plan.planId, credSource, targetColumn);
                 provider.postComment(
                     remoteId,
-                    `Switchboard received this status change and dispatched the local agent for the **${targetColumn}** column. Check back in a few minutes.`
+                    receipt
                 ).catch(e => this._log(`Dispatch ack comment failed for ${plan.planId}: ${e instanceof Error ? e.message : String(e)}`));
             }
         } catch (e) {

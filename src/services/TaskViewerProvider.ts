@@ -2015,7 +2015,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (!migrated) {
             void this._runPhase0Migration();
         }
-        void this._migrateStartupCommandsToGlobalFile().then(() => this._foldAgentConfigToGlobalFile());
+        void this._migrateStartupCommandsToGlobalFile()
+            .then(() => this._foldAgentConfigToGlobalFile())
+            .then(() => this._reconcileStartupCommandsDbRow());
 
         // One-time migration of the persisted planner workflowFilePath from the
         // deprecated `.agent/` prefix to `.agents/` (the directory rename migrated
@@ -3168,6 +3170,124 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             await this._context.globalState.update('switchboard.agents.fileFold.v1', true);
         } catch (e) {
             console.error('[TaskViewerProvider] agent-config fold migration failed:', e);
+        }
+    }
+
+    /**
+     * Reconcile the legacy per-workspace `agents.startupCommands` DB row against
+     * the machine-global file, then retire the row when the file is the source
+     * of truth for every role the row carries.
+     *
+     * The seed migration (`_migrateStartupCommandsToGlobalFile`) seeds the file
+     * from the DB row once but NEVER deletes the row — it is left on disk as a
+     * stale duplicate that can disagree with the file (the original bug: a seat
+     * launched `agy` from the DB row while the file said `devin`). This pass
+     * closes that gap.
+     *
+     * Gate is the COMPARE STEP, not the seed flag:
+     *   - File has a value for every role the DB row has → archive the row as
+     *     `agents.startupCommands.migrated.bak` and delete the live key. The
+     *     file is the source of truth.
+     *   - File lacks any role the DB row has → leave both untouched and log the
+     *     divergence. The DB row may be the only source on a machine that never
+     *     seeded (the seed's guard `(b)` skips keys the file already has, so a
+     *     hand-populated file never reconciled that key from the DB).
+     *   - Both empty / no DB row → no-op.
+     *
+     * The seed flag (`globalFileSeed.v2`) is logged as context when available,
+     * never used as a gate. It is per-IDE (`globalState`), so the standalone
+     * host (file-backed `globalState` at a different path) cannot reliably read
+     * a flag set by the VS Code host — the compare logic does not need it.
+     *
+     * Idempotent: once the row is deleted, subsequent runs find no row and
+     * no-op. Runs on both hosts (the constructor chain is shared).
+     */
+    private async _reconcileStartupCommandsDbRow(): Promise<void> {
+        try {
+            // Candidate workspace roots in priority order: active first, then
+            // any other folder open in this window. De-duped. Same enumeration
+            // as the seed and fold passes.
+            const roots: string[] = [];
+            const activeRoot = this._resolveWorkspaceRoot() ?? undefined;
+            if (activeRoot) roots.push(activeRoot);
+            for (const folder of vscode.workspace.workspaceFolders ?? []) {
+                const r = folder.uri.fsPath;
+                if (r && !roots.includes(r)) roots.push(r);
+            }
+            if (roots.length === 0) {
+                // No workspace open — nothing to reconcile. The standalone host
+                // always has a root, so this is the extension-only no-folder case.
+                return;
+            }
+
+            const fileMap = GlobalIntegrationConfigService.getAgentConfigSync<Record<string, string>>('startupCommands') || {};
+
+            // Log the seed flag as CONTEXT (never a gate). Per-IDE; the
+            // standalone host's file-backed globalState holds its own copy.
+            let seedFlagContext = 'unknown';
+            try {
+                const seeded = this._context.globalState.get<boolean>('switchboard.agents.globalFileSeed.v2');
+                seedFlagContext = seeded ? 'set' : 'unset';
+            } catch {
+                seedFlagContext = 'unreadable';
+            }
+
+            for (const r of roots) {
+                let dbRow: Record<string, string> | undefined;
+                try {
+                    dbRow = KanbanDatabase.forWorkspace(r).getConfigJsonSync<Record<string, string>>('agents.startupCommands', {} as Record<string, string>);
+                } catch { /* db not ready / unreadable — skip this root */ }
+                if (!dbRow || Object.keys(dbRow).length === 0) { continue; }
+
+                // Roles the DB row carries with a non-blank command.
+                const dbRoles = Object.keys(dbRow).filter(role => typeof dbRow[role] === 'string' && dbRow[role].trim() !== '');
+                if (dbRoles.length === 0) {
+                    // Row exists but is empty/blank — safe to archive and delete.
+                    // Same archive-before-delete guard as the populated branch.
+                    const db = KanbanDatabase.forWorkspace(r);
+                    const archived = await db.setConfigJson('agents.startupCommands.migrated.bak', dbRow);
+                    if (!archived) {
+                        console.warn(`[TaskViewerProvider] startupCommands DB row at '${r}' was empty but could not be archived — leaving live row untouched.`);
+                        continue;
+                    }
+                    await db.deleteConfig('agents.startupCommands');
+                    console.log(`[TaskViewerProvider] startupCommands DB row at '${r}' was empty — archived and deleted (seed=${seedFlagContext}).`);
+                    continue;
+                }
+
+                // Roles the DB row has that the file does NOT. The file is the
+                // source of truth; when it lacks a role the DB row carries, the
+                // DB row may be the only source on a machine that never seeded
+                // that key — leave both untouched and log the divergence.
+                const missingFromFile = dbRoles.filter(role => !fileMap[role] || String(fileMap[role]).trim() === '');
+
+                if (missingFromFile.length > 0) {
+                    console.warn(`[TaskViewerProvider] startupCommands divergence at '${r}': DB row has role(s) [${missingFromFile.join(', ')}] the global file lacks — leaving both untouched (DB may be only source; seed=${seedFlagContext}).`);
+                    continue;
+                }
+
+                // File has a value for every role the DB row carries — the file
+                // is the source of truth. Archive the row, then delete the live
+                // key. The archive preserves the row on disk as `.migrated.bak`
+                // so a wrong collapse is always recoverable. The delete runs
+                // ONLY when the archive succeeded — a failed archive followed by
+                // a successful delete would lose the only copy of a config the
+                // file might not have.
+                const db = KanbanDatabase.forWorkspace(r);
+                const archived = await db.setConfigJson('agents.startupCommands.migrated.bak', dbRow);
+                if (!archived) {
+                    console.warn(`[TaskViewerProvider] startupCommands DB row at '${r}' could not be archived — leaving live row untouched (file is source of truth but archive is the safety net).`);
+                    continue;
+                }
+                const deleted = await db.deleteConfig('agents.startupCommands');
+                if (!deleted) {
+                    console.warn(`[TaskViewerProvider] startupCommands DB row at '${r}' was archived but the live key could not be deleted — both the archive and the live row are present; rerun will retry the delete.`);
+                    continue;
+                }
+                console.log(`[TaskViewerProvider] startupCommands DB row at '${r}' reconciled — archived as agents.startupCommands.migrated.bak and deleted (file is source of truth for ${dbRoles.length} role(s); seed=${seedFlagContext}).`);
+            }
+        } catch (e) {
+            console.error('[TaskViewerProvider] startupCommands DB row reconcile failed:', e);
         }
     }
 
@@ -8356,45 +8476,21 @@ Each plan file must include:
         // Custom agents are also machine-global (read from the same ~/.switchboard file).
         const customAgentsGlobal = await this.getCustomAgents(workspaceRoot);
 
-        // Machine-global, cross-IDE source of truth (~/.switchboard/integration-config.json).
-        // Shared by every workspace AND every IDE on the machine.
+        // Single source of truth: the machine-global, cross-IDE file
+        // (~/.switchboard/integration-config.json). The legacy per-IDE
+        // `globalState` fallback and the dead `state.json` fallback (which
+        // re-read the same file through the stateConfigBridge) were retired in
+        // the same pass that recorded startup-command provenance — see the plan
+        // `two-stores-hold-agent-startup-commands-and-they-disagree`. The DB
+        // row duplicate is reconciled separately by
+        // `_reconcileStartupCommandsDbRow`, which archives and deletes it once
+        // the file has a value for every role the row carries.
         const fileCommands = await GlobalIntegrationConfigService.getAgentStartupCommands();
-        if (fileCommands !== undefined) {
-            const startupCommands = { ...fileCommands };
-            for (const agent of parseCustomAgents(customAgentsGlobal)) {
-                startupCommands[agent.role] = agent.startupCommand;
-            }
-            return startupCommands;
+        const startupCommands: Record<string, string> = { ...(fileCommands || {}) };
+        for (const agent of parseCustomAgents(customAgentsGlobal)) {
+            startupCommands[agent.role] = agent.startupCommand;
         }
-
-        // Legacy fallbacks (used until the one-time backfill populates the global file):
-        // per-IDE globalState, then the per-workspace DB.
-        const globalValue = this._context.globalState.get<Record<string, string>>('switchboard.agents.startupCommands');
-        if (globalValue !== undefined) {
-            const startupCommands = { ...globalValue };
-            for (const agent of parseCustomAgents(customAgentsGlobal)) {
-                startupCommands[agent.role] = agent.startupCommand;
-            }
-            return startupCommands;
-        }
-
-        const statePath = this._resolveStateFilePath(workspaceRoot);
-        if (!statePath) {
-            console.warn(`[TaskViewerProvider] getStartupCommands: statePath is null for workspaceRoot='${workspaceRoot}'`);
-            return {};
-        }
-        try {
-            const content = await fs.promises.readFile(statePath, 'utf8');
-            const state = JSON.parse(content);
-            const startupCommands = { ...(state.startupCommands || {}) };
-            for (const agent of parseCustomAgents(state.customAgents)) {
-                startupCommands[agent.role] = agent.startupCommand;
-            }
-            return startupCommands;
-        } catch (e) {
-            console.warn(`[TaskViewerProvider] getStartupCommands: failed to read/parse state file '${statePath}': ${e}`);
-            return {};
-        }
+        return startupCommands;
     }
 
     public async getAgentStartupCommand(role: string, workspaceRoot?: string): Promise<string> {
@@ -23111,12 +23207,16 @@ Each plan file must include:
             throw new Error('No workspace folder found.');
         }
         const plansDir = path.join(workspaceRoot, '.switchboard', 'plans');
-        fs.mkdirSync(plansDir, { recursive: true });
+        const intakeDir = path.join(plansDir, 'intake');
+        fs.mkdirSync(intakeDir, { recursive: true });
 
         const now = new Date();
         const timestamp = this._formatPlanTimestamp(now);
         const slug = this._toPlanSlug(title);
         const fileName = `feature_plan_${timestamp}_${slug}.md`;
+        // Write to intake; the planFileAbsolute (used for DB records and session
+        // logs) points to the archive destination. The file is moved after write.
+        const intakeAbsolute = path.join(intakeDir, fileName);
         const planFileAbsolute = path.join(plansDir, fileName);
         const planFileRelative = path.relative(workspaceRoot, planFileAbsolute);
 
@@ -23126,7 +23226,13 @@ Each plan file must include:
         GlobalPlanWatcherService.registerPendingCreation(planFileAbsolute);
         try {
             const content = isAirlock ? `## Notebook Plan\n\n${idea}` : idea;
-            await fs.promises.writeFile(planFileAbsolute, content, 'utf8');
+            await fs.promises.writeFile(intakeAbsolute, content, 'utf8');
+            // Move from intake to archive after write.
+            try {
+                await fs.promises.rename(intakeAbsolute, planFileAbsolute);
+            } catch (moveErr) {
+                console.warn(`[TaskViewer] intake move failed for ${fileName}:`, moveErr);
+            }
 
             const createdAt = options.createdAt || now.toISOString();
             const log = this._getSessionLog(workspaceRoot);

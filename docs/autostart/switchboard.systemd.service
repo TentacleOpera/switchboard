@@ -51,7 +51,9 @@ Type=simple
 # ── EDIT THESE VALUES ───────────────────────────────────────────
 # ExecStart: path to npx or the switchboard binary, followed by args.
 #   Use `which npx` to find the full path.
-ExecStart=/usr/bin/npx switchboard start --port 7777 --no-open --workspace /home/YOUR_USERNAME/path/to/workspace
+#   Use `local` to serve on loopback only, or `tailnet` to also serve
+#   across your Tailscale network. Do NOT use `start` — it was removed.
+ExecStart=/usr/bin/npx switchboard local --port 7777 --no-open --workspace /home/YOUR_USERNAME/path/to/workspace
 
 # WorkingDirectory: the workspace root (must match --workspace above).
 WorkingDirectory=/home/YOUR_USERNAME/path/to/workspace
@@ -66,6 +68,11 @@ Environment=HOME=/home/YOUR_USERNAME
 # restarted. Verify this by `kill -9`ing the server and confirming it comes back.
 Restart=on-failure
 RestartSec=5
+
+# switchboard stop frees the port and logs "Server stopped" without the
+# process always exiting — without a stop timeout, a restart hangs and a
+# reboot the operator is counting on does not complete.
+TimeoutStopSec=15
 
 [Install]
 WantedBy=default.target

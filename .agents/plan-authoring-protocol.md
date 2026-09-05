@@ -37,9 +37,9 @@ When creating or improving any implementation plan (including via the extension-
 
 ### 📂 Workspace Detection for Plan Creation
 
-When creating plan files in multi-workspace setups, use this decision tree to determine which workspace's `.switchboard/plans/` directory to target:
+When creating plan files in multi-workspace setups, use this decision tree to determine which workspace's `.switchboard/plans/intake/` directory to target:
 
-1. **Primary signal: Active IDE workspace** — If the user's active editor or focused workspace folder is within a specific workspace root, write plans to that workspace's `.switchboard/plans/` directory. This is the most reliable signal.
+1. **Primary signal: Active IDE workspace** — If the user's active editor or focused workspace folder is within a specific workspace root, write plans to that workspace's `.switchboard/plans/intake/` directory. This is the most reliable signal.
 
 2. **Secondary signal: Task content keywords** — If the active workspace signal is ambiguous (e.g., the user is in a generic file), look for project-specific keywords in the task description. This is a hint, not a rule.
 

@@ -16,6 +16,7 @@ import {
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { stampMarker, truncateForComment } from './commentMarker';
 import { localizeHttpError } from './errorMessages';
+import { syncOwnershipLease } from './SyncOwnershipLease';
 
 
 export interface ClickUpConfig {
@@ -2823,6 +2824,10 @@ export class ClickUpSyncService {
     this.isSyncInProgress = true;
 
     try {
+      if (!(await syncOwnershipLease.isOwner())) {
+        return { success: false, error: 'This machine is not the sync owner — outbound ClickUp push skipped' };
+      }
+
       const config = await this.loadConfig();
       if (!config || !config.setupComplete) {
         return { success: false, error: 'ClickUp not set up' };
@@ -2901,6 +2906,9 @@ export class ClickUpSyncService {
 
   async syncPlanContent(taskId: string, markdownContent: string, signal?: AbortSignal): Promise<{ success: boolean; error?: string; dateUpdated?: string }> {
     try {
+      if (!(await syncOwnershipLease.isOwner())) {
+        return { success: false, error: 'This machine is not the sync owner — outbound ClickUp content push skipped' };
+      }
       const config = await this.loadConfig();
       if (!config?.setupComplete) {
         return { success: false, error: 'ClickUp not set up' };
@@ -3366,11 +3374,14 @@ export class ClickUpSyncService {
           imported++;
         } else if (isChild(task)) {
           // Child (including intermediate parents) → subtask: insert DB record,
-          // persist clickup_task_id, THEN write to .switchboard/plans/ (insert-before-write).
+          // persist clickup_task_id, THEN write to .switchboard/plans/intake/ (insert-before-write).
+          // The DB record points to the archive path; the file is moved there after write.
           const childUuid = crypto.randomUUID();
           uuidByTaskId.set(taskId, childUuid);
-          const childPlanFile = path.join(plansDir, `clickup_import_${task.id}.md`);
-          const childRelPath = path.relative(this._workspaceRoot, childPlanFile);
+          const childFilename = `clickup_import_${task.id}.md`;
+          const childIntakePath = path.join(plansDir, 'intake', childFilename);
+          const childArchivePath = path.join(plansDir, childFilename);
+          const childRelPath = path.relative(this._workspaceRoot, childArchivePath);
 
           // Add Feature Plan ID metadata line for debugging.
           const parentTaskId = String(task.parent || '').trim();
@@ -3409,11 +3420,20 @@ export class ClickUpSyncService {
             }
           }
 
-          await fs.promises.writeFile(childPlanFile, childStub, 'utf8');
+          await fs.promises.mkdir(path.dirname(childIntakePath), { recursive: true });
+          await fs.promises.writeFile(childIntakePath, childStub, 'utf8');
+          // Move from intake to archive after write.
+          try {
+            await fs.promises.rename(childIntakePath, childArchivePath);
+          } catch (moveErr) {
+            console.warn(`[ClickUpSync] intake move failed for child ${task.id}:`, moveErr);
+          }
           imported++;
         } else {
-          // Standalone: write file only (same as today — watcher ingests).
-          const planFile = path.join(plansDir, `clickup_import_${task.id}.md`);
+          // Standalone: write file to intake only (watcher ingests and moves).
+          const intakeDir = path.join(plansDir, 'intake');
+          const planFile = path.join(intakeDir, `clickup_import_${task.id}.md`);
+          await fs.promises.mkdir(intakeDir, { recursive: true });
           await fs.promises.writeFile(planFile, stub, 'utf8');
           imported++;
         }

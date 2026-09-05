@@ -1,0 +1,27 @@
+[Unit]
+Description=Switchboard standalone board server
+After=network-online.target
+After=tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/switchboard/switchboard.env
+# ExecStart interpolates SWITCHBOARD_SERVE_MODE as the first argument —
+# `local` serves loopback, `tailnet` serves loopback plus the Tailscale
+# interface. It must NOT say `start` — that subcommand was removed and
+# exits 1. See autostart-unit-invokes-removed-switchboard-start.md.
+ExecStart=/usr/bin/switchboard ${SWITCHBOARD_SERVE_MODE} --port ${SWITCHBOARD_PORT} --no-open --workspace ${SWITCHBOARD_WORKSPACE}
+WorkingDirectory=${SWITCHBOARD_WORKSPACE}
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:${SWITCHBOARD_EXTRA_PATH}
+Environment=HOME=/home/${SWITCHBOARD_USER}
+User=${SWITCHBOARD_USER}
+Restart=on-failure
+RestartSec=5
+# switchboard stop frees the port and logs "Server stopped" without the
+# process always exiting — without a stop timeout, a restart hangs and a
+# reboot the operator is counting on does not complete.
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Switchboard
+GenericName=Agent Fleet Command
+Comment=Plan-driven agent orchestration board
+Exec=switchboard local --no-open
+Icon=switchboard
+Terminal=false
+Categories=Development;Utility;
+StartupNotify=true
