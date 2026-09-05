@@ -1,10 +1,10 @@
-# The Plan Watcher Becomes a Setting, Because a Paired Board Does Not Own the Plans Tree
+# The Watcher Scans an Intake Folder, Not the Whole Archive
 
 kanbanColumn: BACKLOG
 
 ## Goal
 
-An operator running the board on one machine and the agents on another can turn the plan watcher off, or narrow what it sweeps, without losing the board.
+New plans arrive through a small intake directory the watcher sweeps. The accumulated archive is not scanned, so a board host that reaches its plans over a network path pays for the plans arriving, not the plans that already arrived.
 
 ### Problem analysis
 
@@ -12,73 +12,91 @@ This settles the open question recorded in *An app that pairs two machines* (lin
 
 > *"Should the remote run the plan scanner against repositories it can see, or is scanning strictly client-side? This decides whether the remote needs access to code at all."*
 
-**Answer: it must be optional, because on a paired setup the board host frequently has no good access to the tree.**
+**Answer: it scans, but it scans a bounded directory rather than the accumulated archive.**
 
-The concrete case, measured 2026-09-05. A Raspberry Pi is the only machine that can be cabled to the modem, so it is the natural board host; the tower has the CPU and holds the repository. Between them:
+**What a sweep actually costs.** The scanner is already incremental — it does not re-read every plan:
+
+```js
+:637  readdir(dir, { withFileTypes: true })
+:693  const stats = await fs.promises.stat(entryPath);
+:694  if (stats.mtimeMs < lastScan) { continue; }   // unchanged → skipped
+:695  if (now - stats.mtimeMs < 500) { continue; }  // too fresh → skipped
+```
+
+One `readdir` plus one `stat` per file, and a `readFile` only where the mtime advanced. Locally that is microseconds and no problem at all — **this card is not about local installs.**
+
+**The cost is the file count, and only when the directory is remote.** Measured 2026-09-05:
 
 | | |
 | :--- | :--- |
 | plan files | **2,247** |
 | feature files | 312 |
-| `.switchboard/plans/` on disk | 49 MB |
 | tower ↔ Pi over wifi | 4.7 / **47.8** / 94.2 ms, jitter 25.9 |
 | tower ↔ Pi over the direct cable | 0.27 / **0.28** / 0.30 ms, jitter 0.008 |
 
-A network mount of that directory is the wrong shape at either latency. The watcher sweeps on an interval — every 10 s by default — and a sweep over 2,247 files is thousands of round trips. At 48 ms that is minutes per pass, permanently. Even at 0.28 ms it is a poor use of a link the agents also need.
+On a paired setup — a Pi cabled to the modem holding the board, a tower holding the repo — those 2,247 stats become 2,247 round trips every sweep, at a default interval of 10 seconds, forever. Nothing about that work is useful: the archive does not change.
 
-**Today there is no way to say no.** The watcher is unconditional: a board host scans whatever plans directory it is pointed at, forever. So a paired setup has only bad options — mount the tree and accept a watcher that never finishes a pass, or leave the board with no plans at all.
+**The number only grows.** 2,247 today, and every plan ever written stays. A design that scans the archive gets slower for the rest of the product's life, on every host.
 
-**This is not the same as the board being read-only.** Plans still reach the board; they simply arrive by a route that does not require the board host to own a filesystem. `POST /kanban/plans` already exists, and the agent host can post as it writes.
+**Why not simply disable the watcher.** An earlier draft of this card proposed an off switch. That is the wrong shape: a board that silently stops accepting plans written to disk is indistinguishable from a broken one, and it takes away the mechanism rather than fixing its cost.
+
+**Why not mirror the archive.** Also considered and rejected: syncing 49 MB to both machines needs sync machinery and two copies kept honest, to avoid scanning files nobody reads. Bounding the scan is strictly less work than replicating the thing being scanned.
 
 ## Metadata
 
-- **Complexity:** 3
+- **Complexity:** 4
 - **Feature:** Two Machines, One Board - the Paired App and Its Command Loop
-- **Tags:** paired-hosts, watcher, settings
+- **Tags:** paired-hosts, watcher, performance
 
 ## User Review Required
 
-None.
+Change 2 carries one decision: where an imported plan comes to rest.
 
 ## Proposed Changes
 
-### 1. The watcher can be turned off
+### 1. The watcher sweeps an intake directory
 
-A setting that stops the plan sweep entirely. The board still serves, still renders, still dispatches — it simply stops treating a directory as an input.
+Point the scan at a directory that holds only plans that have not yet been imported. A handful of files is cheap to stat at any latency, and stays cheap as the archive grows.
 
-State plainly in the setting's description what turns off with it: plans no longer appear by being written to disk. That is the whole contract of the watcher and an operator disabling it must know they are trading it away.
+The interval and the incremental mtime check stay exactly as they are. This changes *what* is swept, not how.
 
-### 2. And it can be narrowed instead of disabled
+### 2. Decide where an imported plan comes to rest **[decision]**
 
-Off is too blunt for a board host that *does* hold some of the tree. Offer the middle: a longer interval, or a scoped subdirectory, so a host that can afford one sweep a minute over one folder is not forced to choose between minutes-per-pass and nothing.
+Two shapes work and they differ in what the board holds:
 
-Prefer the interval control if only one ships — it is the one that turns an unusable sweep into a tolerable one without changing what the board can see.
+- **Intake as a staging drop.** A plan is imported, then moved to the archive directory; the database records the final path. The board keeps the full history and the watcher never looks at it again.
+- **Intake as the board's whole plans directory.** The archive lives elsewhere entirely and the board simply does not hold 2,247 files.
 
-### 3. Say which route plans are arriving by
+Prefer the first unless the paired case makes the archive genuinely unreachable — it keeps a single-machine install visibly unchanged.
 
-With the watcher off, a plan that does not appear looks like a bug. The board should state its input mode where an operator will see it — watching a directory, or accepting posts — so an absent plan is diagnosable rather than mysterious.
+**The move must not race the watcher.** `:695` already skips files younger than 500 ms, which reads as a scar from exactly this class of race. Whatever performs the move has to be ordered against the import, not merely delayed.
 
-This is the config-read rule: a board that silently stopped watching is indistinguishable from a board whose watcher is broken.
+### 3. An existing install migrates without losing plans
 
-### 4. Record the answer on the parent plan
+There are 2,247 plan files in this workspace and the same shape in every other install. The archive is not re-imported and not moved wholesale on upgrade; existing rows keep their recorded paths, and only new arrivals use intake.
 
-Line 174 asks whether the remote scans or scanning is client-side. The answer this card establishes is *neither, by default — it is the operator's choice, and the default depends on which machine holds the tree*. Write that into the parent so the question is closed rather than re-asked.
+Per the repository's migration rule: a plan file that exists in a released version is migrated, never dropped, and never assumed to have been handled by a prior pass.
+
+### 4. Say which directory is being watched
+
+A plan that does not appear should be diagnosable. The board states the directory it sweeps somewhere an operator reads, so "I wrote a plan and nothing happened" resolves to "you wrote it to the archive, not the intake" instead of a hunt.
 
 ## Edge-Case & Dependency Audit
 
-1. **A single-machine install must be unaffected.** The default stays "watch", and an operator who never opens this setting sees no change. This is an opt-out for a topology most users do not have.
-2. **Disabling the watcher must not disable the importer.** `POST /kanban/plans` and the feature-file path are separate inputs and must keep working — that is what makes disabling survivable.
-3. **Do not make this a mount recommendation.** The measurement here argues *against* mounting the plans tree; the setting exists so that mounting is unnecessary, not so that a slow mount becomes tolerable.
-4. **Both hosts.** The watcher runs in the extension host and in standalone; a setting honoured by one is the divergence trap.
-5. **Interacts with `eb2456e0`.** A standalone board that never scaffolds and never watches is a board with no inputs at all. Confirm the two settings compose into something usable rather than an empty board.
-6. **The board database is already machine-local** since the storage overhaul (`~/.switchboard/boards/<id>.db`), so nothing here touches where state lives — only where *plans* are read from.
+1. **A single-machine install must see no behavioural change.** The scan gets cheaper; nothing else moves. If change 2 lands as the staging drop, plan files end up exactly where they do today.
+2. **Agents write plans by path.** Skills, prompts and the `create-plan` paths all name a plans directory. Every writer has to target intake, or the watcher will not see what they produce — this is the change most likely to be missed, because a plan written to the old path simply never appears.
+3. **The importer is not the only reader.** `POST /kanban/plans` and the feature-file path also create plans; they are unaffected and must stay so.
+4. **Both hosts run the watcher.** A directory honoured by one host and not the other is the divergence trap.
+5. **Do not use this to justify mounting the archive.** The measurement argues against mounting the plans tree at either latency; the intake folder exists so that mounting is unnecessary.
+6. **Interacts with `eb2456e0`** — a standalone board that never scaffolds may have no intake directory to watch. Confirm the two compose.
 
 ## Verification Plan
 
-1. With the watcher disabled, the board serves and dispatches, and a plan written to disk does not appear.
-2. With the watcher disabled, a plan posted to `POST /kanban/plans` does appear.
-3. With an interval set, the sweep runs at that interval and not more often.
-4. With a scoped directory set, only that directory is swept.
-5. The board states its current input mode somewhere an operator reads.
-6. A default single-machine install behaves exactly as it does today.
-7. Both hosts honour the setting identically.
+1. A sweep stats the intake directory only, and its cost does not grow with the archive.
+2. A plan written to intake imports as it does today.
+3. An imported plan comes to rest per the change-2 decision, and the database records where.
+4. A plan written while a move is in flight is imported exactly once.
+5. An existing install with 2,247 archived plans upgrades without re-importing or losing any.
+6. Every writer that creates a plan file targets intake.
+7. The board states which directory it watches.
+8. Both hosts sweep the same directory.
