@@ -44,6 +44,7 @@ import { isPtyAvailable } from '../standalone/ptyBackend';
 // The extension is control plane: it never constructs a fleet and never sees
 // terminal bytes.
 import { PtyFleetService, PTY_IDE_NAME } from '../standalone/ptyFleetService';
+import { DEVIN_DEFAULT_TIMEOUT_MS, CLAUDE_DEFAULT_TIMEOUT_MS, ANTIGRAVITY_DEFAULT_TIMEOUT_MS } from '../standalone/clearReadiness';
 import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExternalTeamTemplate, InstantiateAgentGroupResult } from './agentGroupInstantiation';
 // The pure migrators are deliberately NOT imported here: every standing-orders
 // read in this file goes through `loadEffectiveStandingOrders`, which composes
@@ -389,7 +390,7 @@ type BrainRunSheetMetadata = {
  * touched the slider.
  */
 import { explicitScopeValue, resolvePtyClearDelay, resolvePtyClearPolicy, type PtyClearPolicy } from './ptyClearPolicy';
-import { deriveAgentDisplayName as deriveCliDisplayName, CLI_BRAND_NAMES as SHARED_CLI_BRAND_NAMES } from './cliIdentity';
+import { deriveAgentDisplayName as deriveCliDisplayName, deriveCliFamily, CLI_BRAND_NAMES as SHARED_CLI_BRAND_NAMES, type CliFamily } from './cliIdentity';
 export { explicitScopeValue, resolvePtyClearDelay, resolvePtyClearPolicy, type PtyClearPolicy };
 
 
@@ -2399,7 +2400,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // authoritatively by the atomic claim marker in _tryClaimBrainPlan.
     }
 
-    public setTerminalAgentInfo(suffixedName: string, role: string, displayName: string): void {
+    public setTerminalAgentInfo(suffixedName: string, role: string, displayName: string, startupCommand?: string): void {
         this._terminalAgentInfo.set(suffixedName, { role, displayName });
         this._notifyTerminalAgentNamesChanged();
         // Fire-and-forget: deliver applicable standing orders as a one-shot
@@ -2407,16 +2408,33 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // the first dispatch. The registration sweep (20882/20950) calls
         // _terminalAgentInfo.set directly and is therefore excluded by
         // structure — only fresh-spawn sites route through this method.
+        // The establish delay is family-aware (not a flat 1500ms): a Devin seat
+        // needs ~15s to boot, a Claude seat ~8s. The flat 1500ms was typed into
+        // a boot screen and lost on any CLI slower than Claude. See
+        // prompt-delivery-should-be-patient-not-precise.md.
+        const family = startupCommand ? deriveCliFamily(startupCommand) : 'unknown';
         this._deliverStandingOrdersOnEstablish(suffixedName, role, {
             skipMissionControl: true,
-            // The caller sends the CLI's boot command immediately before this, so the
-            // agent is still starting. Same 1500ms grace Mission Control kickoff uses
-            // for a freshly-created terminal — without it the one-shot is typed into a
-            // shell prompt or a boot screen and lost.
-            readyDelayMs: TaskViewerProvider.ESTABLISH_ORDERS_READY_DELAY_MS,
+            readyDelayMs: TaskViewerProvider.familyEstablishDelayMs(family),
         }).catch((err) => {
             console.error(`[TaskViewerProvider] Standing-orders establish delivery failed for '${suffixedName}':`, err);
         });
+    }
+
+    /**
+     * Family-aware establish delay — replaces the flat 1500ms
+     * {@link ESTABLISH_ORDERS_READY_DELAY_MS} on the send path. Uses the
+     * clear-path timeout as the floor (the same value a cleared seat would
+     * wait at maximum), so a freshly-spawned seat waits as long as a cleared
+     * one before the standing-orders one-shot is typed in. `unknown` resolves
+     * to the Devin floor (patient default). See
+     * prompt-delivery-should-be-patient-not-precise.md.
+     */
+    private static familyEstablishDelayMs(family: CliFamily): number {
+        if (family === 'devin') { return DEVIN_DEFAULT_TIMEOUT_MS; }
+        if (family === 'claude') { return CLAUDE_DEFAULT_TIMEOUT_MS; }
+        if (family === 'antigravity') { return ANTIGRAVITY_DEFAULT_TIMEOUT_MS; }
+        return DEVIN_DEFAULT_TIMEOUT_MS; // unknown — patient default
     }
 
     /**
@@ -2555,7 +2573,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * withTerminalSendLock. A terminal with no applicable orders is a no-op
      * (renderStandaloneOrdersBlock returns null inside the shared method).
      */
-    public deliverStandingOrdersAfterClear(terminalName: string): void {
+    public async deliverStandingOrdersAfterClear(terminalName: string): Promise<void> {
         // No role argument and no Mission Control skip: role is only consulted for the
         // establish-time Mission Control skip, and that skip exists because the kickoff
         // dispatch follows a spawn. Nothing follows a clear — for either
@@ -2563,10 +2581,17 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // seat — so this one-shot is the cleared terminal's only orders delivery.
         // No ready delay either: clearTerminalContext has already waited out its own
         // clear delay, so the CLI is up.
-        this._deliverStandingOrdersOnEstablish(terminalName, '', { skipMissionControl: false, isAfterClear: true })
-            .catch((err) => {
-                console.warn(`[TaskViewerProvider] Standing-orders post-clear delivery failed for '${terminalName}':`, err);
-            });
+        //
+        // Returns a Promise (not fire-and-forget) so callers can AWAIT it —
+        // serializing the standing-orders delivery against the next dispatch.
+        // Without the await, the clear returns `cleared: true` immediately, the
+        // queue pops the next card, and the card's prompt races the orders
+        // delivery into the same seat. See prompt-delivery-should-be-patient-not-precise.md.
+        try {
+            await this._deliverStandingOrdersOnEstablish(terminalName, '', { skipMissionControl: false, isAfterClear: true });
+        } catch (err) {
+            console.warn(`[TaskViewerProvider] Standing-orders post-clear delivery failed for '${terminalName}':`, err);
+        }
     }
 
     /**
@@ -11384,7 +11409,7 @@ Each plan file must include:
                             kind: 'message'
                         });
                         if (clearRes?.success) {
-                            this.deliverStandingOrdersAfterClear(target.friendlyName);
+                            await this.deliverStandingOrdersAfterClear(target.friendlyName);
                             return { cleared: true, reason: clearRes?.readiness?.reason };
                         }
                         return { cleared: false, error: clearRes?.error || 'ptySendPrompt clear reported failure' };
@@ -11429,7 +11454,7 @@ Each plan file must include:
                 terminal!.sendText('', true);
                 await new Promise(r => setTimeout(r, clearDelay));
             });
-            this.deliverStandingOrdersAfterClear(terminal.name || terminalName);
+            await this.deliverStandingOrdersAfterClear(terminal.name || terminalName);
             return { cleared: true };
         } catch (err) {
             console.error(`[TaskViewerProvider] clearTerminalContext clipboard paste failed for '${terminalName}':`, err);
@@ -11861,7 +11886,7 @@ Each plan file must include:
         if (startupCommand && startupCommand.trim()) {
             // Cache the brand-aware agent display name
             const displayName = this.deriveAgentDisplayName(startupCommand);
-            this.setTerminalAgentInfo(uniqueName, normalizedRole, displayName);
+            this.setTerminalAgentInfo(uniqueName, normalizedRole, displayName, startupCommand);
         }
 
         this._refreshTerminalStatuses();
@@ -12212,7 +12237,7 @@ Each plan file must include:
                 });
 
                 const displayName = this.deriveAgentDisplayName(startupCommand);
-                this.setTerminalAgentInfo(suffixedForState, 'mission-control', displayName);
+                this.setTerminalAgentInfo(suffixedForState, 'mission-control', displayName, startupCommand);
             }
             this._refreshTerminalStatuses();
         } else {
@@ -21565,7 +21590,7 @@ Each plan file must include:
             const startupCmd = fleetWouldSend || expected;
             if (startupCmd) {
                 const displayName = this.deriveAgentDisplayName(startupCmd);
-                this.setTerminalAgentInfo(createdName, role, displayName);
+                this.setTerminalAgentInfo(createdName, role, displayName, startupCmd);
             }
         } catch (err) {
             console.warn('[TaskViewerProvider] Startup command resolution/top-up failed:', err);

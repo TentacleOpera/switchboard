@@ -45,10 +45,13 @@ export function resolvePtyClearPolicyFromExplicit(
         return { mode: 'manual', delayMs: explicitPtyDelay, source: 'pty-explicit' };
     }
 
-    if (explicitLegacyDelay !== undefined) {
-        return { mode: 'manual', delayMs: explicitLegacyDelay, source: 'legacy-explicit' };
-    }
-
+    // Rule 4 deleted: a legacy VS Code delay (terminal.clearBeforePromptDelay)
+    // no longer flips a PTY seat to manual mode. Without an explicit PTY mode or
+    // PTY-specific delay, the seat stays in Auto mode and runs the readiness
+    // state machine — a Devin clear resolves on `signal`, not a 600ms `manual`.
+    // The legacy delay is now a floor in createClearReadinessTracker (via the
+    // manual-mode floor), not a policy-level mode flip. See
+    // a-delay-setting-must-not-be-able-to-defeat-known-cli-readiness.md.
     return { mode: 'auto', unknownDelayMs: 600, source: 'default' };
 }
 
@@ -59,8 +62,9 @@ export function resolvePtyClearPolicyFromExplicit(
  * 1. Explicit mode 'auto' -> Auto mode; unknown/custom fallback uses explicit PTY delay or 600ms.
  * 2. Explicit mode 'manual' -> Manual mode; uses explicit PTY delay, else explicit legacy VS Code delay, else 600ms.
  * 3. Unset mode + explicit PTY delay -> Compatibility Manual mode using explicit PTY delay.
- * 4. Unset mode + explicit legacy VS Code delay -> Compatibility Manual mode using explicit legacy delay.
- * 5. Unset mode + no explicit delay -> Auto mode with default 600ms unknown fallback.
+ * 4. Unset mode + no explicit delay -> Auto mode with default 600ms unknown fallback.
+ * (Rule 4 — legacy VS Code delay flipping to Manual — deleted; see
+ *  a-delay-setting-must-not-be-able-to-defeat-known-cli-readiness.md.)
  */
 export function resolvePtyClearPolicy(cfg: vscode.WorkspaceConfiguration): PtyClearPolicy {
     const rawMode = explicitScopeValue(cfg.inspect<string>('terminal.ptyClearReadinessMode'));

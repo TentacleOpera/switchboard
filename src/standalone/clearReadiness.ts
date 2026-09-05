@@ -1,7 +1,7 @@
 import type { CliFamily } from '../services/cliIdentity';
 
 export type ClearReadinessMode = 'auto' | 'manual';
-export type ClearReadinessReason = 'signal' | 'fallback' | 'manual' | 'exit' | 'timeout';
+export type ClearReadinessReason = 'signal' | 'fallback' | 'manual' | 'exit' | 'timeout' | 'late-signal';
 
 export interface ClearReadinessResult {
     reason: ClearReadinessReason;
@@ -51,6 +51,15 @@ export const CLAUDE_DEFAULT_QUIET_MS = 300;
 export const ANTIGRAVITY_DEFAULT_TIMEOUT_MS = 3000;
 export const ANTIGRAVITY_DEFAULT_QUIET_MS = 300;
 export const DEFAULT_FALLBACK_DELAY_MS = 600;
+
+/**
+ * Grace window after the ceiling fires. If a ready signal arrives within this
+ * window, the tracker resolves `'late-signal'` instead of `'fallback'` — making
+ * a truncated clear self-reporting instead of silently folding the late signal
+ * into a fallback. See
+ * a-delay-setting-must-not-be-able-to-defeat-known-cli-readiness.md.
+ */
+export const LATE_SIGNAL_GRACE_MS = 1000;
 
 // ── First-readiness constants (cold-boot gate) ──────────────────────────
 // These cover a COLD boot — a CLI that has never been prompted. The post-clear
@@ -108,6 +117,13 @@ export function createClearReadinessTracker(
     let exitSub: any = undefined;
     let mainTimer: NodeJS.Timeout | null = null;
     let quietTimer: NodeJS.Timeout | null = null;
+    // Set to true when the ceiling timer fires. A ready signal arriving after
+    // this point is a LATE signal — reported as 'late-signal', not 'signal'.
+    let ceilingFired = false;
+    // Stashed reason for the manual-mode floor: when a signal arrives before
+    // the configured delay, the decision is made but resolution is deferred
+    // until the floor elapses.
+    let pendingReason: ClearReadinessReason | null = null;
 
     function cleanup(): void {
         if (mainTimer) {
@@ -136,12 +152,42 @@ export function createClearReadinessTracker(
         }
     }
 
-    function finish(reason: ClearReadinessReason): void {
+    function doResolve(reason: ClearReadinessReason): void {
         if (resolved) return;
         resolved = true;
         cleanup();
         const elapsedMs = Math.max(0, Date.now() - startAt);
         resolvePromise({ reason, elapsedMs });
+    }
+
+    function finish(reason: ClearReadinessReason): void {
+        if (resolved) return;
+        const elapsed = Math.max(0, Date.now() - startAt);
+        // Manual-mode floor for known families: a configured delay is a floor
+        // (max(delay, readiness)), not a replacement for readiness detection.
+        // The state machine runs and can resolve on signal, but the promise
+        // does not resolve before the configured delay has elapsed. Exit is
+        // exempt — a dead CLI must abort immediately. See
+        // a-delay-setting-must-not-be-able-to-defeat-known-cli-readiness.md.
+        if (mode === 'manual' && family !== 'unknown' && elapsed < fallbackDelay && reason !== 'exit') {
+            pendingReason = reason;
+            // Stop listening — the decision is made, we are just waiting for
+            // the floor. Dispose the data subscription so late chunks do not
+            // re-arm quiet timers or otherwise interfere.
+            if (dataSub) {
+                if (typeof dataSub.dispose === 'function') {
+                    try { dataSub.dispose(); } catch {}
+                } else if (typeof dataSub === 'function') {
+                    try { dataSub(); } catch {}
+                }
+                dataSub = undefined;
+            }
+            if (quietTimer) { clearTimeout(quietTimer); quietTimer = null; }
+            if (mainTimer) { clearTimeout(mainTimer); mainTimer = null; }
+            mainTimer = setTimeout(() => doResolve(pendingReason!), fallbackDelay - elapsed);
+            return;
+        }
+        doResolve(reason);
     }
 
     let submitted = false;
@@ -162,16 +208,28 @@ export function createClearReadinessTracker(
 
     const mode = options?.mode || 'auto';
     const fallbackDelay = Math.max(0, options?.fallbackDelayMs ?? DEFAULT_FALLBACK_DELAY_MS);
+    const family = options?.cliFamily || target.cliFamily || 'unknown';
 
-    if (mode === 'manual') {
+    if (mode === 'manual' && family === 'unknown') {
+        // Unknown family in manual mode: delay is the whole policy (unchanged).
+        // No signal detection — the unknown branch has no onData subscription.
         mainTimer = setTimeout(() => finish('manual'), fallbackDelay);
         return { promise, markSubmitted, dispose: cleanup };
     }
-
-    const family = options?.cliFamily || target.cliFamily || 'unknown';
+    // Known family in manual mode: fall through to the family-specific state
+    // machine below. The configured delay is enforced as a floor in finish(),
+    // not as a replacement for readiness detection.
 
     if (family === 'unknown') {
-        mainTimer = setTimeout(() => finish('fallback'), fallbackDelay);
+        // Patient default: an unrecognised CLI is the seat we should be most
+        // careful with, not the least. The unknown branch has no signal
+        // detection (no onData subscription), so this remains a flat timer —
+        // but the timeout is the devin clear-path ceiling (15s), not the 600ms
+        // fallback. The failure mode of a flat 15s wait is latency; the failure
+        // mode of 600ms is a prompt landed into a CLI not yet accepting input.
+        // See prompt-delivery-should-be-patient-not-precise.md.
+        const unknownTimeoutMs = options?.timeouts?.devinTimeoutMs ?? DEVIN_DEFAULT_TIMEOUT_MS;
+        mainTimer = setTimeout(() => finish('fallback'), unknownTimeoutMs);
         return { promise, markSubmitted, dispose: cleanup };
     }
 
@@ -180,7 +238,15 @@ export function createClearReadinessTracker(
         const quietMs = options?.timeouts?.devinQuietMs ?? DEVIN_DEFAULT_QUIET_MS;
         let buffer = '';
 
-        mainTimer = setTimeout(() => finish('fallback'), timeoutMs);
+        mainTimer = setTimeout(() => {
+            if (resolved) return;
+            // Ceiling fired — enter late-signal grace window. A ready signal
+            // arriving within LATE_SIGNAL_GRACE_MS is reported as 'late-signal'
+            // instead of being folded into 'fallback'. See
+            // a-delay-setting-must-not-be-able-to-defeat-known-cli-readiness.md.
+            ceilingFired = true;
+            mainTimer = setTimeout(() => finish('fallback'), LATE_SIGNAL_GRACE_MS);
+        }, timeoutMs);
 
         if (typeof target.onData === 'function') {
             try {
@@ -205,7 +271,7 @@ export function createClearReadinessTracker(
                     if (disabledAt >= 0 && enabledAt > disabledAt) {
                         const afterEnable = buffer.slice(enabledAt);
                         if (afterEnable.includes('\x1b[?25h') && afterEnable.includes('\x1b[?2026l')) {
-                            quietTimer = setTimeout(() => finish('signal'), quietMs);
+                            quietTimer = setTimeout(() => finish(ceilingFired ? 'late-signal' : 'signal'), quietMs);
                         }
                     }
                 });
@@ -224,7 +290,13 @@ export function createClearReadinessTracker(
             ? (options?.timeouts?.claudeQuietMs ?? CLAUDE_DEFAULT_QUIET_MS)
             : (options?.timeouts?.antigravityQuietMs ?? ANTIGRAVITY_DEFAULT_QUIET_MS);
 
-        mainTimer = setTimeout(() => finish('fallback'), timeoutMs);
+        mainTimer = setTimeout(() => {
+            if (resolved) return;
+            // Ceiling fired — enter late-signal grace window. See devin branch
+            // above for the full rationale.
+            ceilingFired = true;
+            mainTimer = setTimeout(() => finish('fallback'), LATE_SIGNAL_GRACE_MS);
+        }, timeoutMs);
 
         if (typeof target.onData === 'function') {
             try {
@@ -236,7 +308,7 @@ export function createClearReadinessTracker(
                         clearTimeout(quietTimer);
                         quietTimer = null;
                     }
-                    quietTimer = setTimeout(() => finish('signal'), quietMs);
+                    quietTimer = setTimeout(() => finish(ceilingFired ? 'late-signal' : 'signal'), quietMs);
                 });
             } catch {
                 // If subscription failed, fallback timer handles it
@@ -350,11 +422,16 @@ export async function awaitFirstReadiness(
             ceilingMs = options?.timeouts?.antigravityTimeoutMs ?? ANTIGRAVITY_FIRST_READINESS_TIMEOUT_MS;
             quietMs = options?.timeouts?.antigravityQuietMs ?? ANTIGRAVITY_FIRST_READINESS_QUIET_MS;
         } else {
-            // Unknown family — use the claude constants as a conservative default
-            // (8 s ceiling, 250 ms quiet). The ceiling covers the silent boot gap
-            // and the quiet window covers the banner burst.
-            ceilingMs = CLAUDE_FIRST_READINESS_TIMEOUT_MS;
-            quietMs = CLAUDE_FIRST_READINESS_QUIET_MS;
+            // Unknown family — an unrecognised CLI is one whose boot time is
+            // unknown. Waiting too long costs seconds; waiting too little costs
+            // the whole delivery (the prompt lands mid-boot and the composer
+            // swallows the submit CRs). The safe default is therefore the
+            // LONGEST ceiling (Devin's 20 s), not the shortest. The quiet window
+            // (250 ms) is what resolves most boots — the ceiling is only reached
+            // when the CLI emits nothing at all, so the practical cost is
+            // smaller than 20 s in the common case.
+            ceilingMs = options?.timeouts?.devinTimeoutMs ?? DEVIN_FIRST_READINESS_TIMEOUT_MS;
+            quietMs = options?.timeouts?.devinQuietMs ?? DEVIN_FIRST_READINESS_QUIET_MS;
         }
 
         // Ceiling — proceed regardless after the max wait.

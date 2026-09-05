@@ -1,6 +1,7 @@
 import type { ExtendedTerminalHandle } from './ptyFleetService';
 import type { CliFamily } from '../services/cliIdentity';
-import { createClearReadinessTracker, awaitFirstReadiness, type ClearReadinessResult, type ClearReadinessMode } from './clearReadiness';
+import { deriveCliFamily } from '../services/cliIdentity';
+import { createClearReadinessTracker, awaitFirstReadiness, type ClearReadinessResult, type ClearReadinessMode, DEVIN_DEFAULT_TIMEOUT_MS, CLAUDE_DEFAULT_TIMEOUT_MS, ANTIGRAVITY_DEFAULT_TIMEOUT_MS } from './clearReadiness';
 
 const CHUNK_SIZE = 256;
 // 30ms was inherited from the VS Code sendText path, where each chunk crosses an
@@ -22,6 +23,26 @@ const SUBMIT_SETTLE_MS = 40;           // was 100 — small settle before Enter
 const CONFIRM_ENTER_DELAY_MS = 200;
 
 const sendLocks = new Map<string, Promise<void>>();
+
+/**
+ * Per-family delivery floor — the minimum elapsed time from lock acquisition to
+ * the first byte of the bracketed-paste write. Uses the clear-path timeout as
+ * the floor value (the same value a cleared seat would wait at maximum), so a
+ * warm-seat delivery with no readiness gate still waits as long as a cleared
+ * one. The floor is a flat `setTimeout`, NOT the signal-based readiness waiter:
+ * on a warm devin seat emitting continuous redraw frames, the quiet timer in
+ * `awaitFirstReadiness` resets on every frame and never fires, so reusing it
+ * would add 20s per delivery (the ceiling), not 15s (the floor).
+ *
+ * `unknown` resolves to the devin floor (patient default) — see
+ * prompt-delivery-should-be-patient-not-precise.md.
+ */
+function familyFloorMs(family: CliFamily | undefined): number {
+    if (family === 'devin') { return DEVIN_DEFAULT_TIMEOUT_MS; }
+    if (family === 'claude') { return CLAUDE_DEFAULT_TIMEOUT_MS; }
+    if (family === 'antigravity') { return ANTIGRAVITY_DEFAULT_TIMEOUT_MS; }
+    return DEVIN_DEFAULT_TIMEOUT_MS; // unknown — patient default
+}
 
 function withTerminalLock<T>(terminalName: string, fn: () => Promise<T>): Promise<T> {
     const previous = sendLocks.get(terminalName) || Promise.resolve();
@@ -161,8 +182,29 @@ export async function sendPromptToPty(
     opts?: PromptDeliveryOptions
 ): Promise<PromptDeliveryReceipt> {
     return withTerminalLock(handle.name, async (): Promise<PromptDeliveryReceipt> => {
+        // Captured at the TOP of the lock callback, BEFORE any readiness gate,
+        // so the floor measures total time from lock acquisition to first write
+        // — including any time spent in awaitFirstReadiness or
+        // clearAndAwaitReadinessLocked. See prompt-delivery-should-be-patient-not-precise.md.
+        const deliveryStartAt = Date.now();
         let readiness: ClearReadinessResult | undefined;
         const isFirstDelivery = handle.promptCount === 0;
+
+        // Re-derive the CLI family from the handle's CURRENT startup command on
+        // every delivery, so a seat whose command was corrected after spawn
+        // picks up the right readiness gate on its next prompt. The family is
+        // frozen at spawn (see ptyFleetService) but the command is not — Agent
+        // Setup can change it on a live seat. Without this, a seat classified
+        // `unknown` at spawn stays `unknown` forever even after its command is
+        // fixed, and every Devin readiness fix silently misses it.
+        // See a-seats-cli-family-is-frozen-at-spawn-so-devin-timing-fixes-never-reach-it.md.
+        if (handle.startupCommand !== undefined) {
+            const rederived = deriveCliFamily(handle.startupCommand);
+            if (rederived !== handle.cliFamily) {
+                console.log(`[cliFamily] rederive seat=${handle.name} was=${handle.cliFamily} now=${rederived} command=${handle.startupCommand}`);
+                handle.cliFamily = rederived;
+            }
+        }
 
         // Change 1: suppress clear on a seat with no prior delivery. A seat the
         // host has never dispatched to has nothing to clear, and the /clear
@@ -242,6 +284,28 @@ export async function sendPromptToPty(
         //      not worth a detection mechanism that will always be a static list pretending to
         //      be a runtime probe.
         // If a third host ever needs this, port that function again. Do not write a new one.
+
+        // Flat delivery floor — ensures a minimum elapsed time from lock
+        // acquisition to the first byte written, regardless of which readiness
+        // gate (if any) ran above. On a warm seat with clearBeforePrompt off
+        // and no automated clear, NO gate runs above and the floor is the only
+        // thing preventing the prompt from landing in a CLI not accepting input.
+        // The floor is additive to any existing readiness wait: if a clear took
+        // 3s (signal) and the floor is 15s, the floor adds 12s. If a readiness
+        // wait already consumed >= familyFloorMs, no additional wait. The floor
+        // is a flat setTimeout, not a signal-based waiter — see familyFloorMs.
+        const floor = familyFloorMs(opts?.cliFamily || handle.cliFamily);
+        const elapsedMs = Date.now() - deliveryStartAt;
+        if (elapsedMs < floor) {
+            await new Promise(r => setTimeout(r, floor - elapsedMs));
+            // Re-check exit after the floor wait — a seat that exited during
+            // the wait must not receive the write. The existing exit checks
+            // above only cover the pre-readiness-gate paths.
+            if (handle.status === 'exited') {
+                return { readiness, bytesWritten: 0, deliveredAt: Date.now(), cleared };
+            }
+        }
+
         handle.write('\x1b[200~');
         for (let i = 0; i < text.length; i += CHUNK_SIZE) {
             handle.write(text.slice(i, i + CHUNK_SIZE));

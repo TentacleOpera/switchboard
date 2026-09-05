@@ -3748,7 +3748,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
                                 // NEW: Cache the brand-aware agent display name
                                 const displayName = taskViewerProvider.deriveAgentDisplayName(cmd);
-                                taskViewerProvider.setTerminalAgentInfo(suffixedName(agent.name), agent.role, displayName);
+                                taskViewerProvider.setTerminalAgentInfo(suffixedName(agent.name), agent.role, displayName, cmd);
 
                                 if (!registeredTerminals.has(suffixedName(agent.name))) {
                                     outputChannel?.appendLine(`[Extension] Startup command sent via local reference (registeredTerminals missing for '${agent.name}')`);

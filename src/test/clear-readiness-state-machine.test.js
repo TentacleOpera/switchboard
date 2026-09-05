@@ -221,20 +221,24 @@ function createMockHandle(overrides = {}) {
     });
 
     // 5. Unknown profile
-    await test('Unknown profile in Auto: uses fallback delay and reports reason fallback', async () => {
+    await test('Unknown profile in Auto: uses patient default ceiling and reports reason fallback', async () => {
         const handle = createMockHandle({ cliFamily: 'unknown' });
         const tracker = createClearReadinessTracker(handle, {
             mode: 'auto',
             fallbackDelayMs: 25,
+            // The unknown branch now uses DEVIN_DEFAULT_TIMEOUT_MS (15s) as the
+            // patient default, not the fallbackDelay. Override with a short
+            // timeout for test speed. See prompt-delivery-should-be-patient-not-precise.md.
+            timeouts: { devinTimeoutMs: 25 },
         });
 
         const res = await tracker.promise;
         assert.strictEqual(res.reason, 'fallback');
     });
 
-    // 6. Manual mode
-    await test('Manual mode: uses exact delay and reports reason manual', async () => {
-        const handle = createMockHandle({ cliFamily: 'devin' });
+    // 6. Manual mode — unknown family: delay is the whole policy (unchanged)
+    await test('Manual mode (unknown family): uses exact delay and reports reason manual', async () => {
+        const handle = createMockHandle({ cliFamily: 'unknown' });
         const tracker = createClearReadinessTracker(handle, {
             mode: 'manual',
             fallbackDelayMs: 20,
@@ -242,6 +246,24 @@ function createMockHandle(overrides = {}) {
 
         const res = await tracker.promise;
         assert.strictEqual(res.reason, 'manual');
+    });
+
+    // 6b. Manual mode — known family: delay is a floor, state machine runs
+    await test('Manual mode (devin): delay is a floor — signal before floor waits', async () => {
+        const handle = createMockHandle({ cliFamily: 'devin' });
+        const tracker = createClearReadinessTracker(handle, {
+            mode: 'manual',
+            fallbackDelayMs: 60,
+            timeouts: { devinQuietMs: 10, devinTimeoutMs: 2000 },
+        });
+
+        // Emit the Devin readiness signal immediately
+        handle.emitData('\x1b[?2004l\x1b[?2004h\x1b[?25h\x1b[?2026l');
+
+        const res = await tracker.promise;
+        // Signal was detected, but the floor (60ms) must have elapsed
+        assert.strictEqual(res.reason, 'signal');
+        assert.ok(res.elapsedMs >= 60, `floor must be enforced (elapsed=${res.elapsedMs}ms)`);
     });
 
     // 7. Exit handling & Prompt blocking

@@ -154,3 +154,27 @@ as "no prompt".
 
 Report fields worth reading: `verdict`, `hasTrustOrConsentPrompt`, `typedEchoed`,
 and `bufferTail` (the last 1200 bytes — where the prompt usually is).
+
+---
+
+## Seat-clear session-restart toll
+
+Switchboard clears a seat when its work context changes (for example, when it
+moves from one plan to another). Clearing a seat **restarts that seat's CLI
+session** — it is a session transition, not a screen wipe. A restarted session
+re-initialises its MCP servers, so any **OAuth-backed MCP server prompts for
+authorisation again**. This is expected and recurs on each work-context switch;
+it is not a broken token, and re-authenticating will not make it "stick". The
+cost is linear in useful work — roughly (context switches) × (seats) — and
+concentrates in remote MCP servers launched through `mcp-remote`, which performs
+a browser OAuth flow per session rather than holding a long-lived local
+credential.
+
+To stop the prompts, **remove** the OAuth-backed servers you do not need from
+your agent's own MCP config. Say *remove*, not *disable* — a `disabled: true`
+flag is not universally honoured across agents and transports, and field
+evidence has a server marked `disabled: true` loading and prompting for OAuth
+anyway. Deleting the entry is correct regardless of whether the flag is
+supported. Switchboard does not manage agent MCP configuration; the only MCP
+config it touches is deleting a key named `switchboard` from a fixed path list
+in `src/extension.ts`, and it never adds, enables, or re-enables an entry.

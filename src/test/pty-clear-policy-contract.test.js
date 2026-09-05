@@ -8,10 +8,11 @@
  * 1. Explicit mode auto -> Auto mode; unknown CLI fallback uses explicit PTY delay or 600.
  * 2. Explicit mode manual -> Manual mode; uses explicit PTY delay -> legacy delay -> 600.
  * 3. Unset mode + explicit PTY delay -> Compatibility Manual mode.
- * 4. Unset mode + explicit legacy delay -> Compatibility Manual mode.
- * 5. Unset mode + no explicit delay -> Auto mode; unknown fallback 600.
- * 6. Explicit 0 delay is preserved (never treated as unset).
- * 7. Mode enum allows only auto | manual.
+ * 4. Unset mode + no explicit delay -> Auto mode; unknown fallback 600.
+ * (Rule 4 — legacy VS Code delay flipping to Manual — deleted; a configured
+ *  delay is now a floor in createClearReadinessTracker, not a mode flip.)
+ * 5. Explicit 0 delay is preserved (never treated as unset).
+ * 6. Mode enum allows only auto | manual.
  */
 
 const fs = require('fs');
@@ -131,18 +132,21 @@ test('Explicit PTY value with no mode resolves compatibility Manual mode', () =>
     assert.deepStrictEqual(sRes, { mode: 'manual', delayMs: 900, source: 'pty-explicit' });
 });
 
-test('Explicit legacy value with no PTY/mode resolves compatibility Manual mode', () => {
+test('Explicit legacy value with no PTY/mode resolves Auto mode (rule 4 deleted)', () => {
+    // Rule 4 deleted: a legacy VS Code delay no longer flips PTY seats to
+    // manual mode. The seat stays in Auto and runs the readiness state machine.
+    // See a-delay-setting-must-not-be-able-to-defeat-known-cli-readiness.md.
     const cfg = createMockConfig({
         'terminal.clearBeforePromptDelay': { globalValue: 1500 }
     });
     const res = resolvePtyClearPolicy(cfg);
-    assert.deepStrictEqual(res, { mode: 'manual', delayMs: 1500, source: 'legacy-explicit' });
+    assert.deepStrictEqual(res, { mode: 'auto', unknownDelayMs: 600, source: 'default' });
 
     const standaloneCfg = createMockStandaloneConfig({
         'terminal.clearBeforePromptDelay': 1500
     });
     const sRes = resolveStandalonePtyClearPolicy(standaloneCfg);
-    assert.deepStrictEqual(sRes, { mode: 'manual', delayMs: 1500, source: 'legacy-explicit' });
+    assert.deepStrictEqual(sRes, { mode: 'auto', unknownDelayMs: 600, source: 'default' });
 });
 
 test('Explicit Auto overrides stored explicit delay without deleting values', () => {

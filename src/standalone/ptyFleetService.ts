@@ -77,6 +77,22 @@ export interface ExtendedTerminalHandle extends TerminalHandle {
     exitCode?: number;
     cliFamily: CliFamily;
     /**
+     * The startup command this seat actually launched with, recorded at spawn
+     * so the delivery path can re-derive {@link cliFamily} from the CURRENT
+     * command rather than the frozen spawn-time classification. Updated
+     * in-place at delivery when re-derivation runs (under the terminal lock),
+     * so a seat whose command was corrected after spawn picks up the right
+     * readiness gate on its next prompt. See `a-seats-cli-family-is-frozen-at-spawn`.
+     */
+    startupCommand?: string;
+    /**
+     * Provenance of {@link startupCommand} — which source produced the string
+     * (`argument` | `global-file` | `team-definition` | `none`). Populated by
+     * the companion plan `two-stores-hold-agent-startup-commands-and-they-disagree`;
+     * absent until that lands. Logged at spawn when present.
+     */
+    startupCommandSource?: string;
+    /**
      * Internal: marks a terminal spawned by spawnDelegates as a team member,
      * suppressing auto-start triggering. A shared member is unparented by
      * construction and would otherwise pass the auto-start recursion guard
@@ -479,6 +495,10 @@ export class PtyFleetService {
             // this correct in ptyHost.ts's child too, which cannot read the setting.
             claudeInlineRendering,
             cliFamily,
+            // Recorded so the delivery path can re-derive cliFamily from the
+            // CURRENT command under the terminal lock, instead of staying frozen
+            // at the spawn-time classification. See ExtendedTerminalHandle.startupCommand.
+            startupCommand: effectiveStartupCommand,
             // Initialise the heartbeat to creation time so a freshly-spawned shell
             // that has not yet emitted its banner still reads as "just heard from".
             lastDataAt: Date.now(),
@@ -487,6 +507,19 @@ export class PtyFleetService {
             // on a seat that has no prior work context to clear.
             promptCount: 0,
         };
+
+        // Spawn-time family log — seat, role, resolved command, provenance
+        // (when the companion plan has populated startupCommandSource), and the
+        // derived family. This is the line that makes the next "the fix didn't
+        // take" report answerable: a seat classified `unknown` or `antigravity`
+        // here never enters the Devin readiness arm, no matter what later fixes
+        // apply to that arm. The command may carry flags like
+        // --dangerously-skip-permissions; keep this to the local console/log,
+        // never surface it anywhere that leaves the machine.
+        const provenanceSuffix = handle.startupCommandSource
+            ? ` source=${handle.startupCommandSource}`
+            : '';
+        console.log(`[cliFamily] spawn seat=${name} role=${role} family=${cliFamily} command=${effectiveStartupCommand ?? '<none>'}${provenanceSuffix}`);
 
         this.terminals.set(name, handle);
 

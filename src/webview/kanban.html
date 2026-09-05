@@ -3279,6 +3279,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <p style="font-size:10px; color:var(--text-secondary); margin-top:8px; line-height:1.4;">
               Custom agents are standalone definitions available across workspaces. To assemble agents into teams with delegates, use the <strong>TEAMS</strong> tab. Configure prompt add-ons and instructions in the <strong>PROMPTS</strong> tab.
             </p>
+            <p style="font-size:10px; color:var(--text-secondary); margin-top:8px; line-height:1.4;">
+              Clearing a seat restarts that seat's CLI session. A restarted session re-initialises its MCP servers, so any OAuth-backed MCP server prompts for authorisation again. This is expected and recurs on each work-context switch — it is not a broken token. To stop the prompts, remove the OAuth-backed servers you do not need from your agent's own MCP config.
+            </p>
             <div id="agents-tab-custom-agent-error" style="min-height:16px; color: var(--accent-red); font-size: 11px; margin-top: 6px;"></div>
             <div class="flex gap-2" style="margin-top: 10px;">
               <button id="agents-tab-btn-save-custom-agent" class="modal-btn-primary">SAVE AGENT</button>

@@ -574,10 +574,13 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         return receipt;
     };
 
-    const relayStartupOrientation = (names: string[]): void => {
-        for (const name of names) {
-            if (!name) { continue; }
-            void (async () => {
+    const relayStartupOrientation = async (names: string[]): Promise<void> => {
+        // Awaitable so the clear callback can serialize the standing-orders relay
+        // against the next dispatch. Creation-site callers keep `void` — awaiting
+        // there would block seat creation on a 15s relay. See
+        // prompt-delivery-should-be-patient-not-precise.md.
+        await Promise.all(names.filter(Boolean).map((name) =>
+            (async () => {
                 const ok = await waitForSeatQuiescence(async () => {
                     const h = ptyFleetService.get(name);
                     return h ? { lastDataAt: h.lastDataAt || 0, status: h.status || '' } : null;
@@ -586,8 +589,8 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                 const handle = ptyFleetService.get(name);
                 if (!handle || handle.status !== 'active') { return; }
                 await deliverPrompt(handle, ORIENTATION_PREAMBLE, { clearBeforePrompt: false }, true, false, undefined, false, true);
-            })().catch(err => console.warn(`[bootstrap] Startup orientation relay for '${name}' failed:`, err));
-        }
+            })().catch(err => console.warn(`[bootstrap] Startup orientation relay for '${name}' failed:`, err))
+        ));
     };
 
     const secrets = createStandaloneHostSecrets(workspaceRoot);
@@ -1955,7 +1958,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             try { server.broadcastWs('terminalsGroupsChanged', { type: 'terminalsGroupsChanged' }, SURFACES.terminals); } catch { /* broadcast failure must not fail the create */ }
                         }
                     }
-                    relayStartupOrientation([terminal.friendlyName, ...spawned.children.map(c => c.friendlyName)]);
+                    void relayStartupOrientation([terminal.friendlyName, ...spawned.children.map(c => c.friendlyName)]);
                     return { success: true, terminal: { friendlyName: terminal.friendlyName, agentInstanceId: terminal.agentInstanceId, parentInstanceId: terminal.parentInstanceId, role: terminal.role, status: terminal.status }, delegates: spawned.children.map(t => ({ friendlyName: t.friendlyName, agentInstanceId: t.agentInstanceId, role: t.role, status: t.status })), ...(spawned.error ? { delegateError: spawned.error } : {}), ...(wiringError ? { wiringError } : {}), ...(teamGroupId ? { teamGroupId } : {}) };
                 }
 
@@ -1968,7 +1971,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         configProvider.getConfigBoolean('terminal.claudeInlineRendering', true)
                     );
                     if (result && Array.isArray(result.created)) {
-                        relayStartupOrientation(result.created.map((c: any) => c.friendlyName));
+                        void relayStartupOrientation(result.created.map((c: any) => c.friendlyName));
                     }
                     return {
                         success: result.success,
@@ -3303,7 +3306,7 @@ Each plan file must include:
             // needs an explicit mirror write.)
         });
         if (result.success && Array.isArray(result.created)) {
-            relayStartupOrientation(result.created);
+            void relayStartupOrientation(result.created);
         }
         return result;
     });
@@ -3450,7 +3453,14 @@ Each plan file must include:
             // deliver the same orders block, so keeping the relay sent the seat two
             // prompts and one of them was the bare, task-less block the after-clear
             // envelope exists to reframe.
-            taskViewerProvider.deliverStandingOrdersAfterClear(terminalName);
+            //
+            // AWAITED (not fire-and-forget) so the standing-orders delivery
+            // serializes against the next dispatch. Without the await, the clear
+            // returns `cleared: true` immediately, the queue pops the next card,
+            // and the card's prompt (which now has the family floor) races the
+            // relay's standing-orders delivery into the same seat. See
+            // prompt-delivery-should-be-patient-not-precise.md.
+            await taskViewerProvider.deliverStandingOrdersAfterClear(terminalName);
             // The log session boundary is NOT rolled here. Every caller of this
             // seam (LocalApiServer's lead-acceptance clear, the queue/done pop,
             // and POST /terminals/clear) fires `onTerminalContextCleared` right
@@ -3789,7 +3799,7 @@ Each plan file must include:
                 },
             });
             if (result.success && Array.isArray(result.workers)) {
-                relayStartupOrientation(result.workers.map((worker: any) => worker.friendlyName));
+                void relayStartupOrientation(result.workers.map((worker: any) => worker.friendlyName));
             }
             return result;
         },
