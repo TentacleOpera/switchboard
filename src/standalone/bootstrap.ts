@@ -2006,6 +2006,12 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         worktreePath: t.worktreePath,
                         cwd: t.cwd,
                         lastDataAt: t.lastDataAt,
+                        // The startup command this seat actually launched with and
+                        // the store it came from. Surfaced so the Agent Setup panel
+                        // can show what a live seat launched without reading a log.
+                        // See the plan `two-stores-hold-agent-startup-commands-and-they-disagree`.
+                        startupCommand: t.startupCommand,
+                        startupCommandSource: t.startupCommandSource,
                         // Delivery count: 0 until the first prompt is delivered, increments on every send.
                         // The extension host's handlePtyVerb reads this in
                         // headless mode to arm the boot-phase curtain.
@@ -2627,9 +2633,24 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // 3. Else, create a new terminal.
                     const active = ptyFleetService.listActive();
                     let terminal: any;
-                    const overrideName: string | undefined = payload.terminalName;
+                    // Field name fix: performKanbanDispatch sends targetTerminalOverride;
+                    // switchboard.triggerAgentFromKanban sends terminalName. Accept both.
+                    const overrideName: string | undefined = payload.targetTerminalOverride || payload.terminalName;
+                    let plannerCursorLocationKey: string | undefined;
                     if (overrideName) {
                         terminal = active.find(t => t.friendlyName === overrideName);
+                    }
+                    if (!terminal && targetRole === 'planner' && taskViewerProvider) {
+                        const { terminals, locationKey } = await taskViewerProvider.getRoleTerminalSet('planner', root);
+                        if (terminals.length > 0) {
+                            const cursor = taskViewerProvider.getPlannerRotationCursor(locationKey);
+                            const pickedName = terminals[cursor % terminals.length];
+                            const picked = active.find(t => t.friendlyName === pickedName);
+                            if (picked) {
+                                terminal = picked;
+                                plannerCursorLocationKey = locationKey;
+                            }
+                        }
                     }
                     if (!terminal) {
                         terminal = matchedWtPath
@@ -2742,6 +2763,10 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             terminalName: terminal.friendlyName,
                             deliveryReason: 'exit',
                         };
+                    }
+
+                    if (plannerCursorLocationKey && taskViewerProvider) {
+                        await taskViewerProvider.advancePlannerRotationCursor(plannerCursorLocationKey, 1);
                     }
 
                     for (const rec of records) {
@@ -4077,7 +4102,36 @@ Each plan file must include:
         try { if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile); } catch { /* ignore */ }
     };
     const signalCleanup = async () => {
-        try { await instance.stop(); } catch { /* ignore */ }
+        log(opts, 'Shutdown signal received, beginning cleanup...');
+        const BOUNDED_EXIT_MS = 5000;
+        const forceExitTimer = setTimeout(() => {
+            log(opts, `Shutdown timed out after ${BOUNDED_EXIT_MS}ms — forcing exit.`);
+            try {
+                const getResources = (process as any).getActiveResourcesInfo;
+                if (typeof getResources === 'function') {
+                    const res = getResources.call(process);
+                    log(opts, `Surviving handles at forced exit (${res.length}): ${JSON.stringify(res)}`);
+                }
+            } catch { /* ignore */ }
+            process.exit(0);
+        }, BOUNDED_EXIT_MS);
+        forceExitTimer.unref();
+
+        try {
+            await instance.stop();
+        } catch (e) {
+            log(opts, `instance.stop() threw: ${e}`);
+        }
+
+        try {
+            const getResources = (process as any).getActiveResourcesInfo;
+            if (typeof getResources === 'function') {
+                const res = getResources.call(process);
+                log(opts, `Surviving handles after graceful stop (${res.length}): ${JSON.stringify(res)}`);
+            }
+        } catch { /* ignore */ }
+
+        clearTimeout(forceExitTimer);
         process.exit(0);
     };
     process.once('SIGINT', signalCleanup);

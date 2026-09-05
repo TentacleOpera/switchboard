@@ -134,7 +134,6 @@ function createVsCodePlanIngestionHost(outputChannel?: vscode.OutputChannel): Pl
                 (vscode.workspace.workspaceFolders || []).map(f => path.resolve(f.uri.fsPath))
             );
             const handles: vscode.Disposable[] = [];
-            let nativeWatcher: fs.FSWatcher | undefined;
 
             if (workspaceFolderPaths.has(folder)) {
                 const pattern = new vscode.RelativePattern(folder, '.switchboard/{plans,features}/**/*.md');
@@ -149,33 +148,38 @@ function createVsCodePlanIngestionHost(outputChannel?: vscode.OutputChannel): Pl
             }
 
             // Native fs.watch fallback (handles non-workspace folders and .gitignore issues)
-            const switchboardDir = path.join(folder, '.switchboard');
-            const watchPath = fs.existsSync(switchboardDir) ? switchboardDir : folder;
-            try {
-                nativeWatcher = fs.watch(watchPath, { recursive: true }, (eventType, filename) => {
-                    if (!filename || !filename.endsWith('.md')) return;
-                    const fullPath = path.resolve(path.join(watchPath, filename));
-                    const plansDir = path.resolve(path.join(folder, '.switchboard', 'plans'));
-                    const featuresDir = path.resolve(path.join(folder, '.switchboard', 'features'));
-                    if (!fullPath.startsWith(plansDir) && !fullPath.startsWith(featuresDir)) return;
-
-                    if (eventType === 'rename' || !fs.existsSync(fullPath)) {
-                        if (!fs.existsSync(fullPath)) {
-                            onEvent('delete', fullPath);
-                            return;
-                        }
+            const plansDir = path.join(folder, '.switchboard', 'plans');
+            const featuresDir = path.join(folder, '.switchboard', 'features');
+            const nativeWatchers: fs.FSWatcher[] = [];
+            for (const dir of [plansDir, featuresDir]) {
+                try {
+                    if (!fs.existsSync(dir)) {
+                        fs.mkdirSync(dir, { recursive: true });
                     }
-                    onEvent('change', fullPath);
-                });
-                outputChannel?.appendLine(`[GlobalPlanWatcher] Native watch active for: ${watchPath}`);
-            } catch (e) {
-                outputChannel?.appendLine(`[GlobalPlanWatcher] Native watch failed for ${watchPath}: ${e}`);
+                    const watcher = fs.watch(dir, { recursive: true }, (eventType, filename) => {
+                        if (!filename || !filename.endsWith('.md')) return;
+                        const fullPath = path.resolve(path.join(dir, filename));
+                        if (!fullPath.startsWith(path.resolve(plansDir)) && !fullPath.startsWith(path.resolve(featuresDir))) return;
+
+                        if (eventType === 'rename' || !fs.existsSync(fullPath)) {
+                            if (!fs.existsSync(fullPath)) {
+                                onEvent('delete', fullPath);
+                                return;
+                            }
+                        }
+                        onEvent('change', fullPath);
+                    });
+                    nativeWatchers.push(watcher);
+                    outputChannel?.appendLine(`[GlobalPlanWatcher] Native watch active for: ${dir}`);
+                } catch (e) {
+                    outputChannel?.appendLine(`[GlobalPlanWatcher] Native watch failed for ${dir}: ${e}`);
+                }
             }
 
             return {
                 dispose: () => {
                     for (const h of handles) { try { h.dispose(); } catch {} }
-                    if (nativeWatcher) { try { nativeWatcher.close(); } catch {} }
+                    for (const nw of nativeWatchers) { try { nw.close(); } catch {} }
                 },
             };
         },

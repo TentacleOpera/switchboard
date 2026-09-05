@@ -11,6 +11,7 @@ import { DEFAULT_DISPLAY_HOSTNAME, isLoopbackHostname } from '../utils/loopbackH
 import { detectTailnetAddress, resolveMagicDnsNames } from '../utils/tailnetDetect';
 import { isPortFree, resolvePreferredPort, PORT_BASE, PORT_SPAN } from '../utils/portResolver';
 import { BANNER_ART_TRUECOLOR, BANNER_ART_256, BANNER_ART_ASCII } from '../generated/bannerArt';
+import { getInotifyWatchCount, getOpenFdCount } from './planIngestionHost';
 
 function usage(): string {
     return `Usage: npx switchboard                        (interactive front-door menu — default)
@@ -18,7 +19,7 @@ function usage(): string {
        npx switchboard tailnet [options]          (serve the loopback board AND your tailnet)
        npx switchboard plans [column] [--project <name>] [--search <query>] [--limit N] [--offset N] [--json]
        npx switchboard ready [--project <name>] [--json]
-       npx switchboard dispatch <planId|prefix> [column] [--project <name>] [--json]
+       npx switchboard dispatch <planId|prefix> [column] [--project <name>] [--seat <terminal>] [--json]
        npx switchboard done --from <seat> [--plan <planId>] [--outcome failed] [--json]
        npx switchboard next --from <seat> [--json]
        npx switchboard clear <terminal|--all> [--json]
@@ -60,6 +61,7 @@ Board commands (drive the board from a terminal):
   next                Pull the next card from the queue for a seat.
   clear               Clear a terminal seat (or --all seats).
   fleet               Show live terminal seats, roles, and assigned plans.
+  probe               Probe host resident memory, inotify watches, and open FDs.
   verb                Call any protocol verb directly: switchboard verb <name> <json>
   api                 Call any API endpoint directly: switchboard api <METHOD> <path> [json] [--data @file]
   setup               Unified setup wizard (init, scaffold, control-plane).
@@ -401,6 +403,7 @@ async function probeHealth(port: number, hostname = '127.0.0.1', timeoutMs = 200
 async function getHealthJson(port: number, hostname = '127.0.0.1', timeoutMs = 2000): Promise<{
     service: string; status: string; port: number; pid: number; roots: string[];
     terminals?: string[]; terminalCount?: number; selectedWorkspaceRoot?: string | null;
+    memory?: NodeJS.MemoryUsage;
 }> {
     return new Promise((resolve, reject) => {
         const req = http.get(`http://${hostname}:${port}/health`, (res) => {
@@ -1313,11 +1316,12 @@ async function cmdReady(workspaceRoot: string, argv: string[]): Promise<void> {
  * Calls POST /kanban/dispatch and returns the exit code. When `jsonFlag` is true,
  * emits the result as JSON on stdout (logs already routed to stderr by caller).
  */
-async function doDispatch(port: number, workspaceRoot: string, planId: string, targetColumn: string, jsonFlag = false): Promise<number> {
+async function doDispatch(port: number, workspaceRoot: string, planId: string, targetColumn: string, jsonFlag = false, seat?: string): Promise<number> {
     const res = await apiPost(port, '/kanban/dispatch', workspaceRoot, {
         plan: planId,
         targetColumn,
         workspaceRoot,
+        ...(seat ? { seat } : {}),
     });
     const code = dispatchExitCode(res.status);
     const data = res.json();
@@ -1334,7 +1338,7 @@ async function doDispatch(port: number, workspaceRoot: string, planId: string, t
 }
 
 /**
- * `switchboard dispatch <planId|prefix> [column] [--project <name>] [--json]`
+ * `switchboard dispatch <planId|prefix> [column] [--project <name>] [--seat <terminal>] [--json]`
  *
  * Resolves a full UUID or short prefix, then calls POST /kanban/dispatch.
  * Omitted column defaults to 'auto' (complexity routing).
@@ -1346,17 +1350,19 @@ async function cmdDispatch(workspaceRoot: string, argv: string[]): Promise<void>
     let ref: string | undefined;
     let column = 'auto';
     let project: string | undefined;
+    let seat: string | undefined;
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
         if (a === '--json') { continue; }
         if (a === '--project') { project = argv[++i]; continue; }
+        if (a === '--seat') { seat = argv[++i]; continue; }
         if (!a.startsWith('-') && !ref) { ref = a; continue; }
         if (!a.startsWith('-') && ref && column === 'auto') { column = a; continue; }
     }
 
     if (!ref) {
         if (jsonFlag) { emitJson({ success: false, error: 'Missing planId or prefix' }); }
-        else { console.error('Usage: npx switchboard dispatch <planId|prefix> [column] [--project <name>] [--json]'); }
+        else { console.error('Usage: npx switchboard dispatch <planId|prefix> [column] [--project <name>] [--seat <terminal>] [--json]'); }
         exitFlushed(5);
     }
 
@@ -1399,7 +1405,7 @@ async function cmdDispatch(workspaceRoot: string, argv: string[]): Promise<void>
         }
     }
 
-    const code = await doDispatch(port, workspaceRoot, planId, column, jsonFlag);
+    const code = await doDispatch(port, workspaceRoot, planId, column, jsonFlag, seat);
     exitFlushed(code);
 }
 
@@ -1464,6 +1470,134 @@ async function cmdClear(workspaceRoot: string, argv: string[]): Promise<void> {
     }
     exitFlushed(results.every(r => r.ok) ? 0 : 1);
 }
+
+/**
+ * `switchboard probe [--csv <file>] [--samples N] [--interval N] [--json]`
+ *
+ * Probe resident memory usage, inotify descriptor count, and open file descriptors
+ * of the running Switchboard host. Emits CSV format by default (to stdout or file)
+ * or JSON when --json is passed.
+ */
+async function cmdProbe(workspaceRoot: string, argv: string[]): Promise<void> {
+    const jsonFlag = argv.includes('--json');
+    if (jsonFlag) { routeLogsToStderr(); }
+
+    let csvFile: string | undefined;
+    let samples = 1;
+    let intervalMs = 1000;
+    let explicitPort: number | undefined;
+
+    for (let i = 0; i < argv.length; i++) {
+        const a = argv[i];
+        if (a === '--csv') { csvFile = argv[++i]; }
+        else if (a === '--samples' || a === '-n') { samples = parseInt(argv[++i], 10) || 1; }
+        else if (a === '--interval' || a === '-i') { intervalMs = parseInt(argv[++i], 10) || 1000; }
+        else if (a === '--port' || a === '-p') { explicitPort = parseInt(argv[++i], 10) || undefined; }
+    }
+
+    const port = explicitPort ?? await findRunningInstance(workspaceRoot);
+    if (port === null) {
+        emitOfflineGuidance(jsonFlag);
+    }
+
+    const results: Array<{
+        timestamp: string;
+        pid: number;
+        rss: number;
+        heapUsed: number;
+        heapTotal: number;
+        external: number;
+        arrayBuffers: number;
+        inotifyDescriptors: number;
+        openFds: number;
+    }> = [];
+
+    const CSV_HEADER = 'timestamp,pid,rss,heapUsed,heapTotal,external,arrayBuffers,inotifyDescriptors,openFds';
+
+    if (!jsonFlag && !csvFile) {
+        console.log(CSV_HEADER);
+    }
+
+    for (let s = 0; s < samples; s++) {
+        if (s > 0 && intervalMs > 0) {
+            await new Promise(r => setTimeout(r, intervalMs));
+        }
+
+        let health: Awaited<ReturnType<typeof getHealthJson>> | undefined;
+        try {
+            health = await getHealthJson(port);
+        } catch (err: any) {
+            if (jsonFlag) { emitJson({ success: false, error: err?.message || 'Failed to contact running server' }); }
+            else { console.error(`[switchboard] Failed to contact running server: ${err?.message}`); }
+            exitFlushed(1);
+        }
+        if (!health) { exitFlushed(1); }
+
+        const pid = health.pid;
+        let rss = health.memory?.rss ?? 0;
+        let heapUsed = health.memory?.heapUsed ?? 0;
+        let heapTotal = health.memory?.heapTotal ?? 0;
+        let external = health.memory?.external ?? 0;
+        let arrayBuffers = health.memory?.arrayBuffers ?? 0;
+
+        if (rss === 0 && process.platform === 'linux') {
+            try {
+                const status = fs.readFileSync(`/proc/${pid}/status`, 'utf8');
+                const m = status.match(/^VmRSS:\s+(\d+)\s+kB/m);
+                if (m) { rss = parseInt(m[1], 10) * 1024; }
+            } catch {}
+        }
+
+        const inotify = getInotifyWatchCount(pid) ?? 0;
+        const openFds = getOpenFdCount(pid) ?? 0;
+
+        const record = {
+            timestamp: new Date().toISOString(),
+            pid,
+            rss,
+            heapUsed,
+            heapTotal,
+            external,
+            arrayBuffers,
+            inotifyDescriptors: inotify,
+            openFds,
+        };
+
+        results.push(record);
+
+        const csvRow = `${record.timestamp},${record.pid},${record.rss},${record.heapUsed},${record.heapTotal},${record.external},${record.arrayBuffers},${record.inotifyDescriptors},${record.openFds}`;
+        if (!jsonFlag && !csvFile) {
+            console.log(csvRow);
+        }
+    }
+
+    if (csvFile) {
+        const lines = [CSV_HEADER, ...results.map(r => `${r.timestamp},${r.pid},${r.rss},${r.heapUsed},${r.heapTotal},${r.external},${r.arrayBuffers},${r.inotifyDescriptors},${r.openFds}`)];
+        const content = lines.join('\n') + '\n';
+        if (fs.existsSync(csvFile)) {
+            // If file already has content, append without header if matching
+            const existing = fs.readFileSync(csvFile, 'utf8');
+            if (existing.startsWith(CSV_HEADER)) {
+                fs.appendFileSync(csvFile, results.map(r => `${r.timestamp},${r.pid},${r.rss},${r.heapUsed},${r.heapTotal},${r.external},${r.arrayBuffers},${r.inotifyDescriptors},${r.openFds}`).join('\n') + '\n');
+            } else {
+                fs.writeFileSync(csvFile, content, 'utf8');
+            }
+        } else {
+            const dir = path.dirname(path.resolve(csvFile));
+            if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true }); }
+            fs.writeFileSync(csvFile, content, 'utf8');
+        }
+        if (!jsonFlag) {
+            console.log(`[switchboard] Recorded ${results.length} probe sample(s) to ${csvFile}`);
+        }
+    }
+
+    if (jsonFlag) {
+        emitJson({ success: true, samples: results });
+    }
+    exitFlushed(0);
+}
+
 
 /**
  * `switchboard fleet [--json]`
@@ -2604,7 +2738,7 @@ async function main() {
     const KNOWN_SUBCOMMANDS = new Set([
         'local', 'tailnet', 'stop', 'status', 'logs', 'init', 'scaffold',
         'control-plane', 'secrets', 'token', 'export', 'import',
-        'plans', 'ready', 'dispatch', 'done', 'next', 'clear', 'fleet', 'verb', 'api',
+        'plans', 'ready', 'dispatch', 'done', 'next', 'clear', 'fleet', 'probe', 'verb', 'api',
         'help', 'about', 'version', 'setup',
     ]);
     const firstArg = process.argv[2];
@@ -2669,7 +2803,7 @@ async function main() {
         && subcommand !== 'stop' && subcommand !== 'status' && subcommand !== 'logs'
         && subcommand !== 'plans' && subcommand !== 'ready' && subcommand !== 'dispatch'
         && subcommand !== 'done' && subcommand !== 'next'
-        && subcommand !== 'clear' && subcommand !== 'fleet' && subcommand !== 'verb'
+        && subcommand !== 'clear' && subcommand !== 'fleet' && subcommand !== 'probe' && subcommand !== 'verb'
         && subcommand !== 'api'
         && subcommand !== 'help' && subcommand !== 'about' && subcommand !== 'version'
         && subcommand !== 'setup';
@@ -3177,30 +3311,36 @@ async function main() {
         // Grace period: the debounced kanban.db persist (300 ms trailing) plus
         // the export/atomic-rename must complete before a SIGKILL would abandon it.
         // 5 seconds is conservative — 300 ms debounce + ~50 ms rename + margin.
+        const isProcessAlive = (p: number): boolean => {
+            try {
+                process.kill(p, 0);
+                return true;
+            } catch (e: any) {
+                return e?.code === 'EPERM';
+            }
+        };
+
         const GRACE_MS = 5000;
         const start = Date.now();
         let stopped = false;
         while (Date.now() - start < GRACE_MS) {
-            if (!await probeHealth(port, '127.0.0.1', 500)) { stopped = true; break; }
+            if (!isProcessAlive(pid)) { stopped = true; break; }
             await new Promise(r => setTimeout(r, 200));
         }
 
         if (!stopped) {
-            // Re-verify identity before SIGKILL: if the server died during the
-            // grace period and the PID was recycled, /health would no longer
-            // identify as switchboard — do not kill an innocent process.
-            if (!await probeHealth(port, '127.0.0.1', 500)) {
+            if (!isProcessAlive(pid)) {
                 console.log('[switchboard] Server stopped during grace period.');
                 stopped = true;
             } else {
-                console.warn(`[switchboard] Server did not stop within ${GRACE_MS / 1000}s. Escalating to SIGKILL — this may abandon a pending database write.`);
+                console.warn(`[switchboard] Server (PID ${pid}) did not stop within ${GRACE_MS / 1000}s. Escalating to SIGKILL — this may abandon a pending database write.`);
                 try { process.kill(pid, 'SIGKILL'); } catch { /* already dead */ }
                 await new Promise(r => setTimeout(r, 500));
             }
         }
 
-        if (await probeHealth(port, '127.0.0.1', 500)) {
-            console.error('[switchboard] Server is still responding after SIGKILL. It may need to be killed manually.');
+        if (isProcessAlive(pid)) {
+            console.error(`[switchboard] Server process (PID ${pid}) is still alive after SIGKILL. It may need to be killed manually.`);
             process.exit(1);
         }
 
@@ -3263,6 +3403,11 @@ async function main() {
             console.log(`  Terminals: ${payload.terminalCount}`);
         }
         exitFlushed(0);
+    }
+
+    // ── probe ───────────────────────────────────────────────────────
+    if (process.argv[2] === 'probe') {
+        await cmdProbe(workspaceRoot, process.argv.slice(3));
     }
 
     // ── logs ───────────────────────────────────────────────────────

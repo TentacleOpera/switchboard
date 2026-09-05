@@ -356,32 +356,120 @@ export namespace workspace {
             }
         };
 
-        // Only recurse when the glob actually spans directories. `watchFile` arrives
-        // as a bare filename against its parent folder — recursing there would walk
-        // the whole subtree (all of `.switchboard/` to observe one `memo.md`) and
-        // funnel every unrelated event through the matcher for nothing.
-        const recursive = globPattern.includes('**') || globPattern.includes('/');
+        // Only recurse when the glob actually spans unbounded subdirectories (`**`).
+        // Globs with single wildcard segment like `*/file.md` are depth-1: recursing
+        // on parent walks whole tree (e.g. 17k descriptors on Antigravity brain).
+        // Bare filenames (`watchFile`) have no `/` or `**` and stay flat.
+        const isUnboundedRecursive = globPattern.includes('**');
+        const isDepthOne = !isUnboundedRecursive && globPattern.includes('/');
 
-        let watcher: fs.FSWatcher;
-        try {
-            watcher = fs.watch(folderPath, { persistent: false, recursive }, emit);
-        } catch {
-            // recursive fs.watch needs macOS/Windows or Node >= 20 on Linux; fall
-            // back to a flat watch (covers the flat plan/ticket folders).
+        const childWatchers = new Map<string, fs.FSWatcher>();
+        let parentWatcher: fs.FSWatcher | undefined;
+
+        // Capping per preset/folder: read cap setting from configuration
+        const cfg = workspace.getConfiguration('switchboard.planScanner');
+        const defaultCap = process.platform === 'linux' ? 2000 : 5000;
+        const maxWatches = cfg.get<number>('maxWatchesPerPreset', defaultCap);
+
+        const closeAll = () => {
+            if (parentWatcher) {
+                try { parentWatcher.close(); } catch {}
+                parentWatcher = undefined;
+            }
+            for (const [p, cw] of childWatchers.entries()) {
+                try { cw.close(); } catch {}
+            }
+            childWatchers.clear();
+        };
+
+        if (isDepthOne) {
+            // Depth-1 pattern: watch folder non-recursively for directory changes,
+            // and watch matching target files directly.
+            const armFileWatch = (filePath: string) => {
+                if (childWatchers.has(filePath)) return;
+                if (childWatchers.size >= maxWatches) {
+                    console.warn(`[vscodeShim watcher] Watch count for ${folderPath} (${childWatchers.size}) exceeds cap (${maxWatches})`);
+                    return;
+                }
+                try {
+                    const fw = fs.watch(filePath, { persistent: false }, (eventType) => {
+                        const uri = { fsPath: filePath } as Uri;
+                        if (!fs.existsSync(filePath)) {
+                            seen.delete(filePath);
+                            const cw = childWatchers.get(filePath);
+                            if (cw) { try { cw.close(); } catch {} childWatchers.delete(filePath); }
+                            deleteHandlers.forEach(h => h(uri));
+                        } else if (eventType === 'rename' && !seen.has(filePath)) {
+                            seen.add(filePath);
+                            createHandlers.forEach(h => h(uri));
+                        } else {
+                            seen.add(filePath);
+                            changeHandlers.forEach(h => h(uri));
+                        }
+                    });
+                    fw.on('error', err => console.warn(`[vscodeShim watcher] ${filePath}:`, err));
+                    childWatchers.set(filePath, fw);
+                } catch { /* file may not exist yet or locked */ }
+            };
+
+            const scanMatchingFiles = () => {
+                try {
+                    const entries = fs.readdirSync(folderPath, { withFileTypes: true });
+                    for (const entry of entries) {
+                        if (entry.isDirectory()) {
+                            const subDir = path.join(folderPath, entry.name);
+                            try {
+                                const subEntries = fs.readdirSync(subDir);
+                                for (const subFile of subEntries) {
+                                    const fullPath = path.join(subDir, subFile);
+                                    const relPath = path.relative(folderPath, fullPath).split(path.sep).join('/');
+                                    if (matcher.test(relPath) && fs.existsSync(fullPath)) {
+                                        if (!seen.has(fullPath)) {
+                                            seen.add(fullPath);
+                                            createHandlers.forEach(h => h({ fsPath: fullPath } as Uri));
+                                        }
+                                        armFileWatch(fullPath);
+                                    }
+                                }
+                            } catch {}
+                        }
+                    }
+                } catch {}
+            };
+
+            scanMatchingFiles();
+
             try {
-                watcher = fs.watch(folderPath, { persistent: false }, emit);
+                parentWatcher = fs.watch(folderPath, { persistent: false }, (_eventType, filename) => {
+                    if (!filename) return;
+                    scanMatchingFiles();
+                });
+                parentWatcher.on('error', err => console.warn(`[vscodeShim watcher] ${folderPath}:`, err));
             } catch (e) {
                 console.warn(`[vscodeShim watcher] cannot watch ${folderPath}:`, e);
+                closeAll();
                 return { onDidCreate: noop, onDidChange: noop, onDidDelete: noop, dispose() {} };
             }
+        } else {
+            const recursive = isUnboundedRecursive;
+            try {
+                parentWatcher = fs.watch(folderPath, { persistent: false, recursive }, emit);
+            } catch {
+                try {
+                    parentWatcher = fs.watch(folderPath, { persistent: false }, emit);
+                } catch (e) {
+                    console.warn(`[vscodeShim watcher] cannot watch ${folderPath}:`, e);
+                    return { onDidCreate: noop, onDidChange: noop, onDidDelete: noop, dispose() {} };
+                }
+            }
+            parentWatcher.on('error', err => console.warn(`[vscodeShim watcher] ${folderPath}:`, err));
         }
-        watcher.on('error', err => console.warn(`[vscodeShim watcher] ${folderPath}:`, err));
 
         return {
             onDidCreate: (handler: (uri: Uri) => void) => { createHandlers.push(handler); return { dispose: () => {} }; },
             onDidChange: (handler: (uri: Uri) => void) => { changeHandlers.push(handler); return { dispose: () => {} }; },
             onDidDelete: (handler: (uri: Uri) => void) => { deleteHandlers.push(handler); return { dispose: () => {} }; },
-            dispose: () => { try { watcher.close(); } catch {} }
+            dispose: () => { closeAll(); }
         };
     }
     export function findFiles(_include: any, _exclude?: any, _maxResults?: number): Thenable<Uri[]> { return Promise.resolve([]); }

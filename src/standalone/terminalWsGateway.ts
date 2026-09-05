@@ -682,7 +682,13 @@ export class TerminalWsGateway {
             if (event.type === 'created') {
                 this.trackTerminalData(event.terminal);
             } else if (event.type === 'closed') {
-                this.untrackTerminalData(event.name, event.code);
+                this.untrackTerminalData(event.name, event.code, event.staleCommandDeath
+                    ? {
+                        staleCommandDeath: true,
+                        startupCommand: event.startupCommand,
+                        startupCommandSource: event.startupCommandSource,
+                    }
+                    : undefined);
             } else if (event.type === 'renamed') {
                 this.rekeyTerminal(event.oldName, event.newName);
             }
@@ -935,7 +941,11 @@ export class TerminalWsGateway {
         this.modeScanCarry.set(terminalName, /^\x1b(\[(\?[0-9;]{0,64}|!)?)?$/.test(fragment) ? fragment : '');
     }
 
-    private untrackTerminalData(name: string, exitCode?: number): void {
+    private untrackTerminalData(name: string, exitCode?: number, staleDeath?: {
+        staleCommandDeath: true;
+        startupCommand?: string;
+        startupCommandSource?: string;
+    }): void {
         const sub = this.terminalSubscriptions.get(name);
         if (sub) {
             sub.dispose();
@@ -956,10 +966,22 @@ export class TerminalWsGateway {
         this.decModes.delete(name);
         this.modeScanCarry.delete(name);
 
-        // Notify and close attached clients
+        // Notify and close attached clients. When the fleet flagged a stale
+        // startup-command death (code 0, no output, inside the first-readiness
+        // window), forward the resolved command and its source so the webview
+        // can name the exit for what it is instead of the bare
+        // "Process Exited with code 0".
         for (const client of Array.from(this.clients)) {
             if (client.terminalName === name) {
-                this.safeSend(client.ws, { t: 'exit', code: exitCode ?? 0 });
+                this.safeSend(client.ws, {
+                    t: 'exit',
+                    code: exitCode ?? 0,
+                    ...(staleDeath ? {
+                        staleCommandDeath: true,
+                        startupCommand: staleDeath.startupCommand,
+                        startupCommandSource: staleDeath.startupCommandSource,
+                    } : {}),
+                });
                 try { client.ws.close(); } catch { /* ignore */ }
                 this.clients.delete(client);
             }
@@ -1519,22 +1541,32 @@ export class TerminalWsGateway {
     public dispose(): void {
         if (this.pingInterval) {
             clearInterval(this.pingInterval);
+            this.pingInterval = undefined;
         }
         if (this.drainInterval) {
             clearInterval(this.drainInterval);
+            this.drainInterval = undefined;
         }
         if (this.sharedFlushInterval) {
             clearInterval(this.sharedFlushInterval);
             this.sharedFlushInterval = undefined;
         }
+        for (const sub of this.terminalSubscriptions.values()) {
+            try { sub.dispose(); } catch { /* ignore */ }
+        }
+        this.terminalSubscriptions.clear();
+        this.scrollbackBuffers.clear();
         this.pendingFlushTerminals.clear();
         this.pendingOutput.clear();
         this.inputQueues.clear();
         this.decModes.clear();
         this.modeScanCarry.clear();
         for (const client of this.clients) {
-            try { client.ws.close(); } catch { /* ignore */ }
+            try { client.ws.terminate(); } catch { /* ignore */ }
         }
         this.clients.clear();
+        try {
+            this.wss.close();
+        } catch { /* ignore */ }
     }
 }

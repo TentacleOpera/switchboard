@@ -481,7 +481,7 @@ export class WsHub {
             this._pingInterval = null;
         }
         for (const meta of this._connections) {
-            try { meta.ws.close(); } catch { /* ignore */ }
+            try { meta.ws.terminate(); } catch { /* ignore */ }
         }
         this._connections.clear();
         if (this._wss) {

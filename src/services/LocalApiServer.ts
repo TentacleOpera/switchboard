@@ -2359,6 +2359,7 @@ export class LocalApiServer {
             const ref = String(body?.plan || body?.planId || body?.sessionId || body?.planFile || '').trim();
             const rawColumn = String(body?.targetColumn || body?.column || '').trim();
             const from = String(body?.from || body?.originTerminal || '').trim();
+            const seat = String(body?.seat || '').trim();
             // Opt-in two-phase dispatch for the command surface: `ack: true`
             // routes to the acked variant, which returns as soon as the dispatch
             // is committed (gate pre-flighted, move+delivery fired) and reports
@@ -2369,10 +2370,12 @@ export class LocalApiServer {
             const acked = body?.ack === true;
             const outcome = acked
                 ? await this.performKanbanDispatchAcked(
-                    workspaceRoot, ref, rawColumn || undefined, { originTerminal: from || undefined }
+                    workspaceRoot, ref, rawColumn || undefined,
+                    { originTerminal: from || undefined, ...(seat ? { targetTerminalOverride: seat } : {}) }
                 )
                 : await this.performKanbanDispatch(
-                    workspaceRoot, ref, rawColumn || undefined, { originTerminal: from || undefined }
+                    workspaceRoot, ref, rawColumn || undefined,
+                    { originTerminal: from || undefined, ...(seat ? { targetTerminalOverride: seat } : {}) }
                 );
             res.writeHead(outcome.status, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(outcome.payload));
@@ -9700,6 +9703,10 @@ export class LocalApiServer {
                 try {
                     selectedWorkspaceRoot = this._options.getSelectedWorkspaceRoot?.() ?? null;
                 } catch { /* health must never fail on a callback error */ }
+                let memory: NodeJS.MemoryUsage | undefined;
+                try {
+                    memory = process.memoryUsage();
+                } catch { /* ignore */ }
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({
                     service: 'switchboard',
@@ -9708,7 +9715,8 @@ export class LocalApiServer {
                     pid: process.pid,
                     roots: this._getKnownRoots(),
                     ...(terminals !== undefined ? { terminals, terminalCount: terminals.length } : {}),
-                    ...(selectedWorkspaceRoot !== undefined ? { selectedWorkspaceRoot } : {})
+                    ...(selectedWorkspaceRoot !== undefined ? { selectedWorkspaceRoot } : {}),
+                    ...(memory !== undefined ? { memory } : {})
                 }));
             } else if (pathname === '/auth/mint' && req.method === 'POST') {
                 await this._handleMintEnrolmentToken(req, res);
