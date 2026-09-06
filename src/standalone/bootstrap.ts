@@ -6,7 +6,7 @@ import * as path from 'path';
 import { URL } from 'url';
 import { JSDOM } from 'jsdom';
 import createDOMPurify = require('dompurify');
-import { LocalApiServer } from '../services/LocalApiServer';
+import { LocalApiServer, readLauncherWorkspaceMappings } from '../services/LocalApiServer';
 import { BackupService } from '../services/BackupService';
 import { RetentionService } from '../services/RetentionService';
 import { DEFAULT_KANBAN_COLUMNS } from '../services/agentConfig';
@@ -54,7 +54,7 @@ import { matchWorktreePath } from '../services/worktreeResolver';
 import { attributePlansToTerminals, type TerminalPlanAttribution } from '../services/terminalPlanAttribution';
 import { createStandalonePlanIngestionHost, readPlanScannerCustomSourceDirs } from './planIngestionHost';
 import { GoPtyFleetProjection } from '../services/goPtyFleetProjection';
-import { PTY_IDE_NAME } from '../services/ptyHostSupervisor';
+import { PTY_IDE_NAME, probePtyHostAvailability } from '../services/ptyHostSupervisor';
 import { resolveTeamScopedRoleTerminal } from '../services/teamWiring';
 import { getThemeBodyClass } from '../services/themeBodyClass';
 import { SURFACES } from '../services/wsHub';
@@ -247,32 +247,16 @@ async function projectStandaloneLauncherState(args: {
     const srv = args.server();
     const roots = srv ? srv.getKnownRoots() : [args.workspaceRoot];
     const tailnet = isTailnetPolicy(args.bindPolicy);
+    // Same reader as the extension root — see readLauncherWorkspaceMappings for
+    // why this is the db `config` row and not the retired getWorkspaceMappings().
     let workspaceMappings: import('../services/LocalApiServer').LauncherStateProjection['workspaceMappings'];
     try {
-        const db = args.db();
-        if (!db) {
-            workspaceMappings = { unavailable: true, reason: 'kanban database not available', source: 'host-db' };
-        } else {
-            const result = await db.getWorkspaceMappings();
-            if (!result || !Array.isArray(result.mappings)) {
-                workspaceMappings = { unavailable: true, reason: 'workspace mappings service returned no list', source: 'host-db' };
-            } else {
-                workspaceMappings = {
-                    unavailable: false,
-                    value: result.mappings.map((m: any) => ({
-                        root: m?.parentFolder ?? m?.workspaceFolders?.[0] ?? '',
-                        label: m?.name,
-                        enabled: result.enabled !== false,
-                    })),
-                    source: 'host-db',
-                };
-            }
-        }
+        workspaceMappings = await readLauncherWorkspaceMappings(args.db());
     } catch (e) {
         workspaceMappings = {
             unavailable: true,
             reason: `workspace mappings read failed: ${e instanceof Error ? e.message : String(e)}`,
-            source: 'host-db',
+            source: 'host-db:config:workspace_mappings',
         };
     }
     return {
@@ -1168,9 +1152,18 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // secretStorage is already created above (line 252) with createStandaloneSecretStorage.
     // Its get() is async (returns Promise<string|undefined>), so integrationsConfigured
     // must be computed inside the async getters, not captured synchronously.
-    // Go supervisor owns PTY capability. Missing artifacts fail at first request
-    // with a named reason; no Node fallback is considered available.
-    const ptyReady = true;
+    // Go supervisor owns PTY capability. This is a REAL probe of the packaged
+    // artifact (manifest target present, file exists, executable bit set), not
+    // a constant: a hardcoded `true` made "no Go binary for this platform" look
+    // exactly like a working terminal runtime, so the browser Board offered
+    // terminal panels and dispatch that could only fail at first request. The
+    // reason is logged, so an unavailable host says WHY. No Node fallback is
+    // considered available either way.
+    const ptyAvailability = probePtyHostAvailability({ installRoot: repoRoot });
+    const ptyReady = ptyAvailability.available;
+    if (!ptyReady) {
+        log(opts, `[pty-host] terminals unavailable: ${ptyAvailability.reason ?? 'unknown reason'}`);
+    }
 
     // The four Board flags added by standalone-capability-gating-honesty default
     // false in headlessPanelHtml, so a host that omits one hides that surface.
@@ -3540,7 +3533,15 @@ Each plan file must include:
     // Both hosts own one Go supervisor. HTTP and board verbs still run the
     // TypeScript handlePtyVerb policy (token strip, dispatch attribution, team
     // barrier) and only the byte/process work reaches the supervisor.
-    taskViewerProvider.setFleetVerb((verb, payload, _signal) => handlePtyVerb(verb, payload, workspaceRoot));
+    //
+    // Gated on `ptyReady` for the same reason the node-pty era gated it on
+    // `isPtyAvailable()`: `_fleetVerb` being wired is what `_hasFleet()` reads,
+    // so wiring it unconditionally reports a reachable fleet on a machine with
+    // no packaged PTY host. `signal` is accepted by the seam signature but
+    // intentionally not forwarded — handlePtyVerb runs in-process here.
+    if (ptyReady) {
+        taskViewerProvider.setFleetVerb((verb, payload, _signal) => handlePtyVerb(verb, payload, workspaceRoot));
+    }
     // Live-terminals provider for the TEAMS-tab `startAgentGroup` arm.
     // `startAgentGroupById` takes `liveTerminals` as a parameter and uses it
     // for the double-start refusal check; without a real provider the check

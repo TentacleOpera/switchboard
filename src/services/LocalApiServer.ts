@@ -855,6 +855,63 @@ interface LocalApiServerOptions {
 }
 
 /**
+ * Read the named workspace mappings for the launcher-state projection.
+ *
+ * The store is the `workspace_mappings` row of the db `config` table — the same
+ * key `PlanFileImporter.detectControlPlaneWorkspace` reads and the same one
+ * `KanbanDatabase`'s registry migration writes. It is deliberately NOT
+ * `db.getWorkspaceMappings()`: that method is a RETIRED stub that returns
+ * `{ enabled: false, mappings: [] }` unconditionally, so a projection built on
+ * it always claimed "zero workspaces configured, and that answer is available"
+ * — the fallback rule in CLAUDE.md, and the exact case this projection's
+ * `unavailable` arm exists to prevent.
+ *
+ * An ABSENT key is a real, configured answer: no multi-repo mappings exist, so
+ * the empty list is reported as available. A present-but-unparseable value is
+ * corrupt configuration and is reported as unavailable with its reason, never
+ * read as "unconfigured".
+ */
+export async function readLauncherWorkspaceMappings(
+    db: { getConfig(key: string): Promise<string | null> } | null | undefined
+): Promise<LauncherStateProjection['workspaceMappings']> {
+    const source = 'host-db:config:workspace_mappings';
+    if (!db) { return { unavailable: true, reason: 'kanban database not available', source }; }
+    let raw: string | null;
+    try {
+        raw = await db.getConfig('workspace_mappings');
+    } catch (e) {
+        return { unavailable: true, reason: `workspace mappings read failed: ${e instanceof Error ? e.message : String(e)}`, source };
+    }
+    if (raw === null || raw === '') { return { unavailable: false, value: [], source }; }
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(raw);
+    } catch (e) {
+        return { unavailable: true, reason: `workspace mappings config is not valid JSON: ${e instanceof Error ? e.message : String(e)}`, source };
+    }
+    // Both shapes have shipped: a bare array, and the `{ enabled, mappings }`
+    // envelope the legacy JSON registry used. Preserve the envelope's `enabled`
+    // flag rather than assuming true.
+    const envelope = (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed as { enabled?: unknown; mappings?: unknown } : null;
+    const list = Array.isArray(parsed) ? parsed : (Array.isArray(envelope?.mappings) ? envelope!.mappings as unknown[] : null);
+    if (!list) { return { unavailable: true, reason: 'workspace mappings config is neither an array nor an { enabled, mappings } envelope', source }; }
+    const enabled = envelope ? envelope.enabled !== false : true;
+    return {
+        unavailable: false,
+        value: list.map(entry => {
+            const m = (entry && typeof entry === 'object') ? entry as Record<string, unknown> : {};
+            const folders = Array.isArray(m.workspaceFolders) ? m.workspaceFolders as unknown[] : [];
+            return {
+                root: typeof m.parentFolder === 'string' ? m.parentFolder : (typeof folders[0] === 'string' ? folders[0] as string : ''),
+                label: typeof m.name === 'string' ? m.name : undefined,
+                enabled,
+            };
+        }),
+        source,
+    };
+}
+
+/**
  * Launcher-state projection returned by `getLauncherState`. The host owns this
  * shape; the launcher consumes it and never reads `kanban.db` directly. Every
  * behavioural value carries its source so a stale projection is visible.

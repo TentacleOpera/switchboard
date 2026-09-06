@@ -4,8 +4,8 @@
 #
 # Prerequisites:
 #   - Run on a Debian-compatible Linux host whose native architecture is
-#     amd64 or arm64. Native modules (better-sqlite3, node-pty, the Go PTY
-#     host, the Go launcher) cannot be cross-compiled reliably, so the
+#     amd64 or arm64. Native payloads (better-sqlite3, the Go PTY host, the
+#     Go client, the Go launcher) cannot be cross-compiled reliably, so the
 #     package architecture is detected from the build host, never supplied
 #     by the caller.
 #   - Node >= 22, npm, dpkg-deb, dpkg-scanpackages (for the repository
@@ -15,9 +15,9 @@
 #   releases/deb/<version>/<arch>/switchboard_<version>_<arch>.deb
 #   releases/deb/<version>/<arch>/switchboard_<version>_<arch>.deb.manifest.json
 #
-# The package vendors better-sqlite3, node-pty, and the platform-selected Go
-# PTY host for the detected architecture at package-build time, so no target
-# ever needs a compiler. See amd64-package-and-an-apt-repository.md.
+# The package vendors better-sqlite3 and the platform-selected Go PTY host,
+# client and launcher for the detected architecture at package-build time, so
+# no target ever needs a compiler. See amd64-package-and-an-apt-repository.md.
 #
 # Architecture detection (plan: amd64-package-and-an-apt-repository):
 #   The native Debian architecture (dpkg --print-architecture) and the Node
@@ -230,29 +230,49 @@ cp package.json package-lock.json "$VENDOR_DIR/"
 ( cd "$VENDOR_DIR" && npm ci --omit=dev --ignore-scripts=false )
 cp -a "$VENDOR_DIR/node_modules" "$INSTALL_DIR/usr/lib/switchboard/node_modules"
 
-# Strip staged node-pty prebuilds for non-Linux platforms (plan:
-# amd64-package-and-an-apt-repository). The Linux addon is produced by the
-# package-time native build outside prebuilds/; the Darwin/Windows prebuilds
-# are unloadable on Linux and only bloat the package. Never modify the
-# repository's own node_modules — only the staged copy inside the package.
-STAGED_NODE_PTY="$INSTALL_DIR/usr/lib/switchboard/node_modules/node-pty"
-if [[ -d "$STAGED_NODE_PTY/prebuilds" ]]; then
-  echo "Stripping staged node-pty/prebuilds/ (non-Linux prebuilds unloadable on Linux)..."
-  rm -rf "$STAGED_NODE_PTY/prebuilds"
-fi
-
+# There is no PTY prebuild staging or strip any more: terminals are owned by the
+# static Go host copied above, and the retired native PTY module is gone from
+# package.json. better-sqlite3 is the only remaining native module.
 # Verify the native database module resolves out of the VENDORED tree, not the repo's.
 node -e "require('$INSTALL_DIR/usr/lib/switchboard/node_modules/better-sqlite3')" \
   || { echo "FAILED: better-sqlite3 missing from the vendored tree"; exit 1; }
-# Verify node-pty still loads after the prebuilds strip (if it was present).
-if [[ -d "$STAGED_NODE_PTY" ]]; then
-  node -e "require('$INSTALL_DIR/usr/lib/switchboard/node_modules/node-pty')" \
-    || { echo "FAILED: node-pty missing or broken in the vendored tree after prebuilds strip"; exit 1; }
-fi
 echo "Vendored native modules verified."
 
-# Entry point
-ln -s /usr/lib/switchboard/standalone/cli.js "$INSTALL_DIR/usr/bin/switchboard"
+# Entry point. `/usr/bin/switchboard` is the STATIC GO CLIENT, not a symlink to
+# the 17 MB Node bundle: the client verbs are one HTTP request each and paying a
+# bundle parse for them is the whole cost this feature removes. The Go front
+# controller hands every non-client verb (local, tailnet, setup, secrets,
+# import/export, control-plane) to the Node entry that remains installed at
+# /usr/lib/switchboard/standalone/cli.js — the absolute path declared in
+# client-artifacts.json's `nodeHostEntry.deb`. The systemd unit execs that Node
+# entry directly, so it does not go through the client (plan: go-cli-client-verbs).
+CLIENT_BIN="$BUILD_DIR/switchboard-client"
+echo "Building static Go client for linux/${GOARCH}..."
+CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" go build -trimpath \
+  -ldflags "-s -w -X main.clientVersion=${VERSION}" \
+  -o "$CLIENT_BIN" ./cmd/switchboard \
+  || { echo "FAILED: static Go client build failed for linux/${GOARCH}"; exit 1; }
+[ -x "$CLIENT_BIN" ] || { echo "FAILED: $CLIENT_BIN is not executable"; exit 1; }
+cp "$CLIENT_BIN" "$INSTALL_DIR/usr/bin/switchboard"
+chmod 755 "$INSTALL_DIR/usr/bin/switchboard"
+# Client manifest for the HOST's own resolution. `cliPathToken.resolveGoClientPath`
+# probes for client-artifacts.json next to the bundle and above it, so the Debian
+# layout gets its own copy pointing at the installed absolute path. Without it the
+# host emits `node "<17 MB bundle>"` in every dispatched prompt even though the Go
+# client is installed one directory away (plan: go-cli-client-verbs).
+cat > "$INSTALL_DIR/usr/lib/switchboard/client-artifacts.json" <<JSON
+{
+  "version": 1,
+  "binary": "switchboard",
+  "description": "Static Go client installed by the Debian package.",
+  "targets": {
+    "linux-${GOARCH}": "../../bin/switchboard"
+  },
+  "nodeHostEntry": {
+    "deb": "/usr/lib/switchboard/standalone/cli.js"
+  }
+}
+JSON
 
 # Static Go launcher. The desktop entry names it directly so icon launches go
 # through the launcher, not `switchboard local` (which was cwd-sensitive and
@@ -293,8 +313,8 @@ Description: Switchboard — plan-driven agent orchestration board
  through a kanban workflow. This package installs the standalone host,
  a systemd service, and the switchboard CLI.
  .
- The package vendors better-sqlite3, node-pty, and the static Go PTY host
- for ${ARCH}, so no compiler is needed on the target.
+ The package vendors better-sqlite3 and the static Go PTY host, client and
+ launcher for ${ARCH}, so no compiler is needed on the target.
 EOF
 
 # Maintainer scripts
@@ -338,13 +358,9 @@ if [[ -z "$BETTER_SQLITE3_NODE" ]]; then
   exit 1
 fi
 validate_native_elf "$BETTER_SQLITE3_NODE" "better-sqlite3"
-# node-pty .node addon (if present)
-NODE_PTY_NODE="$(find "$INSTALL_DIR/usr/lib/switchboard/node_modules/node-pty" -name '*.node' -type f 2>/dev/null | head -1)"
-if [[ -n "$NODE_PTY_NODE" ]]; then
-  validate_native_elf "$NODE_PTY_NODE" "node-pty"
-fi
 # Go binaries
 validate_native_elf "$INSTALL_DIR/usr/lib/switchboard/${PTY_TARGET}/switchboard-pty-host" "Go PTY host"
+validate_native_elf "$INSTALL_DIR/usr/bin/switchboard" "Go client"
 validate_native_elf "$INSTALL_DIR/usr/bin/switchboard-launcher" "Go launcher"
 echo "Post-build native payload validation passed for ${ARCH}."
 

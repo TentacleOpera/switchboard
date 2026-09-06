@@ -78,6 +78,30 @@ export function resolvePtyHostExecutable(options: Pick<PtyHostSupervisorOptions,
     return { value, source: 'manifest', target };
 }
 
+/**
+ * Composition-time capability probe. Terminal availability is "is there a
+ * platform-selected executable this host can actually spawn" — not "was a
+ * supervisor object constructed". Both are true at activation; only the first
+ * is a fact, and a hardcoded `true` (or a bare `!!supervisor` check) makes a
+ * missing artifact indistinguishable from a working terminal runtime, which is
+ * the fallback rule in CLAUDE.md.
+ *
+ * Pure filesystem work — no spawn, no handshake — so it is safe to call from a
+ * composition root before anything is started. The `reason` is the resolver's
+ * own message (missing target mapping, absent file, not executable), so the
+ * host can log WHY terminals are unavailable rather than reporting a bare
+ * false.
+ */
+export function probePtyHostAvailability(
+    options: Pick<PtyHostSupervisorOptions, 'installRoot' | 'artifactPath'>
+): { available: boolean; reason?: string; resolution?: PtyHostResolution } {
+    try {
+        return { available: true, resolution: resolvePtyHostExecutable(options) };
+    } catch (error) {
+        return { available: false, reason: error instanceof Error ? error.message : String(error) };
+    }
+}
+
 export class PtyHostSupervisor {
     private child?: cp.ChildProcess;
     private state: PtyHostState = 'stopped';

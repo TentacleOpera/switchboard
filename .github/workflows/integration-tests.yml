@@ -19,8 +19,29 @@ jobs:
           node-version: 20
           cache: npm
 
+      # The Go toolchain is a build input, not an optional extra: terminals, the
+      # agent-facing CLI and the launcher are all Go binaries now. Without this
+      # step `go build`/`go test` cannot run and the black-box PTY probe below
+      # silently degrades to source-regex assertions — green while incomplete.
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
       - name: Install dependencies
         run: npm ci
+
+      - name: Go build (pty host, static client, launcher)
+        run: go build ./...
+
+      - name: Go unit tests
+        run: go test ./...
+
+      # Builds the host into dist/<target>/ so the black-box contract below runs
+      # its NATIVE half (handshake, WebSocket auth/replay, parent-death) instead
+      # of skipping it.
+      - name: Build Go PTY host artifact
+        run: bash scripts/build-pty-host.sh
 
       - name: Protocol catalog + verb allowlist drift check
         run: npm run catalog:check
@@ -122,6 +143,13 @@ jobs:
       # must stay AFTER "Compile extension" above.
       - name: PTY host gating contract (single load site, probe exported, no bundled binary)
         run: npm run test:contract:pty-host-gating
+
+      # The gating contract is static; this one starts the real Go host and
+      # exercises the wire. It is the only check that can discriminate on whether
+      # the terminal runtime actually works, so it must run in CI — a suite that
+      # exists in package.json but is never invoked gates nothing.
+      - name: PTY host black-box contract (handshake, prompt framing, WebSocket, parent-death)
+        run: npm run test:contract:pty-host-blackbox
 
       # The PTY verb surface must exist ONLY on /terminals/verb/. That is what stops
       # the VS Code sidebar board (which posts to /kanban/verb/) from spawning a
@@ -475,6 +503,13 @@ jobs:
       # the Marketplace upload cap. This runs vsce's real filter over the real tree.
       - name: VSIX packaging contract (no debug symbols, runtime files present, publish mechanics)
         run: npm run test:contract:vsix-packaging
+
+      # Same class of gate for the Debian side: that /usr/bin/switchboard is the
+      # static Go client rather than a symlink to the Node bundle, that the
+      # retired native PTY dependency is gone from packaging, and that the arch
+      # detection/signing mechanics hold.
+      - name: Debian packaging contract (Go client entry point, arch detection, repository signing)
+        run: npm run test:contract:deb-packaging
 
       # The reviewer must assess the plan's goal, not only its steps, and must
       # escalate a destination change rather than silently reversing the plan's

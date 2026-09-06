@@ -7,6 +7,10 @@ node_modules/**
 # helper writes the manifest and target binaries under dist/; vsce ships dist/
 # unless ignored. Never re-include node_modules for terminal capability.
 !pty-host-artifacts.json
+# Same for the static Go client manifest — cliPathToken resolves the agent-facing
+# `switchboard` path through it, and an absent manifest silently keeps every
+# dispatched prompt on the Node bundle.
+!client-artifacts.json
 # better-sqlite3 native module allowlist.
 !node_modules/better-sqlite3/package.json
 !node_modules/better-sqlite3/lib/**/*.js

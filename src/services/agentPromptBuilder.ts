@@ -10,7 +10,7 @@ import * as path from 'path';
 import { DefaultPromptOverride, CustomAgentAddons, BUILT_IN_AGENT_LABELS } from './agentConfig';
 import { extractDesignSystemTokens, ExtractedDesignSystem } from './designSystemTokens';
 import { compareByPrecedence, type SortMode } from './kanbanOrdering';
-import { substituteCliPath } from '../utils/cliPathToken';
+import { substituteCliPath, formatCliInvocation } from '../utils/cliPathToken';
 import {
     ProtocolResolution,
     DIRECTIVE_PROTOCOL_NAMES,
@@ -907,7 +907,11 @@ export const SWITCHBOARD_LIVENESS_DIRECTIVE = (port: number) =>
  * that do not.
  */
 export const SWITCHBOARD_CLI_DIRECTIVE = (cliPath: string) =>
-  `SWITCHBOARD CLI: run \`node "${cliPath}" <command>\` for board callbacks — ` +
+  // `formatCliInvocation` owns the `node` prefix as well as the path: the static
+  // Go client IS the `switchboard` executable and must not be run through node.
+  // Interpolating `cliPath` directly here is what kept every dispatched prompt on
+  // the 17 MB Node bundle even after both roots wired the Go client seam.
+  `SWITCHBOARD CLI: run \`${formatCliInvocation(cliPath)} <command>\` for board callbacks — ` +
   `\`done\`, \`next\`, and \`verb <name> '<json>'\`. Use it instead of hand-building those ` +
   `HTTP requests; endpoints this prompt names explicitly stay on HTTP.`;
 
@@ -2075,7 +2079,7 @@ UNATTENDED IMPROVER CONTRACT:
     if (role === 'reviewer') {
         const { reviewerDelegationMode, reviewerCoderTerminal, reviewerOriginLead, reviewerPreCheckPassed, reviewerPhoneAFriendPassed } = options ?? {};
         const isDelegationActive = Boolean(reviewerDelegationMode && reviewerCoderTerminal && reviewerOriginLead);
-        const cliRef = options?.cliPath ? `node "${options.cliPath}"` : 'switchboard';
+        const cliRef = options?.cliPath ? formatCliInvocation(options.cliPath) : 'switchboard';
         // `/kanban/move` has no verb-rail equivalent (`moveCardForward` /
         // `moveCardBackwards` take a sessionIds array, not a planId), so the
         // escalation stays on the REST route. The base comes from the injected

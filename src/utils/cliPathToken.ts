@@ -94,7 +94,12 @@ export function resolveGoClientPath(): string | null {
             const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
             const targets = manifest.targets;
             if (!targets || typeof targets !== 'object') { continue; }
-            const platform = `${process.platform}-${process.arch}`;
+            // Manifest keys are Go target names, so `x64` must be normalised to
+            // `amd64` — `process.arch` never spells it that way, and the
+            // un-normalised key silently missed on every amd64 machine, which is
+            // the entire install base of the tower.
+            const arch = process.arch === 'x64' ? 'amd64' : process.arch;
+            const platform = `${process.platform}-${arch}`;
             const rel = targets[platform];
             if (typeof rel !== 'string') { continue; }
             const abs = path.resolve(path.dirname(manifestPath), rel);
@@ -105,14 +110,38 @@ export function resolveGoClientPath(): string | null {
 }
 
 /**
- * Resolves the preferred CLI path for agent-facing prompts. Prefers the static
- * Go client when available; falls back to the Node CLI host entry point.
- * The Go client is invoked as `"<path>" <verb>` (no `node` prefix); the Node
- * CLI is invoked as `node "<path>" <verb>`.
+ * The invocation prefix every agent-facing fragment carries in front of the
+ * `<cliPath>` token. Every live fragment writes `node "<cliPath>"` — the
+ * substitution seam rewrites that whole phrase, so a fragment never has to
+ * know which executable it will end up naming.
+ */
+const NODE_INVOCATION_PREFIX = 'node "' + CLI_PATH_TOKEN + '"';
+
+/**
+ * The runnable command an agent should be handed for a board callback.
  *
- * Prompt fragments that use `node "<cliPath>"` should continue to use
- * `resolveBundledCliPath()` for the Node form. This function is for the
- * `switchboard`-style invocation (no `node` prefix).
+ * The static Go client IS the `switchboard` executable: it is invoked as
+ * `"<path>" <verb>` with no `node` prefix, and it hands non-client verbs to
+ * the Node host entry itself. When no Go client is installed the Node bundle
+ * is named directly, exactly as before.
+ *
+ * `nodeCliPath` is the Node host entry the caller already resolved; it is used
+ * only when no Go client is present. Returning the whole invocation (not just
+ * a path) is what makes the `node` prefix disappear along with the Node path —
+ * a caller that only swapped the path would emit `node "<go binary>"`.
+ */
+export function formatCliInvocation(nodeCliPath?: string): string {
+    const goPath = resolveGoClientPath();
+    if (goPath) { return `"${goPath}"`; }
+    return `node "${nodeCliPath || resolveBundledCliPath()}"`;
+}
+
+/**
+ * Resolves the preferred CLI executable for agent-facing prompts. Prefers the
+ * static Go client when available; falls back to the Node CLI host entry
+ * point. Callers that need the *invocation* (with or without the `node`
+ * prefix) want `formatCliInvocation` instead — the prefix and the path are one
+ * decision, not two.
  */
 export function resolveCliPath(): string {
     const goPath = resolveGoClientPath();
@@ -134,13 +163,20 @@ export function isGoClientResolved(): boolean {
  * `cliPath` overrides the host-wired path (the prompt builder passes the value
  * it already resolved); omit it to use the composition-root seam.
  *
- * By default, substitutes the Node CLI path (for `node "<cliPath>"` patterns).
- * Pass `{ preferGoClient: true }` to substitute the Go client path when
- * available (for `switchboard`-style patterns without a `node` prefix).
+ * When the static Go client is installed, the whole `node "<cliPath>"` phrase
+ * becomes `"<go client>"` — the Go binary is the `switchboard` executable and
+ * is not run through `node`. Without a Go client the Node bundle is named, as
+ * before.
  */
-export function substituteCliPath(text: string, cliPath?: string, opts?: { preferGoClient?: boolean }): string {
+export function substituteCliPath(text: string, cliPath?: string): string {
     if (!text || text.indexOf(CLI_PATH_TOKEN) === -1) { return text; }
-    const resolved = cliPath
-        || (opts?.preferGoClient ? resolveCliPath() : resolveBundledCliPath());
-    return text.split(CLI_PATH_TOKEN).join(resolved);
+    const nodePath = cliPath || resolveBundledCliPath();
+    // The whole `node "<cliPath>"` phrase is the unit of substitution, not the
+    // token alone: the Go client is its own executable and must not be handed
+    // to `node`. Rewrite the phrase first, then any bare token (comments,
+    // future fragments) with the Node path.
+    const invocation = formatCliInvocation(nodePath);
+    return text
+        .split(NODE_INVOCATION_PREFIX).join(invocation)
+        .split(CLI_PATH_TOKEN).join(nodePath);
 }

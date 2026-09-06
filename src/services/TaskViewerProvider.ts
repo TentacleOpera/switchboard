@@ -116,7 +116,7 @@ import type { LinearDocsAdapter } from './LinearDocsAdapter';
 let LinearDocsAdapterClass: any;
 import { LocalFolderService } from './LocalFolderService';
 import { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
-import { LocalApiServer, enqueueOnQueueChain, LauncherStateProjection } from './LocalApiServer';
+import { LocalApiServer, enqueueOnQueueChain, LauncherStateProjection, readLauncherWorkspaceMappings } from './LocalApiServer';
 import {
     HostSettingsContext,
     HostSettingsDocument,
@@ -613,7 +613,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * p50 in-process vs 0.24 ms out).
      */
     private async _ptyHostVerb(verb: string, payload: any, signal?: AbortSignal): Promise<any> {
-        if ((!this._ptyHostChild || !this._ptyHostPort) && !this._ptyHostSupervisor && !this._fleetVerb) {
+        if (!this._ptyHostSupervisor && !this._fleetVerb) {
             return { success: false, error: 'PTY host unavailable on this platform/installation' };
         }
 
@@ -1309,72 +1309,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         try {
             if (this._ptyHostSupervisor) {
                 result = await this._ptyHostSupervisor.request(verb, payload, signal);
-            } else if (this._ptyHostChild && this._ptyHostPort) {
-                const http = require('http');
-                const port = this._ptyHostPort;
-                // An aborted join (the parent's curl died) must tear down the proxied
-                // request to the pty host so the held slot is freed and the child process
-                // is not pinned open by a dead forwarder. Wires up both the raw-binary
-                // and JSON branches; an already-aborted signal rejects synchronously.
-                const abortedError = (): { success: false; error: string } =>
-                    ({ success: false, error: 'Client disconnected' });
-                if (signal?.aborted) { return abortedError(); }
-
-                // ptyPasteImage carries a raw Buffer that does not survive
-                // JSON.stringify/parse — forward it as application/octet-stream with
-                // name + mimeType in the query string, matching ptyHost's raw-binary
-                // branch. The standalone host (bootstrap.ts) receives the same verb
-                // via LocalApiServer's own raw-binary branch, so both hosts share the
-                // transport contract.
-                if (verb === 'ptyPasteImage' && payload && Buffer.isBuffer(payload.imageBuffer)) {
-                    const qs = new URLSearchParams({
-                        name: payload.name || '',
-                        mimeType: payload.mimeType || 'image/png'
-                    });
-                    const resString = await new Promise<string>((resolve, reject) => {
-                        const req = http.request({
-                            hostname: '127.0.0.1',
-                            port,
-                            path: `/api/pty/${encodeURIComponent(verb)}?${qs.toString()}`,
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/octet-stream' }
-                        }, (res: any) => {
-                            let body = '';
-                            res.on('data', (c: any) => { body += c; });
-                            res.on('end', () => resolve(body));
-                        });
-                        req.on('error', reject);
-                        const onAbort = () => { try { req.destroy(); } catch { /* idempotent */ } reject(new Error('Client disconnected')); };
-                        if (signal) {
-                            if (signal.aborted) { onAbort(); }
-                            else { signal.addEventListener('abort', onAbort, { once: true }); }
-                        }
-                        req.end(payload.imageBuffer);
-                    });
-                    result = JSON.parse(resString);
-                } else {
-                    const resData = await new Promise<string>((resolve, reject) => {
-                        const req = http.request({
-                            hostname: '127.0.0.1',
-                            port,
-                            path: `/api/pty/${encodeURIComponent(verb)}`,
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' }
-                        }, (res: any) => {
-                            let body = '';
-                            res.on('data', (c: any) => { body += c; });
-                            res.on('end', () => resolve(body));
-                        });
-                        req.on('error', reject);
-                        const onAbort = () => { try { req.destroy(); } catch { /* idempotent */ } reject(new Error('Client disconnected')); };
-                        if (signal) {
-                            if (signal.aborted) { onAbort(); }
-                            else { signal.addEventListener('abort', onAbort, { once: true }); }
-                        }
-                        req.end(JSON.stringify(payload || {}));
-                    });
-                    result = JSON.parse(resData);
-                }
             } else if (this._fleetVerb) {
                 result = await this._fleetVerb(verb, payload, signal);
             } else {
@@ -1637,7 +1571,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     /** True when a fleet is reachable by SOME route: the out-of-process pty host
      *  (extension) or the injected in-process bridge (standalone). */
     private _hasFleet(): boolean {
-        return !!this._ptyHostPort || !!this._ptyHostSupervisor || !!this._fleetVerb;
+        // Deliberately NOT `|| !!this._ptyHostSupervisor`. The supervisor object
+        // is constructed at activation, before any artifact has been resolved or
+        // any handshake attempted — counting it here reported a reachable fleet
+        // on a machine with no packaged PTY host, which is the fallback rule in
+        // CLAUDE.md (a default that behaves exactly like a configured value).
+        // `_ptyHostPort` is set only after a successful handshake; `_fleetVerb`
+        // is wired by standalone only when the artifact probe passed.
+        return !!this._ptyHostPort || !!this._fleetVerb;
     }
 
     public initHeadlessVerbServing(seams: HostSeams, broadcaster: BroadcastHub): void {
@@ -1717,7 +1658,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _hostIntegrationsActivated = false;
     private _needsSetup: boolean = false;
     private _terminalSessionToken: string = '';
-    private _ptyHostChild?: import('child_process').ChildProcess;
     private _ptyHostSupervisor?: PtyHostSupervisor;
     /** HTTP port of the out-of-process pty host child process. Set only in the extension host when _startLocalApiServer launches the child. Does NOT mean "a fleet exists" — check _hasFleet() instead. */
     private _ptyHostPort?: number;
@@ -3787,33 +3727,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             : this._filterMappedRoots(this._getWorkspaceRoots());
         const selected = this._kanbanProvider?.getCurrentWorkspaceRoot() ?? null;
         // Workspace mappings through the existing DB service. The launcher
-        // never opens the DB itself.
+        // never opens the DB itself. Both roots go through the same reader so
+        // the two hosts cannot report the same install differently.
         let workspaceMappings: LauncherStateProjection['workspaceMappings'];
         try {
-            const db = await this._getKanbanDb(effectiveRoot);
-            if (!db) {
-                workspaceMappings = { unavailable: true, reason: 'kanban database not available', source: 'host-db' };
-            } else {
-                const result = await db.getWorkspaceMappings();
-                if (!result || !Array.isArray(result.mappings)) {
-                    workspaceMappings = { unavailable: true, reason: 'workspace mappings service returned no list', source: 'host-db' };
-                } else {
-                    workspaceMappings = {
-                        unavailable: false,
-                        value: result.mappings.map(m => ({
-                            root: (m as any).parentFolder ?? (m as any).workspaceFolders?.[0] ?? '',
-                            label: (m as any).name,
-                            enabled: result.enabled !== false,
-                        })),
-                        source: 'host-db',
-                    };
-                }
-            }
+            workspaceMappings = await readLauncherWorkspaceMappings(await this._getKanbanDb(effectiveRoot));
         } catch (e) {
             workspaceMappings = {
                 unavailable: true,
                 reason: `workspace mappings read failed: ${e instanceof Error ? e.message : String(e)}`,
-                source: 'host-db',
+                source: 'host-db:config:workspace_mappings',
             };
         }
         return {
@@ -3881,91 +3804,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 this._apiServerDiagnosticsChannel.appendLine(`[pty-host] unavailable: ${error instanceof Error ? error.message : String(error)}`);
             }
         }
-        if (false) {
-            const db = await this._getKanbanDb(effectiveRoot);
-            if (db) {
-                const ptyHostScript = path.join(this._context.extensionPath, 'dist', 'standalone', 'ptyHost.js');
-                // ELECTRON_RUN_AS_NODE is NOT optional. Under the extension host
-                // `process.execPath` is the Electron binary, and the utility-process
-                // ext host does not carry this variable in its own env — so a bare
-                // spawn opens a second IDE window instead of running the script.
-                // The child deletes it from its own env before spawning any shell,
-                // so operator terminals do not inherit it.
-                const child = cp.spawn(process.execPath, [
-                    ptyHostScript, '--workspace', effectiveRoot
-                ], {
-                    stdio: ['pipe', 'pipe', 'pipe'],
-                    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
-                });
-                this._ptyHostChild = child;
-                let handshakeDone = false;
-                child.stderr.on('data', (chunk: Buffer) => {
-                    // Guarded: dispose() disposes this channel, and a SIGTERM'd child
-                    // can still emit on the way out. appendLine on a disposed channel throws.
-                    try { this._apiServerDiagnosticsChannel.appendLine(`[ptyHost stderr] ${chunk.toString().trim()}`); } catch { /* channel disposed */ }
-                });
-                child.on('error', (err: Error) => {
-                    try { this._apiServerDiagnosticsChannel.appendLine(`[ptyHost] Spawn failed: ${err.message}`); } catch { /* channel disposed */ }
-                    if (!handshakeDone) { this._ptyHostBootFailed = true; }
-                    this._ptyHostChild = undefined;
-                    this._ptyHostPort = undefined;
-                });
-                child.on('exit', (code: number) => {
-                    try {
-                        this._apiServerDiagnosticsChannel.appendLine(
-                            handshakeDone
-                                ? `[ptyHost] Exited with code ${code}`
-                                : `[ptyHost] Exited with code ${code} before handshake — Terminals disabled for this host lifetime.`
-                        );
-                    } catch { /* channel disposed */ }
-                    // Died before ever reporting a port: a broken install, not a crash
-                    // of a working host. Latch it off rather than letting the liveness
-                    // watchdog respawn it on every failed health check.
-                    if (!handshakeDone) { this._ptyHostBootFailed = true; }
-                    this._ptyHostChild = undefined;
-                    this._ptyHostPort = undefined;
-                    this._ptyTerminalNames = [];
-                });
-                await new Promise<void>((resolve) => {
-                    child.stdout.on('data', (data: Buffer) => {
-                        if (handshakeDone) return;
-                        const lines = data.toString().split('\n');
-                        for (const line of lines) {
-                            if (!line.trim()) continue;
-                            try {
-                                const msg = JSON.parse(line.trim());
-                                if (msg.t === 'ready' && typeof msg.port === 'number') {
-                                    this._ptyHostPort = msg.port;
-                                    this._terminalSessionToken = msg.token || '';
-                                    handshakeDone = true;
-                                    resolve();
-                                    break;
-                                }
-                            } catch (e) {
-                                // non-json output
-                            }
-                        }
-                    });
-                    const timer = setTimeout(() => {
-                        if (handshakeDone) { return; }
-                        // No handshake in 5 s: treat it as a boot failure and reap the
-                        // child rather than leaving a headless orphan holding a port.
-                        this._ptyHostBootFailed = true;
-                        try { child.kill('SIGTERM'); } catch { /* already gone */ }
-                        resolve();
-                    }, 5000);
-                    if (typeof timer.unref === 'function') { timer.unref(); }
-                });
-                // Seed the freshly spawned child with the CURRENT seat. The other
-                // three push sites fire on a seat CHANGE (adopt / stop / handoff), and
-                // a live session changes nothing — so after a window reload with a seat
-                // already adopted the child would hold `controllerSeat = null` for the
-                // rest of the session, and the singleton guard would be blind in
-                // exactly the restart case. Best-effort, same as the change pushes.
-                if (this._ptyHostPort) { this._pushControllerSeatToPtyHost(); }
-            }
-        }
-        const ptyHostReady = () => ptyReady && !!this._ptyHostPort && (!!this._ptyHostSupervisor || !!this._ptyHostChild);
+        // The Electron/ELECTRON_RUN_AS_NODE spawn of dist/standalone/ptyHost.js is
+        // GONE, not disabled: ptyHost.ts is a fail-loud stub and webpack no longer
+        // emits that entry. A retained-but-unreachable copy of the retired runtime is
+        // the silent-fallback shape the plan forbids — the next reader cannot tell a
+        // dead branch from a supported one.
+        const ptyHostReady = () => ptyReady && !!this._ptyHostPort && !!this._ptyHostSupervisor;
 
         const updateMirrorRegistry = async (db: any) => {
             if (!db || !this._ptyHostPort) return;
@@ -5124,7 +4968,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     public getTerminalGridState(): { apiPort?: number; ready: boolean } {
         const apiPort = this._localApiServer?.getPort() || undefined;
         const isListening = this._localApiServer?.isListening() ?? false;
-        const ptyReady = !!this._ptyHostSupervisor && (this.suppressLocalApiServer ? true : (!this._ptyHostBootFailed && !!this._ptyHostPort));
+        // Standalone never runs _startLocalApiServer, so `_ptyHostPort` is never
+        // set on the provider there — its evidence is the injected fleet seam,
+        // which bootstrap wires only when the artifact probe passed. The editor
+        // host's evidence is a completed handshake. Neither branch may fall back
+        // to "a supervisor object exists".
+        const ptyReady = this.suppressLocalApiServer
+            ? !!this._fleetVerb
+            : (!!this._ptyHostSupervisor && !this._ptyHostBootFailed && !!this._ptyHostPort);
         return {
             apiPort,
             ready: !!apiPort && isListening && ptyReady
@@ -12273,7 +12124,7 @@ Each plan file must include:
      */
     private _pushControllerSeatToPtyHost(): void {
         if (this._headlessRuntime) { return; }
-        if ((!this._ptyHostChild && !this._ptyHostSupervisor) || !this._ptyHostPort) { return; }
+        if (!this._ptyHostSupervisor || !this._ptyHostPort) { return; }
         const seat = this._autobanState?.missionControlSeat;
         void this._ptyHostVerb('ptySetControllerSeat', { seat: seat || null })
             .catch(() => { /* best-effort — role scan is the fallback */ });
@@ -13717,7 +13568,7 @@ Each plan file must include:
 
     /**
      * Poll briefly for the pty host to become ready. On the extension host the
-     * fleet lives in a child process (`_ptyHostChild`/`_ptyHostPort`); on the
+     * fleet lives in the Go PTY host child (`_ptyHostSupervisor`/`_ptyHostPort`); on the
      * standalone host the fleet is in-process (`suppressLocalApiServer`), already
      * constructed by bootstrap before this is called, so it short-circuits true.
      * Used by the boot-time autostart pass so it does not fire into a host with
@@ -25080,17 +24931,6 @@ Each plan file must include:
         if (this._ptyHostSupervisor) {
             void this._ptyHostSupervisor.stop();
             this._ptyHostSupervisor = undefined;
-            this._ptyHostPort = undefined;
-            this._ptyTerminalNames = [];
-        }
-        if (this._ptyHostChild) {
-            const child = this._ptyHostChild;
-            try { child.kill('SIGTERM'); } catch {}
-            const escalate = setTimeout(() => {
-                try { if (child.exitCode === null && child.signalCode === null) { child.kill('SIGKILL'); } } catch {}
-            }, 3000);
-            if (typeof escalate.unref === 'function') { escalate.unref(); }
-            this._ptyHostChild = undefined;
             this._ptyHostPort = undefined;
             this._ptyTerminalNames = [];
         }

@@ -138,6 +138,14 @@ const extensionConfig = {
                     from: 'pty-host-artifacts.json',
                     to: 'pty-host-artifacts.json',
                     noErrorOnMissing: true
+                },
+                {
+                    // Same reason as the PTY manifest: cliPathToken probes for this
+                    // beside the bundle. Without it the extension resolves no Go
+                    // client and every dispatched prompt keeps naming the Node bundle.
+                    from: 'client-artifacts.json',
+                    to: 'client-artifacts.json',
+                    noErrorOnMissing: true
                 }
             ]
         })

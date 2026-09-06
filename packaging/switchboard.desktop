@@ -4,14 +4,15 @@ Name=Switchboard
 GenericName=Agent Fleet Command
 Comment=Plan-driven agent orchestration board
 # The launcher is the static Go binary that can run before Node.js or
-# Switchboard is installed. It resolves the workspace from the session's
-# default working directory (Path= is deliberately absent so the entry does
-# not pin a tree the package cannot know), supervises the standalone host,
-# and opens the board. The previous `switchboard local` entry was
-# cwd-sensitive and could serve $HOME on icon launch; the launcher passes
-# --workspace-root explicitly so the host does not infer the workspace from
-# cwd (plan: go-launcher-static-binary).
-Exec=switchboard-launcher start
+# Switchboard is installed. `ui` opens the embedded loopback PICKER, which is
+# the whole point of the entry: `switchboard local` served whatever tree the
+# desktop session's cwd happened to be — usually $HOME, which is not a
+# workspace. `switchboard-launcher start` has the SAME defect (it falls back to
+# os.Getwd() when no --workspace-root is given), so it is not a fix. The picker
+# lists the known workspaces and starts or attaches per root, so no workspace is
+# ever inferred from cwd. Path= stays absent for the same reason: the entry must
+# not pin a tree the package cannot know (plan: go-launcher-static-binary).
+Exec=switchboard-launcher ui
 Icon=switchboard
 Terminal=false
 Categories=Development;Utility;

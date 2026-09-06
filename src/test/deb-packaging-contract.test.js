@@ -190,18 +190,32 @@ check('emits a sidecar manifest with version, arch, node version, revision, sha2
     );
 });
 
-check('strips staged node-pty prebuilds (non-Linux prebuilds unloadable on Linux)', () => {
+check('/usr/bin/switchboard is the static Go client, not the Node bundle', () => {
+    // The plan's first goal invariant. A symlink to dist/standalone/cli.js makes
+    // every board verb pay a 17 MB bundle parse — the exact cost the static
+    // client exists to remove — and it is invisible unless something asserts it.
     assert.ok(
-        /node-pty\/prebuilds/.test(scriptText),
-        'must strip staged node-pty/prebuilds/'
+        !/ln -s .*standalone\/cli\.js .*usr\/bin\/switchboard"/.test(scriptText),
+        '/usr/bin/switchboard must not be a symlink to the Node CLI bundle'
     );
     assert.ok(
-        /rm -rf.*prebuilds/.test(scriptText),
-        'must rm -rf the staged prebuilds directory'
+        /go build[\s\S]{0,400}\.\/cmd\/switchboard\b/.test(scriptText),
+        'must build ./cmd/switchboard (the static Go client)'
     );
     assert.ok(
-        /require.*node-pty/.test(scriptText),
-        'must re-require node-pty after the strip to confirm it still loads'
+        /cp "\$CLIENT_BIN" "\$INSTALL_DIR\/usr\/bin\/switchboard"/.test(scriptText),
+        'must install the built Go client at /usr/bin/switchboard'
+    );
+    assert.ok(
+        /client-artifacts\.json/.test(scriptText),
+        'must write a client manifest so the host resolves the installed Go client'
+    );
+});
+
+check('the retired native PTY dependency is absent from packaging', () => {
+    assert.ok(
+        !scriptText.includes('node-pty'),
+        'package-deb.sh must not stage, strip or probe the retired node-pty dependency'
     );
 });
 
