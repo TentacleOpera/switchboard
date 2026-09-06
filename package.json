@@ -936,6 +936,8 @@
     "test:contract:tickets-assignee-filter": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/tickets-assignee-filter-regression.test.js",
     "test:contract:panel-revival-retention": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/panel-revival-retention-contract.test.js",
     "test:contract:status-pane-mode": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/status-pane-mode-contract.test.js",
+    "test:contract:verb-transport-timeout": "node src/test/verb-transport-timeout-contract.test.js",
+    "test:contract:cli-seat-dispatch-rotation": "node src/test/cli-seat-dispatch-rotation-contract.test.js",
     "test:contract:terminal-flow-control": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-flow-control-contract.test.js",
     "test:contract:terminal-ws-deflate": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-ws-deflate-contract.test.js",
     "test:contract:terminal-input-path": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-input-path-contract.test.js",

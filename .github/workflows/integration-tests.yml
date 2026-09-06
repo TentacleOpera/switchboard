@@ -982,6 +982,19 @@ jobs:
       - name: Status pane mode contract (paneModes third value, suspend/resume, declared-over-inferred)
         run: npm run test:contract:status-pane-mode
 
+      # The verb POST had no timeout: a stalled request never resolved, never rejected,
+      # logged nothing and changed no pixel — the copy button simply died until a reload.
+      # The defect was an OMISSION, so only a structural assertion prevents the next one.
+      - name: Verb transport timeout contract (every fetch bounded, catch surfaces to UI)
+        run: npm run test:contract:verb-transport-timeout
+
+      # CLI seat targeting and the standalone planner round-robin. The rotation lives
+      # or dies on `allowPtyFleet: true`: without it the alive-registry filter drops
+      # every PTY row and the set comes back empty, so the feature is absent rather
+      # than broken — and nothing else in this suite can tell the difference.
+      - name: CLI seat dispatch + planner rotation contract
+        run: npm run test:contract:cli-seat-dispatch-rotation
+
       # Solo pop-out. Every guard here is a silent failure: an unsuppressed saveSetting
       # lets a pop-out rewrite the docked panel's layout; an unpinned pane assignment
       # lets the detach timer destroy the window's own scrollback 15s after an operator

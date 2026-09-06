@@ -2645,9 +2645,28 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     let plannerCursorLocationKey: string | undefined;
                     if (overrideName) {
                         terminal = active.find(t => t.friendlyName === overrideName);
+                        // An explicit target that names no live seat is a routing MISS,
+                        // not a hint. Falling through would round-robin or role-match the
+                        // card onto some other terminal and report success — a `--seat`
+                        // typo, or a seat that died since the board rendered, would land
+                        // the dispatch somewhere nobody asked for with no trace. Name the
+                        // seat and the live set instead.
+                        if (!terminal) {
+                            return {
+                                success: false,
+                                error: `No live terminal named '${overrideName}'. Live seats: ${active.map(t => t.friendlyName).join(', ') || '(none)'}`,
+                            };
+                        }
                     }
                     if (!terminal && targetRole === 'planner' && taskViewerProvider) {
-                        const { terminals, locationKey } = await taskViewerProvider.getRoleTerminalSet('planner', root);
+                        // allowPtyFleet is REQUIRED here, not optional. Without it
+                        // _getAliveAutobanTerminalRegistry runs a PTY row through the
+                        // vscode.window liveness check: standalone's shim exports an empty
+                        // `terminals` array and no `env.appName`, and the fleet's persisted
+                        // row carries no `lastSeen` — so every planner is filtered out, the
+                        // set comes back empty and the rotation never fires. Same reasoning
+                        // as KanbanProvider's browser planner surface (:7301).
+                        const { terminals, locationKey } = await taskViewerProvider.getRoleTerminalSet('planner', root, { allowPtyFleet: true });
                         if (terminals.length > 0) {
                             const cursor = taskViewerProvider.getPlannerRotationCursor(locationKey);
                             const pickedName = terminals[cursor % terminals.length];

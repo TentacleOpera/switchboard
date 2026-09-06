@@ -400,7 +400,15 @@
                 controller.abort();
             }, VERB_ABORT_TIMEOUT_MS);
 
+            // The response arrived and was handled — the transport is done, whatever
+            // happens next. dispatchMessage() runs a PANEL's handler inside this same
+            // promise chain, so a handler that throws lands in the .catch() below and
+            // would report "Action failed" for a verb the server answered. Reporting a
+            // succeeded dispatch as failed is worse than the silence this plan fixes.
+            let settled = false;
+
             function cleanupVerbTimers() {
+                settled = true;
                 if (signalTimer) { clearTimeout(signalTimer); signalTimer = null; }
                 if (abortTimer) { clearTimeout(abortTimer); abortTimer = null; }
                 clearTransportPending();
@@ -459,7 +467,15 @@
                     }
                 })
                 .catch(function (err) {
+                    const wasSettled = settled;
                     cleanupVerbTimers();
+                    if (wasSettled) {
+                        // Not a transport failure: the response landed and a panel
+                        // handler threw. Log it against the handler, do not blame the
+                        // network and do not tell the operator the action failed.
+                        console.error('[transport] verb handler threw after a delivered response:', verb, err);
+                        return;
+                    }
                     const elapsed = Date.now() - startTime;
                     if (err && err.name === 'AbortError') {
                         console.error('[transport] verb timed out:', verb,
