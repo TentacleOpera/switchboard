@@ -25,6 +25,20 @@ export const SIGTERM_GRACE_MS = 3000;
 export const STARTUP_COMMAND_DEATH_WINDOW_MS = 30_000;
 
 /**
+ * Byte allowance for the terminal's echo of the injected startup command when
+ * deciding whether a seat produced any output of its OWN.
+ *
+ * The PTY runs an interactive login shell (`ptyBackend.ts` spawns `bash -l`),
+ * so the shell's prompt/banner reaches the data tap ~immediately — a full
+ * {@link SHELL_READINESS_DELAY_MS} BEFORE the startup command is typed. An
+ * "any byte ever seen" flag is therefore always true by injection time, which
+ * made the stale-command-death branch unreachable. The usable signal is output
+ * observed AFTER injection, discounting the shell's echo of the command line
+ * itself (the command text plus its CR, and any short wrap/erase sequence).
+ */
+export const STARTUP_COMMAND_ECHO_SLACK_BYTES = 32;
+
+/**
  * Singleton role identities. Roles mapped here share ONE seat across the fleet
  * — a second {@link PtyFleetService.create} for any key in the same identity
  * returns the existing live handle instead of minting `<role>-2`. Pool roles
@@ -119,13 +133,29 @@ export interface ExtendedTerminalHandle extends TerminalHandle {
     startupCommandSource?: string;
     /**
      * True once the PTY has emitted ANY byte of output (shell banner, command
-     * output, error text). Keys the stale-command-death detection in `onExit`:
-     * a code-0 exit with `hasProducedOutput === false` inside
-     * {@link STARTUP_COMMAND_DEATH_WINDOW_MS} is reported as a stale startup
-     * command rather than a real session ending. Set from the fleet's own
-     * `onData` tap in `create()`.
+     * output, error text). Liveness only — it is TRUE for every seat by the
+     * time the startup command is injected, because the interactive login shell
+     * prints its prompt long before then, so it can NOT key the
+     * stale-command-death detection. See {@link outputBytesSinceInjection}.
      */
     hasProducedOutput?: boolean;
+    /**
+     * Wall-clock ms at which the startup command was actually typed into the
+     * PTY, or `undefined` when no command was injected. Baselines
+     * {@link outputBytesSinceInjection}: only output after this instant can be
+     * the seat's own.
+     */
+    injectedAtMs?: number;
+    /**
+     * Bytes emitted by the PTY since {@link injectedAtMs}. Keys the
+     * stale-command-death detection in `onExit`: a code-0 exit inside
+     * {@link STARTUP_COMMAND_DEATH_WINDOW_MS} whose post-injection output never
+     * exceeded the command's own echo (see
+     * {@link STARTUP_COMMAND_ECHO_SLACK_BYTES}) is reported as a stale startup
+     * command rather than a real session ending. A binary that ran and printed
+     * anything of its own clears the allowance and is never flagged.
+     */
+    outputBytesSinceInjection?: number;
     /**
      * Wall-clock ms at which the handle was constructed (independent of the ISO
      * `startTime` string). Used by the stale-command-death window check in
@@ -585,11 +615,18 @@ export class PtyFleetService {
         // no I/O — so this survives ~166 emits/sec without per-flush cost. This
         // subscription is independent of the gateway's; it stays live even when
         // ptyReady === false and the WS gateway is never constructed.
-        // The same tap sets hasProducedOutput so the stale-command-death detector
-        // in onExit can distinguish "binary never printed" from "agent finished".
-        handle.onData(() => {
+        // The same tap accumulates post-injection output so the stale-command-death
+        // detector in onExit can distinguish "binary never printed" from "agent
+        // finished". The byte count is baselined at injection (see injectedAtMs)
+        // because the login shell's own prompt lands here BEFORE the command is
+        // typed — an "any byte ever" flag is always true by then.
+        handle.onData((data) => {
             handle.lastDataAt = Date.now();
             handle.hasProducedOutput = true;
+            if (handle.injectedAtMs !== undefined) {
+                handle.outputBytesSinceInjection =
+                    (handle.outputBytesSinceInjection ?? 0) + (typeof data === 'string' ? data.length : 0);
+            }
         });
 
         handle.onExit((code) => {
@@ -607,10 +644,18 @@ export class PtyFleetService {
                 // session that produced output, or one that outlived the window,
                 // is NOT flagged — those are legitimate exits.
                 const elapsedMs = Date.now() - handle.startedAtMs;
+                // "No output" means no output of the seat's OWN, measured from the
+                // moment the command was typed and discounting the terminal's echo
+                // of the command line. Measuring from spawn instead would never
+                // fire: the interactive login shell prints its prompt a full
+                // SHELL_READINESS_DELAY_MS before injection.
+                const echoAllowance =
+                    (handle.startupCommand?.length ?? 0) + STARTUP_COMMAND_ECHO_SLACK_BYTES;
                 const staleCommandDeath = code === 0
-                    && handle.hasProducedOutput !== true
-                    && elapsedMs < STARTUP_COMMAND_DEATH_WINDOW_MS
-                    && !!handle.startupCommand;
+                    && !!handle.startupCommand
+                    && handle.injectedAtMs !== undefined
+                    && (handle.outputBytesSinceInjection ?? 0) <= echoAllowance
+                    && elapsedMs < STARTUP_COMMAND_DEATH_WINDOW_MS;
                 this.emitter.emit('change', staleCommandDeath
                     ? {
                         type: 'closed', name: handle.name, code,
@@ -678,9 +723,13 @@ export class PtyFleetService {
         startupCommand?: string,
         source?: string,
     ): Promise<{ command?: string; source: string }> {
+        // Held outside the try so a failure part-way through still reports the
+        // command and store that WERE resolved. Returning `none` on error would
+        // erase the very provenance this path exists to record — a seat that
+        // failed to launch is exactly when "which store answered?" matters.
+        let cmd = startupCommand;
+        let src = source ?? 'none';
         try {
-            let cmd = startupCommand;
-            let src = source ?? 'none';
             if (!cmd) {
                 const commands = await GlobalIntegrationConfigService.getAgentStartupCommands() || {};
                 cmd = commands[role];
@@ -689,12 +738,17 @@ export class PtyFleetService {
             if (!cmd) { return { command: undefined, source: 'none' }; }
             await new Promise(resolve => setTimeout(resolve, SHELL_READINESS_DELAY_MS));
             if (handle.status === 'active') {
+                // Baseline the stale-death output counter to the instant the
+                // command is typed, BEFORE sendText, so the terminal's echo of
+                // the command line is the only thing inside the allowance.
+                handle.injectedAtMs = Date.now();
+                handle.outputBytesSinceInjection = 0;
                 handle.sendText(cmd, true);
             }
             return { command: cmd, source: src };
         } catch (err) {
             console.warn(`[PtyFleetService] Failed to inject startup command for role ${role}:`, err);
-            return { command: undefined, source: 'none' };
+            return { command: cmd, source: cmd ? src : 'none' };
         }
     }
 
