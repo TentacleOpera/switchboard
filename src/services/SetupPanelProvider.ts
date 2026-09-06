@@ -23,6 +23,12 @@ import { generateSparkContext } from './SparkContextExporter';
 import { BackupService } from './BackupService';
 import { exportProject, importProject } from './projectExport';
 import { RetentionService } from './RetentionService';
+import {
+    HostSettingsDocument,
+    HostSettingsResolution,
+    HostSettingsService,
+    StaleRevisionError,
+} from './hostSettings';
 
 /**
  * The running extension's version, read from the packaged `package.json`.
@@ -166,6 +172,19 @@ export class SetupPanelProvider implements vscode.Disposable {
     public setApiServer(server: any): void {
         this._apiServer = server;
         this._broadcaster?.setApiServer(server);
+    }
+
+    /**
+     * Inject the shared HostSettingsService (plan:
+     * settings-window-and-the-write-path-review-deleted). The same instance is
+     * wired into LocalApiServer's `readHostSettings`/`writeHostSettings` so the
+     * UI verbs and the HTTP endpoints share one durable store. Optional — when
+     * unset, the Host-tab verbs return `{ success: false, error }` so a missing
+     * seam is visible rather than a silent no-op.
+     */
+    private _hostSettingsService?: HostSettingsService;
+    public setHostSettingsService(service: HostSettingsService): void {
+        this._hostSettingsService = service;
     }
 
     /**
@@ -1463,6 +1482,98 @@ export class SetupPanelProvider implements vscode.Disposable {
                     const result = await this._performAgentDirCleanup();
                     this.postMessage({ type: 'agentDirCleanupResult', ...result });
                     return { success: true };
+                }
+                case 'getHostSettings': {
+                    // Host-tab hydration (plan: settings-window-and-the-write-path-review-deleted).
+                    // Delegates to the injected HostSettingsService — the same
+                    // instance LocalApiServer's GET /settings reads, so the UI
+                    // and HTTP paths agree. Returns the resolution in the verb
+                    // body (return-in-body contract) AND pushes it over the WS
+                    // hub so a browser Setup tab that loaded before the verb
+                    // fired still renders.
+                    if (!this._hostSettingsService) {
+                        this.postMessage({
+                            type: 'hostSettings',
+                            success: false,
+                            error: 'Host settings service not wired',
+                        });
+                        return { success: false, error: 'Host settings service not wired' };
+                    }
+                    let resolution: HostSettingsResolution;
+                    try {
+                        resolution = this._hostSettingsService.read();
+                    } catch (err) {
+                        const message = err instanceof Error ? err.message : String(err);
+                        this.postMessage({ type: 'hostSettings', success: false, error: message });
+                        return { success: false, error: message };
+                    }
+                    this.postMessage({ type: 'hostSettings', success: true, resolution });
+                    return { success: true, resolution };
+                }
+                case 'saveHostSettings': {
+                    // Authenticated partial update with optimistic concurrency.
+                    // The webview sends { patch, expectedRevision }; on 409 the
+                    // operator's typed values are retained client-side and the
+                    // fresh server values are pushed so a deliberate re-apply is
+                    // required. On success, name the fields needing restart.
+                    if (!this._hostSettingsService) {
+                        this.postMessage({
+                            type: 'hostSettingsSaveResult',
+                            success: false,
+                            error: 'Host settings service not wired',
+                        });
+                        return { success: false, error: 'Host settings service not wired' };
+                    }
+                    const patch = message.patch as Partial<HostSettingsDocument> | undefined;
+                    const expectedRevision = typeof message.expectedRevision === 'string' ? message.expectedRevision : '';
+                    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+                        this.postMessage({
+                            type: 'hostSettingsSaveResult',
+                            success: false,
+                            error: 'patch is required and must be an object',
+                        });
+                        return { success: false, error: 'patch is required and must be an object' };
+                    }
+                    if (!expectedRevision) {
+                        this.postMessage({
+                            type: 'hostSettingsSaveResult',
+                            success: false,
+                            error: 'expectedRevision is required — refresh and re-apply',
+                        });
+                        return { success: false, error: 'expectedRevision is required' };
+                    }
+                    try {
+                        const fresh = await this._hostSettingsService.update(patch, expectedRevision);
+                        const restartFields: string[] = [];
+                        if (patch.port !== undefined) restartFields.push('port');
+                        if (patch.serveMode !== undefined) restartFields.push('serveMode');
+                        if (patch.defaultWorkspaceId !== undefined) restartFields.push('defaultWorkspace');
+                        if (patch.workspaces !== undefined) restartFields.push('workspaces');
+                        if (patch.extraPath !== undefined) restartFields.push('extraPath');
+                        this.postMessage({
+                            type: 'hostSettingsSaveResult',
+                            success: true,
+                            revision: fresh.revision,
+                            restartRequired: true,
+                            restartFields,
+                            resolution: fresh,
+                        });
+                        return { success: true, revision: fresh.revision, restartRequired: true, restartFields, resolution: fresh };
+                    } catch (err) {
+                        if (err instanceof StaleRevisionError) {
+                            this.postMessage({
+                                type: 'hostSettingsSaveResult',
+                                success: false,
+                                conflict: true,
+                                error: err.message,
+                                freshState: err.freshState,
+                            });
+                            return { success: false, conflict: true, error: err.message, freshState: err.freshState };
+                        }
+                        const message2 = err instanceof Error ? err.message : String(err);
+                        this.postMessage({ type: 'hostSettingsSaveResult', success: false, error: message2 });
+                        return { success: false, error: message2 };
+                    }
                 }
                 default:
                     return { success: true };

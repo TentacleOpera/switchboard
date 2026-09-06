@@ -37,6 +37,12 @@ import { instantiateExternalHeadedTeam, resolveExternalTeamTemplate } from './ag
 import { parseComplexityScore, getFallbackRole } from './complexityScale';
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import {
+    HostSettingsDocument,
+    HostSettingsError,
+    HostSettingsResolution,
+    StaleRevisionError,
+} from './hostSettings';
+import {
     DEFAULT_KANBAN_COLUMNS,
     DEFAULT_VISIBLE_AGENTS,
     DISPLAY_MODE_COLUMNS,
@@ -829,6 +835,23 @@ interface LocalApiServerOptions {
      * host and in headless/test harnesses.
      */
     shutdown?: () => Promise<void>;
+    /**
+     * Host-settings reader (plan: settings-window-and-the-write-path-review-deleted).
+     * Required in production; optional in test harnesses. `GET /settings`
+     * delegates to this when wired, retaining explicit runtime values
+     * (bind policy / launch port) as stronger, source-tagged inputs. Absent
+     * → `GET /settings` falls back to the legacy coarse projection.
+     */
+    readHostSettings?: () => import('./hostSettings').HostSettingsResolution;
+    /**
+     * Host-settings writer. Required in production for `PUT /settings`;
+     * optional in test harnesses (PUT then returns 503). Performs a validated
+     * partial update with `expectedRevision` against the durable
+     * `~/.switchboard/host-settings.json`. Returns the fresh resolution.
+     * Rejects with `StaleRevisionError` on a conflict (HTTP 409) and
+     * `HostSettingsError` on invalid input (HTTP 400) or IO failure (HTTP 500).
+     */
+    writeHostSettings?: (patch: Partial<import('./hostSettings').HostSettingsDocument>, expectedRevision: string) => Promise<import('./hostSettings').HostSettingsResolution>;
 }
 
 /**
@@ -9964,34 +9987,203 @@ export class LocalApiServer {
                     catch (e) { console.error('[LocalApiServer] shutdown callback threw:', e); }
                 })();
             } else if (pathname === '/settings' && req.method === 'GET') {
-                // Read-only. Reports the resolved serve mode, port and roots, each
-                // with the source it resolved FROM, so a wrong value is visible
-                // before it is a boot failure rather than after. Works with no peer
-                // configured — the single-machine case is the primary one.
+                // Read-only. Reports the resolved serve mode, port, roots, PATH,
+                // and workspace catalog — each with the source it resolved FROM,
+                // so a wrong value is visible before it is a boot failure rather
+                // than after. Works with no peer configured — the single-machine
+                // case is the primary one.
                 //
-                // There is deliberately NO write half. Serve mode is chosen by the
-                // subcommand the operator typed (`switchboard local` / `tailnet`) or
-                // by SWITCHBOARD_SERVE_MODE in the systemd env file; a POST that
-                // stored a preference in this process would be a second store with
-                // no reader, answering "saved" to a change that can never take
-                // effect. Change the mode where it is actually read: re-launch with
-                // the other subcommand, or edit /etc/switchboard/switchboard.env and
-                // restart the unit.
+                // When the host wired `readHostSettings`, the durable
+                // host-settings document is the source of truth and explicit
+                // runtime values (the bind policy the launch chose, the port the
+                // server actually bound) are reported as stronger, source-tagged
+                // inputs alongside the configured next-start value. When no
+                // reader is wired (test harness), falls back to the legacy coarse
+                // projection from `_options`/`_port`.
                 const bindPolicy = this._options.bindPolicy ?? LOOPBACK_ONLY_POLICY;
                 const tailnet = isTailnetPolicy(bindPolicy);
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({
-                    serveMode: {
-                        value: tailnet ? 'tailnet' : 'local',
-                        source: this._options.bindPolicy ? 'launch-subcommand' : 'default'
-                    },
-                    port: { value: this._port, source: 'launch' },
-                    roots: { value: this._getKnownRoots(), source: 'launch' },
-                    loopbackOnly: !tailnet,
-                    tailnetAddress: this._tailnetAddress,
-                    readOnly: true,
-                    note: 'Serve mode and port are set at launch. Re-launch with `switchboard local` or `switchboard tailnet`, or edit /etc/switchboard/switchboard.env and restart the service.'
-                }));
+                const runtimeServeMode: 'local' | 'tailnet' = tailnet ? 'tailnet' : 'local';
+                const runtimeServeModeSource = this._options.bindPolicy ? 'launch-subcommand' : 'default';
+                if (this._options.readHostSettings) {
+                    let resolution: HostSettingsResolution;
+                    try {
+                        resolution = this._options.readHostSettings();
+                    } catch (err) {
+                        const message = err instanceof Error ? err.message : String(err);
+                        res.writeHead(500, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ error: 'host-settings read failed', reason: message }));
+                        return;
+                    }
+                    // Override the effective serve mode/port with the runtime
+                    // values the launch actually chose — an explicit subcommand
+                    // and the bound port beat a stored preference, and the
+                    // source label must reflect that. The configured next-start
+                    // value remains visible alongside.
+                    const serveMode = {
+                        value: runtimeServeMode,
+                        source: runtimeServeModeSource,
+                        configuredValue: resolution.serveMode.configuredValue,
+                        configuredSource: resolution.serveMode.configuredSource,
+                        // The effective durable value (what the next start would
+                        // use without an explicit subcommand) is preserved for the
+                        // UI's "configured vs effective" display.
+                        durableValue: resolution.serveMode.effectiveValue,
+                        durableSource: resolution.serveMode.effectiveSource,
+                        restartRequired: resolution.serveMode.restartRequired,
+                    };
+                    const port = {
+                        value: this._port,
+                        source: 'launch',
+                        configuredValue: resolution.port.configuredValue,
+                        configuredSource: resolution.port.configuredSource,
+                        durableValue: resolution.port.effectiveValue,
+                        durableSource: resolution.port.effectiveSource,
+                        restartRequired: resolution.port.restartRequired,
+                    };
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        revision: resolution.revision,
+                        serveMode,
+                        port,
+                        workspaces: {
+                            value: resolution.workspaces.value,
+                            source: resolution.workspaces.source,
+                            configuredValue: resolution.workspaces.configuredValue,
+                            configuredSource: resolution.workspaces.configuredSource,
+                        },
+                        defaultWorkspace: {
+                            effectiveValue: resolution.defaultWorkspace.effectiveValue,
+                            effectiveSource: resolution.defaultWorkspace.effectiveSource,
+                            configuredValue: resolution.defaultWorkspace.configuredValue,
+                            configuredSource: resolution.defaultWorkspace.configuredSource,
+                            available: resolution.defaultWorkspace.available,
+                            restartRequired: resolution.defaultWorkspace.restartRequired,
+                        },
+                        extraPath: {
+                            effectiveValue: resolution.extraPath.effectiveValue,
+                            effectiveSource: resolution.extraPath.effectiveSource,
+                            configuredValue: resolution.extraPath.configuredValue,
+                            configuredSource: resolution.extraPath.configuredSource,
+                            restartRequired: resolution.extraPath.restartRequired,
+                        },
+                        roots: { value: this._getKnownRoots(), source: 'launch' },
+                        loopbackOnly: !tailnet,
+                        tailnetAddress: this._tailnetAddress,
+                        readOnly: false,
+                        writeSupported: !!this._options.writeHostSettings,
+                    }));
+                } else {
+                    // Legacy coarse projection — no durable reader wired.
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        serveMode: {
+                            value: runtimeServeMode,
+                            source: runtimeServeModeSource,
+                        },
+                        port: { value: this._port, source: 'launch' },
+                        roots: { value: this._getKnownRoots(), source: 'launch' },
+                        loopbackOnly: !tailnet,
+                        tailnetAddress: this._tailnetAddress,
+                        readOnly: true,
+                        note: 'Host-settings reader not wired. Serve mode and port are set at launch; re-launch with `switchboard local` or `switchboard tailnet`, or edit /etc/switchboard/switchboard.env and restart the service.'
+                    }));
+                }
+            } else if (pathname === '/settings' && req.method === 'PUT') {
+                // Authenticated partial update of the durable host-settings
+                // document (plan: settings-window-and-the-write-path-review-deleted).
+                // The read path is unauthenticated (loopback/tailnet trust); the
+                // write path applies the same `_checkAuth` every other mutating
+                // endpoint uses, so a behavior-changing endpoint is never left on
+                // the unauthenticated read path merely because GET /settings is
+                // readable. Requires `expectedRevision` for optimistic
+                // concurrency: a stale save returns 409 with the fresh state so
+                // two open windows cannot silently erase one another.
+                if (!await this._checkAuth(req, true)) {
+                    this._sendUnauthorized(res);
+                    return;
+                }
+                if (!this._options.writeHostSettings) {
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        error: 'host-settings writer not wired',
+                        reason: 'this host did not wire writeHostSettings',
+                    }));
+                    return;
+                }
+                let body: any;
+                try {
+                    body = await this._parseJsonBody(req);
+                } catch (parseErr) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        error: 'Invalid JSON body',
+                        reason: parseErr instanceof Error ? parseErr.message : String(parseErr),
+                    }));
+                    return;
+                }
+                const patch = body?.patch;
+                const expectedRevision = typeof body?.expectedRevision === 'string' ? body.expectedRevision : '';
+                if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        error: 'Invalid request',
+                        reason: 'Body must be { patch: {...}, expectedRevision: string }',
+                    }));
+                    return;
+                }
+                if (!expectedRevision) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        error: 'Invalid request',
+                        reason: 'expectedRevision is required — GET /settings first and pass its revision',
+                    }));
+                    return;
+                }
+                try {
+                    const fresh = await this._options.writeHostSettings(patch as Partial<HostSettingsDocument>, expectedRevision);
+                    // A successful save leaves the current effective values
+                    // unchanged until restart; name the fields that need one.
+                    const restartFields: string[] = [];
+                    if (patch.port !== undefined) restartFields.push('port');
+                    if (patch.serveMode !== undefined) restartFields.push('serveMode');
+                    if (patch.defaultWorkspaceId !== undefined) restartFields.push('defaultWorkspace');
+                    if (patch.workspaces !== undefined) restartFields.push('workspaces');
+                    if (patch.extraPath !== undefined) restartFields.push('extraPath');
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        success: true,
+                        revision: fresh.revision,
+                        restartRequired: true,
+                        restartFields,
+                        resolution: fresh,
+                    }));
+                } catch (err) {
+                    if (err instanceof StaleRevisionError) {
+                        res.writeHead(409, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({
+                            error: 'Stale revision',
+                            reason: err.message,
+                            freshState: err.freshState,
+                        }));
+                        return;
+                    }
+                    if (err instanceof HostSettingsError) {
+                        const status = err.code === 'invalid' ? 400 : 500;
+                        res.writeHead(status, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({
+                            error: err.code === 'invalid' ? 'Invalid input' : 'Host settings error',
+                            reason: err.message,
+                            code: err.code,
+                        }));
+                        return;
+                    }
+                    console.error('[LocalApiServer] PUT /settings error:', err);
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        error: 'Host settings write failed',
+                        reason: err instanceof Error ? err.message : String(err),
+                    }));
+                }
             } else if (pathname === '/auth/mint' && req.method === 'POST') {
                 await this._handleMintEnrolmentToken(req, res);
             } else if (pathname === '/metadata/clickup' && req.method === 'GET') {

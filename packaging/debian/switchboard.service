@@ -21,6 +21,13 @@ EnvironmentFile=/etc/switchboard/switchboard.env
 # A board pointed at the wrong workspace is silent and wrong; a unit that
 # exits with a named reason is loud. Also refuses the removed `start` verb
 # and any serve mode that is not one of the two the CLI accepts.
+#
+# The legacy env file remains the tagged fallback for an install that has not
+# yet been seeded with `switchboard setup host`. Once setup host seeds
+# ~/.switchboard/host-settings.json, the durable document is the source of
+# truth and the env values are only consulted as `legacy-env` fallbacks. Both
+# paths must still validate here so an env-only configured install keeps
+# starting (plan: settings-window-and-the-write-path-review-deleted).
 ExecStartPre=/bin/sh -c '\
   if [ -z "$SWITCHBOARD_WORKSPACE" ]; then \
     echo "SWITCHBOARD_WORKSPACE is empty in /etc/switchboard/switchboard.env - run: sudo switchboard setup host" >&2; exit 1; \
@@ -33,12 +40,20 @@ ExecStartPre=/bin/sh -c '\
     *) echo "SWITCHBOARD_SERVE_MODE=$SWITCHBOARD_SERVE_MODE is not local or tailnet (start was removed) - run: sudo switchboard setup host" >&2; exit 1 ;; \
   esac'
 
-# ExecStart IS a command line, so ${...} from the EnvironmentFile expands here.
-# SWITCHBOARD_SERVE_MODE names a SUBCOMMAND, not a flag: `switchboard local`
-# serves loopback, `switchboard tailnet` serves loopback plus the Tailscale
-# interface. It must NOT say `start` — that subcommand was removed and exits 1.
-# See autostart-unit-invokes-removed-switchboard-start.md.
-ExecStart=/usr/bin/switchboard ${SWITCHBOARD_SERVE_MODE} --port ${SWITCHBOARD_PORT} --no-open --workspace ${SWITCHBOARD_WORKSPACE}
+# ExecStart runs the service entrypoint with NO per-field flags. The
+# EnvironmentFile still exports SWITCHBOARD_PORT/SWITCHBOARD_WORKSPACE/
+# SWITCHBOARD_SERVE_MODE/SWITCHBOARD_EXTRA_PATH into the process environment;
+# the service subcommand reads those as `legacy-env` fallbacks (see cli.ts
+# isServiceCommand block). Passing them again as --port/--workspace would tag
+# them `cli-flag`, which always beats durable — so a port or workspace saved
+# via the Host tab would never take effect on service restart. Leaving them
+# off the command line is what lets a saved durable value win when present and
+# the env value fill the gap when the durable file is absent (a fresh install
+# that has not yet run `switchboard setup host`). An explicit --serve-mode is
+# intentionally omitted for the same reason: a saved durable serveMode takes
+# effect, with the env SERVE_MODE as the fallback.
+# See settings-window-and-the-write-path-review-deleted.md.
+ExecStart=/usr/bin/switchboard service --no-open
 
 Restart=on-failure
 RestartSec=5

@@ -1392,6 +1392,12 @@ export const SETUP_VERB_SCHEMAS: Record<string, VerbSchema> = {
             mappings: { type: 'array' },
         },
     },
+    saveHostSettings: {
+        fields: {
+            patch: { type: 'object', required: true },
+            expectedRevision: { type: 'string', required: true },
+        },
+    },
     setCustomDbPath: {
         fields: {
             customDbPath: { type: 'string' },

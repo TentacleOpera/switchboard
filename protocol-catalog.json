@@ -3414,6 +3414,7 @@
         "getThemeSetting",
         "getUltracodeAnimationSetting",
         "getVisibleAgents",
+        "getHostSettings",
         "getWorkspaceMappings",
         "importProject",
         "importPromptSettings",
@@ -3442,6 +3443,7 @@
         "runNotionRemoteSetup",
         "runRetentionRotation",
         "runSetup",
+        "saveHostSettings",
         "saveMemoHotkey",
         "savePlanningSources",
         "saveRetentionConfig",
@@ -9056,6 +9058,20 @@
     "getWorkspaceMappings": {
       "payloadKeys": [
         "type"
+      ],
+      "siteCount": 1
+    },
+    "getHostSettings": {
+      "payloadKeys": [
+        "type"
+      ],
+      "siteCount": 1
+    },
+    "saveHostSettings": {
+      "payloadKeys": [
+        "type",
+        "patch",
+        "expectedRevision"
       ],
       "siteCount": 1
     },

@@ -34,6 +34,12 @@ import type { ProtocolResolution } from '../services/protocolDirectives';
 import { writeMissionControlReport } from '../services/ScheduledJobsService';
 import { StandaloneHostPathConfigProvider, createStandaloneHostSecrets } from './hostServices';
 import {
+    HostSettingsContext,
+    HostSettingsResolution,
+    applyExtraPathToProcessEnv,
+    createHostSettingsService,
+} from '../services/hostSettings';
+import {
     getShellHtml as sharedGetShellHtml,
     getBoardHtml as sharedGetBoardHtml,
     getProjectHtml as sharedGetProjectHtml,
@@ -157,6 +163,18 @@ export interface HeadlessSwitchboardOptions {
      * without a credential (decision 4: tailnet membership is the control).
      */
     bindPolicy?: BindPolicy;
+    /**
+     * Host-settings resolution context (plan:
+     * settings-window-and-the-write-path-review-deleted). Carries the
+     * explicitly-supplied CLI inputs (with source labels distinguishing a real
+     * flag from a parser default) and the tagged legacy `SWITCHBOARD_*`
+     * environment fallback. Bootstrap creates one HostSettingsService, resolves
+     * with this context to apply PATH before child agents spawn, and wires the
+     * same instance into LocalApiServer and SetupPanelProvider. Optional —
+     * absent under tests and the bare `local`/`tailnet` commands when no
+     * durable file exists yet.
+     */
+    hostSettingsContext?: HostSettingsContext;
 }
 
 export interface HeadlessSwitchboardInstance {
@@ -1350,6 +1368,23 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     (setupProvider as any)._hostSeams = headlessSeams;
     (setupProvider as any)._broadcaster = headlessBroadcaster;
     (setupProvider as any)._headless = true;
+
+    // Host-settings service (plan: settings-window-and-the-write-path-review-deleted).
+    // One instance per host lifetime, shared by LocalApiServer (GET/PUT /settings)
+    // and the Setup panel's Host tab. Resolved BEFORE the pty fleet is constructed
+    // so the durable PATH additions reach `process.env.PATH` before any child agent
+    // can spawn — without shell interpolation. A corrupt file fails loudly here
+    // and stops the boot rather than silently serving a wrong tree; a missing
+    // file returns defaults tagged `default` and the boot continues.
+    const hostSettingsService = createHostSettingsService();
+    let hostSettingsResolution: HostSettingsResolution;
+    try {
+        hostSettingsResolution = hostSettingsService.resolve(opts.hostSettingsContext ?? {});
+    } catch (e) {
+        throw new Error(`host-settings resolution failed at boot: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    applyExtraPathToProcessEnv(hostSettingsResolution.extraPath.effectiveValue);
+    setupProvider.setHostSettingsService(hostSettingsService);
 
     // Tickets: extensionUri, context, stateStore. The ticket verb surface still lives in
     // PlanningPanelProvider, so this currently serves the panel's own chrome verbs only.
@@ -4129,6 +4164,13 @@ Each plan file must include:
                 console.error('[standalone] shutdown callback fired but instanceStopRef is unbound — instance.stop() was never wired into the holder');
             }
         },
+        // Host-settings read/write (plan: settings-window-and-the-write-path-review-deleted).
+        // The reader resolves with the boot context (explicit CLI inputs + tagged
+        // legacy env) so GET /settings reports the same source-tagged precedence
+        // the startup path used. The writer performs a validated, revision-checked
+        // atomic update of ~/.switchboard/host-settings.json.
+        readHostSettings: () => hostSettingsService.resolve(opts.hostSettingsContext ?? {}),
+        writeHostSettings: (patch, expectedRevision) => hostSettingsService.update(patch, expectedRevision, opts.hostSettingsContext),
     };
 
     server = new LocalApiServer(options);

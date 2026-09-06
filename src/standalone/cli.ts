@@ -7,6 +7,12 @@ import * as path from 'path';
 import * as util from 'util';
 import { spawn, execSync as cpExecSync } from 'child_process';
 import type { HeadlessSwitchboardOptions, HeadlessSwitchboardInstance } from './bootstrap';
+import {
+    HostSettingsContext,
+    applyExtraPathToProcessEnv,
+    createHostSettingsService,
+    seedHostSettingsDocument,
+} from '../services/hostSettings';
 import { DEFAULT_DISPLAY_HOSTNAME, isLoopbackHostname } from '../utils/loopbackHostname';
 import { detectTailnetAddress, resolveMagicDnsNames } from '../utils/tailnetDetect';
 import { isPortFree, resolvePreferredPort, PORT_BASE, PORT_SPAN } from '../utils/portResolver';
@@ -148,20 +154,23 @@ function resolveSecretKey(inputKey: string): string {
     process.exit(1);
 }
 
-function parseArgs(argv: string[]): { workspace?: string; port?: number; hostname?: string; noOpen: boolean; open: boolean; detach: boolean; help: boolean; version: boolean; out?: string; importBundle?: string } {
-    const args = { noOpen: false, open: false, detach: false, help: false, version: false, port: 7777 } as any;
+function parseArgs(argv: string[]): { workspace?: string; port?: number; hostname?: string; noOpen: boolean; open: boolean; detach: boolean; help: boolean; version: boolean; out?: string; importBundle?: string; extraPath?: string[]; _explicit: { workspace?: boolean; port?: boolean; hostname?: boolean; extraPath?: boolean } } {
+    const args = { noOpen: false, open: false, detach: false, help: false, version: false, port: 7777, _explicit: {} as any } as any;
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
-        if (a === '--workspace') { args.workspace = argv[++i]; }
+        if (a === '--workspace') { args.workspace = argv[++i]; args._explicit.workspace = true; }
         else if (a === '--out') { args.out = argv[++i]; }
         else if (a === '--import-bundle') { args.importBundle = argv[++i]; }
-        else if (a === '--port') { args.port = parseInt(argv[++i], 10); }
-        else if (a === '--hostname') { args.hostname = argv[++i]; }
+        else if (a === '--port') { args.port = parseInt(argv[++i], 10); args._explicit.port = true; }
+        else if (a === '--hostname') { args.hostname = argv[++i]; args._explicit.hostname = true; }
         else if (a === '--no-open') { args.noOpen = true; }
         else if (a === '--open') { args.open = true; }
         else if (a === '--detach') { args.detach = true; }
         else if (a === '--help' || a === '-h') { args.help = true; }
         else if (a === '--version' || a === '-v') { args.version = true; }
+        // --extra-path: repeatable; entries are prepended to PATH for child
+        // agents WITHOUT shell evaluation (plan: settings-window-and-the-write-path-review-deleted).
+        else if (a === '--extra-path') { const v = argv[++i]; if (!args.extraPath) args.extraPath = []; args.extraPath.push(v); args._explicit.extraPath = true; }
     }
     return args;
 }
@@ -404,6 +413,11 @@ async function getHealthJson(port: number, hostname = '127.0.0.1', timeoutMs = 2
     service: string; status: string; port: number; pid: number; roots: string[];
     terminals?: string[]; terminalCount?: number; selectedWorkspaceRoot?: string | null;
     memory?: NodeJS.MemoryUsage;
+    // Host identity + capabilities (plan: go-launcher-static-binary).
+    // Optional — old hosts omit them. A stop caller MUST check both before
+    // requesting teardown; absence is NOT "standalone with shutdown enabled".
+    host?: { kind: 'extension' | 'standalone'; instanceId: string; version: string; source: string };
+    capabilities?: { shutdown: { enabled: boolean; reason?: string } };
 }> {
     return new Promise((resolve, reject) => {
         const req = http.get(`http://${hostname}:${port}/health`, (res) => {
@@ -2253,6 +2267,73 @@ async function cmdSetupHost(workspaceRoot: string, argv: string[]): Promise<void
             return;
         }
 
+        // 8c. Seed the durable host-settings document for the service user
+        //     (plan: settings-window-and-the-write-path-review-deleted). The
+        //     new service entrypoint reads ~/.switchboard/host-settings.json
+        //     BEFORE boot; this seeds it from the same values just written to
+        //     the legacy env file so a fresh install starts through
+        //     `switchboard service` with no behaviour change. The file is
+        //     user-owned (mode 0600, dir 0700) and lives in the SERVICE USER's
+        //     HOME, not root's. `seedHostSettingsDocument` is a no-op when the
+        //     file already exists, so re-running setup host never silently
+        //     overwrites an operator's saved settings — the Host tab is the
+        //     durable edit surface after the first seed.
+        //
+        //     The legacy env file remains the systemd unit's EnvironmentFile and
+        //     a tagged fallback; UI saves NEVER rewrite /etc/switchboard/switchboard.env.
+        try {
+            // Resolve a stable workspace ID for the catalog entry. The
+            // committed-file source is preferred; the hash fallback is stable
+            // for the same root. This matches what the running board would
+            // compute, so the durable defaultWorkspaceId selects the same tree.
+            const { resolveCanonicalWorkspaceIdSync } = require('../services/WorkspaceIdentityService');
+            const wsId = resolveCanonicalWorkspaceIdSync(workspace).value;
+            // The durable file must land in the SERVICE USER's home, not root's.
+            // `stateFile` honors SWITCHBOARD_STATE_HOME, so point it at the
+            // service user's home for the duration of the seed. The env var is
+            // restored immediately after so the rest of setup host is unaffected.
+            const savedStateHome = process.env.SWITCHBOARD_STATE_HOME;
+            process.env.SWITCHBOARD_STATE_HOME = serviceHome;
+            try {
+                const seedResult = seedHostSettingsDocument({
+                    workspaces: [{ id: wsId, name: path.basename(workspace) || workspace, root: workspace }],
+                    defaultWorkspaceId: wsId,
+                    port: Number(port),
+                    serveMode: serveMode as 'local' | 'tailnet',
+                    extraPath: extraPath ? extraPath.split(':').filter(Boolean) : [],
+                });
+                if (seedResult) {
+                    console.log(`  Seeded host settings: ${seedResult.path} (revision ${seedResult.revision})`);
+                    // chown to the service user so the unit (which runs as that
+                    // user) can read and update it. Best-effort: a non-sudo run
+                    // already writes as the service user.
+                    if (process.env.SUDO_USER) {
+                        try {
+                            const uid = cpExecSync(`id -u ${serviceUser}`, { encoding: 'utf8' }).trim();
+                            const gid = cpExecSync(`id -g ${serviceUser}`, { encoding: 'utf8' }).trim();
+                            fs.chownSync(seedResult.path, parseInt(uid, 10), parseInt(gid, 10));
+                            const seedDir = path.dirname(seedResult.path);
+                            fs.chownSync(seedDir, parseInt(uid, 10), parseInt(gid, 10));
+                        } catch (chownErr) {
+                            console.warn(`  Warning: could not chown host-settings.json to ${serviceUser}: ${chownErr}`);
+                            console.warn(`  The service user must own this file — run \`sudo chown -R ${serviceUser} ${serviceHome}/.switchboard\` if needed.`);
+                        }
+                    }
+                } else {
+                    console.log('  Host settings already exist — kept (use the Host tab to edit).');
+                }
+            } finally {
+                if (savedStateHome !== undefined) {
+                    process.env.SWITCHBOARD_STATE_HOME = savedStateHome;
+                } else {
+                    delete process.env.SWITCHBOARD_STATE_HOME;
+                }
+            }
+        } catch (seedErr) {
+            console.warn(`  Warning: could not seed host-settings.json: ${seedErr}`);
+            console.warn('  The service will fall back to the legacy env file until the Host tab is used.');
+        }
+
         // 9. Import an existing board if requested. The board lives in the HOME
         //    store (~/.switchboard/boards/<workspace-id>.db), never inside the
         //    workspace — a copy into the workspace is a file nothing ever reads.
@@ -3048,7 +3129,7 @@ async function main() {
         'local', 'tailnet', 'stop', 'status', 'logs', 'init', 'scaffold',
         'control-plane', 'secrets', 'token', 'export', 'import',
         'plans', 'ready', 'dispatch', 'done', 'next', 'clear', 'fleet', 'probe', 'verb', 'api',
-        'help', 'about', 'version', 'setup',
+        'help', 'about', 'version', 'setup', 'launcher-state', 'service',
     ]);
     const firstArg = process.argv[2];
     const isFlag = firstArg && firstArg.startsWith('-');
@@ -3072,6 +3153,36 @@ async function main() {
     } else if (firstArg === 'local') {
         serveMode = 'local';
         process.argv.splice(2, 1);
+    } else if (firstArg === 'service') {
+        // `switchboard service` — the packaged service entrypoint (plan:
+        // settings-window-and-the-write-path-review-deleted). Reads the durable
+        // host-settings.json BEFORE boot so saved values are consumed by actual
+        // startup. Explicit per-field CLI flags still beat the durable store;
+        // an explicit `local`/`tailnet` is NOT set here because `service` is
+        // mode-agnostic — the durable serveMode (or legacy env fallback) wins
+        // unless the operator passed `--serve-mode` explicitly. The subcommand
+        // is stripped so parseArgs sees only the options.
+        process.argv.splice(2, 1);
+        // `--serve-mode` is a service-only explicit flag (the bare `local`/
+        // `tailnet` subcommands remain the primary way to pick a mode for an
+        // interactive launch). Parse it here before parseArgs so the value
+        // reaches the host-settings context as a real `cli-flag` source.
+        for (let i = 2; i < process.argv.length; i++) {
+            if (process.argv[i] === '--serve-mode' && i + 1 < process.argv.length) {
+                const m = process.argv[i + 1];
+                if (m === 'local' || m === 'tailnet') {
+                    process.argv.splice(i, 2);
+                    (process as any).__switchboardServiceServeMode = m;
+                    i--;
+                } else {
+                    console.error(`[switchboard] --serve-mode '${m}' is not local or tailnet.`);
+                    process.exit(1);
+                }
+            }
+        }
+        // Default the bare-service serveMode to local; the host-settings
+        // resolution below overrides it with the durable value when present.
+        serveMode = 'local';
     } else {
         // Bare `npx switchboard` or `npx switchboard --hostname foo` → local.
         serveMode = 'local';
@@ -3087,7 +3198,7 @@ async function main() {
         await cmdAbout(path.resolve(args.workspace || process.cwd()), process.argv.includes('--json'));
     }
 
-    const workspaceRoot = path.resolve(args.workspace || process.cwd());
+    let workspaceRoot = path.resolve(args.workspace || process.cwd());
     if (!fs.existsSync(workspaceRoot)) {
         console.error(`[switchboard] Workspace does not exist: ${workspaceRoot}`);
         process.exit(1);
@@ -3115,7 +3226,8 @@ async function main() {
         && subcommand !== 'clear' && subcommand !== 'fleet' && subcommand !== 'probe' && subcommand !== 'verb'
         && subcommand !== 'api'
         && subcommand !== 'help' && subcommand !== 'about' && subcommand !== 'version'
-        && subcommand !== 'setup';
+        && subcommand !== 'setup'
+        && subcommand !== 'launcher-state';
     const switchboardDir = path.join(workspaceRoot, '.switchboard');
     if (subcommandTargetsCwd && !fs.existsSync(switchboardDir)) {
         fs.mkdirSync(switchboardDir, { recursive: true });
@@ -3609,8 +3721,68 @@ async function main() {
             process.exit(1);
         }
         if (!health) { process.exit(1); }
+
+        // ── Host identity / capability gate (plan: go-launcher-static-binary) ──
+        // /health now identifies the host kind and declares shutdown capability.
+        // The stop command MUST refuse an extension or identity-less host rather
+        // than signalling its PID — a generic PID-based Stop could terminate VS
+        // Code (extension host) or a replaced process. Only a matching standalone
+        // instance with declared capability is signalled, and only over the
+        // loopback-only authenticated /shutdown route. Old standalone versions
+        // that predate host identity keep the legacy PID-signalling fallback
+        // (explicitly approved for that version range only); the source is
+        // reported so the operator can see which path answered.
+        const hostKind = health.host?.kind;
+        const shutdownEnabled = health.capabilities?.shutdown?.enabled === true;
+        if (hostKind === 'extension') {
+            console.error('[switchboard] Refusing to stop: /health identifies this as the VS Code extension host.');
+            console.error(`[switchboard] ${health.capabilities?.shutdown?.reason ?? 'extension host does not own process teardown — close VS Code to stop'}`);
+            process.exit(1);
+        }
+        if (hostKind === 'standalone' && shutdownEnabled) {
+            // Authenticated loopback shutdown. The route flushes the 200 before
+            // tearing down the listener, so the CLI receives its response before
+            // the server closes. The host verifies kind/capability/loopback again
+            // server-side; this CLI gate is the first line, not the only one.
+            console.log(`[switchboard] Stopping standalone server (instance ${health.host!.instanceId}, port ${port}) via /shutdown…`);
+            let res: ApiResponse;
+            try {
+                res = await apiPost(port, '/shutdown', workspaceRoot, {}, 10000);
+            } catch (err) {
+                console.error(`[switchboard] /shutdown request failed: ${err instanceof Error ? err.message : String(err)}`);
+                console.error('[switchboard] The host may have already stopped, or the route is unreachable. Falling back is disabled for an identity-bearing standalone host — re-run after confirming the server is still up.');
+                process.exit(1);
+            }
+            if (res.status === 200) {
+                // The host scheduled teardown after flushing; give it a moment to
+                // close the listener and unlink the discovery files. The route's
+                // own instance.stop() sequence owns the cleanup; this wait is
+                // only so the CLI does not report success before the port frees.
+                await new Promise(r => setTimeout(r, 500));
+                console.log('[switchboard] Server stopped (source: /shutdown route, host kind standalone).');
+                process.exit(0);
+            }
+            // 403 / 500: the host refused. Surface the reason verbatim — the
+            // route returns structured { error, reason } for every refusal.
+            const reason = res.json()?.reason || res.body || `HTTP ${res.status}`;
+            console.error(`[switchboard] /shutdown refused: ${reason}`);
+            process.exit(1);
+        }
+        if (hostKind === 'standalone' && !shutdownEnabled) {
+            console.error('[switchboard] Refusing to stop: /health identifies a standalone host that declared shutdown disabled.');
+            console.error(`[switchboard] ${health.capabilities?.shutdown?.reason ?? 'host declared shutdown disabled'}`);
+            process.exit(1);
+        }
+
+        // ── Legacy fallback: old standalone without host identity ──
+        // `health.host` is absent on standalone versions that predate the
+        // launcher wiring. The PID-signalling path below is the explicitly
+        // approved fallback for that version range only. The source is reported
+        // so the operator can see which path answered. A future host that
+        // drops the PID-signalling contract is unreachable here and must be
+        // stopped via /shutdown (above) or systemd.
         const pid = health.pid;
-        console.log(`[switchboard] Stopping server (PID ${pid}, port ${port})…`);
+        console.log(`[switchboard] Stopping server (PID ${pid}, port ${port}) — legacy PID fallback (host reported no identity; source: pid-signal)…`);
 
         // PID-recycle guard. Liveness (`process.kill(pid, 0)`) tells us a process
         // with that number exists — NOT that it is still OUR process. The old
@@ -3687,7 +3859,88 @@ async function main() {
         try { if (fs.existsSync(portFile)) fs.unlinkSync(portFile); } catch { /* ignore */ }
         try { if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile); } catch { /* ignore */ }
 
-        console.log('[switchboard] Server stopped.');
+        console.log('[switchboard] Server stopped (source: pid-signal, legacy fallback).');
+        process.exit(0);
+    }
+
+    // ── launcher-state ─────────────────────────────────────────────
+    // One-shot host-side launcher-state projection for the installed-but-
+    // stopped case (plan: go-launcher-static-binary). When a host is running,
+    // proxies GET /launcher/state so the launcher gets the authoritative
+    // projection. When no host is running, reads workspace mappings through
+    // the existing Node KanbanDatabase service and prints a typed result — Go
+    // never parses the database. Every behavioural value carries its source;
+    // missing DB data is unavailable-with-reason, never an empty list.
+    if (process.argv[2] === 'launcher-state') {
+        const jsonFlag = process.argv.slice(3).includes('--json');
+        if (jsonFlag) { routeLogsToStderr(); }
+        const port = await findRunningInstance(workspaceRoot);
+        if (port !== null) {
+            // Host is running — proxy the authoritative projection.
+            try {
+                const res = await apiGet(port, '/launcher/state', workspaceRoot);
+                if (res.status === 200) {
+                    if (jsonFlag) { emitJson(res.json()); }
+                    else { console.log(JSON.stringify(res.json(), null, 2)); }
+                    process.exit(0);
+                }
+                if (res.status === 404) {
+                    // Old host without the route — fall through to the stopped
+                    // path so the launcher still gets a typed result rather
+                    // than an error. Report the source.
+                    if (jsonFlag) {
+                        emitJson({
+                            note: 'running host has no /launcher/state route (old version); falling back to local DB read',
+                            source: 'host-404-fallback',
+                        });
+                    } else {
+                        console.log('[switchboard] Running host has no /launcher/state route (old version); falling back to local DB read.');
+                    }
+                } else {
+                    console.error(`[switchboard] /launcher/state returned HTTP ${res.status}: ${res.body}`);
+                    process.exit(1);
+                }
+            } catch (err) {
+                console.error(`[switchboard] /launcher/state request failed: ${err instanceof Error ? err.message : String(err)}`);
+                process.exit(1);
+            }
+        }
+        // Stopped case: read workspace mappings through the existing Node DB
+        // service. Go never parses the database.
+        let mappings: any;
+        try {
+            const db = await openBoardDatabase(workspaceRoot);
+            const result = await db.getWorkspaceMappings();
+            if (!result || !Array.isArray(result.mappings)) {
+                mappings = { unavailable: true, reason: 'workspace mappings service returned no list', source: 'local-db' };
+            } else {
+                mappings = {
+                    unavailable: false,
+                    value: result.mappings.map((m: any) => ({
+                        root: m?.parentFolder ?? m?.workspaceFolders?.[0] ?? '',
+                        label: m?.name,
+                        enabled: result.enabled !== false,
+                    })),
+                    source: 'local-db',
+                };
+            }
+        } catch (err) {
+            mappings = {
+                unavailable: true,
+                reason: `local DB read failed: ${err instanceof Error ? err.message : String(err)}`,
+                source: 'local-db',
+            };
+        }
+        const projection = {
+            host: { kind: 'standalone', instanceId: 'stopped', version: 'stopped', source: 'cli-launcher-state' },
+            capabilities: { shutdown: { enabled: false, reason: 'no host running' } },
+            roots: { value: [workspaceRoot], source: 'cli-arg' },
+            selectedWorkspaceRoot: { value: workspaceRoot, source: 'cli-arg' },
+            workspaceMappings: mappings,
+            note: 'host is not running; projection derived from local DB only',
+        };
+        if (jsonFlag) { emitJson(projection); }
+        else { console.log(JSON.stringify(projection, null, 2)); }
         process.exit(0);
     }
 
@@ -3879,6 +4132,90 @@ async function main() {
     // never silently falls back to loopback-only, and never binds 0.0.0.0.
     let tailnetAddress: string | null = null;
     let magicDnsNames: string[] = [];
+
+    // ── Host-settings resolution (plan: settings-window-and-the-write-path-review-deleted) ──
+    //
+    // Build the resolution context from the explicit CLI inputs (each tagged
+    // with its real source — `cli-subcommand` for `local`/`tailnet`, `cli-flag`
+    // for `--port`/`--workspace`/`--extra-path`/`--serve-mode`) and the tagged
+    // legacy `SWITCHBOARD_*` environment fallback. Resolve BEFORE the tailnet
+    // probe so a durable `tailnet` mode triggers the probe, and BEFORE the boot
+    // so PATH additions reach child agents. Explicit inputs always win; a
+    // durable value wins over legacy env; a corrupt file fails loudly here.
+    const isServiceCommand = firstArg === 'service' || (process as any).__switchboardServiceServeMode !== undefined;
+    const explicitServeModeFlag = (process as any).__switchboardServiceServeMode as 'local' | 'tailnet' | undefined;
+    const hostSettingsContext: HostSettingsContext = { explicit: {}, legacy: {} };
+    // `local`/`tailnet` subcommands are an explicit serve-mode input. `service`
+    // is NOT — its durable/legacy value wins unless `--serve-mode` was passed.
+    if (firstArg === 'tailnet' || firstArg === 'local') {
+        hostSettingsContext.explicit!.serveMode = { value: serveMode, source: 'cli-subcommand' };
+    } else if (explicitServeModeFlag) {
+        hostSettingsContext.explicit!.serveMode = { value: explicitServeModeFlag, source: 'cli-flag' };
+    }
+    if (args._explicit?.port) {
+        hostSettingsContext.explicit!.port = { value: args.port, source: 'cli-flag' };
+    }
+    if (args._explicit?.workspace) {
+        hostSettingsContext.explicit!.workspaceRoot = { value: workspaceRoot, source: 'cli-flag' };
+    }
+    if (args._explicit?.extraPath) {
+        hostSettingsContext.explicit!.extraPath = { value: args.extraPath!, source: 'cli-flag' };
+    }
+    // Legacy env fallback — only tagged as `legacy-env` when running the
+    // packaged service entrypoint (the env file is the systemd unit's
+    // EnvironmentFile). An interactive `switchboard local` does NOT inherit
+    // these as legacy inputs; they are merely ambient env that the durable
+    // store already supersedes.
+    if (isServiceCommand) {
+        const legacyServe = process.env.SWITCHBOARD_SERVE_MODE;
+        const legacyPort = process.env.SWITCHBOARD_PORT;
+        const legacyWorkspace = process.env.SWITCHBOARD_WORKSPACE;
+        const legacyExtraPath = process.env.SWITCHBOARD_EXTRA_PATH;
+        if (legacyServe) hostSettingsContext.legacy!.serveMode = legacyServe;
+        if (legacyPort) hostSettingsContext.legacy!.port = legacyPort;
+        if (legacyWorkspace) hostSettingsContext.legacy!.workspace = legacyWorkspace;
+        if (legacyExtraPath) hostSettingsContext.legacy!.extraPath = legacyExtraPath;
+    }
+    let hostSettingsResolution: ReturnType<ReturnType<typeof createHostSettingsService>['resolve']> | null = null;
+    try {
+        hostSettingsResolution = createHostSettingsService().resolve(hostSettingsContext);
+    } catch (e) {
+        // A corrupt host-settings.json fails loudly and stops the boot rather
+        // than silently serving a wrong tree. The file is left untouched.
+        console.error(`[switchboard] host-settings.json is corrupt: ${e instanceof Error ? e.message : String(e)}`);
+        console.error('[switchboard] Fix or remove ~/.switchboard/host-settings.json and retry.');
+        process.exit(1);
+    }
+    // Apply the resolved PATH additions to the current process before any child
+    // agent can spawn. Entries are prepended without shell evaluation.
+    applyExtraPathToProcessEnv(hostSettingsResolution.extraPath.effectiveValue);
+    // For `service` (no explicit subcommand), the resolved serve mode drives
+    // the tailnet probe and the bind policy. An explicit `local`/`tailnet`
+    // subcommand keeps its own value — explicit beats durable, by design.
+    if (isServiceCommand && !explicitServeModeFlag) {
+        serveMode = hostSettingsResolution.serveMode.effectiveValue;
+    }
+    // The durable default workspace (when no --workspace was passed and the
+    // service entrypoint is running) selects the boot workspace by stable ID.
+    // An explicit --workspace always wins; the durable value is only consulted
+    // when the operator did not name one.
+    if (isServiceCommand && !args._explicit?.workspace) {
+        const durableWs = hostSettingsResolution.defaultWorkspace.effectiveValue;
+        if (durableWs && fs.existsSync(durableWs.root)) {
+            workspaceRoot = durableWs.root;
+        }
+    }
+    // The durable/legacy port (when no --port was passed) drives the actual
+    // listen. Without this, `args.port` (parseArgs default 7777) would be bound
+    // and the durable port would only show up in GET /settings reporting — a
+    // saved port would never take effect. An explicit --port always wins.
+    if (isServiceCommand && !args._explicit?.port) {
+        const resolvedPort = hostSettingsResolution.port.effectiveValue;
+        if (typeof resolvedPort === 'number' && resolvedPort > 0 && resolvedPort <= 65535) {
+            args.port = resolvedPort;
+        }
+    }
+
     if (serveMode === 'tailnet') {
         tailnetAddress = await detectTailnetAddress();
         if (!tailnetAddress) {
@@ -4048,6 +4385,7 @@ async function main() {
         hostname,
         verbose: true,
         bindPolicy,
+        hostSettingsContext,
     });
 
     await waitForHealth(instance.port);

@@ -117,6 +117,14 @@ let LinearDocsAdapterClass: any;
 import { LocalFolderService } from './LocalFolderService';
 import { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
 import { LocalApiServer, enqueueOnQueueChain, LauncherStateProjection } from './LocalApiServer';
+import {
+    HostSettingsContext,
+    HostSettingsDocument,
+    HostSettingsResolution,
+    HostSettingsService,
+    applyExtraPathToProcessEnv,
+    createHostSettingsService,
+} from './hostSettings';
 import { LOOPBACK_ONLY_POLICY, type BindPolicy } from '../utils/loopbackHostname';
 import { detectTailnetAddress, resolveMagicDnsNames } from '../utils/tailnetDetect';
 import { GlobalIntegrationConfigService, AgentGlobalKey, ScheduledJob, SchedulerConfig } from './GlobalIntegrationConfigService';
@@ -1971,6 +1979,62 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     // it is about to mutate. A recycled PID cannot fool this: the ID changes
     // only when the extension host process itself is replaced.
     private readonly _apiServerInstanceId: string = crypto.randomUUID();
+    /**
+     * Host-settings service (plan: settings-window-and-the-write-path-review-deleted).
+     * One instance per extension-host lifetime, shared by LocalApiServer
+     * (GET/PUT /settings) and the Setup panel's Host tab. Lazily created on
+     * first read/write so the extension host does not touch ~/.switchboard
+     * until a host-settings surface is actually exercised.
+     */
+    private _hostSettingsService?: HostSettingsService;
+    private _ensureHostSettingsService(): HostSettingsService {
+        if (!this._hostSettingsService) {
+            this._hostSettingsService = createHostSettingsService();
+            // Apply the durable PATH additions to the extension host's env so
+            // agent CLIs spawned from here find their per-user binaries. The
+            // extension host is long-lived, so this runs once per service
+            // creation; a save that changes PATH takes effect on the next
+            // extension activation (restart-required semantics).
+            try {
+                const resolution = this._hostSettingsService.resolve(this._buildHostSettingsContext());
+                applyExtraPathToProcessEnv(resolution.extraPath.effectiveValue);
+            } catch (e) {
+                console.warn('[TaskViewerProvider] host-settings initial resolve failed:', e);
+            }
+            // Propagate to the Setup panel if it is already wired.
+            if (this._setupPanelProvider) {
+                this._setupPanelProvider.setHostSettingsService(this._hostSettingsService);
+            }
+        }
+        return this._hostSettingsService;
+    }
+    /**
+     * Build the resolution context for the extension host. The explicit VS Code
+     * `switchboard.remote.tailnet` setting is a stronger, source-tagged
+     * compatibility input than the durable store — saving `tailnet` from the
+     * Host tab updates the durable document but the UI must report when the
+     * explicit VS Code setting still wins.
+     */
+    private _buildHostSettingsContext(): HostSettingsContext {
+        const ctx: HostSettingsContext = {};
+        try {
+            const config = vscode.workspace.getConfiguration('switchboard');
+            const tailnetCfg = config.inspect<boolean>('remote.tailnet');
+            // Only treat as explicit when set at user/workspace scope (not the
+            // default). A default value is NOT a configured input.
+            if (tailnetCfg && (tailnetCfg.globalValue !== undefined || tailnetCfg.workspaceValue !== undefined)) {
+                const enabled = tailnetCfg.globalValue ?? tailnetCfg.workspaceValue;
+                ctx.vscode = { tailnetEnabled: !!enabled };
+            }
+        } catch { /* vscode unavailable in headless tests */ }
+        return ctx;
+    }
+    private _resolveHostSettingsForApi(): HostSettingsResolution {
+        return this._ensureHostSettingsService().resolve(this._buildHostSettingsContext());
+    }
+    private async _writeHostSettingsForApi(patch: Partial<HostSettingsDocument>, expectedRevision: string): Promise<HostSettingsResolution> {
+        return this._ensureHostSettingsService().update(patch, expectedRevision, this._buildHostSettingsContext());
+    }
     // PlanIngestionEngine reference — set after the GlobalPlanWatcherService is
     // created (extension.ts wires this after both the provider and the watcher
     // exist). Used by the armQueueWatch callback so LocalApiServer's
@@ -4843,6 +4907,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             // and never reads kanban.db. Reuses KanbanProvider/SetupPanelProvider
             // mapping reads — no direct DB reads in the launcher client.
             getLauncherState: async () => this._projectLauncherState(effectiveRoot),
+            // Host-settings read/write (plan: settings-window-and-the-write-path-review-deleted).
+            // The extension host constructs one HostSettingsService per host
+            // lifetime and injects the same instance into LocalApiServer and
+            // SetupPanelProvider. The reader resolves with a VS Code config
+            // context (`switchboard.remote.tailnet` is a stronger, source-tagged
+            // compatibility input) so the Host tab reports when an explicit VS
+            // Code setting still wins over a saved durable value. The writer
+            // performs a validated, revision-checked atomic update.
+            readHostSettings: () => this._resolveHostSettingsForApi(),
+            writeHostSettings: (patch, expectedRevision) => this._writeHostSettingsForApi(patch, expectedRevision),
         });
 
         this._broadcaster?.setApiServer(this._localApiServer);
@@ -4851,6 +4925,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
         if (this._setupPanelProvider) {
             this._setupPanelProvider.setApiServer(this._localApiServer);
+            // Inject the same HostSettingsService instance the LocalApiServer
+            // reads/writes, so the Host tab and the HTTP endpoints share one
+            // durable store (composition-root parity with standalone bootstrap).
+            if (this._hostSettingsService) {
+                this._setupPanelProvider.setHostSettingsService(this._hostSettingsService);
+            }
         }
         if (this._designPanelProvider && typeof (this._designPanelProvider as any).setApiServer === 'function') {
             (this._designPanelProvider as any).setApiServer(this._localApiServer);

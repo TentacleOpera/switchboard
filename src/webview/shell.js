@@ -1392,13 +1392,30 @@
         }
 
         const hash = window.location.hash.replace(/^#/, '');
-        if (hash && modalPanels.has(hash)) {
+        // Sub-fragment deep link (e.g. `setup:host`) — select the panel then
+        // forward the sub-fragment so the panel activates its own sub-section.
+        const colonIdx = hash.indexOf(':');
+        const panelHash = colonIdx >= 0 ? hash.slice(0, colonIdx) : hash;
+        const subFragment = colonIdx >= 0 ? hash.slice(colonIdx + 1) : '';
+        if (panelHash && modalPanels.has(panelHash)) {
             const base = defaultPanelId(manifest);
             if (base) { selectPanel(base); }
-            openModal(hash);
+            openModal(panelHash);
         } else {
-            const initial = (hash && frames.has(hash)) ? hash : defaultPanelId(manifest);
+            const initial = (panelHash && frames.has(panelHash)) ? panelHash : defaultPanelId(manifest);
             if (initial) { selectPanel(initial); }
+        }
+        if (subFragment && frames.has(panelHash)) {
+            // Defer slightly so the target iframe has loaded before the message lands.
+            setTimeout(() => {
+                const frame = frames.get(panelHash);
+                try {
+                    frame.contentWindow?.postMessage(
+                        { type: 'openSetupSection', section: subFragment },
+                        location.origin
+                    );
+                } catch { /* frame not ready yet */ }
+            }, 200);
         }
     }
 
@@ -1482,10 +1499,27 @@
     });
 
     // Hash deep-link changes (bookmarkable panels).
+    // A hash may carry a sub-fragment after a colon (e.g. `setup:host`) to
+    // deep-link a tab inside a panel. The panel part selects the panel; the
+    // sub-fragment is forwarded to the panel iframe as a postMessage so the
+    // panel can activate its own sub-section (plan: settings-window-and-the-write-path-review-deleted).
     window.addEventListener('hashchange', () => {
         const hash = window.location.hash.replace(/^#/, '');
-        if (hash && frames.has(hash) && hash !== activePanel) {
-            selectPanel(hash);
+        if (!hash) return;
+        const colonIdx = hash.indexOf(':');
+        const panelId = colonIdx >= 0 ? hash.slice(0, colonIdx) : hash;
+        const subFragment = colonIdx >= 0 ? hash.slice(colonIdx + 1) : '';
+        if (frames.has(panelId) && panelId !== activePanel) {
+            selectPanel(panelId);
+        }
+        if (subFragment && frames.has(panelId)) {
+            const frame = frames.get(panelId);
+            try {
+                frame.contentWindow?.postMessage(
+                    { type: 'openSetupSection', section: subFragment },
+                    location.origin
+                );
+            } catch { /* frame not ready yet */ }
         }
     });
 

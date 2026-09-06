@@ -682,6 +682,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <button class="shared-tab-btn" data-tab="theme" role="tab" aria-selected="false">Theme</button>
             <button class="shared-tab-btn" data-tab="status-bar" role="tab" aria-selected="false">Status Bar</button>
             <button class="shared-tab-btn" data-tab="remote" role="tab" aria-selected="false">Remote</button>
+            <button class="shared-tab-btn" data-tab="host" role="tab" aria-selected="false">Host</button>
         </div>
 
         <div class="shared-tab-content active" id="startup-fields" data-tab-content="setup">
@@ -1105,6 +1106,77 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 </div>
             </div>
         </div>
+
+        <!-- ── Host tab (plan: settings-window-and-the-write-path-review-deleted) ──
+             The operator-facing host settings: workspace catalog, port, serve
+             mode, and PATH additions for agent CLIs. Each field shows where it
+             resolved from (source label) and a configured-vs-effective split so
+             a save that needs a restart is visible. Saves go through the
+             authenticated PUT /settings path with optimistic concurrency; a
+             stale save returns the fresh state and the operator's typed values
+             are retained for a deliberate re-apply. -->
+        <div class="shared-tab-content" id="host-fields" data-tab-content="host">
+            <div style="padding:12px; max-width:720px;">
+                <div class="db-subsection" style="border-top:none;">
+                    <div class="section-label" style="margin-bottom:6px;">Host Settings</div>
+                    <div style="font-size:11px; color:var(--text-secondary); line-height:1.5; margin-bottom:12px;">
+                        The values that launch the board: the workspace catalog, port, serve mode, and the
+                        PATH additions agent CLIs need. Each shows where it resolved from; each can be
+                        changed. A change reaches the thing that reads it on the next start — saving here
+                        never pretends to change a running value.
+                    </div>
+
+                    <div id="host-settings-error" class="hidden" style="margin-bottom:10px; padding:8px 10px; border:1px solid var(--accent-red, #d33); border-radius:4px; background:color-mix(in srgb, var(--accent-red, #d33) 8%, transparent); color:var(--text-primary); font-size:11px;"></div>
+                    <div id="host-settings-conflict" class="hidden" style="margin-bottom:10px; padding:8px 10px; border:1px solid var(--accent-teal); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 8%, transparent); color:var(--text-primary); font-size:11px;">
+                        <div><strong>Conflict:</strong> another window saved first. Your typed values are kept. Review the fresh values below and re-apply if you still want your change.</div>
+                        <div id="host-settings-conflict-detail" style="margin-top:6px; font-size:10px; color:var(--text-secondary);"></div>
+                    </div>
+                    <div id="host-settings-restart" class="hidden" style="margin-bottom:10px; padding:8px 10px; border:1px solid var(--accent-teal); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 8%, transparent); color:var(--text-primary); font-size:11px;">
+                        <strong>Saved.</strong> The saved values take effect on the next start. Fields needing a restart: <span id="host-settings-restart-fields"></span>.
+                    </div>
+
+                    <div style="margin-bottom:12px;">
+                        <label style="font-size:10px; color:var(--text-secondary); letter-spacing:1px; display:block; margin-bottom:4px;">SERVE MODE</label>
+                        <select id="host-serve-mode" style="width:100%; max-width:240px;">
+                            <option value="local">local (loopback only)</option>
+                            <option value="tailnet">tailnet (loopback + Tailscale interface)</option>
+                        </select>
+                        <div id="host-serve-mode-source" style="font-size:10px; color:var(--text-secondary); margin-top:2px;"></div>
+                    </div>
+
+                    <div style="margin-bottom:12px;">
+                        <label style="font-size:10px; color:var(--text-secondary); letter-spacing:1px; display:block; margin-bottom:4px;">PORT</label>
+                        <input id="host-port" type="number" min="1" max="65535" style="width:100%; max-width:160px;" />
+                        <div id="host-port-source" style="font-size:10px; color:var(--text-secondary); margin-top:2px;"></div>
+                    </div>
+
+                    <div style="margin-bottom:12px;">
+                        <label style="font-size:10px; color:var(--text-secondary); letter-spacing:1px; display:block; margin-bottom:4px;">DEFAULT WORKSPACE</label>
+                        <select id="host-default-workspace" style="width:100%; max-width:480px;">
+                            <option value="">(none)</option>
+                        </select>
+                        <div id="host-default-workspace-source" style="font-size:10px; color:var(--text-secondary); margin-top:2px;"></div>
+                    </div>
+
+                    <div style="margin-bottom:12px;">
+                        <label style="font-size:10px; color:var(--text-secondary); letter-spacing:1px; display:block; margin-bottom:4px;">WORKSPACE CATALOG</label>
+                        <div id="host-workspaces-list" style="border:1px solid var(--border-color); border-radius:4px; padding:6px; min-height:40px; font-size:11px; margin-bottom:4px;"></div>
+                        <div style="font-size:10px; color:var(--text-secondary);">Removing a workspace from the catalog never deletes the workspace directory or its board database.</div>
+                    </div>
+
+                    <div style="margin-bottom:12px;">
+                        <label style="font-size:10px; color:var(--text-secondary); letter-spacing:1px; display:block; margin-bottom:4px;">EXTRA PATH (one entry per line, no shell expansion)</label>
+                        <textarea id="host-extra-path" rows="3" style="width:100%; max-width:480px; font-family:monospace; font-size:11px;"></textarea>
+                        <div id="host-extra-path-source" style="font-size:10px; color:var(--text-secondary); margin-top:2px;"></div>
+                    </div>
+
+                    <div style="margin-top:16px;">
+                        <button id="btn-host-save" class="action-btn">Save</button>
+                        <button id="btn-host-refresh" class="action-btn" style="margin-left:8px;">Refresh</button>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <div id="control-plane-modal" class="modal-overlay hidden">
@@ -1461,6 +1533,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     vscode.postMessage({ type: 'getStatusShowDesignSetting' });
                     vscode.postMessage({ type: 'getStatusShowProjectSetting' });
                     vscode.postMessage({ type: 'getStatusShowMemoSetting' });
+                },
+                'host': () => {
+                    requestHostSettings();
                 },
             };
 
@@ -2020,6 +2095,193 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             vscode.postMessage({ type: 'getIntegrationTicketSaveLocations' });
         }
 
+        // ── Host tab (plan: settings-window-and-the-write-path-review-deleted) ──
+        // The Host tab hydrates from the shared HostSettingsService via the
+        // `getHostSettings` verb, renders source labels for every field, and
+        // saves through `saveHostSettings` with optimistic concurrency. The
+        // revision from the last hydration is held in `_hostSettingsRevision`
+        // and sent as `expectedRevision` on save; a 409 (conflict) returns the
+        // fresh state, retains the operator's typed values client-side, and
+        // surfaces the conflict so a deliberate re-apply is required.
+        let _hostSettingsRevision = '';
+        let _lastHostSettingsResolution = null;
+
+        function requestHostSettings() {
+            vscode.postMessage({ type: 'getHostSettings' });
+        }
+
+        function sourceLabel(src) {
+            const map = {
+                'cli-flag': 'CLI flag',
+                'cli-subcommand': 'CLI subcommand',
+                'durable': 'saved',
+                'legacy-env': 'legacy env file',
+                'default': 'default',
+                'vscode-config': 'VS Code setting',
+                'launch': 'current launch',
+                'launch-subcommand': 'current launch',
+                'extension-host': 'extension host',
+                'host-db': 'host database',
+                'kanban-provider': 'kanban provider',
+            };
+            return map[src] || src;
+        }
+
+        function renderHostSettings(resolution) {
+            _lastHostSettingsResolution = resolution;
+            _hostSettingsRevision = resolution.revision || '';
+
+            // Serve mode
+            const serveModeSel = document.getElementById('host-serve-mode');
+            const serveModeSrc = document.getElementById('host-serve-mode-source');
+            if (serveModeSel) {
+                // The durable (next-start) value is what the select edits; the
+                // effective (current-launch) value is shown alongside.
+                const durableVal = resolution.serveMode.durableValue || resolution.serveMode.configuredValue || resolution.serveMode.effectiveValue;
+                serveModeSel.value = durableVal || 'local';
+            }
+            if (serveModeSrc) {
+                const eff = resolution.serveMode.value !== undefined ? resolution.serveMode.value : resolution.serveMode.effectiveValue;
+                const effSrc = resolution.serveMode.source || resolution.serveMode.effectiveSource;
+                const cfgSrc = resolution.serveMode.configuredSource;
+                const cfgVal = resolution.serveMode.configuredValue;
+                let txt = `Effective now: ${eff} (${sourceLabel(effSrc)}).`;
+                if (cfgVal !== null && cfgVal !== undefined) txt += ` Saved: ${cfgVal} (${sourceLabel(cfgSrc)}).`;
+                if (resolution.serveMode.restartRequired) txt += ` Restart required to apply a saved change.`;
+                serveModeSrc.textContent = txt;
+            }
+
+            // Port
+            const portInput = document.getElementById('host-port');
+            const portSrc = document.getElementById('host-port-source');
+            if (portInput) {
+                const durableVal = resolution.port.durableValue || resolution.port.configuredValue || resolution.port.effectiveValue;
+                portInput.value = durableVal != null ? durableVal : '';
+            }
+            if (portSrc) {
+                const eff = resolution.port.value !== undefined ? resolution.port.value : resolution.port.effectiveValue;
+                const effSrc = resolution.port.source || resolution.port.effectiveSource;
+                const cfgSrc = resolution.port.configuredSource;
+                const cfgVal = resolution.port.configuredValue;
+                let txt = `Effective now: ${eff} (${sourceLabel(effSrc)}).`;
+                if (cfgVal !== null && cfgVal !== undefined) txt += ` Saved: ${cfgVal} (${sourceLabel(cfgSrc)}).`;
+                if (resolution.port.restartRequired) txt += ` Restart required to apply a saved change.`;
+                portSrc.textContent = txt;
+            }
+
+            // Default workspace
+            const defWsSel = document.getElementById('host-default-workspace');
+            const defWsSrc = document.getElementById('host-default-workspace-source');
+            const workspaces = resolution.workspaces.value || [];
+            if (defWsSel) {
+                // Preserve the operator's current selection if possible.
+                const prev = defWsSel.value;
+                defWsSel.innerHTML = '<option value="">(none)</option>' + workspaces.map(w =>
+                    `<option value="${escapeHtml(w.id)}">${escapeHtml(w.name)} — ${escapeHtml(w.root)}</option>`).join('');
+                const configured = resolution.defaultWorkspace.configuredValue;
+                const effective = resolution.defaultWorkspace.effectiveValue;
+                const targetId = (configured && configured.id) || (effective && effective.id) || '';
+                defWsSel.value = workspaces.some(w => w.id === targetId) ? targetId : (prev || '');
+            }
+            if (defWsSrc) {
+                const eff = resolution.defaultWorkspace.effectiveValue;
+                const effSrc = resolution.defaultWorkspace.effectiveSource;
+                const cfg = resolution.defaultWorkspace.configuredValue;
+                const cfgSrc = resolution.defaultWorkspace.configuredSource;
+                let txt = 'Effective now: ';
+                txt += eff ? `${eff.name} (${sourceLabel(effSrc)})` : '(none)';
+                if (cfg) txt += `. Saved: ${cfg.name} (${sourceLabel(cfgSrc)})`;
+                if (resolution.defaultWorkspace.restartRequired) txt += `. Restart required to apply a saved change.`;
+                defWsSrc.textContent = txt;
+            }
+
+            // Workspace catalog (read-only list — editing the catalog is a
+            // separate concern; the Host tab surfaces the resolved set and the
+            // source label. Removing a workspace from the catalog never deletes
+            // the workspace directory or its board database.)
+            const wsList = document.getElementById('host-workspaces-list');
+            if (wsList) {
+                if (workspaces.length === 0) {
+                    wsList.innerHTML = '<div style="color:var(--text-secondary);">No workspaces in the catalog.</div>';
+                } else {
+                    wsList.innerHTML = workspaces.map(w =>
+                        `<div style="padding:2px 0;">${escapeHtml(w.name)} — <code>${escapeHtml(w.root)}</code> <span style="color:var(--text-secondary);">(id: ${escapeHtml(w.id)})</span></div>`
+                    ).join('');
+                }
+            }
+
+            // Extra PATH
+            const pathTa = document.getElementById('host-extra-path');
+            const pathSrc = document.getElementById('host-extra-path-source');
+            if (pathTa) {
+                const durableVal = resolution.extraPath.configuredValue || resolution.extraPath.effectiveValue || [];
+                pathTa.value = (Array.isArray(durableVal) ? durableVal : []).join('\n');
+            }
+            if (pathSrc) {
+                const eff = resolution.extraPath.effectiveValue || [];
+                const effSrc = resolution.extraPath.effectiveSource;
+                const cfg = resolution.extraPath.configuredValue;
+                const cfgSrc = resolution.extraPath.configuredSource;
+                let txt = `Effective now: ${eff.length} entries (${sourceLabel(effSrc)}).`;
+                if (cfg && cfg.length) txt += ` Saved: ${cfg.length} entries (${sourceLabel(cfgSrc)}).`;
+                if (resolution.extraPath.restartRequired) txt += ` Restart required to apply a saved change.`;
+                pathSrc.textContent = txt;
+            }
+
+            // Hide stale banners
+            const errEl = document.getElementById('host-settings-error');
+            const conflictEl = document.getElementById('host-settings-conflict');
+            const restartEl = document.getElementById('host-settings-restart');
+            if (errEl) errEl.classList.add('hidden');
+            if (conflictEl) conflictEl.classList.add('hidden');
+            if (restartEl) restartEl.classList.add('hidden');
+        }
+
+        function collectHostSettingsPatch() {
+            const patch = {};
+            const serveModeSel = document.getElementById('host-serve-mode');
+            const portInput = document.getElementById('host-port');
+            const defWsSel = document.getElementById('host-default-workspace');
+            const pathTa = document.getElementById('host-extra-path');
+            if (serveModeSel) patch.serveMode = serveModeSel.value === 'tailnet' ? 'tailnet' : 'local';
+            if (portInput) {
+                const p = parseInt(portInput.value, 10);
+                if (!Number.isInteger(p) || p < 1 || p > 65535) {
+                    return { error: 'Port must be an integer 1-65535.' };
+                }
+                patch.port = p;
+            }
+            if (defWsSel) patch.defaultWorkspaceId = defWsSel.value || null;
+            if (pathTa) {
+                const entries = pathTa.value.split('\n').map(s => s.trim()).filter(Boolean);
+                patch.extraPath = entries;
+            }
+            return { patch };
+        }
+
+        function saveHostSettings() {
+            const collected = collectHostSettingsPatch();
+            const errEl = document.getElementById('host-settings-error');
+            if (collected.error) {
+                if (errEl) { errEl.textContent = collected.error; errEl.classList.remove('hidden'); }
+                return;
+            }
+            vscode.postMessage({
+                type: 'saveHostSettings',
+                patch: collected.patch,
+                expectedRevision: _hostSettingsRevision,
+            });
+        }
+
+        // Wire the Host-tab buttons once the DOM is ready. Done lazily so a
+        // missing element on a stripped-down host does not throw at load.
+        function initHostTabBindings() {
+            const saveBtn = document.getElementById('btn-host-save');
+            const refreshBtn = document.getElementById('btn-host-refresh');
+            if (saveBtn) saveBtn.addEventListener('click', saveHostSettings);
+            if (refreshBtn) refreshBtn.addEventListener('click', requestHostSettings);
+        }
+
         function setIntegrationStatus(kind, state, errorText = '') {
             const statusEl = document.getElementById(`${kind}-setup-status`);
             const errorEl = document.getElementById(`${kind}-setup-error`);
@@ -2364,6 +2626,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
         // Database Operations listeners retired — operations moved to Database panel in shell rail.
         initTabs();
+        initHostTabBindings();
 
         // Workspace database mapping handlers
         let workspaceMappings = [];
@@ -3473,6 +3736,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     if (message.section === 'control-plane:fresh-setup' || message.section === 'multi-repo-control-plane') {
                         openControlPlaneSetup('fresh-setup');
                     }
+                    if (message.section === 'host') {
+                        // Deep link from the browser shell (#setup:host) or a VS Code
+                        // command (openSetupSection: host) — both resolve to the same
+                        // Host tab (plan: settings-window-and-the-write-path-review-deleted).
+                        activateTab('host');
+                    }
                     break;
                 case 'agentDirCleanupState': {
                     const card = document.getElementById('agent-dir-cleanup-card');
@@ -3534,6 +3803,65 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         statusEl.textContent = statusMsg;
                         statusEl.style.display = 'block';
                         setTimeout(() => { statusEl.style.display = 'none'; }, 5000);
+                    }
+                    break;
+                }
+                case 'hostSettings': {
+                    // Hydration from getHostSettings. The verb pushes this on
+                    // first load and after every save; render it into the Host tab.
+                    if (message.success && message.resolution) {
+                        renderHostSettings(message.resolution);
+                    } else {
+                        const errEl = document.getElementById('host-settings-error');
+                        if (errEl) {
+                            errEl.textContent = message.error || 'Failed to load host settings.';
+                            errEl.classList.remove('hidden');
+                        }
+                    }
+                    break;
+                }
+                case 'hostSettingsSaveResult': {
+                    if (message.success && message.resolution) {
+                        // Re-render with the fresh state and show the restart banner.
+                        renderHostSettings(message.resolution);
+                        const restartEl = document.getElementById('host-settings-restart');
+                        const restartFieldsEl = document.getElementById('host-settings-restart-fields');
+                        if (restartEl) {
+                            if (restartFieldsEl) restartFieldsEl.textContent = (message.restartFields || []).join(', ') || 'none';
+                            restartEl.classList.remove('hidden');
+                        }
+                    } else if (message.conflict) {
+                        // 409: another window saved first. Render the fresh state
+                        // but RETAIN the operator's typed values by re-applying
+                        // only the source labels and the revision, not the inputs.
+                        if (message.freshState) {
+                            // Save the operator's current inputs before re-rendering.
+                            const prevServeMode = (document.getElementById('host-serve-mode') || {}).value;
+                            const prevPort = (document.getElementById('host-port') || {}).value;
+                            const prevDefWs = (document.getElementById('host-default-workspace') || {}).value;
+                            const prevPath = (document.getElementById('host-extra-path') || {}).value;
+                            renderHostSettings(message.freshState);
+                            // Restore the operator's typed values so a deliberate
+                            // re-apply is one Save click away.
+                            const sm = document.getElementById('host-serve-mode');
+                            const pt = document.getElementById('host-port');
+                            const dw = document.getElementById('host-default-workspace');
+                            const ep = document.getElementById('host-extra-path');
+                            if (sm && prevServeMode) sm.value = prevServeMode;
+                            if (pt && prevPort) pt.value = prevPort;
+                            if (dw && prevDefWs != null) dw.value = prevDefWs;
+                            if (ep && prevPath != null) ep.value = prevPath;
+                        }
+                        const conflictEl = document.getElementById('host-settings-conflict');
+                        const detailEl = document.getElementById('host-settings-conflict-detail');
+                        if (conflictEl) conflictEl.classList.remove('hidden');
+                        if (detailEl) detailEl.textContent = message.error || 'Stale revision.';
+                    } else {
+                        const errEl = document.getElementById('host-settings-error');
+                        if (errEl) {
+                            errEl.textContent = message.error || 'Save failed.';
+                            errEl.classList.remove('hidden');
+                        }
                     }
                     break;
                 }
