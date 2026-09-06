@@ -435,6 +435,20 @@ jobs:
       - name: Loopback hostname contract (rebinding guard, one predicate, CSP parity)
         run: npm run test:contract:loopback-hostname
 
+      # Loopback INVARIANCE. The regression test for the paired-app plan's own
+      # first draft, which proposed binding off 127.0.0.1 behind mandatory auth.
+      # A `--bind` flag is the single most plausible future widening: it looks
+      # like a convenience and it dismantles a four-layer, threat-modelled guard.
+      - name: Loopback invariance contract (no bind flag, unconditional loopback listener)
+        run: npm run test:contract:loopback-invariance
+
+      # The remote command vocabulary is closed at two verbs — author content,
+      # move a card. A third verb collapses authoring and triggering into one
+      # write and removes the invariant everything else rests on: what gets
+      # executed was reviewed. Widening it must fail HERE, not in review.
+      - name: Remote command vocabulary contract (two verbs, review gate fails closed)
+        run: npm run test:contract:remote-command-vocabulary
+
       # Tailnet bind policy. Every failure mode here is silent and reach-shaped:
       # binding 0.0.0.0 instead of the specific Tailscale address exposes the
       # board to every network the machine is on; moving the bind instead of

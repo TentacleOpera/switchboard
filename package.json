@@ -907,6 +907,8 @@
     "test:contract:design-system": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/design-system-contract.test.js",
     "test:contract:cross-client-scope": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/cross-client-scope-contract.test.js",
     "test:contract:loopback-hostname": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/loopback-hostname-contract.test.js",
+    "test:contract:loopback-invariance": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/loopback-invariance-contract.test.js",
+    "test:contract:remote-command-vocabulary": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/remote-command-vocabulary-contract.test.js",
     "test:contract:tailscale-bind": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/tailscale-bind-contract.test.js",
     "test:contract:panel-runtime-surface": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/webview-panel-runtime-surface.test.js",
     "test:contract:headless-feature-mgmt": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/headless-feature-management-contract.test.js",

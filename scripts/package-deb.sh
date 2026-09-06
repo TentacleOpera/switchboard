@@ -50,11 +50,48 @@ mkdir -p "$INSTALL_DIR/lib/systemd/system"
 # Copy built dist
 cp -a dist/* "$INSTALL_DIR/usr/lib/switchboard/"
 
-# Copy vendored node_modules
-cp -a node_modules "$INSTALL_DIR/usr/lib/switchboard/node_modules"
+# The CLI is exec'd directly by /usr/bin/switchboard and by the systemd unit.
+# webpack's BannerPlugin gives it a `#!/usr/bin/env node` shebang, but the
+# emitted file is mode 0644 — systemd would fail the unit with 203/EXEC and the
+# operator would see a unit that never starts and no reason why. Assert the
+# shebang and set the exec bit here, where it costs a rebuild.
+CLI_JS="$INSTALL_DIR/usr/lib/switchboard/standalone/cli.js"
+[ -f "$CLI_JS" ] || { echo "FAILED: $CLI_JS missing — did npm run compile emit dist/standalone?"; exit 1; }
+head -c 2 "$CLI_JS" | grep -q '#!' || {
+  echo "FAILED: dist/standalone/cli.js has no shebang — /usr/bin/switchboard would fail with 203/EXEC"; exit 1;
+}
+chmod 755 "$CLI_JS"
+
+# Copy vendored node_modules. Production only: the dev tree is hundreds of MB
+# of build tooling no target Pi needs, and it would ship inside the package.
+echo "Vendoring production node_modules..."
+VENDOR_DIR="$BUILD_DIR/vendor"
+mkdir -p "$VENDOR_DIR"
+cp package.json package-lock.json "$VENDOR_DIR/"
+( cd "$VENDOR_DIR" && npm ci --omit=dev --ignore-scripts=false )
+cp -a "$VENDOR_DIR/node_modules" "$INSTALL_DIR/usr/lib/switchboard/node_modules"
+
+# Verify the native modules resolve out of the VENDORED tree, not the repo's.
+# node-pty sits in optionalDependencies, so npm SUCCEEDS when its build fails:
+# the install looks clean, the board starts, and every terminal is dead.
+node -e "require('$INSTALL_DIR/usr/lib/switchboard/node_modules/better-sqlite3')" \
+  || { echo "FAILED: better-sqlite3 missing from the vendored tree"; exit 1; }
+node -e "require('$INSTALL_DIR/usr/lib/switchboard/node_modules/node-pty')" \
+  || { echo "FAILED: node-pty missing from the vendored tree — terminals will not work"; exit 1; }
+echo "Vendored native modules verified."
 
 # Entry point
 ln -s /usr/lib/switchboard/standalone/cli.js "$INSTALL_DIR/usr/bin/switchboard"
+
+# Desktop entry + icon (Linux desktop install; harmless on a headless Pi)
+mkdir -p "$INSTALL_DIR/usr/share/applications"
+cp packaging/switchboard.desktop "$INSTALL_DIR/usr/share/applications/switchboard.desktop"
+# The .desktop file names Icon=switchboard, so an icon MUST land on the icon
+# path or the launcher shows a generic placeholder. icon.png is the extension's
+# own icon and the only one that ships in the repo root.
+[ -f icon.png ] || { echo "FAILED: icon.png missing — the desktop entry names Icon=switchboard"; exit 1; }
+mkdir -p "$INSTALL_DIR/usr/share/icons/hicolor/256x256/apps"
+cp icon.png "$INSTALL_DIR/usr/share/icons/hicolor/256x256/apps/switchboard.png"
 
 # Config file (conffile)
 cp packaging/debian/switchboard.env "$INSTALL_DIR/etc/switchboard/switchboard.env"

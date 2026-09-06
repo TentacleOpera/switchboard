@@ -5,12 +5,12 @@
 set -e
 
 if [ "$1" = "remove" ] || [ "$1" = "deconfigure" ]; then
-    if systemctl is-enabled switchboard.service >/dev/null 2>&1; then
-        systemctl disable switchboard.service || true
+    if command -v systemctl >/dev/null 2>&1; then
+        if systemctl is-enabled switchboard.service >/dev/null 2>&1; then
+            systemctl disable switchboard.service || true
+        fi
+        systemctl stop switchboard.service || true
     fi
-    systemctl stop switchboard.service || true
 fi
-
-#DEBHELPER#
 
 exit 0

@@ -239,3 +239,39 @@ manager is the last thing that should decide otherwise.
    `apt purge` additionally removes `/etc/switchboard/` and still leaves the board databases.
 9. `apt install` of a newer version over a configured install preserves the env file and the
    board data, and the service comes back on the new version.
+
+## Review Findings
+
+The packaging tree shipped four defects that each produce a unit which never starts, and all four
+are fixed. `User=`, `WorkingDirectory=` and `Environment=` carried `${SWITCHBOARD_*}` references —
+systemd expands `${VAR}` in **command lines only**, so the unit would have tried to run as a user
+literally named `${SWITCHBOARD_USER}` with `HOME=/home/${SWITCHBOARD_USER}`, which is precisely the
+second-empty-board failure change 3 warns about; those four settings now come from a drop-in
+`switchboard setup host` writes with resolved literals, and the base unit gained an `ExecStartPre`
+that refuses to start unconfigured rather than restart-looping into `failed`. `/usr/bin/switchboard`
+symlinked a mode-0644 `.js`, so `ExecStart` would have failed 203/EXEC; `package-deb.sh` now asserts
+the shebang and sets the exec bit, vendors **production** `node_modules` instead of the whole dev
+tree, and requires `better-sqlite3` and `node-pty` out of the vendored tree as change 2 specifies
+rather than out of the repo's. `setup host --import` copied the board into
+`<workspace>/.switchboard/boards/` — a path nothing reads, since the board lives in the home store —
+and now resolves the destination through `resolveBoardDbPath`, the same resolver the running board
+uses, backing up any existing board first; it also validates the source, restores the missing
+`systemctl daemon-reload`, honours `--workspace` for the non-interactive form it already advertised,
+records the resolved Node directory on the unit PATH (change 4), prints the real tailnet name via
+`detectTailnetAddress`/`resolveMagicDnsNames` instead of `os.hostname()`, and `return`s after every
+`exitFlushed` — which can fall through when stdout is buffered, so the old code went on to write the
+env file and enable the service after reporting a bad workspace. `debian/rules` and `debian/control`
+were deleted: nothing invoked `dh`, so `--no-start --no-enable` never ran and `rules` wrote
+`DEBIAN/conffiles` into a directory that did not exist yet; `packaging/debian/README.md` records why
+a second packaging mechanism must not come back. Validated with `tsc --noEmit`, `npm test`,
+`npm run compile`, and `bash -n` / `sh -n` on every shipped script.
+
+## Deferred Findings
+
+- CRITICAL `scripts/package-deb.sh:1` — **nothing in this review ran on arm64 hardware.** No `.deb` was built, installed, rebooted, or removed. Every verification item (1-9) is unexecuted, and passing the repo's unrelated suites is not evidence that the package installs, that the unit starts, or that terminals work on a Pi. The verdict on this plan is provisional until someone runs `npm run package:deb` on a Pi and follows the plan's own nine steps.
+- MAJOR `scripts/package-deb.sh:71` — the production vendor step runs `npm ci --omit=dev` in a temp directory, which re-resolves and rebuilds the native modules there. On an arm64 build host that is correct; on any other host it silently produces the wrong binaries and the `require()` checks still pass. The script does not assert `process.arch === 'arm64'`.
+- MAJOR `packaging/debian/switchboard.service:4` — `After=tailscaled.service` is unconditional rather than applied only when `SWITCHBOARD_SERVE_MODE=tailnet` (edge case 10). Harmless where tailscaled is absent, but the plan asked for the conditional.
+- MAJOR `packaging/debian/postrm:1` — `apt purge` removing `/etc/switchboard` and the drop-in is implemented and never tested; nothing asserts board databases survive it.
+- MAJOR — `Depends: nodejs (>= 22)` now lives only in the inline control block of `package-deb.sh` after `debian/control` was deleted. It is still emitted, but the dependency declaration is no longer reviewable as a standalone file.
+- NIT `src/standalone/cli.ts:2196` — `which -a switchboard` under `sudo` sees root's PATH, so the second-binary warning (edge case 8) will miss an nvm-installed CLI on the invoking user's PATH.
+- NIT — arm64-only is enforced by the control field but the description does not name armhf / Pi Zero 2 W explicitly as edge case 5 asks.

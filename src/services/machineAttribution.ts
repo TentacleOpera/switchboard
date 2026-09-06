@@ -3,7 +3,14 @@ import * as os from 'os';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { execFileSync } from 'child_process';
-import * as vscode from 'vscode';
+// NOT a static `import * as vscode`. KanbanDatabase imports this module, and
+// KanbanDatabase is loaded from out/ by headless contract tests and by any
+// plain-node consumer. webpack aliases `vscode` to a shim for the standalone
+// BUNDLE, but tsc's out/ has no such alias, so a top-level import here makes
+// `require('out/services/KanbanDatabase.js')` throw "Cannot find module
+// 'vscode'" — which is exactly what it did to
+// test:contract:workspace-root-write-path. Resolved lazily inside the try/catch
+// that already exists to tolerate a missing host.
 import { stateFile } from '../utils/stateHome';
 import { getGlobalStoreDir } from './globalStore';
 
@@ -19,6 +26,7 @@ interface ResolvedAttribution {
 }
 
 let _identityCache: MachineIdentity | null = null;
+let _userAttributionCache: ResolvedAttribution | null = null;
 
 /**
  * Load or create a stable, persisted machine identity for board attribution.
@@ -79,18 +87,45 @@ export function getMachineLabel(): string {
  * Returns the source so callers can log which store answered.
  */
 export function resolveUserId(): ResolvedAttribution {
+    // Cached for the life of the process. This is called on EVERY plan_events
+    // append — a column move, a workflow start, a completion — and the git branch
+    // below spawns a synchronous subprocess that blocks the event loop. Resolving
+    // it once per process is the difference between an attribution lookup and a
+    // fork per board event on a 4 GB Pi.
+    if (_userAttributionCache) { return _userAttributionCache; }
+
+    const resolved = _resolveUserIdUncached();
+    _userAttributionCache = resolved;
+    if (resolved.source === 'unknown') {
+        // Logged ONCE, here, rather than on every event: the callers' per-event
+        // warning turned an unresolved attribution into log spam proportional to
+        // board activity.
+        console.log('[MachineAttribution] No user id resolved (no switchboard.attribution.userId setting, no git user.email) — plan_events attribution will show \'unknown\'.');
+    }
+    return resolved;
+}
+
+/** Test seam: drop the cached attribution so a changed setting is re-read. */
+export function resetUserAttributionCache(): void {
+    _userAttributionCache = null;
+}
+
+function _resolveUserIdUncached(): ResolvedAttribution {
     const identity = getMachineIdentity();
     if (identity.userId && identity.userId.trim() !== '') {
         return { value: identity.userId.trim(), source: 'setting' };
     }
 
     try {
-        const setting = vscode.workspace.getConfiguration('switchboard').get<string>('attribution.userId');
-        if (setting && setting.trim() !== '') {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const vscode = require('vscode');
+        const setting = vscode?.workspace?.getConfiguration?.('switchboard')?.get?.('attribution.userId');
+        if (typeof setting === 'string' && setting.trim() !== '') {
             return { value: setting.trim(), source: 'setting' };
         }
     } catch {
-        // VS Code may not be available in some test harnesses — fall through.
+        // No VS Code host (standalone, a contract test, a plain-node consumer) —
+        // fall through to git config. Attribution degrades; it never blocks.
     }
 
     try {

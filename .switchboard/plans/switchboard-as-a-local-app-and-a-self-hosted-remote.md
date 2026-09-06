@@ -298,3 +298,56 @@ re-open it as an open question; it was one, and it has been answered.
 ## Implementation & Completion Summary
 
 The scope of this plan has been implemented and superseded by the concrete subtasks and architecture shipped across the codebase. Remote connectivity was delivered via Tailscale (`switchboard tailnet`) with dual listeners, retaining loopback invariance and eliminating manual tunnel pairing machinery (`remote-switchboard-is-tailscale-and-nothing-else.md`). Standalone autostart, systemd service units, and package distribution have been factored into their dedicated subtasks (`raspberry-pi-installs-switchboard-with-apt.md`, `autostart-unit-invokes-removed-switchboard-start.md`). Interactive terminal front-door navigation (`switchboard` CLI menu, `local`, `tailnet`, `setup`) provides full standalone host lifecycle and mode management without IDE reliance.
+
+## Review Findings
+
+Of this plan's twelve proposed changes, three landed in a form that works and the rest are either
+covered by the plan's own Implementation & Completion Summary (Tailscale replaced the pairing and
+tunnel machinery) or are absent. `POST /settings` and `POST|DELETE /pair` were removed by this
+review: both stored their input in a private field nothing ever read, `_pendingServeMode` was
+written and never consulted, and the settings POST answered `success: true` with "restart to apply"
+for a change that could not survive the process — a write endpoint that cannot take effect is worse
+than none, because it makes a wrong setting invisible instead of impossible. `GET /settings`
+survives and now reports each value with the source it resolved from, which is what change 10's
+"every value shows where it resolved from" actually asks for; it works with no peer, which is the
+single-machine case the plan puts first. The loopback-invariance contract test (change 9) was
+rewritten — its `--bind` assertion was `!A || !A`, it made no behavioural assertion at all, and it
+was defined in neither `package.json` nor CI, so the plan's own regression guard was not guarding.
+It now exercises the real predicate and is wired into the workflow. The desktop entry (change 0)
+passed `--no-open` with `Terminal=false`, so clicking the icon started a server nobody could see;
+that is fixed and the entry plus an icon are now actually installed by the package. Files changed:
+`src/services/LocalApiServer.ts`, `src/test/loopback-invariance-contract.test.js`,
+`packaging/switchboard.desktop`, `scripts/package-deb.sh`, `package.json`,
+`.github/workflows/integration-tests.yml`, `src/services/machineAttribution.ts`.
+
+## Deferred Findings
+
+- CRITICAL `src/services/machineAttribution.ts:1` — this file introduced a top-level `import * as vscode` into `KanbanDatabase`'s require graph. `out/` has no vscode alias, so every headless consumer of `KanbanDatabase` threw `Cannot find module 'vscode'` at load. Fixed here (lazy require), but recorded as CRITICAL because it reached a green review: `npm test` does not load `out/`, and the CI steps that do were already red for an older reason and hid it.
+- MAJOR `src/services/SyncOwnershipLease.ts:1` — the lease is out of this plan's scope (the plan names `sync-owner-lease-and-write-attribution.md` as a *dependency*, for the second-host mode only) and is non-functional: `_isLocalFileStore` returns `true` unconditionally, so `isOwner()` always returns true and the six new guards in ClickUp/Linear/Notion/ContinuousSync are no-ops. `getStatus()` hardcodes `isOwner: true`. Left in place rather than deleted, because removing another plan's groundwork is that plan's call.
+- MAJOR `src/services/LocalApiServer.ts:9721` — change 10's settings **window** does not exist. There is a read-only JSON endpoint and no UI, so workspace root, port, PATH additions and mode still have no home an operator can open.
+- MAJOR — changes 1 (tray launcher), 2 (`switchboard remote install|start|stop|status`), 5 (tunnel health surfaced in the Database panel), 6 (mode-transition semantics and per-terminal host labels), 7 (store ownership lock), 8 (version-skew refusal) are unimplemented. The plan's revision narrowed 3 and 5; it did not withdraw 1, 2, 6, 7 or 8.
+- MAJOR — the distribution-tier rule ("nothing persistent may leak into `npx`") has no test. Nothing prevents a future first-run flow from installing the desktop entry or a unit, which is the exact violation the tier table exists to forbid.
+- MAJOR — verification is unexecuted for every item that needs two machines or a reboot: pairing, all three modes end to end, reboot survival, tunnel loss, mode switch, single ownership, unattended legibility, version skew, capability gating, service lifecycle, credential scope. Passing the repo's unrelated suites is not evidence any of them hold.
+- NIT `packaging/switchboard.desktop:1` — no `Path=` is set, so the launcher's workspace is whatever directory the desktop session inherits. Correct for a package that cannot know the tree, but it means the icon can open a board pointed at `$HOME`.
+
+### Review Deviations
+
+Recorded for the author; this is prose, not an instruction to a later agent.
+
+**What changed:** `POST /settings`, `POST /pair` and `DELETE /pair` were deleted, along with the
+`_pendingServeMode` and `_pairingState` fields. `GET /settings` was kept and given per-value
+`source` reporting.
+
+**Why the original destination was a blocker:** as delivered, all three write endpoints stored
+their input in a private field of a single `LocalApiServer` instance and nothing anywhere read it
+back. Serve mode is decided by the subcommand the operator typed or by `SWITCHBOARD_SERVE_MODE` in
+the systemd env file; a preference held in this process could never reach either, and the endpoint
+said `success: true` regardless. Making them real would mean choosing a persistent store for mode
+and pairing and a reader at startup — a design decision with a precedence question attached (does a
+stored mode beat an explicit `switchboard tailnet`?) that is the author's, not a reviewer's.
+
+**What the author needs to decide:** whether change 4's mode picker and change 3's pairing flow are
+still wanted at all now that the plan's own Implementation & Completion Summary says Tailscale
+replaced the pairing machinery — and if they are, where the mode is stored and which source wins.
+The card has NOT been moved: the plan's Goal (an installed application, mode selection, loopback
+kept absolute) is not reversed by removing two endpoints that did nothing.

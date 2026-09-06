@@ -23207,16 +23207,20 @@ Each plan file must include:
             throw new Error('No workspace folder found.');
         }
         const plansDir = path.join(workspaceRoot, '.switchboard', 'plans');
-        const intakeDir = path.join(plansDir, 'intake');
-        fs.mkdirSync(intakeDir, { recursive: true });
+        fs.mkdirSync(plansDir, { recursive: true });
 
         const now = new Date();
         const timestamp = this._formatPlanTimestamp(now);
         const slug = this._toPlanSlug(title);
         const fileName = `feature_plan_${timestamp}_${slug}.md`;
-        // Write to intake; the planFileAbsolute (used for DB records and session
-        // logs) points to the archive destination. The file is moved after write.
-        const intakeAbsolute = path.join(intakeDir, fileName);
+        // Written straight to the archive, NOT via plans/intake/. Intake exists so
+        // the scanner's cost tracks arrivals instead of archive size — it is the
+        // door for writers that rely on the watcher to import. This path does not:
+        // it pre-registers the archive path (registerPendingCreation below), which
+        // makes the watcher SKIP it, and creates its own registry row. Writing to
+        // intake and immediately renaming out of it would be a hop the scanner
+        // never sees, and a failed rename would leave a file in intake that the
+        // scanner then imports as a SECOND card for the row created here.
         const planFileAbsolute = path.join(plansDir, fileName);
         const planFileRelative = path.relative(workspaceRoot, planFileAbsolute);
 
@@ -23226,13 +23230,7 @@ Each plan file must include:
         GlobalPlanWatcherService.registerPendingCreation(planFileAbsolute);
         try {
             const content = isAirlock ? `## Notebook Plan\n\n${idea}` : idea;
-            await fs.promises.writeFile(intakeAbsolute, content, 'utf8');
-            // Move from intake to archive after write.
-            try {
-                await fs.promises.rename(intakeAbsolute, planFileAbsolute);
-            } catch (moveErr) {
-                console.warn(`[TaskViewer] intake move failed for ${fileName}:`, moveErr);
-            }
+            await fs.promises.writeFile(planFileAbsolute, content, 'utf8');
 
             const createdAt = options.createdAt || now.toISOString();
             const log = this._getSessionLog(workspaceRoot);

@@ -61,3 +61,20 @@ Add `TimeoutStopSec` while there: `switchboard stop` is known to free the port a
 
 - **Complexity:** 2
 - **Tags:** standalone, docs, devops, bugfix
+
+## Review Findings
+
+All three templates now invoke `switchboard local` and each carries a comment naming `tailnet` as
+the substitution and stating that `start` was removed — verified against `cli.ts:2908`, which still
+prints the replacement notice and exits 1, and against the `KNOWN_SUBCOMMANDS` set, which accepts
+`local` and `tailnet`. `TimeoutStopSec=15` was added to the systemd template only; launchd's
+`ExitTimeOut` and the Windows Task Scheduler `ExecutionTimeLimit` have no equivalent stop-hang
+failure and were left alone. Files changed by this review: none — the implementation was correct as
+delivered. Validated with `npx tsc -p tsconfig.test.json --noEmit` (clean), `npm test` (green after
+regenerating `protocol-catalog.json`, which the implementation commit left stale), and the two new
+contract suites.
+
+## Deferred Findings
+
+- NIT `docs/autostart/switchboard.launchd.plist:39` — launchd has no stop timeout set. `ExitTimeOut` defaults to 20s and SIGKILLs after, so the systemd hang mode does not apply; not worth a change.
+- NIT `docs/autostart/switchboard-windows.xml:53` — the comment block sits above `<Command>` rather than above `<Arguments>`, where the verb actually is. Cosmetic.

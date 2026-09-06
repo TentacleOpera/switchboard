@@ -135,16 +135,13 @@ interface RemoteControlDeps {
     onColumnMove: (plan: KanbanPlanRecord, targetColumn: string) => Promise<{ dispatched: boolean }>;
     /**
      * Return the workspace's kanban column definitions, for the review gate
-     * (the-remote-command-vocabulary-is-closed.md). Optional — when absent,
-     * the review gate is skipped (legacy behaviour). When present, a move
-     * into an execution column is refused if the plan has not passed review.
+     * (the-remote-command-vocabulary-is-closed.md). REQUIRED, deliberately:
+     * an optional seam here means "absent" and "working" look the same, and
+     * absent would mean every remote dispatch bypasses the gate in silence.
+     * Supplying an empty array is the honest way to say "unresolvable" — the
+     * gate fails CLOSED on it.
      */
-    getColumns?: () => KanbanColumnDefinition[];
-    /**
-     * Return the column history (runs) for a plan, for the review gate's
-     * "has this plan ever been in a reviewed column?" check. Optional.
-     */
-    getPlanRuns?: (planId: string) => Promise<Array<{ column?: string }>>;
+    getColumns: () => KanbanColumnDefinition[];
     /** Credential source label for receipts (e.g. 'linear', 'notion', 'store'). */
     credentialSource?: string;
     /**
@@ -840,27 +837,28 @@ export class RemoteControlService {
             // (applies to every trigger path) and fails closed when columns
             // cannot be resolved. See the-remote-command-vocabulary-is-closed.md.
             const credSource = this._deps.credentialSource || provider.kind;
-            if (this._deps.getColumns) {
-                const columns = this._deps.getColumns();
-                let runs: Array<{ column?: string }> | undefined;
-                if (this._deps.getPlanRuns) {
-                    try { runs = await this._deps.getPlanRuns(plan.planId); } catch { runs = undefined; }
-                }
-                const gate = checkReviewGate({
-                    targetColumn,
-                    sourceColumn: plan.kanbanColumn,
-                    columns,
-                    runs,
-                    isRemote: true
-                });
-                if (!gate.allowed) {
-                    const refusal = formatRefusalReceipt(plan.planId, credSource, gate.refusalReason || 'unknown');
-                    provider.postComment(remoteId, refusal).catch(e =>
-                        this._log(`Refusal receipt comment failed for ${plan.planId}: ${e instanceof Error ? e.message : String(e)}`)
-                    );
-                    this._log(`Review gate REFUSED dispatch for ${plan.planId} → ${targetColumn}: ${gate.refusalReason}`);
-                    return;
-                }
+            let columns: KanbanColumnDefinition[] = [];
+            try {
+                columns = this._deps.getColumns() || [];
+            } catch (colErr) {
+                // An unresolvable column configuration is exactly the case the
+                // gate must fail closed on — an empty array is how that is said.
+                this._log(`Review gate could not resolve columns for ${plan.planId}: ${colErr instanceof Error ? colErr.message : String(colErr)}`);
+                columns = [];
+            }
+            const gate = checkReviewGate({
+                targetColumn,
+                sourceColumn: plan.kanbanColumn,
+                columns,
+                isRemote: true
+            });
+            if (!gate.allowed) {
+                const refusal = formatRefusalReceipt(plan.planId, credSource, gate.refusalReason || 'unknown');
+                provider.postComment(remoteId, refusal).catch(e =>
+                    this._log(`Refusal receipt comment failed for ${plan.planId}: ${e instanceof Error ? e.message : String(e)}`)
+                );
+                this._log(`Review gate REFUSED dispatch for ${plan.planId} → ${targetColumn}: ${gate.refusalReason}`);
+                return;
             }
 
             const { dispatched } = await this._deps.onColumnMove(plan, targetColumn);

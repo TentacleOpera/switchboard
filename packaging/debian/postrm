@@ -4,9 +4,15 @@
 set -e
 
 if [ "$1" = "purge" ]; then
+    # /etc/switchboard and the setup drop-in only. Board databases live in the
+    # operator's home store (~/.switchboard/boards/) and the workspace is theirs
+    # — a package manager is the last thing that should decide to delete either.
     rm -rf /etc/switchboard
+    rm -rf /etc/systemd/system/switchboard.service.d
 fi
 
-#DEBHELPER#
+if command -v systemctl >/dev/null 2>&1 && [ "$1" != "upgrade" ]; then
+    systemctl daemon-reload || true
+fi
 
 exit 0

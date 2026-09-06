@@ -158,3 +158,32 @@ The receipt is additive. The review precondition may refuse a trigger that previ
 - Is there a legitimate remote verb beyond authoring and moving — pausing the fleet, cancelling a dispatch — that is a *control* rather than an *instruction*? Cancellation in particular is safe in a way execution is not, and refusing it may be over-tight.
 - **Answered: the targets split, and the gate stays for sqld.** sqld enforces only whole-connection read-only versus read-write — SQLite has no native table-level authorization and sqld registers no authorizer, so `-p <table>:<action>` is a Turso Cloud control-plane feature with no self-hosted equivalent (see `libsql-shared-store-turso-and-self-hosted-sqld.md`). So credential separation on a self-hosted target is enforced entirely in the application, and the execution gate **cannot** be relaxed there even where Turso's scoping permits relaxing it. Two targets, two postures, stated in the panel rather than left for an operator to discover.
 - **And the product should not offer what the server cannot enforce.** A scoped-token minting flow for a sqld target would hand an operator a credential they believe is narrow and is not — the failure mode is a false belief, not a server bug. Offer scoped minting only for targets that enforce it.
+
+## Review Findings
+
+`RemoteCommandEnforcement.ts` closes the vocabulary at two verbs and the gate is wired at
+`RemoteControlService`'s full-mode dispatch, whose deps are built at the single construction site in
+`KanbanProvider.ts:2677` — shared by both hosts, so there is no composition-root divergence here.
+Four fixes were applied: `getColumns` was optional and its absence **skipped the gate entirely**
+(fail-open on a security seam) and is now required with an unresolvable configuration expressed as an
+empty array that fails closed; the `getPlanRuns` seam was removed after checking the persisted
+`plan_events` literal, which has no `column` field and no writer that puts one in `payload` — nothing
+could ever have supplied it, so "never wired" and "working" were the same value; the vocabulary and
+its reasoning are now documented in `.agents/workflows/switchboard-remote.md` §2a (plan change 1,
+previously not done at all); and the contract test was rewritten to be runnable — it required
+`dist/remote/RemoteCommandEnforcement`, a path webpack never emits, and was invoked by neither
+`package.json` nor CI, so "widening the vocabulary fails CI" was false. Files changed:
+`src/services/remote/RemoteCommandEnforcement.ts`, `src/services/RemoteControlService.ts`,
+`src/test/remote-command-vocabulary-contract.test.js`, `package.json`,
+`.github/workflows/integration-tests.yml`, `.agents/workflows/switchboard-remote.md`.
+
+## Deferred Findings
+
+- MAJOR `src/services/remote/RemoteCommandEnforcement.ts:15` — the typed switch table and append-only logs table (change 6) do not exist. There is no store transport yet, so there is nothing to type; the verb list is a constant, not a schema. The "switch schema carries no free-text column" verification cannot be run and the plan's own switch-versioning and edge-triggering requirements are unimplemented.
+- MAJOR `src/services/RemoteControlService.ts:835` — credential separation (change 5, decision 3) is documented in the remote workflow by this review but nothing enforces or even surfaces it. One credential still both authors and triggers, which is the confused-deputy chain the plan calls the load-bearing control.
+- MAJOR `src/services/RemoteControlService.ts:838` — the gate is NOT transport-neutral as decision 2 requires. It runs only on the remote poll path; a local drag from CREATED into a coding column is ungated. Making it universal would refuse the everyday local dispatch, so the author has to decide whether decision 2 survives contact with the drag-and-drop workflow before this is "wired everywhere".
+- MAJOR `src/services/RemoteControlService.ts:836` — receipts post through `provider.postComment`, not `postManagedComment` as change 4 names, so they carry no managed marker and will accumulate un-collapsed on the remote card.
+- MAJOR — no provenance marker on agent-authored cards as a board-visible field (change 3b). `importRemotePlan` writes a `> **Provenance:**` blockquote into the plan body, which is a document convention, not card state a reviewer sees on the board.
+- MAJOR — edge-triggering, idempotent dispatch across two transports, and the "log as untrusted input" verification have no implementation and no test. They belong with the store transport that does not exist yet.
+- NIT `src/services/remote/RemoteCommandEnforcement.ts:137,147` — `credentialSource || 'unknown'` is a fallback on identity, but it lands only in receipt prose and reads as honestly unknown rather than plausibly configured. Left as-is.
+- NIT `src/services/remote/RemoteCommandEnforcement.ts:82` — `role === 'acceptance'` matches no built-in column; `ACCEPTANCE TESTED` carries role `tester` and passes only via the `TESTED` label fallback. Works by accident.

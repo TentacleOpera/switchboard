@@ -10540,10 +10540,9 @@ FROM plans
         workspaceId?: string;
     }): Promise<boolean> {
         const deviceId = getMachineId();
-        const { value: userId, source: userSource } = resolveUserId();
-        if (userSource === 'unknown') {
-            console.log(`[KanbanDatabase] plan_event user_id unresolved for plan ${planId} — attribution will show 'unknown'`);
-        }
+        // resolveUserId caches and logs an unresolved attribution once per process;
+        // warning per event made the log volume track board activity.
+        const { value: userId } = resolveUserId();
         let wsId = event.workspaceId;
         if (!wsId && planId) {
             try {

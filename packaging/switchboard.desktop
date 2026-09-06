@@ -3,7 +3,14 @@ Type=Application
 Name=Switchboard
 GenericName=Agent Fleet Command
 Comment=Plan-driven agent orchestration board
-Exec=switchboard local --no-open
+# No --no-open: clicking the icon must start the host AND open the board. With
+# --no-open and Terminal=false the launcher starts a server nobody can see and
+# looks like it did nothing at all, which is the exact discoverability failure
+# the desktop entry exists to fix.
+# The workspace is the one the CLI resolves from the working directory; Path=
+# is deliberately absent so the entry inherits the session's own default rather
+# than pinning a tree the package cannot know.
+Exec=switchboard local
 Icon=switchboard
 Terminal=false
 Categories=Development;Utility;

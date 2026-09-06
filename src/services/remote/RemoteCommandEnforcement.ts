@@ -24,9 +24,29 @@ export interface ReviewGateOptions {
   targetColumn: string;
   sourceColumn?: string;
   columns: KanbanColumnDefinition[];
-  runs?: Array<{ column?: string }>;
   isRemote?: boolean;
 }
+
+/*
+ * NOTE ON RUN HISTORY — read before adding it back.
+ *
+ * An earlier revision took an optional `runs: Array<{ column?: string }>` so a
+ * plan that had EVER been in a reviewed column could pass even when its current
+ * column is not one. Nothing could supply it. `plan_events` is the only column
+ * audit trail on the board, and its persisted literal is
+ *   (plan_id, event_type, workflow, action, timestamp, device_id, user_id,
+ *    payload, workspace_id)
+ * — there is no `column` field, and no writer puts one in `payload` either. The
+ * parameter was therefore a seam whose never-wired state and whose working
+ * state produced identical behaviour, which is exactly the shape this codebase
+ * keeps getting bitten by. It is removed rather than left declared.
+ *
+ * The gate consequently keys on the plan's CURRENT column. That is stricter,
+ * and stricter is the safe direction: a reviewed plan parked in STAGING is
+ * refused a remote trigger and the operator sees a receipt saying why. To relax
+ * it, first persist a column-transition history (a `column` field on the
+ * plan_events insert, or a dedicated table) — then, and only then, feed it here.
+ */
 
 /**
  * Helper to determine if a column role or kind represents execution/coding.
@@ -81,7 +101,7 @@ export function isReviewedStage(columnName: string, columns: KanbanColumnDefinit
  * remote one does. See the-remote-command-vocabulary-is-closed.md decision 2.
  */
 export function checkReviewGate(options: ReviewGateOptions): ReviewGateResult {
-  const { targetColumn, sourceColumn, columns, runs } = options;
+  const { targetColumn, sourceColumn, columns } = options;
 
   if (!columns || columns.length === 0) {
     // Fail closed if columns configuration is missing
@@ -100,13 +120,6 @@ export function checkReviewGate(options: ReviewGateOptions): ReviewGateResult {
   // Target is execution. Check if plan is coming from or has passed a reviewed column.
   if (sourceColumn && isReviewedStage(sourceColumn, columns)) {
     return { allowed: true };
-  }
-
-  if (runs && runs.length > 0) {
-    const passedReview = runs.some(r => r.column && isReviewedStage(r.column, columns));
-    if (passedReview) {
-      return { allowed: true };
-    }
   }
 
   return {

@@ -31,6 +31,61 @@ Check which MCP servers are connected (Linear, Notion, GitHub):
   state (confirm the name with `list_issue_statuses` first for Linear; read the
   `Kanban Column` select options for Notion).
 
+### 2a. The remote command vocabulary is closed at two verbs
+
+A remote surface may **author content** and **move a card**. Nothing else. There
+is no third verb, and there is no free-text instruction channel — not as a
+setting, not as an advanced toggle. `ALLOWED_REMOTE_VERBS` in
+`src/services/remote/RemoteCommandEnforcement.ts` is the definition, and
+`test:contract:remote-command-vocabulary` fails CI if it grows.
+
+**Why, rather than just what.** A column move dispatches a plan file that
+*already exists* — authored, materialised, imported, and advanced through
+columns. So the worst a compromised remote surface can do is dispatch an
+already-reviewed plan at the wrong moment: bad, recoverable, bounded. A
+free-text instruction channel collapses authoring and triggering into a single
+write, and that is the entire difference. It cannot cause novel code to run,
+because it cannot author the thing that runs and trigger it in one motion.
+
+This matters more here than in most products because **the fleet reads untrusted
+content for a living** — issue bodies, Notion pages, ClickUp tasks, PR and review
+comments, fetched web pages. An agent that reads such content *and* holds write
+access to a command channel is a confused deputy: text arriving in a ticket can
+instruct the agent to write the queue, and the local controller executes that
+queue because executing it is its job. Prompt injection becomes code execution on
+a machine holding every repository, key and credential the operator works with.
+No link in that chain is a bug.
+
+**Token scoping does not fix this, and it is important not to believe it does.**
+Table+action scoping narrows *board data* damage. It does nothing about
+execution, because the local controller runs the contents of the channel by
+design. A token scoped to insert into an instruction queue is a token that can
+run code.
+
+**Two things you must know when driving remotely:**
+
+1. **A trigger into an execution column is refused unless the plan passed
+   review.** The gate keys on the column's *role/kind*, not its label, so
+   renaming a column does not open it; and it **fails closed** when the column
+   configuration cannot be resolved. It is transport-neutral — a local agent
+   reading the same poisoned ticket authors the same plan a remote one does, so
+   the gate does not care where the trigger came from. A refusal is never
+   silent: it posts a receipt naming the plan, the credential and the reason.
+2. **The two transports are not equally tight.** Linear and Notion descriptions
+   are *free text* pulled into plan bodies — that is the shipped remote-authoring
+   workflow and it stays. The store transport's typed switch table carries no
+   free-text column at all. Do not assume the switch table's guarantees apply to
+   Linear; for the SaaS path the review gate is the control.
+
+**Credential separation is the control that actually breaks the chain.** The
+credential that can *trigger* must not be the one handed to agents that read
+tickets, pages, PR comments or the web. Two credentials, two trust zones: an
+authoring/read token for content-consuming agents, and a triggering credential
+the operator holds. Switchboard operates no service and enforces no
+authorisation — this is a vocabulary boundary, not an access-control layer, and
+nothing here protects you from a leaked triggering credential. It limits what
+that credential can express.
+
 ## 3. Read Current Board State
 
 - Query Linear/Notion for issues in the Switchboard-mapped project, grouped by status.

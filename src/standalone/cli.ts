@@ -2046,39 +2046,79 @@ async function cmdNext(workspaceRoot: string, argv: string[]): Promise<void> {
  *
  * See raspberry-pi-installs-switchboard-with-apt.md change 4.
  */
-async function cmdSetupHost(_workspaceRoot: string, argv: string[]): Promise<void> {
-    const importPath = argv.includes('--import') ? argv[argv.indexOf('--import') + 1] : null;
+async function cmdSetupHost(workspaceRoot: string, argv: string[]): Promise<void> {
+    const importIdx = argv.indexOf('--import');
+    const importPath = importIdx >= 0 ? argv[importIdx + 1] : null;
+    if (importIdx >= 0 && !importPath) {
+        console.error('[switchboard] --import requires a path to the board database to import.');
+        exitFlushed(5);
+        return;
+    }
     const prompter = openPrompter();
 
     try {
         console.log('[switchboard] Host setup — configure the systemd service.\n');
 
-        // 1. Workspace root
+        // 1. Workspace root. `--workspace` (resolved by main()) is the
+        //    non-interactive answer; a TTY is prompted. There is deliberately no
+        //    cwd default and no "create it for you" — a board pointed at the
+        //    wrong tree is silent and wrong, and --import must not smuggle one in.
+        const workspaceFlagged = process.argv.includes('--workspace');
         let workspace = '';
-        if (importPath) {
-            workspace = process.cwd();
+        let workspaceSource = '';
+        if (workspaceFlagged) {
+            workspace = workspaceRoot;
+            workspaceSource = '--workspace';
+        } else if (process.stdin.isTTY) {
+            workspace = (await prompter.ask('Workspace root (full path to the directory whose .switchboard/ holds the board): ')) || '';
+            workspaceSource = 'prompt';
         } else {
-            if (process.stdin.isTTY) {
-                workspace = (await prompter.ask('Workspace root (full path to the directory whose .switchboard/ holds the board): ')) || '';
-            } else {
-                console.error('[switchboard] Non-interactive setup host requires a workspace argument.');
-                console.error('  switchboard setup host --workspace /path/to/workspace');
-                exitFlushed(5);
-            }
+            console.error('[switchboard] Non-interactive setup host requires an explicit workspace.');
+            console.error('  switchboard setup host --workspace /path/to/workspace');
+            exitFlushed(5);
+            return;
         }
+        workspace = workspace.trim();
         if (!workspace || !fs.existsSync(workspace) || !fs.statSync(workspace).isDirectory()) {
             console.error(`[switchboard] Workspace '${workspace}' does not exist or is not a directory.`);
             console.error('  Do not create it here — a board pointed at the wrong tree is silent and wrong.');
             exitFlushed(5);
+            return;
         }
-        console.log(`  Workspace: ${workspace}`);
+        workspace = path.resolve(workspace);
+        console.log(`  Workspace: ${workspace} (from ${workspaceSource})`);
 
         // 2. Service user — resolve from SUDO_USER or current user. Never assume `pi`.
         const serviceUser = process.env.SUDO_USER || os.userInfo().username;
-        console.log(`  Service user: ${serviceUser} (from ${process.env.SUDO_USER ? 'SUDO_USER' : 'current user'})`);
+        const serviceUserSource = process.env.SUDO_USER ? 'SUDO_USER' : 'current user';
+        console.log(`  Service user: ${serviceUser} (from ${serviceUserSource})`);
+
+        // The unit's HOME must be the service user's real home, not a
+        // /home/<user> guess — the board writes to ~/.switchboard/boards/, so a
+        // wrong HOME creates a second, empty board that looks identical to a
+        // missing one from the UI.
+        let serviceHome = '';
+        let serviceHomeSource = '';
+        try {
+            const passwd = cpExecSync(`getent passwd ${serviceUser}`, { encoding: 'utf8' }).trim();
+            const field = passwd.split(':')[5];
+            if (field && field.trim() !== '') { serviceHome = field.trim(); serviceHomeSource = 'getent passwd'; }
+        } catch { /* getent unavailable — fall through */ }
+        if (!serviceHome && !process.env.SUDO_USER) {
+            serviceHome = os.homedir();
+            serviceHomeSource = 'os.homedir()';
+        }
+        if (!serviceHome) {
+            console.error(`[switchboard] Could not resolve a home directory for '${serviceUser}'.`);
+            console.error('  The board writes to ~/.switchboard/boards/ — guessing /home/<user> would create a second, empty board.');
+            exitFlushed(5);
+            return;
+        }
+        console.log(`  Service HOME: ${serviceHome} (from ${serviceHomeSource})`);
 
         // 3. Serve mode — validate against exactly two words.
         let serveMode = 'tailnet';
+        let serveModeSource = 'default';
         if (process.stdin.isTTY) {
             const modeAnswer = await prompter.ask('Serve mode [local/tailnet] (default: tailnet): ');
             if (modeAnswer && modeAnswer.trim()) {
@@ -2086,36 +2126,51 @@ async function cmdSetupHost(_workspaceRoot: string, argv: string[]): Promise<voi
                 if (trimmed !== 'local' && trimmed !== 'tailnet') {
                     console.error(`[switchboard] Invalid serve mode '${trimmed}'. Must be 'local' or 'tailnet'.`);
                     exitFlushed(5);
+                    return;
                 }
                 serveMode = trimmed;
+                serveModeSource = 'prompt';
             }
         }
-        console.log(`  Serve mode: ${serveMode}`);
+        console.log(`  Serve mode: ${serveMode} (from ${serveModeSource})`);
 
         // 4. Port
         let port = '7777';
+        let portSource = 'default';
         if (process.stdin.isTTY) {
             const portAnswer = await prompter.ask('Port (default: 7777): ');
             if (portAnswer && portAnswer.trim()) {
-                port = portAnswer.trim();
+                const parsed = Number(portAnswer.trim());
+                if (!Number.isInteger(parsed) || parsed < 1 || parsed > 65535) {
+                    console.error(`[switchboard] Invalid port '${portAnswer.trim()}'. Must be 1-65535.`);
+                    exitFlushed(5);
+                    return;
+                }
+                port = String(parsed);
+                portSource = 'prompt';
             }
         }
-        console.log(`  Port: ${port}`);
+        console.log(`  Port: ${port} (from ${portSource})`);
 
         // 5. Extra PATH for agent CLIs
         let extraPath = '';
         if (process.stdin.isTTY) {
-            extraPath = (await prompter.ask('Extra PATH for agent CLIs (e.g. ~/.local/bin, nvm paths — leave empty if none): ')) || '';
+            extraPath = ((await prompter.ask('Extra PATH for agent CLIs (e.g. ~/.local/bin, nvm paths — leave empty if none): ')) || '').trim();
         }
 
-        // 6. Resolve Node path
+        // 6. Resolve Node. The unit execs /usr/bin/switchboard, whose shebang is
+        //    `#!/usr/bin/env node`, so the unit's PATH decides which Node answers.
+        //    Record the absolute directory of the resolved Node ahead of the
+        //    system paths so an nvm Node keeps working under systemd, which gets
+        //    no interactive shell profile.
         const nodePath = process.execPath;
         const nodeVersion = process.version;
         console.log(`  Node: ${nodeVersion} at ${nodePath}`);
+        const nodeBinDir = path.dirname(nodePath);
         if (nodePath.includes('.nvm')) {
-            console.log('  Warning: Node is from nvm. The systemd unit uses an absolute path, but');
-            console.log('           if nvm updates Node, the path may break. Consider installing Node');
-            console.log('           from the distro package or NodeSource.');
+            console.log('  Note: Node came from nvm. Its absolute directory is recorded in the unit PATH,');
+            console.log('        because a systemd unit gets no interactive shell profile. An nvm version');
+            console.log('        switch will change that path — prefer distro Node or NodeSource.');
         }
 
         // 7. Check for a second switchboard on PATH
@@ -2129,12 +2184,13 @@ async function cmdSetupHost(_workspaceRoot: string, argv: string[]): Promise<voi
             }
         } catch { /* which not available or no results — ignore */ }
 
-        // 8. Write the env file
+        // 8. Write the env file (command-line values only — see the unit's comment)
         const envDir = '/etc/switchboard';
         const envFile = path.join(envDir, 'switchboard.env');
         const envContent = [
             '# Switchboard service configuration.',
-            '# Written by `switchboard setup host`.',
+            '# Written by `switchboard setup host`. Values here are interpolated into',
+            '# the unit ExecStart, which is the only place systemd expands ${VAR}.',
             `SWITCHBOARD_WORKSPACE=${workspace}`,
             `SWITCHBOARD_PORT=${port}`,
             `SWITCHBOARD_SERVE_MODE=${serveMode}`,
@@ -2150,37 +2206,114 @@ async function cmdSetupHost(_workspaceRoot: string, argv: string[]): Promise<voi
             console.error(`\n[switchboard] Failed to write ${envFile}: ${writeErr}`);
             console.error('  Run with sudo: sudo switchboard setup host');
             exitFlushed(5);
+            return;
         }
 
-        // 9. Import an existing board if requested
+        // 8b. Write the drop-in carrying the LITERAL fields systemd will not
+        //     interpolate: User=, WorkingDirectory=, Environment=HOME=/PATH=.
+        const dropInDir = '/etc/systemd/system/switchboard.service.d';
+        const dropInFile = path.join(dropInDir, '10-setup.conf');
+        const pathEntries = [nodeBinDir, ...(extraPath ? extraPath.split(':').filter(Boolean) : []), '/usr/local/bin', '/usr/bin', '/bin'];
+        const dedupedPath = pathEntries.filter((entry, idx) => entry && pathEntries.indexOf(entry) === idx).join(':');
+        const dropInContent = [
+            '# Written by `switchboard setup host`. Do not hand-edit — re-run setup host.',
+            '# systemd expands ${VAR} in command lines ONLY, so these four settings',
+            '# must carry resolved literal values, never EnvironmentFile references.',
+            '[Service]',
+            `User=${serviceUser}`,
+            `WorkingDirectory=${workspace}`,
+            `Environment=HOME=${serviceHome}`,
+            `Environment=PATH=${dedupedPath}`,
+        ].join('\n') + '\n';
+        try {
+            fs.mkdirSync(dropInDir, { recursive: true });
+            fs.writeFileSync(dropInFile, dropInContent, 'utf8');
+            console.log(`  Written: ${dropInFile}`);
+            console.log(`    User=${serviceUser}  HOME=${serviceHome}`);
+            console.log(`    PATH=${dedupedPath}`);
+        } catch (dropErr) {
+            console.error(`\n[switchboard] Failed to write ${dropInFile}: ${dropErr}`);
+            console.error('  Without it the unit runs as root with the wrong HOME and creates a second, empty board.');
+            exitFlushed(5);
+            return;
+        }
+
+        // 9. Import an existing board if requested. The board lives in the HOME
+        //    store (~/.switchboard/boards/<workspace-id>.db), never inside the
+        //    workspace — a copy into the workspace is a file nothing ever reads.
         if (importPath) {
-            console.log(`\n[switchboard] Importing board from ${importPath}...`);
-            // Stop the service before touching the file — a rename over a live
-            // database orphans the board onto an unlinked inode.
+            const resolvedImport = path.resolve(importPath);
+            if (!fs.existsSync(resolvedImport) || !fs.statSync(resolvedImport).isFile()) {
+                console.error(`[switchboard] Import source '${resolvedImport}' does not exist or is not a file.`);
+                exitFlushed(5);
+                return;
+            }
+            console.log(`\n[switchboard] Importing board from ${resolvedImport}...`);
+            // Stop the service before touching the file — a rename or copy over a
+            // live database orphans the running board onto an unlinked inode: the
+            // process keeps writing to a file with no name and every read stays
+            // correct right up until a restart discards the lot.
             try { cpExecSync('systemctl stop switchboard.service', { stdio: 'inherit' }); } catch { /* not running */ }
-            const boardDir = path.join(workspace, '.switchboard', 'boards');
-            fs.mkdirSync(boardDir, { recursive: true });
-            const destPath = path.join(boardDir, path.basename(importPath));
-            fs.copyFileSync(importPath, destPath);
+            // resolveBoardDbPath is the SAME resolver the running board uses to
+            // open its store, so the import lands where the board will read it —
+            // ~/.switchboard/boards/<workspace-id>.db, not inside the workspace.
+            let destPath = '';
+            try {
+                destPath = resolveBoardDbPath(workspace);
+            } catch (resolveErr) {
+                console.error(`[switchboard] Could not resolve the board path for '${workspace}': ${resolveErr}`);
+                exitFlushed(5);
+                return;
+            }
+            console.log(`  Board target: ${destPath}`);
+            try { fs.mkdirSync(path.dirname(destPath), { recursive: true }); } catch { /* exists */ }
+            if (fs.existsSync(destPath)) {
+                const backup = `${destPath}.pre-import-${Date.now()}.bak`;
+                fs.copyFileSync(destPath, backup);
+                console.log(`  Existing board archived to ${backup}`);
+            }
+            fs.copyFileSync(resolvedImport, destPath);
+            try { fs.chmodSync(destPath, 0o600); } catch { /* best effort */ }
             console.log(`  Board imported to ${destPath}`);
+            console.log(`  NOTE: chown it to ${serviceUser} if you ran this as a different user.`);
         }
 
-        // 10. Enable and start the service
+        // 10. Enable and start the service. daemon-reload first: the package is
+        //     built with dpkg-deb and ships no debhelper systemd snippet, so the
+        //     unit and the drop-in just written are not known to systemd yet.
         console.log('\n[switchboard] Enabling service...');
         try {
+            cpExecSync('systemctl daemon-reload', { stdio: 'inherit' });
             cpExecSync('systemctl enable --now switchboard.service', { stdio: 'inherit' });
             console.log('  Service enabled and started.');
         } catch (enableErr) {
             console.error(`  Failed to enable service: ${enableErr}`);
             console.error('  Check the unit file at /lib/systemd/system/switchboard.service');
+            console.error('  and the drop-in at /etc/systemd/system/switchboard.service.d/10-setup.conf');
+            console.error('  Then: journalctl -u switchboard -n 50');
             exitFlushed(5);
+            return;
         }
 
-        // 11. Print the URL
-        const hostname = os.hostname();
+        // 11. Print the URL. On tailnet, the reachable name is the MagicDNS name
+        //     or the tailnet address — os.hostname() is neither, and printing it
+        //     hands the operator a URL that does not resolve from another machine.
         if (serveMode === 'tailnet') {
+            let reachable = '';
+            try {
+                const tailnetAddress = await detectTailnetAddress();
+                if (tailnetAddress) {
+                    const names = await resolveMagicDnsNames();
+                    reachable = names[0] || tailnetAddress;
+                }
+            } catch { /* tailscale not up yet — fall through */ }
             console.log(`\n[switchboard] Board is serving on your tailnet.`);
-            console.log(`  Open: http://${hostname}:${port}/  (or your tailnet machine name)`);
+            if (reachable) {
+                console.log(`  Open: http://${reachable}:${port}/`);
+            } else {
+                console.log(`  Tailscale is not reporting an address yet. Once it is up, open`);
+                console.log(`  http://<your-tailnet-name>:${port}/ — 'tailscale status' names this machine.`);
+            }
         } else {
             console.log(`\n[switchboard] Board is serving on loopback.`);
             console.log(`  Open: http://127.0.0.1:${port}/`);

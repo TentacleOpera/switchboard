@@ -3374,12 +3374,15 @@ export class ClickUpSyncService {
           imported++;
         } else if (isChild(task)) {
           // Child (including intermediate parents) → subtask: insert DB record,
-          // persist clickup_task_id, THEN write to .switchboard/plans/intake/ (insert-before-write).
-          // The DB record points to the archive path; the file is moved there after write.
+          // persist clickup_task_id, THEN write to .switchboard/plans/ (insert-before-write).
+          // NOT via plans/intake/: this branch creates its own row, so the file has
+          // already been imported by the time it is written. An intake hop it
+          // immediately renames out of is invisible to the scanner, and a failed
+          // rename would leave a file the scanner imports as a SECOND card for the
+          // row created here. Intake is the door for writers the watcher imports.
           const childUuid = crypto.randomUUID();
           uuidByTaskId.set(taskId, childUuid);
           const childFilename = `clickup_import_${task.id}.md`;
-          const childIntakePath = path.join(plansDir, 'intake', childFilename);
           const childArchivePath = path.join(plansDir, childFilename);
           const childRelPath = path.relative(this._workspaceRoot, childArchivePath);
 
@@ -3420,14 +3423,8 @@ export class ClickUpSyncService {
             }
           }
 
-          await fs.promises.mkdir(path.dirname(childIntakePath), { recursive: true });
-          await fs.promises.writeFile(childIntakePath, childStub, 'utf8');
-          // Move from intake to archive after write.
-          try {
-            await fs.promises.rename(childIntakePath, childArchivePath);
-          } catch (moveErr) {
-            console.warn(`[ClickUpSync] intake move failed for child ${task.id}:`, moveErr);
-          }
+          await fs.promises.mkdir(path.dirname(childArchivePath), { recursive: true });
+          await fs.promises.writeFile(childArchivePath, childStub, 'utf8');
           imported++;
         } else {
           // Standalone: write file to intake only (watcher ingests and moves).

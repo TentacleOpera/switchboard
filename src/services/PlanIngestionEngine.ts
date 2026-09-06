@@ -2009,9 +2009,27 @@ export class PlanIngestionEngine {
                 // intake path) so every later read resolves. Read, insert, move —
                 // in that order. See the-plan-watcher-is-a-setting-when-the-board-does-not-own-the-tree.md.
                 const isIntakeFile = relativePath.startsWith('.switchboard/plans/intake/');
-                const archiveRelativePath = isIntakeFile
-                    ? relativePath.replace(/^\.switchboard\/plans\/intake\//, '.switchboard/plans/')
-                    : relativePath;
+                let archiveRelativePath = relativePath;
+                if (isIntakeFile) {
+                    archiveRelativePath = relativePath.replace(/^\.switchboard\/plans\/intake\//, '.switchboard/plans/');
+                    // A same-named file already at rest in the archive would be
+                    // OVERWRITTEN by the rename below — silent loss of a plan the
+                    // board still has a row for. Resolve the collision here, before
+                    // the row is written, so the recorded path is the one the file
+                    // actually lands on.
+                    const archiveExt = path.extname(archiveRelativePath);
+                    const archiveStem = archiveRelativePath.slice(0, archiveRelativePath.length - archiveExt.length);
+                    let suffix = 2;
+                    while (fs.existsSync(path.join(workspaceRoot, archiveRelativePath)) && suffix < 1000) {
+                        archiveRelativePath = `${archiveStem}_${suffix}${archiveExt}`;
+                        suffix++;
+                    }
+                    if (archiveRelativePath !== relativePath.replace(/^\.switchboard\/plans\/intake\//, '.switchboard/plans/')) {
+                        this._host.logger.appendLine(
+                            `[GlobalPlanWatcher] Intake name collided with an archived plan; landing as ${archiveRelativePath}`
+                        );
+                    }
+                }
                 const newRecord: KanbanPlanRecord = {
                     planId: derivedPlanId,
                     sessionId: '',

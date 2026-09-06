@@ -79,3 +79,28 @@ Per the repository's migration rule: state that has shipped is migrated, never d
 6. Every plan-writing path targets intake.
 7. An install with 2,247 archived plans upgrades without re-importing, moving or losing any.
 8. A crash between read and move leaves either both the row and the moved file, or neither.
+
+## Review Findings
+
+The scanner now sweeps `.switchboard/plans/intake/` and the importer records the archive
+destination, which is the plan's goal and it is achieved. Three fixes were applied. The
+intake→archive rename could **silently overwrite an existing archived plan** of the same name;
+the collision is now resolved before the row is written, so the recorded path is the one the file
+lands on (`PlanIngestionEngine.ts:2011`). `bootstrap.createAndIngestPlan` checked uniqueness in
+intake only, so a name free there but taken in the archive clobbered on the rename. And three
+writers — `TaskViewerProvider._createInitiatedPlan`, the ClickUp child-import branch, and
+`importRemotePlan` — wrote to intake and immediately renamed out of it; each creates its own DB row
+and pre-registers or inserts the archive path, so the hop was invisible to the scanner and a failed
+rename would have left a file the scanner imports as a *second* card for that row. Those three now
+write straight to the archive, with the rule stated in each: intake is the door for writers the
+watcher imports, not a mandatory way-station. `.switchboard/plans/intake` was added to the setup
+scaffold. Validated with `tsc --noEmit` (clean), `npm test` (green), `npm run compile` (clean),
+and the DB contract suites that load `KanbanDatabase` from `out/`.
+
+## Deferred Findings
+
+- MAJOR `src/services/GlobalPlanWatcherService.ts:151` — verification item 5 ("a plan written directly to `.switchboard/plans/` is not imported") is FALSE. Both hosts' fs watchers watch `.switchboard/plans/**` recursively, so a file written to the old path still fires a create event and still imports. That is the safer behaviour and it is why change 3's "silent failure" hazard never materialises — but the plan asserts the opposite, and the next reader will design against the wrong model.
+- MAJOR `src/services/PlanIngestionEngine.ts:633` — a workspace with a populated `.switchboard/plans/` and an EMPTY board database no longer back-fills. The periodic scan was the only path that imported an existing archive into a fresh DB (a clone on a new machine, a rebuilt board). Change 4 sanctions this for an upgrade in place; it does not address the fresh-DB case, which now yields a permanently empty board.
+- MAJOR `src/services/PlanIngestionEngine.ts:2049` — the intake rename fires a delete event on the intake path and a create event on the archive path. Neither corrupts state today (the delete keys on a path no row holds; the create finds the row and updates), but nothing tests the sequence and the 500 ms freshness skip at `:695` is a scar from this exact class of race.
+- NIT `src/services/PlanIngestionEngine.ts:2231` — `triggerScan` (the manual "Scan now" path) also sweeps intake only, so a user who clicks it expecting the archive to be re-read gets a no-op with no message.
+- NIT — verification item 1 ("the sweep's cost does not grow with the archive") has no automated check. The win is real by construction but unmeasured.

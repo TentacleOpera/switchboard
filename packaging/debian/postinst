@@ -5,6 +5,11 @@
 # cannot guess. See raspberry-pi-installs-switchboard-with-apt.md change 4.
 set -e
 
-#DEBHELPER#
+# The package is built with dpkg-deb, not debhelper — there is no #DEBHELPER#
+# token expansion here, so systemd is told about the unit explicitly. Without
+# this, `systemctl enable` finds no unit until something else reloads.
+if [ "$1" = "configure" ] && command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload || true
+fi
 
 exit 0

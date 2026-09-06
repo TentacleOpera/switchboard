@@ -803,18 +803,6 @@ export class LocalApiServer {
     private _options: LocalApiServerOptions;
     private _allRoots: string[];
     private _bindPolicy: BindPolicy;
-    /**
-     * Pending serve mode requested via POST /settings — applied on next restart.
-     * Mode transitions apply to new work and do not move running terminals.
-     * See switchboard-as-a-local-app-and-a-self-hosted-remote.md.
-     */
-    private _pendingServeMode: 'local' | 'tailnet' | null = null;
-    /**
-     * Peer pairing state — the second machine in a two-machine setup.
-     * Null when no peer is configured (the single-machine case).
-     * See switchboard-as-a-local-app-and-a-self-hosted-remote.md.
-     */
-    private _pairingState: { host: string; port: number; role: string; transport: string; pairedAt: string } | null = null;
     /** The bound tailnet address (v4), or null under loopback-only. */
     private _tailnetAddress: string | null = null;
     private _nameResolutionCache: Map<string, { id: string; timestamp: number }> = new Map();
@@ -9731,77 +9719,34 @@ export class LocalApiServer {
                     ...(memory !== undefined ? { memory } : {})
                 }));
             } else if (pathname === '/settings' && req.method === 'GET') {
-                // Settings endpoint — returns the current serve mode, port, workspace,
-                // and peer pairing state. Works without a configured peer (the single-
-                // machine case). See switchboard-as-a-local-app-and-a-self-hosted-remote.md.
+                // Read-only. Reports the resolved serve mode, port and roots, each
+                // with the source it resolved FROM, so a wrong value is visible
+                // before it is a boot failure rather than after. Works with no peer
+                // configured — the single-machine case is the primary one.
+                //
+                // There is deliberately NO write half. Serve mode is chosen by the
+                // subcommand the operator typed (`switchboard local` / `tailnet`) or
+                // by SWITCHBOARD_SERVE_MODE in the systemd env file; a POST that
+                // stored a preference in this process would be a second store with
+                // no reader, answering "saved" to a change that can never take
+                // effect. Change the mode where it is actually read: re-launch with
+                // the other subcommand, or edit /etc/switchboard/switchboard.env and
+                // restart the unit.
                 const bindPolicy = this._options.bindPolicy ?? LOOPBACK_ONLY_POLICY;
-                const serveMode = isTailnetPolicy(bindPolicy) ? 'tailnet' : 'local';
+                const tailnet = isTailnetPolicy(bindPolicy);
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({
-                    serveMode,
-                    port: this._port,
-                    roots: this._getKnownRoots(),
-                    peer: this._pairingState ?? null,
-                    loopbackOnly: !isTailnetPolicy(bindPolicy)
+                    serveMode: {
+                        value: tailnet ? 'tailnet' : 'local',
+                        source: this._options.bindPolicy ? 'launch-subcommand' : 'default'
+                    },
+                    port: { value: this._port, source: 'launch' },
+                    roots: { value: this._getKnownRoots(), source: 'launch' },
+                    loopbackOnly: !tailnet,
+                    tailnetAddress: this._tailnetAddress,
+                    readOnly: true,
+                    note: 'Serve mode and port are set at launch. Re-launch with `switchboard local` or `switchboard tailnet`, or edit /etc/switchboard/switchboard.env and restart the service.'
                 }));
-            } else if (pathname === '/settings' && req.method === 'POST') {
-                // Update settings — currently only the serve mode can be changed at runtime.
-                // Mode transitions apply to new work and do not move running terminals.
-                let body: any;
-                try { body = await this._parseJsonBody(req); }
-                catch { res.writeHead(400); res.end(JSON.stringify({ error: 'Invalid JSON' })); return; }
-                const newMode = String(body?.serveMode || '').toLowerCase();
-                if (newMode !== 'local' && newMode !== 'tailnet') {
-                    res.writeHead(400);
-                    res.end(JSON.stringify({ error: `Invalid serveMode '${newMode}'. Must be 'local' or 'tailnet'.` }));
-                    return;
-                }
-                // Mode change requires a restart to take effect — record the intent
-                // and inform the caller. The actual bind policy is set at startup.
-                this._pendingServeMode = newMode;
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({
-                    success: true,
-                    serveMode: newMode,
-                    note: 'Restart the host to apply the new serve mode.'
-                }));
-            } else if (pathname === '/pair' && req.method === 'POST') {
-                // Pairing flow — establish a peer relationship over SSH or Tailscale.
-                // The operator chooses which machine holds the board and which runs
-                // the agents. See switchboard-as-a-local-app-and-a-self-hosted-remote.md.
-                let body: any;
-                try { body = await this._parseJsonBody(req); }
-                catch { res.writeHead(400); res.end(JSON.stringify({ error: 'Invalid JSON' })); return; }
-                const peerHost = String(body?.host || '').trim();
-                const peerPort = Number(body?.port) || 7777;
-                const peerRole = String(body?.role || '').toLowerCase(); // 'board' or 'agents'
-                const transport = String(body?.transport || '').toLowerCase(); // 'ssh' or 'tailscale'
-                if (!peerHost) {
-                    res.writeHead(400);
-                    res.end(JSON.stringify({ error: 'host is required' }));
-                    return;
-                }
-                if (peerRole !== 'board' && peerRole !== 'agents') {
-                    res.writeHead(400);
-                    res.end(JSON.stringify({ error: "role must be 'board' or 'agents'" }));
-                    return;
-                }
-                if (transport !== 'ssh' && transport !== 'tailscale') {
-                    res.writeHead(400);
-                    res.end(JSON.stringify({ error: "transport must be 'ssh' or 'tailscale'" }));
-                    return;
-                }
-                this._pairingState = { host: peerHost, port: peerPort, role: peerRole, transport, pairedAt: new Date().toISOString() };
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({
-                    success: true,
-                    peer: this._pairingState,
-                    note: `Paired with ${peerHost} as ${peerRole} via ${transport}. Use the peer's URL to drive the board.`
-                }));
-            } else if (pathname === '/pair' && req.method === 'DELETE') {
-                this._pairingState = null;
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: true, note: 'Peer pairing cleared.' }));
             } else if (pathname === '/auth/mint' && req.method === 'POST') {
                 await this._handleMintEnrolmentToken(req, res);
             } else if (pathname === '/metadata/clickup' && req.method === 'GET') {

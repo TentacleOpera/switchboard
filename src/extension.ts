@@ -4412,6 +4412,10 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
     const dirs = [
         '.agents',
         '.switchboard/plans',
+        // The scanner sweeps plans/intake/ only, so the folder agents are told to
+        // write into must exist from first setup. A missing intake folder makes a
+        // correctly-written plan look like it vanished.
+        '.switchboard/plans/intake',
         '.switchboard/archive'
     ];
 
