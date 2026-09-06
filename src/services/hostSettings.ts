@@ -194,6 +194,12 @@ function validateWorkspaceEntry(entry: any, seenRoots: Set<string>, seenIds: Set
     return { id, name, root };
 }
 
+/** True only for a string that is an in-range integer port. */
+function isValidPortString(raw: string): boolean {
+    const p = Number(raw);
+    return Number.isInteger(p) && p >= MIN_PORT && p <= MAX_PORT;
+}
+
 function validateExtraPath(entries: any[]): string[] {
     const out: string[] = [];
     for (const entry of entries) {
@@ -426,9 +432,13 @@ function buildResolution(
     } else if (effectiveDoc.port != null) {
         portVal = effectiveDoc.port;
         portSource = doc ? 'durable' : 'default';
-    } else if (legacy?.port) {
-        const p = Number(legacy.port);
-        portVal = Number.isInteger(p) && p >= MIN_PORT && p <= MAX_PORT ? p : 7777;
+    } else if (legacy?.port && isValidPortString(legacy.port)) {
+        // Only a legacy value that actually parses may be tagged `legacy-env`.
+        // Substituting 7777 for a malformed SWITCHBOARD_PORT and still calling
+        // it `legacy-env` makes a broken env file indistinguishable from a
+        // configured one — the exact defect this file's precedence exists to
+        // prevent. A malformed value falls through to the tagged default.
+        portVal = Number(legacy.port);
         portSource = 'legacy-env';
     } else {
         portVal = 7777;

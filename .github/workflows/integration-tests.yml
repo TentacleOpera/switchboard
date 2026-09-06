@@ -511,6 +511,15 @@ jobs:
       - name: Debian packaging contract (Go client entry point, arch detection, repository signing)
         run: npm run test:contract:deb-packaging
 
+      # Host settings: the write path an earlier review deleted for storing a
+      # preference nothing read back. Pins per-field source tagging (a default
+      # must never wear a configured label), atomic revision-checked writes,
+      # unknown-key preservation, PATH applied without shell evaluation, and
+      # BOTH composition roots wiring the same read/write/Setup-provider seams —
+      # the extension host has no runtime gate, and the two roots have drifted.
+      - name: Host settings contract (source tagging, durable write path, composition-root parity)
+        run: npm run test:contract:host-settings
+
       # The reviewer must assess the plan's goal, not only its steps, and must
       # escalate a destination change rather than silently reversing the plan's
       # purpose. Pins the GOAL VERDICT clause, the escalation instruction, the

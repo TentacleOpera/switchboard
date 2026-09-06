@@ -1943,7 +1943,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             }
             // Propagate to the Setup panel if it is already wired.
             if (this._setupPanelProvider) {
-                this._setupPanelProvider.setHostSettingsService(this._hostSettingsService);
+                this._setupPanelProvider.setHostSettingsService(
+                    this._hostSettingsService,
+                    () => this._buildHostSettingsContext(),
+                );
             }
         }
         return this._hostSettingsService;
@@ -4772,9 +4775,19 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             // Inject the same HostSettingsService instance the LocalApiServer
             // reads/writes, so the Host tab and the HTTP endpoints share one
             // durable store (composition-root parity with standalone bootstrap).
-            if (this._hostSettingsService) {
-                this._setupPanelProvider.setHostSettingsService(this._hostSettingsService);
-            }
+            //
+            // This MUST construct the service rather than test for one. The
+            // field is lazily populated by `readHostSettings`/`writeHostSettings`,
+            // which only fire on an HTTP hit — so guarding on `_hostSettingsService`
+            // here left the Setup panel unwired on every extension start, and the
+            // Host tab answered "Host settings service not wired" until something
+            // happened to call GET /settings. It also meant the durable extraPath
+            // never reached `process.env.PATH` before agents spawned. Standalone
+            // wires this eagerly at bootstrap; the two roots must not diverge.
+            this._setupPanelProvider.setHostSettingsService(
+                this._ensureHostSettingsService(),
+                () => this._buildHostSettingsContext(),
+            );
         }
         if (this._designPanelProvider && typeof (this._designPanelProvider as any).setApiServer === 'function') {
             (this._designPanelProvider as any).setApiServer(this._localApiServer);
@@ -6029,6 +6042,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (this._localApiServer) {
             this._setupPanelProvider.setApiServer(this._localApiServer);
         }
+        // The panel may be registered after the API server was created, so the
+        // wiring in _createLocalApiServer alone is not enough — inject here too.
+        this._setupPanelProvider.setHostSettingsService(
+            this._ensureHostSettingsService(),
+            () => this._buildHostSettingsContext(),
+        );
     }
 
     public setTicketsPanelProvider(provider: { handleServiceVerb(verb: string, payload: any): Promise<any> }) {

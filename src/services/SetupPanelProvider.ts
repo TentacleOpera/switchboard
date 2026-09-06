@@ -24,6 +24,7 @@ import { BackupService } from './BackupService';
 import { exportProject, importProject } from './projectExport';
 import { RetentionService } from './RetentionService';
 import {
+    HostSettingsContext,
     HostSettingsDocument,
     HostSettingsResolution,
     HostSettingsService,
@@ -183,8 +184,24 @@ export class SetupPanelProvider implements vscode.Disposable {
      * seam is visible rather than a silent no-op.
      */
     private _hostSettingsService?: HostSettingsService;
-    public setHostSettingsService(service: HostSettingsService): void {
+    /**
+     * Resolution context supplier. The Host tab must report the SAME
+     * source-tagged precedence the running host resolved with — an explicit
+     * `switchboard tailnet`, an explicit `--port`, the tagged legacy env, or an
+     * explicit VS Code setting. Reading with no context would label a host
+     * launched as `tailnet` "local (default)", which is precisely the
+     * fallback-indistinguishable-from-a-real-value defect this plan exists to
+     * remove. Both composition roots supply their own context builder.
+     */
+    private _hostSettingsContext?: () => HostSettingsContext;
+    public setHostSettingsService(service: HostSettingsService, contextProvider?: () => HostSettingsContext): void {
         this._hostSettingsService = service;
+        this._hostSettingsContext = contextProvider;
+    }
+    /** The host's resolution context, or `{}` when a root wired none. */
+    private _resolveHostSettingsContext(): HostSettingsContext {
+        if (!this._hostSettingsContext) return {};
+        try { return this._hostSettingsContext() ?? {}; } catch { return {}; }
     }
 
     /**
@@ -1501,7 +1518,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     }
                     let resolution: HostSettingsResolution;
                     try {
-                        resolution = this._hostSettingsService.read();
+                        resolution = this._hostSettingsService.resolve(this._resolveHostSettingsContext());
                     } catch (err) {
                         const message = err instanceof Error ? err.message : String(err);
                         this.postMessage({ type: 'hostSettings', success: false, error: message });
@@ -1543,7 +1560,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                         return { success: false, error: 'expectedRevision is required' };
                     }
                     try {
-                        const fresh = await this._hostSettingsService.update(patch, expectedRevision);
+                        const fresh = await this._hostSettingsService.update(patch, expectedRevision, this._resolveHostSettingsContext());
                         const restartFields: string[] = [];
                         if (patch.port !== undefined) restartFields.push('port');
                         if (patch.serveMode !== undefined) restartFields.push('serveMode');

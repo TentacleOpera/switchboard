@@ -7880,8 +7880,10 @@ Please format the updated output document strictly as follows:
                     isFeature: record.isFeature,
                     featureId: record.featureId || '',
                     subtaskCount,
-                    clickupTaskId: record.clickupTaskId || record.clickup_task_id || '',
-                    linearIssueId: record.linearIssueId || record.linear_issue_id || '',
+                    // The snake_case forms are raw-row aliases that are not on
+                    // KanbanPlanRecord; read them off the untyped row.
+                    clickupTaskId: record.clickupTaskId || (record as any).clickup_task_id || '',
+                    linearIssueId: record.linearIssueId || (record as any).linear_issue_id || '',
                     priorityStarred: record.priorityStarred ?? 0
                 };
             } catch { /* root has no kanban DB, skip */ }

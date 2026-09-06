@@ -35,6 +35,7 @@ import { writeMissionControlReport } from '../services/ScheduledJobsService';
 import { StandaloneHostPathConfigProvider, createStandaloneHostSecrets } from './hostServices';
 import {
     HostSettingsContext,
+    HostSettingsDocument,
     HostSettingsResolution,
     applyExtraPathToProcessEnv,
     createHostSettingsService,
@@ -1377,7 +1378,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         throw new Error(`host-settings resolution failed at boot: ${e instanceof Error ? e.message : String(e)}`);
     }
     applyExtraPathToProcessEnv(hostSettingsResolution.extraPath.effectiveValue);
-    setupProvider.setHostSettingsService(hostSettingsService);
+    setupProvider.setHostSettingsService(hostSettingsService, () => opts.hostSettingsContext ?? {});
 
     // Tickets: extensionUri, context, stateStore. The ticket verb surface still lives in
     // PlanningPanelProvider, so this currently serves the panel's own chrome verbs only.
@@ -4171,7 +4172,7 @@ Each plan file must include:
         // the startup path used. The writer performs a validated, revision-checked
         // atomic update of ~/.switchboard/host-settings.json.
         readHostSettings: () => hostSettingsService.resolve(opts.hostSettingsContext ?? {}),
-        writeHostSettings: (patch, expectedRevision) => hostSettingsService.update(patch, expectedRevision, opts.hostSettingsContext),
+        writeHostSettings: (patch: Partial<HostSettingsDocument>, expectedRevision: string) => hostSettingsService.update(patch, expectedRevision, opts.hostSettingsContext),
     };
 
     server = new LocalApiServer(options);

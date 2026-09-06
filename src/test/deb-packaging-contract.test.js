@@ -153,6 +153,44 @@ check('Depends nodejs floor comes from a single reviewable constant', () => {
         /Depends: nodejs \(>= \$\{NODE_ENGINE_FLOOR\}\)/.test(scriptText),
         'control heredoc must derive Depends from ${NODE_ENGINE_FLOOR}'
     );
+    // The plan requires the packaging floor to MATCH the application engine
+    // floor, not merely to be spelled once. A hand-typed literal drifts the
+    // moment package.json moves and nothing notices.
+    assert.ok(
+        !/^NODE_ENGINE_FLOOR="\d+"\s*$/m.test(scriptText),
+        'NODE_ENGINE_FLOOR must be derived from package.json engines.node, not a hardcoded literal'
+    );
+    assert.ok(
+        /NODE_ENGINE_FLOOR="\$\(node[\s\S]{0,400}engines/.test(scriptText),
+        'NODE_ENGINE_FLOOR must read package.json engines.node'
+    );
+});
+
+check('the systemd unit and the packaged entry point agree', () => {
+    // The unit's ExecStart names `/usr/bin/switchboard service`, which the
+    // package installs as the static Go client. `service` is not an owned Go
+    // verb, so it must fall through to the Node host — if it were ever added to
+    // ownedVerbs the packaged service would stop booting and no test would say
+    // so.
+    const unit = fs.readFileSync(
+        path.join(REPO_ROOT, 'packaging', 'debian', 'switchboard.service'), 'utf8');
+    assert.ok(
+        /^ExecStart=\/usr\/bin\/switchboard service\b/m.test(unit),
+        'unit ExecStart must run `/usr/bin/switchboard service`'
+    );
+    const goMain = fs.readFileSync(path.join(REPO_ROOT, 'cmd', 'switchboard', 'main.go'), 'utf8');
+    const owned = goMain.match(/ownedVerbs\s*=\s*map\[string\]bool\{([\s\S]*?)\}/);
+    assert.ok(owned, 'could not locate ownedVerbs in cmd/switchboard/main.go');
+    assert.ok(
+        !/"service"/.test(owned[1]),
+        '`service` must NOT be an owned Go verb — it must delegate to the Node host'
+    );
+    // A missing legacy env file must not be fatal: the durable host-settings
+    // document is now the source of truth.
+    assert.ok(
+        /^EnvironmentFile=-\/etc\/switchboard\/switchboard\.env$/m.test(unit),
+        'EnvironmentFile must be `-` prefixed so a durable-only install still starts'
+    );
 });
 
 check('output path is releases/deb/<version>/<arch>/', () => {

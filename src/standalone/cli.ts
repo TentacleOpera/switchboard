@@ -4153,6 +4153,13 @@ async function main() {
         hostSettingsContext.explicit!.serveMode = { value: explicitServeModeFlag, source: 'cli-flag' };
     }
     if (args._explicit?.port) {
+        // `--port` with a missing or non-numeric value must not be promoted to an
+        // explicit `cli-flag` input — that would outrank the durable setting with
+        // a NaN. Reject it here rather than binding an unusable port.
+        if (typeof args.port !== 'number' || !Number.isInteger(args.port) || args.port < 1 || args.port > 65535) {
+            console.error(`[switchboard] --port requires an integer 1-65535 (got '${args.port}').`);
+            process.exit(1);
+        }
         hostSettingsContext.explicit!.port = { value: args.port, source: 'cli-flag' };
     }
     if (args._explicit?.workspace) {
@@ -4201,9 +4208,25 @@ async function main() {
     // when the operator did not name one.
     if (isServiceCommand && !args._explicit?.workspace) {
         const durableWs = hostSettingsResolution.defaultWorkspace.effectiveValue;
-        if (durableWs && fs.existsSync(durableWs.root)) {
-            workspaceRoot = durableWs.root;
+        const wsSource = hostSettingsResolution.defaultWorkspace.effectiveSource;
+        if (!durableWs) {
+            // `service` is NOT a public synonym for `local`: it fails before
+            // bootstrap when no valid selected workspace can be resolved.
+            // Falling back to the process cwd would serve whatever directory
+            // systemd happened to set as WorkingDirectory and report nothing.
+            console.error('[switchboard] `switchboard service` has no selected startup workspace.');
+            console.error('[switchboard] Set one in the Setup panel\'s Host tab, or run `sudo switchboard setup host`.');
+            process.exit(1);
         }
+        if (!fs.existsSync(durableWs.root)) {
+            // A missing selected workspace is a visible validation error, not a
+            // silent revert to the cwd. Name the field AND the store that
+            // answered so the operator knows which one to fix.
+            console.error(`[switchboard] Selected startup workspace does not exist: ${durableWs.root}`);
+            console.error(`[switchboard] It resolved from '${wsSource}' (workspace id ${durableWs.id}). Fix it in the Host tab or re-run \`sudo switchboard setup host\`.`);
+            process.exit(1);
+        }
+        workspaceRoot = durableWs.root;
     }
     // The durable/legacy port (when no --port was passed) drives the actual
     // listen. Without this, `args.port` (parseArgs default 7777) would be bound

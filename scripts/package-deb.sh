@@ -119,7 +119,20 @@ PKG_NAME="switchboard"
 # The Node >=22 application contract (package.json engines). The package
 # Depends line is derived from this single reviewable constant so a future
 # floor change touches one place, not a buried heredoc.
-NODE_ENGINE_FLOOR="22"
+# Derived from package.json `engines.node`, never typed twice: the plan requires
+# the packaging floor to MATCH the application contract, and a hand-copied
+# literal drifts silently the moment the engine floor moves.
+NODE_ENGINE_FLOOR="$(node -p "
+  const r = require('./package.json').engines && require('./package.json').engines.node;
+  if (!r) { console.error('package.json has no engines.node'); process.exit(1); }
+  const m = String(r).match(/(\\d+)/);
+  if (!m) { console.error('cannot parse a major version from engines.node: ' + r); process.exit(1); }
+  m[1];
+")"
+if [[ -z "$NODE_ENGINE_FLOOR" ]]; then
+  echo "ERROR: could not derive the Node engine floor from package.json engines.node" >&2
+  exit 1
+fi
 DEB_NAME="${PKG_NAME}_${VERSION}_${ARCH}.deb"
 OUT_DIR="releases/deb/${VERSION}/${ARCH}"
 mkdir -p "$OUT_DIR"
@@ -244,8 +257,10 @@ echo "Vendored native modules verified."
 # controller hands every non-client verb (local, tailnet, setup, secrets,
 # import/export, control-plane) to the Node entry that remains installed at
 # /usr/lib/switchboard/standalone/cli.js — the absolute path declared in
-# client-artifacts.json's `nodeHostEntry.deb`. The systemd unit execs that Node
-# entry directly, so it does not go through the client (plan: go-cli-client-verbs).
+# client-artifacts.json's `nodeHostEntry.deb`. The systemd unit's ExecStart is
+# `/usr/bin/switchboard service --no-open`, so it DOES go through this client:
+# `service` is not an owned verb, so the client syscall-execs the Node entry in
+# place and systemd's MainPID is preserved (plan: go-cli-client-verbs).
 CLIENT_BIN="$BUILD_DIR/switchboard-client"
 echo "Building static Go client for linux/${GOARCH}..."
 CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" go build -trimpath \

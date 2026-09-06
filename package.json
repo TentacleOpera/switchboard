@@ -994,6 +994,7 @@
     "publish:marketplace": "bash scripts/publish-marketplace.sh",
     "test:contract:vsix-packaging": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/vsix-packaging-contract.test.js",
     "test:contract:deb-packaging": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/deb-packaging-contract.test.js",
+    "test:contract:host-settings": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/host-settings-contract.test.js",
     "test:contract:goal-invariant-verification": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/goal-invariant-verification.test.js",
     "test:contract:pty-route-surface": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-route-surface-contract.test.js",
     "test:contract:workspace-root-write-path": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/workspace-root-write-path-contract.test.js",

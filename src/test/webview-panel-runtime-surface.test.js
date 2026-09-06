@@ -194,7 +194,14 @@ check('every panel provider with a browser surface is handed the LocalApiServer'
     // and require every browser-surface provider in it.
     const anchor = tvp.indexOf('this._broadcaster?.setApiServer(this._localApiServer)');
     assert.ok(anchor !== -1, 'could not locate the LocalApiServer fan-out block');
-    const fanout = tvp.slice(anchor, anchor + 2000);
+    // To the end of the enclosing method, NOT a fixed byte window — the same
+    // correction already made for the REGISTRARS loop above. A fixed window
+    // lets a comment added to an EARLIER provider's arm push a LATER provider
+    // out of view, and the failure reads as "the tickets panel lost its
+    // fan-out" when nothing about the tickets panel changed.
+    const afterAnchor = tvp.slice(anchor);
+    const endOfMethod = afterAnchor.search(/\n    (?:public|private|protected|\/\*\*)/);
+    const fanout = endOfMethod === -1 ? afterAnchor : afterAnchor.slice(0, endOfMethod);
     for (const field of ['_kanbanProvider', '_setupPanelProvider', '_designPanelProvider', '_planningPanelProvider', '_ticketsPanelProvider']) {
         assert.ok(
             fanout.includes(field),

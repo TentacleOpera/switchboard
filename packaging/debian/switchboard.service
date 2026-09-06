@@ -6,7 +6,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-EnvironmentFile=/etc/switchboard/switchboard.env
+# `-` prefix: a MISSING env file is non-fatal. The durable
+# ~/.switchboard/host-settings.json is now the source of truth; the env file is
+# a tagged legacy fallback, so an install configured only through the Host tab
+# must still start (plan: settings-window-and-the-write-path-review-deleted).
+EnvironmentFile=-/etc/switchboard/switchboard.env
 
 # systemd expands ${VAR} in command lines ONLY. `User=`, `WorkingDirectory=`
 # and `Environment=` take LITERAL values — a `${SWITCHBOARD_USER}` there is not
@@ -28,7 +32,14 @@ EnvironmentFile=/etc/switchboard/switchboard.env
 # truth and the env values are only consulted as `legacy-env` fallbacks. Both
 # paths must still validate here so an env-only configured install keeps
 # starting (plan: settings-window-and-the-write-path-review-deleted).
+#
+# The durable document is checked FIRST. When $HOME/.switchboard/host-settings.json
+# exists, `switchboard service` owns validation (it names the failing field and
+# the store that answered) and these env checks must not veto a host that is
+# configured entirely through the Host tab. Only an env-only install — one that
+# has no durable document — is gated on the legacy variables here.
 ExecStartPre=/bin/sh -c '\
+  if [ -f "$HOME/.switchboard/host-settings.json" ]; then exit 0; fi; \
   if [ -z "$SWITCHBOARD_WORKSPACE" ]; then \
     echo "SWITCHBOARD_WORKSPACE is empty in /etc/switchboard/switchboard.env - run: sudo switchboard setup host" >&2; exit 1; \
   fi; \
