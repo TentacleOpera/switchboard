@@ -215,3 +215,13 @@ Complexity 4 → **Send to Coder**.
 
 Implemented fix for standalone host hang on stop. Added `{ persistent: false }` to `fs.watch` calls in `src/standalone/planIngestionHost.ts` and ensured explicit close and client termination of `wss` in `src/standalone/terminalWsGateway.ts` and `src/services/wsHub.ts`. Armed bounded 5s exit timer before `await instance.stop()` in `src/standalone/bootstrap.ts` with `getActiveResourcesInfo()` surviving handle logging. Updated `switchboard stop` in `src/standalone/cli.ts` to poll for process termination using `process.kill(pid, 0)` instead of port-free status and exit non-zero if the process remains alive.
 
+
+## Review Findings
+
+Reviewed against the shipped diff in `f40e15ae`; the bounded exit timer is armed correctly *before* `await instance.stop()` (`bootstrap.ts:4104-4117`), `getActiveResourcesInfo()` is logged on both the forced and graceful paths, `wsHub.close()` now terminates rather than closes connections and runs before `httpServer.close()`, and `terminalWsGateway.dispose()` closes its own `wss` — all four of the plan's proposed changes are present and correct. One MAJOR regression was found and fixed: replacing the port probe with `process.kill(pid, 0)` also deleted the PID-recycle guard the old code carried explicitly, so a recycled PID would have been SIGKILLed as an innocent process; `src/standalone/cli.ts` now captures the process `starttime` from `/proc/<pid>/stat` before SIGTERM and refuses to escalate if it changed (undefined off Linux, where the previous unguarded behaviour stands). Verification: `tsc -p tsconfig.test.json --noEmit` clean, `npm test` aggregate green (standalone-parity, catalog, icons, banner), `host-seam-parity:check` and `standalone-fork:check` green. The plan's live assertions (process dead within 5 s, non-zero exit on a surviving process) were not executed — doing so would have killed the board this session is dispatched from — so those remain manual and this verdict is provisional on them.
+
+## Deferred Findings
+
+- MAJOR — `LocalApiServer.stop()` awaits `httpServer.close()` without `closeAllConnections()`, so a keep-alive HTTP client (not a WebSocket) can still stall the graceful path; the 5 s bounded timer masks it rather than fixing it. `src/services/LocalApiServer.ts:1133`
+- NIT — the forced-exit path calls `process.exit(0)` on a timeout, so a `switchboard stop` that only succeeded because the timer fired is indistinguishable from a clean one in the CLI's exit code. `src/standalone/bootstrap.ts:4106`
+- NIT — `switchboard stop`'s liveness poll runs for the full 5 s grace before the SIGKILL branch, so a host that exits at 4.9 s costs the operator 5 s of polling at 200 ms intervals. `src/standalone/cli.ts:3630`

@@ -16054,114 +16054,148 @@ Each plan file must include:
 
         this._loadBrainPlanBlacklist(workspaceRoot);
 
-        const roots = this._getAntigravityRoots();
-        for (const antigravityRoot of roots) {
-            if (!fs.existsSync(antigravityRoot)) continue;
-
-            // Brain → Mirror: VS Code-managed watcher (cross-platform, lifecycle-safe)
+        // Brain → Mirror. The watch set is DEPTH-BOUNDED on purpose.
+        //
+        // This used to arm two unbounded recursive watchers per Antigravity root
+        // (a `**/*.md{,.*}` FileSystemWatcher plus `fs.watch(root, {recursive:true})`).
+        // Node/VS Code implement recursion by walking the tree and arming a watch
+        // per directory, so 194 sessions under ~6,839 directories cost 17,196
+        // inotify descriptors, climbing ~900/hour — 2× a Raspberry Pi's whole
+        // 8,192 kernel budget, after which every watcher on the machine fails
+        // with ENOSPC and nothing reports it.
+        //
+        // What is watched now: each existing Antigravity PLAN root (not the
+        // whole IDE root) non-recursively, plus each of its immediate child
+        // directories non-recursively. That is (sessions + 1) descriptors per
+        // plan root and it does not grow with the size of a session's tree.
+        // New session directories are picked up because the plan-root watch
+        // fires on their creation and arms their watch then.
+        //
+        // The one thing this gives up is real-time events for the third level
+        // `_isBrainMirrorCandidate` allows (brain/<session>/<subdir>/plan.md).
+        // Those are still ingested — `_collectAntigravityPlanCandidates` walks
+        // the full tree on every Plan Scanner sweep — they just arrive on the
+        // sweep interval instead of instantly. That is the trade the budget buys.
+        const brainWatchCap = (() => {
             try {
-                const brainUri = vscode.Uri.file(antigravityRoot);
-                const brainPattern = new vscode.RelativePattern(brainUri, '**/*.md{,.*}');
-                const watcher = vscode.workspace.createFileSystemWatcher(brainPattern);
+                const configured = vscode.workspace
+                    .getConfiguration('switchboard.planScanner')
+                    .get<number>('maxWatchesPerPreset');
+                if (typeof configured === 'number' && configured > 0) { return configured; }
+            } catch { /* fall through to the platform default */ }
+            return process.platform === 'linux' ? 2000 : 5000;
+        })();
+        let brainWatchCount = 0;
+        let brainCapReported = false;
 
-                const handleBrainEvent = (uri: vscode.Uri, allowAutoClaim: boolean) => {
-                    const fullPath = uri.fsPath;
-                    if (!this._isBrainMirrorCandidate(fullPath)) return;
+        const mirrorBrainCandidate = (fullPath: string, rawAutoClaim: boolean) => {
+            if (!this._isBrainMirrorCandidate(fullPath)) return;
 
-                    const stablePath = this._getStablePath(fullPath);
-                    if (allowAutoClaim) {
-                        this._brainDebounceClaims.add(stablePath);
-                    }
-                    // Debounce: Windows fires multiple events per save (rename + change)
-                    const existing = this._brainDebounceTimers.get(stablePath);
-                    if (existing) clearTimeout(existing);
-                    // Capture root at event time for validation in the debounce callback
-                    const eventRoot = this._resolveWorkspaceRoot();
-                    this._brainDebounceTimers.set(stablePath, setTimeout(async () => {
-                        try {
-                            this._brainDebounceTimers.delete(stablePath);
-                            const finalAllowAutoClaim = this._brainDebounceClaims.has(stablePath);
-                            this._brainDebounceClaims.delete(stablePath);
-                            // Skip if we wrote this brain file ourselves (mirror→brain direction)
-                            if (this._recentBrainWrites.has(stablePath)) return;
-                            // Dynamic resolution with validation guard
-                            const dynamicWorkspaceRoot = this._resolveWorkspaceRoot();
-                            if (!dynamicWorkspaceRoot) return;
-                            // If workspace switched during debounce, skip to avoid wrong-root mirroring
-                            if (eventRoot && dynamicWorkspaceRoot !== eventRoot) {
-                                console.log(`[TaskViewerProvider] Brain watcher debounce skipped: workspace changed during debounce window`);
-                                return;
-                            }
-                            if (fs.existsSync(fullPath)) {
-                                await this._ensureTombstonesLoaded(dynamicWorkspaceRoot);
-                                await this._mirrorBrainPlan(fullPath, finalAllowAutoClaim, dynamicWorkspaceRoot);
-                            }
-                        } catch (e) {
-                            console.error('[TaskViewerProvider] Brain watcher debounce callback failed:', e);
-                        }
-                    }, 300));
-                };
-
-                watcher.onDidCreate((uri) => handleBrainEvent(uri, true));
-                watcher.onDidChange((uri) => handleBrainEvent(uri, false));
-                this._brainWatchers.push(watcher);
-            } catch (e) {
-                console.error('[TaskViewerProvider] Brain watcher failed:', e);
+            const stablePath = this._getStablePath(fullPath);
+            if (rawAutoClaim) {
+                this._brainDebounceClaims.add(stablePath);
             }
+            // Debounce: Windows fires multiple events per save (rename + change)
+            const existing = this._brainDebounceTimers.get(stablePath);
+            if (existing) clearTimeout(existing);
+            // Capture root at event time for validation in the debounce callback
+            const eventRoot = this._resolveWorkspaceRoot();
+            this._brainDebounceTimers.set(stablePath, setTimeout(async () => {
+                try {
+                    this._brainDebounceTimers.delete(stablePath);
+                    const finalAutoClaim = this._brainDebounceClaims.has(stablePath);
+                    this._brainDebounceClaims.delete(stablePath);
+                    // Skip if we wrote this brain file ourselves (mirror→brain direction)
+                    if (this._recentBrainWrites.has(stablePath)) return;
+                    // Dynamic resolution with validation guard
+                    const dynamicWorkspaceRoot = this._resolveWorkspaceRoot();
+                    if (!dynamicWorkspaceRoot) return;
+                    // If workspace switched during debounce, skip to avoid wrong-root mirroring
+                    if (eventRoot && dynamicWorkspaceRoot !== eventRoot) {
+                        console.log('[TaskViewerProvider] Brain watcher debounce skipped: workspace changed during debounce window');
+                        return;
+                    }
+                    if (fs.existsSync(fullPath)) {
+                        await this._ensureTombstonesLoaded(dynamicWorkspaceRoot);
+                        await this._mirrorBrainPlan(fullPath, finalAutoClaim, dynamicWorkspaceRoot);
+                    }
+                } catch (e) {
+                    console.error('[TaskViewerProvider] Brain watcher debounce callback failed:', e);
+                }
+            }, 300));
+        };
 
-            // Brain → Mirror: native fs.watch fallback on the brain dir.
+        const watchedBrainDirs = new Set<string>();
+        /**
+         * Arm one NON-RECURSIVE watch on `dir`. When `armChildDirs` is true the
+         * directory is a plan root, so its immediate subdirectories (the session
+         * folders) are armed too, and newly created ones are armed on arrival.
+         */
+        const armBrainDirWatch = (dir: string, armChildDirs: boolean): void => {
+            const stableDir = this._getStablePath(dir);
+            if (watchedBrainDirs.has(stableDir)) return;
+            if (brainWatchCount >= brainWatchCap) {
+                if (!brainCapReported) {
+                    brainCapReported = true;
+                    console.warn(`[TaskViewerProvider] Brain watch cap reached (${brainWatchCount}/${brainWatchCap}) at ${dir} — remaining directories are covered by the Plan Scanner sweep only.`);
+                }
+                return;
+            }
+            let watcher: FSWatcher;
             try {
-                const brainFsWatcher = fs.watch(antigravityRoot, { recursive: true }, (_eventType: string, filename: string | null) => {
+                watcher = fs.watch(dir, { persistent: false }, (eventType: string, filename: string | null) => {
                     try {
                         if (!filename) return;
-                        if (!/\.md(?:$|\.resolved(?:\.\d+)?$)/i.test(filename)) return;
-                        const fullPath = path.join(antigravityRoot, filename);
-                        if (!this._isBrainMirrorCandidate(fullPath)) return;
-
-                        const rawAutoClaim = _eventType === 'rename';
-                        const stablePath = this._getStablePath(fullPath);
-                        if (rawAutoClaim) {
-                            this._brainDebounceClaims.add(stablePath);
-                        }
-
-                        const existing = this._brainDebounceTimers.get(stablePath);
-                        if (existing) clearTimeout(existing);
-                        // Capture root at event time for validation in the debounce callback
-                        const eventRoot = this._resolveWorkspaceRoot();
-                        this._brainDebounceTimers.set(stablePath, setTimeout(async () => {
-                            try {
-                                this._brainDebounceTimers.delete(stablePath);
-                                const finalAutoClaim = this._brainDebounceClaims.has(stablePath);
-                                this._brainDebounceClaims.delete(stablePath);
-                                if (this._recentBrainWrites.has(stablePath)) return;
-                                // Dynamic resolution with validation guard
-                                const dynamicWorkspaceRoot = this._resolveWorkspaceRoot();
-                                if (!dynamicWorkspaceRoot) return;
-                                // If workspace switched during debounce, skip to avoid wrong-root mirroring
-                                if (eventRoot && dynamicWorkspaceRoot !== eventRoot) {
-                                    console.log(`[TaskViewerProvider] Brain fs.watch debounce skipped: workspace changed during debounce window`);
-                                    return;
+                        const fullPath = path.join(dir, String(filename));
+                        if (armChildDirs) {
+                            // A new session directory: arm it, then sweep it once so a
+                            // plan file written before the watch landed is not lost.
+                            let isDir = false;
+                            try { isDir = fs.statSync(fullPath).isDirectory(); } catch { /* gone already */ }
+                            if (isDir) {
+                                if (String(filename).toLowerCase() !== 'completed') {
+                                    armBrainDirWatch(fullPath, false);
+                                    try {
+                                        for (const entry of fs.readdirSync(fullPath, { withFileTypes: true })) {
+                                            if (!entry.isFile()) continue;
+                                            mirrorBrainCandidate(path.join(fullPath, entry.name), true);
+                                        }
+                                    } catch { /* unreadable — the sweep will get it */ }
                                 }
-                                if (fs.existsSync(fullPath)) {
-                                    await this._ensureTombstonesLoaded(dynamicWorkspaceRoot);
-                                    await this._mirrorBrainPlan(fullPath, finalAutoClaim, dynamicWorkspaceRoot);
-                                }
-                            } catch (e) {
-                                console.error('[TaskViewerProvider] Brain fs.watch debounce callback failed:', e);
+                                return;
                             }
-                        }, 300));
+                        }
+                        if (!/\.md(?:$|\.resolved(?:\.\d+)?$)/i.test(String(filename))) return;
+                        mirrorBrainCandidate(fullPath, eventType === 'rename');
                     } catch (e: any) {
                         if (e?.code !== 'ENOENT') {
                             console.error('[TaskViewerProvider] Brain fs.watch callback error:', e);
                         }
                     }
                 });
-                this._brainFsWatchers.push(brainFsWatcher);
-                console.log(`[TaskViewerProvider] Brain fs.watch fallback active for ${antigravityRoot}`);
             } catch (e) {
-                console.error(`[TaskViewerProvider] Brain fs.watch fallback failed (non-fatal) for ${antigravityRoot}:`, e);
+                console.error(`[TaskViewerProvider] Brain fs.watch failed (non-fatal) for ${dir}:`, e);
+                return;
             }
+            watchedBrainDirs.add(stableDir);
+            brainWatchCount++;
+            this._brainFsWatchers.push(watcher);
+
+            if (!armChildDirs) return;
+            try {
+                for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+                    if (!entry.isDirectory()) continue;
+                    if (entry.name.toLowerCase() === 'completed') continue;
+                    armBrainDirWatch(path.join(dir, entry.name), false);
+                }
+            } catch { /* unreadable root — the sweep still covers it */ }
+        };
+
+        for (const planRoot of this._getAntigravityPlanRoots()) {
+            if (!fs.existsSync(planRoot)) continue;
+            armBrainDirWatch(planRoot, true);
         }
+        console.log(`[TaskViewerProvider] Brain watchers armed: ${brainWatchCount} directory watches (cap ${brainWatchCap})`);
 
         // Mirror → Brain: debounced watcher so edits in VS Code sync back
         // (staging watcher already disposed by idempotency guard at top of method)

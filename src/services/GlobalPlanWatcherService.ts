@@ -151,11 +151,15 @@ function createVsCodePlanIngestionHost(outputChannel?: vscode.OutputChannel): Pl
             const plansDir = path.join(folder, '.switchboard', 'plans');
             const featuresDir = path.join(folder, '.switchboard', 'features');
             const nativeWatchers: fs.FSWatcher[] = [];
-            for (const dir of [plansDir, featuresDir]) {
+            const armed = new Set<string>();
+            // A missing directory is NOT created here. `watchFolder` is called for
+            // every mapped root, including PARENT folders that hold many repos and
+            // are not Switchboard workspaces at all — creating `.switchboard/plans`
+            // in each of those is scaffold litter. A `.switchboard` watch below
+            // notices the real directory appearing and arms the watch then.
+            const armDir = (dir: string): void => {
+                if (armed.has(dir) || !fs.existsSync(dir)) return;
                 try {
-                    if (!fs.existsSync(dir)) {
-                        fs.mkdirSync(dir, { recursive: true });
-                    }
                     const watcher = fs.watch(dir, { recursive: true }, (eventType, filename) => {
                         if (!filename || !filename.endsWith('.md')) return;
                         const fullPath = path.resolve(path.join(dir, filename));
@@ -170,10 +174,26 @@ function createVsCodePlanIngestionHost(outputChannel?: vscode.OutputChannel): Pl
                         onEvent('change', fullPath);
                     });
                     nativeWatchers.push(watcher);
+                    armed.add(dir);
                     outputChannel?.appendLine(`[GlobalPlanWatcher] Native watch active for: ${dir}`);
                 } catch (e) {
                     outputChannel?.appendLine(`[GlobalPlanWatcher] Native watch failed for ${dir}: ${e}`);
                 }
+            };
+
+            for (const dir of [plansDir, featuresDir]) { armDir(dir); }
+
+            const switchboardDir = path.join(folder, '.switchboard');
+            if (fs.existsSync(switchboardDir) && (!fs.existsSync(plansDir) || !fs.existsSync(featuresDir))) {
+                try {
+                    const dirWatcher = fs.watch(switchboardDir, (_eventType, filename) => {
+                        if (!filename) return;
+                        const name = filename.toString();
+                        if (name !== 'plans' && name !== 'features') return;
+                        armDir(path.join(switchboardDir, name));
+                    });
+                    nativeWatchers.push(dirWatcher);
+                } catch { /* the engine's periodic scan is the backstop */ }
             }
 
             return {

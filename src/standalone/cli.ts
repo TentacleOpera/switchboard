@@ -3597,6 +3597,28 @@ async function main() {
         const pid = health.pid;
         console.log(`[switchboard] Stopping server (PID ${pid}, port ${port})…`);
 
+        // PID-recycle guard. Liveness (`process.kill(pid, 0)`) tells us a process
+        // with that number exists — NOT that it is still OUR process. The old
+        // code re-probed /health before SIGKILL for exactly this reason; /health
+        // can no longer answer that question, because the listener closes long
+        // before the process dies (that is the bug this command exists to fix).
+        // Linux's `starttime` (field 22 of /proc/<pid>/stat) is the cheap
+        // substitute: it is fixed for the life of a process and changes the
+        // instant the number is reused. Undefined off Linux — there the SIGKILL
+        // escalation keeps its previous, unguarded behaviour.
+        const processStartTime = (p: number): string | undefined => {
+            if (process.platform !== 'linux') { return undefined; }
+            try {
+                const stat = fs.readFileSync(`/proc/${p}/stat`, 'utf8');
+                // `comm` (field 2) is parenthesised and may itself contain spaces,
+                // so split only what follows the LAST ')'. That slice starts at
+                // field 3, putting starttime (field 22) at index 19.
+                const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
+                return fields[19];
+            } catch { return undefined; }
+        };
+        const startTimeAtSignal = processStartTime(pid);
+
         try { process.kill(pid, 'SIGTERM'); } catch (err) {
             console.error(`[switchboard] Failed to send SIGTERM to PID ${pid}: ${err instanceof Error ? err.message : String(err)}`);
             process.exit(1);
@@ -3626,6 +3648,11 @@ async function main() {
             if (!isProcessAlive(pid)) {
                 console.log('[switchboard] Server stopped during grace period.');
                 stopped = true;
+            } else if (startTimeAtSignal !== undefined && processStartTime(pid) !== startTimeAtSignal) {
+                // Same number, different process: ours died and the PID was
+                // reused. Killing this one would kill an innocent process.
+                console.log('[switchboard] Server stopped during grace period (PID was recycled by another process — not signalling it).');
+                stopped = true;
             } else {
                 console.warn(`[switchboard] Server (PID ${pid}) did not stop within ${GRACE_MS / 1000}s. Escalating to SIGKILL — this may abandon a pending database write.`);
                 try { process.kill(pid, 'SIGKILL'); } catch { /* already dead */ }
@@ -3633,7 +3660,7 @@ async function main() {
             }
         }
 
-        if (isProcessAlive(pid)) {
+        if (!stopped && isProcessAlive(pid)) {
             console.error(`[switchboard] Server process (PID ${pid}) is still alive after SIGKILL. It may need to be killed manually.`);
             process.exit(1);
         }

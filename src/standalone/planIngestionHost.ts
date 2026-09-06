@@ -102,15 +102,17 @@ function attachFolderWatcher(
     const composite = new CompositeWatchHandle();
     const subWatchers = new Map<string, fs.FSWatcher>();
 
+    const switchboardDir = path.join(folder, '.switchboard');
     const plansDir = path.join(folder, '.switchboard', 'plans');
     const featuresDir = path.join(folder, '.switchboard', 'features');
-    for (const dir of [plansDir, featuresDir]) {
-        try {
-            if (!fs.existsSync(dir)) {
-                fs.mkdirSync(dir, { recursive: true });
-            }
-        } catch {}
-    }
+    // NOTE: these directories are watched if they exist and NOT created if they
+    // do not. `watchFolder` is called for every root the engine tracks, which
+    // includes plan-scanner source folders (`~/.cursor/plans`, ...) and, in the
+    // extension, mapped PARENT folders that are not Switchboard workspaces at
+    // all. Creating `.switchboard/plans` in each of those is scaffold litter in
+    // directories that never wanted it. A missing subtree is instead covered by
+    // a single non-recursive watch on `.switchboard` itself (see below), which
+    // arms the real watch when the directory appears.
 
     const handleEvent = (eventType: string, fullPath: string) => {
         if (!shouldEmitForFolder(folder, fullPath)) return;
@@ -212,20 +214,35 @@ function attachFolderWatcher(
         }
     };
 
-    let recursiveOk = true;
-    for (const d of [plansDir, featuresDir]) {
-        if (fs.existsSync(d)) {
-            if (!attachRecursive(d)) {
-                recursiveOk = false;
-            }
+    /** Arm the watch for one of the two subtrees, recursive first, tree-walk on fallback. */
+    const armSubtree = (d: string): void => {
+        if (subWatchers.has(d)) return;
+        if (!fs.existsSync(d)) return;
+        if (!attachRecursive(d)) {
+            // Fallback: per-subdirectory non-recursive tree-walk (this is the path
+            // EXCLUDED_DIR_NAMES guards, which is why `logs`, `dbbackup` and
+            // `mission-control` were added to it).
+            walkAndAttach(d);
         }
-    }
+    };
 
-    if (!recursiveOk) {
-        // Fallback: per-subdirectory non-recursive tree-walk over .switchboard/plans + features.
-        for (const d of [plansDir, featuresDir]) {
-            if (fs.existsSync(d)) { walkAndAttach(d); }
-        }
+    for (const d of [plansDir, featuresDir]) { armSubtree(d); }
+
+    // A missing `plans/` or `features/` is not created here (see the note above).
+    // One non-recursive watch on `.switchboard` — a single descriptor — notices
+    // the directory being created later and arms the real watch then.
+    if (fs.existsSync(switchboardDir) && (!fs.existsSync(plansDir) || !fs.existsSync(featuresDir))) {
+        try {
+            const w = fs.watch(switchboardDir, { persistent: false }, (_eventType, filename) => {
+                if (!filename) return;
+                const name = filename.toString();
+                if (name !== 'plans' && name !== 'features') return;
+                armSubtree(path.join(switchboardDir, name));
+                void rescanRoot();
+            });
+            subWatchers.set(switchboardDir, w);
+            w.on('error', () => { /* transient */ });
+        } catch { /* .switchboard unwatchable — the engine's periodic scan is the backstop */ }
     }
 
     const inotifyCount = getInotifyWatchCount();

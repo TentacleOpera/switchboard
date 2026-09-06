@@ -1494,6 +1494,16 @@ jobs:
       - name: Workspace mapping precedence, visibility and child-scaffold guard
         run: npm run test:contract:workspace-mappings
 
+      # Resident-memory budget for 4 GB hosts. The static half gates here: the
+      # probe's column schema, /health publishing process.memoryUsage(), the
+      # narrowed .switchboard watch roots, the depth-bounded Antigravity brain
+      # watcher, no watcher mkdir-ing the tree it wanted to observe, and the
+      # numbers in docs/LOW_MEMORY_HOSTS.md. The RSS and inotify ceilings need a
+      # running host and are skipped here — the run says so out loud rather than
+      # passing quietly.
+      - name: Resident memory budget contract (probe schema, watch bounds, published budget)
+        run: npm run test:contract:resident-memory
+
       - name: Run integration suite
         run: npm run test:integration:all
 

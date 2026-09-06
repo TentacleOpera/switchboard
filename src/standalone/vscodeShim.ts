@@ -412,31 +412,53 @@ export namespace workspace {
                 } catch { /* file may not exist yet or locked */ }
             };
 
-            const scanMatchingFiles = () => {
+            const scanDir = (subDir: string) => {
                 try {
-                    const entries = fs.readdirSync(folderPath, { withFileTypes: true });
-                    for (const entry of entries) {
-                        if (entry.isDirectory()) {
-                            const subDir = path.join(folderPath, entry.name);
-                            try {
-                                const subEntries = fs.readdirSync(subDir);
-                                for (const subFile of subEntries) {
-                                    const fullPath = path.join(subDir, subFile);
-                                    const relPath = path.relative(folderPath, fullPath).split(path.sep).join('/');
-                                    if (matcher.test(relPath) && fs.existsSync(fullPath)) {
-                                        if (!seen.has(fullPath)) {
-                                            seen.add(fullPath);
-                                            createHandlers.forEach(h => h({ fsPath: fullPath } as Uri));
-                                        }
-                                        armFileWatch(fullPath);
-                                    }
-                                }
-                            } catch {}
+                    for (const subFile of fs.readdirSync(subDir)) {
+                        const fullPath = path.join(subDir, subFile);
+                        const relPath = path.relative(folderPath, fullPath).split(path.sep).join('/');
+                        if (!matcher.test(relPath) || !fs.existsSync(fullPath)) continue;
+                        if (!seen.has(fullPath)) {
+                            seen.add(fullPath);
+                            createHandlers.forEach(h => h({ fsPath: fullPath } as Uri));
                         }
+                        armFileWatch(fullPath);
                     }
-                } catch {}
+                } catch { /* directory vanished mid-scan */ }
             };
 
+            // Two levels, both non-recursive: the parent notices new session
+            // directories, and each session directory notices the file appearing
+            // INSIDE it. Watching the parent alone loses every new session — the
+            // directory is created empty and its plan file is written a moment
+            // later, which produces no event on the parent.
+            const armDirWatch = (subDir: string) => {
+                if (childWatchers.has(subDir)) return;
+                if (childWatchers.size >= maxWatches) {
+                    console.warn(`[vscodeShim watcher] Watch count for ${folderPath} (${childWatchers.size}) exceeds cap (${maxWatches})`);
+                    return;
+                }
+                try {
+                    const dw = fs.watch(subDir, { persistent: false }, () => scanDir(subDir));
+                    dw.on('error', err => console.warn(`[vscodeShim watcher] ${subDir}:`, err));
+                    childWatchers.set(subDir, dw);
+                } catch { /* directory may have been removed */ }
+            };
+
+            const scanMatchingFiles = () => {
+                try {
+                    for (const entry of fs.readdirSync(folderPath, { withFileTypes: true })) {
+                        if (!entry.isDirectory()) continue;
+                        const subDir = path.join(folderPath, entry.name);
+                        armDirWatch(subDir);
+                        scanDir(subDir);
+                    }
+                } catch { /* folder unreadable */ }
+            };
+
+            // Seed `seen` with what already exists BEFORE any handler can be
+            // registered, so the first real event on a pre-existing file is
+            // reported as a change and not as a spurious create.
             scanMatchingFiles();
 
             try {

@@ -1078,7 +1078,8 @@
     "test:contract:team-release-control": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/team-release-control-contract.test.js",
     "test:contract:roster-clear-mid-turn": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/roster-clear-mid-turn-deferral.test.js",
     "test:contract:mobile-command-route": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/mobile-command-route-contract.test.js",
-    "test:contract:workspace-mappings": "mocha --ui tdd --require ./src/test/bootstrap/sandboxStateHome.js --require ./src/test/bootstrap/vscodeStub.js out/test/workspace-identity-precedence.test.js"
+    "test:contract:workspace-mappings": "mocha --ui tdd --require ./src/test/bootstrap/sandboxStateHome.js --require ./src/test/bootstrap/vscodeStub.js out/test/workspace-identity-precedence.test.js",
+    "test:contract:resident-memory": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/resident-memory-budget-contract.test.js"
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.0.0",
