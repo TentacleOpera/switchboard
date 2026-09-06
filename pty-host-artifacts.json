@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "binary": "switchboard-pty-host",
+  "targets": {
+    "linux-arm64": "dist/linux-arm64/switchboard-pty-host",
+    "linux-amd64": "dist/linux-amd64/switchboard-pty-host",
+    "darwin-arm64": "dist/darwin-arm64/switchboard-pty-host",
+    "darwin-amd64": "dist/darwin-amd64/switchboard-pty-host"
+  }
+}

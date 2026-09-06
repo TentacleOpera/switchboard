@@ -3,41 +3,27 @@
 .vscode-test/**
 out/**
 node_modules/**
-# node-pty is a native module: it cannot be webpack-bundled, so it must ship in
-# node_modules and load its prebuild at runtime (lib/utils.js resolves
-# `prebuilds/<platform>-<arch>/`).
-#
-# READ BEFORE EDITING — a blanket `!node_modules/node-pty/**` is WRONG.
-# vsce's filter is `!ignore.some(...) || negate.some(...)`: a negation wins
-# UNCONDITIONALLY over every ignore pattern, regardless of line order. So a
-# blanket negation silently re-includes the 28 MB of `.pdb` debug symbols that
-# the `**/*.pdb` rule below is trying to drop, and drags in the build-from-source
-# trees (src/, deps/, third_party/ ≈ 3.8 MB) that the runtime never touches.
-# That is the difference between a ~3 MB and a ~30 MB Windows VSIX, and the
-# Marketplace's per-VSIX upload cap sits in the 25–50 MB window.
-#
-# The negations are therefore enumerated by what the runtime actually loads.
-# `scripts/package-targets.sh` additionally stages only the CURRENT target's
-# prebuild directory, so a single VSIX never carries all four platforms.
-!node_modules/node-pty/package.json
-# Scoped to *.js so this negation cannot re-include lib/**/*.map past `**/*.map`.
-!node_modules/node-pty/lib/**/*.js
-!node_modules/node-pty/prebuilds/**/*.node
-!node_modules/node-pty/prebuilds/**/*.dll
-!node_modules/node-pty/prebuilds/**/*.exe
-!node_modules/node-pty/prebuilds/*/spawn-helper
-# better-sqlite3 native module: same allowlist discipline as node-pty.
+# PTY capability is provided by the small platform-selected Go host. The build
+# helper writes the manifest and target binaries under dist/; vsce ships dist/
+# unless ignored. Never re-include node_modules for terminal capability.
+!pty-host-artifacts.json
+# better-sqlite3 native module allowlist.
 !node_modules/better-sqlite3/package.json
 !node_modules/better-sqlite3/lib/**/*.js
-!node_modules/better-sqlite3/build/Release/**/*.node
+!node_modules/better-sqlite3/build/Release/better_sqlite3.node
 **/*.pdb
 
 # Source files
 src/**
+cmd/**
+internal/**
+**/*.go
+go.mod
+go.sum
 # NOTE: there is deliberately no `!dist/**` here. Nothing above ignores dist/, so the
 # negation was a no-op for inclusion — but negations override ignores UNCONDITIONALLY,
 # so it silently re-included every dist/**/*.map (20 MB for extension.js.map alone)
-# past the `**/*.map` rule below. Same trap as the node-pty one; see the header comment.
+# past the `**/*.map` rule below.
 dist/templates/**
 **/dist/templates/**
 
@@ -63,6 +49,7 @@ webpack.config.js
 # Runtime artifacts
 .switchboard/**
 switchboard/**
+.antigravitycli/**
 
 # Documentation (keep README + AGENTS)
 *.md

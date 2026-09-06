@@ -20,7 +20,7 @@ import { writeMissionControlReport, writeInstruction, bootstrapInstructionsDirec
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { resolvePreferredPort, PORT_BASE, PORT_SPAN } from '../utils/portResolver';
-import { setBundledCliPath } from '../utils/cliPathToken';
+import { setBundledCliPath, setGoClientPath, resolveGoClientPath } from '../utils/cliPathToken';
 import { getConstitutionPath } from './constitutionUtils';
 import { buildWorkspaceItems } from './workspaceUtils';
 import { stateFs as fs, stateLockfile as lockfile, getWorkspaceRootFromStatePath } from './stateConfigBridge';
@@ -38,12 +38,7 @@ import type { FSWatcher, Dirent, Stats } from 'fs';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import * as https from 'https';
-import { isPtyAvailable } from '../standalone/ptyBackend';
-// PtyFleetService is imported for purgePtyTerminals ONLY — the fleet itself, the
-// WebSocket gateway and the prompt-delivery helpers now live in the pty host child.
-// The extension is control plane: it never constructs a fleet and never sees
-// terminal bytes.
-import { PtyFleetService, PTY_IDE_NAME } from '../standalone/ptyFleetService';
+import { PTY_IDE_NAME, PtyHostSupervisor } from './ptyHostSupervisor';
 import { DEVIN_DEFAULT_TIMEOUT_MS, CLAUDE_DEFAULT_TIMEOUT_MS, ANTIGRAVITY_DEFAULT_TIMEOUT_MS } from '../standalone/clearReadiness';
 import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExternalTeamTemplate, InstantiateAgentGroupResult } from './agentGroupInstantiation';
 // The pure migrators are deliberately NOT imported here: every standing-orders
@@ -121,7 +116,7 @@ import type { LinearDocsAdapter } from './LinearDocsAdapter';
 let LinearDocsAdapterClass: any;
 import { LocalFolderService } from './LocalFolderService';
 import { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
-import { LocalApiServer, enqueueOnQueueChain } from './LocalApiServer';
+import { LocalApiServer, enqueueOnQueueChain, LauncherStateProjection } from './LocalApiServer';
 import { LOOPBACK_ONLY_POLICY, type BindPolicy } from '../utils/loopbackHostname';
 import { detectTailnetAddress, resolveMagicDnsNames } from '../utils/tailnetDetect';
 import { GlobalIntegrationConfigService, AgentGlobalKey, ScheduledJob, SchedulerConfig } from './GlobalIntegrationConfigService';
@@ -161,6 +156,26 @@ const { syncMirrorToBrain } = require('./mirrorSync') as {
         writeTtlMs?: number;
     }) => Promise<{ updatedBase: boolean; sidecarWrites: number; changed: boolean }>;
 };
+
+/**
+ * Read the extension version from `<extensionPath>/package.json` for the
+ * launcher's host identity (plan: go-launcher-static-binary). Returns
+ * `'unknown'` (with a source the projection still reports) when the file
+ * cannot be read — never an empty string, which would be indistinguishable
+ * from "no version wired" (the fallback rule). Mirrors extension.ts
+ * `getExtensionVersion` but lives here so TaskViewerProvider does not import
+ * the extension entry point.
+ */
+function getExtensionVersionSafe(extensionPath: string): string {
+    try {
+        const packageJsonPath = path.join(extensionPath, 'package.json');
+        const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
+        const v = typeof packageJson?.version === 'string' ? packageJson.version.trim() : '';
+        return v || 'unknown';
+    } catch {
+        return 'unknown';
+    }
+}
 
 /**
  * One local ticket nominated for deletion. `paths` holds EVERY on-disk copy known
@@ -590,7 +605,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * p50 in-process vs 0.24 ms out).
      */
     private async _ptyHostVerb(verb: string, payload: any, signal?: AbortSignal): Promise<any> {
-        if ((!this._ptyHostChild || !this._ptyHostPort) && !this._fleetVerb) {
+        if ((!this._ptyHostChild || !this._ptyHostPort) && !this._ptyHostSupervisor && !this._fleetVerb) {
             return { success: false, error: 'PTY host unavailable on this platform/installation' };
         }
 
@@ -1284,7 +1299,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         let result: any = null;
         try {
-            if (this._ptyHostChild && this._ptyHostPort) {
+            if (this._ptyHostSupervisor) {
+                result = await this._ptyHostSupervisor.request(verb, payload, signal);
+            } else if (this._ptyHostChild && this._ptyHostPort) {
                 const http = require('http');
                 const port = this._ptyHostPort;
                 // An aborted join (the parent's curl died) must tear down the proxied
@@ -1583,6 +1600,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         this._fleetVerb = fn;
     }
 
+    public setPtyHostSupervisor(supervisor: PtyHostSupervisor): void {
+        this._ptyHostSupervisor = supervisor;
+    }
+
     public async handleTerminalVerb(verb: string, payload: any, root?: string, signal?: AbortSignal): Promise<any> {
         if (this._handlePtyVerb) {
             return this._handlePtyVerb(verb, payload, root, signal);
@@ -1608,7 +1629,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     /** True when a fleet is reachable by SOME route: the out-of-process pty host
      *  (extension) or the injected in-process bridge (standalone). */
     private _hasFleet(): boolean {
-        return !!this._ptyHostPort || !!this._fleetVerb;
+        return !!this._ptyHostPort || !!this._ptyHostSupervisor || !!this._fleetVerb;
     }
 
     public initHeadlessVerbServing(seams: HostSeams, broadcaster: BroadcastHub): void {
@@ -1689,6 +1710,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _needsSetup: boolean = false;
     private _terminalSessionToken: string = '';
     private _ptyHostChild?: import('child_process').ChildProcess;
+    private _ptyHostSupervisor?: PtyHostSupervisor;
     /** HTTP port of the out-of-process pty host child process. Set only in the extension host when _startLocalApiServer launches the child. Does NOT mean "a fleet exists" — check _hasFleet() instead. */
     private _ptyHostPort?: number;
     /**
@@ -1942,6 +1964,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _linearServices: Map<string, LinearSyncService> = new Map();
     private _notionContentCache: Map<string, string | null> = new Map();
     private _localApiServer: LocalApiServer | null = null;
+    // Process-lifetime instance ID for the launcher's host identity (plan:
+    // go-launcher-static-binary). Stable across re-entrant _startLocalApiServer
+    // calls (the liveness watchdog restarts the server, not the provider), so
+    // the launcher can prove the process that answered /health is the same one
+    // it is about to mutate. A recycled PID cannot fool this: the ID changes
+    // only when the extension host process itself is replaced.
+    private readonly _apiServerInstanceId: string = crypto.randomUUID();
     // PlanIngestionEngine reference — set after the GlobalPlanWatcherService is
     // created (extension.ts wires this after both the provider and the watcher
     // exist). Used by the armQueueWatch callback so LocalApiServer's
@@ -3675,6 +3704,74 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     /**
+     * Project launcher state for `GET /launcher/state` (plan:
+     * go-launcher-static-binary). The host owns this shape; the launcher
+     * consumes it and never reads kanban.db. Reuses KanbanProvider /
+     * SetupPanelProvider mapping reads — every behavioural value carries its
+     * source so a stale projection is visible. Missing provider/DB data
+     * returns an explicit `{ unavailable: true, reason, source }` object,
+     * NEVER an empty array indistinguishable from "no workspaces configured"
+     * (the fallback rule in CLAUDE.md).
+     */
+    private async _projectLauncherState(effectiveRoot: string): Promise<LauncherStateProjection> {
+        // getKnownRoots() is the same source set /health advertises. Fall back
+        // to the provider's own workspace-roots list when the server field is
+        // not yet set (defensive — the projection is called at request time,
+        // by which point _localApiServer is assigned).
+        const roots = this._localApiServer
+            ? this._localApiServer.getKnownRoots()
+            : this._filterMappedRoots(this._getWorkspaceRoots());
+        const selected = this._kanbanProvider?.getCurrentWorkspaceRoot() ?? null;
+        // Workspace mappings through the existing DB service. The launcher
+        // never opens the DB itself.
+        let workspaceMappings: LauncherStateProjection['workspaceMappings'];
+        try {
+            const db = await this._getKanbanDb(effectiveRoot);
+            if (!db) {
+                workspaceMappings = { unavailable: true, reason: 'kanban database not available', source: 'host-db' };
+            } else {
+                const result = await db.getWorkspaceMappings();
+                if (!result || !Array.isArray(result.mappings)) {
+                    workspaceMappings = { unavailable: true, reason: 'workspace mappings service returned no list', source: 'host-db' };
+                } else {
+                    workspaceMappings = {
+                        unavailable: false,
+                        value: result.mappings.map(m => ({
+                            root: (m as any).parentFolder ?? (m as any).workspaceFolders?.[0] ?? '',
+                            label: (m as any).name,
+                            enabled: result.enabled !== false,
+                        })),
+                        source: 'host-db',
+                    };
+                }
+            }
+        } catch (e) {
+            workspaceMappings = {
+                unavailable: true,
+                reason: `workspace mappings read failed: ${e instanceof Error ? e.message : String(e)}`,
+                source: 'host-db',
+            };
+        }
+        return {
+            host: {
+                kind: 'extension',
+                instanceId: this._apiServerInstanceId,
+                version: getExtensionVersionSafe(this._context.extensionPath),
+                source: 'extension-host',
+            },
+            capabilities: {
+                shutdown: {
+                    enabled: false,
+                    reason: 'extension host does not own process teardown — close VS Code to stop',
+                },
+            },
+            roots: { value: roots, source: 'extension-host' },
+            selectedWorkspaceRoot: { value: selected, source: 'kanban-provider' },
+            workspaceMappings,
+        };
+    }
+
+    /**
      * Start the local API server for agent access.
      */
     private async _startLocalApiServer(): Promise<void> {
@@ -3706,11 +3803,23 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // fleet's registry rows, and mint a new token that 401s every already-open
         // browser terminal. The fleet outlives individual server restarts; only the
         // gateway reference is handed to the new LocalApiServer.
-        const ptyReady = isPtyAvailable();
-        if (ptyReady && !this._ptyHostChild && !this._ptyHostBootFailed) {
+        const ptyReady = !!this._ptyHostSupervisor;
+        if (this._ptyHostSupervisor && !this._ptyHostPort && !this._ptyHostBootFailed) {
+            try {
+                this._ptyHostSupervisor.setWorkspaceRoot(effectiveRoot);
+                const ready = await this._ptyHostSupervisor.start();
+                this._ptyHostPort = ready.port;
+                this._terminalSessionToken = ready.terminalToken;
+                this._apiServerDiagnosticsChannel.appendLine(`[pty-host] ready protocol=${ready.protocolVersion} port=${ready.port}`);
+                this._pushControllerSeatToPtyHost();
+            } catch (error) {
+                this._ptyHostBootFailed = true;
+                this._apiServerDiagnosticsChannel.appendLine(`[pty-host] unavailable: ${error instanceof Error ? error.message : String(error)}`);
+            }
+        }
+        if (false) {
             const db = await this._getKanbanDb(effectiveRoot);
             if (db) {
-                await PtyFleetService.purgePtyTerminals(db);
                 const ptyHostScript = path.join(this._context.extensionPath, 'dist', 'standalone', 'ptyHost.js');
                 // ELECTRON_RUN_AS_NODE is NOT optional. Under the extension host
                 // `process.execPath` is the Electron binary, and the utility-process
@@ -3792,7 +3901,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 if (this._ptyHostPort) { this._pushControllerSeatToPtyHost(); }
             }
         }
-        const ptyHostReady = () => ptyReady && !!this._ptyHostChild && !!this._ptyHostPort;
+        const ptyHostReady = () => ptyReady && !!this._ptyHostPort && (!!this._ptyHostSupervisor || !!this._ptyHostChild);
 
         const updateMirrorRegistry = async (db: any) => {
             if (!db || !this._ptyHostPort) return;
@@ -4706,6 +4815,34 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 }
             },
             bindPolicy: await this._resolveBindPolicy(),
+            // Host identity + capabilities for the launcher (plan:
+            // go-launcher-static-binary). The extension host's PID is the VS
+            // Code extension host process — a generic PID-based Stop action
+            // could terminate the editor. The extension explicitly identifies
+            // itself and declares shutdown disabled with a reason. Omission is
+            // never used to signal unsupported behaviour: the route handler
+            // verifies kind === 'standalone' AND capabilities.shutdown.enabled
+            // AND a present callback before requesting teardown.
+            hostIdentity: {
+                kind: 'extension',
+                instanceId: this._apiServerInstanceId,
+                version: getExtensionVersionSafe(this._context.extensionPath),
+                source: 'extension-host',
+            },
+            capabilities: {
+                // The extension never owns teardown — closing VS Code is the
+                // operator's stop action. A launcher that sees this MUST hide
+                // Stop; the route handler refuses even if a callback were
+                // wired by mistake (it is not).
+                shutdown: {
+                    enabled: false,
+                    reason: 'extension host does not own process teardown — close VS Code to stop',
+                },
+            },
+            // Host-owned launcher-state projection. The launcher consumes this
+            // and never reads kanban.db. Reuses KanbanProvider/SetupPanelProvider
+            // mapping reads — no direct DB reads in the launcher client.
+            getLauncherState: async () => this._projectLauncherState(effectiveRoot),
         });
 
         this._broadcaster?.setApiServer(this._localApiServer);
@@ -4863,6 +5000,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // `<cliPath>` through. Fragments are constants with byte-identical
         // webview mirrors, so they cannot interpolate the path themselves.
         setBundledCliPath(resolved);
+        // Prime the Go client seam: when the static Go client is available
+        // (from client-artifacts.json or SWITCHBOARD_GO_CLIENT_PATH), prompts
+        // that use the `switchboard` form resolve to the Go binary.
+        const goClientPath = resolveGoClientPath();
+        if (goClientPath) {
+            setGoClientPath(goClientPath);
+        }
         return resolved;
     }
 
@@ -4900,7 +5044,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     public getTerminalGridState(): { apiPort?: number; ready: boolean } {
         const apiPort = this._localApiServer?.getPort() || undefined;
         const isListening = this._localApiServer?.isListening() ?? false;
-        const ptyReady = isPtyAvailable() && (this.suppressLocalApiServer ? true : (!!this._ptyHostChild && !this._ptyHostBootFailed && !!this._ptyHostPort));
+        const ptyReady = !!this._ptyHostSupervisor && (this.suppressLocalApiServer ? true : (!this._ptyHostBootFailed && !!this._ptyHostPort));
         return {
             apiPort,
             ready: !!apiPort && isListening && ptyReady
@@ -12049,7 +12193,7 @@ Each plan file must include:
      */
     private _pushControllerSeatToPtyHost(): void {
         if (this._headlessRuntime) { return; }
-        if (!this._ptyHostChild || !this._ptyHostPort) { return; }
+        if ((!this._ptyHostChild && !this._ptyHostSupervisor) || !this._ptyHostPort) { return; }
         const seat = this._autobanState?.missionControlSeat;
         void this._ptyHostVerb('ptySetControllerSeat', { seat: seat || null })
             .catch(() => { /* best-effort — role scan is the fallback */ });
@@ -13503,10 +13647,10 @@ Each plan file must include:
         if (this.suppressLocalApiServer) { return true; }
         const deadline = Date.now() + timeoutMs;
         while (Date.now() < deadline) {
-            if (isPtyAvailable() && !!this._ptyHostChild && !!this._ptyHostPort) { return true; }
+            if (!!this._ptyHostSupervisor && !!this._ptyHostPort) { return true; }
             await new Promise(r => setTimeout(r, 200));
         }
-        return isPtyAvailable() && !!this._ptyHostChild && !!this._ptyHostPort;
+        return !!this._ptyHostSupervisor && !!this._ptyHostPort;
     }
 
     /**
@@ -24853,6 +24997,12 @@ Each plan file must include:
         // and the unref'd escalation covers a child that ignores it. Plan 1's
         // parent-death watch is the backstop for the crash path, which never
         // reaches here at all.
+        if (this._ptyHostSupervisor) {
+            void this._ptyHostSupervisor.stop();
+            this._ptyHostSupervisor = undefined;
+            this._ptyHostPort = undefined;
+            this._ptyTerminalNames = [];
+        }
         if (this._ptyHostChild) {
             const child = this._ptyHostChild;
             try { child.kill('SIGTERM'); } catch {}

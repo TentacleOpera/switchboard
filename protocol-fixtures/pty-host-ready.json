@@ -1,0 +1,62 @@
+{
+  "protocolVersion": 1,
+  "ready": {
+    "t": "ready",
+    "version": 1,
+    "port": 43127,
+    "token": "non-empty-random-token"
+  },
+  "verbs": {
+    "ptyCreateTerminal": { "request": { "role": "coder", "name": "coder-1" }, "success": true },
+    "ptyCreateBatch": { "request": { "terminals": [] }, "success": true },
+    "ptyCloseTerminal": { "request": { "name": "coder-1" }, "success": true },
+    "ptyListTerminals": { "success": true, "terminals": [] },
+    "ptyRenameTerminal": { "request": { "name": "coder-1", "alias": "coder-renamed" }, "success": true },
+    "ptyClearTerminal": { "request": { "name": "coder-1" }, "success": true },
+    "ptySendModel": { "request": { "name": "coder-1" }, "success": true },
+    "ptyClearAllTerminals": { "success": true },
+    "ptyWrite": { "request": { "name": "coder-1", "data": "echo hi\\r" }, "success": true },
+    "ptyPasteImage": { "contentType": "application/octet-stream", "maxBytes": 4194304 },
+    "ptySendPrompt": { "request": { "name": "coder-1", "prompt": "multi\\nline" }, "framing": "bracketed-paste" },
+    "ptySetControllerSeat": { "request": { "seat": null }, "success": true },
+    "ptyRollLogSession": { "request": { "name": "coder-1" }, "success": true }
+  },
+  "requiredVerbs": [
+    "ptyCreateTerminal",
+    "ptyCreateBatch",
+    "ptyCloseTerminal",
+    "ptyListTerminals",
+    "ptyRenameTerminal",
+    "ptyClearTerminal",
+    "ptySendModel",
+    "ptyClearAllTerminals",
+    "ptyWrite",
+    "ptyPasteImage",
+    "ptySendPrompt",
+    "ptySetControllerSeat",
+    "ptyRollLogSession"
+  ],
+  "bytes": {
+    "bracketedPasteOpen": "\\u001b[200~",
+    "bracketedPasteClose": "\\u001b[201~",
+    "submit": "\\r",
+    "chunkBoundary": 256
+  },
+  "websocket": {
+    "emptyToken": 401,
+    "wrongToken": 401,
+    "trustedLoopbackOrigin": true,
+    "untrustedOrigin": false,
+    "replayUsesSequence": true,
+    "resizeMessage": { "t": "resize", "cols": 120, "rows": 40 }
+  },
+  "lifecycle": ["stdin-eof", "parent-disappearance", "explicit-close", "self-exit", "graceful-termination", "forced-termination", "descendant-reaping"],
+  "invalidJson": {
+    "status": 400,
+    "body": { "success": false, "error": "Invalid JSON payload" }
+  },
+  "unknownVerb": {
+    "status": 200,
+    "body": { "success": false, "code": "unknown_verb" }
+  }
+}

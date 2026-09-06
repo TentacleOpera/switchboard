@@ -896,6 +896,7 @@
     "test:contract:default-prompt-previews": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/kanban-default-prompt-previews.test.js",
     "test:contract:reviewer-prompt-behaviour": "mocha --ui tdd --require ./src/test/bootstrap/sandboxStateHome.js out/services/__tests__/agentPromptBuilder.test.js",
     "test:contract:pty-host-gating": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-host-gating-contract.test.js",
+    "test:contract:pty-host-blackbox": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-host-blackbox-contract.test.js",
     "test:contract:standalone-fleet-seam": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/standalone-fleet-seam-contract.test.js",
     "test:contract:verb-engine": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/verb-engine-headless-seams.test.js",
     "test:contract:verb-engine-kanban": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/verb-engine-kanban-headless.test.js",
@@ -1127,9 +1128,6 @@
     "uuid": "^9.0.1",
     "ws": "8.21.0",
     "zod": "^3.23.8"
-  },
-  "optionalDependencies": {
-    "node-pty": "1.1.0"
   },
   "peerDependenciesMeta": {
     "@mermaid-js/mermaid-cli": {

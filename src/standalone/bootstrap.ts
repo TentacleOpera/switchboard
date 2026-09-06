@@ -47,19 +47,24 @@ import { PlanIngestionEngine } from '../services/PlanIngestionEngine';
 import { matchWorktreePath } from '../services/worktreeResolver';
 import { attributePlansToTerminals, type TerminalPlanAttribution } from '../services/terminalPlanAttribution';
 import { createStandalonePlanIngestionHost, readPlanScannerCustomSourceDirs } from './planIngestionHost';
-import { PtyFleetService, PTY_IDE_NAME } from './ptyFleetService';
+import { GoPtyFleetProjection } from '../services/goPtyFleetProjection';
+import { PTY_IDE_NAME } from '../services/ptyHostSupervisor';
 import { resolveTeamScopedRoleTerminal } from '../services/teamWiring';
-import { isPtyAvailable } from './ptyBackend';
 import { getThemeBodyClass } from '../services/themeBodyClass';
 import { SURFACES } from '../services/wsHub';
 import { MISSION_CONTROL_TERMINAL_NAME } from '../services/autobanState';
 import { GlobalIntegrationConfigService } from '../services/GlobalIntegrationConfigService';
-import { TerminalWsGateway } from './terminalWsGateway';
-import { sendPromptToPty, clearPty, modelPty, writeSlashCommand, type PromptDeliveryReceipt } from './ptyPromptDelivery';
-import { TerminalLogWriter } from './terminalLogWriter';
 import type { ClearReadinessResult } from './clearReadiness';
 import { extractDispatchIdentity } from '../services/dispatchIdentity';
 import { resolveStandalonePtyClearDelay, resolveStandalonePtyClearPolicy } from '../services/ptyClearPolicy';
+
+type PromptDeliveryReceipt = {
+    readiness?: ClearReadinessResult;
+    bytesWritten: number;
+    deliveredAt: number;
+    promptSeq?: number;
+    cleared?: boolean;
+};
 import {
     applyStandingOrders,
     stripStandingOrdersBlock,
@@ -107,7 +112,8 @@ import { createVscodeHostSeams, type HostSeams } from '../services/hostSeams';
 // is constructed.
 import { __setStandaloneWorkspaceRoot, createStandaloneSecretStorage } from './vscodeShim';
 import { isLoopbackHostname, resolveDisplayHostname, isAllowedHostFor, isTailnetPolicy, LOOPBACK_ONLY_POLICY, type BindPolicy } from '../utils/loopbackHostname';
-import { setBundledCliPath } from '../utils/cliPathToken';
+import { setBundledCliPath, setGoClientPath, resolveGoClientPath } from '../utils/cliPathToken';
+import { PtyHostSupervisor } from '../services/ptyHostSupervisor';
 
 // One JSDOM window for the whole process, reused by every `markdown.api.render`
 // call below. Building a window per render is ~100x slower and the expensive
@@ -177,6 +183,101 @@ function log(opts: HeadlessSwitchboardOptions | undefined, ...args: any[]) {
 function resolveRepoRoot(): string {
     // dist/standalone/cli.js -> repo root is two levels up
     return path.resolve(__dirname, '..', '..');
+}
+
+/**
+ * Read the standalone host version from the bundled package.json for the
+ * launcher's host identity (plan: go-launcher-static-binary). Returns
+ * `'unknown'` when the file cannot be read — never an empty string, which
+ * would be indistinguishable from "no version wired" (the fallback rule).
+ * The bundleDir is `__dirname/../..` (the same root `resolveRepoRoot` returns
+ * for the dev layout and the .deb layout flattens to /usr/lib/switchboard).
+ */
+function readStandaloneHostVersion(): string {
+    try {
+        const bundleDir = path.resolve(__dirname, '..', '..');
+        const pkgPath = path.join(bundleDir, 'package.json');
+        if (fs.existsSync(pkgPath)) {
+            const v = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))?.version;
+            if (typeof v === 'string' && v.trim()) { return v.trim(); }
+        }
+    } catch { /* fall through */ }
+    return 'unknown';
+}
+
+/**
+ * Project launcher state for `GET /launcher/state` (plan:
+ * go-launcher-static-binary). The host owns this shape; the launcher consumes
+ * it and never reads kanban.db. Every behavioural value carries its source so
+ * a stale projection is visible. Missing DB data returns an explicit
+ * `{ unavailable: true, reason, source }` object, NEVER an empty array
+ * indistinguishable from "no workspaces configured" (the fallback rule).
+ *
+ * `server` and `db` are passed as zero-arg resolvers because the projection
+ * is called at request time, by which point both are assigned — but the
+ * options object that captures this function is built before `server` is
+ * constructed. Resolving at call time mirrors the queue-seam precedent.
+ */
+async function projectStandaloneLauncherState(args: {
+    instanceId: string;
+    version: string;
+    workspaceRoot: string;
+    server: () => LocalApiServer | undefined;
+    db: () => any;
+    bindPolicy: BindPolicy;
+}): Promise<import('../services/LocalApiServer').LauncherStateProjection> {
+    const srv = args.server();
+    const roots = srv ? srv.getKnownRoots() : [args.workspaceRoot];
+    const tailnet = isTailnetPolicy(args.bindPolicy);
+    let workspaceMappings: import('../services/LocalApiServer').LauncherStateProjection['workspaceMappings'];
+    try {
+        const db = args.db();
+        if (!db) {
+            workspaceMappings = { unavailable: true, reason: 'kanban database not available', source: 'host-db' };
+        } else {
+            const result = await db.getWorkspaceMappings();
+            if (!result || !Array.isArray(result.mappings)) {
+                workspaceMappings = { unavailable: true, reason: 'workspace mappings service returned no list', source: 'host-db' };
+            } else {
+                workspaceMappings = {
+                    unavailable: false,
+                    value: result.mappings.map((m: any) => ({
+                        root: m?.parentFolder ?? m?.workspaceFolders?.[0] ?? '',
+                        label: m?.name,
+                        enabled: result.enabled !== false,
+                    })),
+                    source: 'host-db',
+                };
+            }
+        }
+    } catch (e) {
+        workspaceMappings = {
+            unavailable: true,
+            reason: `workspace mappings read failed: ${e instanceof Error ? e.message : String(e)}`,
+            source: 'host-db',
+        };
+    }
+    return {
+        host: {
+            kind: 'standalone',
+            instanceId: args.instanceId,
+            version: args.version,
+            source: 'standalone-host',
+        },
+        capabilities: {
+            shutdown: {
+                enabled: true,
+                reason: 'standalone host owns graceful teardown',
+            },
+        },
+        roots: { value: roots, source: 'standalone-host' },
+        selectedWorkspaceRoot: { value: args.workspaceRoot, source: 'standalone-host' },
+        workspaceMappings,
+        serveMode: { value: tailnet ? 'tailnet' : 'local', source: 'launch-subcommand' },
+        installation: {
+            hostVersion: { value: args.version, source: 'standalone-host' },
+        },
+    };
 }
 
 function findFile(candidates: string[]): string | undefined {
@@ -526,12 +627,19 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         // worked on exactly the seats where it timed out.
         let receipt: PromptDeliveryReceipt | undefined;
         try {
-            receipt = await sendPromptToPty(handle, out, {
-                ...opts,
-                onPromptDelivered: terminalLogWriter
-                    ? (terminalName, promptText) => terminalLogWriter.onPrompt(terminalName, promptText)
-                    : undefined,
+            receipt = await ptyHostSupervisor.request('ptySendPrompt', {
+                name: handle.friendlyName,
+                data: out,
+                clearBeforePrompt: opts?.clearBeforePrompt === true,
+                clearBeforePromptDelayMs: opts?.clearBeforePromptDelayMs,
+                clearReadinessMode: opts?.clearReadinessMode,
+                cliFamily: opts?.cliFamily || handle.cliFamily,
             });
+            if (receipt && typeof receipt.promptSeq === 'number') {
+                handle.promptCount = receipt.promptSeq;
+            } else if (receipt && receipt.bytesWritten > 0) {
+                handle.promptCount = (handle.promptCount || 0) + 1;
+            }
         } catch (err: any) {
             sendErr = err;
             throw err;
@@ -679,6 +787,21 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     const ingestionEngine = new PlanIngestionEngine(getClickUpService, getLinearService, ingestionHost, getNotionService);
 
     let server: LocalApiServer;
+
+    // Process-lifetime instance ID for the launcher's host identity (plan:
+    // go-launcher-static-binary). Stable for the process lifetime so the
+    // launcher can prove the process that answered /health is the same one
+    // it is about to mutate. A recycled PID cannot fool this.
+    const hostInstanceId = crypto.randomUUID();
+
+    // Shutdown callback holder. `new LocalApiServer(options)` runs at :2955
+    // (now shifted) BEFORE `instance` is created at :3106 (now shifted), so
+    // the options object captures this holder and the shutdown callback
+    // resolves `instanceStopRef` at CALL time. Capturing `instance` in a
+    // local here would bind undefined and silently no-op forever — the exact
+    // Promise<void> failure mode the queue-seam precedent (CLAUDE.md) exists
+    // to close. The truthiness check inside the callback is load-bearing.
+    let instanceStopRef: (() => Promise<void>) | undefined;
 
     // The terminal WebSocket channel is RCE-grade: a browser page that reached
     // the loopback listener and then attached to an agent shell could type into
@@ -1027,14 +1150,9 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // secretStorage is already created above (line 252) with createStandaloneSecretStorage.
     // Its get() is async (returns Promise<string|undefined>), so integrationsConfigured
     // must be computed inside the async getters, not captured synchronously.
-    // node-pty is an optional dependency, so every PTY-facing surface is gated on
-    // one probe. Without this, an install that legitimately skipped the optional
-    // native module still advertises a Terminals tab and un-hidden dispatch
-    // buttons, both of which throw on first use.
-    const ptyReady = isPtyAvailable();
-    if (!ptyReady) {
-        log(opts, 'node-pty is unavailable — PTY terminals and board dispatch are disabled for this session (the board, plans and panels are unaffected).');
-    }
+    // Go supervisor owns PTY capability. Missing artifacts fail at first request
+    // with a named reason; no Node fallback is considered available.
+    const ptyReady = true;
 
     // The four Board flags added by standalone-capability-gating-honesty default
     // false in headlessPanelHtml, so a host that omits one hides that surface.
@@ -1256,6 +1374,15 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // ran inside the constructor — but the config read is real and standalone
     // depends on it (aggressivePairProgramming feeds dispatched prompts).
     taskViewerProvider.suppressLocalApiServer = true;
+    const ptyHostSupervisor = new PtyHostSupervisor({
+        installRoot: repoRoot,
+        workspaceRoot,
+        onDiagnostic: message => log(opts, message),
+    });
+    taskViewerProvider.setPtyHostSupervisor(ptyHostSupervisor);
+    const clearPty = async (handle: any): Promise<void> => { await ptyHostSupervisor.request('ptyClearTerminal', { name: handle.friendlyName || handle.name }); };
+    const modelPty = async (handle: any): Promise<void> => { await ptyHostSupervisor.request('ptySendModel', { name: handle.friendlyName || handle.name }); };
+    const writeSlashCommand = async (handle: any, command: string): Promise<void> => { await ptyHostSupervisor.request('ptyWrite', { name: handle.friendlyName || handle.name, data: `${command}\r` }); };
     taskViewerProvider.activateHostIntegrations();
     taskViewerProvider.initHeadlessVerbServing(headlessSeams, headlessBroadcaster);
     // Setup arms delegate startup-command / integration-state reads to the
@@ -1290,6 +1417,16 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // prompt fragments. Both hosts must call this; the extension root does it
     // in TaskViewerProvider.getCliPath().
     setBundledCliPath(resolvedCliPath);
+
+    // Composition-root seam for the static Go client binary. When the Go
+    // client is available (from client-artifacts.json or
+    // SWITCHBOARD_GO_CLIENT_PATH), agent-facing prompts that use the
+    // `switchboard` form resolve to the Go binary instead of the Node CLI.
+    // The Node CLI path above remains the host entry point for `node` form.
+    const goClientPath = resolveGoClientPath();
+    if (goClientPath) {
+        setGoClientPath(goClientPath);
+    }
 
     // Restore the active project filter from the DB config at boot.
     //
@@ -1400,7 +1537,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     });
     switchboardCommandRegistry.register('switchboard.triggerAgentFromKanban', async (role: string, sessionId: string, instruction?: string, targetRoot?: string, terminalName?: string) => {
         if (!ptyReady) {
-            return { success: false, error: 'PTY terminals are unavailable: node-pty module could not be loaded on this machine.' };
+            return { success: false, error: 'PTY terminals are unavailable: switchboard-pty-host artifact is missing or unsupported on this machine.' };
         }
         return await handlePtyVerb('triggerAction', { role, sessionId, instruction, terminalName }, targetRoot || workspaceRoot);
     });
@@ -1410,7 +1547,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // (the command registry is untyped). Both hosts must keep or drop it together.
     switchboardCommandRegistry.register('switchboard.triggerBatchAgentFromKanban', async (role: string, sessionIds: string[], instruction?: string, targetRoot?: string, terminalName?: string, _apiOriginated?: boolean, analysisScope?: string | null) => {
         if (!ptyReady) {
-            return { success: false, error: 'PTY terminals are unavailable: node-pty module could not be loaded on this machine.' };
+            return { success: false, error: 'PTY terminals are unavailable: switchboard-pty-host artifact is missing or unsupported on this machine.' };
         }
         return await handlePtyVerb('triggerAction', { role, sessionIds, instruction, terminalName, analysisScope }, targetRoot || workspaceRoot);
     });
@@ -1741,7 +1878,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // restart (or a direct API caller) can still reach the verb. Fail
                     // with a readable error instead of an unhandled spawn exception.
                     if (!ptyReady) {
-                        return { success: false, error: 'PTY terminals are unavailable: the optional node-pty module could not be loaded on this machine.' };
+                        return { success: false, error: 'PTY terminals are unavailable: switchboard-pty-host artifact is missing or unsupported on this machine.' };
                     }
                     return await handlePtyVerb(verb, payload, root);
                 }
@@ -2893,6 +3030,11 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     return { success: true, ...(created ? { created: true, terminalName: handle.friendlyName } : {}) };
                 }
 
+                case 'ptySetControllerSeat':
+                    return ptyHostSupervisor.request('ptySetControllerSeat', payload);
+                case 'ptyRollLogSession':
+                    return ptyHostSupervisor.request('ptyRollLogSession', payload);
+
                 default:
                     return { success: false, error: `PTY verb '${verb}' not implemented in standalone mode` };
         }
@@ -3057,7 +3199,7 @@ Each plan file must include:
     // /terminals/verb/ptySendPrompt gets 401 and the link-up relay recipe is a
     // lie on this host. The token reaches the shell as SWITCHBOARD_API_TOKEN
     // (an env var, never prompt text) so it never enters the agent's scrollback.
-    const ptyFleetService = new PtyFleetService(workspaceRoot, db, resolvedToken);
+    const ptyFleetService = new GoPtyFleetProjection(ptyHostSupervisor, workspaceRoot, db, resolvedToken);
     // Default for every create() path that passes no explicit claudeInlineRendering.
     // The two ptyCreateTerminal / ptyCreateBatch arms below resolve it themselves, but
     // this host also creates seats from board dispatch, send-by-name, memo→planner and
@@ -3314,7 +3456,7 @@ Each plan file must include:
     // launch command, and this is a definition the user authored in the Agents tab.
     kanbanProvider.setAgentGroupInstantiator(async (group: any, groupRoot: string) => {
         if (!ptyReady) {
-            return { success: false, error: 'PTY terminals are unavailable: the optional node-pty module could not be loaded on this machine.' };
+            return { success: false, error: 'PTY terminals are unavailable: switchboard-pty-host artifact is missing or unsupported on this machine.' };
         }
         const settings: TerminalGroupsSettingsAccessor | undefined = {
             get: (k, d) => kanbanProvider._getScopedSetting(k, d),
@@ -3360,11 +3502,10 @@ Each plan file must include:
         }
         return result;
     });
-    // `signal` is accepted by the seam signature but intentionally not forwarded:
-    // standalone's handlePtyVerb runs in-process and has no request to abort.
-    if (ptyReady) {
-        taskViewerProvider.setFleetVerb((verb, payload, _signal) => handlePtyVerb(verb, payload, workspaceRoot));
-    }
+    // Both hosts own one Go supervisor. HTTP and board verbs still run the
+    // TypeScript handlePtyVerb policy (token strip, dispatch attribution, team
+    // barrier) and only the byte/process work reaches the supervisor.
+    taskViewerProvider.setFleetVerb((verb, payload, _signal) => handlePtyVerb(verb, payload, workspaceRoot));
     // Live-terminals provider for the TEAMS-tab `startAgentGroup` arm.
     // `startAgentGroupById` takes `liveTerminals` as a parameter and uses it
     // for the double-start refusal check; without a real provider the check
@@ -3381,7 +3522,7 @@ Each plan file must include:
     // Awaited here, well before `server.start()` below: a ghost `purpose:'pty'`
     // entry from a previous run would otherwise satisfy /kanban/dispatch's
     // no-live-terminal pre-flight and route work at a dead pid.
-    await PtyFleetService.purgePtyTerminals(db);
+    await GoPtyFleetProjection.purgePtyTerminals(db);
 
     // Sweep pasted-image temp files older than 1 hour every 10 minutes. The
     // ptyPasteImage verb writes screenshots to os.tmpdir()/switchboard-paste/;
@@ -3403,30 +3544,8 @@ Each plan file must include:
         } catch { /* dir may not exist yet */ }
     }, 10 * 60 * 1000).unref();
 
-    // Only wired when PTYs actually work. Left undefined, LocalApiServer's upgrade
-    // router destroys `/ws/terminal` outright — the same posture the extension host
-    // has, rather than a gateway that accepts sockets for a fleet that can't spawn.
-    const terminalWsGateway = ptyReady
-        ? new TerminalWsGateway(ptyFleetService, async () => terminalSessionToken)
-        : undefined;
-
-    // Terminal log writer — tees flushed pty output to per-session markdown files
-    // under .switchboard/logs/. Subscribes to the gateway's flush observer for
-    // output chunks and to prompt-delivery notifications for dispatch headings.
-    // Both hosts wire this after gateway creation so the tee reaches both.
-    const terminalLogWriter = ptyReady
-        ? new TerminalLogWriter(path.join(switchboardDir, 'logs'))
-        : undefined;
-    if (terminalWsGateway && terminalLogWriter) {
-        terminalWsGateway.onFlush((terminal, data) => terminalLogWriter.onFlush(terminal, data));
-        ptyFleetService.onDidChange((event) => {
-            if (event.type === 'renamed') {
-                terminalLogWriter.onRename(event.oldName, event.newName);
-            } else if (event.type === 'closed') {
-                terminalLogWriter.onClose(event.name);
-            }
-        });
-    }
+    // The Go supervisor owns terminal WebSocket transport and session logs.
+    // LocalApiServer must not construct a second in-process gateway.
 
     // Bind policy — resolved early so the options object and the hostname
     // validator both see it. Defaults to loopback-only.
@@ -3442,7 +3561,6 @@ Each plan file must include:
         getNotionService: () => notionService,
         getAuthToken: async () => resolvedToken,
         getRegisteredTerminals: () => ptyFleetService.listActive().map(t => t.friendlyName),
-        terminalWsGateway,
         getSelectedWorkspaceRoot: () => workspaceRoot,
         allRoots: [workspaceRoot],
         getKanbanDatabase: async () => db,
@@ -3531,9 +3649,9 @@ Each plan file must include:
         },
         // Roll the terminal log file when a seat's context is cleared via
         // queue/done — a cleared terminal starting fresh work is a new session.
-        onTerminalContextCleared: terminalLogWriter
-            ? (terminalName: string) => terminalLogWriter.onSessionBoundary(terminalName)
-            : undefined,
+        onTerminalContextCleared: (terminalName: string) => {
+            void ptyHostSupervisor.request('ptyRollLogSession', { name: terminalName }).catch(() => { /* best-effort log roll */ });
+        },
         // Queue-level stall watch arming (host parity with the extension's
         // TaskViewerProvider.setPlanIngestionEngine path, but WITHOUT the
         // extension's watcher indirection — standalone owns the
@@ -3597,7 +3715,7 @@ Each plan file must include:
         // an unguarded call would surface as an unhandled spawn exception.
         terminalVerb: async (verb: string, payload: any, workspaceRootArg?: string) => {
             if (verb !== 'ptyVisibleRoles' && verb !== 'ptyListAgentGroups' && !ptyReady) {
-                return { success: false, error: 'PTY terminals are unavailable: the optional node-pty module could not be loaded on this machine.' };
+                return { success: false, error: 'PTY terminals are unavailable: switchboard-pty-host artifact is missing or unsupported on this machine.' };
             }
             return handlePtyVerb(verb, payload, workspaceRootArg || payload?.workspaceRoot || workspaceRoot);
         },
@@ -3966,17 +4084,54 @@ Each plan file must include:
             staticRoutes,
         },
         bindPolicy,
+        // Host identity + capabilities for the launcher (plan:
+        // go-launcher-static-binary). Standalone owns graceful teardown, so it
+        // declares shutdown enabled and wires the callback below. The route
+        // handler verifies kind === 'standalone' AND capabilities.shutdown
+        // .enabled AND a present callback before requesting teardown — all
+        // three, never any one alone.
+        hostIdentity: {
+            kind: 'standalone',
+            instanceId: hostInstanceId,
+            version: readStandaloneHostVersion(),
+            source: 'standalone-host',
+        },
+        capabilities: {
+            shutdown: {
+                enabled: true,
+                reason: 'standalone host owns graceful teardown',
+            },
+        },
+        // Host-owned launcher-state projection. The launcher consumes this and
+        // never reads kanban.db. Reuses the existing DB service for workspace
+        // mappings — Go must not parse the database.
+        getLauncherState: async () => projectStandaloneLauncherState({
+            instanceId: hostInstanceId,
+            version: readStandaloneHostVersion(),
+            workspaceRoot,
+            server: () => server,
+            db: () => db,
+            bindPolicy,
+        }),
+        // Loopback-only authenticated shutdown. Resolves `instanceStopRef` at
+        // CALL time (the holder is assigned after `instance` is created below).
+        // The route handler has already verified kind/capability/loopback by
+        // the time this runs; the truthiness check is the load-bearing guard
+        // against the holder being unbound.
+        shutdown: async () => {
+            if (typeof instanceStopRef === 'function') {
+                await instanceStopRef();
+            } else {
+                // Wiring bug: the holder was never assigned. Log loudly rather
+                // than 200-then-nothing — the route already returned 200, so
+                // the launcher knows the request was accepted; this log is the
+                // after-the-fact trace that teardown did not run.
+                console.error('[standalone] shutdown callback fired but instanceStopRef is unbound — instance.stop() was never wired into the holder');
+            }
+        },
     };
 
     server = new LocalApiServer(options);
-    // Wire the terminal WS gateway's bind policy + tailnet-listener predicate.
-    // The gateway is constructed before the server (it needs the PTY fleet, not
-    // the server), so its policy is set here once the server — and its
-    // `isTailnetSocket` predicate — exist. Reads at call time, so this late wire
-    // still applies to every upgrade.
-    if (terminalWsGateway) {
-        terminalWsGateway.setBindPolicy(server.bindPolicy, (req: any) => server.isTailnetSocket(req));
-    }
     // Point the headless providers' broadcaster at the live WS hub so verb arms
     // that push state updates reach browser clients (additive to the HTTP body).
     designProvider.setApiServer(server);
@@ -4111,11 +4266,6 @@ Each plan file must include:
         /** True when the session secret came from the stored `switchboard.apiToken`. */
         usingDurableToken,
         stop: async () => {
-            try { terminalWsGateway?.dispose(); } catch { /* ignore */ }
-            // Before the fleet goes: closes every open output block so the files
-            // left on disk are balanced markdown rather than something the read
-            // path has to repair on every later view.
-            try { terminalLogWriter?.dispose(); } catch { /* ignore */ }
             try { await ptyFleetService.disposeAll(); } catch { /* ignore */ }
             try { ingestionEngine.dispose(); } catch { /* ignore */ }
             try { (designProvider as any).dispose?.(); } catch { /* ignore */ }
@@ -4129,6 +4279,12 @@ Each plan file must include:
             try { if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile); } catch { /* ignore */ }
         },
     };
+    // Wire the shutdown holder NOW that `instance` exists. The LocalApiServer
+    // options object captured `instanceStopRef` by reference at construction
+    // time; this assignment is what makes the loopback `/shutdown` route's
+    // callback actually run teardown. Without it the callback's truthiness
+    // guard fires and the after-the-fact error log traces the wiring bug.
+    instanceStopRef = instance.stop;
 
     const syncUnlinkPortFile = () => {
         try { if (fs.existsSync(portFile)) fs.unlinkSync(portFile); } catch { /* ignore */ }

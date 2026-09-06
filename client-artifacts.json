@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "binary": "switchboard",
+  "description": "Static Go client for board verbs. Delegates non-client verbs to the Node host entry point.",
+  "targets": {
+    "linux-arm64": "dist/linux-arm64/switchboard",
+    "linux-amd64": "dist/linux-amd64/switchboard",
+    "darwin-arm64": "dist/darwin-arm64/switchboard",
+    "darwin-amd64": "dist/darwin-amd64/switchboard",
+    "windows-amd64": "dist/windows-amd64/switchboard.exe"
+  },
+  "nodeHostEntry": {
+    "deb": "/usr/lib/switchboard/standalone/cli.js",
+    "bundled": "standalone/cli.js",
+    "dev": "dist/standalone/cli.js"
+  }
+}

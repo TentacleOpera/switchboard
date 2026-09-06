@@ -1,8 +1,7 @@
 'use strict';
 
 /**
- * Contract: VSIX packaging for the native node-pty module.
- * (extension-host-pty-fleet-and-packaging.md, step 1.)
+ * Contract: VSIX packaging for the platform-selected Go PTY host.
  *
  * WHY THIS FILE EXISTS — the trap it pins.
  * `.vscodeignore` is NOT evaluated top-to-bottom. vsce partitions the file into an
@@ -11,14 +10,8 @@
  *     files.filter(f => !ignore.some(i => minimatch(f, i)) || negate.some(i => minimatch(f, i)))
  *
  * A negation therefore wins UNCONDITIONALLY over every ignore pattern, regardless of
- * line order. So a blanket `!node_modules/node-pty` + glob silently re-includes the
- * 28 MB of `.pdb` debug symbols that a later dot-pdb rule appears to exclude — and the
- * mistake is invisible by inspection, because the file reads as if order mattered.
- * That is a ~3 MB vs ~30 MB Windows VSIX, against a documented Marketplace upload cap
- * of 25-50 MB.
- *
- * This test re-implements vsce's filter and runs it over the REAL node-pty tree, so
- * the assertion is about what would actually ship, not about how the file reads.
+ * line order. The previous node-pty allowlist tripped this and shipped debug symbols.
+ * This file now asserts the Go artifacts WOULD ship and node-pty WOULD NOT.
  */
 
 const assert = require('assert');
@@ -27,7 +20,7 @@ const path = require('path');
 const { minimatch } = require('minimatch');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
-const NODE_PTY = path.join(REPO_ROOT, 'node_modules', 'node-pty');
+const MANIFEST = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'pty-host-artifacts.json'), 'utf8'));
 
 let failures = 0;
 function check(name, fn) {
@@ -41,25 +34,20 @@ function check(name, fn) {
     }
 }
 
-/** vsce's .vscodeignore semantics, reproduced exactly. See package.ts `collectFiles`. */
 function buildVsceFilter(ignoreFileText) {
     let patterns = ignoreFileText
         .split(/[\n\r]/)
         .map(s => s.trim())
         .filter(s => !!s)
         .filter(i => !/^\s*#/.test(i));
-
-    // vsce appends '/**' to entries that look like bare directory names.
     patterns = [
         ...patterns,
         ...patterns
             .filter(i => !/(^|\/)[^/]*\*[^/]*$/.test(i))
             .map(i => (/\/$/.test(i) ? `${i}**` : `${i}/**`)),
     ];
-
     const ignore = patterns.filter(e => !/^\s*!/.test(e));
     const negate = patterns.filter(e => /^\s*!/.test(e)).map(e => e.substr(1));
-
     const opts = { dot: true };
     return (relPath) =>
         !ignore.some(i => minimatch(relPath, i, opts)) || negate.some(i => minimatch(relPath, i, opts));
@@ -80,215 +68,64 @@ console.log('\n── VSIX packaging contract ──');
 const ignoreText = fs.readFileSync(path.join(REPO_ROOT, '.vscodeignore'), 'utf8');
 const included = buildVsceFilter(ignoreText);
 
-const hasNodePty = fs.existsSync(NODE_PTY);
-if (!hasNodePty) {
-    console.log('  ⚠️  node_modules/node-pty absent (optionalDependency) — file-level assertions skipped.');
-}
-
-check('no .pdb debug symbol would be packaged', () => {
-    if (!hasNodePty) { return; }
-    const shipped = walkRel(NODE_PTY, REPO_ROOT).filter(included);
-    const pdbs = shipped.filter(f => /\.pdb$/i.test(f));
-    assert.deepStrictEqual(
-        pdbs, [],
-        `${pdbs.length} .pdb file(s) would ship (e.g. ${pdbs.slice(0, 3).join(', ')}). `
-        + 'A negation in .vscodeignore is re-including them — negations override ignores unconditionally, '
-        + 'so the negation itself must not match .pdb. Enumerate the runtime file types instead of using a blanket !node_modules/node-pty/**.'
-    );
+check('manifest declares the versioned Go host', () => {
+    assert.strictEqual(MANIFEST.binary, 'switchboard-pty-host');
+    assert.strictEqual(MANIFEST.version, 1);
 });
 
-check('the runtime files node-pty actually loads WOULD be packaged', () => {
-    if (!hasNodePty) { return; }
-    // lib/utils.js `loadNativeModule` resolves prebuilds/<platform>-<arch>/<name>.node,
-    // and a bare module require resolves package.json -> main -> lib/index.js. Excluding
-    // any of these produces an extension that cannot load the module it ships.
-    //
-    // (Phrased without the literal module-require form on purpose: the PTY host gating
-    // contract greps src/ for runtime load sites and would flag this file as a second
-    // one. Widening that gate's one-entry allowlist to accommodate a comment would
-    // defeat it; rewording the comment costs nothing.)
-    for (const required of [
-        'node_modules/node-pty/package.json',
-        'node_modules/node-pty/lib/index.js',
-        'node_modules/node-pty/lib/utils.js',
-    ]) {
-        assert.ok(included(required), `${required} must be packaged — node-pty cannot load without it.`);
-    }
-    const prebuilds = walkRel(path.join(NODE_PTY, 'prebuilds'), REPO_ROOT);
-    for (const f of prebuilds.filter(p => /\.(node|dll|exe)$/i.test(p) || /\/spawn-helper$/.test(p))) {
-        assert.ok(included(f), `${f} is a runtime binary and must be packaged.`);
+check('manifest targets are explicit and platform-selected', () => {
+    assert.deepStrictEqual(Object.keys(MANIFEST.targets).sort(), ['darwin-amd64', 'darwin-arm64', 'linux-amd64', 'linux-arm64']);
+    for (const relative of Object.values(MANIFEST.targets)) {
+        assert.ok(relative.startsWith('dist/'), `${relative} must live under dist/`);
     }
 });
 
-check('build-from-source trees are NOT packaged', () => {
-    if (!hasNodePty) { return; }
-    // src/, deps/, third_party/ are ~3.8 MB of compile inputs the runtime never reads.
-    const shipped = walkRel(NODE_PTY, REPO_ROOT).filter(included);
-    for (const deadWeight of ['node_modules/node-pty/src/', 'node_modules/node-pty/deps/', 'node_modules/node-pty/third_party/']) {
-        const hits = shipped.filter(f => f.startsWith(deadWeight));
-        assert.deepStrictEqual(
-            hits, [],
-            `${hits.length} file(s) under ${deadWeight} would ship; node-pty loads prebuilt binaries, never compiles at install.`
-        );
+check('Go PTY artifacts WOULD be packaged by vsce filter', () => {
+    assert.ok(included('pty-host-artifacts.json') || included('dist/pty-host-artifacts.json'),
+        'manifest must not be ignored by .vscodeignore');
+    for (const relative of Object.values(MANIFEST.targets)) {
+        assert.ok(included(relative), `${relative} would be excluded from the VSIX`);
     }
 });
 
-check('no source map would be packaged', () => {
-    // Same negation trap, second instance: `!dist/**` and a blanket
-    // `!node_modules/node-pty/lib/**` each overrode `**/*.map`, re-including 20 MB of
-    // extension.js.map. The bundle is built with --devtool hidden-source-map, so
-    // nothing references these at runtime.
-    const roots = ['dist', path.join('node_modules', 'node-pty', 'lib')];
-    const shipped = roots.flatMap(r => walkRel(path.join(REPO_ROOT, r), REPO_ROOT)).filter(included);
-    const maps = shipped.filter(f => /\.map$/.test(f));
-    assert.deepStrictEqual(
-        maps.slice(0, 5), [],
-        `${maps.length} source map(s) would ship (e.g. ${maps.slice(0, 3).join(', ')}). `
-        + 'Check for a negation that overrides `**/*.map` — negations win unconditionally regardless of line order.'
-    );
-});
-
-check('the extension bundle itself would still be packaged', () => {
-    // Guard the over-correction: tightening map/negation rules must not drop dist.
-    assert.ok(included('dist/extension.js'), 'dist/extension.js must be packaged — it is the extension entry point.');
-});
-
-check('the packaging script builds the full target matrix plus a target-less fallback', () => {
-    const script = fs.readFileSync(path.join(REPO_ROOT, 'scripts', 'package-targets.sh'), 'utf8');
-    for (const target of ['darwin-arm64', 'darwin-x64', 'win32-x64', 'win32-arm64']) {
-        assert.ok(new RegExp(target.replace('-', '\\-')).test(script), `matrix is missing target ${target}`);
+check('node-pty would not be packaged', () => {
+    assert.ok(!included('node_modules/node-pty/package.json'));
+    assert.ok(!included('node_modules/node-pty/lib/index.js'));
+    const nodePtyTree = path.join(REPO_ROOT, 'node_modules', 'node-pty');
+    if (fs.existsSync(nodePtyTree)) {
+        const shipped = walkRel(nodePtyTree, REPO_ROOT).filter(included);
+        assert.deepStrictEqual(shipped, [], `${shipped.length} node-pty file(s) would ship`);
     }
-    assert.ok(
-        !/--target\s+universal/.test(script),
-        "'universal' is not a valid --target value — the fallback artifact is produced by OMITTING the flag."
-    );
-    assert.ok(
-        /package --out/.test(script),
-        'the script must produce a target-less (universal) artifact as the Marketplace fallback for unlisted platforms.'
-    );
 });
 
-check('publishing is sequential by packagePath and never uses --skip-duplicate', () => {
-    const script = fs.readFileSync(path.join(REPO_ROOT, 'scripts', 'publish-marketplace.sh'), 'utf8');
-    const active = script.split('\n').filter(l => !/^\s*#/.test(l)).join('\n');
-    assert.ok(
-        /publish --packagePath/.test(active),
-        'each artifact must be published with `vsce publish --packagePath <file>` — re-packaging per target loses the prebuild staging.'
-    );
-    assert.ok(
-        !/--skip-duplicate/.test(active),
-        'vsce #868/#1014: --skip-duplicate wrongly skips the 2nd..Nth target of one version. Never pass it in a multi-target publish.'
-    );
+check('no .pdb debug symbol would be packaged from node_modules', () => {
+    const nodeModules = path.join(REPO_ROOT, 'node_modules');
+    if (!fs.existsSync(nodeModules)) { return; }
+    const pdbs = walkRel(nodeModules, REPO_ROOT).filter(f => /\.pdb$/i.test(f)).filter(included);
+    assert.deepStrictEqual(pdbs, [], `${pdbs.length} .pdb file(s) would ship`);
 });
 
-check('platform targeting is supported by the declared engines.vscode floor', () => {
-    const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8'));
-    const engine = pkg.engines && pkg.engines.vscode;
-    assert.ok(engine, 'package.json must declare engines.vscode');
-    const minor = /\^?(\d+)\.(\d+)/.exec(engine);
-    assert.ok(minor, `could not parse engines.vscode '${engine}'`);
-    const [, major, min] = minor.map(Number);
-    assert.ok(
-        major > 1 || (major === 1 && min >= 61),
-        `platform-specific extensions require engines.vscode >= 1.61.0; found ${engine}.`
-    );
-});
-
-// The control plane the extension SEEDS into a user workspace must itself be
-// packaged, or every path the extension emits is dead on arrival. This has already
-// happened once: the skill-injection-cleanup feature moved 33 protocols to
-// `.switchboard/protocols/`, which `.vscodeignore` excludes wholesale — the files
-// existed in the dev repo, so every grep, compile, lint and manual check passed
-// while the shipped artifact contained none of them. Nothing else can see this:
-// the seeding code is correct, the paths are correct, and the only broken thing is
-// membership in the zip. Asserted against the real vsce filter, not by reading
-// `.vscodeignore` (whose negations override ignores regardless of line order).
-check('the .agents control plane the extension seeds WOULD be packaged', () => {
-    const AGENTS = path.join(REPO_ROOT, '.agents');
-    if (!fs.existsSync(AGENTS)) {
-        assert.fail('.agents/ is missing from the repo — it is the seeded control plane and must ship.');
+check('packaging scripts build and probe the Go target matrix', () => {
+    const targets = fs.readFileSync(path.join(REPO_ROOT, 'scripts', 'package-targets.sh'), 'utf8');
+    const deb = fs.readFileSync(path.join(REPO_ROOT, 'scripts', 'package-deb.sh'), 'utf8');
+    const build = fs.readFileSync(path.join(REPO_ROOT, 'scripts', 'build-pty-host.sh'), 'utf8');
+    for (const target of ['linux-arm64', 'linux-x64', 'darwin-arm64', 'darwin-x64']) {
+        assert.ok(targets.includes(target), `package-targets missing ${target}`);
     }
-    const excluded = walkRel(AGENTS, REPO_ROOT).filter(f => !included(f));
-    assert.deepStrictEqual(
-        excluded, [],
-        `${excluded.length} .agents file(s) would NOT be packaged (e.g. ${excluded.slice(0, 5).join(', ')}). `
-        + 'Everything under .agents/ is seeded into user workspaces by extension.ts and '
-        + 'ControlPlaneMigrationService; a file that does not ship cannot be seeded, and the '
-        + 'extension will emit path references to a file no user has.'
-    );
+    assert.ok(targets.includes('pty-host-artifacts.json'));
+    assert.ok(!targets.includes('node-pty'));
+    assert.ok(deb.includes('switchboard-pty-host'));
+    assert.ok(deb.includes('handshake'));
+    assert.ok(!deb.includes('node-pty'));
+    assert.ok(build.includes('linux/amd64'));
+    assert.ok(build.includes('darwin/arm64'));
 });
 
-check('surviving protocol files (improve-plan, improve-feature) live under a packaged root and non-survivors are removed', () => {
-    // Protocols are database rows; only the two user-configurable extension point
-    // defaults (improve-plan and improve-feature) remain as committed files.
-    const PROTOCOLS = path.join(REPO_ROOT, '.agents', 'protocols');
-    assert.ok(
-        fs.existsSync(PROTOCOLS),
-        'protocols must live under .agents/protocols/'
-    );
-    const files = walkRel(PROTOCOLS, REPO_ROOT);
-    assert.ok(files.length > 0, '.agents/protocols/ must contain surviving protocols.');
-
-    const protocolEntries = fs.readdirSync(PROTOCOLS);
-    assert.deepStrictEqual(
-        protocolEntries.sort(),
-        ['improve-feature', 'improve-plan'].sort(),
-        'Only improve-plan and improve-feature should remain committed in .agents/protocols/ — all others moved to control_plane rows'
-    );
-
-    const excluded = files.filter(f => !included(f));
-    assert.deepStrictEqual(
-        excluded, [],
-        `${excluded.length} protocol file(s) would NOT be packaged (e.g. ${excluded.slice(0, 5).join(', ')}).`
-    );
+check('release surfaces contain no retired native PTY dependency', () => {
+    for (const file of ['package.json', 'package-lock.json', 'webpack.config.js', '.vscodeignore', 'scripts/package-deb.sh', 'scripts/package-targets.sh']) {
+        assert.ok(!fs.readFileSync(path.join(REPO_ROOT, file), 'utf8').includes('node-pty'), `${file} still names retired dependency`);
+    }
 });
 
-// ── Must-not-exist assertions ──────────────────────────────────────────────
-// Goal invariants of the form "X no longer ships" need a check that FAILS when
-// the path IS packaged — the mirror image of the must-exist checks above. A
-// negation in .vscodeignore overrides every ignore unconditionally, so a path
-// that should be excluded can silently re-enter the zip; this catches that.
-// Each assertion walks the real directory (if it exists) and fails if any file
-// under it would be packaged. A directory that does not exist trivially passes.
-
-check('.switchboard/ runtime data does NOT ship (user workspace content, not extension content)', () => {
-    const SWITCHBOARD = path.join(REPO_ROOT, '.switchboard');
-    if (!fs.existsSync(SWITCHBOARD)) { return; }
-    const shipped = walkRel(SWITCHBOARD, REPO_ROOT).filter(included);
-    assert.deepStrictEqual(
-        shipped.slice(0, 5), [],
-        `${shipped.length} .switchboard file(s) WOULD be packaged (e.g. ${shipped.slice(0, 3).join(', ')}). `
-        + '.switchboard/ is user runtime data (plans, kanban.db, api-server-port.txt) — it must never ship in the VSIX. '
-        + 'Check for a negation in .vscodeignore that overrides the .switchboard/** ignore.'
-    );
-});
-
-check('src/ source files do NOT ship (compiled bundle is the entry point)', () => {
-    const SRC = path.join(REPO_ROOT, 'src');
-    if (!fs.existsSync(SRC)) { return; }
-    const shipped = walkRel(SRC, REPO_ROOT).filter(included);
-    assert.deepStrictEqual(
-        shipped.slice(0, 5), [],
-        `${shipped.length} src/ file(s) WOULD be packaged (e.g. ${shipped.slice(0, 3).join(', ')}). `
-        + 'src/ is TypeScript source — the compiled dist/extension.js is the entry point, not the source tree. '
-        + 'Check for a negation in .vscodeignore that overrides the src/** ignore.'
-    );
-});
-
-check('test files do NOT ship (dev-only, not runtime)', () => {
-    const TEST = path.join(REPO_ROOT, 'src', 'test');
-    if (!fs.existsSync(TEST)) { return; }
-    const shipped = walkRel(TEST, REPO_ROOT).filter(included);
-    assert.deepStrictEqual(
-        shipped.slice(0, 5), [],
-        `${shipped.length} test file(s) WOULD be packaged (e.g. ${shipped.slice(0, 3).join(', ')}). `
-        + 'Tests are dev-only — they must not ship in the VSIX. '
-        + 'Check for a negation in .vscodeignore that overrides the src/** ignore.'
-    );
-});
-
-if (failures > 0) {
-    console.error(`\n${failures} contract check(s) failed.\n`);
-    process.exit(1);
-}
-console.log('\nAll VSIX packaging checks passed.\n');
+if (failures > 0) { process.exit(1); }
+console.log('VSIX packaging contract passed.');

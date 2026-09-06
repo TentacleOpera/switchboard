@@ -1,52 +1,28 @@
-const fs = require('fs');
-const path = require('path');
-const assert = require('assert');
+'use strict';
 
 /**
- * Contract: PTY host gating.
+ * Contract: PTY host gating after node-pty removal.
  *
  * HISTORY — read this before "fixing" the test.
  * The original directive (2026-07-31) was that PTY terminals be standalone-only,
  * and this file enforced it with a hard, mechanical invariant: `dist/extension.js`
- * must contain zero node-pty module references. The user reversed that directive
- * the same day — the VS Code marketplace is the only distribution channel that
- * exists (nothing is published to npm), and an owned terminal surface enables
- * layouts / per-worktree tabs / completion messages that VS Code's terminal panel
- * structurally cannot. See `.switchboard/plans/reverse-pty-standalone-only-constraint.md`.
+ * must contain zero node-pty module references. The user reversed that, then this
+ * feature retired node-pty entirely in favour of a packaged Go host.
  *
- * THE TRADE, STATED PLAINLY.
- * "Never in the extension bundle" was verifiable by grep. Its replacement — "only
- * reached behind the availability probe" — is NOT verifiable by grep, because no
- * static check can prove a call is guarded at runtime. This file is therefore a
- * genuinely weaker gate than the one it replaces. What it CAN do is pin the two
- * structural facts that make the soft invariant auditable by a human in one sitting:
- *
- *   1. Exactly ONE module loads the native binding (`ptyBackend.ts`).
- *   2. That module exports the probe every capability flag derives from.
- *
- * If either fact stops holding, "audit the gate" stops being a bounded task, and
- * this test is the thing that notices.
- *
- * Do not "restore" the old bundle-purity assertion. node-pty in the extension
- * bundle is now EXPECTED once `extension-host-pty-fleet-and-packaging.md` lands.
+ * What this file now pins:
+ *   1. No live TypeScript/JavaScript runtime import of node-pty.
+ *   2. Both composition roots construct the same PtyHostSupervisor.
+ *   3. Protocol fixtures freeze the versioned verb surface.
+ *   4. Unsupported platforms fail loudly; there is no Node PTY fallback.
  */
+
+const fs = require('fs');
+const path = require('path');
+const assert = require('assert');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const SRC = path.join(REPO_ROOT, 'src');
 
-/**
- * Modules permitted to perform a RUNTIME load of node-pty.
- *
- * Deliberately a one-entry list, not a directory prefix: the point of the gate is
- * that the load site is singular and auditable. Adding an entry here is a
- * deliberate act that should be justified in review — widening it to a directory
- * would quietly permit an unbounded number of load sites.
- */
-const ALLOWED_LOAD_SITES = [
-    'src/standalone/ptyBackend.ts',
-];
-
-/** Type-only references (`typeof import('node-pty')`, `import('node-pty').IPty`) are free. */
 const RUNTIME_LOAD_PATTERNS = [
     /require\(\s*['"]node-pty['"]\s*\)/,
     /^\s*import\s+[^;]*\bfrom\s+['"]node-pty['"]/m,
@@ -79,84 +55,92 @@ function walk(dir, out = []) {
 
 console.log('\n── PTY host gating contract ──');
 
-// This file necessarily contains the module-reference forms it searches for (as
-// string literals and regexes), so it exempts itself.
-const SELF = path.relative(REPO_ROOT, __filename).replace(/\\/g, '/');
-
-check('the native binding is loaded in exactly one module, and it is the allowed one', () => {
-    const loadSites = [];
-    for (const file of walk(SRC)) {
-        const rel = path.relative(REPO_ROOT, file).replace(/\\/g, '/');
-        if (rel === SELF) { continue; }
+check('no live source file runtime-loads node-pty', () => {
+    const files = walk(SRC);
+    const hits = [];
+    for (const file of files) {
         const text = fs.readFileSync(file, 'utf8');
-        if (!/node-pty/.test(text)) { continue; }
-        if (RUNTIME_LOAD_PATTERNS.some(re => re.test(text))) {
-            loadSites.push(rel);
+        for (const pattern of RUNTIME_LOAD_PATTERNS) {
+            if (pattern.test(text)) {
+                hits.push(path.relative(REPO_ROOT, file));
+                break;
+            }
         }
     }
-    assert.deepStrictEqual(
-        loadSites.sort(), [...ALLOWED_LOAD_SITES].sort(),
-        `node-pty runtime load sites must be exactly ${JSON.stringify(ALLOWED_LOAD_SITES)}; found ${JSON.stringify(loadSites)}. `
-        + 'A second load site means the availability gate can be bypassed and the "one function to audit" property is lost.'
-    );
+    assert.deepStrictEqual(hits, [], `runtime node-pty load sites remain: ${hits.join(', ')}`);
 });
 
-check('the single load site exports the availability probe', () => {
-    const backend = path.join(REPO_ROOT, ALLOWED_LOAD_SITES[0]);
-    const text = fs.readFileSync(backend, 'utf8');
-    assert.ok(
-        /export function isPtyAvailable\s*\(/.test(text),
-        `${ALLOWED_LOAD_SITES[0]} must export isPtyAvailable() — it is the single derivation point for `
-        + 'terminalDispatch, terminalFleet and availability.terminals. Without it those flags cannot fail closed.'
-    );
-    assert.ok(
-        /catch\s*\(/.test(text),
-        'isPtyAvailable() must swallow the load failure and return false — node-pty is an optionalDependency '
-        + '(no Linux prebuild), so an absent binding is a supported state, not a crash.'
-    );
-});
-
-check('no native binary is ever webpack-bundled into dist', () => {
-    const dist = path.join(REPO_ROOT, 'dist');
-    if (!fs.existsSync(dist)) {
-        assert.fail('dist/ is missing — run `npm run compile` first. This check must not be waived in the release path.');
+check('package.json / lockfile / webpack / vscodeignore do not keep node-pty', () => {
+    for (const file of ['package.json', 'package-lock.json', 'webpack.config.js', '.vscodeignore']) {
+        const text = fs.readFileSync(path.join(REPO_ROOT, file), 'utf8');
+        assert.ok(!text.includes('node-pty'), `${file} still names retired dependency`);
     }
-    const binaries = [];
-    (function scan(dir) {
-        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-            const full = path.join(dir, entry.name);
-            if (entry.isDirectory()) { scan(full); }
-            else if (entry.name.endsWith('.node')) { binaries.push(path.relative(REPO_ROOT, full)); }
-        }
-    })(dist);
-    assert.deepStrictEqual(
-        binaries, [],
-        `webpack bundled native binaries into dist: ${binaries.join(', ')}. node-pty must stay a commonjs external `
-        + 'and load from node_modules at runtime — a bundled .node cannot work across platforms.'
-    );
 });
 
-check('node-pty is externalized wherever it is referenced by a webpack config', () => {
-    const cfg = fs.readFileSync(path.join(REPO_ROOT, 'webpack.config.js'), 'utf8');
-    assert.ok(
-        /'node-pty':\s*'commonjs node-pty'/.test(cfg),
-        "standaloneConfig must declare externals { 'node-pty': 'commonjs node-pty' }"
-    );
-    // Once the extension host gains a PTY fleet, its config must externalize the
-    // module too. Asserted as a conditional so this passes both before and after
-    // that change: if the extension config grows a node-pty reference, it must be
-    // an externals entry, never a bundled import.
-    const externalsCount = (cfg.match(/'node-pty':\s*'commonjs node-pty'/g) || []).length;
-    const importCount = (cfg.match(/require\(\s*['"]node-pty['"]\s*\)/g) || []).length;
-    assert.strictEqual(
-        importCount, 0,
-        'webpack.config.js must not require node-pty directly; it belongs in externals only.'
-    );
-    assert.ok(externalsCount >= 1, 'at least one webpack config must externalize node-pty');
+check('webpack no longer ships ptyHost.ts as an entry', () => {
+    const webpack = fs.readFileSync(path.join(REPO_ROOT, 'webpack.config.js'), 'utf8');
+    assert.ok(!webpack.includes('ptyHost.ts'), 'retired TypeScript host remains a webpack entry');
+});
+
+check('both composition roots construct PtyHostSupervisor', () => {
+    const extension = fs.readFileSync(path.join(SRC, 'extension.ts'), 'utf8');
+    const bootstrap = fs.readFileSync(path.join(SRC, 'standalone', 'bootstrap.ts'), 'utf8');
+    assert.ok(extension.includes('new PtyHostSupervisor'), 'extension root missing supervisor');
+    assert.ok(bootstrap.includes('new PtyHostSupervisor'), 'standalone root missing supervisor');
+    assert.ok(!bootstrap.includes('new PtyFleetService('), 'standalone still constructs Node fleet');
+    assert.ok(!extension.includes('new PtyFleetService('), 'extension constructs Node fleet');
+});
+
+check('Node PTY fallback is retired with a fail-loud backend', () => {
+    const backend = fs.readFileSync(path.join(SRC, 'standalone', 'ptyBackend.ts'), 'utf8');
+    assert.ok(backend.includes('return false'), 'isPtyAvailable must not claim a Node backend');
+    assert.ok(backend.includes('Node PTY fallback is removed'), 'backend must refuse Node fallback');
+});
+
+check('artifact manifest is versioned and platform-selected', () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'pty-host-artifacts.json'), 'utf8'));
+    assert.strictEqual(manifest.version, 1);
+    assert.strictEqual(manifest.binary, 'switchboard-pty-host');
+    assert.deepStrictEqual(Object.keys(manifest.targets).sort(), ['darwin-amd64', 'darwin-arm64', 'linux-amd64', 'linux-arm64']);
+});
+
+check('language-neutral fixtures freeze the ready handshake and verb inventory', () => {
+    const fixtures = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'protocol-fixtures', 'pty-host-ready.json'), 'utf8'));
+    assert.strictEqual(fixtures.protocolVersion, 1);
+    assert.strictEqual(fixtures.ready.t, 'ready');
+    const required = [
+        'ptyCreateTerminal', 'ptyCreateBatch', 'ptyCloseTerminal', 'ptyListTerminals',
+        'ptyRenameTerminal', 'ptyClearTerminal', 'ptySendModel', 'ptyClearAllTerminals',
+        'ptyWrite', 'ptyPasteImage', 'ptySendPrompt', 'ptySetControllerSeat', 'ptyRollLogSession',
+    ];
+    assert.deepStrictEqual(fixtures.requiredVerbs, required);
+    for (const verb of required) {
+        assert.ok(fixtures.verbs[verb], `fixture missing verb ${verb}`);
+    }
+    assert.strictEqual(fixtures.bytes.chunkBoundary, 256);
+    assert.ok(fixtures.lifecycle.includes('stdin-eof'));
+    assert.ok(fixtures.lifecycle.includes('parent-disappearance'));
+    assert.strictEqual(fixtures.websocket.emptyToken, 401);
+    assert.strictEqual(fixtures.invalidJson.status, 400);
+    assert.strictEqual(fixtures.unknownVerb.body.code, 'unknown_verb');
+});
+
+check('Go host implements the required verbs', () => {
+    const main = fs.readFileSync(path.join(REPO_ROOT, 'cmd', 'switchboard-pty-host', 'main.go'), 'utf8');
+    const prompt = fs.readFileSync(path.join(REPO_ROOT, 'cmd', 'switchboard-pty-host', 'prompt.go'), 'utf8');
+    for (const verb of [
+        'ptyCreateTerminal', 'ptyCreateBatch', 'ptyCloseTerminal', 'ptyListTerminals',
+        'ptyRenameTerminal', 'ptyClearTerminal', 'ptySendModel', 'ptyClearAllTerminals',
+        'ptyWrite', 'ptyPasteImage', 'ptySendPrompt', 'ptySetControllerSeat', 'ptyRollLogSession',
+    ]) {
+        assert.ok(main.includes(`"${verb}"`) || main.includes(`case "${verb}"`), `Go host missing ${verb}`);
+    }
+    assert.ok(prompt.includes('bracketedPasteOpen'), 'prompt delivery missing bracketed paste open');
+    assert.ok(prompt.includes('confirmEnterDelay'), 'prompt delivery missing confirm CR delay');
+    assert.ok(main.includes('payload["data"]') || main.includes('strField(payload, "data")'), 'ptySendPrompt must accept data payload');
 });
 
 if (failures > 0) {
-    console.error(`\n${failures} contract check(s) failed.\n`);
     process.exit(1);
 }
-console.log('\nAll PTY host gating checks passed.\n');
+console.log('PTY host gating contract passed.');

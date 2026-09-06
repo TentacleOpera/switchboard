@@ -6,11 +6,9 @@ import { GlobalIntegrationConfigService } from '../services/GlobalIntegrationCon
 import type { KanbanDatabase } from '../services/KanbanDatabase';
 import type { DelegateDefinition } from '../services/agentConfig';
 import { deriveCliFamily, type CliFamily } from '../services/cliIdentity';
+import { MAX_DELEGATES_PER_PARENT, MAX_LIVE_DELEGATE_PTYS } from '../services/ptyLimits';
 
-/** Delegate children one head agent may co-launch. A pty is a process, not a row. */
-export const MAX_DELEGATES_PER_PARENT = 8;
-/** Delegate ptys alive across every head agent in this fleet. */
-export const MAX_LIVE_DELEGATE_PTYS = 32;
+export { MAX_DELEGATES_PER_PARENT, MAX_LIVE_DELEGATE_PTYS } from '../services/ptyLimits';
 
 export const SHELL_READINESS_DELAY_MS = 750;
 export const SIGTERM_GRACE_MS = 3000;
@@ -102,7 +100,7 @@ export interface FleetTerminalInfo {
 }
 
 export interface ExtendedTerminalHandle extends TerminalHandle {
-    pty: import('node-pty').IPty;
+    pty: any;
     role: string;
     friendlyName: string;
     agentInstanceId: string;
@@ -567,6 +565,7 @@ export class PtyFleetService {
         const startedAtMs = Date.now();
         const handle: ExtendedTerminalHandle = {
             ...rawHandle,
+            pty: (rawHandle as ExtendedTerminalHandle).pty ?? { pid: 0, kill: () => { rawHandle.kill(); } },
             name,
             role,
             friendlyName: name,

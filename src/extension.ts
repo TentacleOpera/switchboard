@@ -51,6 +51,7 @@ import { stateFile } from './utils/stateHome';
 import { GlobalIntegrationConfigService } from './services/GlobalIntegrationConfigService';
 import { StandaloneHostSecrets as EncryptedSecretsStore } from './services/encryptedSecretsStore';
 import { resolveDisplayHostname, isTailnetPolicy } from './utils/loopbackHostname';
+import { PtyHostSupervisor } from './services/ptyHostSupervisor';
 
 /**
  * Verb Engine · 1 — register a `switchboard.*` command in BOTH the host-agnostic
@@ -1002,6 +1003,11 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // 1. REGISTER SIDEBAR (Task Viewer)
     const taskViewerProvider = new TaskViewerProvider(context.extensionUri, context);
+    taskViewerProvider.setPtyHostSupervisor(new PtyHostSupervisor({
+        installRoot: context.extensionPath,
+        workspaceRoot: '',
+        onDiagnostic: message => outputChannel?.appendLine(message),
+    }));
     // Editor-event subscriptions + the pairProgramming config read. Used to run at
     // the end of the constructor; called here so `new` stays host-agnostic. Must
     // stay adjacent to the construction — nothing may observe the provider first.

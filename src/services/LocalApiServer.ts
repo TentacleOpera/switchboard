@@ -17,7 +17,7 @@ import { readScheduleState } from './scheduleState';
 // The fence discipline the terminal log is WRITTEN with is the same one the read
 // path has to honour, so the balance pass ships with the writer rather than
 // being re-derived (and drifting) here.
-import { normalizeLogSlice } from '../standalone/terminalLogWriter';
+import { normalizeLogSlice } from './terminalLogUtils';
 import {
     STANDING_ORDERS_CONFIG_KEY,
     STANDING_ORDER_DEFINITIONS_CONFIG_KEY,
@@ -759,6 +759,110 @@ interface LocalApiServerOptions {
      * do the same.
      */
     livenessWindowMs?: number;
+    /**
+     * Host identity for the launcher (plan: go-launcher-static-binary).
+     *
+     * `kind` is `'extension'` or `'standalone'` — the one fact `/health` did not
+     * safely provide and that a PID-only Stop action cannot recover. `instanceId`
+     * is stable only for the process lifetime: it lets the launcher prove the
+     * process that answered `/health` is the same one it is about to mutate, so
+     * a recycled PID or a replaced extension host cannot turn a Stop button into
+     * a signal against an innocent process. `version` and `source` are reported
+     * alongside every behavioural value so a stale projection is visible.
+     *
+     * Optional — absent in headless/test harnesses. When absent, `/health` omits
+     * the `host` and `capabilities` fields, `/launcher/state` reports identity
+     * as unavailable with a source, and the launcher refuses side effects
+     * (Stop, mutation) rather than guessing. Omission is never read as
+     * "standalone with shutdown enabled" — the route handler verifies both
+     * `host.kind === 'standalone'` AND a present `shutdown` callback before
+     * requesting teardown.
+     */
+    hostIdentity?: {
+        kind: 'extension' | 'standalone';
+        instanceId: string;
+        version: string;
+        source: string;
+    };
+    /**
+     * Lifecycle capabilities the host declares. `shutdown.enabled` is the
+     * explicit gate for `POST /shutdown`: the extension composition root
+     * declares `enabled: false` with a reason and supplies NO `shutdown`
+     * callback; the standalone composition root declares `enabled: true` and
+     * supplies the callback. The route handler checks BOTH — a missing
+     * callback paired with `enabled: true` is a wiring bug and is refused.
+     * `openShellUrl`/`setupPanelUrl` are the board/setup URLs the launcher
+     * opens to hand off to the existing first-run panel; they are presentation
+     * only and never change board behaviour.
+     */
+    capabilities?: {
+        shutdown: { enabled: boolean; reason?: string };
+        openShellUrl?: { url: string; source: string };
+        setupPanelUrl?: { url: string; source: string };
+    };
+    /**
+     * Host-owned launcher-state projection. Combines health identity,
+     * source-tagged serve settings, current roots, the selected root, named
+     * workspace mappings from the existing provider/DB service, installation
+     * facts the host can truthfully report, and capability reasons. The
+     * launcher consumes this and never keeps a second list — Go must not infer
+     * board identity by opening `kanban.db` or maintaining a second workspace
+     * registry.
+     *
+     * Every value that changes behaviour carries its source. Missing
+     * mapping/provider data returns an explicit `{ unavailable: true, reason,
+     * source }` object, NOT an empty array indistinguishable from "no
+     * workspaces configured" (the fallback rule in CLAUDE.md). Optional —
+     * absent in headless/test harnesses (`/launcher/state` then reports
+     * unavailable with a source).
+     */
+    getLauncherState?: () => Promise<LauncherStateProjection>;
+    /**
+     * Standalone-only graceful shutdown callback. Called by `POST /shutdown`
+     * AFTER the response flushes, so the launcher receives its 200 before the
+     * listener closes. Routes through the existing instance `stop()` sequence
+     * so terminal runtime, retention, API listeners, database writes, and
+     * discovery files close in their established order. The extension
+     * composition root MUST NOT supply this — its `capabilities.shutdown`
+     * declares `enabled: false`, and the route handler refuses a request even
+     * if a callback were wired by mistake. Optional — absent on the extension
+     * host and in headless/test harnesses.
+     */
+    shutdown?: () => Promise<void>;
+}
+
+/**
+ * Launcher-state projection returned by `getLauncherState`. The host owns this
+ * shape; the launcher consumes it and never reads `kanban.db` directly. Every
+ * behavioural value carries its source so a stale projection is visible.
+ */
+export interface LauncherStateProjection {
+    host: {
+        kind: 'extension' | 'standalone';
+        instanceId: string;
+        version: string;
+        source: string;
+    };
+    capabilities: {
+        shutdown: { enabled: boolean; reason?: string };
+        openShellUrl?: { url: string; source: string };
+        setupPanelUrl?: { url: string; source: string };
+    };
+    roots: { value: string[]; source: string };
+    selectedWorkspaceRoot: { value: string | null; source: string };
+    /**
+     * Named workspace mappings. `{ unavailable: true, reason, source }` when
+     * the provider/DB service is missing — NEVER an empty array, which would
+     * be indistinguishable from "no workspaces configured" (the fallback rule).
+     */
+    workspaceMappings:
+        | { unavailable: true; reason: string; source: string }
+        | { unavailable: false; value: Array<{ root: string; label?: string; enabled: boolean }>; source: string };
+    serveMode?: { value: string; source: string };
+    installation?: {
+        nodeVersion?: { value: string; source: string };
+        hostVersion?: { value: string; source: string };
+    };
 }
 
 /**
@@ -805,6 +909,14 @@ export class LocalApiServer {
     private _bindPolicy: BindPolicy;
     /** The bound tailnet address (v4), or null under loopback-only. */
     private _tailnetAddress: string | null = null;
+    /**
+     * Re-entrancy guard for POST /shutdown (plan: go-launcher-static-binary).
+     * Latched true after the first accepted shutdown request. A second POST
+     * /shutdown during the 50ms flush window (or any later request) gets a 409
+     * instead of scheduling a second teardown — instance.stop() is not
+     * idempotent and a double-close would throw or double-free.
+     */
+    private _shutdownInProgress: boolean = false;
     private _nameResolutionCache: Map<string, { id: string; timestamp: number }> = new Map();
     private readonly _CACHE_TTL_MS = 30000; // 30 seconds
     private readonly _MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10MB
@@ -1107,6 +1219,17 @@ export class LocalApiServer {
 
     public getPort(): number {
         return this._port;
+    }
+
+    /**
+     * Public accessor for the known workspace roots (plan:
+     * go-launcher-static-binary). Used by the host-owned launcher-state
+     * projection so the launcher never reads the option map or kanban.db
+     * directly. Mirrors the private `_getKnownRoots` — the same source set
+     * `/health` advertises.
+     */
+    public getKnownRoots(): string[] {
+        return this._getKnownRoots();
     }
 
     /**
@@ -9716,8 +9839,130 @@ export class LocalApiServer {
                     roots: this._getKnownRoots(),
                     ...(terminals !== undefined ? { terminals, terminalCount: terminals.length } : {}),
                     ...(selectedWorkspaceRoot !== undefined ? { selectedWorkspaceRoot } : {}),
-                    ...(memory !== undefined ? { memory } : {})
+                    ...(memory !== undefined ? { memory } : {}),
+                    // Host identity + capabilities (plan: go-launcher-static-binary).
+                    // Optional — omitted when the composition root did not wire
+                    // `hostIdentity`. A launcher that sees neither field MUST
+                    // treat Stop/mutation as unavailable rather than guessing.
+                    ...(this._options.hostIdentity ? { host: this._options.hostIdentity } : {}),
+                    ...(this._options.capabilities ? { capabilities: this._options.capabilities } : {})
                 }));
+            } else if (pathname === '/launcher/state' && req.method === 'GET') {
+                // Host-owned launcher-state projection (plan: go-launcher-static-binary).
+                // The launcher consumes this and never reads kanban.db. Auth is
+                // the same `_checkAuth` every other route uses; the loopback/tailnet
+                // gate at the top of `_handleRequest` already bounded the peer.
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                if (!this._options.getLauncherState) {
+                    // A 404 here is version incompatibility (old host), NOT "no
+                    // workspaces" — the launcher must not read an empty list from it.
+                    res.writeHead(404, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        error: 'launcher-state unavailable',
+                        reason: 'host did not wire getLauncherState',
+                        source: 'host-options'
+                    }));
+                    return;
+                }
+                let projection: LauncherStateProjection;
+                try {
+                    projection = await this._options.getLauncherState();
+                } catch (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        error: 'launcher-state projection failed',
+                        reason: err instanceof Error ? err.message : String(err),
+                        source: 'host-callback'
+                    }));
+                    return;
+                }
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify(projection));
+            } else if (pathname === '/shutdown' && req.method === 'POST') {
+                // Loopback-only authenticated shutdown (plan: go-launcher-static-binary).
+                // The top-of-_handleRequest gate already rejects non-loopback,
+                // non-tailnet peers; shutdown additionally rejects tailnet peers
+                // — only a process on this machine may tear the host down. The
+                // route verifies host.kind === 'standalone', capabilities.shutdown
+                // .enabled === true, AND a present `shutdown` callback before
+                // requesting teardown. The extension composition root declares
+                // enabled:false and wires NO callback; a missing-callback/
+                // enabled:true mismatch is a wiring bug and is refused.
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                if (this._isTailnetSocket(req)) {
+                    res.writeHead(403, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        error: 'shutdown is loopback-only',
+                        reason: 'request arrived on the tailnet listener'
+                    }));
+                    return;
+                }
+                if (this._shutdownInProgress) {
+                    // Re-entrancy guard: a second POST /shutdown during the
+                    // 50ms flush window (or any later request) gets a 409.
+                    // instance.stop() is not idempotent — a double-close would
+                    // throw or double-free.
+                    res.writeHead(409, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        error: 'shutdown already in progress',
+                        reason: 'a previous /shutdown request was accepted and teardown is scheduled'
+                    }));
+                    return;
+                }
+                const ident = this._options.hostIdentity;
+                const caps = this._options.capabilities;
+                if (!ident || ident.kind !== 'standalone') {
+                    res.writeHead(403, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        error: 'shutdown not supported',
+                        reason: ident
+                            ? `host kind '${ident.kind}' does not own teardown`
+                            : 'host identity not wired'
+                    }));
+                    return;
+                }
+                if (!caps || !caps.shutdown.enabled) {
+                    res.writeHead(403, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        error: 'shutdown not supported',
+                        reason: caps?.shutdown.reason || 'host declared shutdown disabled'
+                    }));
+                    return;
+                }
+                if (typeof this._options.shutdown !== 'function') {
+                    // Wiring bug: enabled:true with no callback. Refuse loudly
+                    // rather than 200-then-nothing.
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        error: 'shutdown callback missing',
+                        reason: 'capabilities.shutdown.enabled is true but no shutdown callback was wired'
+                    }));
+                    return;
+                }
+                // Acknowledge BEFORE teardown so the launcher receives its 200
+                // before the listener closes. The callback runs the existing
+                // instance.stop() sequence (terminal runtime, retention, API
+                // listeners, database writes, discovery files) in order.
+                // Latch the re-entrancy guard NOW so a concurrent request
+                // during the flush window gets 409 instead of scheduling a
+                // second teardown.
+                this._shutdownInProgress = true;
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: true,
+                    host: { kind: ident.kind, instanceId: ident.instanceId },
+                    note: 'shutdown scheduled; the listener closes after this response flushes'
+                }));
+                // Flush-then-teardown: `res.end` is async to the wire; give the
+                // kernel a moment to drain the response before tearing down the
+                // listener. The instance.stop() sequence is awaited; if it
+                // throws, the process is already committed to exiting and the
+                // error is logged.
+                void (async () => {
+                    try { await new Promise(r => setTimeout(r, 50)); } catch { /* ignore */ }
+                    try { await this._options.shutdown!(); }
+                    catch (e) { console.error('[LocalApiServer] shutdown callback threw:', e); }
+                })();
             } else if (pathname === '/settings' && req.method === 'GET') {
                 // Read-only. Reports the resolved serve mode, port and roots, each
                 // with the source it resolved FROM, so a wrong value is visible

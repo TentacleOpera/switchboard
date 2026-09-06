@@ -9,7 +9,7 @@
 # Output:
 #   switchboard_<version>_arm64.deb
 #
-# The package vendors node_modules with better-sqlite3 and node-pty built
+# The package vendors better-sqlite3 and the platform-selected Go PTY host
 # for arm64 at package-build time, so no target Pi ever needs a compiler.
 # See raspberry-pi-installs-switchboard-with-apt.md.
 
@@ -30,15 +30,39 @@ echo "Building ${DEB_NAME}..."
 echo "Compiling TypeScript..."
 npm run compile || { echo "Compile failed"; exit 1; }
 
-# 2. Install/verify native modules for arm64
-echo "Verifying native modules..."
+# 2. Verify the native database module and the platform-selected Go PTY host
+echo "Verifying native database module and Go PTY host..."
 node -e "require('better-sqlite3')" || { echo "FAILED: better-sqlite3 not loadable"; exit 1; }
-node -e "require('node-pty')" || { echo "FAILED: node-pty not loadable — terminals will not work"; exit 1; }
-echo "Native modules verified."
+PTY_HOST_SRC="dist/linux-arm64/switchboard-pty-host"
+[ -f "$PTY_HOST_SRC" ] || { echo "FAILED: $PTY_HOST_SRC missing — build the Go PTY host first"; exit 1; }
+[ -x "$PTY_HOST_SRC" ] || { echo "FAILED: $PTY_HOST_SRC is not executable"; exit 1; }
+PTY_READY=$(printf '' | "$PTY_HOST_SRC" --workspace "$ROOT_DIR")
+node -e 'const m=JSON.parse(process.argv[1]); if(m.t!=="ready"||m.version!==1||!Number.isInteger(m.port)||!m.token) process.exit(1)' "$PTY_READY" || {
+  echo "FAILED: Go PTY host version/handshake probe failed"; exit 1;
+}
+echo "Native database module and Go PTY host verified."
 
 # 3. Build the .deb using dpkg-deb directly (simpler than full debhelper)
 BUILD_DIR=$(mktemp -d)
 trap "rm -rf $BUILD_DIR" EXIT
+
+# 2b. Build and verify the static Go launcher (plan: go-launcher-static-binary).
+# Linux arm64 only — the launcher is the static binary that can run before
+# Node.js or Switchboard is installed. The .deb layout flattens dist/ into
+# /usr/lib/switchboard/, so the launcher binary lands at
+# /usr/bin/switchboard-launcher (the desktop entry names it directly).
+echo "Building static Go launcher (linux/arm64)..."
+LAUNCHER_SRC="cmd/switchboard-launcher"
+LAUNCHER_BIN="$BUILD_DIR/switchboard-launcher"
+[ -d "$LAUNCHER_SRC" ] || { echo "FAILED: $LAUNCHER_SRC missing — launcher source tree not found"; exit 1; }
+LAUNCHER_VERSION=$(node -p "require('./package.json').version")
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build \
+  -trimpath -ldflags "-s -w -X main.launcherVersion=${LAUNCHER_VERSION} -X main.buildArch=linux/arm64" \
+  -o "$LAUNCHER_BIN" ./cmd/switchboard-launcher \
+  || { echo "FAILED: Go launcher build failed"; exit 1; }
+[ -x "$LAUNCHER_BIN" ] || { echo "FAILED: $LAUNCHER_BIN is not executable"; exit 1; }
+"$LAUNCHER_BIN" version || { echo "FAILED: launcher version probe failed"; exit 1; }
+echo "Static Go launcher (linux/arm64) built and verified."
 
 INSTALL_DIR="$BUILD_DIR/deb"
 mkdir -p "$INSTALL_DIR/DEBIAN"
@@ -47,8 +71,16 @@ mkdir -p "$INSTALL_DIR/usr/bin"
 mkdir -p "$INSTALL_DIR/etc/switchboard"
 mkdir -p "$INSTALL_DIR/lib/systemd/system"
 
-# Copy built dist
+# Copy built dist. The Go manifest is rewritten for the package root because
+# the Debian layout flattens dist/ into /usr/lib/switchboard/.
 cp -a dist/* "$INSTALL_DIR/usr/lib/switchboard/"
+node - <<'NODE' "$INSTALL_DIR/usr/lib/switchboard/pty-host-artifacts.json"
+const fs = require('fs');
+const file = process.argv[2];
+const manifest = JSON.parse(fs.readFileSync('pty-host-artifacts.json', 'utf8'));
+for (const key of Object.keys(manifest.targets)) manifest.targets[key] = manifest.targets[key].replace(/^dist\\//, '');
+fs.writeFileSync(file, JSON.stringify(manifest, null, 2) + '\\n');
+NODE
 
 # The CLI is exec'd directly by /usr/bin/switchboard and by the systemd unit.
 # webpack's BannerPlugin gives it a `#!/usr/bin/env node` shebang, but the
@@ -71,17 +103,20 @@ cp package.json package-lock.json "$VENDOR_DIR/"
 ( cd "$VENDOR_DIR" && npm ci --omit=dev --ignore-scripts=false )
 cp -a "$VENDOR_DIR/node_modules" "$INSTALL_DIR/usr/lib/switchboard/node_modules"
 
-# Verify the native modules resolve out of the VENDORED tree, not the repo's.
-# node-pty sits in optionalDependencies, so npm SUCCEEDS when its build fails:
-# the install looks clean, the board starts, and every terminal is dead.
+# Verify the native database module resolves out of the VENDORED tree, not the repo's.
 node -e "require('$INSTALL_DIR/usr/lib/switchboard/node_modules/better-sqlite3')" \
   || { echo "FAILED: better-sqlite3 missing from the vendored tree"; exit 1; }
-node -e "require('$INSTALL_DIR/usr/lib/switchboard/node_modules/node-pty')" \
-  || { echo "FAILED: node-pty missing from the vendored tree — terminals will not work"; exit 1; }
-echo "Vendored native modules verified."
+echo "Vendored database module verified."
 
 # Entry point
 ln -s /usr/lib/switchboard/standalone/cli.js "$INSTALL_DIR/usr/bin/switchboard"
+
+# Static Go launcher (plan: go-launcher-static-binary). The desktop entry names
+# it directly so icon launches go through the launcher, not `switchboard local`
+# (which was cwd-sensitive and could serve $HOME). The launcher is a static
+# binary with no Node dependency, so it can run before Node.js is installed.
+cp "$LAUNCHER_BIN" "$INSTALL_DIR/usr/bin/switchboard-launcher"
+chmod 755 "$INSTALL_DIR/usr/bin/switchboard-launcher"
 
 # Desktop entry + icon (Linux desktop install; harmless on a headless Pi)
 mkdir -p "$INSTALL_DIR/usr/share/applications"
@@ -117,7 +152,7 @@ Description: Switchboard — plan-driven agent orchestration board
  a systemd service, and the switchboard CLI.
  .
  On a Raspberry Pi 4/5 (arm64, 4 GB), it runs two agent seats comfortably.
- The package vendors better-sqlite3 and node-pty built for arm64, so no
+ The package vendors better-sqlite3 and the static Go PTY host for arm64, so no
  compiler is needed on the target.
 EOF
 

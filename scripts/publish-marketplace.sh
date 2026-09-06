@@ -66,5 +66,5 @@ done
 
 printf '\nPublished %d artifacts for %s.\n' "${#ARTIFACTS[@]}" "$VERSION"
 printf 'Targets not in the matrix (Linux, alpine, web) receive the universal build,\n'
-printf 'which carries no node-pty prebuild and degrades via isPtyAvailable(). State\n'
-printf 'this in the release notes.\n'
+printf 'which carries the Go PTY artifact manifest and fails loudly on unsupported targets.\n'
+printf 'State the supported target matrix in the release notes.\n'

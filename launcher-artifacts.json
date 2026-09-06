@@ -1,0 +1,26 @@
+{
+  "comment": "Static Go launcher artifacts (plan: go-launcher-static-binary). Linux amd64 and arm64 only — macOS, Windows, and armhf are explicitly out of scope. The arm64 artifact is also the Raspberry Pi 64-bit binary. Built by scripts/build-launcher.sh with CGO_ENABLED=0 and -trimpath so the binary is fully static and reproducible.",
+  "version": "0.0.0",
+  "targets": {
+    "linux-amd64": "dist/linux-amd64/switchboard-launcher",
+    "linux-arm64": "dist/linux-arm64/switchboard-launcher"
+  },
+  "excludedTargets": [
+    "darwin-amd64",
+    "darwin-arm64",
+    "windows-amd64",
+    "windows-arm64",
+    "linux-arm"
+  ],
+  "excludedTargetsReason": "macOS, Windows, and armhf/32-bit Raspberry Pi are explicitly out of scope for the static launcher (plan: go-launcher-static-binary).",
+  "buildCommand": "scripts/build-launcher.sh",
+  "buildFlags": [
+    "CGO_ENABLED=0",
+    "-trimpath",
+    "-ldflags", "-s -w -X main.launcherVersion=${VERSION} -X main.buildArch=${GOOS}/${GOARCH}"
+  ],
+  "verification": {
+    "versionProbe": "dist/linux-amd64/switchboard-launcher version",
+    "elfCheck": "file dist/linux-arm64/switchboard-launcher | grep -q ELF"
+  }
+}
