@@ -98,3 +98,9 @@ switchboard-transfer*.json
 # compile/watch/pretest) writes both src/webview/vendor and dist/webview/vendor.
 # Never commit these — a checked-in copy silently rots when the dep is bumped.
 src/webview/vendor/
+
+# Migration and editor backups — not tracked (operator policy, 2026-09-06)
+**/*.migrated.bak
+**/*.ts.bak
+**/*.local.bak
+**/*.corrupt-*.bak
