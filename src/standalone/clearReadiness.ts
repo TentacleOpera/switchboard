@@ -193,6 +193,15 @@ export function createClearReadinessTracker(
     let submitted = false;
     const markSubmitted = (): void => { submitted = true; };
 
+    // Resolved BEFORE the already-exited check below. `finish()` reads all three,
+    // and both the already-exited branch and the exit listener call it — reading a
+    // `const` declared further down throws `ReferenceError: Cannot access 'mode'
+    // before initialization` (the temporal dead zone). Keep these three
+    // declarations above the first possible `finish()` call.
+    const mode = options?.mode || 'auto';
+    const fallbackDelay = Math.max(0, options?.fallbackDelayMs ?? DEFAULT_FALLBACK_DELAY_MS);
+    const family = options?.cliFamily || target.cliFamily || 'unknown';
+
     // Check if already exited
     if (target.status === 'exited') {
         finish('exit');
@@ -205,10 +214,6 @@ export function createClearReadinessTracker(
             exitSub = target.onExit(() => finish('exit'));
         } catch {}
     }
-
-    const mode = options?.mode || 'auto';
-    const fallbackDelay = Math.max(0, options?.fallbackDelayMs ?? DEFAULT_FALLBACK_DELAY_MS);
-    const family = options?.cliFamily || target.cliFamily || 'unknown';
 
     if (mode === 'manual' && family === 'unknown') {
         // Unknown family in manual mode: delay is the whole policy (unchanged).

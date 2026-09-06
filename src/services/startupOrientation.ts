@@ -20,6 +20,16 @@ export const ORIENTATION_PREAMBLE =
  */
 export const ORIENTATION_QUIET_MS = 1200;      // output stopped this long => settled
 export const ORIENTATION_NO_OUTPUT_MS = 4000;  // no output at all => nothing coming
+/**
+ * LOAD-BEARING — this is the real timer, not a fallback. On any CLI with a
+ * continuous redraw loop (Devin emits ~12 content-free frames/sec, measured at
+ * 183 frames / 6,475 bytes / 0 printable characters in 15s), `lastDataAt` never
+ * ages past ~82ms, so the ORIENTATION_QUIET_MS (1200ms) branch above is
+ * UNREACHABLE and every wait runs to this cap. Reducing it as an "optimisation"
+ * removes the only thing that lets the relay fire on a noisy seat. See
+ * an-idle-heartbeat-eats-two-thirds-of-the-scrollback-and-the-seat-looks-dead
+ * and prompt-delivery-should-be-patient-not-precise.md.
+ */
 export const ORIENTATION_MAX_WAIT_MS = 15000;  // hard cap: always relay eventually
 export const ORIENTATION_POLL_MS = 250;
 

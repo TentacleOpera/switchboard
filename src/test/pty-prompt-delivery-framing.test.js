@@ -117,6 +117,23 @@ function stubHandle(name = 'Feature Implementation-coder-1', role = 'coder') {
     };
 }
 
+/**
+ * Timing overrides for every delivery in this suite. The subject here is the
+ * BYTE SEQUENCE — marker framing and the confirm-Enter double CR — not the
+ * readiness policy, which clear-readiness-state-machine.test.js owns. Without
+ * these, each case pays the production ceiling for an `unknown` family (a 20s
+ * first-readiness ceiling plus a 15s delivery floor), turning a byte-level gate
+ * into a multi-minute one. The values are deliberately tiny: they must not be
+ * read as a claim about real CLI timing.
+ */
+const FAST_TIMING = {
+    readinessTimeouts: {
+        devinTimeoutMs: 20, devinQuietMs: 5,
+        claudeTimeoutMs: 20, claudeQuietMs: 5,
+        antigravityTimeoutMs: 20, antigravityQuietMs: 5,
+    },
+};
+
 (async function main() {
     console.log('\n── PTY prompt delivery framing ──');
 
@@ -139,7 +156,7 @@ function stubHandle(name = 'Feature Implementation-coder-1', role = 'coder') {
         await test(`markers are whole writes and ${CONFIRM_CR_COUNT} \\r follow — len ${len} (mod ${len % 256})`, async () => {
             const text = 'x'.repeat(len);
             const { handle, writes } = stubHandle();
-            await sendPromptToPty(handle, text, { clearBeforePrompt: false });
+            await sendPromptToPty(handle, text, { clearBeforePrompt: false , ...FAST_TIMING });
 
             // \x1b[200~ must be a single, whole write (first write).
             assert.strictEqual(
@@ -182,7 +199,7 @@ function stubHandle(name = 'Feature Implementation-coder-1', role = 'coder') {
         await test(`emitted sequence matches reference + confirm CR — len ${len}`, async () => {
             const text = 'A'.repeat(len);
             const { handle, writes } = stubHandle();
-            await sendPromptToPty(handle, text, { clearBeforePrompt: false });
+            await sendPromptToPty(handle, text, { clearBeforePrompt: false , ...FAST_TIMING });
             assert.deepStrictEqual(
                 writes, expectedWrites(text),
                 `write sequence differs from _sendRobustTextBackground's (plus the confirm CR) for len ${len}`
@@ -206,7 +223,7 @@ function stubHandle(name = 'Feature Implementation-coder-1', role = 'coder') {
         // never dispatched to has nothing to clear. This test is about the clear
         // branch, so the seat must have been prompted before.
         handle.promptCount = 1;
-        await sendPromptToPty(handle, text, { clearBeforePrompt: true, clearBeforePromptDelayMs: 0 });
+        await sendPromptToPty(handle, text, { clearBeforePrompt: true, clearBeforePromptDelayMs: 0 , ...FAST_TIMING });
 
         assert.strictEqual(writes[0], '\x15', 'first write must reset the CLI input line (Ctrl+U)');
         assert.strictEqual(writes[1], '/clear', 'second write must be the bare /clear command — no CR appended');
@@ -235,7 +252,7 @@ function stubHandle(name = 'Feature Implementation-coder-1', role = 'coder') {
     await test('no write carries printable text AND a trailing CR', async () => {
         const { handle, writes } = stubHandle();
         handle.promptCount = 1; // established seat — see the clear-branch note above
-        await sendPromptToPty(handle, 'y'.repeat(300), { clearBeforePrompt: true, clearBeforePromptDelayMs: 0 });
+        await sendPromptToPty(handle, 'y'.repeat(300), { clearBeforePrompt: true, clearBeforePromptDelayMs: 0 , ...FAST_TIMING });
         for (const w of writes) {
             if (w === '\r') { continue; }
             assert.ok(
@@ -277,8 +294,8 @@ function stubHandle(name = 'Feature Implementation-coder-1', role = 'coder') {
         const text = 'x'.repeat(507);
         const coder = stubHandle('Feature Implementation-coder-1', 'coder');
         const shell = stubHandle('my-shell', 'shell');
-        await sendPromptToPty(coder.handle, text, { clearBeforePrompt: false });
-        await sendPromptToPty(shell.handle, text, { clearBeforePrompt: false });
+        await sendPromptToPty(coder.handle, text, { clearBeforePrompt: false , ...FAST_TIMING });
+        await sendPromptToPty(shell.handle, text, { clearBeforePrompt: false , ...FAST_TIMING });
         assert.deepStrictEqual(
             coder.writes, shell.writes,
             'coder and shell roles must produce identical write sequences'
@@ -290,7 +307,7 @@ function stubHandle(name = 'Feature Implementation-coder-1', role = 'coder') {
         const text = 'Hello — world ─ test 🚀';
         const { handle } = stubHandle('Feature Implementation-coder-1', 'coder');
         const t0 = Date.now();
-        const receipt = await sendPromptToPty(handle, text, { clearBeforePrompt: false });
+        const receipt = await sendPromptToPty(handle, text, { clearBeforePrompt: false , ...FAST_TIMING });
         const t1 = Date.now();
 
         assert.strictEqual(
@@ -311,11 +328,11 @@ function stubHandle(name = 'Feature Implementation-coder-1', role = 'coder') {
 
     await test('the latch regression: promptCount increments monotonically on multiple sends', async () => {
         const { handle } = stubHandle('Feature Implementation-coder-1', 'coder');
-        const receipt1 = await sendPromptToPty(handle, 'first prompt', { clearBeforePrompt: false });
+        const receipt1 = await sendPromptToPty(handle, 'first prompt', { clearBeforePrompt: false , ...FAST_TIMING });
         assert.strictEqual(receipt1.promptSeq, 1, 'first promptSeq must be 1');
         assert.strictEqual(handle.promptCount, 1, 'handle.promptCount must be 1 after first send');
 
-        const receipt2 = await sendPromptToPty(handle, 'second prompt', { clearBeforePrompt: false });
+        const receipt2 = await sendPromptToPty(handle, 'second prompt', { clearBeforePrompt: false , ...FAST_TIMING });
         assert.strictEqual(receipt2.promptSeq, 2, 'second promptSeq must be 2');
         assert.strictEqual(handle.promptCount, 2, 'handle.promptCount must be 2 after second send (not latched at 1)');
     });
@@ -324,7 +341,7 @@ function stubHandle(name = 'Feature Implementation-coder-1', role = 'coder') {
         const { handle } = stubHandle('Feature Implementation-coder-1', 'coder');
         handle.status = 'exited';
         handle.promptCount = 0;
-        const receipt = await sendPromptToPty(handle, 'prompt to exited seat', { clearBeforePrompt: false });
+        const receipt = await sendPromptToPty(handle, 'prompt to exited seat', { clearBeforePrompt: false , ...FAST_TIMING });
 
         assert.strictEqual(receipt.bytesWritten, 0, 'boot exit must report bytesWritten === 0');
         assert.strictEqual(receipt.promptSeq, undefined, 'boot exit must not allocate a promptSeq');

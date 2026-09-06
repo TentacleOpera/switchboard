@@ -260,7 +260,15 @@
                                         // pane got its whole boot as replay, or no CLI booted)
     const CURTAIN_MAX_MS = 15000;       // hard cap: never strand a pane behind it
     const MIN_DISPATCH_CURTAIN_MS = 350;
-    const MAX_DISPATCH_CURTAIN_MS = 16000;
+    // Hard dismiss for the DISPATCH curtain. Must outlast the slowest legitimate
+    // dispatch, or the curtain lifts while the prompt has still not been written —
+    // the exact "looks delivered, isn't" state the curtain exists to prevent.
+    // Worst case on a Devin seat: the clear-readiness ceiling (15s) plus the
+    // late-signal grace (1s) plus the per-delivery family floor (15s) = ~31s; a
+    // cold-boot dispatch is awaitFirstReadiness (20s) then the floor's remainder.
+    // 36s covers both with margin. Raised from 16000, which predated the delivery
+    // floor added by prompt-delivery-should-be-patient-not-precise.md.
+    const MAX_DISPATCH_CURTAIN_MS = 36000;
 
     // "Working, no output" signal. A dispatched seat that is pty-live (frames
     // still arriving) but has produced no PRINTABLE glyph for this long shows a

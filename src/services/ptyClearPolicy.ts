@@ -49,9 +49,12 @@ export function resolvePtyClearPolicyFromExplicit(
     // no longer flips a PTY seat to manual mode. Without an explicit PTY mode or
     // PTY-specific delay, the seat stays in Auto mode and runs the readiness
     // state machine — a Devin clear resolves on `signal`, not a 600ms `manual`.
-    // The legacy delay is now a floor in createClearReadinessTracker (via the
-    // manual-mode floor), not a policy-level mode flip. See
-    // a-delay-setting-must-not-be-able-to-defeat-known-cli-readiness.md.
+    // The legacy delay keeps governing VS Code seats (via resolvePtyClearDelay and
+    // the extension host's clearTerminalContext) and is still the VALUE used when
+    // Manual is genuinely selected (rule 2 above) — where
+    // createClearReadinessTracker now enforces it as a floor rather than a
+    // replacement for readiness detection. It is no longer an input to PTY MODE.
+    // See a-delay-setting-must-not-be-able-to-defeat-known-cli-readiness.md.
     return { mode: 'auto', unknownDelayMs: 600, source: 'default' };
 }
 

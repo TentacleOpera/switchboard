@@ -267,6 +267,22 @@ function createMockHandle(overrides = {}) {
     });
 
     // 7. Exit handling & Prompt blocking
+    await test('Tracker constructed on an ALREADY-exited target resolves exit (no ReferenceError)', async () => {
+        // Regression: finish() reads `mode`, `family` and `fallbackDelay` for the
+        // manual-mode floor. When those `const`s were declared BELOW the
+        // already-exited check, this branch threw
+        // `ReferenceError: Cannot access 'mode' before initialization` — the one
+        // input that reaches finish() before the declarations run.
+        const handle = createMockHandle({ cliFamily: 'devin', status: 'exited' });
+        let tracker;
+        assert.doesNotThrow(() => {
+            tracker = createClearReadinessTracker(handle, { mode: 'manual', fallbackDelayMs: 5000 });
+        }, 'constructing a tracker on an exited target must not throw');
+        const res = await tracker.promise;
+        assert.strictEqual(res.reason, 'exit');
+        assert.ok(res.elapsedMs < 5000, 'an exited target must not wait out the manual floor');
+    });
+
     await test('Terminal exit before / during clear resolves exit and blocks prompt paste', async () => {
         const handle = createMockHandle({ cliFamily: 'devin' });
         const tracker = createClearReadinessTracker(handle, {
@@ -299,6 +315,41 @@ function createMockHandle(overrides = {}) {
     });
 
     // 8. Disposal cleanup
+    // 8. Per-delivery floor (prompt-delivery-should-be-patient-not-precise)
+    await test('Warm-seat delivery waits the family floor before the first paste byte', async () => {
+        // promptCount >= 1 with clearBeforePrompt off runs NO readiness gate — the
+        // floor is the only thing between the queue pop and the write. Claude's
+        // floor (3000ms) is used so the assertion does not cost devin's 15s.
+        const handle = createMockHandle({ cliFamily: 'claude', promptCount: 1 });
+        const startAt = Date.now();
+        let pasteOpenAt = 0;
+        const baseWrite = handle.write.bind(handle);
+        handle.write = (data) => {
+            if (data === '\x1b[200~' && !pasteOpenAt) { pasteOpenAt = Date.now(); }
+            baseWrite(data);
+        };
+
+        await sendPromptToPty(handle, 'warm-seat-prompt', { clearBeforePrompt: false });
+
+        assert.ok(pasteOpenAt > 0, 'the prompt must still be delivered');
+        assert.ok(pasteOpenAt - startAt >= 3000,
+            `floor must be honoured before the first paste byte (waited ${pasteOpenAt - startAt}ms)`);
+        assert.ok(handle.writes.includes('\x1b[201~'), 'paste close marker must still be written');
+        assert.strictEqual(handle.writes.filter(w => w === '\r').length, 2,
+            'the confirm-Enter double CR must be unchanged by the floor');
+    });
+
+    await test('A pure /clear (empty payload) does NOT pay the delivery floor', async () => {
+        // clearTerminalContext sends `data: ''` on both hosts. There is no prompt
+        // text a not-yet-ready composer could swallow, so flooring it would add the
+        // full devin floor (15s) to every queue/done pop for nothing.
+        const handle = createMockHandle({ cliFamily: 'devin', promptCount: 1 });
+        const startAt = Date.now();
+        await sendPromptToPty(handle, '', { clearBeforePrompt: false });
+        const elapsed = Date.now() - startAt;
+        assert.ok(elapsed < 1000, `empty payload must not wait the devin floor (waited ${elapsed}ms)`);
+    });
+
     await test('Dispose cleans up all listeners and timers idempotently', () => {
         const handle = createMockHandle({ cliFamily: 'devin' });
         const tracker = createClearReadinessTracker(handle, {

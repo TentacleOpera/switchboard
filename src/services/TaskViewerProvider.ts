@@ -2425,7 +2425,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     /**
      * Family-aware establish delay — replaces the flat 1500ms
-     * {@link ESTABLISH_ORDERS_READY_DELAY_MS} on the send path. Uses the
+     * `ESTABLISH_ORDERS_READY_DELAY_MS` that used to sit on the send path (now
+     * deleted, so it cannot regrow as a bare flat wait). Uses the
      * clear-path timeout as the floor (the same value a cleared seat would
      * wait at maximum), so a freshly-spawned seat waits as long as a cleared
      * one before the standing-orders one-shot is typed in. `unknown` resolves
@@ -2569,10 +2570,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * clearTerminalContext at both cleared:true return points (PTY fleet and
      * VS Code terminal). Resolves the terminal's role from _terminalAgentInfo
      * (the role does not change on clear) and delegates to the shared
-     * _deliverStandingOrdersOnEstablish method. Fire-and-forget: the clear
-     * returns immediately and the orders delivery runs in the background,
-     * serialized against any concurrent dispatch by the per-terminal
-     * withTerminalSendLock. A terminal with no applicable orders is a no-op
+     * _deliverStandingOrdersOnEstablish method. AWAITED by both callers: the
+     * clear does not report `cleared: true` until the orders have been
+     * delivered, so the queue's next pop cannot race this write into the same
+     * seat. Never rejects — the delivery's own failures are logged, not thrown,
+     * so awaiting it cannot fail a clear. A terminal with no applicable orders
+     * is a no-op
      * (renderStandaloneOrdersBlock returns null inside the shared method).
      */
     public async deliverStandingOrdersAfterClear(terminalName: string): Promise<void> {
@@ -2595,12 +2598,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             console.warn(`[TaskViewerProvider] Standing-orders post-clear delivery failed for '${terminalName}':`, err);
         }
     }
-
-    /**
-     * Grace period between a terminal's CLI boot command and the standing-orders
-     * one-shot. Matches Mission Control kickoff's freshly-created-terminal delay.
-     */
-    private static readonly ESTABLISH_ORDERS_READY_DELAY_MS = 1500;
 
     private static CLI_BRAND_NAMES: Record<string, string> = { ...SHARED_CLI_BRAND_NAMES };
 
@@ -11488,12 +11485,18 @@ Each plan file must include:
                             data: '',
                             clearBeforePrompt: true,
                             clearBeforePromptDelayMs: ptyPolicy.mode === 'manual' ? ptyPolicy.delayMs : ptyPolicy.unknownDelayMs,
-                            // Explicitly MANUAL, never the operator's Auto policy. This is a
-                            // standalone clear — the accepted coder, a reporting seat, a roster
-                            // reset — and the next write to it is minutes away. Running the
-                            // detector here would hold this call for up to 15s on a Devin seat to
-                            // learn something nothing is waiting on. The fixed delay is still
-                            // needed: _deliverStandingOrdersAfterClear writes immediately after.
+                            // Explicitly MANUAL, never the operator's Auto policy — but note
+                            // what Manual now means. Since
+                            // a-delay-setting-must-not-be-able-to-defeat-known-cli-readiness.md,
+                            // Manual on a KNOWN family is a FLOOR, not a bypass:
+                            // createClearReadinessTracker still runs the family state machine and
+                            // resolves on max(delay, readiness). So this clear does hold for the
+                            // detector on a Devin seat — the earlier claim that it short-circuits
+                            // to a flat delay is no longer true, and the wait is the point: this
+                            // call is awaited, and _deliverStandingOrdersAfterClear writes
+                            // immediately after it returns. Manual is kept because the delay is
+                            // still the floor for an `unknown`-family seat, where there is no
+                            // signal to detect.
                             clearReadinessMode: 'manual',
                             // Empty payload — this is a pure /clear, no prompt.
                             addonsComposed: true,

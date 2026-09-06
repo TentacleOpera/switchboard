@@ -81,14 +81,29 @@ possible. Land it first.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Explain the seat-clear session-restart toll where seat CLIs are configured](../plans/devin-clear-reauth-toll-visibility.md) — **CODER CODED** — ID: fe5daf69-426e-4b5a-92b0-da1df24fe6cd
-- [ ] [A delay setting must not be able to defeat known-CLI readiness detection](../plans/a-delay-setting-must-not-be-able-to-defeat-known-cli-readiness.md) — **CODER CODED** — ID: 4570333b-0cce-4e40-b8a0-8da118d86191
-- [ ] [A seat's CLI family is derived once at spawn and frozen, so every Devin readiness fix silently misses any seat not classified as Devin](../plans/a-seats-cli-family-is-frozen-at-spawn-so-devin-timing-fixes-never-reach-it.md) — **CODER CODED** — ID: d8f86774-a517-4040-b9aa-513decfaae17
-- [ ] [Prompt delivery should be patient, not precise — an unknown seat gets the fastest profile and deliveries 2..N get no gate at all](../plans/prompt-delivery-should-be-patient-not-precise.md) — **CODER CODED** — ID: c11ab0cd-0370-44d8-a33d-58a875d2cd18
-- [ ] [A Half-Delivered Dispatch Has No Safe Recovery — Retry Is the Only Lever, and It Destroys State](../plans/a-half-delivered-dispatch-has-no-safe-recovery-retry-is-the-only-lever-and-it-destroys-state.md) — **CODER CODED** — ID: ba068390-01cb-4832-a805-c924e2ccdc71
+- [ ] [Explain the seat-clear session-restart toll where seat CLIs are configured](../plans/devin-clear-reauth-toll-visibility.md) — **CODE REVIEWED** — ID: fe5daf69-426e-4b5a-92b0-da1df24fe6cd
+- [ ] [A delay setting must not be able to defeat known-CLI readiness detection](../plans/a-delay-setting-must-not-be-able-to-defeat-known-cli-readiness.md) — **CODE REVIEWED** — ID: 4570333b-0cce-4e40-b8a0-8da118d86191
+- [ ] [A seat's CLI family is derived once at spawn and frozen, so every Devin readiness fix silently misses any seat not classified as Devin](../plans/a-seats-cli-family-is-frozen-at-spawn-so-devin-timing-fixes-never-reach-it.md) — **CODE REVIEWED** — ID: d8f86774-a517-4040-b9aa-513decfaae17
+- [ ] [Prompt delivery should be patient, not precise — an unknown seat gets the fastest profile and deliveries 2..N get no gate at all](../plans/prompt-delivery-should-be-patient-not-precise.md) — **CODE REVIEWED** — ID: c11ab0cd-0370-44d8-a33d-58a875d2cd18
+- [ ] [A Half-Delivered Dispatch Has No Safe Recovery — Retry Is the Only Lever, and It Destroys State](../plans/a-half-delivered-dispatch-has-no-safe-recovery-retry-is-the-only-lever-and-it-destroys-state.md) — **CODE REVIEWED** — ID: ba068390-01cb-4832-a805-c924e2ccdc71
 <!-- END SUBTASKS -->
 
 ## Completion Summary
 
 All four instructed subtasks implemented and committed (dc167800). Subtask 5 (ba068390, half-delivered dispatch) had no Team Dispatch Instructions or acceptance criteria in the feature file — a question report was filed at `.switchboard/orchestrator/reports/2026-09-05-half-delivered-dispatch-no-seat.md` and the subtask was held. The team's coders stopped mid-work after a terminal clear disrupted their context; the lead finished the remaining defects (re-derivation logic, awaitable standing-orders relay, ESTABLISH_ORDERS_READY_DELAY_MS family-aware floor, rule 4 deletion, manual-mode floor, late-signal detection) and updated the two affected contract tests. All 13 clear-readiness state machine tests and all 9 pty-clear-policy contract assertions pass.
 
+
+## Review Findings
+
+Four of the five subtasks are implemented and now reviewed; the fifth (`ba068390`, half-delivered dispatch) has no code at all and its card sits in CODE REVIEWED asserting work that does not exist. The feature's rule holds end to end: an unrecognised seat takes the longest ceiling on both readiness paths, the floor applies to deliveries 2..N and not just the first, a configured delay is a floor rather than a bypass, and the after-clear standing-orders delivery is serialized against the next dispatch in both hosts. One CRITICAL was fixed — `createClearReadinessTracker` threw `ReferenceError: Cannot access 'mode' before initialization` on an already-exited target, because the manual-mode floor added reads of three `const`s declared below the branch that calls `finish()`. Eight MAJORs were fixed: two unimplemented Goal Invariants (the delivery-time family log, the unrecognised-CLI indicator in Agent Setup), the floor being charged to pure `/clear` sends, `MAX_DISPATCH_CURTAIN_MS` becoming shorter than a legitimate dispatch, `switchboard done`/`next`/`dispatch` timing out at 15 s against a server that now legitimately holds ~35 s, the CI framing gate ballooning to ~6 minutes, a session-restart note hidden inside a collapsible form, and three comments that documented behaviour this feature deleted. Gate-wiring audit: all three named gates (`test:contract:clear-readiness`, `test:contract:pty-clear-policy`, `test:contract:dispatch-curtain`) are invoked by `.github/workflows/integration-tests.yml:1442,1445,1473` — no green-while-incomplete hole. Two new automated assertions now discriminate on the core mechanism (a warm seat waits its family floor before the first paste byte; an empty payload does not), so the floor is no longer manual-verification-only; the per-CLI acceptance runs remain manual and were not executed, and passing these suites is not evidence a real Devin seat submits its standing orders.
+
+## Deferred Findings
+
+- CRITICAL — subtask `ba068390` is entirely unimplemented while its card sits in CODE REVIEWED (see that plan's own Deferred Findings).
+- MAJOR — the establish path pays the family floor twice on a PTY seat (`readyDelayMs` then the delivery floor), pushing a fresh Devin seat's standing orders to ~30 s (`src/services/TaskViewerProvider.ts:2420`).
+- MAJOR — `POST /kanban/team/feature-complete` clears roster seats serially and can now hold one response ~80 s for a five-seat team (`src/services/LocalApiServer.ts:4110`).
+- MAJOR — late-signal detection defers resolution by a 1 s grace window instead of observing past `finish()`, so a signal arriving after the tracker resolves is still invisible (`src/standalone/clearReadiness.ts:62`).
+- MAJOR — the flat floor is not a readiness probe: a CLI busy for 60 s still receives its prompt at 15 s (`src/standalone/ptyPromptDelivery.ts:297`).
+- NIT — `'legacy-explicit'` is now unreachable but survives in the policy union and the webview's source-label switch (`src/services/ptyClearPolicy.ts:5`).
+- NIT — the dispatch curtain reads `cliFamily` before the delivery re-derives it, so a corrected seat shows the old CLI name for one curtain (`src/standalone/bootstrap.ts:517`).
+- NIT — the webview mirrors the three-name CLI roster and can drift from `cliIdentity.ts` if a fourth family is added (`src/webview/kanban.html:4543`).

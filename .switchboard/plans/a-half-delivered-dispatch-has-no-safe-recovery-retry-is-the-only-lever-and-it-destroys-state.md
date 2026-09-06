@@ -69,3 +69,13 @@ Note that `f824db44` covers the adjacent defect — an unknown outcome re-arming
 4. Two identical re-deliveries do not compound.
 5. Simulating the 2026-09-04 sequence — move succeeds, delivery drops, operator recovers — leaves the lead holding its context and the prompt delivered once.
 6. Both hosts behave identically for the same sequence.
+
+## Review Findings
+
+**Nothing was implemented for this plan and there is nothing to review.** The feature's own Completion Summary records it as held: it carried no Team Dispatch Instructions and no acceptance criteria in the feature file, so no seat was given it. The report the summary says was filed does not exist — `.switchboard/orchestrator/reports/` is not present in the working tree, so that claim is unverifiable and the plan has no written record outside this note. Confirmed by inspection: `bd036e49` (the feature's implementation commit) touches none of the three proposed changes — a dispatch still reports one outcome for card-move and prompt-delivery combined, there is no re-deliver action distinct from redispatch, and the command surface still reports the request rather than the delivery. Its stated root cause (*Prompt delivery should be patient, not precise*) HAS landed, which reduces how often half-delivery happens but leaves recovery from it exactly as absent as before. No files were changed. No validation applies. This card is in CODE REVIEWED with no code behind it; it needs dispatch instructions and a seat, not a review.
+
+## Deferred Findings
+
+- CRITICAL — the entire plan is unimplemented while its card sits in a post-implementation column, so the board asserts work that does not exist (`.switchboard/features/prompt-delivery-is-patient-b8930ab8-17d0-4468-9aa9-ffb1cf214499.md:1`).
+- MAJOR — the feature file cites a question report at `.switchboard/orchestrator/reports/2026-09-05-half-delivered-dispatch-no-seat.md`; that path does not exist, so the reason this subtask was held survives only in the summary sentence.
+- MAJOR — proposed change 1 depends on what `ptySendPrompt`'s delivery evidence actually reports. `PromptDeliveryReceipt` now carries `bytesWritten`, `deliveredAt`, `promptSeq` and `readiness` — all evidence of a WRITE, none of arrival — so the plan's own rule 1 ("do not infer arrival from a write") means this card must surface "unobserved", and that decision has not been made (`src/standalone/ptyPromptDelivery.ts:146`).

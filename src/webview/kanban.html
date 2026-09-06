@@ -1389,6 +1389,26 @@
           border: 1px solid color-mix(in srgb, var(--accent-blue, #3b82f6) 30%, transparent);
         }
 
+        /* Unrecognised-CLI indicator. Switchboard's readiness timing is keyed on
+           the CLI family parsed from a startup command; a command it cannot
+           identify (a wrapper like `npx devin`, an alias, a path) falls back to
+           the most patient profile. Without this an operator discovers the
+           misclassification through a prompt that never submits. Neutral amber,
+           not an error: the fallback is safe, just slower. */
+        .agents-tab-unknown-cli {
+          font-size: 9px;
+          padding: 1px 5px;
+          border-radius: 10px;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          font-weight: 600;
+          white-space: nowrap;
+          flex-shrink: 0;
+          background: color-mix(in srgb, var(--accent-amber, #d59a2a) 15%, transparent);
+          color: var(--accent-amber, #d59a2a);
+          border: 1px solid color-mix(in srgb, var(--accent-amber, #d59a2a) 30%, transparent);
+        }
+
         /* ── TEAMS tab — card row, flow diagram, portraits ─────────────── */
         /* Three-card row: each card is a clickable tile carrying a portrait,
            name, purpose and roster strip. The whole card is the click target. */
@@ -3261,6 +3281,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <span>Auto-sync repo before sending to Jules</span>
           </label>
 
+          <!-- Seat-clear session-restart toll. Lives HERE, beside the always-visible
+               role command fields, not inside the Custom Agents inline form: that form
+               is hidden by agentsTabHideInlineForm() after any save, cancel or delete,
+               so a note placed in it disappears for the rest of the session — and the
+               reader who needs it is usually configuring a ROLE, not a custom agent.
+               Static copy only: no runtime detection, no banner, no notification. See
+               devin-clear-reauth-toll-visibility.md. -->
+          <p style="font-size:10px; color:var(--text-secondary); margin-top:10px; line-height:1.4;">
+            Clearing a seat restarts that seat's CLI session. A restarted session re-initialises its MCP servers, so any OAuth-backed MCP server prompts for authorisation again. This is expected and recurs on each work-context switch — it is not a broken token. To stop the prompts, remove the OAuth-backed servers you do not need from your agent's own MCP config.
+          </p>
+
 
         </div>
 
@@ -3278,9 +3309,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
             <p style="font-size:10px; color:var(--text-secondary); margin-top:8px; line-height:1.4;">
               Custom agents are standalone definitions available across workspaces. To assemble agents into teams with delegates, use the <strong>TEAMS</strong> tab. Configure prompt add-ons and instructions in the <strong>PROMPTS</strong> tab.
-            </p>
-            <p style="font-size:10px; color:var(--text-secondary); margin-top:8px; line-height:1.4;">
-              Clearing a seat restarts that seat's CLI session. A restarted session re-initialises its MCP servers, so any OAuth-backed MCP server prompts for authorisation again. This is expected and recurs on each work-context switch — it is not a broken token. To stop the prompts, remove the OAuth-backed servers you do not need from your agent's own MCP config.
             </p>
             <div id="agents-tab-custom-agent-error" style="min-height:16px; color: var(--accent-red); font-size: 11px; margin-top: 6px;"></div>
             <div class="flex gap-2" style="margin-top: 10px;">
@@ -4519,6 +4547,67 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
           vscode.postMessage({ type: 'saveCustomAgent', agent: nextAgent, workspaceRoot });
         }
 
+        /**
+         * Webview mirror of `deriveCliFamily` (src/services/cliIdentity.ts).
+         * Presentation only — it labels a field, it never decides a timeout; the
+         * host remains the single authority on the family a seat actually gets.
+         * The roster is deliberately the SAME three names the host matches: this
+         * indicator exists to show when a command falls OUTSIDE that roster, so
+         * widening it here would hide exactly what it is meant to reveal.
+         */
+        function agentsTabDeriveCliFamily(startupCommand) {
+          const cmd = String(startupCommand || '').trim();
+          if (!cmd || cmd === 'No agent assigned') { return 'unknown'; }
+          const binary = cmd.split(/\s+/)[0];
+          if (!binary) { return 'unknown'; }
+          const base = binary.split(/[\\/]/).pop().replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
+          if (base === 'devin') { return 'devin'; }
+          if (base === 'claude') { return 'claude'; }
+          if (base === 'agy' || base === 'antigravity') { return 'antigravity'; }
+          return 'unknown';
+        }
+
+        const AGENTS_TAB_UNKNOWN_CLI_TITLE =
+          'Switchboard cannot identify the CLI in this command, so this seat gets the most patient '
+          + 'readiness profile instead of one measured for its CLI. Only a bare devin, claude, agy or '
+          + 'antigravity binary is recognised — a wrapper (npx, env, bash -lc), an alias or a path is not. '
+          + 'Delivery still works; it is slower than it needs to be.';
+
+        /**
+         * Stamp an UNRECOGNISED CLI chip beside every role startup-command input
+         * whose value does not parse to a known family. Runs on every value
+         * change and on each `startupCommands` push, so a command corrected in
+         * this tab clears its own chip. Empty inputs get no chip — an unset role
+         * is not a misclassified one.
+         */
+        function agentsTabRefreshUnknownCliIndicators() {
+          document.querySelectorAll('#agents-tab-content .startup-row input[type="text"][data-role]').forEach(input => {
+            const row = input.parentElement;
+            if (!row) { return; }
+            let chip = row.querySelector('.agents-tab-unknown-cli');
+            const value = (input.value || '').trim();
+            const show = value.length > 0 && agentsTabDeriveCliFamily(value) === 'unknown';
+            if (!show) {
+              if (chip) { chip.remove(); }
+              return;
+            }
+            if (!chip) {
+              chip = document.createElement('span');
+              chip.className = 'agents-tab-unknown-cli';
+              chip.textContent = 'Unrecognised CLI';
+              chip.title = AGENTS_TAB_UNKNOWN_CLI_TITLE;
+              row.appendChild(chip);
+            }
+          });
+        }
+
+        document.addEventListener('input', (e) => {
+          const t = e.target;
+          if (t && t.matches && t.matches('#agents-tab-content .startup-row input[type="text"][data-role]')) {
+            agentsTabRefreshUnknownCliIndicators();
+          }
+        });
+
         function agentsTabRenderCustomAgentList() {
           const container = document.getElementById('agents-tab-custom-agent-list');
           if (!container) return;
@@ -4545,11 +4634,19 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
               ? `<span class="agents-tab-custom-agent-badge team-assigned" title="Used in this workspace by: ${escapeAttr(teamsUsingAgent.map(t => t.name).join(', '))}">Team (${teamsUsingAgent.length})</span>`
               : `<span class="agents-tab-custom-agent-badge standalone" title="Not used by any team in this workspace">Standalone</span>`;
 
+            // Same indicator the role rows carry: a command Switchboard cannot
+            // identify gets the most patient readiness profile, and the operator
+            // should see that here rather than discover it through a prompt that
+            // never submits.
+            const unknownCliHtml = agentsTabDeriveCliFamily(agent.startupCommand) === 'unknown'
+              ? `<span class="agents-tab-unknown-cli" title="${escapeAttr(AGENTS_TAB_UNKNOWN_CLI_TITLE)}">Unrecognised CLI</span>`
+              : '';
+
             const item = document.createElement('div');
             item.className = 'agents-tab-custom-agent-item';
             item.innerHTML = `
               <span class="agents-tab-custom-agent-item-name">${agent.name}${badgeHtml}</span>
-              <span class="agents-tab-custom-agent-item-command">${agent.startupCommand}</span>
+              <span class="agents-tab-custom-agent-item-command">${agent.startupCommand}${unknownCliHtml}</span>
               <div class="agents-tab-custom-agent-item-actions">
                 <button class="agents-tab-custom-agent-item-btn edit" data-id="${agent.id}">EDIT</button>
                 <button class="agents-tab-custom-agent-item-btn export-skill" data-id="${agent.id}">EXPORT SKILL</button>
@@ -11655,6 +11752,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                   document.querySelectorAll('#agents-tab-content input[type="text"][data-role]').forEach(i => {
                     if (i.dataset.role) i.value = cmds[i.dataset.role] || '';
                   });
+                  agentsTabRefreshUnknownCliIndicators();
                   document.querySelectorAll('#agents-tab-content .agents-tab-visible-toggle').forEach(cb => {
                     if (cb.dataset.role) cb.checked = vis[cb.dataset.role] !== false;
                   });

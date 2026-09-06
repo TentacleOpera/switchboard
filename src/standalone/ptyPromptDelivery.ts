@@ -1,7 +1,7 @@
 import type { ExtendedTerminalHandle } from './ptyFleetService';
 import type { CliFamily } from '../services/cliIdentity';
 import { deriveCliFamily } from '../services/cliIdentity';
-import { createClearReadinessTracker, awaitFirstReadiness, type ClearReadinessResult, type ClearReadinessMode, DEVIN_DEFAULT_TIMEOUT_MS, CLAUDE_DEFAULT_TIMEOUT_MS, ANTIGRAVITY_DEFAULT_TIMEOUT_MS } from './clearReadiness';
+import { createClearReadinessTracker, awaitFirstReadiness, type ClearReadinessResult, type ClearReadinessMode, type ClearReadinessTimeouts, DEVIN_DEFAULT_TIMEOUT_MS, CLAUDE_DEFAULT_TIMEOUT_MS, ANTIGRAVITY_DEFAULT_TIMEOUT_MS } from './clearReadiness';
 
 const CHUNK_SIZE = 256;
 // 30ms was inherited from the VS Code sendText path, where each chunk crosses an
@@ -37,11 +37,12 @@ const sendLocks = new Map<string, Promise<void>>();
  * `unknown` resolves to the devin floor (patient default) — see
  * prompt-delivery-should-be-patient-not-precise.md.
  */
-function familyFloorMs(family: CliFamily | undefined): number {
-    if (family === 'devin') { return DEVIN_DEFAULT_TIMEOUT_MS; }
-    if (family === 'claude') { return CLAUDE_DEFAULT_TIMEOUT_MS; }
-    if (family === 'antigravity') { return ANTIGRAVITY_DEFAULT_TIMEOUT_MS; }
-    return DEVIN_DEFAULT_TIMEOUT_MS; // unknown — patient default
+function familyFloorMs(family: CliFamily | undefined, timeouts?: ClearReadinessTimeouts): number {
+    const devin = timeouts?.devinTimeoutMs ?? DEVIN_DEFAULT_TIMEOUT_MS;
+    if (family === 'devin') { return devin; }
+    if (family === 'claude') { return timeouts?.claudeTimeoutMs ?? CLAUDE_DEFAULT_TIMEOUT_MS; }
+    if (family === 'antigravity') { return timeouts?.antigravityTimeoutMs ?? ANTIGRAVITY_DEFAULT_TIMEOUT_MS; }
+    return devin; // unknown — patient default
 }
 
 function withTerminalLock<T>(terminalName: string, fn: () => Promise<T>): Promise<T> {
@@ -118,6 +119,7 @@ async function clearAndAwaitReadinessLocked(
         mode: opts?.clearReadinessMode,
         fallbackDelayMs: Math.min(10000, Math.max(0, opts?.clearBeforePromptDelayMs ?? DEFAULT_CLEAR_SETTLE_MS)),
         cliFamily: opts?.cliFamily || handle.cliFamily,
+        timeouts: opts?.readinessTimeouts,
     });
     try {
         await writeSlashCommandLocked(handle, '/clear', tracker.markSubmitted);
@@ -132,6 +134,17 @@ export interface PromptDeliveryOptions {
     clearBeforePromptDelayMs?: number;
     clearReadinessMode?: ClearReadinessMode;
     cliFamily?: CliFamily;
+    /**
+     * Per-family timing overrides for BOTH readiness gates and the delivery
+     * floor. The tracker and `awaitFirstReadiness` already accepted these; the
+     * delivery path never plumbed them, so the one chokepoint every host shares
+     * had no way to shorten a 15-20s wait — which is why the framing gate, whose
+     * subject is the byte sequence and not the timing, paid the full production
+     * ceiling on every case. Unset everywhere in production: the defaults ARE
+     * the policy, and this is the seam that lets a test say so out loud instead
+     * of waiting it out.
+     */
+    readinessTimeouts?: ClearReadinessTimeouts;
     /**
      * Fired after the prompt text has been written to the pty (before the
      * confirm CR). The terminal log writer registers as this callback to emit
@@ -225,6 +238,7 @@ export async function sendPromptToPty(
             }
             readiness = await awaitFirstReadiness(handle, {
                 cliFamily: opts?.cliFamily || handle.cliFamily,
+                timeouts: opts?.readinessTimeouts,
             });
             if (readiness.reason === 'exit' || (handle.status as string) === 'exited') {
                 return { readiness, bytesWritten: 0, deliveredAt: Date.now(), cleared: false };
@@ -294,7 +308,15 @@ export async function sendPromptToPty(
         // 3s (signal) and the floor is 15s, the floor adds 12s. If a readiness
         // wait already consumed >= familyFloorMs, no additional wait. The floor
         // is a flat setTimeout, not a signal-based waiter — see familyFloorMs.
-        const floor = familyFloorMs(opts?.cliFamily || handle.cliFamily);
+        //
+        // Skipped for an EMPTY payload. A `data: ''` send is a pure `/clear`
+        // (clearTerminalContext issues exactly that on both hosts): the clear has
+        // already run its own readiness gate above, and there is no prompt text
+        // that a not-yet-ready composer could swallow. Flooring it would add the
+        // full family floor to every `queue/done` pop for a write that carries
+        // nothing.
+        const deliveryFamily = opts?.cliFamily || handle.cliFamily;
+        const floor = text.length > 0 ? familyFloorMs(deliveryFamily, opts?.readinessTimeouts) : 0;
         const elapsedMs = Date.now() - deliveryStartAt;
         if (elapsedMs < floor) {
             await new Promise(r => setTimeout(r, floor - elapsedMs));
@@ -305,6 +327,16 @@ export async function sendPromptToPty(
                 return { readiness, bytesWritten: 0, deliveredAt: Date.now(), cleared };
             }
         }
+
+        // Delivery-time family log — seat, the family actually used, which
+        // readiness arm resolved (`signal` / `fallback` / `manual` / `timeout` /
+        // `late-signal` / `exit`, or `none` when no gate ran), and the elapsed ms
+        // from lock acquisition to the first byte. Paired with the spawn-time log
+        // in ptyFleetService, this is what makes the next "the Devin timing fix
+        // didn't take" report answerable in one line: it names the arm the seat
+        // actually entered instead of leaving it to be inferred. See
+        // a-seats-cli-family-is-frozen-at-spawn-so-devin-timing-fixes-never-reach-it.md.
+        console.log(`[cliFamily] deliver seat=${handle.name} family=${deliveryFamily || 'unknown'} arm=${readiness?.reason ?? 'none'} floorMs=${floor} elapsedMs=${Date.now() - deliveryStartAt}`);
 
         handle.write('\x1b[200~');
         for (let i = 0; i < text.length; i += CHUNK_SIZE) {

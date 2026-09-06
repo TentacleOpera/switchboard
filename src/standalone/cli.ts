@@ -593,9 +593,24 @@ function apiGet(port: number, pathname: string, workspaceRoot: string, query?: R
 /**
  * HTTP POST against the running server with auth headers and a JSON body.
  */
-function apiPost(port: number, pathname: string, workspaceRoot: string, payload: unknown): Promise<ApiResponse> {
-    return apiRequest(port, 'POST', pathname, workspaceRoot, payload);
+function apiPost(port: number, pathname: string, workspaceRoot: string, payload: unknown, timeoutMs?: number): Promise<ApiResponse> {
+    return apiRequest(port, 'POST', pathname, workspaceRoot, payload, undefined, timeoutMs);
 }
+
+/**
+ * Request timeout for the board callbacks that BLOCK ON A PROMPT DELIVERY —
+ * `done`, `next`, `dispatch`. These do not merely write a row: the server clears
+ * the seat, waits out the clear-readiness state machine, delivers standing
+ * orders, then writes the next card's prompt. Since
+ * prompt-delivery-should-be-patient-not-precise.md added a per-family delivery
+ * floor (15s on Devin/unknown) on top of the clear ceiling (15s + 1s late-signal
+ * grace), one `done` can legitimately hold its response for ~35s — well past the
+ * 15s default, which would abandon the request and print a failure at an agent
+ * whose card actually advanced. The other commands keep the shorter default: a
+ * read that hangs 15s IS a fault, and hiding it behind a long ceiling is how a
+ * dead server looks slow.
+ */
+const DELIVERY_BLOCKING_TIMEOUT_MS = 120000;
 
 /** The first 8 hex chars of a planId — short enough to type, unique in practice. */
 function shortPrefix(planId: string): string {
@@ -1322,7 +1337,7 @@ async function doDispatch(port: number, workspaceRoot: string, planId: string, t
         targetColumn,
         workspaceRoot,
         ...(seat ? { seat } : {}),
-    });
+    }, DELIVERY_BLOCKING_TIMEOUT_MS);
     const code = dispatchExitCode(res.status);
     const data = res.json();
     if (jsonFlag) {
@@ -1949,7 +1964,7 @@ async function cmdDone(workspaceRoot: string, argv: string[]): Promise<void> {
 
     let res;
     try {
-        res = await apiPost(port, '/kanban/queue/done', workspaceRoot, body);
+        res = await apiPost(port, '/kanban/queue/done', workspaceRoot, body, DELIVERY_BLOCKING_TIMEOUT_MS);
     } catch (err: any) {
         // The server answered /health a moment ago and is gone now. Report it as
         // offline rather than letting main()'s catch print a stack trace at an
@@ -2014,7 +2029,7 @@ async function cmdNext(workspaceRoot: string, argv: string[]): Promise<void> {
         res = await apiPost(port, '/kanban/queue/next', workspaceRoot, {
             workspaceRoot,
             from,
-        });
+        }, DELIVERY_BLOCKING_TIMEOUT_MS);
     } catch (err: any) {
         if (jsonFlag) { emitJson({ success: false, error: `Switchboard did not answer: ${err?.message || err}` }); }
         else { console.error(`[switchboard] Switchboard did not answer on port ${port}: ${err?.message || err}`); }
