@@ -3,14 +3,15 @@ Type=Application
 Name=Switchboard
 GenericName=Agent Fleet Command
 Comment=Plan-driven agent orchestration board
-# No --no-open: clicking the icon must start the host AND open the board. With
-# --no-open and Terminal=false the launcher starts a server nobody can see and
-# looks like it did nothing at all, which is the exact discoverability failure
-# the desktop entry exists to fix.
-# The workspace is the one the CLI resolves from the working directory; Path=
-# is deliberately absent so the entry inherits the session's own default rather
-# than pinning a tree the package cannot know.
-Exec=switchboard local
+# The launcher is the static Go binary that can run before Node.js or
+# Switchboard is installed. It resolves the workspace from the session's
+# default working directory (Path= is deliberately absent so the entry does
+# not pin a tree the package cannot know), supervises the standalone host,
+# and opens the board. The previous `switchboard local` entry was
+# cwd-sensitive and could serve $HOME on icon launch; the launcher passes
+# --workspace-root explicitly so the host does not infer the workspace from
+# cwd (plan: go-launcher-static-binary).
+Exec=switchboard-launcher start
 Icon=switchboard
 Terminal=false
 Categories=Development;Utility;
