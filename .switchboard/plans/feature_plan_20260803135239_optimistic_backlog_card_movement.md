@@ -290,3 +290,7 @@ case 'sendToNew': {
 
 ## Agent Recommendation
 **Send to Coder** (complexity 5).
+
+## Implementation Summary
+
+Implemented all three proposed changes. (1) `moveCardsOptimistically` in `src/webview/kanban.html` now resolves its target via `resolveDisplayColumn` instead of `resolveDomColumn`, so hidden targets (BACKLOG outside backlog view, CREATED inside it, role columns hidden by `visibleAgents`) route to the `unresolvedNeedsRender` → `renderBoard` fallback instead of bailing as silent no-ops; the model mutation, guard arming, and `allCards` sync all run regardless, and the trailing `updateStagingViewInfo()` was preserved. (2) The `.send-to-backlog-btn` / `.send-to-new-btn` branches in the delegated click handler now capture `btn.dataset.*` into locals before calling `moveCardsOptimistically` (since its `renderBoard` fallback detaches the button mid-handler), derive the board key as `planId || sessionId`, and still post the original `sendToBacklog` / `sendToNew` messages. (3) The `sendToBacklog` and `sendToNew` cases in `src/services/KanbanProvider.ts` now capture the pre-move column via `getPlanBySessionId`, honour `moveCardToColumn`'s boolean return, emit `moveCards` on success and `moveCardsFailed` (carrying `sourceColumn`) on failure, and return `{ success: ok, ... }` so the existing webview ledger-clearing and revert handlers resolve the optimistic state. Compile and automated tests skipped per session directives; verification was by inspection against the plan's edge-case audit.

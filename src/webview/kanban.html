@@ -6433,6 +6433,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
         // Ledger of pending optimistic moves: Map<cardId, targetColumn>
         const pendingOptimisticMoves = new Map();
+        // Ledger of pending optimistic priority-star toggles: Map<planId, boolean>.
+        // Mirrors command.js's pendingStars. Cleared by a MATCHING updateBoard push
+        // (server confirms our write), NOT by the 2s optimistic-move timer — the
+        // timer is tuned for the local postMessage round trip and expires mid-flight
+        // on the remote tailnet case this plan exists to fix. The ledger holds the
+        // optimistic value across guard expiries and full re-renders until the server
+        // confirms it, so a slow remote push cannot revert a fast local click.
+        const pendingStars = new Map();
         let suppressedRenderPending = false;
         let optimisticExpiryTimer = null;
 
@@ -6456,6 +6464,9 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         function clearOptimisticGuard() {
             optimisticMoveUntil = 0;
             pendingOptimisticMoves.clear();
+            // A workspace switch replaces the entire board, so any in-flight
+            // optimistic star toggle for the previous board's cards is void.
+            pendingStars.clear();
             if (optimisticExpiryTimer) {
                 clearTimeout(optimisticExpiryTimer);
                 optimisticExpiryTimer = null;
@@ -8031,19 +8042,32 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
          * @param {string} targetColumn - Logical target column
          */
         function moveCardsOptimistically(sessionIds, sourceColumn, targetColumn) {
-            const domTargetColumn = resolveDomColumn(targetColumn);
-            const targetBody = document.getElementById('col-' + domTargetColumn);
-            if (!targetBody) return;
+            // Resolve through the DISPLAY rules, not resolveDomColumn. A target that is not
+            // rendered in the current view has no container at all: BACKLOG outside backlog
+            // view, CREATED inside it, or a role column hidden by visibleAgents. The old
+            // resolveDomColumn + early return made the whole call a silent no-op for those
+            // targets — the model was never mutated and no guard was armed.
+            const domTargetColumn = resolveDisplayColumn(targetColumn);
+            const targetBody = domTargetColumn ? document.getElementById('col-' + domTargetColumn) : null;
 
             const entries = sessionIds.map(id => ({ id, targetColumn }));
 
             // Called before the model mutation below, so the source column resolves from
-            // currentCards — no explicit sourceColumn needed here.
-            const unresolved = moveCardElements(entries);
+            // currentCards — no explicit sourceColumn needed here. With no target container
+            // there is nothing to move to: every id is unresolved, and the render fallback
+            // below is what takes the card off screen.
+            const unresolved = targetBody ? moveCardElements(entries) : sessionIds.slice();
 
             sessionIds.forEach(id => {
                 const cardData = currentCards.find(c => (c.planId || c.sessionId) === id);
                 if (cardData) cardData.column = targetColumn;
+            });
+            // currentCards entries are the same objects as allCards entries, so the mutation
+            // above normally already reaches the occupancy cache renderBoard reads for the
+            // count badges. Kept explicit so that invariant is not load-bearing.
+            allCards.forEach(card => {
+                const key = card.planId || card.sessionId;
+                if (key && sessionIds.includes(key)) card.column = targetColumn;
             });
 
             lastBoardSignature = buildBoardSignature(currentCards);
@@ -8196,15 +8220,28 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         }
 
         function applyPendingOptimisticMoves(cards) {
-            if (!Array.isArray(cards) || cards.length === 0 || pendingOptimisticMoves.size === 0) {
+            if (!Array.isArray(cards) || cards.length === 0) {
+                return cards;
+            }
+            if (pendingOptimisticMoves.size === 0 && pendingStars.size === 0) {
                 return cards;
             }
             return cards.map(card => {
                 const id = card.planId || card.sessionId;
-                if (id && pendingOptimisticMoves.has(id)) {
-                    return { ...card, column: pendingOptimisticMoves.get(id) };
+                if (!id) return card;
+                let result = card;
+                if (pendingOptimisticMoves.has(id)) {
+                    result = { ...result, column: pendingOptimisticMoves.get(id) };
                 }
-                return card;
+                // Apply the optimistic priority-star overlay so a stale server
+                // push (write in flight but not yet landed) does not revert a
+                // fast local click. The ledger entry is cleared separately in
+                // the updateBoard path once the server value MATCHES the pending
+                // value — see the comment there.
+                if (pendingStars.has(id)) {
+                    result = { ...result, priorityStarred: pendingStars.get(id) };
+                }
+                return result;
             });
         }
 
@@ -9179,6 +9216,193 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             });
         }
 
+        // Shared card-precedence comparator for a column. Extracted from
+        // renderBoard's inline sort so the optimistic star reposition (and any
+        // future same-column optimistic move) honours the EXACT same ordering the
+        // full render does — starred-first, then mode-dependent secondary, then
+        // manual order, then column_entered_at DESC, then createdAt DESC. A
+        // private reposition routine that mirrored this would be the third copy of
+        // "where does this card go" (renderBoard + moveCardElements + the mirror);
+        // consuming one shared comparator keeps them from drifting.
+        //
+        // `colId` is the LOGICAL column id (e.g. 'STAGING', 'CREATED'). The
+        // comparator consults the module-level `currentOrderByMode`. `_ts` and
+        // `_colTs` are normally populated by renderBoard before sorting; callers
+        // that sort outside renderBoard (e.g. repositionCardInColumn) must ensure
+        // they are set on the cards passed in — see ensureCardSortKeys below.
+        function compareCardsByPrecedence(a, b, colId) {
+            const queueOrdered = (colId === 'STAGING');
+            // 1. Starred first — on the BOARD only. A mission is not the
+            //    board and kanban priority does not reach inside one: a
+            //    card added to a mission joins the end of its queue and
+            //    runs in queue_position order, starred or not. Matches
+            //    compareByPrecedence, which skips this step for STAGING.
+            if (!queueOrdered) {
+                const sa = a.priorityStarred ? 1 : 0;
+                const sb = b.priorityStarred ? 1 : 0;
+                if (sa !== sb) return sb - sa;
+            }
+
+            // 2. Mode-dependent secondary ordering:
+            if (currentOrderByMode === 'priority') {
+                const pa = (a.priority !== null && a.priority !== undefined && a.priority >= 1 && a.priority <= 4) ? a.priority : null;
+                const pb = (b.priority !== null && b.priority !== undefined && b.priority >= 1 && b.priority <= 4) ? b.priority : null;
+                if (pa !== null && pb !== null) {
+                    const d = pa - pb;
+                    if (d !== 0) return d;
+                } else if (pa !== null || pb !== null) {
+                    return pa === null ? 1 : -1; // NULL sorts last
+                }
+                // Same priority (or both null) falls through to manual order / fallback below
+            } else if (currentOrderByMode === 'date') {
+                // Skips manual order entirely — column_entered_at DESC -> createdAt DESC
+                const colTsDiff = (b._colTs || 0) - (a._colTs || 0);
+                if (colTsDiff !== 0) return colTsDiff;
+                let createdA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+                let createdB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+                if (isNaN(createdA)) createdA = 0;
+                if (isNaN(createdB)) createdB = 0;
+                return createdB - createdA;
+            } else if (currentOrderByMode === 'complexity') {
+                const parseC = (c) => {
+                    if (!c || c === 'Unknown') return null;
+                    const n = parseInt(c, 10);
+                    return isNaN(n) ? null : n;
+                };
+                const ca = parseC(a.complexity);
+                const cb = parseC(b.complexity);
+                if (ca !== null && cb !== null) {
+                    const d = ca - cb;
+                    if (d !== 0) return d;
+                } else if (ca !== null || cb !== null) {
+                    return ca === null ? 1 : -1; // Unknown/null sorts last
+                }
+                // Same complexity falls through to column_entered_at DESC -> createdAt DESC
+                const colTsDiff = (b._colTs || 0) - (a._colTs || 0);
+                if (colTsDiff !== 0) return colTsDiff;
+                let createdA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+                let createdB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+                if (isNaN(createdA)) createdA = 0;
+                if (isNaN(createdB)) createdB = 0;
+                return createdB - createdA;
+            }
+
+            // Manual order: queue_position (STAGING) or column_order
+            // (elsewhere), ASC. A card that HAS a position outranks one
+            // that does not; cards that both lack one fall through to
+            // column_entered_at. This matches compareByPrecedence exactly
+            // (see its header for why manual-vs-NULL cannot be resolved
+            // by timestamp without an intransitive comparator).
+            if (queueOrdered) {
+                const ap = a.queuePosition, bp = b.queuePosition;
+                const an = (ap === null || ap === undefined), bn = (bp === null || bp === undefined);
+                if (an && !bn) return 1;   // NULL sorts last in STAGING (V60 precedent)
+                if (!an && bn) return -1;
+                if (!an && !bn) {
+                    const d = ap - bp;
+                    if (d !== 0) return d;
+                }
+            } else {
+                const ap = a.columnOrder, bp = b.columnOrder;
+                const an = (ap === null || ap === undefined), bn = (bp === null || bp === undefined);
+                if (!an && !bn) {
+                    const d = ap - bp;
+                    if (d !== 0) return d;
+                } else if (an !== bn) {
+                    // NULL column_order means "just arrived / not part of
+                    // this column's arrangement", so it sorts FIRST — the
+                    // top, where the board has always put a card that just
+                    // landed. Opposite of STAGING above, where a NULL
+                    // queue_position means "never staged" and goes last.
+                    return an ? -1 : 1;
+                }
+                // both null → fall through to column_entered_at
+            }
+            // 3. V61: sort by column_entered_at DESC (most recently moved
+            // to column first), then createdAt DESC as tiebreaker.
+            const colTsDiff = (b._colTs || 0) - (a._colTs || 0);
+            if (colTsDiff !== 0) return colTsDiff;
+            // 4. Secondary tiebreaker: createdAt descending
+            let createdA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+            let createdB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+            if (isNaN(createdA)) createdA = 0;
+            if (isNaN(createdB)) createdB = 0;
+            return createdB - createdA;
+        }
+
+        // Populate _ts / _colTs on a card if missing, mirroring renderBoard's
+        // pre-sort setup. Safe to call on cards already keyed (no-op then).
+        function ensureCardSortKeys(card) {
+            if (!card) return;
+            if (card._ts === undefined) {
+                const t = card.lastActivity ? new Date(card.lastActivity).getTime() : 0;
+                card._ts = isNaN(t) ? 0 : t;
+            }
+            if (card._colTs === undefined) {
+                const colTs = card.columnEnteredAt ? new Date(card.columnEnteredAt).getTime() : NaN;
+                card._colTs = isNaN(colTs) ? card._ts : colTs;
+            }
+        }
+
+        // Optimistic same-column reposition after a local state change (e.g. a
+        // priority-star toggle). Reorders the existing DOM card elements in the
+        // card's column to match the shared comparator, WITHOUT a full
+        // innerHTML rebuild — appendChild on an existing node moves it, so no
+        // card is destroyed/recreated (no flicker, no lost selection state).
+        // STAGING is skipped: starred-first does not apply there (missions and
+        // queue_position govern), and the column interleaves mission cards the
+        // comparator does not know about.
+        function repositionCardInColumn(planId) {
+            const card = currentCards.find(c => (c.planId || c.sessionId) === planId);
+            if (!card) return;
+            const logicalCol = card.column;
+            if (!logicalCol || logicalCol === 'STAGING') return;
+            const domCol = resolveDisplayColumn(logicalCol) || resolveDomColumn(logicalCol);
+            const container = domCol ? document.getElementById('col-' + domCol) : null;
+            if (!container) return;
+            const cardEls = Array.from(container.querySelectorAll('.kanban-card'));
+            if (cardEls.length <= 1) return;
+            // Map id -> element and id -> currentCards entry. Cards rendered in
+            // this column are exactly the .kanban-card children; subtask/feature
+            // cards are never rendered, so they cannot appear here.
+            const elById = new Map();
+            cardEls.forEach(el => {
+                const id = el.dataset.planId || el.dataset.session || '';
+                if (id) elById.set(id, el);
+            });
+            const ids = Array.from(elById.keys());
+            const cardById = new Map();
+            ids.forEach(id => {
+                const c = currentCards.find(cc => (cc.planId || cc.sessionId) === id);
+                if (c) { ensureCardSortKeys(c); cardById.set(id, c); }
+            });
+            // Sort ids to match renderBoard's ordering for this container. The
+            // shared comparator covers every per-column render; the synthetic
+            // CODED_AUTO container is the ONE exception — renderBoard sorts it
+            // by ts-descending only (no starred-first), so the optimistic
+            // reposition must match it or the next render would flicker the
+            // card back. ids without a model entry keep relative order (every
+            // rendered card has a currentCards entry in practice).
+            const collapsedCoder = (domCol === 'CODED_AUTO');
+            ids.sort((aId, bId) => {
+                const ca = cardById.get(aId);
+                const cb = cardById.get(bId);
+                if (ca && cb) {
+                    if (collapsedCoder) return (cb._ts || 0) - (ca._ts || 0);
+                    return compareCardsByPrecedence(ca, cb, logicalCol);
+                }
+                if (ca && !cb) return -1;
+                if (!ca && cb) return 1;
+                return 0;
+            });
+            // Reorder DOM by moving each element in sorted order. appendChild on
+            // an existing node relocates it without rebuilding.
+            ids.forEach(id => {
+                const el = elById.get(id);
+                if (el) container.appendChild(el);
+            });
+        }
+
         function renderBoard(cards, justFinishedIds = new Set()) {
             hideTooltip();
             unrenderedColumnRefreshRequested = false;
@@ -9313,105 +9537,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 // fallback, then column_entered_at DESC, then createdAt DESC.
                 // This matches the consumer resolver (compareByPrecedence) so
                 // the screen and the system agree on which card is next.
-                const queueOrdered = (col === 'STAGING');
-                const sortedItems = [...items].sort((a, b) => {
-                    // 1. Starred first — on the BOARD only. A mission is not the
-                    //    board and kanban priority does not reach inside one: a
-                    //    card added to a mission joins the end of its queue and
-                    //    runs in queue_position order, starred or not. Matches
-                    //    compareByPrecedence, which skips this step for STAGING.
-                    if (!queueOrdered) {
-                        const sa = a.priorityStarred ? 1 : 0;
-                        const sb = b.priorityStarred ? 1 : 0;
-                        if (sa !== sb) return sb - sa;
-                    }
-
-                    // 2. Mode-dependent secondary ordering:
-                    if (currentOrderByMode === 'priority') {
-                        const pa = (a.priority !== null && a.priority !== undefined && a.priority >= 1 && a.priority <= 4) ? a.priority : null;
-                        const pb = (b.priority !== null && b.priority !== undefined && b.priority >= 1 && b.priority <= 4) ? b.priority : null;
-                        if (pa !== null && pb !== null) {
-                            const d = pa - pb;
-                            if (d !== 0) return d;
-                        } else if (pa !== null || pb !== null) {
-                            return pa === null ? 1 : -1; // NULL sorts last
-                        }
-                        // Same priority (or both null) falls through to manual order / fallback below
-                    } else if (currentOrderByMode === 'date') {
-                        // Skips manual order entirely — column_entered_at DESC -> createdAt DESC
-                        const colTsDiff = (b._colTs || 0) - (a._colTs || 0);
-                        if (colTsDiff !== 0) return colTsDiff;
-                        let createdA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-                        let createdB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-                        if (isNaN(createdA)) createdA = 0;
-                        if (isNaN(createdB)) createdB = 0;
-                        return createdB - createdA;
-                    } else if (currentOrderByMode === 'complexity') {
-                        const parseC = (c) => {
-                            if (!c || c === 'Unknown') return null;
-                            const n = parseInt(c, 10);
-                            return isNaN(n) ? null : n;
-                        };
-                        const ca = parseC(a.complexity);
-                        const cb = parseC(b.complexity);
-                        if (ca !== null && cb !== null) {
-                            const d = ca - cb;
-                            if (d !== 0) return d;
-                        } else if (ca !== null || cb !== null) {
-                            return ca === null ? 1 : -1; // Unknown/null sorts last
-                        }
-                        // Same complexity falls through to column_entered_at DESC -> createdAt DESC
-                        const colTsDiff = (b._colTs || 0) - (a._colTs || 0);
-                        if (colTsDiff !== 0) return colTsDiff;
-                        let createdA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-                        let createdB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-                        if (isNaN(createdA)) createdA = 0;
-                        if (isNaN(createdB)) createdB = 0;
-                        return createdB - createdA;
-                    }
-
-                    // Manual order: queue_position (STAGING) or column_order
-                    // (elsewhere), ASC. A card that HAS a position outranks one
-                    // that does not; cards that both lack one fall through to
-                    // column_entered_at. This matches compareByPrecedence exactly
-                    // (see its header for why manual-vs-NULL cannot be resolved
-                    // by timestamp without an intransitive comparator).
-                    if (queueOrdered) {
-                        const ap = a.queuePosition, bp = b.queuePosition;
-                        const an = (ap === null || ap === undefined), bn = (bp === null || bp === undefined);
-                        if (an && !bn) return 1;   // NULL sorts last in STAGING (V60 precedent)
-                        if (!an && bn) return -1;
-                        if (!an && !bn) {
-                            const d = ap - bp;
-                            if (d !== 0) return d;
-                        }
-                    } else {
-                        const ap = a.columnOrder, bp = b.columnOrder;
-                        const an = (ap === null || ap === undefined), bn = (bp === null || bp === undefined);
-                        if (!an && !bn) {
-                            const d = ap - bp;
-                            if (d !== 0) return d;
-                        } else if (an !== bn) {
-                            // NULL column_order means "just arrived / not part of
-                            // this column's arrangement", so it sorts FIRST — the
-                            // top, where the board has always put a card that just
-                            // landed. Opposite of STAGING above, where a NULL
-                            // queue_position means "never staged" and goes last.
-                            return an ? -1 : 1;
-                        }
-                        // both null → fall through to column_entered_at
-                    }
-                    // 3. V61: sort by column_entered_at DESC (most recently moved
-                    // to column first), then createdAt DESC as tiebreaker.
-                    const colTsDiff = (b._colTs || 0) - (a._colTs || 0);
-                    if (colTsDiff !== 0) return colTsDiff;
-                    // 4. Secondary tiebreaker: createdAt descending
-                    let createdA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-                    let createdB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-                    if (isNaN(createdA)) createdA = 0;
-                    if (isNaN(createdB)) createdB = 0;
-                    return createdB - createdA;
-                });
+                // The comparator is extracted as compareCardsByPrecedence so
+                // optimistic same-column repositions (e.g. a star toggle) can
+                // honour the exact same ordering without re-deriving it here.
+                const sortedItems = [...items].sort((a, b) => compareCardsByPrecedence(a, b, col));
                 countEl.textContent = String(occupancyCounts[col] || 0);
 
                 if (col === 'STAGING') {
@@ -9915,19 +10044,82 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (btn) {
                 // V63: priority star toggle — one click on, one click off, no confirm
                 // gate (project rule). stopPropagation prevents the click from reaching
-                // the card's drag-selection / click-to-open handlers. The backend
-                // refresh re-renders the card with the updated star state.
+                // the card's drag-selection / click-to-open handlers.
+                // The star applies OPTIMISTICALLY: the class, data-starred, the SVG
+                // fill, the currentCards/allCards model entries, and the same-column
+                // reposition all happen NOW, before the post. A pendingStars ledger
+                // (keyed by planId) holds the optimistic value until a MATCHING
+                // updateBoard push confirms it — NOT the 2s optimistic-move timer,
+                // which expires mid-flight on the remote tailnet case this exists to
+                // fix. Failure handling is option (a): the existing generic
+                // showStatusBarMessage toast fires on a failed write (no card-keyed
+                // ack exists in either host), and the ledger holds the optimistic
+                // value until a matching push arrives.
                 if (btn.classList.contains('star-btn')) {
                     e.stopPropagation();
                     e.preventDefault();
                     const planId = btn.dataset.planId || btn.dataset.session || '';
                     const workspaceRoot = btn.dataset.workspaceRoot || '';
                     const currentlyStarred = btn.dataset.starred === '1';
+                    const nextStarred = !currentlyStarred;
+
+                    // 1. Apply locally BEFORE posting — the visual change must not
+                    //    await the host round trip.
+                    btn.dataset.starred = nextStarred ? '1' : '0';
+                    btn.classList.toggle('starred', nextStarred);
+                    btn.dataset.tooltip = nextStarred ? 'Remove priority star' : 'Set priority star (overrides order)';
+                    const starSvg = btn.querySelector('svg');
+                    if (starSvg) starSvg.setAttribute('fill', nextStarred ? 'currentColor' : 'none');
+
+                    // 2. Update the model so the next render/merge agrees with the
+                    //    DOM. Both the filtered currentCards and the unfiltered
+                    //    allCards cache are advanced (allCards drives
+                    //    updateStarredCount and occupancy for hidden projects).
+                    const cardKey = planId;
+                    let modelChanged = false;
+                    const cc = currentCards.find(c => (c.planId || c.sessionId) === cardKey);
+                    if (cc && !!cc.priorityStarred !== nextStarred) {
+                        cc.priorityStarred = nextStarred;
+                        modelChanged = true;
+                    }
+                    const ac = allCards.find(c => (c.planId || c.sessionId) === cardKey);
+                    if (ac && !!ac.priorityStarred !== nextStarred) {
+                        ac.priorityStarred = nextStarred;
+                        modelChanged = true;
+                    }
+
+                    // 3. Record the optimistic value in the pendingStars ledger.
+                    //    Keyed by planId so a double click's last intended state
+                    //    overwrites the first; cleared only by a matching push.
+                    pendingStars.set(cardKey, nextStarred);
+
+                    // 4. Advance the board signature so the next push reconciles
+                    //    against the optimistic state rather than treating the
+                    //    pre-click signature as stale and forcing a flicker.
+                    if (modelChanged) {
+                        lastBoardSignature = buildBoardSignature(currentCards);
+                    }
+
+                    // 5. Re-sort the affected column optimistically using the
+                    //    shared comparator, so a newly-starred card jumps to the
+                    //    top of its column immediately (and an unstarred card
+                    //    falls back to its unstarred position). STAGING is skipped
+                    //    by repositionCardInColumn (starred-first does not apply
+                    //    there).
+                    repositionCardInColumn(cardKey);
+
+                    // 6. Refresh the starred-count badge (driven by allCards).
+                    updateStarredCount();
+
+                    // 7. Post the verb — fire-and-forget in both hosts. The
+                    //    optimistic state persists across guard expiries and full
+                    //    re-renders via the pendingStars overlay until a matching
+                    //    updateBoard clears it.
                     postKanbanMessage({
                         type: 'setPriorityStarred',
                         planId,
                         sessionId: btn.dataset.session || '',
-                        starred: !currentlyStarred,
+                        starred: nextStarred,
                         workspaceRoot
                     });
                     return;
@@ -10026,11 +10218,32 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     return;
                 }
                 if (btn.classList.contains('send-to-backlog-btn')) {
-                    postKanbanMessage({ type: 'sendToBacklog', sessionId: btn.dataset.session || '', planId: btn.dataset.planId || '', workspaceRoot: btn.dataset.workspaceRoot });
+                    // Capture the dataset BEFORE the optimistic step: its renderBoard fallback
+                    // rebuilds every card and detaches this button mid-handler.
+                    const sessionId = btn.dataset.session || '';
+                    const planId = btn.dataset.planId || '';
+                    const workspaceRoot = btn.dataset.workspaceRoot;
+                    const key = planId || sessionId;
+                    if (key) {
+                        // sourceColumn is informational (the helper re-derives it); the button
+                        // only renders on CREATED cards outside backlog view.
+                        const card = currentCards.find(c => (c.planId || c.sessionId) === key);
+                        moveCardsOptimistically([key], card?.column || 'CREATED', 'BACKLOG');
+                    }
+                    postKanbanMessage({ type: 'sendToBacklog', sessionId, planId, workspaceRoot });
                     return;
                 }
                 if (btn.classList.contains('send-to-new-btn')) {
-                    postKanbanMessage({ type: 'sendToNew', sessionId: btn.dataset.session || '', planId: btn.dataset.planId || '', workspaceRoot: btn.dataset.workspaceRoot });
+                    const sessionId = btn.dataset.session || '';
+                    const planId = btn.dataset.planId || '';
+                    const workspaceRoot = btn.dataset.workspaceRoot;
+                    const key = planId || sessionId;
+                    if (key) {
+                        // The button only renders on BACKLOG cards inside backlog view.
+                        const card = currentCards.find(c => (c.planId || c.sessionId) === key);
+                        moveCardsOptimistically([key], card?.column || 'BACKLOG', 'CREATED');
+                    }
+                    postKanbanMessage({ type: 'sendToNew', sessionId, planId, workspaceRoot });
                     return;
                 }
                 // Unknown button (including .card-btn.copy, which uses pointerdown not click) —
@@ -11024,7 +11237,27 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     // local boardProjectFilter client-side, mirroring the project panel's
                     // kanban tab. The backend now sends unfiltered cards; the board owns
                     // its view filter so browser and webview never reset each other.
-                    allCards = applyPendingOptimisticMoves(Array.isArray(msg.cards) ? msg.cards : []);
+                    const rawCards = Array.isArray(msg.cards) ? msg.cards : [];
+                    // Clear confirmed pending stars BEFORE the overlay is applied: a
+                    // ledger entry whose pending value equals the server's
+                    // priorityStarred for that card is a confirmed write, so the
+                    // overlay is no longer needed and the server value wins going
+                    // forward. A mismatch (stale push with the write still in flight,
+                    // OR a concurrent edit by another client) leaves the entry in
+                    // place so the overlay keeps the optimistic value visible until
+                    // a matching push arrives — this is the latency-robust pattern
+                    // from command.js's pendingStars, NOT the 2s optimistic-move
+                    // timer which expires mid-flight on the remote tailnet case.
+                    if (pendingStars.size > 0) {
+                        for (const card of rawCards) {
+                            const id = card.planId || card.sessionId;
+                            if (!id || !pendingStars.has(id)) continue;
+                            if (!!card.priorityStarred === !!pendingStars.get(id)) {
+                                pendingStars.delete(id);
+                            }
+                        }
+                    }
+                    allCards = applyPendingOptimisticMoves(rawCards);
                     currentMissions = Array.isArray(msg.missions) ? msg.missions : [];
                     if (msg.orderByMode) {
                         currentOrderByMode = msg.orderByMode;

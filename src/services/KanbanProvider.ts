@@ -12855,18 +12855,46 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 if (!resolvedRoot) return { success: false, error: 'No workspace root resolved' };
                 const resolvedSessionId = this._resolveSessionId(msg.planId, msg.sessionId);
                 if (!resolvedSessionId) return { success: false, error: 'Could not resolve session id' };
-                await this.moveCardToColumn(resolvedRoot, resolvedSessionId, 'BACKLOG');
+                // Pre-move column so a failed write reverts the optimistic move to where the
+                // card actually was, not to an assumed column.
+                let sourceColumn = 'CREATED';
+                try {
+                    const pre = await this._getKanbanDb(resolvedRoot).getPlanBySessionId(resolvedSessionId);
+                    if (pre?.kanbanColumn) sourceColumn = pre.kanbanColumn;
+                } catch { /* fall back to the only column this button renders on */ }
+                const ok = await this.moveCardToColumn(resolvedRoot, resolvedSessionId, 'BACKLOG');
+                if (ok) {
+                    this.postMessage({ type: 'moveCards', sessionIds: [resolvedSessionId], targetColumn: 'BACKLOG' });
+                } else {
+                    this.postMessage({
+                        type: 'moveCardsFailed',
+                        failures: [{ id: resolvedSessionId, sourceColumn, reason: 'database update failed' }]
+                    });
+                }
                 this.refresh();
-                return { success: true, sessionId: resolvedSessionId };
+                return { success: ok, sessionId: resolvedSessionId };
             }
             case 'sendToNew': {
                 const resolvedRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!resolvedRoot) return { success: false, error: 'No workspace root resolved' };
                 const resolvedSessionId = this._resolveSessionId(msg.planId, msg.sessionId);
                 if (!resolvedSessionId) return { success: false, error: 'Could not resolve session id' };
-                await this.moveCardToColumn(resolvedRoot, resolvedSessionId, 'CREATED');
+                let sourceColumn = 'BACKLOG';
+                try {
+                    const pre = await this._getKanbanDb(resolvedRoot).getPlanBySessionId(resolvedSessionId);
+                    if (pre?.kanbanColumn) sourceColumn = pre.kanbanColumn;
+                } catch { /* fall back to the only column this button renders on */ }
+                const ok = await this.moveCardToColumn(resolvedRoot, resolvedSessionId, 'CREATED');
+                if (ok) {
+                    this.postMessage({ type: 'moveCards', sessionIds: [resolvedSessionId], targetColumn: 'CREATED' });
+                } else {
+                    this.postMessage({
+                        type: 'moveCardsFailed',
+                        failures: [{ id: resolvedSessionId, sourceColumn, reason: 'database update failed' }]
+                    });
+                }
                 this.refresh();
-                return { success: true, sessionId: resolvedSessionId };
+                return { success: ok, sessionId: resolvedSessionId };
             }
             case 'sendToPlanned': {
                 const resolvedRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);

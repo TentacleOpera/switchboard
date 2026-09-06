@@ -287,6 +287,14 @@ export class PlanningPanelProvider {
     private _projectPanelConfigDisposable: vscode.Disposable | undefined;
     private _pendingProjectMessages: any[] = [];
     private _projectPanelReadyTimer: NodeJS.Timeout | undefined;
+    // WS-only cold-panel queue (browser cockpit path). Unlike _pendingProjectMessages
+    // (which gates the EDITOR's _projectPanel.webview), this gates pushes whose CLICK
+    // happened in the browser: the WS fan-out is their sole delivery path, and a push
+    // sent before the Project panel's WS connection has joined the hub's broadcast set
+    // is delivered to nobody. Single-slot, latest-activation-wins, expiry-bounded — the
+    // editor queue's _projectPanelReadyTimer is the precedent. See pushProjectMessageToWsOnly.
+    private _pendingWsOnlyProjectActivation: any = undefined;
+    private _pendingWsOnlyProjectActivationTimer: NodeJS.Timeout | undefined;
     private _projectPanelOpening: Promise<void> | undefined;
     private _projectPanelRestoring = false;
     private _disposables: vscode.Disposable[] = [];
@@ -1096,6 +1104,46 @@ export class PlanningPanelProvider {
         // browser-only case), and an unbuilt broadcaster would silently drop the push.
         if (!this._broadcaster) {
             this._initPlanningService();
+        }
+        // Cold-panel queue: a browser-originated activation can arrive BEFORE the
+        // Project panel's WS connection has joined the hub's broadcast set (the panel
+        // iframe mounts immediately, but its WS handshake is still in flight). The
+        // mirror below is a no-op against zero subscribers in that window, so the
+        // selection would be lost. Stash the latest activation and re-mirror it when
+        // the panel signals WS-ready (see the webviewReady handler). Single-slot,
+        // latest-wins, expiry-bounded — a stale activation replayed minutes later
+        // would hijack the panel to a plan the user has forgotten clicking.
+        if (message && message.type === 'activateKanbanTabAndSelectPlan') {
+            this._pendingWsOnlyProjectActivation = message;
+            if (this._pendingWsOnlyProjectActivationTimer) {
+                clearTimeout(this._pendingWsOnlyProjectActivationTimer);
+            }
+            this._pendingWsOnlyProjectActivationTimer = setTimeout(() => {
+                this._pendingWsOnlyProjectActivation = undefined;
+                this._pendingWsOnlyProjectActivationTimer = undefined;
+            }, 10000);
+        }
+        this._broadcaster?.mirrorToWs('project', message);
+    }
+
+    /**
+     * Flush a pending WS-only activation to the WS fan-out. Called when the browser
+     * Project panel signals it has joined the hub's broadcast set (the `webviewReady`
+     * verb re-posted on `sbTransportSubscribed`). The activation is only replayed if
+     * it has not expired — a stale activation would hijack the panel to a plan the
+     * user clicked long ago. Mirrors the editor path's _flushPendingProjectMessages
+     * semantics: clear the slot and the timer, deliver once.
+     */
+    private _flushPendingWsOnlyProjectActivation(): void {
+        if (!this._pendingWsOnlyProjectActivation) { return; }
+        if (!this._broadcaster) {
+            this._initPlanningService();
+        }
+        const message = this._pendingWsOnlyProjectActivation;
+        this._pendingWsOnlyProjectActivation = undefined;
+        if (this._pendingWsOnlyProjectActivationTimer) {
+            clearTimeout(this._pendingWsOnlyProjectActivationTimer);
+            this._pendingWsOnlyProjectActivationTimer = undefined;
         }
         this._broadcaster?.mirrorToWs('project', message);
     }
@@ -2700,7 +2748,15 @@ Start by checking which documents exist, then present the menu.`;
             // 200 instead of the allowlist throw's 500-and-red-banner. Deliberately does NOT
             // flush _pendingProjectMessages: that queue gates ONLY the editor's
             // _projectPanel.webview, and WS clients are mirrored unconditionally.
+            //
+            // It DOES flush the WS-only cold-panel queue: the browser Project panel re-posts
+            // `webviewReady` on `sbTransportSubscribed` (the moment its WS connection has
+            // joined the hub's broadcast set), which is the earliest point a host push is
+            // guaranteed to reach it. A cold-open Review Plan click that arrived before the
+            // WS handshake completed is stashed in _pendingWsOnlyProjectActivation and replayed
+            // here. No-op when the slot is empty (warm path, or no activation was clicked).
             case 'webviewReady':
+                this._flushPendingWsOnlyProjectActivation();
                 return { success: true };
             case 'renderMarkdownLive': {
                 const mdTargetPanel = isProject ? this._projectPanel : this._panel;
@@ -3790,7 +3846,19 @@ Start by checking which documents exist, then present the menu.`;
                 this._latestRequestIds.set(guardKey, requestId);
                 this._fullKanbanPlansSent = false;
                 try {
-                    const allRoots = Array.from(this._getAllowedRoots());
+                    // Scope to the activation's workspaceRoot when the caller names one
+                    // (e.g. a Review Plan navigation that already carries it). The
+                    // all-roots build is the explicit case (no workspaceRoot), not the
+                    // automatic one — selecting one card must not drag a 1.4 MB
+                    // multi-workspace board download behind it. The effective-root
+                    // resolution matches _getKanbanPlans' tagging so the scoped plans
+                    // land in the same workspace bucket the webview filters on.
+                    const requestedRoot = typeof msg.workspaceRoot === 'string' ? msg.workspaceRoot.trim() : '';
+                    const allRoots = requestedRoot
+                        ? Array.from(this._getAllowedRoots()).filter(r =>
+                            path.resolve(r) === path.resolve(requestedRoot)
+                            || path.resolve(this._resolveEffectiveWorkspaceRoot(r) || r) === path.resolve(requestedRoot))
+                        : Array.from(this._getAllowedRoots());
                     const allPlans: any[] = [];
                     const seenIds = new Set<string>();
                     const allWorkspaceProjects: Record<string, string[]> = {};
@@ -3863,6 +3931,10 @@ Start by checking which documents exist, then present the menu.`;
                             allWorkspaceProjectPaths,
                             columns: mergedColumns,
                             kanbanWorkspaceRoot: this._kanbanProvider?.getCurrentWorkspaceRoot() || null,
+                            // Carry the scoped root so the webview merges by workspace
+                            // (preserving other workspaces' cached plans) instead of
+                            // replacing the whole cache with one workspace's slice.
+                            workspaceRoot: requestedRoot || undefined,
                             requestId
                         };
                         if (!this._fullKanbanPlansSent) {
@@ -3881,6 +3953,7 @@ Start by checking which documents exist, then present the menu.`;
                         allWorkspaceProjectPaths,
                         columns: mergedColumns,
                         kanbanWorkspaceRoot: this._kanbanProvider?.getCurrentWorkspaceRoot() || null,
+                        workspaceRoot: requestedRoot || undefined,
                         requestId
                     };
                     this._postToBothPanels(resultPayload);
@@ -3913,6 +3986,34 @@ Start by checking which documents exist, then present the menu.`;
                 const filePath: string = msg.filePath || '';
                 const requestId = typeof msg.requestId === 'number' ? msg.requestId : 0;
                 return await this._handleFetchKanbanPlanPreview(filePath, requestId);
+            }
+            // Single-plan fetch for the Review Plan navigation: when the activation's
+            // plan is not in the webview's _kanbanPlansCache, fetch THAT plan's summary
+            // (one DB row) instead of the whole multi-workspace list (2,555 plans / 1.4 MB
+            // measured). The webview adds it to its cache and resolves the pending
+            // selection. Mirrors the _getKanbanPlans summary shape so the cache entry is
+            // indistinguishable from a list-fetched one.
+            case 'fetchKanbanPlan': {
+                const planId: string = typeof msg.planId === 'string' ? msg.planId : '';
+                if (!planId) { return { success: false, error: 'planId is required' }; }
+                try {
+                    const summary = await this._getKanbanPlanSummaryByPlanId(planId);
+                    if (!summary) {
+                        this.postMessageToProjectWebview({
+                            type: 'kanbanPlanReady', planId, plan: null,
+                            error: `Plan not found: ${planId}`
+                        });
+                        return { success: false, error: `Plan not found: ${planId}` };
+                    }
+                    const payload = { type: 'kanbanPlanReady', planId, plan: summary };
+                    this.postMessageToProjectWebview(payload);
+                    return { success: true, ...payload };
+                } catch (err: any) {
+                    this.postMessageToProjectWebview({
+                        type: 'kanbanPlanReady', planId, plan: null, error: String(err)
+                    });
+                    return { success: false, error: String(err) };
+                }
             }
 
             case 'copyKanbanPlanPrompt': {
@@ -7734,6 +7835,58 @@ Please format the updated output document strictly as follows:
             linearIssueId: r.linearIssueId || r.linear_issue_id || '',
             priorityStarred: r.priorityStarred ?? 0
         }));
+    }
+
+    /**
+     * Single-plan summary lookup for the Review Plan navigation. Searches every
+     * allowed root's kanban DB for `planId` and returns the first match rendered
+     * into the same summary shape `_getKanbanPlans` emits, so the webview can drop
+     * it straight into `_kanbanPlansCache` and resolve the pending selection. This
+     * is the one-card fetch the plan calls for instead of the 2,555-plan list.
+     */
+    private async _getKanbanPlanSummaryByPlanId(planId: string): Promise<KanbanPlanSummary | null> {
+        const allRoots = Array.from(this._getAllowedRoots());
+        for (const root of allRoots) {
+            try {
+                const db = KanbanDatabase.forWorkspace(root);
+                const record = await db.getPlanByPlanId(planId);
+                if (!record) { continue; }
+                const effectiveRoot = this._resolveEffectiveWorkspaceRoot(root);
+                const wsLabel = this._buildKanbanWorkspaceItems().find(
+                    item => item.workspaceRoot === effectiveRoot
+                )?.label || path.basename(effectiveRoot);
+                // subtaskCount for a feature: count children in the same DB. A single-plan
+                // fetch does not load the sibling set, so query it directly.
+                let subtaskCount: number | undefined;
+                if (record.isFeature) {
+                    try {
+                        const workspaceId = await this._getWorkspaceId(root);
+                        const board = await db.getBoard(workspaceId);
+                        subtaskCount = board.filter((r: any) => r.featureId === planId && !r.isFeature).length;
+                    } catch { /* best-effort */ }
+                }
+                return {
+                    planId: record.planId,
+                    sessionId: record.sessionId || '',
+                    topic: record.topic || path.basename(record.planFile || '') || 'Untitled',
+                    column: record.kanbanColumn,
+                    workspaceRoot: effectiveRoot,
+                    workspaceLabel: wsLabel,
+                    project: record.project || '',
+                    repoScope: record.repoScope || '',
+                    mtime: record.updatedAt ? new Date(record.updatedAt).getTime() : 0,
+                    planFile: record.planFile || '',
+                    complexity: record.complexity || 'Unknown',
+                    isFeature: record.isFeature,
+                    featureId: record.featureId || '',
+                    subtaskCount,
+                    clickupTaskId: record.clickupTaskId || record.clickup_task_id || '',
+                    linearIssueId: record.linearIssueId || record.linear_issue_id || '',
+                    priorityStarred: record.priorityStarred ?? 0
+                };
+            } catch { /* root has no kanban DB, skip */ }
+        }
+        return null;
     }
 
     private async _getKanbanColumnDefinitions(workspaceRoot: string, plans?: KanbanPlanSummary[]): Promise<KanbanColumnDefinition[]> {

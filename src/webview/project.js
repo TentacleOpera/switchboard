@@ -52,7 +52,13 @@
             }
 
             if (activeTab === 'kanban') {
-                vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
+                // Skip the list fetch when activateKanbanTabAndSelectPlan is driving
+                // this tab switch — it does its own cache hit / single-plan fetch and
+                // must not trigger the 2,555-plan multi-workspace refetch measured at
+                // 2.2 s behind every Review Plan click.
+                if (!_suppressNextKanbanTabFetch) {
+                    vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
+                }
             } else if (activeTab === 'projects') {
                 // Ensure the workspace/project caches are fresh, then hydrate the PRD editor.
                 vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
@@ -208,6 +214,12 @@
     }
 
     let _kanbanPlansCache = [];
+    // Set by activateKanbanTabAndSelectPlan while it programmatically clicks the
+    // Kanban tab for the visual switch, so the tab's click handler skips its
+    // fetchKanbanPlans. The activation handler does its own (cache hit = zero
+    // fetch, cache miss = single-plan fetchKanbanPlan) — never the 2,555-plan
+    // list the tab click would fire.
+    let _suppressNextKanbanTabFetch = false;
     let _kanbanAllWorkspaceProjects = {};
     let _kanbanAllWorkspaceProjectPaths = {};
     let _kanbanProjectsError = false;
@@ -620,6 +632,21 @@
                     btnCreateKanbanPlan.textContent = 'Create';
                 }
                 break;
+            case 'kanbanPlanReady':
+                // Single-plan fetch result (fetchKanbanPlan verb). Drop the plan into
+                // _kanbanPlansCache (dedup by planId) and resolve the pending selection
+                // the Review Plan navigation queued. This is the one-card path — it
+                // replaces the 2,555-plan list fetch the tab-click handler used to fire.
+                if (msg.plan && msg.plan.planId) {
+                    const existingIdx = _kanbanPlansCache.findIndex(p => p.planId === msg.plan.planId);
+                    if (existingIdx >= 0) {
+                        _kanbanPlansCache[existingIdx] = msg.plan;
+                    } else {
+                        _kanbanPlansCache.push(msg.plan);
+                    }
+                    tryResolvePendingKanbanSelection();
+                }
+                break;
             case 'kanbanPlanPreviewReady':
                 if (kanbanPreviewContent && _kanbanSelectedPlan && _kanbanSelectedPlan.planFile === msg.filePath) {
                     if (state.editMode.kanban) {
@@ -711,11 +738,40 @@
                 // navigation to whatever's typed. Wipe it so the target card is the one shown.
                 kanbanFilters.search = '';
 
-                // Activate the Kanban tab — its click handler fires fetchKanbanPlans.
+                // Activate the Kanban tab for the visual switch, but SUPPRESS the
+                // fetchKanbanPlans its click handler fires. Selecting one card must not
+                // drag a 1.4 MB / 2,555-plan multi-workspace list refetch behind it
+                // (the measured 2.2 s wait behind every Review Plan click). The plan is
+                // either already in _kanbanPlansCache (resolve now, zero fetch) or it is
+                // not, in which case we fetch THAT plan alone (fetchKanbanPlan, one DB
+                // row) — never the whole board.
+                _suppressNextKanbanTabFetch = true;
                 const kanbanTabBtn = document.querySelector('.shared-tab-btn[data-tab="kanban"]');
                 if (kanbanTabBtn) kanbanTabBtn.click();
-                // Resolve immediately if the plan is already in the cache.
-                tryResolvePendingKanbanSelection();
+                _suppressNextKanbanTabFetch = false;
+
+                // Resolve immediately if the plan is already in the cache — no fetch.
+                const cached = _kanbanPlansCache.find(p =>
+                    (msg.planId && p.planId === msg.planId) ||
+                    (msg.planFile && p.planFile === msg.planFile) ||
+                    (msg.sessionId && p.sessionId === msg.sessionId)
+                );
+                if (cached) {
+                    tryResolvePendingKanbanSelection();
+                } else if (msg.planId) {
+                    // Plan not cached (e.g. a different workspace the panel has not
+                    // loaded). Fetch the single plan summary, not all 2,555. The
+                    // kanbanPlanReady handler adds it to the cache and resolves.
+                    vscode.postMessage({ type: 'fetchKanbanPlan', planId: msg.planId });
+                } else {
+                    // No planId to fetch by — fall back to a workspace-scoped list fetch
+                    // (still not the all-roots build) so the resolver can find it.
+                    vscode.postMessage({
+                        type: 'fetchKanbanPlans',
+                        requestId: Date.now(),
+                        workspaceRoot: msg.workspaceRoot || ''
+                    });
+                }
                 break;
             }
             case 'featureDetails':
@@ -1235,6 +1291,21 @@
     // cold-open messages (e.g. activateKanbanTabAndSelectPlan from a kanban
     // Review click) are not dropped by the browser before the listener exists.
     vscode.postMessage({ type: 'webviewReady' });
+
+    // WS-subscribed handshake: the editor path's _pendingProjectMessages queue
+    // flushes on the webview's `webviewReady` postMessage, but the browser path's
+    // WS-only push (pushProjectMessageToWsOnly) is delivered over the WebSocket,
+    // and a push sent before this connection joined the hub's broadcast set is
+    // delivered to nobody. `sbTransportSubscribed` fires after the __resync frame
+    // — the first moment a host push is guaranteed to reach us. Re-post
+    // `webviewReady` here so the host flushes its WS-only cold-panel queue (the
+    // latest activation, expiry-bounded) and re-mirrors it to us now that we can
+    // actually receive it. Also covers reconnects (a resync is sent on every
+    // reconnect), bounded by the host's activation expiry so a stale click does
+    // not hijack the panel.
+    window.addEventListener('sbTransportSubscribed', () => {
+        vscode.postMessage({ type: 'webviewReady' });
+    });
 
     // Shared Tab/Workspace Population
     function populateWorkspaceDropdowns() {
