@@ -9,6 +9,9 @@ const path = require('path');
 const assert = require('assert');
 
 const terminalsJs = fs.readFileSync(path.join(__dirname, '../webview/terminals.js'), 'utf8');
+// The WebSocket frame handling moved to the extracted viewport module; the panel
+// keeps the sidebar/grid/layout code. Frame-level assertions read the module.
+const terminalViewportJs = fs.readFileSync(path.join(__dirname, '../webview/terminalViewport.js'), 'utf8');
 const terminalsHtml = fs.readFileSync(path.join(__dirname, '../webview/terminals.html'), 'utf8');
 const shellJs = fs.readFileSync(path.join(__dirname, '../webview/shell.js'), 'utf8');
 
@@ -60,7 +63,7 @@ test('solo mode initializes layout mode to 1 and pre-sets initialAssignmentDone'
 });
 
 test('websocket exit frame distinguishes transport eviction from process exit', () => {
-    const exitArm = block(terminalsJs, "} else if (frame.t === 'exit') {", "entry.term.options.disableStdin = true;");
+    const exitArm = block(terminalViewportJs, "} else if (frame.t === 'exit') {", "entry.term.options.disableStdin = true;");
     const polarity = exitArm.match(/if \(frame\.reason (===|!==) 'Lagging client evicted'\)/);
     assert.ok(polarity, 'exit arm must branch on eviction reason');
     // The eviction case carries NO notice of its own. It used to write
@@ -101,8 +104,12 @@ test('the eviction sentinel matches the string the gateway actually sends', () =
     // Polarity-agnostic: the client now branches `!==` (the eviction case is
     // deliberately unhandled). The cross-file pin is the LITERAL, not the operator.
     assert.ok(
-        new RegExp(`frame\\.reason (===|!==) '${sent[1]}'`).test(terminalsJs),
-        `terminals.js branches on a different string than the gateway sends ("${sent[1]}")`
+        new RegExp(`frame\\.reason (===|!==) '${sent[1]}'`).test(terminalViewportJs),
+        `terminalViewport.js branches on a different string than the gateway sends ("${sent[1]}")`
+    );
+    assert.ok(
+        !new RegExp(`frame\\.reason (===|!==) '${sent[1]}'`).test(terminalsJs),
+        'the exit-frame branch lives in terminalViewport.js only — a second copy in terminals.js would drift'
     );
 });
 

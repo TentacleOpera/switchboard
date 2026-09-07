@@ -21,6 +21,7 @@ const path = require('path');
 const assert = require('assert');
 
 const terminalsJs = fs.readFileSync(path.join(__dirname, '../webview/terminals.js'), 'utf8');
+const terminalViewportJs = fs.readFileSync(path.join(__dirname, '../webview/terminalViewport.js'), 'utf8');
 const terminalsHtml = fs.readFileSync(path.join(__dirname, '../webview/terminals.html'), 'utf8');
 
 let passed = 0;
@@ -52,7 +53,7 @@ test('no bracketed connection/throttle notices are written into the buffer', () 
     // written via entry.term.write. The four removed sites all matched this.
     // The process-exit line is the ONE allowed survivor — it is written to a
     // terminal whose process is gone, so no TUI will ever redraw over it.
-    const writes = terminalsJs.match(/entry\.term\.write\(`[^`]*`[^)]*\)/g) || [];
+    const writes = terminalViewportJs.match(/entry\.term\.write\(`[^`]*`[^)]*\)/g) || [];
     const bracketed = writes.filter(w => /\\r\\n.*\\x1b\[\d*m.*\[.*\]/.test(w));
     assert.ok(bracketed.length === 1,
         `expected exactly one bracketed buffer write (the exit line), found ${bracketed.length}: ${bracketed.join(' | ')}`);
@@ -65,7 +66,7 @@ test('no bracketed connection/throttle notices are written into the buffer', () 
 test('the only bracketed buffer write that remains is the process-exit line', () => {
     // The exit line is deliberately kept: the process is gone, so no TUI will
     // ever redraw over it, and it is the only record of the exit code.
-    const exitArm = block(terminalsJs, "frame.t === 'exit'", "} catch (err) {");
+    const exitArm = block(terminalViewportJs, "frame.t === 'exit'", "} catch (err) {");
     const writes = exitArm.match(/entry\.term\.write\(`[^`]*`[^)]*\)/g) || [];
     assert.ok(writes.length === 1, `exactly one write expected in the exit arm, found ${writes.length}`);
     assert.ok(/Process Exited with code/.test(writes[0]),
@@ -86,7 +87,7 @@ test('no new entry.term.write site appears beyond the known set', () => {
     // not a notice: it carries no text, resets the parser rather than printing
     // into the screen, and fires only when the gateway reports evicted output.
     // It is pinned by terminal-replay-gap-contract.test.js.
-    const count = (terminalsJs.match(/entry\.term\.write\(/g) || []).length;
+    const count = (terminalViewportJs.match(/entry\.term\.write\(/g) || []).length;
     assert.ok(count === 5,
         `expected exactly 5 entry.term.write( call sites (DEC seq, gap RIS, exit line, batch flush, replay write), found ${count} — a new buffer write site is a regression`);
 });
@@ -126,10 +127,10 @@ test('every is-input-* removal site clears the full resolver key set', () => {
 // ---- 3. The throttle flag is cleared on both socket transitions ----
 
 test('inputThrottled is reset in ws.onopen and ws.onclose', () => {
-    const onopen = block(terminalsJs, 'ws.onopen = () => {', 'ws.onmessage = ');
+    const onopen = block(terminalViewportJs, 'ws.onopen = () => {', 'ws.onmessage = ');
     assert.ok(/entry\.inputThrottled\s*=\s*false/.test(onopen),
         'ws.onopen must clear inputThrottled so a stranded flag cannot outlive a dead socket');
-    const oncloseBody = block(terminalsJs, 'ws.onclose = () => {', 'function scheduleBatchFlush(');
+    const oncloseBody = block(terminalViewportJs, 'ws.onclose = () => {', 'function scheduleBatchFlush(');
     assert.ok(/entry\.inputThrottled\s*=\s*false/.test(oncloseBody),
         'ws.onclose must clear inputThrottled — the throttled:false frame for a dead socket never arrives');
 });
@@ -145,7 +146,7 @@ test('the live state still renders no chip', () => {
 // ---- 5. The error arm sets disableStdin before it notifies ----
 
 test('the error arm sets disableStdin before it notifies, and the toast helper exists', () => {
-    const errorArm = block(terminalsJs, "frame.t === 'error'", "frame.t === 'exit'");
+    const errorArm = block(terminalViewportJs, "frame.t === 'error'", "frame.t === 'exit'");
     const disableIdx = errorArm.indexOf('disableStdin = true');
     const refreshIdx = errorArm.indexOf('refreshInputState(entry.name)');
     const toastIdx = errorArm.indexOf('showTerminalErrorToast(');
@@ -160,7 +161,7 @@ test('the error arm sets disableStdin before it notifies, and the toast helper e
 });
 
 test('the inputThrottled arm writes nothing to the buffer', () => {
-    const arm = block(terminalsJs, "frame.t === 'inputThrottled'", "frame.t === 'error'");
+    const arm = block(terminalViewportJs, "frame.t === 'inputThrottled'", "frame.t === 'error'");
     assert.ok(!/entry\.term\.write/.test(arm),
         'the inputThrottled arm must not write to the buffer — the chip is the whole signal');
     assert.ok(/entry\.inputThrottled\s*=/.test(arm) && /refreshInputState\(entry\.name\)/.test(arm),

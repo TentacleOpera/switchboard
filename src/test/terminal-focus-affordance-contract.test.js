@@ -14,6 +14,7 @@ const path = require('path');
 const assert = require('assert');
 
 const terminalsJs = fs.readFileSync(path.join(__dirname, '../webview/terminals.js'), 'utf8');
+const terminalViewportJs = fs.readFileSync(path.join(__dirname, '../webview/terminalViewport.js'), 'utf8');
 const terminalsHtml = fs.readFileSync(path.join(__dirname, '../webview/terminals.html'), 'utf8');
 
 let passed = 0;
@@ -44,9 +45,9 @@ test('the focus ring is driven by real caret focus, not by pane selection', () =
     // this file constructs has no focus pair, so subscribing to them threw from the
     // middle of the view builder and took the WebSocket with it. The helper textarea
     // is the node that actually holds the caret.
-    assert.ok(/term\.textarea\.addEventListener\('focus'/.test(terminalsJs),
+    assert.ok(/term\.textarea\.addEventListener\('focus'/.test(terminalViewportJs),
         'the ring must be driven by focus on the node that actually holds the caret');
-    assert.ok(/term\.textarea\.addEventListener\('blur'/.test(terminalsJs),
+    assert.ok(/term\.textarea\.addEventListener\('blur'/.test(terminalViewportJs),
         'blur on that same node must clear it');
     assert.ok(terminalsHtml.includes('.terminal-pane.has-caret'),
         '.has-caret is the real typing signal — .focused is selection and survives blur');
@@ -55,7 +56,7 @@ test('the focus ring is driven by real caret focus, not by pane selection', () =
 test('blur clears EVERY pane, not the one that blurred', () => {
     assert.ok(terminalsJs.includes('function clearCaretRing()'),
         'a sweep is the only form correct in every case — Chromium fires no blur on detach');
-    assert.ok(/addEventListener\('blur',\s*\(\)\s*=>\s*clearCaretRing\(\)\)/.test(terminalsJs),
+    assert.ok(/addEventListener\('blur',\s*\(\)\s*=>\s*(deps\.)?clearCaretRing\(\)\)/.test(terminalViewportJs),
         'blur must go through clearCaretRing, not a single-pane classList.remove');
 });
 
@@ -101,14 +102,14 @@ test('the ring recolours for states that cannot take input', () => {
 });
 
 test('the inactive cursor style is none, so exactly one pane shows a caret', () => {
-    assert.ok(/cursorInactiveStyle:\s*'none'/.test(terminalsJs),
+    assert.ok(/cursorInactiveStyle:\s*'none'/.test(terminalViewportJs),
         "'outline' is xterm 5.5.0's own default — setting it changes nothing");
 });
 
 test('keystrokes on a non-OPEN socket are reported, not swallowed', () => {
-    assert.ok(terminalsJs.includes('notifyInputDropped(entry)'),
+    assert.ok(terminalViewportJs.includes('deps.notifyInputDropped(entry)'),
         'the else branch of term.onData must surface the drop');
-    assert.ok(!terminalsJs.includes('entry.inputQueue'),
+    assert.ok(!terminalViewportJs.includes('entry.inputQueue'),
         'input must NOT be queued — replaying stale keystrokes can complete a half-typed command');
     assert.ok(terminalsJs.includes('entry.inputDropNoticed = false'),
         'the notice must reset on reconnect, or the second outage is silent');
@@ -147,7 +148,7 @@ test('the live state renders no chip, and one writer creates AND removes it', ()
 });
 
 test('the CONNECTING window has a nudge site', () => {
-    const connect = block(terminalsJs, 'function connectTerminalSocket(', 'function scheduleBatchFlush(');
+    const connect = block(terminalViewportJs, 'function connectTerminalSocket(', 'function scheduleBatchFlush(');
     assert.ok(connect.includes('refreshInputState('),
         'a reconnect swaps in a CONNECTING socket without re-rendering the grid');
 });

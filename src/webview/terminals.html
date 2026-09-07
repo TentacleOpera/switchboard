@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{NONCE}}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'none';">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{NONCE}}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws: wss:; frame-src 'none';">
     <title>Terminals</title>
     <link rel="stylesheet" href="{{XTERM_CSS_URI}}">
     <style>
@@ -2703,6 +2703,39 @@
     </style>
 </head>
 <body>
+    <!-- Mode parse + mode body class, FIRST thing in the body.
+         This is the "before first paint" half of the dock-containment fix. It used
+         to live at the top of terminals.js, which is the LAST of seven parser-
+         blocking scripts at the end of this document (~1.1 MB of xterm, the viewport
+         module and the panel itself). The sidebar below is the first element in the
+         body, so the browser had every opportunity to paint the full-panel chrome
+         while those scripts were still fetching and compiling — which is the sidebar
+         flash the dock's operator reported. Applying the class here means the
+         chrome-hiding rules (body.is-solo / body.is-kanban in the <style> above) are
+         already matching when the sidebar markup is parsed.
+         ONE parser: this is the only read of the mode parameters. terminals.js reads
+         the object published here rather than re-parsing location.search, so the two
+         cannot disagree about dock mode. Nonce'd because this document serves
+         `script-src 'nonce-...' 'self'` — a bare inline script is blocked outright. -->
+    <script nonce="{{NONCE}}">
+        (function () {
+            var mode = { solo: null, kanban: false, team: null, dock: false };
+            try {
+                var p = new URLSearchParams(location.search);
+                // Precedence: solo > kanban > team (narrower scope wins).
+                if (p.has('solo')) { mode.solo = p.get('solo'); }
+                if (p.has('kanban') && !mode.solo) { mode.kanban = p.get('kanban') === '1'; }
+                if (p.has('team') && !mode.solo && !mode.kanban) { mode.team = p.get('team'); }
+                mode.dock = p.get('dock') === '1';
+            } catch (e) {
+                console.error('[terminals] mode parse failed; the panel will render as the full grid:', e);
+            }
+            window.__SB_TERMINAL_MODE__ = mode;
+            if (mode.solo) { document.body.classList.add('is-solo'); }
+            else if (mode.kanban) { document.body.classList.add('is-kanban'); }
+            else if (mode.team) { document.body.classList.add('is-team-scoped'); }
+        })();
+    </script>
     <div class="terminals-sidebar">
         <div class="sidebar-header">
             <span class="sidebar-title">Agents</span>
@@ -3004,6 +3037,7 @@
     <script nonce="{{NONCE}}" src="{{XTERM_ADDON_WEBGL_URI}}"></script>
     <script nonce="{{NONCE}}" src="{{XTERM_ADDON_CANVAS_URI}}"></script>
     <script nonce="{{NONCE}}" src="{{SHARED_UTILS_URI}}"></script>
+    <script nonce="{{NONCE}}" src="{{TERMINAL_VIEWPORT_JS_URI}}"></script>
     <script nonce="{{NONCE}}" src="{{TERMINALS_JS_URI}}"></script>
 </body>
 </html>

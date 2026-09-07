@@ -31,6 +31,7 @@ const terminalsJs = fs.readFileSync(path.join(__dirname, '../webview/terminals.j
 const terminalsHtml = fs.readFileSync(path.join(__dirname, '../webview/terminals.html'), 'utf8');
 const shellJs = fs.readFileSync(path.join(__dirname, '../webview/shell.js'), 'utf8');
 const shellHtml = fs.readFileSync(path.join(__dirname, '../webview/shell.html'), 'utf8');
+const localApiServerTs = fs.readFileSync(path.join(__dirname, '../services/LocalApiServer.ts'), 'utf8');
 
 let passed = 0;
 let failed = 0;
@@ -1121,8 +1122,19 @@ test('top-right cluster exists and satisfies invariants', () => {
     assert.ok(shellHtml.includes('id="top-right-cluster"'), '#top-right-cluster must exist in shell.html');
     assert.ok(/#top-right-cluster\s*\{[^}]*position:\s*fixed/.test(shellHtml), '#top-right-cluster must have position: fixed');
     assert.ok(/#top-right-cluster\s*\{[^}]*z-index:\s*40/.test(shellHtml), '#top-right-cluster must have z-index: 40');
-    assert.ok(/#top-right-cluster\s*\{[^}]*calc\(var\(--dock-width,\s*0px\)\s*\+\s*6px\)/.test(shellHtml),
-        '#top-right-cluster right offset must track --dock-width');
+    // Board Collapse 08: the cluster is anchored to the shell's right edge
+    // (right: 6px), NOT displaced leftward by --dock-width. The dock opens
+    // BELOW the cluster via --cluster-band on #agent-dock and #dock-splitter.
+    assert.ok(/#top-right-cluster\s*\{[^}]*right:\s*6px/.test(shellHtml),
+        '#top-right-cluster right offset must be a fixed 6px (anchored to the shell edge, not --dock-width)');
+    assert.ok(!/--dock-width/.test(shellHtml),
+        '--dock-width must be removed from shell.html — the cluster no longer tracks it');
+    assert.ok(/--cluster-band:\s*calc\(6px\s*\+\s*36px\s*\+\s*4px\)/.test(shellHtml),
+        '--cluster-band must be defined as calc(6px + 36px + 4px) in :root');
+    assert.ok(/#agent-dock\s*\{[^}]*margin-top:\s*var\(--cluster-band\)/.test(shellHtml),
+        '#agent-dock must consume --cluster-band as margin-top');
+    assert.ok(/#dock-splitter\s*\{[^}]*margin-top:\s*var\(--cluster-band\)/.test(shellHtml),
+        '#dock-splitter must consume --cluster-band as margin-top');
 
     const fn = block(shellJs, 'function renderTopRightCluster(manifest) {', 'function renderManifest(manifest) {');
     assert.ok(fn.includes('dock-toggle-btn'), 'cluster must create dock button with .dock-toggle-btn');
@@ -1131,8 +1143,102 @@ test('top-right cluster exists and satisfies invariants', () => {
     assert.ok(fn.includes("'connections'"), 'cluster must create connections button');
 
     assert.ok(!shellJs.includes('buildDockToggle'), 'buildDockToggle must be removed from shell.js');
-    assert.ok(/document\.documentElement\.style\.setProperty\('--dock-width'/.test(shellJs),
-        '--dock-width must be written to documentElement');
+    assert.ok(!/--dock-width/.test(shellJs),
+        '--dock-width writers must be removed from shell.js');
+});
+
+test('dock has three tabs (Agent, CLI, Fleet) and no Kanban pane', () => {
+    assert.ok(shellHtml.includes('id="dock-tab-agent"'), 'Agent tab must exist');
+    assert.ok(shellHtml.includes('id="dock-tab-cli"'), 'CLI tab must exist');
+    assert.ok(shellHtml.includes('id="dock-tab-fleet"'), 'Fleet tab must exist');
+    assert.ok(!shellHtml.includes('id="dock-tab-kanban"'), 'Kanban tab must be removed');
+    assert.ok(!shellHtml.includes('id="dock-kanban-frame"'), 'Kanban iframe must be removed');
+    assert.ok(shellHtml.includes('id="dock-cli-frame"'), 'CLI iframe must exist');
+    // dock-dragging pointer-inert selector must cover every dock frame.
+    assert.ok(/body\.dock-dragging #dock-cli-frame/.test(shellHtml),
+        'dock-dragging selector must include #dock-cli-frame');
+    assert.ok(!/body\.dock-dragging #dock-kanban-frame/.test(shellHtml),
+        'dock-dragging selector must not reference the removed #dock-kanban-frame');
+});
+
+test('setDockActiveTab uses a pane map with exactly one visible pane per tab', () => {
+    const fn = block(shellJs, 'function setDockActiveTab(tab) {', 'function startFleetPoll() {');
+    // Every pane is hidden unconditionally BEFORE the active one is shown.
+    assert.ok(fn.includes('dockFrame.classList.remove(\'is-visible\')'), 'agent frame must be hidden by default');
+    assert.ok(fn.includes('dockCliFrame') && fn.includes('dockCliFrame.classList.remove(\'is-visible\')'),
+        'CLI frame must be hidden by default');
+    assert.ok(fn.includes('dockFleetEl') && fn.includes('dockFleetEl.classList.remove(\'is-visible\')'),
+        'Fleet pane must be hidden by default');
+    // Normalises 'kanban' (retired) and unknown values to 'agent'.
+    assert.ok(fn.includes('normaliseDockTab'), 'setDockActiveTab must normalise the tab id');
+    assert.ok(/normaliseDockTab\(tab\)/.test(fn), 'setDockActiveTab must call normaliseDockTab');
+});
+
+test('persisted kanban tab normalises to agent', () => {
+    const fn = block(shellJs, 'function normaliseDockTab(tab) {', 'function setDockActiveTab(tab) {');
+    assert.ok(/DOCK_TABS\.includes\(tab\)/.test(fn), 'normaliseDockTab must check against DOCK_TABS');
+    assert.ok(/return 'agent'/.test(fn), 'normaliseDockTab must fall back to agent');
+    assert.ok(!/kanban/.test(fn), 'normaliseDockTab must not special-case kanban — it falls through to agent');
+});
+
+test('syncDockSeat is tab-aware and does not early-return for CLI', () => {
+    const fn = block(shellJs, 'async function syncDockSeat() {', 'function updateDockTitle(name) {');
+    assert.ok(/saved\.activeTab !== 'agent'/.test(fn), 'syncDockSeat must early-return when not on the agent tab');
+    // CLI has its own sync path.
+    assert.ok(shellJs.includes('async function syncCliSeat()'), 'syncCliSeat must exist');
+    const cliFn = block(shellJs, 'async function syncCliSeat() {', 'function mountCliFrame(name) {');
+    assert.ok(/normaliseDockTab\(saved\.activeTab\) !== 'cli'/.test(cliFn),
+        'syncCliSeat must early-return when not on the CLI tab');
+    assert.ok(/checkCliLiveness\(\)/.test(cliFn), 'syncCliSeat must call checkCliLiveness');
+    assert.ok(/mountCliFrame/.test(cliFn), 'syncCliSeat must mount the CLI frame when live');
+});
+
+test('CLI seat name differs from the controller seat name', () => {
+    assert.ok(/function dockCliSeatName\(\) \{ return 'dock-cli'/.test(shellJs),
+        'dockCliSeatName must return dock-cli');
+    assert.ok(/function dockSeatName\(\) \{ return 'dock-project_manager'/.test(shellJs),
+        'dockSeatName must return dock-project_manager (the controller seat)');
+    // The CLI seat is created with role 'dock_cli' and startup command 'switchboard'.
+    const startFn = block(shellJs, 'async function startCliSeat() {', 'async function showDockEmptyState() {');
+    assert.ok(/role:\s*'dock_cli'/.test(startFn), 'startCliSeat must create with role dock_cli');
+    assert.ok(/name:\s*dockCliSeatName\(\)/.test(startFn), 'startCliSeat must use dockCliSeatName()');
+    assert.ok(/dock_cli:\s*'switchboard'/.test(startFn), 'startCliSeat must save switchboard as the dock_cli startup command');
+});
+
+test('theme fan-out includes every dock frame', () => {
+    const fn = block(shellJs, 'function applyThemeToAll(themeName) {', 'function buildFrame(panel) {');
+    assert.ok(/dockFrame\?\.contentWindow\?\.postMessage/.test(fn), 'theme fan-out must include dockFrame');
+    assert.ok(/dockCliFrame\?\.contentWindow\?\.postMessage/.test(fn), 'theme fan-out must include dockCliFrame');
+    assert.ok(!/dockKanbanFrame/.test(fn), 'theme fan-out must not reference the removed dockKanbanFrame');
+});
+
+test('Fleet offline path renders offline guidance, not an empty table', () => {
+    const fn = block(shellJs, 'function renderFleetOffline() {', 'function escapeHtml(str) {');
+    assert.ok(/dockFleetOfflineEl\) dockFleetOfflineEl\.hidden = false/.test(fn),
+        'renderFleetOffline must show the offline guidance element');
+    assert.ok(/dockFleetContentEl\) dockFleetContentEl\.hidden = true/.test(fn),
+        'renderFleetOffline must hide the content (table) element');
+});
+
+test('Fleet poll lifecycle stops when Fleet is hidden or page backgrounded', () => {
+    const start = block(shellJs, 'function startFleetPoll() {', 'function stopFleetPoll() {');
+    assert.ok(/setInterval/.test(start), 'startFleetPoll must set an interval');
+    const stop = block(shellJs, 'function stopFleetPoll() {', 'document.addEventListener(\'visibilitychange\'');
+    assert.ok(/clearInterval\(fleetPollTimer\)/.test(stop), 'stopFleetPoll must clear the interval');
+    assert.ok(/fleetPollTimer = null/.test(stop), 'stopFleetPoll must null the timer');
+    // visibilitychange handler must stop on hidden and resume on visible.
+    const vis = block(shellJs, "document.addEventListener('visibilitychange',", 'async function refreshFleetTab() {');
+    assert.ok(/document\.hidden/.test(vis), 'visibilitychange must check document.hidden');
+    assert.ok(/stopFleetPoll\(\)/.test(vis), 'visibilitychange must stop the poll when hidden');
+    assert.ok(/startFleetPoll\(\)/.test(vis), 'visibilitychange must resume the poll when visible');
+});
+
+test('no new server route is introduced for command execution', () => {
+    // The CLI tab uses the existing ptyCreateTerminal verb — no new route.
+    // This is a negative assertion: the route table in LocalApiServer.ts
+    // must not gain a /terminals/execute or /cli/run style route.
+    assert.ok(!/\/terminals\/execute/.test(localApiServerTs), 'no /terminals/execute route may exist');
+    assert.ok(!/\/cli\/run/.test(localApiServerTs), 'no /cli/run route may exist');
 });
 
 test('three fixed team slots in the rail and showStripToast kept alive', () => {

@@ -101,7 +101,7 @@ test('only a VERIFIED mismatch is reported to the shared pty', () => {
     // fitAndReportSize sends unconditionally, even when fit() short-circuits, so an
     // 'unsettled' verdict must NOT reach it.
     assert.ok(
-        /before === 'mismatch'\s*\)\s*\{\s*\n\s*fitAndReportSize/.test(ladder),
+        /before === 'mismatch'\s*\)\s*\{\s*\n\s*viewport\.fitAndReportSize/.test(ladder),
         'fitAndReportSize must be gated on a verified buffer mismatch alone'
     );
 });

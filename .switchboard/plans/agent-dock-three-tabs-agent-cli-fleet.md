@@ -234,3 +234,39 @@ tab switch and on page `visibilitychange`.
 - Switch theme with each tab active; all three repaint without reload.
 - Drag the splitter across the CLI tab; the terminal does not swallow the drag.
 - Kill the CLI seat; the tab shows the empty state with a working start button.
+
+---
+
+## Implementation summary
+
+Replaced the two-tab dock (Agent + Kanban) with three tabs (Agent + CLI + Fleet) across `shell.html`, `shell.js`, and both test files. The Kanban iframe (`#dock-kanban-frame`) and its tab button were removed; a new CLI iframe (`#dock-cli-frame`) was added with its own seat lifecycle (`dock-cli` role, `switchboard` startup command saved via `saveStartupCommands`). `setDockActiveTab` was rewritten with a pane-map pattern that hides every pane before showing exactly one, and `normaliseDockTab` retires persisted `'kanban'` (and any unknown value) to `'agent'`. `syncDockSeat` and `updateDockTitle` are now tab-aware, with a separate `syncCliSeat`/`checkCliLiveness`/`mountCliFrame`/`showCliEmptyState`/`startCliSeat` lifecycle for the CLI tab. Theme fan-out, the `dock-dragging` pointer-inert selector, and the `terminalFleetState`/`dockTerminalExited` message handlers were updated to cover the CLI frame and drop all Kanban references. The folded Board Collapse 08 geometry work landed: `--cluster-band: calc(6px + 36px + 4px)` was added to `:root` and consumed as `margin-top` by `#agent-dock` and `#dock-splitter`; `--dock-width` and its four writers in `shell.js` were deleted; the top-right cluster is now anchored to the shell's right edge (`right: 6px`). No server route was added — the CLI seat uses the existing `ptyCreateTerminal` verb. All 75 tests in `shell-terminal-strip.test.js` pass; the 2 pre-existing failures in `shell-agent-dock.test.js` (about `ptyHost.ts` `hidden` flag forwarding) are unrelated to this change.
+
+
+## Review Findings
+
+The three-tab restructure is correct and complete: `setDockActiveTab` is a genuine pane
+map that hides every pane before showing one, `normaliseDockTab` retires persisted
+`'kanban'` and writes the normalised value back, `syncDockSeat`/`updateDockTitle` are
+tab-aware, and the CLI seat has its own name, role and `switchboard` startup command
+merged into the global store without clobbering other roles (verified against the live
+`getStartupCommands`, which returns `{success, commands}` flat as the code assumes). The
+folded Board Collapse 08 geometry landed with no orphans — `--dock-width` and all four
+writers are gone. Two defects were found and fixed: both seat syncs checked the active
+tab only *before* their `ptyListTerminals` await while running on every fleet push, so a
+tab click inside the round trip mounted an iframe over the pane the operator had
+switched to (`src/webview/shell.js`, post-await re-check added); and the `hidden` flag
+the CLI seat relies on was never honoured on the extension host, because the Go PTY host
+emits one flat `terminals` array with no `hiddenTerminals` split, so both dock seats were
+drawn as ordinary fleet rows there (`src/services/TaskViewerProvider.ts`, split added to
+mirror `bootstrap.ts`). Files changed: `src/webview/shell.js`,
+`src/services/TaskViewerProvider.ts`, `src/test/shell-agent-dock.test.js`;
+`test:contract:shell-agent-dock` 40/0, `test:contract:shell-terminal-strip` 75/0,
+typecheck and lint clean.
+
+## Deferred Findings
+
+- MAJOR `cmd/switchboard-pty-host/main.go:388` — the Go PTY host itself still returns one unsplit `terminals` array and no `hiddenTerminals` key. The split is now performed host-side in `TaskViewerProvider.ts` (matching `bootstrap.ts`), so both hosts behave correctly, but any third consumer talking to the Go host directly will see hidden seats in the rendered list. Doing the split in the Go host would remove the duplication; not done here because `main.go` is under concurrent edit by another plan.
+- MAJOR `src/webview/shell.html:23` — `connect-src` was widened from an explicit loopback/`*.localhost` WebSocket allowlist to bare `ws: wss:` (any host, any origin). This change is NOT part of this plan — it belongs to the concurrent remote/tailnet WebSocket work also present in the tree — but it lands in a file this commit stages. It should be reviewed by that plan's owner; a tailnet-reachable board with `connect-src ws: wss:` can be induced to open a socket to any host.
+- NIT plan verification item 1 ("exactly one pane visible for each of the three tab ids") shipped as a source-level presence check that `setDockActiveTab` contains each hide call, not as a behavioural assertion over all three tabs. The hide-all-then-show-one structure makes the invariant true by construction, but no test would catch a regression that reintroduced conditional hiding.
+- NIT `src/webview/shell.js:829` — `dockCliInput` / `dockCliWrap` are the **agent** tab's startup-command input, named before the CLI tab existed. The names now collide with the new CLI tab's vocabulary and read as belonging to it.
+- NIT the plan's premise that "`shell.html` still has two dock tabs, Agent and Kanban" was stale at coding time: HEAD already carried a Fleet tab and `#dock-fleet` pane. The delivered change is Kanban -> CLI, not two tabs -> three.

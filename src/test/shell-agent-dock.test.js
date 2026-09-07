@@ -30,9 +30,22 @@ const assert = require('assert');
 const shellJs = fs.readFileSync(path.join(__dirname, '../webview/shell.js'), 'utf8');
 const shellHtml = fs.readFileSync(path.join(__dirname, '../webview/shell.html'), 'utf8');
 const bootstrapTs = fs.readFileSync(path.join(__dirname, '../standalone/bootstrap.ts'), 'utf8');
-const ptyHostTs = fs.readFileSync(path.join(__dirname, '../standalone/ptyHost.ts'), 'utf8');
+const goPtyProjectionTs = fs.readFileSync(path.join(__dirname, '../services/goPtyFleetProjection.ts'), 'utf8');
+const goPtyHostGo = fs.readFileSync(path.join(__dirname, '../../cmd/switchboard-pty-host/main.go'), 'utf8');
+const tvpHiddenSplitTs = fs.readFileSync(path.join(__dirname, '../services/TaskViewerProvider.ts'), 'utf8');
 const ptyFleetTs = fs.readFileSync(path.join(__dirname, '../standalone/ptyFleetService.ts'), 'utf8');
 const terminalsJs = fs.readFileSync(path.join(__dirname, '../webview/terminals.js'), 'utf8');
+const transportJs = fs.readFileSync(path.join(__dirname, '../webview/transport.js'), 'utf8');
+const linearJs = fs.readFileSync(path.join(__dirname, '../webview/linear.js'), 'utf8');
+
+/** Slice of a source file between two markers, for scoping an assertion to one function. */
+function block(code, startMarker, endMarker) {
+    const start = code.indexOf(startMarker);
+    assert.ok(start !== -1, `marker not found: ${startMarker}`);
+    const end = code.indexOf(endMarker, start);
+    assert.ok(end !== -1, `end marker not found AFTER "${startMarker}": ${endMarker}`);
+    return code.substring(start, end);
+}
 
 let passed = 0;
 let failed = 0;
@@ -84,8 +97,8 @@ test('#dock-empty uses .is-visible, not [hidden] alone', () => {
 });
 
 test('#dock-frame uses .is-visible, not [hidden] alone', () => {
-    // Both dock frames share one rule, so the selector may be grouped:
-    //   #dock-frame,\n#dock-kanban-frame { display: none; ... }
+    // Dock frames share one rule, so the selector may be grouped:
+    //   #dock-frame,\n#dock-cli-frame { display: none; ... }
     assert.ok(/#dock-frame\s*(?:,\s*#[a-z-]+\s*)*\{[^}]*display:\s*none/.test(shellHtml),
         '#dock-frame must declare a base display:none');
     assert.ok(/#dock-frame\.is-visible\s*(?:,\s*#[a-z-]+\.is-visible\s*)*\{[^}]*display:\s*block/.test(shellHtml),
@@ -274,21 +287,137 @@ test('PtyFleetService carries a hidden flag and stamps it on new handles only', 
         'the singleton return/reclaim path must never assign `hidden`');
 });
 
-test('both hosts read payload.hidden on ptyCreateTerminal', () => {
+// These two gates used to read `src/standalone/ptyHost.ts`, which is a RETIRED
+// stub — PTY ownership moved to cmd/switchboard-pty-host. They therefore failed
+// unconditionally and guarded nothing, while the divergence they exist to catch
+// shipped underneath them: the Go host emits one flat `terminals` array and no
+// `hiddenTerminals` key, so the extension host rendered the dock's own seats in
+// the sidebar and rail. Repointed at the real producers on each host.
+test('both hosts forward payload.hidden on ptyCreateTerminal', () => {
     assert.ok(bootstrapTs.includes('hidden: payload.hidden === true'),
         'standalone bootstrap.ts ptyCreateTerminal must forward payload.hidden');
-    assert.ok(ptyHostTs.includes('hidden: payload.hidden === true'),
-        'ptyHost.ts ptyCreateTerminal must forward payload.hidden');
+    assert.ok(goPtyProjectionTs.includes('hidden: opts?.hidden === true'),
+        'goPtyFleetProjection.ts must forward the hidden flag to the Go PTY host');
+    assert.ok(/"hidden":\s*t\.hidden/.test(goPtyHostGo),
+        'the Go PTY host must project `hidden` onto every listed row, or no host can split on it');
+    assert.ok(/hidden:\s*boolField\(payload,\s*"hidden"\)/.test(goPtyHostGo),
+        'the Go PTY host must read the hidden flag off the create payload');
 });
 
 test('both hosts emit hiddenTerminals from ptyListTerminals', () => {
-    for (const [label, src] of [['bootstrap.ts', bootstrapTs], ['ptyHost.ts', ptyHostTs]]) {
+    // The dock's seats are surface-owned: terminals.js assigns
+    // `fleetList = data.terminals` unfiltered, so a seat left in that array is
+    // drawn in the sidebar and the rail no matter what `hidden` says.
+    for (const [label, src] of [['bootstrap.ts', bootstrapTs], ['TaskViewerProvider.ts', tvpHiddenSplitTs]]) {
         assert.ok(src.includes('hiddenTerminals'),
             `${label} ptyListTerminals must return a hiddenTerminals array`);
-        assert.ok(src.includes("t.hidden !== true"),
+        assert.ok(src.includes("hidden !== true"),
             `${label} must exclude hidden seats from the rendered terminals array`);
-        assert.ok(src.includes("t.hidden === true"),
+        assert.ok(src.includes("hidden === true"),
             `${label} must collect hidden seats into hiddenTerminals`);
+    }
+});
+
+// ── Dock containment (dock-frames-do-not-know-they-are-docks) ─────────
+// The plan specified nine automated checks and shipped none of them: the
+// containment guard and the shell's origin check were carried entirely by
+// review. These are the gates.
+
+test('a dock document does not inherit the main panel\'s pane-scoped settings', () => {
+    // Defect 1. loadLayoutSettings restores kanbanPaneColumn/Workspace/Project
+    // from the shared, un-namespaced `terminals.*` keys. The solo/kanban tail
+    // re-clamps four other values and never these three, so a dock document
+    // rendered against a different pane's chosen column in a different panel.
+    const clamp = block(terminalsJs, 'if (isDockFrame) {', 'Seed the currently-active scope');
+    for (const key of ['kanbanPaneColumn', 'kanbanPaneWorkspace', 'kanbanPaneProject']) {
+        assert.ok(clamp.includes(key),
+            `the dock clamp must reset ${key} — it is restored from the shared terminals.* keys and never re-clamped`);
+    }
+    // Read-side only: the dock must never write the main panel's settings back.
+    const save = block(terminalsJs, 'function saveLayoutSettings()', 'saveSetting(\'terminals.layoutMode\'');
+    assert.ok(/soloTerminalName \|\| isKanbanDock/.test(save),
+        'saveLayoutSettings must still early-return for dock documents — the re-clamp must not become a write path');
+});
+
+test('a dock frame cannot switch the shell\'s main panel', () => {
+    // Defect 3. transport.js is shared by every panel and had no notion of a
+    // dock, so a document in a side pane could repaint the whole content area.
+    // Guarding only PANEL_SWITCH_VERBS leaves the public global open — assert both.
+    assert.ok(/isDockFrame\s*=\s*new URLSearchParams\(window\.location\.search\)\.get\('dock'\) === '1'/.test(transportJs),
+        'transport.js must derive its own isDockFrame — it is shared by panels that never load terminals.js');
+    const senders = transportJs.split("postMessage({ type: 'switchPanel'");
+    assert.strictEqual(senders.length, 3,
+        'exactly two switchPanel senders are expected in transport.js (the verb map and __switchboardSwitchPanel)');
+    for (const preamble of senders.slice(0, 2)) {
+        const tail = preamble.slice(-600);
+        assert.ok(/if \(isDockFrame\) \{/.test(tail),
+            'every switchPanel sender must be dock-guarded — a verb-only fix leaves the global open');
+        assert.ok(/console\.warn\(/.test(tail),
+            'the guard must warn rather than fail silently — a silent no-op is a dead button to debug');
+    }
+    assert.ok(!/postMessage\(\{ type: 'switchPanel'[^)]*\}, '\*'\)/.test(transportJs),
+        "switchPanel must post with location.origin, never '*'");
+});
+
+test('a non-dock panel can still switch the shell panel', () => {
+    // The regression the dock guard most plausibly causes: linear.js's Tickets
+    // switch is posted from the content area and must keep working.
+    assert.ok(/postMessage\(\{ type: 'switchPanel', panel: 'tickets' \}, location\.origin\)/.test(linearJs),
+        'linear.js must still post switchPanel — the guard is on dock frames, not on content-area panels');
+    assert.ok(!/isDockFrame/.test(linearJs),
+        'linear.js is a content-area panel and must not acquire a dock guard');
+});
+
+test('every shell message arm is classified for the origin check', () => {
+    // Property-based on purpose: a SEVENTH arm added without a decision fails
+    // here rather than shipping unguarded, which is exactly how switchPanel —
+    // the only arm without a check — survived alongside three that had one.
+    const listener = block(shellJs, "window.addEventListener('message', (event) => {", "document.addEventListener('keydown'");
+    const ORIGIN_CHECKED = ['switchPanel', 'missionControlArmed', 'terminalFleetState',
+        'dockTerminalExited', 'popoutTerminal'];
+    // Exempt, and only this one: transport.js dispatches theme pushes as synthetic
+    // events with an empty origin, so a check here rejects the server push.
+    const ORIGIN_EXEMPT = ['switchboardThemeChanged'];
+    const arms = [...listener.matchAll(/data\.type === '([A-Za-z]+)'/g)].map(m => m[1]);
+    assert.ok(arms.length > 0, 'shell message arms not found');
+    for (const arm of arms) {
+        assert.ok(ORIGIN_CHECKED.includes(arm) || ORIGIN_EXEMPT.includes(arm),
+            `shell message arm '${arm}' is classified neither origin-checked nor exempt — decide, do not default`);
+    }
+    for (const type of ORIGIN_CHECKED) {
+        const at = listener.indexOf(`data.type === '${type}'`);
+        assert.ok(at !== -1, `${type} arm not found`);
+        const next = listener.indexOf('} else if (data.type', at);
+        const body = listener.substring(at, next === -1 ? listener.length : next);
+        assert.ok(body.includes('if (event.origin !== location.origin) { return; }'),
+            `the ${type} arm must check event.origin`);
+    }
+});
+
+test('the parent-directed postMessage surface is enumerated', () => {
+    // Two relays were guarded ad hoc, each with a careful comment about this exact
+    // hazard, while a third shipped unguarded because nothing listed them.
+    const audit = transportJs.slice(transportJs.indexOf('PANEL_SWITCH_VERBS switchPanel'));
+    for (const relay of ['missionControlArmed', 'terminalFleetState', 'dockTerminalExited', 'linear.js']) {
+        assert.ok(audit.includes(relay),
+            `the parent-directed postMessage audit must record ${relay}`);
+    }
+});
+
+test('both seat syncs re-check the active tab AFTER their round trip', () => {
+    // Each sync is a ptyListTerminals fetch and both run on every
+    // terminalFleetState push, so a tab click lands inside the await routinely.
+    // A guard only before the await lets the resolved call mount its iframe over
+    // whichever pane the operator switched to — two panes visible at once.
+    for (const [fn, tab] of [['syncDockSeat', 'agent'], ['syncCliSeat', 'cli']]) {
+        const body = block(shellJs, `async function ${fn}()`, 'if (live) {');
+        const awaitAt = body.indexOf('await check');
+        assert.ok(awaitAt !== -1, `${fn} must await a liveness check`);
+        const after = body.slice(awaitAt);
+        assert.ok(
+            after.includes(`normaliseDockTab(readDockState().activeTab) !== '${tab}'`),
+            `${fn} must re-read the active tab AFTER the await, not only before it`
+        );
     }
 });
 
@@ -365,17 +494,40 @@ test('terminals.js returns early from postFleetStateToShell on the dock flag', (
         'the dock guard must sit BEFORE the fleetList.map call');
 });
 
-test('terminals.js parses the dock=1 URL param', () => {
-    assert.ok(/isDockFrame\s*=\s*urlParams\.get\(['"]dock['"]\)\s*===\s*['"]1['"]/.test(terminalsJs),
-        'terminals.js must parse isDockFrame from the dock=1 URL param');
+test('the dock=1 URL param is parsed once, before first paint', () => {
+    // The parse lives in terminals.html's body-top inline script, not in
+    // terminals.js: terminals.js is the last of seven parser-blocking scripts
+    // (~1.1 MB), so a mode class applied there lands after the browser has had
+    // every chance to paint the full-panel chrome — the dock's sidebar flash.
+    const terminalsHtml = fs.readFileSync(path.join(__dirname, '../webview/terminals.html'), 'utf8');
+    const bodyIdx = terminalsHtml.search(/<\/head\s*>/i);
+    const sidebarIdx = terminalsHtml.indexOf('class="terminals-sidebar"');
+    const parseIdx = terminalsHtml.indexOf("p.get('dock') === '1'");
+    assert.ok(parseIdx !== -1, 'terminals.html must parse the dock=1 URL param');
+    assert.ok(parseIdx > bodyIdx && parseIdx < sidebarIdx,
+        'the mode parse must sit inside <body> and BEFORE the sidebar markup, or the chrome can paint unclassed');
+    assert.ok(/window\.__SB_TERMINAL_MODE__\s*=/.test(terminalsHtml),
+        'the early script must publish the parsed mode for terminals.js to consume');
+
+    // ONE parser: terminals.js consumes the published object and must NOT
+    // re-read location.search for mode — two readers can disagree about dock mode.
+    assert.ok(/window\.__SB_TERMINAL_MODE__/.test(terminalsJs),
+        'terminals.js must read the published mode');
+    assert.ok(!/urlParams\.get\(['"]dock['"]\)/.test(terminalsJs),
+        'terminals.js must NOT re-parse the dock param — the early script is the single reader');
+    assert.ok(/isDockFrame = publishedMode\.dock === true/.test(terminalsJs),
+        'terminals.js must derive isDockFrame from the published mode');
 });
 
-test('dock contains two iframes (agent + kanban) and tab strip in header', () => {
+test('dock contains agent + CLI iframes and three-tab strip in header', () => {
     assert.ok(shellHtml.includes('id="dock-frame"'), '#dock-frame must exist in shell.html');
-    assert.ok(shellHtml.includes('id="dock-kanban-frame"'), '#dock-kanban-frame must exist in shell.html');
+    assert.ok(shellHtml.includes('id="dock-cli-frame"'), '#dock-cli-frame must exist in shell.html');
+    assert.ok(!shellHtml.includes('id="dock-kanban-frame"'), '#dock-kanban-frame must be removed');
     assert.ok(shellHtml.includes('id="dock-tabs"'), '#dock-tabs must exist in shell.html');
     assert.ok(shellHtml.includes('id="dock-tab-agent"'), '#dock-tab-agent must exist in shell.html');
-    assert.ok(shellHtml.includes('id="dock-tab-kanban"'), '#dock-tab-kanban must exist in shell.html');
+    assert.ok(shellHtml.includes('id="dock-tab-cli"'), '#dock-tab-cli must exist in shell.html');
+    assert.ok(shellHtml.includes('id="dock-tab-fleet"'), '#dock-tab-fleet must exist in shell.html');
+    assert.ok(!shellHtml.includes('id="dock-tab-kanban"'), '#dock-tab-kanban must be removed');
 
     // Tab strip ahead of title and close
     const tabsIdx = shellHtml.indexOf('id="dock-tabs"');
@@ -384,9 +536,11 @@ test('dock contains two iframes (agent + kanban) and tab strip in header', () =>
     assert.ok(tabsIdx < titleIdx && titleIdx < closeIdx,
         'tab strip must sit ahead of #dock-title and #dock-close in #dock-header');
 
-    // Pointer-events rule covers both frames
-    assert.ok(/body\.dock-dragging\s+#dock-kanban-frame/.test(shellHtml),
-        'body.dock-dragging must neutralise #dock-kanban-frame pointer events');
+    // Pointer-events rule covers every dock frame
+    assert.ok(/body\.dock-dragging\s+#dock-cli-frame/.test(shellHtml),
+        'body.dock-dragging must neutralise #dock-cli-frame pointer events');
+    assert.ok(!/body\.dock-dragging\s+#dock-kanban-frame/.test(shellHtml),
+        'body.dock-dragging must not reference the removed #dock-kanban-frame');
 });
 
 test('sb.agentDock persistence handles activeTab and defaults to agent', () => {
@@ -397,11 +551,13 @@ test('sb.agentDock persistence handles activeTab and defaults to agent', () => {
     assert.ok(shellJs.includes('setDockActiveTab'), 'setDockActiveTab must exist in shell.js');
 });
 
-test('applyThemeToAll fans out to both dockFrame and dockKanbanFrame', () => {
+test('applyThemeToAll fans out to dockFrame and dockCliFrame', () => {
     const fn = shellJs.match(/function\s+applyThemeToAll\([\s\S]*?\n\s{4}\}/);
     assert.ok(fn, 'applyThemeToAll function must exist');
-    assert.ok(/dockFrame/.test(fn[0]) && /dockKanbanFrame/.test(fn[0]),
+    assert.ok(/dockFrame/.test(fn[0]) && /dockCliFrame/.test(fn[0]),
         'applyThemeToAll must fan out theme changes to BOTH dock frames');
+    assert.ok(!/dockKanbanFrame/.test(fn[0]),
+        'applyThemeToAll must not reference the removed dockKanbanFrame');
 });
 
 test('kanban dock mode is handled in terminals.js and CSS in terminals.html', () => {
@@ -416,8 +572,10 @@ test('kanban dock mode is handled in terminals.js and CSS in terminals.html', ()
         'terminals.html must style #pane-grid for body.is-kanban');
 
     // Precedence and parsing
-    assert.ok(terminalsJs.includes("urlParams.get('kanban') === '1'"),
-        'terminals.js must parse kanban query param');
+    assert.ok(terminalsHtml.includes("p.get('kanban') === '1'"),
+        'terminals.html\'s body-top mode script must parse the kanban query param');
+    assert.ok(terminalsJs.includes('isKanbanDock = publishedMode.kanban === true'),
+        'terminals.js must derive isKanbanDock from the published mode');
 
     // Poll suppressions in kanban mode
     assert.ok(/startFleetPoll\(\)\s*\{[^}]*isKanbanDock/.test(terminalsJs),

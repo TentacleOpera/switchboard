@@ -20,7 +20,7 @@
         CSP: same-origin only; scripts via nonce; frames same-origin; WebSocket
         to 127.0.0.1 for the panels' live transport.
     -->
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{NONCE}}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* ws://localhost:* wss://localhost:* ws://*.localhost:* wss://*.localhost:*; frame-src 'self'; manifest-src 'self';" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{NONCE}}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws: wss:; frame-src 'self'; manifest-src 'self';" />
     <style>
         @font-face {
             font-family: 'Hanken Grotesk';
@@ -39,6 +39,11 @@
             --accent-dim: #007a8a;
             --font:      'Hanken Grotesk', Menlo, Consolas, sans-serif;
             --font-code: Menlo, Consolas, monospace;
+            /* Cluster band: the vertical space reserved at the dock's top for the
+               top-right control cluster (6px top margin + 36px button height +
+               4px gap). Consumed by #agent-dock and #dock-splitter as margin-top
+               so the dock opens below the cluster rather than displacing it. */
+            --cluster-band: calc(6px + 36px + 4px);
         }
         /* Claudify: retint the strip's highlight to the panels' terracotta accent
            (mirrors body.theme-claudify in kanban.html — #D97757 / #E2A188). The
@@ -184,11 +189,13 @@
            Reserved band: the top ~34px of every panel's right edge is tab-strip
            whitespace; panel controls must start below this band so they are not
            occluded by the cluster.
-           Fixed positioning; right offset tracks --dock-width when the dock is open. */
+           Fixed positioning; anchored to the shell's right edge. The dock opens
+           BELOW the cluster (via --cluster-band on #agent-dock and #dock-splitter)
+           rather than displacing it leftward. */
         #top-right-cluster {
             position: fixed;
             top: calc(env(safe-area-inset-top, 0px) + 6px);
-            right: calc(var(--dock-width, 0px) + 6px);
+            right: 6px;
             z-index: 40;
             display: flex;
             flex-direction: row;
@@ -326,6 +333,8 @@
             display: none;
             flex-direction: column;
             overflow: hidden;
+            /* Open below the top-right cluster rather than displacing it. */
+            margin-top: var(--cluster-band);
         }
         #agent-dock.is-open { display: flex; }
         #dock-splitter {
@@ -333,6 +342,8 @@
             cursor: col-resize;
             background: transparent;
             display: none;
+            /* Same band as #agent-dock so the splitter starts at the same height. */
+            margin-top: var(--cluster-band);
         }
         #dock-splitter.is-open { display: block; }
         #dock-splitter:hover, #dock-splitter.is-dragging { background: var(--accent-dim); }
@@ -418,9 +429,9 @@
            attribute stays on the markup for assistive tech; the class is the
            mechanism. Same pattern as .panel-frame / .panel-frame.is-active. */
         #dock-frame,
-        #dock-kanban-frame { display: none; flex: 1 1 auto; border: none; width: 100%; background: var(--bg); }
+        #dock-cli-frame { display: none; flex: 1 1 auto; border: none; width: 100%; background: var(--bg); }
         #dock-frame.is-visible,
-        #dock-kanban-frame.is-visible { display: block; }
+        #dock-cli-frame.is-visible { display: block; }
         #dock-fleet {
             display: none;
             flex: 1 1 auto;
@@ -622,7 +633,7 @@
            this the drag dies the instant the cursor crosses into a frame. */
         body.dock-dragging .panel-frame,
         body.dock-dragging #dock-frame,
-        body.dock-dragging #dock-kanban-frame { pointer-events: none; }
+        body.dock-dragging #dock-cli-frame { pointer-events: none; }
 
         /* Browser-only shell: dark native palette + a 6px strip scrollbar to
            match the panels it frames. #strip is the document's only scroller
@@ -677,7 +688,7 @@
         <div id="dock-header">
             <div id="dock-tabs" role="tablist" aria-label="Dock tabs">
                 <button id="dock-tab-agent" type="button" class="dock-tab-btn is-active" role="tab" aria-selected="true">Agent</button>
-                <button id="dock-tab-kanban" type="button" class="dock-tab-btn" role="tab" aria-selected="false">Kanban</button>
+                <button id="dock-tab-cli" type="button" class="dock-tab-btn" role="tab" aria-selected="false">CLI</button>
                 <button id="dock-tab-fleet" type="button" class="dock-tab-btn" role="tab" aria-selected="false">Fleet</button>
             </div>
             <span id="dock-title"></span>
@@ -693,7 +704,7 @@
         </div>
         <iframe id="dock-frame" title="Agent terminal"
                 allow="clipboard-read; clipboard-write" hidden></iframe>
-        <iframe id="dock-kanban-frame" title="Kanban pane"
+        <iframe id="dock-cli-frame" title="CLI terminal"
                 allow="clipboard-read; clipboard-write" hidden></iframe>
         <div id="dock-fleet" class="dock-fleet-pane" hidden>
             <div id="dock-fleet-offline" class="dock-fleet-offline" hidden>

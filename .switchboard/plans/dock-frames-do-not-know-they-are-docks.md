@@ -241,3 +241,34 @@ remembered.
 - Open the dock's agent tab — no sidebar flash.
 - Work the pane's normal actions; `#content` never changes behind the dock.
 - Confirm `linear.js`'s Tickets switch still works from the content area.
+
+## Implementation Summary
+
+All four proposed changes landed. Defect 1: `loadLayoutSettings` now re-clamps `kanbanPaneColumn`, `kanbanPaneWorkspace`, and `kanbanPaneProject` to dock-local defaults when `isDockFrame` is set, so a dock document no longer renders against the main panel's pane-scoped state. Defect 2: the `is-solo` / `is-kanban` / `is-team-scoped` body class is applied at module scope (right after the single `location.search` parse), before `init()` runs, eliminating the first-paint sidebar/toolbar flash; `init()` re-applies defensively as an idempotent fallback. Defect 3: `transport.js` derives its own `isDockFrame` from `location.search` (with cross-reference comments to `terminals.js`), guards both `switchPanel` senders (`PANEL_SWITCH_VERBS` and `__switchboardSwitchPanel`) with a `console.warn` no-op, and posts with `location.origin` instead of `'*'`; `shell.js`'s `switchPanel` arm now carries the origin check the other three arms already had. Change 4: the full parent-directed `postMessage` surface is enumerated as a comment in `transport.js`, recording each relay's dock-safety status. Syntax verified via `node --check` on all three files; compilation and tests skipped per orders.
+
+
+## Review Findings
+
+Reviewed against the plan's three defects; all three land, but defect 2's fix did not
+reach its Goal Invariant and was corrected. The mode class was applied at the top of
+`terminals.js` — the last of seven parser-blocking scripts (~1.1 MB of xterm, the
+viewport module and the panel), with `.terminals-sidebar` as the first element in
+`<body>` — so the chrome could still paint unclassed and the reported flash survived;
+the parse and the class now live in a nonce'd body-top script in `terminals.html`
+(`src/webview/terminals.html`), which publishes `window.__SB_TERMINAL_MODE__` for
+`terminals.js` to consume, keeping the plan's one-parser rule intact and reporting
+loudly rather than silently defaulting if the early script did not run. Defect 1's
+re-clamp and defect 3's `transport.js` guards, `location.origin` post and shell-side
+origin check are all correct as written. The plan specified nine automated tests and
+shipped none, so five were added to the CI-wired `shell-agent-dock` suite covering the
+clamp, both `switchPanel` senders, the `linear.js` non-regression, a
+classify-every-arm origin gate, and the relay audit. Files changed:
+`src/webview/terminals.html`, `src/webview/terminals.js`,
+`src/test/shell-agent-dock.test.js`; `test:contract:shell-agent-dock` is 40/0 (32/2 at
+HEAD) and `test:contract:shell-terminal-strip` 75/0.
+
+## Deferred Findings
+
+- NIT `src/webview/terminals.js:216` — `?kanban=1` still parses into `isKanbanDock`, which now has no live caller anywhere in the codebase. Retiring the dock URL parameters is owned by `the-dock-becomes-its-own-document.md` (its Proposed Change 4), which has not been implemented.
+- NIT `src/webview/terminals.js:1971` — `saveLayoutSettings` early-returns on `soloTerminalName || isKanbanDock` rather than `isDockFrame`. Every dock tab is currently a `?solo=` document so the guard holds, but a future `?dock=1` document without `solo=` would write the main panel's layout settings back.
+- NIT `src/webview/shell.js:1603` — the `switchboardThemeChanged` shell arm deliberately carries no origin check (transport.js dispatches theme pushes as synthetic events with an empty origin). This is now recorded as an explicit exemption in the new arm-classification test rather than left as an unexplained gap.

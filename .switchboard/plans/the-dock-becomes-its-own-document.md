@@ -192,3 +192,27 @@ live caller. Remove them in the same change so the panel stops carrying a mode n
   completion light.
 - Resize to the dock's minimum width; all three tabs render.
 - Confirm the Terminals panel, popouts and the board are unchanged.
+
+
+## Review Findings
+
+**Not implemented.** No implementation exists for this plan anywhere in the working tree:
+there is no `src/webview/dock.html`, no `src/webview/dock.js`, no `/dock` route in
+`LocalApiServer.ts`, no `getDockHtml` getter in either composition root, and no `dock`
+entry in the panels manifest. The shell still hosts two Terminals-panel iframes pointed
+at `/terminals?solo=<name>&dock=1` (`src/webview/shell.js:816` for the Agent tab and
+`:879` for the CLI tab), which is exactly the shape this plan exists to replace, and the
+`isDockFrame` guards in `terminals.js` still have live callers, so Proposed Change 4 is
+not reachable either. Its two hard prerequisites — the viewport extraction and the
+three-tab rework — have both landed and were reviewed in this pass, so the plan is
+unblocked; nothing else about it has started. No code was changed for this plan and no
+verification was run against it, because there is nothing to verify. The card should go
+back to a pre-coding column rather than be treated as reviewed.
+
+## Deferred Findings
+
+- CRITICAL not implemented: `src/webview/dock.html` and `dock.js` (Proposed Change 1) do not exist.
+- CRITICAL not implemented: `/dock` is served by neither composition root (Proposed Change 2) — the manifest-panel-vs-own-getter decision the plan flagged as its key design choice is unmade.
+- CRITICAL not implemented: `src/webview/shell.js:816,879` still mount two `/terminals?…&dock=1` iframes rather than one `/dock` frame (Proposed Change 3).
+- CRITICAL not implemented: the four `isDockFrame` guards in `terminals.js` still have live callers, so Proposed Change 4 cannot be applied.
+- MAJOR all nine of the plan's automated verification items are unsatisfiable as written; none exist in `src/test/`.

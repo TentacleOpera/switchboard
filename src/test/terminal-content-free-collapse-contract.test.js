@@ -32,6 +32,7 @@ const assert = require('assert');
 
 const gatewayTs = fs.readFileSync(path.join(__dirname, '../standalone/terminalWsGateway.ts'), 'utf8');
 const terminalsJs = fs.readFileSync(path.join(__dirname, '../webview/terminals.js'), 'utf8');
+const terminalViewportJs = fs.readFileSync(path.join(__dirname, '../webview/terminalViewport.js'), 'utf8');
 const terminalsHtml = fs.readFileSync(path.join(__dirname, '../webview/terminals.html'), 'utf8');
 const bootstrapTs = fs.readFileSync(path.join(__dirname, '../standalone/bootstrap.ts'), 'utf8');
 const taskViewerTs = fs.readFileSync(path.join(__dirname, '../services/TaskViewerProvider.ts'), 'utf8');
@@ -364,11 +365,11 @@ test('headSafeStart eviction handling is unchanged — no parallel re-derivation
 // ---------------------------------------------------------------------------
 
 test('the webview tracks lastPrintableAt, lastFrameAt and firstFrameAt per pane entry', () => {
-    assert.ok(/lastPrintableAt:\s*0/.test(terminalsJs),
+    assert.ok(/lastPrintableAt:\s*0/.test(terminalViewportJs),
         'terminal entries must initialise lastPrintableAt to 0');
-    assert.ok(/lastFrameAt:\s*0/.test(terminalsJs),
+    assert.ok(/lastFrameAt:\s*0/.test(terminalViewportJs),
         'terminal entries must initialise lastFrameAt to 0');
-    assert.ok(/firstFrameAt:\s*0/.test(terminalsJs),
+    assert.ok(/firstFrameAt:\s*0/.test(terminalViewportJs),
         'terminal entries must initialise firstFrameAt to 0');
 });
 
@@ -384,7 +385,7 @@ test('the silence clock falls back to firstFrameAt, never to lastFrameAt', () =>
         'the never-printed fallback must be firstFrameAt');
     assert.ok(!/entry\.lastPrintableAt \|\| entry\.lastFrameAt/.test(update),
         'lastFrameAt must NOT be the silence-clock origin — the heartbeat restamps it');
-    assert.ok(/if \(!entry\.firstFrameAt\) \{ entry\.firstFrameAt = now; \}/.test(terminalsJs),
+    assert.ok(/if \(!entry\.firstFrameAt\) \{ entry\.firstFrameAt = now; \}/.test(terminalViewportJs),
         'firstFrameAt must be stamped once, on the first live frame');
 });
 
@@ -393,9 +394,9 @@ test('the silence clock falls back to firstFrameAt, never to lastFrameAt', () =>
 // there is real main-thread cost on the busiest terminals — which are exactly
 // the ones that will never show this signal.
 test('the printable scan and the DOM clear are throttled off the live-frame hot path', () => {
-    assert.ok(/const PRINTABLE_SCAN_THROTTLE_MS = \d+;/.test(terminalsJs),
+    assert.ok(/const PRINTABLE_SCAN_THROTTLE_MS = \d+;/.test(terminalViewportJs),
         'a scan throttle constant must exist');
-    const stamp = block(terminalsJs, 'entry.batchQueue.push(text);', 'scheduleBatchFlush(entry);');
+    const stamp = block(terminalViewportJs, 'entry.batchQueue.push(text);', 'scheduleBatchFlush(entry);');
     assert.ok(/now - entry\.lastPrintableAt >= PRINTABLE_SCAN_THROTTLE_MS/.test(stamp),
         'the printable scan must be gated by the throttle');
     assert.ok(/workingSilenceShown\.has\(entry\.name\)/.test(stamp),
@@ -404,7 +405,7 @@ test('the printable scan and the DOM clear are throttled off the live-frame hot 
 
 test('the webview stamps timers only on LIVE frames, not replay frames', () => {
     // The awaitingReplayFrame branch returns before the stamping site.
-    const onmessage = block(terminalsJs, 'ws.onmessage = (event) => {', 'ws.onclose = () => {');
+    const onmessage = block(terminalViewportJs, 'ws.onmessage = (event) => {', 'ws.onclose = () => {');
     const replayReturn = onmessage.indexOf('writeReplay(entry, text);');
     const stampSite = onmessage.indexOf('entry.lastFrameAt = now;');
     assert.ok(replayReturn !== -1 && stampSite !== -1,
@@ -414,9 +415,9 @@ test('the webview stamps timers only on LIVE frames, not replay frames', () => {
 });
 
 test('the webview resets lastPrintableAt only on a printable glyph via frameHasPrintable', () => {
-    assert.ok(/function frameHasPrintable\(text\)/.test(terminalsJs),
+    assert.ok(/function frameHasPrintable\(text\)/.test(terminalViewportJs),
         'frameHasPrintable must be defined');
-    const stamp = block(terminalsJs, 'entry.batchQueue.push(text);', 'scheduleBatchFlush(entry);');
+    const stamp = block(terminalViewportJs, 'entry.batchQueue.push(text);', 'scheduleBatchFlush(entry);');
     assert.ok(stamp.includes('frameHasPrintable(text)'),
         'the binary live path must test the frame for printables');
     assert.ok(/if \(frameHasPrintable\(text\)\) {[\s\S]*?entry\.lastPrintableAt = now;/.test(stamp),
@@ -437,7 +438,7 @@ test('the signal is gated on the seat holding a dispatched card', () => {
 });
 
 test('the signal clears the instant a printable frame arrives', () => {
-    const stamp = block(terminalsJs, 'entry.batchQueue.push(text);', 'scheduleBatchFlush(entry);');
+    const stamp = block(terminalViewportJs, 'entry.batchQueue.push(text);', 'scheduleBatchFlush(entry);');
     assert.ok(stamp.includes('clearWorkingSilence(entry.name)'),
         'a printable live frame must call clearWorkingSilence immediately');
 });
@@ -469,11 +470,11 @@ test('the sweep is started once during init', () => {
 });
 
 test('the affordance is cleared on terminal destroy, exit, and error', () => {
-    assert.ok(/destroyTerminalView[\s\S]{0,200}clearWorkingSilence\(name\)/.test(terminalsJs),
+    assert.ok(/destroyTerminalView[\s\S]{0,200}clearWorkingSilence\(name\)/.test(terminalViewportJs),
         'destroyTerminalView must clear the affordance');
-    assert.ok(/frame\.t === 'error'[\s\S]{0,500}clearWorkingSilence\(entry\.name\)/.test(terminalsJs),
+    assert.ok(/frame\.t === 'error'[\s\S]{0,500}clearWorkingSilence\(entry\.name\)/.test(terminalViewportJs),
         'the error frame handler must clear the affordance');
-    assert.ok(/frame\.t === 'exit'[\s\S]{0,900}clearWorkingSilence\(entry\.name\)/.test(terminalsJs),
+    assert.ok(/frame\.t === 'exit'[\s\S]{0,900}clearWorkingSilence\(entry\.name\)/.test(terminalViewportJs),
         'the exit frame handler must clear the affordance');
 });
 

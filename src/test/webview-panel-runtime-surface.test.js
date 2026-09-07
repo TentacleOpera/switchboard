@@ -53,6 +53,7 @@ console.log('Browser-panel runtime surface contract');
 check('terminals.js subscribes only to xterm events the VENDORED public Terminal exposes', () => {
     const bundle = fs.readFileSync(path.join(WEBVIEW, 'vendor', 'xterm', 'xterm.js'), 'utf8');
     const panel = fs.readFileSync(path.join(WEBVIEW, 'terminals.js'), 'utf8');
+    const viewport = fs.readFileSync(path.join(WEBVIEW, 'terminalViewport.js'), 'utf8');
 
     // The public class is the one carrying `get textarea()` alongside its event
     // getters — the internal CoreTerminal subclass has no helper textarea. Locate it
@@ -75,12 +76,17 @@ check('terminals.js subscribes only to xterm events the VENDORED public Terminal
     assert.ok(exposed.has('onData'), `public Terminal must expose onData; found: ${[...exposed].join(', ')}`);
 
     // `term` is the local name materializeTerminalView binds the instance to.
-    const used = new Set([...panel.matchAll(/\bterm\.(on[A-Z][\w$]*)\s*\(/g)].map(m => m[1]));
+    // The viewport module (terminalViewport.js) now holds materializeTerminalView,
+    // so scan BOTH files — the panel and the extracted viewport module.
+    const used = new Set([
+        ...panel.matchAll(/\bterm\.(on[A-Z][\w$]*)\s*\(/g),
+        ...viewport.matchAll(/\bterm\.(on[A-Z][\w$]*)\s*\(/g),
+    ].map(m => m[1]));
     const missing = [...used].filter(u => !exposed.has(u));
     assert.deepStrictEqual(
         missing,
         [],
-        `terminals.js calls term.${missing.join('/term.')}, which the vendored public Terminal does not expose. ` +
+        `terminals.js/terminalViewport.js calls term.${missing.join('/term.')}, which the vendored public Terminal does not expose. ` +
         'These throw at runtime from inside materializeTerminalView, and connectTerminalSocket() runs AFTER that ' +
         'point — so the pane renders a blank xterm and reports "connecting" forever. ' +
         `Exposed: ${[...exposed].sort().join(', ')}`

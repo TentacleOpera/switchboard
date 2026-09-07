@@ -17,6 +17,7 @@ const assert = require('assert');
 
 const gatewayCode = fs.readFileSync(path.join(__dirname, '../standalone/terminalWsGateway.ts'), 'utf8');
 const terminalsJs = fs.readFileSync(path.join(__dirname, '../webview/terminals.js'), 'utf8');
+const terminalViewportJs = fs.readFileSync(path.join(__dirname, '../webview/terminalViewport.js'), 'utf8');
 
 let passed = 0;
 let failed = 0;
@@ -45,22 +46,22 @@ function block(code, startMarker, endMarker) {
 
 test('the ack is emitted from the xterm write callback, not from onmessage', () => {
     assert.ok(
-        terminalsJs.includes('entry.term.write(combined, () => onWriteParsed(entry, combined.length))'),
+        terminalViewportJs.includes('entry.term.write(combined, () => onWriteParsed(entry, combined.length))'),
         'flushBatch must pass a write callback — acking on receipt measures the transport, which is the bug being fixed'
     );
-    const onMessage = block(terminalsJs, 'ws.onmessage = (event) => {', 'ws.onclose = () =>');
+    const onMessage = block(terminalViewportJs, 'ws.onmessage = (event) => {', 'ws.onclose = () =>');
     assert.ok(!onMessage.includes("t: 'ack'"), 'ws.onmessage must not send an ack directly');
-    assert.ok(block(terminalsJs, 'function onWriteParsed(', 'window.__sbTerminalStats').includes("t: 'ack'"),
+    assert.ok(block(terminalViewportJs, 'function onWriteParsed(', 'function destroyTerminalView(').includes("t: 'ack'"),
         'onWriteParsed must be the only ack emitter');
 });
 
 test('flushBatch wraps term.write in try/catch', () => {
-    assert.ok(/try\s*\{\s*entry\.term\.write/.test(terminalsJs),
+    assert.ok(/try\s*\{\s*entry\.term\.write/.test(terminalViewportJs),
         "xterm throws at 50 MB of pending data; unguarded, that escapes a rAF callback and the terminal never drains again");
 });
 
 test('flushBatch guards on disposed, NOT exited', () => {
-    const flush = block(terminalsJs, 'function flushBatch(entry)', 'function onWriteParsed(');
+    const flush = block(terminalViewportJs, 'function flushBatch(entry)', 'function onWriteParsed(');
     assert.ok(flush.includes('entry.disposed'), 'flushBatch must bail on a disposed view');
     assert.ok(!/if \(!entry \|\| entry\.exited/.test(flush),
         'guarding on exited drops the final output of an exiting process — the gateway drains before announcing exit, so that output is still queued here');
@@ -76,9 +77,9 @@ test('replay is excluded from the credit ledger on BOTH ends', () => {
     const setup = block(gatewayCode, 'private setupClient(', "ws.on('pong'");
     assert.ok(!setup.includes('unackedChars +='), 'setupClient must not bill the replay burst to the new client');
     assert.ok(setup.includes('replayChars'), 'hello must carry the replay length so the client knows what not to ack');
-    assert.ok(terminalsJs.includes('entry.ackSuppressChars'),
+    assert.ok(terminalViewportJs.includes('entry.ackSuppressChars'),
         'the client must suppress acks for replayed chars — otherwise it pays down credit it never consumed and backpressure is off for the first 256 KB after every reconnect');
-    const onWrite = block(terminalsJs, 'function onWriteParsed(', 'window.__sbTerminalStats');
+    const onWrite = block(terminalViewportJs, 'function onWriteParsed(', 'function destroyTerminalView(');
     assert.ok(onWrite.includes('entry.ackSuppressChars'), 'the suppression budget must be burned inside onWriteParsed');
 });
 
@@ -105,16 +106,16 @@ test('credit is reset with the ClientState on every attach', () => {
     // End marker is the socket-URL build. It used to be `const protocol =`, which the
     // out-of-process pty host removed: the scheme is now baked into the module-scope
     // PTY_HOST_ORIGIN, because the gateway no longer lives on the page's own origin.
-    const connect = block(terminalsJs, 'function connectTerminalSocket(entry)', 'let wsUrl =');
+    const connect = block(terminalViewportJs, 'function connectTerminalSocket(entry)', 'let wsUrl =');
     assert.ok(connect.includes('entry.pendingAckChars = 0') && connect.includes('entry.ackSuppressChars = 0'),
         'both client-side accumulators must be zeroed on reconnect');
 });
 
 test('batching is page-level on both ends, with the hidden-panel fallback intact', () => {
-    assert.ok(!terminalsJs.includes('animationFrameId'), 'no per-entry rAF may remain');
-    assert.ok(terminalsJs.includes('pendingBatchEntries') && terminalsJs.includes('sharedBatchRafId'),
+    assert.ok(!terminalViewportJs.includes('animationFrameId'), 'no per-entry rAF may remain');
+    assert.ok(terminalViewportJs.includes('pendingBatchEntries') && terminalViewportJs.includes('sharedBatchRafId'),
         'the drain must be a single page-level rAF over a pending set');
-    assert.ok(terminalsJs.includes('sharedBatchFallbackTimer') && terminalsJs.includes('BATCH_FALLBACK_MS'),
+    assert.ok(terminalViewportJs.includes('sharedBatchFallbackTimer') && terminalViewportJs.includes('BATCH_FALLBACK_MS'),
         'rAF is parked in a display:none iframe — the fallback timer is the only thing draining a hidden panel');
     assert.ok(gatewayCode.includes('sharedFlushInterval') && gatewayCode.includes('pendingFlushTerminals'),
         'the gateway must coalesce onto one shared flush tick rather than a timer per terminal');
@@ -135,7 +136,7 @@ test('unassign arms disposal and assignment cancels it', () => {
 });
 
 test('every disposal path clears the detach timer', () => {
-    const destroy = block(terminalsJs, 'function destroyTerminalView(name)', 'function createTerminalView(');
+    const destroy = block(terminalViewportJs, 'function destroyTerminalView(name)', 'function createTerminalView(');
     assert.ok(destroy.includes('cancelDetachTimer(name)'),
         'PtyFleetService reuses freed names, so a stale timer could dispose a DIFFERENT terminal that inherited the name');
     assert.ok(destroy.includes('pendingBatchEntries.delete(entry)'), 'disposal must drop the entry from the page-level drain set');
@@ -151,11 +152,11 @@ test('the detach timer re-checks assignment before disposing', () => {
 });
 
 test('WebGL contexts are capped before construction, and released exactly once', () => {
-    assert.ok(terminalsJs.includes('MAX_WEBGL_CONTEXTS = 12'),
+    assert.ok(terminalViewportJs.includes('MAX_WEBGL_CONTEXTS = 12'),
         '12, not 16 — the other panels share the page context budget');
-    assert.ok(terminalsJs.includes('liveWebglContexts < MAX_WEBGL_CONTEXTS'),
+    assert.ok(terminalViewportJs.includes('liveWebglContexts < MAX_WEBGL_CONTEXTS'),
         'the cap must be checked BEFORE constructing WebglAddon; by the time onContextLoss fires the damage has landed on a different terminal');
-    const attach = block(terminalsJs, 'function attachRenderer(term, entry)', 'const ALL_THEME_CLASSES');
+    const attach = block(terminalViewportJs, 'function attachRenderer(term, entry)', 'function forceReleaseWebglContext');
     assert.ok(attach.includes('liveWebglContexts - 1'), 'context loss must decrement the counter');
 
     // Accounting is a ONE-SHOT closure minted at the moment of acquisition, not three
@@ -172,10 +173,10 @@ test('WebGL contexts are capped before construction, and released exactly once',
 
     // The invariant that replaces hand-paired accounting: exactly one increment, and no
     // decrement anywhere outside the closure.
-    const incrementSites = terminalsJs.match(/liveWebglContexts\+\+/g) || [];
+    const incrementSites = terminalViewportJs.match(/liveWebglContexts\+\+/g) || [];
     assert.strictEqual(incrementSites.length, 1, 'exactly one increment site, and it must be in attachRenderer');
     assert.ok(attach.includes('liveWebglContexts++'), 'the single increment must live in attachRenderer');
-    const decrementSites = terminalsJs.match(/liveWebglContexts(--|\s*-=|\s*=\s*Math\.max\(0, liveWebglContexts - 1\))/g) || [];
+    const decrementSites = terminalViewportJs.match(/liveWebglContexts(--|\s*-=|\s*=\s*Math\.max\(0, liveWebglContexts - 1\))/g) || [];
     assert.strictEqual(decrementSites.length, 1,
         'exactly one decrement site — it must live in the holder.release closure and nowhere else');
 
@@ -187,7 +188,7 @@ test('WebGL contexts are capped before construction, and released exactly once',
     assert.ok(lossHandler.indexOf('if (released) { return; }') < lossHandler.indexOf('holder.release()'),
         'the re-entrancy guard must precede the release call it is guarding');
 
-    const destroy = block(terminalsJs, 'function destroyTerminalView(name)', 'function createTerminalView(');
+    const destroy = block(terminalViewportJs, 'function destroyTerminalView(name)', 'function createTerminalView(');
     const releaseAt = destroy.indexOf('entry.rendererAddon.release()');
     const disposeAt = destroy.indexOf('.dispose()', releaseAt);
     const tryAt = destroy.indexOf('try {', releaseAt);
@@ -199,19 +200,19 @@ test('WebGL contexts are capped before construction, and released exactly once',
 });
 
 test('exited and disposed stay distinct, and reconnect keys on exited', () => {
-    assert.ok(terminalsJs.includes('disposed: false') && terminalsJs.includes('exited: false'),
+    assert.ok(terminalViewportJs.includes('disposed: false') && terminalViewportJs.includes('exited: false'),
         'both flags must exist on the entry shape');
-    const destroy = block(terminalsJs, 'function destroyTerminalView(name)', 'function createTerminalView(');
+    const destroy = block(terminalViewportJs, 'function destroyTerminalView(name)', 'function createTerminalView(');
     const disposedAt = destroy.indexOf('entry.exited = true');
     const closeAt = destroy.indexOf('entry.ws.close()');
     assert.ok(disposedAt !== -1 && closeAt !== -1 && disposedAt < closeAt,
         'exited must be set BEFORE the socket is closed, or onclose reconnects a view that is being torn down');
-    const onclose = block(terminalsJs, 'ws.onclose = () => {', 'function scheduleBatchFlush');
+    const onclose = block(terminalViewportJs, 'ws.onclose = () => {', '// ─── Public surface');
     assert.ok(onclose.includes('entry.exited'), 'the reconnect guard must key on exited');
 });
 
 test('scrollback is explicit', () => {
-    assert.ok(/scrollback: \d+,/.test(terminalsJs),
+    assert.ok(/scrollback: \d+,/.test(terminalViewportJs),
         'left implicit, client memory is untracked against the server ring it now depends on for re-attach');
 });
 

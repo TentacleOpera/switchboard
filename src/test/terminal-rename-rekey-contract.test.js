@@ -27,6 +27,8 @@ const GATEWAY_SRC = fs.readFileSync(
     path.join(__dirname, '..', 'standalone', 'terminalWsGateway.ts'), 'utf8');
 const TERMINALS_JS = fs.readFileSync(
     path.join(__dirname, '..', 'webview', 'terminals.js'), 'utf8');
+const TERMINAL_VIEWPORT_JS = fs.readFileSync(
+    path.join(__dirname, '..', 'webview', 'terminalViewport.js'), 'utf8');
 
 let passed = 0, failed = 0;
 function test(name, fn) {
@@ -106,7 +108,7 @@ test('the client re-keys its view instead of destroying it on rename', () => {
 });
 
 test('a replaced socket cannot arm a reconnect against the new one', () => {
-    const m = TERMINALS_JS.match(/function connectTerminalSocket\([\s\S]*?\n            entry\.ws = null;/);
+    const m = TERMINAL_VIEWPORT_JS.match(/function connectTerminalSocket\([\s\S]*?\n            entry\.ws = null;/);
     assert.ok(m, 'connectTerminalSocket prologue not found');
     assert.match(m[0], /onclose = null/,
         'without destroyTerminalView setting entry.exited first, the outgoing socket\'s ' +

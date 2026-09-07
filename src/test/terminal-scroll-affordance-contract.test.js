@@ -25,6 +25,8 @@ const HTML = fs.readFileSync(
     path.join(__dirname, '..', 'webview', 'terminals.html'), 'utf8');
 const JS = fs.readFileSync(
     path.join(__dirname, '..', 'webview', 'terminals.js'), 'utf8');
+const VP = fs.readFileSync(
+    path.join(__dirname, '..', 'webview', 'terminalViewport.js'), 'utf8');
 
 let passed = 0, failed = 0;
 function test(name, fn) {
@@ -73,12 +75,12 @@ test('the Firefox terminal override stays inside the @supports gate', () => {
 });
 
 test('a jump-to-latest control is built for each materialised view', () => {
-    assert.match(JS, /function attachJumpToLatest\(/, 'attachJumpToLatest missing');
-    assert.match(JS, /term\.scrollToBottom\(\)/, 'the control must actually scroll to bottom');
+    assert.match(VP, /function attachJumpToLatest\(/, 'attachJumpToLatest missing');
+    assert.match(VP, /term\.scrollToBottom\(\)/, 'the control must actually scroll to bottom');
 });
 
 test('visibility is driven by BOTH event sources', () => {
-    const m = JS.match(/function attachJumpToLatest\([\s\S]*?\n    \}/);
+    const m = VP.match(/function attachJumpToLatest\([\s\S]*?\n    \}/);
     assert.ok(m, 'attachJumpToLatest not found');
     assert.match(m[0], /term\.onScroll\(/,
         'without term.onScroll the line count never advances as new output arrives');
@@ -89,7 +91,7 @@ test('visibility is driven by BOTH event sources', () => {
 });
 
 test('both listeners are torn down with the view', () => {
-    const m = JS.match(/function destroyTerminalView\([\s\S]*?\n    \}/);
+    const m = VP.match(/function destroyTerminalView\([\s\S]*?\n    \}/);
     assert.ok(m, 'destroyTerminalView not found');
     assert.match(m[0], /scrollDisposable[\s\S]{0,80}dispose\(\)/,
         'an undisposed onScroll listener outlives its terminal');

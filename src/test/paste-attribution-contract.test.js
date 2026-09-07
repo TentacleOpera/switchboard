@@ -11,6 +11,7 @@ const path = require('path');
 const assert = require('assert');
 
 const terminalsJs = fs.readFileSync(path.join(__dirname, '../webview/terminals.js'), 'utf8');
+const terminalViewportJs = fs.readFileSync(path.join(__dirname, '../webview/terminalViewport.js'), 'utf8');
 const protocolCatalog = JSON.parse(fs.readFileSync(path.join(__dirname, '../../protocol-catalog.json'), 'utf8'));
 const allowlistTs = fs.readFileSync(path.join(__dirname, '../generated/verbAllowlist.ts'), 'utf8');
 const kanbanDb = fs.readFileSync(path.join(__dirname, '../services/KanbanDatabase.ts'), 'utf8');
@@ -50,7 +51,7 @@ test('kanban-pane Copy Prompt handler reads data.prompt and writes navigator.cli
 // ---------------------------------------------------------------- paste attribution scanner contracts
 
 test('extractPastedDispatchIdentity is defined and scans for dispatch identity', () => {
-    const fn = block(terminalsJs, 'function extractPastedDispatchIdentity(text) {', 'const pendingBatchEntries = new Set();');
+    const fn = block(terminalViewportJs, 'function extractPastedDispatchIdentity(text) {', 'const pendingBatchEntries = new Set();');
     assert.ok(fn.includes('PLANS TO PROCESS:'), 'scanner must look for dispatch marker');
     assert.ok(fn.includes('PLANS TO DISCUSS:'), 'scanner must reject consultation marker');
     // Plan ids are UUIDs. The shipped `(\d+)` captured a single leading digit
@@ -64,7 +65,7 @@ test('extractPastedDispatchIdentity is defined and scans for dispatch identity',
 });
 
 test('term.onData arms attribution and fires attributePastedPrompt on a later submit', () => {
-    const onData = block(terminalsJs, 'term.onData((data) => {', 'if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {');
+    const onData = block(terminalViewportJs, 'term.onData((data) => {', 'if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {');
     assert.ok(onData.includes('extractPastedDispatchIdentity(data)'), 'onData must call the scanner');
     assert.ok(onData.includes('entry.pendingAttribution'), 'onData must maintain pendingAttribution state');
     assert.ok(onData.includes('/kanban/verb/attributePastedPrompt'), 'onData must POST to attributePastedPrompt');
@@ -73,9 +74,9 @@ test('term.onData arms attribution and fires attributePastedPrompt on a later su
 });
 
 test('pendingAttribution is cleared on socket close and terminal kill', () => {
-    assert.ok(terminalsJs.includes('ws.onclose = () => {\n            entry.pendingAttribution = null;'), 'ws.onclose must clear pendingAttribution');
-    assert.ok(terminalsJs.includes('entry.exited = true;\n        entry.pendingAttribution = null;'), 'destroyTerminalView must clear pendingAttribution');
-    assert.ok(terminalsJs.includes('entry.pendingAttribution = null;\n            try { entry.ws.onclose = null; }'), 'reconnect must clear pendingAttribution');
+    assert.ok(terminalViewportJs.includes('ws.onclose = () => {\n            entry.pendingAttribution = null;'), 'ws.onclose must clear pendingAttribution');
+    assert.ok(terminalViewportJs.includes('entry.exited = true;\n        entry.pendingAttribution = null;'), 'destroyTerminalView must clear pendingAttribution');
+    assert.ok(terminalViewportJs.includes('entry.pendingAttribution = null;\n            try { entry.ws.onclose = null; }'), 'reconnect must clear pendingAttribution');
 });
 
 test('KanbanDatabase has attributePasteDispatch writer', () => {

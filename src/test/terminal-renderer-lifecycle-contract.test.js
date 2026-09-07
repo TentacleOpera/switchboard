@@ -29,6 +29,7 @@ const fs = require('fs');
 const path = require('path');
 
 const SRC = fs.readFileSync(path.join(__dirname, '..', 'webview', 'terminals.js'), 'utf8');
+const VP = fs.readFileSync(path.join(__dirname, '..', 'webview', 'terminalViewport.js'), 'utf8');
 const ADDON = fs.readFileSync(
     path.join(__dirname, '..', 'webview', 'vendor', 'xterm', 'addon-webgl.js'), 'utf8');
 
@@ -38,20 +39,21 @@ function test(name, fn) {
     catch (e) { failed++; console.error(`  ❌ ${name}\n     ${e.message}`); }
 }
 
-function block(startMarker, endMarker) {
-    const start = SRC.indexOf(startMarker);
+function block(startMarker, endMarker, source) {
+    const src = source || VP;
+    const start = src.indexOf(startMarker);
     assert.ok(start !== -1, `marker not found: ${startMarker}`);
-    const end = SRC.indexOf(endMarker, start);
+    const end = src.indexOf(endMarker, start);
     assert.ok(end !== -1, `end marker not found AFTER "${startMarker}": ${endMarker}`);
     assert.ok(end > start, `span is inverted — check declaration order: ${startMarker}`);
-    return SRC.substring(start, end);
+    return src.substring(start, end);
 }
 
 // attachRenderer through the release/reconcile helpers that follow it.
-const RENDERER_BLOCK = () => block('function attachRenderer(term, entry)', 'const ALL_THEME_CLASSES');
+const RENDERER_BLOCK = () => block('function attachRenderer(term, entry)', 'function forceReleaseWebglContext');
 
 test('exactly one increment, exactly one decrement path', () => {
-    const increments = SRC.match(/liveWebglContexts\+\+/g) || [];
+    const increments = VP.match(/liveWebglContexts\+\+/g) || [];
     assert.strictEqual(increments.length, 1, 'exactly one increment site');
     assert.ok(RENDERER_BLOCK().includes('liveWebglContexts++'),
         'the single increment must live inside attachRenderer');
@@ -59,7 +61,7 @@ test('exactly one increment, exactly one decrement path', () => {
     // Any decrement outside the one-shot closure is the hand-paired accounting this
     // design replaced: four sites keyed on entry.isWebgl is how a counter drifts low
     // (over-allocating) or high (pinning every pane to canvas for the life of the page).
-    const decrements = SRC.match(/liveWebglContexts(--|\s*-=|\s*=\s*Math\.max\(0, liveWebglContexts - 1\))/g) || [];
+    const decrements = VP.match(/liveWebglContexts(--|\s*-=|\s*=\s*Math\.max\(0, liveWebglContexts - 1\))/g) || [];
     assert.strictEqual(decrements.length, 1,
         'exactly one decrement, and it must be the holder.release closure');
     const release = RENDERER_BLOCK();
@@ -150,11 +152,13 @@ test('every release site goes through the holder', () => {
 
 test('every renderer swap ends in a repaint, guarded on actually having a box', () => {
     const swap = block('function swapRenderer(entry, wantWebgl)', 'function cancelRendererRelease(');
-    assert.ok(/if \(isRendered\(entry\.container\)\) \{ resyncPaneRenderer\(entry, 'stale-canvas'\); \}/.test(swap),
+    // deps.resyncPaneRenderer: the viewport module takes the panel's repaint as a
+    // constructor dependency rather than closing over a panel global.
+    assert.ok(/if \(isRendered\(entry\.container\)\) \{ deps\.resyncPaneRenderer\(entry, 'stale-canvas'\); \}/.test(swap),
         'an on-screen swap strands every already-drawn row unless it repaints; a boxless one must NOT repaint, or handleResize measures a zero cell');
     // Permanently guards the already-landed onContextLoss repair too.
     const release = RENDERER_BLOCK();
-    assert.ok(release.slice(release.indexOf('webgl.onContextLoss(')).includes("resyncPaneRenderer(entry, 'stale-canvas')"),
+    assert.ok(release.slice(release.indexOf('webgl.onContextLoss(')).includes("deps.resyncPaneRenderer(entry, 'stale-canvas')"),
         'the context-loss handler must still repaint — the canvas renderer starts empty and paints only rows later marked dirty');
 });
 
@@ -189,7 +193,7 @@ test('the debt expression is the availability check, not !hasBox', () => {
 });
 
 test('the release is debounced, cancellable, and torn down', () => {
-    const arm = block('function armRendererRelease(entry)', '/** Theme classes');
+    const arm = block('function armRendererRelease(entry)', 'function buildTerminalTheme(');
     assert.ok(arm.includes('if (entry.releaseTimer || entry.disposed) { return; }'),
         'armRendererRelease must be idempotent — the ResizeObserver fires on every geometry change, not only on visibility transitions');
     assert.ok(arm.includes('RENDERER_RELEASE_DELAY_MS'),
@@ -222,19 +226,22 @@ test('the shell panel-switch carrier also drives the renderer, not only the size
     // so the panelVisibility message is the only carrier guaranteed to arrive. Leaving
     // the renderer on the observer alone loses SILENTLY — nobody reads
     // __sbTerminalStats() in the panel that is currently hidden.
-    const arm = block("message.type === 'panelVisibility'", "window.addEventListener('resize'");
-    const hideAt = arm.indexOf('armRendererRelease(entry)');
-    const showAt = arm.indexOf('reconcileRendererForVisibility(entry)');
+    const arm = block("message.type === 'panelVisibility'", "window.addEventListener('resize'", SRC);
+    const hideAt = arm.indexOf('viewport.armRendererRelease(entry)');
+    const showAt = arm.indexOf('viewport.reconcileRendererForVisibility(entry)');
     assert.ok(hideAt !== -1, 'the hide direction must arm the renderer release');
     assert.ok(showAt !== -1, 'the show direction must reconcile the renderer back up');
-    const cancelAt = arm.indexOf('cancelRendererRelease(entry)');
+    const cancelAt = arm.indexOf('viewport.cancelRendererRelease(entry)');
     assert.ok(cancelAt !== -1 && cancelAt < arm.indexOf('requestAnimationFrame'),
         'the show direction must cancel the pending release SYNCHRONOUSLY — setTimeout keeps running in a hidden iframe and would beat a rAF-deferred cancel');
 });
 
 test('declaration order keeps the pane-fit contract spans forward-only', () => {
     const anchor = SRC.indexOf('function readRenderedGrid(');
-    assert.ok(anchor !== -1, 'readRenderedGrid must exist — it anchors the pane-fit suite');
+    assert.ok(anchor !== -1, 'readRenderedGrid must exist in terminals.js — it anchors the pane-fit suite');
+    // The renderer functions moved to terminalViewport.js. They must exist there,
+    // and must NOT exist in terminals.js (or they would land inside the pane-fit
+    // suite's slices and silently widen them).
     for (const name of [
         'function webglAvailable(',
         'function attachRenderer(',
@@ -244,16 +251,17 @@ test('declaration order keeps the pane-fit contract spans forward-only', () => {
         'function cancelRendererRelease(',
         'function armRendererRelease(',
     ]) {
-        const at = SRC.indexOf(name);
-        assert.ok(at !== -1, `missing declaration: ${name}`);
-        assert.ok(at < anchor,
-            `${name} must be declared ABOVE readRenderedGrid, or it lands inside terminal-pane-fit-verification-contract's slices and silently widens them`);
+        const atVp = VP.indexOf(name);
+        assert.ok(atVp !== -1, `missing declaration in terminalViewport.js: ${name}`);
+        const atSrc = SRC.indexOf(name);
+        assert.ok(atSrc === -1,
+            `${name} must NOT be declared in terminals.js — it was extracted to terminalViewport.js and a leftover copy would land inside terminal-pane-fit-verification-contract's slices`);
     }
 });
 
 test('the per-document cap is documented as NOT the process ceiling', () => {
     // The wrong word here is what made the pop-out interaction invisible on inspection.
-    const capNote = SRC.slice(SRC.indexOf('MAX_WEBGL_CONTEXTS = 12') - 500, SRC.indexOf('MAX_WEBGL_CONTEXTS = 12'));
+    const capNote = VP.slice(VP.indexOf('MAX_WEBGL_CONTEXTS = 12') - 500, VP.indexOf('MAX_WEBGL_CONTEXTS = 12'));
     assert.ok(/per-document|per document/.test(capNote),
         'MAX_WEBGL_CONTEXTS must be documented as a per-document ceiling');
     const destroy = block('function destroyTerminalView(name)', 'function createTerminalView(');

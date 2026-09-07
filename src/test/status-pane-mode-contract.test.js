@@ -20,6 +20,7 @@ const path = require('path');
 
 const repoRoot = path.join(__dirname, '..', '..');
 const TERMINALS_JS = path.join(repoRoot, 'src', 'webview', 'terminals.js');
+const TERMINAL_VIEWPORT_JS = path.join(repoRoot, 'src', 'webview', 'terminalViewport.js');
 const TERMINALS_HTML = path.join(repoRoot, 'src', 'webview', 'terminals.html');
 
 let passed = 0, failed = 0;
@@ -29,18 +30,22 @@ function test(name, fn) {
 }
 
 const src = fs.readFileSync(TERMINALS_JS, 'utf8');
+const vpSrc = fs.readFileSync(TERMINAL_VIEWPORT_JS, 'utf8');
 const html = fs.readFileSync(TERMINALS_HTML, 'utf8');
 
-/** Extract a top-level `function name(...) { ... }` body by brace matching. */
+/** Extract a top-level `function name(...) { ... }` body by brace matching.
+ *  Searches terminals.js first, then terminalViewport.js (where the viewport
+ *  functions were extracted to). */
 function fnBody(name) {
     const marker = `function ${name}(`;
-    const start = src.indexOf(marker);
-    assert.ok(start > -1, `function ${name} not found in terminals.js`);
-    let i = src.indexOf('{', start);
+    const source = src.indexOf(marker) !== -1 ? src : vpSrc;
+    const start = source.indexOf(marker);
+    assert.ok(start > -1, `function ${name} not found in terminals.js or terminalViewport.js`);
+    let i = source.indexOf('{', start);
     let depth = 0;
-    for (let j = i; j < src.length; j++) {
-        if (src[j] === '{') { depth++; }
-        else if (src[j] === '}') { depth--; if (depth === 0) { return src.slice(start, j + 1); } }
+    for (let j = i; j < source.length; j++) {
+        if (source[j] === '{') { depth++; }
+        else if (source[j] === '}') { depth--; if (depth === 0) { return source.slice(start, j + 1); } }
     }
     throw new Error(`unbalanced braces extracting ${name}`);
 }
@@ -137,7 +142,7 @@ test('suspendTerminalStream does not dispose the terminal and closes the socket'
 test('leaving status resumes the stream from lastSeq', () => {
     const resume = fnBody('resumeTerminalStream');
     assert.match(resume, /connectTerminalSocket\(entry\)/, 'resume must reconnect');
-    assert.match(src, /wsUrl \+= `&lastSeq=/, 'the reconnect must carry lastSeq so the gateway replays only the tail');
+    assert.match(vpSrc, /wsUrl \+= `&lastSeq=/, 'the reconnect must carry lastSeq so the gateway replays only the tail');
 });
 
 /* ── The rendered-slot predicate owns entry.suspended ───────────────────── */
@@ -165,23 +170,17 @@ test('the suspend/resume call sites in updatePaneElement are gone', () => {
 
 test('the only callers of suspend/resume are inside the reconcile trailing loop', () => {
     const grid = fnBody('renderPaneGrid');
-    assert.match(grid, /if \(isTerminalRendered\(name\)\) \{\s*resumeTerminalStream\(entry\);\s*\} else \{\s*suspendTerminalStream\(entry\);\s*\}/,
-        'the reconcile trailing loop must drive suspend/resume from isTerminalRendered');
+    assert.match(grid, /if \(isTerminalRendered\(name\)\) \{\s*viewport\.resumeTerminalStream\(entry\);\s*\} else \{\s*viewport\.suspendTerminalStream\(entry\);\s*\}/,
+        'the reconcile trailing loop must drive suspend/resume from isTerminalRendered (via viewport.)');
     // No other call site in the file outside the definitions and the loop.
-    const suspendDef = fnBody('suspendTerminalStream');
-    const resumeDef = fnBody('resumeTerminalStream');
-    const isRenderedFn = fnBody('isTerminalRendered');
-    // Strip the definitions, then count remaining call sites.
-    let stripped = src
-        .replace(suspendDef, '')
-        .replace(resumeDef, '')
-        .replace(isRenderedFn, '');
-    const suspendCalls = stripped.match(/suspendTerminalStream\(/g) || [];
-    const resumeCalls = stripped.match(/resumeTerminalStream\(/g) || [];
+    // The definitions now live in terminalViewport.js, so we only need to count
+    // call sites in terminals.js (which all go through viewport.).
+    const suspendCalls = src.match(/viewport\.suspendTerminalStream\(/g) || [];
+    const resumeCalls = src.match(/viewport\.resumeTerminalStream\(/g) || [];
     assert.equal(suspendCalls.length, 1,
-        `suspendTerminalStream must have exactly one call site (the loop), found ${suspendCalls.length}`);
+        `viewport.suspendTerminalStream must have exactly one call site (the loop), found ${suspendCalls.length}`);
     assert.equal(resumeCalls.length, 1,
-        `resumeTerminalStream must have exactly one call site (the loop), found ${resumeCalls.length}`);
+        `viewport.resumeTerminalStream must have exactly one call site (the loop), found ${resumeCalls.length}`);
 });
 
 test('the suspend/resume loop appears after the updatePaneElement loop in source order', () => {

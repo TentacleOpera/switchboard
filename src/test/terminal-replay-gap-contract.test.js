@@ -22,6 +22,7 @@ const assert = require('assert');
 
 const gatewayTs = fs.readFileSync(path.join(__dirname, '../standalone/terminalWsGateway.ts'), 'utf8');
 const terminalsJs = fs.readFileSync(path.join(__dirname, '../webview/terminals.js'), 'utf8');
+const terminalViewportJs = fs.readFileSync(path.join(__dirname, '../webview/terminalViewport.js'), 'utf8');
 const terminalsHtml = fs.readFileSync(path.join(__dirname, '../webview/terminals.html'), 'utf8');
 
 let passed = 0;
@@ -201,7 +202,7 @@ test('headSafeStart is computed at eviction and stored on the buffer', () => {
 });
 
 test('the client resets in-band on the hello arm, before the replay', () => {
-    const hello = block(terminalsJs, "frame.t === 'hello'", "frame.t === 'inputThrottled'");
+    const hello = block(terminalViewportJs, "frame.t === 'hello'", "frame.t === 'inputThrottled'");
     assert.ok(hello.includes("entry.term.write('\\x1bc')"),
         'the hello arm must write RIS (\\x1bc) through the write queue');
     assert.ok(!/term\.reset\(\)/.test(codeOnly(hello)),
@@ -219,7 +220,7 @@ test('the client resets in-band on the hello arm, before the replay', () => {
 });
 
 test('the gap flag is per-socket and cleared in the connectWs teardown', () => {
-    const teardown = block(terminalsJs, 'function connectTerminalSocket(', 'let wsUrl =');
+    const teardown = block(terminalViewportJs, 'function connectTerminalSocket(', 'let wsUrl =');
     assert.ok(teardown.includes('entry.replayGap = false'),
         'a gap flag left armed by a dead socket must be cleared alongside awaitingReplayFrame');
     assert.ok(teardown.includes('entry.awaitingReplayFrame = false'),

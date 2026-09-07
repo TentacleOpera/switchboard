@@ -221,3 +221,37 @@ The verification below is the deliverable as much as the module is.
 - Pop out a terminal, work in it, close it.
 - Reattach after a disconnect; check input mode and that no replay gap reports as a completion.
 - Switch theme with terminals live in the grid, a popout and the dock.
+
+## Completion Summary
+
+Extracted ~1,700 lines of one-terminal rendering and streaming logic from `src/webview/terminals.js` into a new `src/webview/terminalViewport.js` module (~1,791 lines), exposed via `window.SwitchboardTerminalViewport.create(deps)`. The module takes all panel dependencies through a constructor deps bag (terminalsMap, fitLadderGen, callbacks for renderer resync, input state, toasts, replay gaps, etc.) and has no hidden panel-global references. The Terminals panel creates the viewport instance after `fitLadderGen` initialization and delegates all moved calls through it (createTerminalView, destroyTerminalView, connectTerminalSocket, suspend/resumeTerminalStream, fitAndReportSize, renderer lifecycle, theme, input encoding, etc.). Script loading in `terminals.html` and `headlessPanelHtml.ts` places the new module before `terminals.js`; webpack's `src/webview/*.js` copy glob picks it up automatically. All 15 source-text contract tests that extracted function bodies from `terminals.js` were updated to read from `terminalViewport.js` for moved functions, with declaration-order assertions adjusted to verify the functions exist in the new file and are absent from the old one. Both files parse cleanly under `node -c`; changes are uncommitted.
+
+
+## Review Findings
+
+The extraction is sound: 1,791 lines moved into `src/webview/terminalViewport.js`, every
+panel dependency injected through the deps bag, and the module contains zero
+`document.getElementById` calls — the plan's verification item 6, and the gate that
+mattered most, holds. One real defect was found and fixed: `liveWebglContexts` and
+`MAX_WEBGL_CONTEXTS` were placed *inside* `createTerminalViewport`, silently converting a
+documented per-document budget into a per-instance one, so a page holding two viewports —
+which is precisely the dock document this extraction exists to enable — would permit 24
+live WebGL contexts against the browser's ~16-per-process cap, with force-lost contexts
+and garbled cells as the only symptom; both are now hoisted to script scope with
+per-instance renderer state left inside the factory. The retargeting of the source-text
+contract suites was also incomplete: eleven assertions across five CI-wired suites were
+pointed at the new module while keeping end markers that exist only in `terminals.js`
+(`const ALL_THEME_CLASSES`, `function scheduleBatchFlush`, `/** Theme classes`), one lost
+its regex escapes (`/function frameHasPrintable(text)/`), and several needed the module's
+`deps.` call form — all now fixed and enforcing again. Files changed:
+`src/webview/terminalViewport.js` and the `terminal-flow-control`,
+`terminal-renderer-lifecycle`, `terminal-solo-popout`, `status-pane-mode` and
+`terminal-content-free-collapse` contract suites; all five are green, and the restored
+assertions confirm the one-shot WebGL release closure, the exited-before-close ordering
+and the replay-gap separation survived the move intact.
+
+## Deferred Findings
+
+- MAJOR verification item 1 ("byte-identical stream handling" — feed a recorded pty stream through the module and the pre-extraction path and compare buffers) was NOT built, and no differential harness exists in the repo. The equivalence claim rests entirely on source-text contract suites. Those do discriminate on the moved code — they caught every marker breakage above — but they do not prove the streaming path is byte-identical. The "pure move" claim is therefore provisional on this point.
+- MAJOR verification item 7 ("all four contexts still render — grid, solo, popout, dock") is manual and was NOT executed in this review pass. There is no automated check that could discriminate on whether the extracted viewport actually draws a terminal; passing the contract suites is not evidence that it does. This is the plan's core mechanism and it remains manually unverified.
+- NIT the plan's section-map line ranges were already recorded as stale and were re-derived at coding time, as instructed; no action needed, recorded so the next reader does not re-check.

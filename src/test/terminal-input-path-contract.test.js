@@ -15,6 +15,7 @@ const assert = require('assert');
 
 const gatewayCode = fs.readFileSync(path.join(__dirname, '../standalone/terminalWsGateway.ts'), 'utf8');
 const terminalsJs = fs.readFileSync(path.join(__dirname, '../webview/terminals.js'), 'utf8');
+const terminalViewportJs = fs.readFileSync(path.join(__dirname, '../webview/terminalViewport.js'), 'utf8');
 
 let passed = 0;
 let failed = 0;
@@ -39,17 +40,17 @@ function block(code, startMarker, endMarker) {
 }
 
 test('the client sends binary input frames', () => {
-    assert.ok(terminalsJs.includes('entry.ws.send(encodeInputFrame(data))'),
+    assert.ok(terminalViewportJs.includes('entry.ws.send(encodeInputFrame(data))'),
         'term.onData must send a binary frame — xterm delivers a paste as ONE onData event, so base64 meant a per-byte loop over the whole paste on the shared main thread');
-    const encode = block(terminalsJs, 'function encodeInputFrame(str)', 'function base64ToUtf8(');
+    const encode = block(terminalViewportJs, 'function encodeInputFrame(str)', 'function base64ToUtf8(');
     assert.ok(encode.includes('0x01'), 'the frame must carry the input opcode');
     assert.ok(encode.includes('TextEncoder'), 'the payload must be raw UTF-8 bytes, not base64');
 });
 
 test('utf8ToBase64 is gone but base64ToUtf8 stays for the legacy output branch', () => {
-    assert.ok(!terminalsJs.includes('utf8ToBase64'), 'utf8ToBase64 must have no remaining references');
-    assert.ok(terminalsJs.includes('function base64ToUtf8('), 'base64ToUtf8 still decodes the retained legacy output frames');
-    assert.ok(block(terminalsJs, "frame.t === 'out'", "frame.t === 'hello'").includes('base64ToUtf8'),
+    assert.ok(!terminalViewportJs.includes('utf8ToBase64'), 'utf8ToBase64 must have no remaining references');
+    assert.ok(terminalViewportJs.includes('function base64ToUtf8('), 'base64ToUtf8 still decodes the retained legacy output frames');
+    assert.ok(block(terminalViewportJs, "frame.t === 'out'", "frame.t === 'hello'").includes('base64ToUtf8'),
         'the legacy output branch must still call it');
 });
 
@@ -98,7 +99,7 @@ test('the input queue is torn down with the terminal', () => {
 });
 
 test('the throttle notice is informational and two-sided', () => {
-    const branch = block(terminalsJs, "frame.t === 'inputThrottled'", "frame.t === 'error'");
+    const branch = block(terminalViewportJs, "frame.t === 'inputThrottled'", "frame.t === 'error'");
     assert.ok(!branch.includes('disableStdin'),
         'input is queued, never dropped — the operator must be able to keep typing');
     // Either polarity. The branch no longer WRITES the notice into the buffer (it
@@ -186,7 +187,7 @@ test('hello omits the mode when unobserved and the client re-arms from it', () =
     const hello = block(gatewayCode, "t: 'hello'", 'Replay scrollback BEFORE');
     assert.ok(hello.includes("typeof bracketedPaste === 'boolean'"),
         'omitted, NOT false, when unobserved — telling a client to DISABLE a mode nobody ruled on is a regression');
-    const arm = block(terminalsJs, "frame.t === 'hello'", "frame.t === 'inputThrottled'");
+    const arm = block(terminalViewportJs, "frame.t === 'hello'", "frame.t === 'inputThrottled'");
     assert.ok(arm.includes('entry.pendingModes'),
         'a rebuilt view starts with bracketedPasteMode false and would paste unbracketed — the recorded mode set is armed on the entry and applied after the replay');
     // `push`, not any mention. The hazard is ENQUEUEING synthetic chars into the
@@ -195,7 +196,7 @@ test('hello omits the mode when unobserved and the client re-arms from it', () =
     // (see terminal-replay-gap-contract) — and nothing it drops was ever billed.
     assert.ok(!/batchQueue\.push/.test(arm),
         'the mode escape must bypass batchQueue: that path is billed to pendingAckChars and synthetic chars corrupt the backpressure ledger');
-    const apply = block(terminalsJs, 'function applyServerModes(', 'function isAnswerback(');
+    const apply = block(terminalViewportJs, 'function applyServerModes(', 'function isAnswerback(');
     assert.ok(apply.includes('REARMABLE_DEC_MODES'),
         'the authoritative mode write is built from the re-armable allowlist, not the legacy single-mode literal');
 });

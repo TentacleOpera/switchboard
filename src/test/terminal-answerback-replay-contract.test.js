@@ -14,6 +14,7 @@ const path = require('path');
 const assert = require('assert');
 
 const terminalsJs = fs.readFileSync(path.join(__dirname, '../webview/terminals.js'), 'utf8');
+const terminalViewportJs = fs.readFileSync(path.join(__dirname, '../webview/terminalViewport.js'), 'utf8');
 
 let passed = 0;
 let failed = 0;
@@ -38,8 +39,8 @@ function block(code, startMarker, endMarker) {
 }
 
 // Evaluate the shipped regex rather than a copy, so the test cannot drift from it.
-const reSource = /const ANSWERBACK_RE = (\/.*\/);/.exec(terminalsJs);
-assert.ok(reSource, 'ANSWERBACK_RE must be declared in terminals.js');
+const reSource = /const ANSWERBACK_RE = (\/.*\/);/.exec(terminalViewportJs);
+assert.ok(reSource, 'ANSWERBACK_RE must be declared in terminalViewport.js');
 // eslint-disable-next-line no-eval
 const ANSWERBACK_RE = eval(reSource[1]);
 
@@ -105,13 +106,13 @@ test('modified F1-F4 collide with CPR by protocol design — accepted, not overl
 });
 
 test('onData drops answerback ONLY while the replay window is open', () => {
-    const handler = block(terminalsJs, 'term.onData(', 'connectTerminalSocket(entry);');
+    const handler = block(terminalViewportJs, 'term.onData(', 'connectTerminalSocket(entry);');
     assert.ok(/entry\.suppressAnswerback\s*&&\s*isAnswerback\(data\)/.test(handler),
         'both conditions required — a bare flag check would eat keystrokes, a bare content check would break live colour queries');
 });
 
 test('the replay frame is written alone, never coalesced with live output', () => {
-    const wr = block(terminalsJs, 'function writeReplay(entry, text)', 'function onWriteParsed(');
+    const wr = block(terminalViewportJs, 'function writeReplay(entry, text)', 'function onWriteParsed(');
     assert.ok(!wr.includes('batchQueue'), 'replay must bypass the shared rAF batch queue');
     assert.ok(wr.includes('entry.suppressAnswerback = true'), 'window must open before the write');
     assert.ok((wr.match(/entry\.suppressAnswerback = false/g) || []).length >= 2,
@@ -119,13 +120,13 @@ test('the replay frame is written alone, never coalesced with live output', () =
 });
 
 test('the window is armed from the hello frame, not guessed', () => {
-    const hello = block(terminalsJs, "frame.t === 'hello'", "frame.t === 'inputThrottled'");
+    const hello = block(terminalViewportJs, "frame.t === 'hello'", "frame.t === 'inputThrottled'");
     assert.ok(hello.includes('entry.awaitingReplayFrame'), 'hello must arm the replay marker');
     assert.ok(hello.includes('replayChars'), 'armed off the server-declared replay length');
 });
 
 test('a dead socket cannot leak its replay window into the next connection', () => {
-    const connect = block(terminalsJs, 'function connectTerminalSocket(entry)', 'let wsUrl =');
+    const connect = block(terminalViewportJs, 'function connectTerminalSocket(entry)', 'let wsUrl =');
     assert.ok(connect.includes('entry.suppressAnswerback = false'), 'reset on reconnect');
     assert.ok(connect.includes('entry.awaitingReplayFrame = false'), 'reset on reconnect');
 });
@@ -136,7 +137,7 @@ test('a gapped reconnect resets the parser in-band before the replay write', () 
     // document order AND in wire order. term.reset() is NOT acceptable here: it
     // does not reset the escape-sequence parser, so a stale mid-CSI would consume
     // the replay's first bytes.
-    const hello = block(terminalsJs, "frame.t === 'hello'", "frame.t === 'inputThrottled'");
+    const hello = block(terminalViewportJs, "frame.t === 'hello'", "frame.t === 'inputThrottled'");
     const risIdx = hello.indexOf("entry.term.write('\\x1bc')");
     assert.ok(risIdx !== -1, 'the hello arm must write RIS (\\x1bc) on a gap');
     // Whole-line comments stripped first: the branch's own comment explains why

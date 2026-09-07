@@ -18,6 +18,7 @@ const assert = require('assert');
 
 const gatewayCode = fs.readFileSync(path.join(__dirname, '../standalone/terminalWsGateway.ts'), 'utf8');
 const terminalsJs = fs.readFileSync(path.join(__dirname, '../webview/terminals.js'), 'utf8');
+const terminalViewportJs = fs.readFileSync(path.join(__dirname, '../webview/terminalViewport.js'), 'utf8');
 
 let passed = 0;
 let failed = 0;
@@ -78,10 +79,10 @@ test('hello omits modes when unobserved and derives bracketedPaste from the same
 //    called from writeReplay's callback and that the hello branch only applies
 //    inline when !entry.awaitingReplayFrame.
 test('the client applies the mode set after the replay parse', () => {
-    const wr = block(terminalsJs, 'function writeReplay(entry, text)', 'function onWriteParsed(');
+    const wr = block(terminalViewportJs, 'function writeReplay(entry, text)', 'function onWriteParsed(');
     assert.ok(wr.includes('entry.pendingModes'),
         'writeReplay must apply pendingModes in its callback — the authoritative write lands after the replay parse, not before it');
-    const hello = block(terminalsJs, "frame.t === 'hello'", "frame.t === 'inputThrottled'");
+    const hello = block(terminalViewportJs, "frame.t === 'hello'", "frame.t === 'inputThrottled'");
     assert.ok(hello.includes('!entry.awaitingReplayFrame && applyServerModes'),
         'the hello branch must only apply inline when there is no replay to wait for');
 });
@@ -90,13 +91,13 @@ test('the client applies the mode set after the replay parse', () => {
 //    ONLY in a statement that also tests === 'alternate'. Assert ?1049h appears
 //    nowhere in terminals.js.
 test('alt screen is reset-only and buffer-gated', () => {
-    assert.ok(!terminalsJs.includes('\\x1b[?1049h'),
+    assert.ok(!terminalsJs.includes('\\x1b[?1049h') && !terminalViewportJs.includes('\\x1b[?1049h'),
         'the client must NEVER write ?1049h — it would switch a fresh xterm to an empty alt buffer and hide the replayed scrollback');
-    const apply = block(terminalsJs, 'function applyServerModes(', 'function isAnswerback(');
+    const apply = block(terminalViewportJs, 'function applyServerModes(', 'function isAnswerback(');
     // Parsed from the DECLARATION, which sits ABOVE applyServerModes and is therefore
     // outside the slice above — a regex run against `apply` can never match it and the
     // assertion would pass no matter what the list contained.
-    const rearmDecl = /const REARMABLE_DEC_MODES = \[([^\]]+)\];/.exec(terminalsJs);
+    const rearmDecl = /const REARMABLE_DEC_MODES = \[([^\]]+)\];/.exec(terminalViewportJs);
     assert.ok(rearmDecl, 'REARMABLE_DEC_MODES must be declared');
     assert.ok(!rearmDecl[1].split(',').map(s => Number(s.trim())).includes(1049),
         '1049 must be absent from REARMABLE_DEC_MODES — it is handled separately and conditionally');
@@ -142,29 +143,29 @@ test('mode 9 is tracked by the gateway and re-armable on the client', () => {
     const trackedDecl = /export const TRACKED_DEC_MODES = \[([^\]]+)\] as const;/.exec(gatewayCode);
     const tracked = trackedDecl[1].split(',').map(s => Number(s.trim()));
     assert.ok(tracked.includes(9), 'mode 9 must be tracked by the gateway');
-    const rearmDecl = /const REARMABLE_DEC_MODES = \[([^\]]+)\];/.exec(terminalsJs);
+    const rearmDecl = /const REARMABLE_DEC_MODES = \[([^\]]+)\];/.exec(terminalViewportJs);
     assert.ok(rearmDecl, 'REARMABLE_DEC_MODES must be declared');
     const rearm = rearmDecl[1].split(',').map(s => Number(s.trim()));
     assert.ok(rearm.includes(9), 'mode 9 must be re-armable on the client');
 });
 
 test('pendingModes is reset on reconnect and cleared on the replay throw path', () => {
-    const connect = block(terminalsJs, 'function connectTerminalSocket(entry)', 'let wsUrl =');
+    const connect = block(terminalViewportJs, 'function connectTerminalSocket(entry)', 'let wsUrl =');
     assert.ok(connect.includes('entry.pendingModes = null'),
         'a set left armed by a socket that died mid-replay describes a stream this connection will not receive');
-    const wr = block(terminalsJs, 'function writeReplay(entry, text)', 'function onWriteParsed(');
+    const wr = block(terminalViewportJs, 'function writeReplay(entry, text)', 'function onWriteParsed(');
     assert.ok(wr.includes('entry.pendingModes = null'),
         'the throw path must clear pendingModes alongside suppressAnswerback');
 });
 
 test('macOptionClickForcesSelection is true in the constructor', () => {
-    const ctor = block(terminalsJs, 'new window.Terminal({', '});');
+    const ctor = block(terminalViewportJs, 'new window.Terminal({', '});');
     assert.ok(ctor.includes('macOptionClickForcesSelection: true'),
         'Option-drag must select even while an app is capturing the mouse — without it there is no modifier that can select text in a mouse-reporting app on macOS');
 });
 
 test('Shift-wheel scrolls the viewport even while the app is capturing the wheel', () => {
-    const mat = block(terminalsJs, 'function materializeTerminalView(entry)', "term.textarea.addEventListener('focus'");
+    const mat = block(terminalViewportJs, 'function materializeTerminalView(entry)', "term.textarea.addEventListener('focus'");
     assert.ok(mat.includes('attachCustomWheelEventHandler'),
         'the custom wheel handler must be registered');
     assert.ok(mat.includes('!ev.shiftKey'),

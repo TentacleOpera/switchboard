@@ -4204,6 +4204,27 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 this._relayStartupOrientation(result.created.map((c: any) => c?.friendlyName).filter(Boolean));
             }
             if (verb === 'ptyListTerminals' && result && result.success !== false && Array.isArray(result.terminals)) {
+                // Split the hidden seats out, exactly as standalone's arm does
+                // (bootstrap.ts, `const terminals = projected.filter(...)`).
+                //
+                // The Go PTY host returns ONE flat `terminals` array and projects
+                // `hidden` onto each row; it emits no `hiddenTerminals` key. Every
+                // consumer here reads `result.hiddenTerminals || []` defensively, so
+                // the missing split never threw — it just meant the key was always
+                // empty and every hidden seat stayed in the rendered list. terminals.js
+                // assigns `fleetList = data.terminals` unfiltered and the shell rail is
+                // built from the same relay, so the dock's own seats (dock-project_manager,
+                // dock-cli) were drawn as ordinary fleet rows on this host while
+                // standalone correctly hid them. `hidden` is a RENDERING flag only —
+                // the routing registry below deliberately keeps both lists.
+                const hiddenRows = result.terminals.filter((t: any) => t.hidden === true);
+                if (hiddenRows.length > 0) {
+                    result.terminals = result.terminals.filter((t: any) => t.hidden !== true);
+                    result.hiddenTerminals = [
+                        ...(Array.isArray(result.hiddenTerminals) ? result.hiddenTerminals : []),
+                        ...hiddenRows,
+                    ];
+                }
                 // Routing registry, NOT a render list — it must include seats the
                 // sidebar does not draw. `hidden` is a rendering flag: a hidden
                 // seat is still prompted, still addressed by name and role, and
@@ -4674,7 +4695,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             // The token is hex (crypto.randomBytes) so it needs no escaping,
                             // but it is escaped anyway to keep that a local property.
                             const attrSafeToken = this._terminalSessionToken.replace(/[^a-zA-Z0-9]/g, '');
-                            const ptyOriginAttr = this._ptyHostPort ? ` data-pty-host-origin="ws://127.0.0.1:${this._ptyHostPort}"` : '';
+                            // Resolve the port from the supervisor when the field is unset.
+                            // `_ptyHostPort` is assigned only in `_startLocalApiServer`, which the
+                            // standalone host never runs — so on standalone this attribute was
+                            // always omitted, the page fell back to `ws://location.host` (the
+                            // board, which does not serve /ws/terminal), and every pane sat on
+                            // `connecting` forever. The supervisor has known the port all along;
+                            // nothing asked it. Both hosts now read the same value.
+                            const resolvedPtyHostPort = this._ptyHostPort ?? this._ptyHostSupervisor?.getReady()?.port;
+                            const ptyOriginAttr = resolvedPtyHostPort ? ` data-pty-host-origin="ws://127.0.0.1:${resolvedPtyHostPort}"` : '';
                             // Silence threshold for the "working, no output" signal — the same
                             // knob the server-side nudge sweeps read (bootstrap.ts injects it too).
                             const silenceMs = vscode.workspace.getConfiguration('switchboard').get<number>('activityLight.turnEndSilenceMs', 90000);

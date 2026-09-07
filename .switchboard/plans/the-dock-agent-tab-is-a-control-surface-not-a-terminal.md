@@ -88,3 +88,29 @@ Small for a controller taking short commands, but it has no equivalent on the CL
 6. The CLI tab still provides a full pty seat.
 7. Per change 4, either the pty controller is gone or its retention is recorded with a reason.
 8. The controller is reachable from the mobile command surface, and renders no terminal there.
+
+
+## Review Findings
+
+**Not implemented.** The Agent tab is still a pty seat: `src/webview/shell.js:816` mounts
+`/terminals?solo=<name>&dock=1` against the `dock-project_manager` terminal, exactly as
+before. None of the six proposed changes exists — there is no API-backed control surface,
+no HTTP model endpoint configured as a role backend, no resolution display, no
+conversation history held between turns, and no exposure on the mobile command route. The
+plan's one flagged decision (Change 4 — whether the terminal-backed controller is retained
+as an option or removed) is unanswered, and its own file carries no implementation
+summary and was unmodified in the working tree. Its stated dependency, the CLI tab from
+`c2502571`, has now landed and was reviewed in this pass, so the prerequisite is
+satisfied and the plan is unblocked. No code was changed and no verification was run
+against this plan, because there is nothing to verify. The card should go back to a
+pre-coding column rather than be treated as reviewed.
+
+## Deferred Findings
+
+- CRITICAL not implemented: Change 1 — the Agent tab renders no control surface; it is still a terminal emulator (`src/webview/shell.js:816`).
+- CRITICAL not implemented: Change 2 — no HTTP model endpoint exists as a role backend value.
+- CRITICAL not implemented: Change 3 — nothing displays what a phrase resolved to before acting.
+- CRITICAL unanswered: Change 4 is marked `[decision]` in the plan and carries a recommendation (remove the pty controller) that no one has accepted or rejected. Per the plan's own verification item 7, either the pty controller is gone or its retention is recorded with a reason; neither has happened.
+- CRITICAL not implemented: Change 5 — the controller is not reachable from the mobile command surface.
+- CRITICAL not implemented: Change 6 — there is no per-turn context/history store for an API-backed controller.
+- MAJOR all eight of the plan's verification items are unsatisfiable as written.
