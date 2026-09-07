@@ -799,6 +799,40 @@
             box-shadow: var(--glow-teal);
         }
 
+        /* "showing N of M" hint — appears only when a column is render-capped
+           (plan: the-board-ships-2-8mb-of-uncompressed-json-so-a-remote-device-waits-minutes,
+           change 1). The count badge keeps the honest total; this says how many
+           are actually in the DOM so a truncated column is never mistaken for an
+           empty one. */
+        .column-cap-hint {
+            font-family: var(--font-code);
+            font-size: 9px;
+            color: var(--vscode-descriptionForeground, var(--text-secondary));
+            white-space: nowrap;
+        }
+        .column-cap-hint:empty { display: none; }
+
+        /* "Load more" control appended to a capped column. Pages the rest of the
+           column into the DOM on demand without re-rendering the board. */
+        .column-load-more {
+            display: block;
+            width: 100%;
+            margin-top: 6px;
+            padding: 6px 8px;
+            background: transparent;
+            border: 1px dashed var(--border-color);
+            border-radius: 3px;
+            color: var(--vscode-descriptionForeground, var(--text-secondary));
+            font-size: 11px;
+            font-family: var(--font-family, var(--font, system-ui, sans-serif));
+            cursor: pointer;
+            text-align: center;
+        }
+        .column-load-more:hover {
+            border-color: var(--accent-teal);
+            color: var(--accent-teal);
+        }
+
         .column-select {
             background: #0a0a0a;
             color: var(--text-primary);
@@ -3027,6 +3061,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     <span class="sb-icon sb-icon-sm sb-icon-branch" style="opacity:0.6;" aria-hidden="true"></span>
                     <span id="wt-indicator-branch" style="font-family:monospace;"></span>
                 </div>
+                <!-- Board-fetch diagnostics (plan change 4). Payload size + elapsed
+                     time of the last board fetch, behind the verbose flag so it is
+                     invisible during normal use (the regression this plan fixes was
+                     invisible on loopback, where it was developed). Toggle with
+                     ?verbose=1 on the board URL or localStorage sb_verbose=1. -->
+                <div id="board-fetch-diagnostics" style="display:none; font-size:10px; color:var(--text-secondary); font-family:var(--font-code, monospace); white-space:nowrap;" data-tooltip="Last board fetch payload size + elapsed time. Toggle with ?verbose=1."></div>
             </div>
             <div class="kanban-board" id="kanban-board"></div>
         </div>
@@ -6540,6 +6580,23 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         }
         let allCards = [];
         let currentMissions = [];
+        // Per-column render cap (plan change 1): only the first N rows of every
+        // column are built into the DOM at first paint; the rest page in on
+        // demand via the "Load more" control. No column is special — the same N
+        // applies to every column, so the fix is habit-agnostic and scales for a
+        // genuinely busy board. The count badge keeps the honest total; the
+        // cap-hint span says "showing N of M" when they differ.
+        const COLUMN_RENDER_CAP = 50;
+        // Per-column current render limit. Defaults to COLUMN_RENDER_CAP and
+        // grows by COLUMN_RENDER_CAP each time the operator pages that column.
+        // Reset to the cap on every full renderBoard (a board refresh is the
+        // moment to drop paged-in rows and re-cap).
+        let columnRenderLimits = {};
+        // Last-computed sorted items per column, stashed by renderBoard so the
+        // "Load more" handler can append the next page without re-deriving the
+        // bucket + sort (which would need the full cards array and comparator
+        // state at click time).
+        let lastSortedBuckets = {};
         // Apply the local project filter to a card set. Unassigned cards have
         // project === '' (cards are built with `row.project || ''`).
         function applyBoardProjectFilter(cards) {
@@ -8003,7 +8060,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     }
                 }
                 if (!inserted) {
-                    targetBody.appendChild(cardEl);
+                    // Insert before the "Load more" control if present, so a
+                    // moved card never lands below the paging button.
+                    const loadMore = targetBody.querySelector('.column-load-more');
+                    if (loadMore) {
+                        targetBody.insertBefore(cardEl, loadMore);
+                    } else {
+                        targetBody.appendChild(cardEl);
+                    }
+                    inserted = true;
                 }
 
                 // The copy-prompt button carries the card's column as a data attribute, baked
@@ -8381,11 +8446,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             <button class="column-header-btn" id="btn-add-plan" data-tooltip="Add Plan">+</button>
                             <button class="column-header-btn" id="btn-import-clipboard" data-tooltip="Import plan(s) from clipboard&#10;&#10;Multi-plan? Separate with markers:&#10;### PLAN 1 START&#10;[plan 1 content]&#10;### PLAN 2 START&#10;[plan 2 content]"><img src="${ICON_IMPORT_CLIPBOARD}" alt="Import"></button>
                             <span class="column-count" id="count-${escapeAttr(def.id)}">0</span>
+                            <span class="column-cap-hint" id="cap-hint-${escapeAttr(def.id)}"></span>
                        </div>`
                     : `<div style="display: flex; align-items: center; gap: 4px;">
                             ${complexityRoutingToggle}
                             ${modeToggle}
                             <span class="column-count" id="count-${escapeAttr(def.id)}">0</span>
+                            <span class="column-cap-hint" id="cap-hint-${escapeAttr(def.id)}"></span>
                        </div>`;
                 const subline = hasAgent
                     ? `<div class="column-agent" id="agent-${escapeAttr(def.id)}"></div>`
@@ -9432,7 +9499,173 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             });
         }
 
+        // ─── Per-column render cap + paging (plan change 1) ────────────────────
+        // Update the "showing N of M" hint for a column. `rendered` is the count
+        // actually in the DOM; `pool` is the count that WOULD render if uncapped
+        // (the project-filtered set for this column). The count badge keeps the
+        // unfiltered true total; this hint says how many of the current view's
+        // cards are in the DOM, so a capped column is never mistaken for empty.
+        function updateCapHint(col, rendered, pool) {
+            const hintEl = document.getElementById('cap-hint-' + col);
+            if (!hintEl) return;
+            hintEl.textContent = (rendered < pool && pool > 0)
+                ? `showing ${rendered} of ${pool}`
+                : '';
+        }
+
+        // Build the "Load more" control HTML for a capped column. Clicking it
+        // grows that column's render limit by COLUMN_RENDER_CAP and re-renders
+        // ONLY that column body (append-style: the next page's cards are added
+        // without rebuilding the columns already on screen).
+        function loadMoreHtml(col, rendered, pool) {
+            if (rendered >= pool || pool <= 0) return '';
+            const remaining = pool - rendered;
+            const next = Math.min(COLUMN_RENDER_CAP, remaining);
+            return `<button class="column-load-more" data-load-more-col="${escapeAttr(col)}" type="button">Load ${next} more (${remaining} hidden)</button>`;
+        }
+
+        // Append the next page of a column into its body, honouring the column's
+        // grown render limit. Used by the "Load more" click handler.
+        //
+        // APPEND-ONLY, and that is load-bearing rather than an optimisation. The
+        // obvious implementation rebuilds the body from `lastSortedBuckets[col]`,
+        // but that stash is a snapshot taken at the last renderBoard, and the DOM
+        // legitimately runs ahead of it: an optimistic drag moves a card's NODE
+        // into this column and does not touch the stash until the confirming board
+        // push lands (up to ~2s later). Rebuilding from the stash inside that
+        // window makes the card the operator just dropped disappear. Diffing by
+        // planId against what is already on screen adds only the genuinely missing
+        // rows and leaves every optimistic node alone.
+        function appendColumnPage(col) {
+            const sortedItems = lastSortedBuckets[col];
+            if (!Array.isArray(sortedItems)) return;
+            const container = document.getElementById('col-' + col);
+            if (!container) return;
+            const limit = columnRenderLimits[col] ?? COLUMN_RENDER_CAP;
+
+            // STAGING renders live mission cards above its loose cards. Missions are
+            // never capped — they are few and are the queue's head — but they do
+            // consume the budget, so the cap applies to the loose cards beneath them
+            // exactly as it does at first paint.
+            const missionCount = (col === 'STAGING')
+                ? (currentMissions || []).filter(m => m && m.runState !== 'completed').length
+                : 0;
+            const budget = Math.max(0, limit - missionCount);
+            const target = sortedItems.slice(0, budget);
+
+            const present = new Set(
+                Array.from(container.querySelectorAll('.kanban-card[data-plan-id]'))
+                    .map(el => el.getAttribute('data-plan-id'))
+            );
+            const additions = target.filter(card => {
+                const id = card.planId || card.sessionId || '';
+                return id && !present.has(id);
+            });
+
+            const loadMore = container.querySelector('.column-load-more');
+            if (additions.length > 0) {
+                // An empty body holds a placeholder, not cards — drop it before the
+                // first real row lands under it.
+                const placeholder = container.querySelector('.empty-state');
+                if (placeholder) placeholder.remove();
+                const holder = document.createElement('div');
+                holder.innerHTML = additions.map(card => createCardHtml(card)).join('');
+                for (const node of Array.from(holder.children)) {
+                    if (loadMore) { container.insertBefore(node, loadMore); }
+                    else { container.appendChild(node); }
+                }
+            }
+
+            // Counted off the DOM, not off the slice: that is the honest answer to
+            // "how many are on screen" even when an optimistic move put a card here
+            // that the stash has not caught up with.
+            const pool = missionCount + sortedItems.length;
+            const rendered = missionCount + container.querySelectorAll('.kanban-card:not(.mission-card)').length;
+            const nextHtml = loadMoreHtml(col, rendered, pool);
+            if (loadMore) {
+                if (nextHtml) { loadMore.outerHTML = nextHtml; }
+                else { loadMore.remove(); }
+            } else if (nextHtml) {
+                container.insertAdjacentHTML('beforeend', nextHtml);
+            }
+            updateCapHint(col, rendered, pool);
+        }
+
+        // Delegated "Load more" handler — one listener on the board, survives
+        // innerHTML rebuilds. Grows the column's limit and re-renders just that
+        // column body, appending the next page without touching the others.
+        function initLoadMoreDelegation() {
+            const board = document.getElementById('kanban-board') || document.querySelector('.kanban-board');
+            if (!board || board.__loadMoreDelegated) return;
+            board.__loadMoreDelegated = true;
+            board.addEventListener('click', function (ev) {
+                const btn = ev.target.closest && ev.target.closest('.column-load-more');
+                if (!btn) return;
+                const col = btn.getAttribute('data-load-more-col');
+                if (!col) return;
+                columnRenderLimits[col] = (columnRenderLimits[col] ?? COLUMN_RENDER_CAP) + COLUMN_RENDER_CAP;
+                appendColumnPage(col);
+                reapplySelectionState();
+            });
+        }
+
+        // ─── Board-fetch diagnostics (plan change 4) ───────────────────────────
+        // The regression this plan fixes was invisible on loopback, where it was
+        // developed and tested. Surfacing the last board fetch's payload size +
+        // elapsed time makes the next regression a fact rather than a report.
+        // Behind a verbose flag so it is invisible during normal use.
+        const boardVerboseDiagnostics = (() => {
+            try {
+                if (typeof localStorage !== 'undefined' && localStorage.getItem('sb_verbose') === '1') return true;
+            } catch (e) { /* localStorage may be blocked */ }
+            try {
+                const params = new URLSearchParams(window.location.search);
+                return params.get('verbose') === '1';
+            } catch (e) { return false; }
+        })();
+        let lastBoardPayloadBytes = 0;
+        let lastBoardFetchElapsedMs = null;
+        let lastBoardRenderMs = null;
+
+        function formatBytes(n) {
+            if (!n || n < 1) return '0 B';
+            if (n < 1024) return n + ' B';
+            if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+            return (n / (1024 * 1024)).toFixed(2) + ' MB';
+        }
+
+        // Each part is emitted only when it was actually measured. A placeholder
+        // that looks like a reading ("0 ms", "—") is worse than a missing part: the
+        // whole point of this line is that the operator can trust the number, and
+        // `fetch` genuinely does not exist on the push path (a wsHub board push has
+        // no round trip to time).
+        function renderBoardDiagnostics() {
+            const el = document.getElementById('board-fetch-diagnostics');
+            if (!el) return;
+            if (!boardVerboseDiagnostics) { el.style.display = 'none'; return; }
+            el.style.display = '';
+            const parts = [];
+            if (lastBoardPayloadBytes > 0) parts.push(formatBytes(lastBoardPayloadBytes));
+            if (typeof lastBoardFetchElapsedMs === 'number') parts.push('fetch ' + lastBoardFetchElapsedMs + ' ms');
+            if (typeof lastBoardRenderMs === 'number') parts.push('render ' + lastBoardRenderMs + ' ms');
+            el.textContent = parts.length ? ('board: ' + parts.join(' · ')) : 'board: no data yet';
+        }
+
+        function recordBoardPayloadBytes(msg) {
+            if (!boardVerboseDiagnostics) return;
+            try {
+                lastBoardPayloadBytes = new Blob([JSON.stringify(msg)]).size;
+            } catch (e) { /* ignore */ }
+            renderBoardDiagnostics();
+        }
+
         function renderBoard(cards, justFinishedIds = new Set()) {
+            // Render timing (plan change 4). Measured INLINE rather than in a
+            // wrapper function: several contract tests slice this function's body
+            // by its declaration line and assert on what is inside it, so a
+            // delegating wrapper would empty the body those gates read.
+            const renderStartedAt = (typeof performance !== 'undefined' && performance.now)
+                ? performance.now() : Date.now();
             hideTooltip();
             unrenderedColumnRefreshRequested = false;
             const now = Date.now();
@@ -9441,6 +9674,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
             const viewState = captureBoardViewState();
             currentCards = cards;
+            // NOTE: columnRenderLimits is deliberately NOT reset here. renderBoard
+            // runs on every board push — a card moving, an agent heartbeat, a star
+            // confirming — so re-capping here would collapse a column the operator
+            // had just paged open, seconds after they opened it, and read as a
+            // broken button. First paint is still capped because the map starts
+            // empty; it is cleared only when the card set stops being the same set
+            // (workspace change, below).
             // Prune stale selectedCards entries so ASSIGN count and merge buttons stay accurate
             // when cards disappear from the board (deletion, workspace/project filter change)
             const cardIds = new Set(cards.map(c => c.planId || c.sessionId).filter(Boolean));
@@ -9537,9 +9777,18 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     // columns; the DOM renders only the project-filtered subset.
                     const coderOccupancy = CODED_IDS.reduce((sum, c) => sum + (occupancyCounts[c] || 0), 0);
                     autoCountEl.textContent = String(coderOccupancy);
-                    autoContainer.innerHTML = coderItems.length === 0
-                        ? '<div class="empty-state">No plans</div>'
-                        : sortedCoderItems.map(card => createCardHtml(card)).join('');
+                    // Render cap (plan change 1): only the first page of coder
+                    // cards is built into the DOM; the rest page in on demand.
+                    lastSortedBuckets['CODED_AUTO'] = sortedCoderItems;
+                    const limit = columnRenderLimits['CODED_AUTO'] ?? COLUMN_RENDER_CAP;
+                    const visibleCoder = sortedCoderItems.slice(0, limit);
+                    if (coderItems.length === 0) {
+                        autoContainer.innerHTML = '<div class="empty-state">No plans</div>';
+                    } else {
+                        autoContainer.innerHTML = visibleCoder.map(card => createCardHtml(card)).join('')
+                            + loadMoreHtml('CODED_AUTO', visibleCoder.length, sortedCoderItems.length);
+                    }
+                    updateCapHint('CODED_AUTO', visibleCoder.length, sortedCoderItems.length);
                 }
             }
 
@@ -9571,6 +9820,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 // honour the exact same ordering without re-deriving it here.
                 const sortedItems = [...items].sort((a, b) => compareCardsByPrecedence(a, b, col));
                 countEl.textContent = String(occupancyCounts[col] || 0);
+                // Stash the sorted bucket so the "Load more" handler can page
+                // this column without re-deriving it (plan change 1).
+                lastSortedBuckets[col] = sortedItems;
+                const limit = columnRenderLimits[col] ?? COLUMN_RENDER_CAP;
 
                 if (col === 'STAGING') {
                     const parts = [];
@@ -9581,23 +9834,35 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     if (liveMissions.length > 0) {
                         parts.push(...liveMissions.map(m => createMissionCardHtml(m)));
                     }
-                    if (sortedItems.length > 0) {
+                    // Missions are never capped — they are few and are the queue's
+                    // head. The cap applies to the loose staged cards beneath them.
+                    const looseBudget = Math.max(0, limit - liveMissions.length);
+                    const visibleLoose = sortedItems.slice(0, looseBudget);
+                    if (visibleLoose.length > 0) {
                         // Loose cards staged before missions or not part of a mission
-                        parts.push(...sortedItems.map(card => createCardHtml(card)));
+                        parts.push(...visibleLoose.map(card => createCardHtml(card)));
                     }
-                    countEl.textContent = String(liveMissions.length + sortedItems.length);
+                    const stagingPool = liveMissions.length + sortedItems.length;
+                    const stagingRendered = liveMissions.length + visibleLoose.length;
+                    countEl.textContent = String(stagingPool);
                     if (parts.length === 0) {
                         container.innerHTML = '<div class="empty-state">No missions</div>';
                     } else {
-                        container.innerHTML = parts.join('');
+                        container.innerHTML = parts.join('') + loadMoreHtml(col, stagingRendered, stagingPool);
                     }
+                    updateCapHint(col, stagingRendered, stagingPool);
                 } else if (items.length === 0) {
                     container.innerHTML = '<div class="empty-state">No plans</div>';
+                    updateCapHint(col, 0, 0);
                 } else {
-                    container.innerHTML = sortedItems.map(card => createCardHtml(card)).join('');
+                    const visible = sortedItems.slice(0, limit);
+                    container.innerHTML = visible.map(card => createCardHtml(card)).join('')
+                        + loadMoreHtml(col, visible.length, sortedItems.length);
+                    updateCapHint(col, visible.length, sortedItems.length);
                 }
             });
 
+            initLoadMoreDelegation();
             updateStagingViewInfo();
             updateStarredCount();
             updateCapLabels();
@@ -9645,6 +9910,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         el.addEventListener('animationend', () => el.classList.remove('card-op-completed'), { once: true });
                     }
                 });
+            }
+
+            // Render cost is the ONE number available on every path — extension
+            // push, browser push and verb response alike — so the diagnostics line
+            // always carries a real reading, and it is precisely the cost the
+            // per-column cap exists to cut.
+            if (boardVerboseDiagnostics) {
+                const renderEndedAt = (typeof performance !== 'undefined' && performance.now)
+                    ? performance.now() : Date.now();
+                lastBoardRenderMs = Math.round(renderEndedAt - renderStartedAt);
+                renderBoardDiagnostics();
             }
         }
         function scoreToCategory(scoreStr) {
@@ -11074,6 +11350,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     showStatusBarMessage(msg.message || '', { isError: !!msg.isError });
                     break;
                 }
+                case 'boardFetchMetrics': {
+                    // Standalone HTTP path diagnostics (plan change 4):
+                    // transport.js captures the fetchKanbanPlans response size +
+                    // elapsed and dispatches it here. Byte size may also arrive
+                    // via updateBoard (recorded separately); the elapsed time is
+                    // fetch-only, so it is NULL in the extension webview.
+                    if (typeof msg.bytes === 'number') lastBoardPayloadBytes = msg.bytes;
+                    if (typeof msg.elapsedMs === 'number') lastBoardFetchElapsedMs = msg.elapsedMs;
+                    renderBoardDiagnostics();
+                    break;
+                }
                 case 'dispatchProjectManager': {
                     // Browser-only path: transport.js re-dispatches the HTTP body as a
                     // MessageEvent. In the editor webview the provider's return value is
@@ -11114,6 +11401,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     if (workspaceChanged) {
                         setBoardProjectFilter(activeProjectFilter);
                         allCards = []; // new workspace → drop the stale unfiltered cache
+                        // Drop paged-in rows + stashed buckets too — they belong
+                        // to the previous workspace's columns (plan change 1).
+                        columnRenderLimits = {};
+                        lastSortedBuckets = {};
                     } else if (boardProjectFilter === null && allCards.length === 0) {
                         // First hydration before any updateBoard: seed from backend so the
                         // board starts in sync, then own it locally.
@@ -11269,6 +11560,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     // kanban tab. The backend now sends unfiltered cards; the board owns
                     // its view filter so browser and webview never reset each other.
                     const rawCards = Array.isArray(msg.cards) ? msg.cards : [];
+                    // Diagnostics (plan change 4): record the payload size of this
+                    // board push. The extension webview path has no fetch round-trip
+                    // (the host pushes updateBoard), so only byte size is recorded
+                    // here; the standalone HTTP path also receives a
+                    // boardFetchMetrics message with the elapsed time.
+                    recordBoardPayloadBytes(msg);
                     // Clear confirmed pending stars BEFORE the overlay is applied: a
                     // ledger entry whose pending value equals the server's
                     // priorityStarred for that card is a confirmed write, so the
@@ -12556,6 +12853,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         updateFeatureWorkflowToggleUi();
         renderColumns();
         renderBoard([]);
+        renderBoardDiagnostics();
 
         document.getElementById('integration-autopull-toggle')?.addEventListener('change', updateIntegrationIntervalState);
         document.getElementById('integration-settings-close')?.addEventListener('click', closeIntegrationSettings);

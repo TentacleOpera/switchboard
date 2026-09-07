@@ -26,6 +26,20 @@
     const routePrefix = panel === 'kanban' ? '/kanban/verb' : `/${panel}/verb`;
     const localStorageKey = `sb-state-${panel}`;
 
+    // Defect 3 fix: derive isDockFrame from location.search here, mirroring
+    // terminals.js's parse of the `dock` parameter. transport.js is shared
+    // by every panel (including the dock's /terminals?…&dock=1 iframes) and
+    // has no notion of a dock — the switchPanel bridge below must not fire
+    // from a side pane, or a dock document repaints the shell's whole content
+    // area. terminals.js has its OWN isDockFrame parse for its own relays
+    // (postFleetStateToShell, missionControlArmed); this one covers the
+    // transport-level senders. If you change the dock parameter's name or
+    // semantics, update BOTH parsers — see the cross-reference in terminals.js.
+    let isDockFrame = false;
+    try {
+        isDockFrame = new URLSearchParams(window.location.search).get('dock') === '1';
+    } catch { /* ignore */ }
+
     function loadState() {
         try {
             const raw = localStorage.getItem(localStorageKey);
@@ -112,6 +126,11 @@
      * devtools are that panel's traffic only, not the whole system's.
      */
     const PANEL_SURFACES_MAP = {
+        // The shell frame. Absent from this map it declared no surfaces at all,
+        // which the server reads as "subscribe to everything" and answers with a
+        // full resync — ~423 KB on a real board, enough to kill the socket over a
+        // network while working perfectly on loopback.
+        shell: ['terminals', 'common'],
         kanban: ['kanban', 'common'],
         command: ['kanban', 'common'],
         terminals: ['terminals', 'common'],
@@ -379,8 +398,22 @@
             // client-side switch (no HTTP round-trip). Outside the shell
             // (standalone full-page route), fall through to the HTTP post —
             // the server returns a no-op ack.
+            //
+            // Defect 3 fix: a dock frame must not switch the shell's main
+            // panel — a side pane repainting the whole content area is the
+            // surprise being removed. The guard is unconditional (no opt-in,
+            // no exception list — confirmed by User Review in the plan). Warn
+            // so a developer who triggers it can see the no-op rather than
+            // debug a silent dead button. Also post with location.origin
+            // instead of '*' — the shell is same-origin, and '*' lets any
+            // frame the page hosts reach the switchPanel arm.
             if (PANEL_SWITCH_VERBS[verb] && window.parent && window.parent !== window) {
-                window.parent.postMessage({ type: 'switchPanel', panel: PANEL_SWITCH_VERBS[verb] }, '*');
+                if (isDockFrame) {
+                    console.warn('[transport] switchPanel (' + verb
+                        + ') ignored — dock frames must not change the main panel');
+                    return;
+                }
+                window.parent.postMessage({ type: 'switchPanel', panel: PANEL_SWITCH_VERBS[verb] }, location.origin);
                 return;
             }
 
@@ -424,6 +457,29 @@
                 .then(function (res) { return res.json(); })
                 .then(function (result) {
                     cleanupVerbTimers();
+                    // Board-fetch diagnostics (plan change 4). Capture payload size
+                    // + elapsed for a board payload that arrived as a verb RESPONSE,
+                    // so the operator can see the round-trip cost without a
+                    // stopwatch.
+                    //
+                    // Keyed on the response SHAPE, not on a verb name. The board
+                    // panel never sends `fetchKanbanPlans` (that is the Project
+                    // panel's verb, and it dispatches into the Project panel's
+                    // handler), so a verb-name gate here fires for nobody and the
+                    // elapsed number is permanently absent. `updateBoard` is the one
+                    // message that carries the cards, whichever verb's reply it rides
+                    // in on. Note that in the BROWSER the cards usually arrive as a
+                    // wsHub push instead, which has no round trip to time — see
+                    // renderBoardDiagnostics in kanban.html, which measures render
+                    // time on every path so the line is never empty.
+                    if (result && typeof result === 'object' && result.type === 'updateBoard') {
+                        const elapsed = Date.now() - startTime;
+                        let bytes = 0;
+                        try { bytes = new Blob([JSON.stringify(result)]).size; } catch (e) { /* ignore */ }
+                        try {
+                            dispatchMessage({ type: 'boardFetchMetrics', bytes: bytes, elapsedMs: elapsed });
+                        } catch (e) { /* ignore — diagnostics must never break the board */ }
+                    }
                     if (result && result.prompt && window.sbCopyToClipboard) {
                         window.sbCopyToClipboard(result.prompt).catch(function (err) {
                             console.warn('[transport] Clipboard write failed:', err);
@@ -522,10 +578,35 @@
     // posts {type:'switchPanel', panel} to the parent window. No-op when not
     // iframed (extension webview or standalone full-page route) — the parent
     // listener only exists in the shell.
+    //
+    // Defect 3 fix: dock-guarded and origin-scoped, mirroring the PANEL_SWITCH_VERBS
+    // sender above. A dock frame has no verb mapping but can call this global
+    // directly — guarding only the verb map leaves this path open.
+    //
+    // ─── Parent-directed postMessage audit (Change 4) ──────────────────────
+    // Every window.parent.postMessage under src/webview/, and whether each is
+    // dock-safe. Two were guarded ad hoc; this list is so the next relay is
+    // checked against something rather than remembered.
+    //
+    //   transport.js  PANEL_SWITCH_VERBS switchPanel     — dock-guarded + origin (this file)
+    //   transport.js  __switchboardSwitchPanel           — dock-guarded + origin (this file)
+    //   terminals.js  missionControlArmed                — dock-guarded (!isDockFrame)
+    //   terminals.js  terminalFleetState                 — dock-guarded (isDockFrame early return)
+    //   terminals.js  popoutTerminal                     — dock-safe: solo/kanban CSS hides the
+    //                                                       popout button; posts with location.origin
+    //   terminals.js  dockTerminalExited                 — dock-ONLY (gated by isDockFrame)
+    //   linear.js     switchPanel → tickets              — dock-safe: linear.js is a content-area
+    //                                                       panel, not a dock document; posts with
+    //                                                       location.origin
     window.__switchboardSwitchPanel = function (panelId) {
         try {
             if (window.parent && window.parent !== window) {
-                window.parent.postMessage({ type: 'switchPanel', panel: String(panelId) }, '*');
+                if (isDockFrame) {
+                    console.warn('[transport] __switchboardSwitchPanel(' + panelId
+                        + ') ignored — dock frames must not change the main panel');
+                    return;
+                }
+                window.parent.postMessage({ type: 'switchPanel', panel: String(panelId) }, location.origin);
             }
         } catch (err) {
             console.warn('[transport] switchPanel postMessage failed:', err);

@@ -1,4 +1,5 @@
 import * as http from 'http';
+import * as zlib from 'zlib';
 import * as fs from 'fs/promises';
 import * as fsSync from 'fs';
 import * as path from 'path';
@@ -392,6 +393,26 @@ interface LocalApiServerOptions {
      */
     getRegisteredTerminals?: () => string[];
     terminalWsGateway?: any;
+    /**
+     * Port of the out-of-process Go PTY host, if one owns the fleet.
+     *
+     * When set, `/ws/terminal` upgrades are proxied to it. This is what keeps
+     * terminals reachable on the SAME origin as the board — and therefore over
+     * the tailnet. The Go host binds loopback only, so a page told to dial it
+     * directly works on the serving machine and fails everywhere else.
+     */
+    getPtyHostPort?: () => number | undefined;
+    /**
+     * Authorise a terminal upgrade against the out-of-process PTY host.
+     *
+     * Given the token the PAGE supplied, return the child's port and the child's
+     * OWN token, or undefined to reject. Two credentials exist: the board mints
+     * one for the page, the Go host mints its own and reports it in the ready
+     * handshake. They are not the same value, so the page's token can never
+     * satisfy the child directly — the board validates one and substitutes the
+     * other. The child's credential therefore never reaches a browser.
+     */
+    authorizePtyHostUpgrade?: (suppliedToken: string) => { port: number; token: string } | undefined;
     /**
      * The board's currently selected workspace root (the kanban dropdown selection),
      * or null when no provider is loaded. Surfaced on GET /health as
@@ -1145,6 +1166,24 @@ export class LocalApiServer {
                     await this._wsHub!.handleUpgrade(req, socket, head);
                 } else if (reqUrl.pathname === '/ws/terminal' && this._options.terminalWsGateway) {
                     await this._options.terminalWsGateway.handleUpgrade(req, socket, head);
+                } else if (reqUrl.pathname === '/ws/terminal' && this._options.authorizePtyHostUpgrade) {
+                    const supplied = reqUrl.searchParams.get('token') || '';
+                    const grant = this._options.authorizePtyHostUpgrade(supplied);
+                    if (!grant) {
+                        socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
+                        try { socket.destroy(); } catch { /* ignore */ }
+                        return;
+                    }
+                    reqUrl.searchParams.set('token', grant.token);
+                    this._proxyTerminalUpgrade(req, socket, head, grant.port, reqUrl.pathname + reqUrl.search);
+                } else if (reqUrl.pathname === '/ws/terminal' && this._options.getPtyHostPort?.()) {
+                    // The fleet lives in the Go PTY host child, which binds loopback
+                    // only. Proxy rather than redirect: the board's listener is the
+                    // one on the tailnet, so terminals must arrive on THIS origin or
+                    // they are unreachable from any other machine. Handing the page
+                    // the child's address instead works on the serving host and
+                    // silently breaks every remote viewer.
+                    this._proxyTerminalUpgrade(req, socket, head, this._options.getPtyHostPort()!);
                 } else {
                     socket.destroy();
                 }
@@ -1748,6 +1787,40 @@ export class LocalApiServer {
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'Failed to build panels manifest' }));
         }
+    }
+
+    /**
+     * Pipe a `/ws/terminal` upgrade through to the Go PTY host on loopback.
+     *
+     * A raw socket splice: replay the client's request line and headers to the
+     * child, then join the two sockets. The child performs the WebSocket
+     * handshake and the token check itself, so this adds no auth of its own and
+     * cannot weaken the child's — it is transport only.
+     */
+    private _proxyTerminalUpgrade(req: http.IncomingMessage, socket: any, head: any, port: number, overrideUrl?: string): void {
+        const net = require('net') as typeof import('net');
+        const upstream = net.connect(port, '127.0.0.1');
+        const fail = (why: string) => {
+            console.warn(`[LocalApiServer] terminal upgrade proxy failed: ${why}`);
+            try { socket.destroy(); } catch { /* ignore */ }
+            try { upstream.destroy(); } catch { /* ignore */ }
+        };
+        upstream.on('error', (e: Error) => fail(e.message));
+        socket.on('error', () => { try { upstream.destroy(); } catch { /* ignore */ } });
+        upstream.on('connect', () => {
+            const lines = [`GET ${overrideUrl || req.url} HTTP/1.1`];
+            for (let i = 0; i < req.rawHeaders.length; i += 2) {
+                // Host and Origin are forwarded VERBATIM. The child's CheckOrigin
+                // accepts same-origin, so it needs to see the page's real origin
+                // and the real Host to compare them. Rewriting either here would
+                // turn that check into a rubber stamp.
+                lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
+            }
+            upstream.write(lines.join('\r\n') + '\r\n\r\n');
+            if (head && head.length) { upstream.write(head); }
+            upstream.pipe(socket);
+            socket.pipe(upstream);
+        });
     }
 
     private async _handleServePanelById(id: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -9885,9 +9958,292 @@ export class LocalApiServer {
     }
 
     /**
+     * Compression configuration — see plan
+     * `the-board-ships-2-8mb-of-uncompressed-json-so-a-remote-device-waits-minutes.md`
+     * change 2. The board ships ~2.8 MB of uncompressed JSON; gzip takes the
+     * transfer from 1.1–4.5 s to ~0.1–0.5 s on a jittery wifi link. This is the
+     * change that specifically closes the local-versus-remote gap, because
+     * loopback never paid the transfer cost the remote path does.
+     */
+    private static readonly COMPRESSION_MIN_BYTES = 1024;
+
+    /**
+     * Content-Type prefixes whose bodies are worth compressing. Already-compressed
+     * formats (images, fonts, archives, video/audio) are excluded — gzipping them
+     * costs CPU for no gain and can even grow the body.
+     */
+    private static readonly COMPRESSIBLE_CONTENT_TYPE_PREFIXES = [
+        'text/',
+        'application/json',
+        'application/manifest+json',
+        'application/javascript',
+        'application/x-javascript',
+        'application/xml',
+        'image/svg+xml',
+    ];
+
+    private _isCompressibleContentType(contentType: string | undefined): boolean {
+        if (!contentType) return false;
+        const ct = contentType.toLowerCase();
+        return LocalApiServer.COMPRESSIBLE_CONTENT_TYPE_PREFIXES.some(p => ct.startsWith(p));
+    }
+
+    /**
+     * Parse `Accept-Encoding` and pick an encoding. Returns `'gzip'`, `'deflate'`
+     * or `null` (no usable encoding, or the client asked for `identity` only).
+     * Honours `q=0` exclusions and the `*` wildcard. Prefers gzip (better ratio
+     * and the contract test pins it).
+     */
+    private _pickContentEncoding(acceptEncoding: string | undefined): 'gzip' | 'deflate' | null {
+        if (!acceptEncoding) return null;
+        const offers: { name: string; q: number }[] = [];
+        for (const part of acceptEncoding.split(',')) {
+            const trimmed = part.trim();
+            if (!trimmed) continue;
+            const semi = trimmed.indexOf(';');
+            const name = (semi >= 0 ? trimmed.slice(0, semi) : trimmed).toLowerCase().trim();
+            let q = 1;
+            if (semi >= 0) {
+                const qMatch = /q=([0-9.]+)/i.exec(trimmed.slice(semi + 1));
+                if (qMatch) { const parsed = parseFloat(qMatch[1]); if (!isNaN(parsed)) q = parsed; }
+            }
+            offers.push({ name, q });
+        }
+        const qFor = (name: string) => {
+            const exact = offers.find(o => o.name === name);
+            if (exact) return exact.q;
+            const wild = offers.find(o => o.name === '*');
+            return wild ? wild.q : 0;
+        };
+        const gzipQ = qFor('gzip');
+        const deflateQ = qFor('deflate');
+        // `identity` with q=0 means "do not send me an uncompressed body"; we still
+        // may send a compressed one. We only need a usable compression encoding.
+        if (gzipQ > 0) return 'gzip';
+        if (deflateQ > 0) return 'deflate';
+        return null;
+    }
+
+    /**
+     * Wrap a `ServerResponse` so the body is transparently gzip/deflate-compressed
+     * when the client sent an `Accept-Encoding` we support, the response is large
+     * enough, the Content-Type is compressible, and the response is not already
+     * compressed or a Range/Content-Range body (byte offsets must stay meaningful).
+     *
+     * Applied at the top of `_handleRequest`, which is the SHARED handler both the
+     * loopback and tailnet listeners route through — so compression reaches the
+     * remote path (the only one that needs it) without a per-listener seam. This
+     * is the exact shape of defect the tailnet Host-header bug had: a guard wired
+     * on one listener only. Eligibility is decided at `writeHead` time, when the
+     * status, Content-Type and any existing Content-Encoding / Content-Range are
+     * all known; the SIZE floor is resolved one step later, at the first
+     * `write`/`end`, because almost no route here sets `Content-Length` and the
+     * one-shot `writeHead(); end(body)` shape only reveals its size then. Bodies
+     * are streamed through `zlib` rather than buffered, so a large board does not
+     * double in server memory.
+     *
+     * The wrapper is a Proxy that forwards every property to the real `res`
+     * except `writeHead`, `write` and `end`, which it intercepts. `setHeader`
+     * calls before `writeHead` pass through to the real `res` and are read back
+     * via `res.getHeaders()` at `writeHead` time, so the CORS / Vary headers the
+     * top of `_handleRequest` sets are preserved.
+     */
+    private _wrapForCompression(req: http.IncomingMessage, res: http.ServerResponse): http.ServerResponse {
+        const acceptEncoding = req.headers['accept-encoding'];
+        const hasRangeRequest = req.headers['range'] !== undefined;
+        let compression: zlib.Gzip | zlib.Deflate | null = null;
+        let declared = false;
+        /**
+         * A compress CANDIDATE whose head has not been handed to the real `res`
+         * yet, because the body size is not known.
+         *
+         * Almost nothing in this file sets `Content-Length` — the dominant shape
+         * is `res.writeHead(200, {'Content-Type': ...}); res.end(json)`. Deciding
+         * at `writeHead` time therefore made the 1 KB floor dead config and
+         * gzipped every 18-byte `{"success":true}` ack. Holding the head until
+         * the first `write`/`end` is the only way to see the size of a one-shot
+         * body, so the floor the plan asks for actually applies. Only compress
+         * candidates are held; everything else keeps its immediate `writeHead`,
+         * which is what bounds the blast radius of the deferral.
+         */
+        let pending: { status: number; headers: http.OutgoingHttpHeaders; encoding: 'gzip' | 'deflate' } | null = null;
+
+        const pickEncoding = (): 'gzip' | 'deflate' | null => {
+            if (hasRangeRequest) return null;
+            return this._pickContentEncoding(acceptEncoding);
+        };
+
+        /**
+         * The encoding this response could use, or null when it must not be
+         * compressed at all. Body size is NOT considered here — that is the
+         * `pending` path's job, because it is unknown at `writeHead` time.
+         */
+        const candidateEncoding = (status: number, mergedHeaders: Record<string, string | string[] | undefined>): 'gzip' | 'deflate' | null => {
+            if (status < 200 || status >= 300) return null; // errors, redirects — small, skip
+            const existingEncoding = mergedHeaders['content-encoding'];
+            if (existingEncoding && String(existingEncoding).toLowerCase() !== 'identity') return null;
+            // Range responses: byte offsets must stay meaningful.
+            if (mergedHeaders['content-range'] || mergedHeaders['accept-ranges']) return null;
+            const contentType = mergedHeaders['content-type'];
+            if (!this._isCompressibleContentType(contentType as string | undefined)) return null;
+            return pickEncoding();
+        };
+
+        const mergeHeaders = (statusHeaders?: http.OutgoingHttpHeaders): Record<string, string | string[] | undefined> => {
+            const merged: Record<string, string | string[] | undefined> = {};
+            // Headers set via res.setHeader before writeHead.
+            for (const [k, v] of Object.entries(res.getHeaders())) {
+                merged[k.toLowerCase()] = v as string | string[] | undefined;
+            }
+            if (statusHeaders) {
+                for (const [k, v] of Object.entries(statusHeaders)) {
+                    merged[k.toLowerCase()] = v as string | string[] | undefined;
+                }
+            }
+            return merged;
+        };
+
+        const appendVary = (headers: http.OutgoingHttpHeaders): void => {
+            const existing = headers['Vary'] ?? res.getHeader('Vary');
+            if (!existing) {
+                headers['Vary'] = 'Accept-Encoding';
+                return;
+            }
+            const parts = String(existing).split(',').map(s => s.trim().toLowerCase());
+            if (!parts.includes('accept-encoding')) {
+                headers['Vary'] = String(existing) + (String(existing).trim() ? ', ' : '') + 'Accept-Encoding';
+            }
+        };
+
+        /** Drop Content-Length whatever case the route spelled it in. */
+        const dropContentLength = (headers: http.OutgoingHttpHeaders): void => {
+            for (const k of Object.keys(headers)) {
+                if (k.toLowerCase() === 'content-length') delete headers[k];
+            }
+        };
+
+        const armCompression = (encoding: 'gzip' | 'deflate'): void => {
+            compression = encoding === 'gzip' ? zlib.createGzip() : zlib.createDeflate();
+            compression.on('error', (err) => {
+                console.error('[LocalApiServer] compression stream error:', err);
+                try { res.destroy(); } catch { /* ignore */ }
+            });
+            compression.pipe(res);
+        };
+
+        /**
+         * Hand the held head to the real `res`. `compress` decides which of the
+         * two shapes it takes; it is resolved by the caller from the body size.
+         */
+        const flushPending = (compress: boolean): void => {
+            if (!pending) return;
+            const { status, headers, encoding } = pending;
+            pending = null;
+            const finalHeaders: http.OutgoingHttpHeaders = { ...headers };
+            appendVary(finalHeaders);
+            if (compress) {
+                finalHeaders['Content-Encoding'] = encoding;
+                // A streamed compressed body has no fixed length up front.
+                dropContentLength(finalHeaders);
+                try { res.removeHeader('Content-Length'); } catch { /* ignore */ }
+                armCompression(encoding);
+            }
+            (res.writeHead as any)(status, finalHeaders);
+        };
+
+        const wrappedWriteHead = (status: number, ...rest: any[]): http.ServerResponse => {
+            if (declared) {
+                // Node allows writeHead to be called once; a second call is a bug
+                // that throws. Release any held head first so the real res is in
+                // the state it would have been, then forward and let it throw.
+                flushPending(true);
+                return (res.writeHead as any)(status, ...rest);
+            }
+            declared = true;
+            const statusHeaders: http.OutgoingHttpHeaders | undefined =
+                rest.length === 1 ? rest[0] : (rest.length === 2 ? rest[1] : undefined);
+            const merged = mergeHeaders(statusHeaders);
+            const encoding = candidateEncoding(status, merged);
+            if (encoding) {
+                const declaredLength = merged['content-length'];
+                if (declaredLength !== undefined && Number(declaredLength) < LocalApiServer.COMPRESSION_MIN_BYTES) {
+                    // Size is known and below the floor — settle it now, no deferral.
+                    const finalHeaders: http.OutgoingHttpHeaders = { ...(statusHeaders || {}) };
+                    appendVary(finalHeaders);
+                    return (res.writeHead as any)(status, finalHeaders);
+                }
+                // Size unknown, or known and worth compressing. Hold the head: the
+                // first write/end resolves it (see `pending`).
+                pending = { status, headers: { ...(statusHeaders || {}) }, encoding };
+                if (declaredLength !== undefined) { flushPending(true); }
+                return res;
+            }
+            // Not compressing. Still advertise Vary so an intermediary does not
+            // cache this response and serve it to a client that wanted compression
+            // (or vice versa) — but only for compressible types, to avoid tagging
+            // every tiny JSON ack.
+            if (this._isCompressibleContentType(merged['content-type'] as string | undefined) && !hasRangeRequest) {
+                const finalHeaders: http.OutgoingHttpHeaders = { ...(statusHeaders || {}) };
+                appendVary(finalHeaders);
+                return (res.writeHead as any)(status, finalHeaders);
+            }
+            return (res.writeHead as any)(status, ...rest);
+        };
+
+        const wrappedWrite = (chunk: any, ...rest: any[]): boolean => {
+            // A route that writes before ending is streaming: the total size can
+            // never be known, so commit to compressing.
+            if (pending) { flushPending(true); }
+            if (compression) {
+                return compression.write(chunk, ...rest);
+            }
+            return (res.write as any)(chunk, ...rest);
+        };
+
+        const wrappedEnd = (chunk?: any, ...rest: any[]): http.ServerResponse => {
+            if (pending) {
+                // The one-shot `writeHead(...); end(body)` shape — the whole body is
+                // in hand, so the 1 KB floor can finally be applied for real.
+                const size = (chunk === undefined || chunk === null)
+                    ? 0
+                    : (Buffer.isBuffer(chunk) ? chunk.length : Buffer.byteLength(String(chunk), typeof rest[0] === 'string' ? rest[0] as BufferEncoding : 'utf8'));
+                flushPending(size >= LocalApiServer.COMPRESSION_MIN_BYTES);
+            }
+            if (compression) {
+                const encodingArg = typeof rest[0] === 'string' ? rest[0] : undefined;
+                const callback = rest.find(r => typeof r === 'function') as (() => void) | undefined;
+                if (chunk !== undefined && chunk !== null) {
+                    compression.write(chunk, encodingArg as any);
+                }
+                // res.end is invoked by the gzip stream's pipe completion; the
+                // caller's callback must still fire, so hang it off the real res.
+                if (callback) { res.once('finish', callback); }
+                compression.end();
+                return res;
+            }
+            return (res.end as any)(chunk, ...rest);
+        };
+
+        return new Proxy(res, {
+            get(target, prop, receiver) {
+                if (prop === 'writeHead') return wrappedWriteHead;
+                if (prop === 'write') return wrappedWrite;
+                if (prop === 'end') return wrappedEnd;
+                const value = (target as any)[prop];
+                return typeof value === 'function' ? value.bind(target) : value;
+            },
+        }) as http.ServerResponse;
+    }
+
+    /**
      * Handle incoming HTTP requests.
      */
     private async _handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        // Compression wrapper (plan change 2). Applied here — the SHARED handler
+        // both listeners route through — so the remote (tailnet) path is covered,
+        // not just loopback. The wrapper is a no-op for incompressible / small /
+        // Range responses, so existing callers are unaffected.
+        res = this._wrapForCompression(req, res);
         // Guard 2: restrict to localhost OR a peer arriving on the tailnet
         // listener. The peer is identified by which listener accepted the
         // connection (socket.localAddress === tailnet address), not by an

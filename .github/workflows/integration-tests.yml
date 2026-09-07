@@ -1009,6 +1009,18 @@ jobs:
       - name: Terminal WebSocket compression contract (deflate negotiated, context takeover retained, 400 cost pinned)
         run: npm run test:contract:terminal-ws-deflate
 
+      # HTTP response compression + the board's per-column render cap. Both are
+      # silent-failure changes: the board serves ~2.8 MB uncompressed without the
+      # wrapper and a remote device waits seconds for it, while on loopback the
+      # regression is invisible — which is where this is developed. The checks are
+      # live: they drive the real _wrapForCompression from the compiled source
+      # through a real http.Server, so the exclusions (Range, Content-Range,
+      # already-encoded, sub-1 KB) are proven rather than asserted about. They also
+      # pin that renderBoard does not reset the operator's paged-in rows, which
+      # would make "Load more" collapse a second after it is clicked.
+      - name: Board payload compression + render cap contract (gzip negotiated, exclusions honoured, cap uniform)
+        run: npm run test:contract:board-payload-compression
+
       # GPU renderer lifecycle. The failure mode is SILENT SUCCESS: WebglAddon.dispose()
       # leaves the live WebGL2 context to the garbage collector, and the browser charges
       # its ~16-per-renderer-process ceiling against the live context — so a release path
