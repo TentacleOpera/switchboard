@@ -79,6 +79,30 @@ function extractDeflateLiteral() {
 
 const deflate = extractDeflateLiteral();
 
+/**
+ * The hub's shared `perMessageDeflate` literal, lifted verbatim from wsHub.ts.
+ * Same one-source-of-truth trick as the gateway above: a drift in the source
+ * fails the structural assertions, and a change in `ws` behaviour under an
+ * unchanged source fails the behavioural ones.
+ */
+function extractHubDeflateLiteral() {
+    const key = 'const HUB_PER_MESSAGE_DEFLATE = {';
+    const at = hubCode.indexOf(key);
+    assert.ok(at !== -1, 'wsHub.ts must declare HUB_PER_MESSAGE_DEFLATE — the board resync is 400+ KB uncompressed');
+    let i = at + key.length - 1;
+    let depth = 0;
+    for (; i < hubCode.length; i++) {
+        if (hubCode[i] === '{') { depth++; }
+        else if (hubCode[i] === '}') { depth--; if (depth === 0) { break; } }
+    }
+    assert.ok(depth === 0, 'unbalanced braces in HUB_PER_MESSAGE_DEFLATE');
+    const body = hubCode.substring(at + key.length - 1, i + 1);
+    // eslint-disable-next-line no-new-func
+    return { text: body, value: new Function(`return ${body};`)() };
+}
+
+const hubDeflate = extractHubDeflateLiteral();
+
 // ------------------------------------------------------------------ structure
 
 test('the terminal WebSocketServer enables permessage-deflate', () => {
@@ -115,13 +139,33 @@ test('the comment names the HTTP 400 consequence of serverNoContextTakeover: fal
         + 'debug the resulting handshake failure as a network fault');
 });
 
-test('the control-plane hub stays uncompressed', () => {
+// The hub was previously pinned UNCOMPRESSED here, on the premise that it
+// "carries small JSON pushes where deflate is mostly overhead". Measured on a
+// real board (2026-09-08) the connect-time __resync frame is 427,793 B — one
+// updateBoard of 425,677 B carrying 603 cards — and it is the first thing a
+// remote browser waits for. That premise was wrong, so the assertion is
+// inverted rather than kept: the hub must now compress, and must NOT acquire
+// the gateway's context-takeover setting (see the next test for why).
+test('the control-plane hub compresses, from ONE shared literal', () => {
     const constructions = hubCode.match(/new WebSocketServer\(\{[^}]*\}/g) || [];
     assert.strictEqual(constructions.length, 2, 'wsHub.ts is expected to construct exactly two WebSocketServers');
     for (const c of constructions) {
-        assert.ok(!c.includes('perMessageDeflate'),
-            'wsHub carries small JSON pushes where deflate is mostly overhead — it is explicitly out of scope');
+        assert.ok(/perMessageDeflate:\s*HUB_PER_MESSAGE_DEFLATE/.test(c),
+            'BOTH hub WebSocketServers must take the shared literal. attach() and the handleUpgrade lazy-init are '
+            + 'two construction sites, and a client that arrives through the one that was missed silently gets an '
+            + `uncompressed 400 KB resync: ${c}`);
     }
+});
+
+test('the hub does NOT set serverNoContextTakeover — a refused upgrade here is a dead board', () => {
+    assert.ok(!('serverNoContextTakeover' in hubDeflate.value),
+        'Do not copy the terminal gateway\'s literal here. `serverNoContextTakeover: false` makes ws REFUSE an '
+        + 'offer carrying server_no_context_takeover with HTTP 400 rather than downgrading. The terminal socket '
+        + 'accepts that cost because a dead terminal is visibly dead; this hub is the board\'s only state channel, '
+        + 'so a refused upgrade is a board that never receives cards and reads to the operator as a network fault.');
+    assert.ok(!('threshold' in hubDeflate.value),
+        'ws only honours `threshold` when server_no_context_takeover is negotiated; setting it here would tell a '
+        + 'future reader small pushes bypass zlib when they do not');
 });
 
 test('the flow-control budget is untouched by the compression change', () => {
@@ -152,12 +196,12 @@ test('no new constructor parameter or setter was added for compression', () => {
 // ----------------------------------------------------------------- behavioural
 
 /** Raw HTTP upgrade so the offer header is exactly what a given client would send. */
-function handshake(port, extensionsHeader) {
+function handshake(port, extensionsHeader, wsPath = '/ws/terminal') {
     return new Promise((resolve, reject) => {
         const key = crypto.randomBytes(16).toString('base64');
         const sock = net.connect(port, '127.0.0.1', () => {
             sock.write(
-                `GET /ws/terminal HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nUpgrade: websocket\r\n`
+                `GET ${wsPath} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nUpgrade: websocket\r\n`
                 + `Connection: Upgrade\r\nSec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\n`
                 + (extensionsHeader ? `Sec-WebSocket-Extensions: ${extensionsHeader}\r\n` : '')
                 + '\r\n'
@@ -267,6 +311,58 @@ async function main() {
     });
 
     server.close();
+
+    // ─── The control-plane hub, live from ITS literal ─────────────────────────
+    // A board-shaped resync: the real one measured 425,677 B of highly repetitive
+    // JSON (40 keys x 600 cards). This fixture reproduces that shape so the ratio
+    // assertion means something.
+    const BOARD_FRAME = Buffer.from(JSON.stringify({
+        type: 'updateBoard',
+        cards: Array.from({ length: 600 }, (_, i) => ({
+            planId: 'plan-' + i, sessionId: 'sess-' + i, column: 'PLAN REVIEWED',
+            topic: 'a plan with a reasonably long title ' + i,
+            planFile: '.switchboard/plans/a-plan-with-a-reasonably-long-title-' + i + '.md',
+            workspaceId: '038bffef-9842-4574-96a1-69a43a280b3c',
+            createdAt: '2026-09-01T12:00:00.000Z', updatedAt: '2026-09-08T12:00:00.000Z',
+            project: '', tags: [], featureId: null, complexity: '5',
+        })),
+    }));
+    const hubWss = new WebSocketServer({ noServer: true, perMessageDeflate: hubDeflate.value });
+    const hubServer = http.createServer((_req, res) => { res.writeHead(404); res.end(); });
+    hubServer.on('upgrade', (req, socket, head) => {
+        hubWss.handleUpgrade(req, socket, head, (ws) => { ws.send(BOARD_FRAME, { binary: true }); });
+    });
+    await new Promise((r) => hubServer.listen(0, '127.0.0.1', r));
+    const hubPort = hubServer.address().port;
+
+    await asyncTest('HUB: a server_no_context_takeover offer CONNECTS — it must never 400', async () => {
+        const res = await handshake(hubPort, 'permessage-deflate; server_no_context_takeover; client_max_window_bits', '/ws');
+        assert.strictEqual(res.status, 101,
+            'This is the whole reason the hub omits serverNoContextTakeover. A 400 here is not a degraded board, '
+            + 'it is a board that never receives cards — and the operator sees a network error, not a config bug.');
+        assert.ok(/permessage-deflate/.test(res.negotiated),
+            `the downgrade must still compress; got "${res.negotiated}"`);
+    });
+
+    await asyncTest('HUB: a board-shaped resync is compressed to a fraction of the wire', async () => {
+        const res = await handshake(hubPort, 'permessage-deflate; client_max_window_bits', '/ws');
+        assert.strictEqual(res.status, 101);
+        const frame = res.frames[0];
+        assert.ok(frame, 'expected the board frame');
+        assert.ok(frame.compressed, 'the resync frame must carry RSV1 — this frame IS the reason for the change');
+        assert.ok(frame.wireBytes < BOARD_FRAME.length / 4,
+            `a 40-key x 600-card board is hugely repetitive and must shrink at least 4x; `
+            + `${BOARD_FRAME.length} bytes went out as ${frame.wireBytes}`);
+    });
+
+    await asyncTest('HUB: a client offering no extensions still connects, uncompressed', async () => {
+        const res = await handshake(hubPort, '', '/ws');
+        assert.strictEqual(res.status, 101);
+        assert.strictEqual(res.negotiated, '');
+        assert.ok(res.frames.length >= 1 && !res.frames[0].compressed);
+    });
+
+    hubServer.close();
     console.log(`\nResults: ${passed} passed, ${failed} failed.`);
     process.exit(failed > 0 ? 1 : 0);
 }

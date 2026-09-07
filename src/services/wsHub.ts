@@ -153,6 +153,38 @@ interface ConnectionMeta {
     resyncFailed?: boolean;
 }
 
+/**
+ * permessage-deflate for the control-plane hub.
+ *
+ * This hub was deliberately left uncompressed on the premise that it "carries
+ * small JSON pushes where deflate is mostly overhead". Measured on a real board
+ * (2026-09-08) that premise is false: the connect-time `__resync` frame is
+ * **427,793 B** — one `updateBoard` of 425,677 B carrying 603 cards — and it is
+ * the FIRST thing a browser waits for. deflate takes that frame to 70,936 B
+ * (16.6%), removing 348 KB from the critical path of every remote open. Fleet
+ * and status deltas really are small, and compressing them costs sub-millisecond
+ * CPU; the resync is what this exists for.
+ *
+ * `serverNoContextTakeover` is deliberately ABSENT, and that is the one thing not
+ * to "harden" by copying the terminal gateway's literal. Setting it to `false`
+ * makes ws REFUSE a client offer carrying `server_no_context_takeover` — the
+ * upgrade aborts with HTTP 400 rather than downgrading (measured; see the
+ * contract test). The terminal socket accepts that cost because a dead terminal
+ * is visibly dead. This hub is the board's only state channel: a refused upgrade
+ * here is a board that never receives cards at all, and the client would read it
+ * as a network fault. Omitting the option lets ws negotiate context takeover when
+ * the client wants it and downgrade cleanly when it does not.
+ *
+ * `concurrencyLimit` is also absent on purpose: it is a module-level global in
+ * ws shared by every connection in the process, and the first PerMessageDeflate
+ * instance to initialize wins. terminalWsGateway.ts states it (10) for the whole
+ * process; a second, possibly different value here would only mislead a reader
+ * into thinking this hub had its own budget.
+ */
+const HUB_PER_MESSAGE_DEFLATE = {
+    zlibDeflateOptions: { level: 6, memLevel: 8 },
+} as const;
+
 export class WsHub {
     private _wss: WebSocketServer | null = null;
     private _options: WsHubOptions;
@@ -174,7 +206,7 @@ export class WsHub {
      * the HTTP server is listening.
      */
     attach(autoListen: boolean = true): void {
-        this._wss = new WebSocketServer({ noServer: true });
+        this._wss = new WebSocketServer({ noServer: true, perMessageDeflate: HUB_PER_MESSAGE_DEFLATE });
 
         if (autoListen) {
             this._options.server.on('upgrade', async (req, socket, head) => {
@@ -189,17 +221,56 @@ export class WsHub {
 
         if (!this._pingInterval) {
             this._pingInterval = setInterval(() => {
-                for (const meta of this._connections) {
+                // Snapshot before iterating: the reap branch mutates the set via
+                // removeConnection(), and deleting during a for...of is the one
+                // iteration in this class where mutation happens inside the loop.
+                // (broadcast() also iterates _connections, but it is synchronous
+                // and the reaper runs in setInterval — Node's single-threaded
+                // event loop means they cannot interleave. The snapshot is here
+                // because this is the load-bearing case.)
+                for (const meta of Array.from(this._connections)) {
                     if (meta.isAlive === false) {
                         console.warn(`[wsHub] reaping connection with no pong: originatorId=${meta.originatorId || 'unknown'}, `
                             + `surfaces=${meta.surfaces ? [...meta.surfaces].join(',') : 'all'}`);
                         try { meta.ws.terminate(); } catch { /* ignore */ }
+                        // Removal MUST be outside the terminate() try and unconditional.
+                        // For an already-dead socket (peer vanished without a TCP FIN)
+                        // terminate() is a no-op that emits nothing — the `close` event
+                        // that handleDisconnect listens for never fires, so without this
+                        // the reaped entry stays in _connections and is re-reaped every
+                        // tick for the process lifetime. The reaper is the only code
+                        // that knows this connection is dead; it must act on that.
+                        this._removeConnection(meta);
                     } else {
                         meta.isAlive = false;
                         try { meta.ws.ping(); } catch { /* ignore */ }
                     }
                 }
             }, this._options.pingIntervalMs ?? 30000);
+        }
+    }
+
+    /**
+     * The single removal path for a connection. Shared by the reaper and by
+     * `handleDisconnect` so the two removal routes cannot diverge — the reaper
+     * fires the same `_disconnectListeners` (e.g. DesignPanelProvider seat
+     * eviction) that a clean `close` would, and a late `close` arriving after
+     * a reap is a no-op via the `has()` guard. Belt and braces is correct here:
+     * the two cases genuinely differ (a clean close fires `close`; a dead
+     * socket does not), but both must end in the same bookkeeping.
+     */
+    private _removeConnection(meta: ConnectionMeta): void {
+        if (!this._connections.has(meta)) {
+            return;
+        }
+        this._connections.delete(meta);
+        console.warn(`[wsHub] connection closed: originatorId=${meta.originatorId || 'unknown'}, `
+            + `surfaces=${meta.surfaces ? [...meta.surfaces].join(',') : 'all'}, `
+            + `remaining=${this._connections.size}`);
+        if (meta.originatorId) {
+            for (const listener of Array.from(this._disconnectListeners)) {
+                try { listener(meta.originatorId); } catch (e) { console.error('[wsHub] disconnect listener error:', e); }
+            }
         }
     }
 
@@ -220,7 +291,7 @@ export class WsHub {
      */
     public async handleUpgrade(req: any, socket: any, head: any): Promise<void> {
         if (!this._wss) {
-            this._wss = new WebSocketServer({ noServer: true });
+            this._wss = new WebSocketServer({ noServer: true, perMessageDeflate: HUB_PER_MESSAGE_DEFLATE });
         }
 
         // A stalled token read must become a 503 the client can see, never silence.
@@ -360,17 +431,7 @@ export class WsHub {
                 + `resyncFailed=${meta.resyncFailed === true}, total=${this._connections.size}`);
 
             const handleDisconnect = () => {
-                if (this._connections.has(meta)) {
-                    this._connections.delete(meta);
-                    console.warn(`[wsHub] connection closed: originatorId=${meta.originatorId || 'unknown'}, `
-                        + `surfaces=${meta.surfaces ? [...meta.surfaces].join(',') : 'all'}, `
-                        + `remaining=${this._connections.size}`);
-                    if (meta.originatorId) {
-                        for (const listener of Array.from(this._disconnectListeners)) {
-                            try { listener(meta.originatorId); } catch (e) { console.error('[wsHub] disconnect listener error:', e); }
-                        }
-                    }
-                }
+                this._removeConnection(meta);
             };
 
             ws.on('close', handleDisconnect);
