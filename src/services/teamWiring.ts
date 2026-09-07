@@ -1410,8 +1410,10 @@ export interface WireSpawnedTeamOptions {
      * `wireSpawnedTeam` writes the file after the group registration lands,
      * mirroring the head-prompt file pattern for external-headed teams. Absent
      * for callers that have no workspace root (tests, headless harnesses) —
-     * no file is written, which is the safe default (the re-delivery at
-     * turn-end falls back to the fragment text).
+     * no file is written. All four production call sites pass it; the write is
+     * still skipped when `.switchboard/` does not exist, so an absent file is a
+     * real state and the turn-end reminder existence-checks the path before
+     * naming it.
      */
     workspaceRoot?: string;
 }
@@ -1822,8 +1824,12 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
     // Member orders file — the durable, re-readable orders file for team
     // members, mirroring the head's `head-prompt.md`. Written for ALL teams
     // (regular and external-headed) when a workspace root is available. A
-    // failure here leaves a missing file, not a broken team — the turn-end
-    // re-delivery falls back to the fragment text when the file is absent.
+    // failure here leaves a missing file, not a broken team: the turn-end
+    // reminder existence-checks the path and names the completion route
+    // instead. Note the standing-order fragments name this file
+    // UNCONDITIONALLY, so a skipped write does leave that one pointer dangling
+    // in the establish-time block — acceptable because the block it sits in
+    // carries the full recipe anyway, which is exactly what the file duplicates.
     // Runs AFTER the group write so `groupId` is the persisted team id.
     if (opts.workspaceRoot && childNames.length > 0) {
         try {

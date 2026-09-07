@@ -1546,6 +1546,14 @@ jobs:
       - name: Queue stall watch contract (completed card not in flight, dead pacer, ladder backstop)
         run: npm run test:contract:queue-stall-watch
 
+      # The member completion reminder is the member's half of the turn-end
+      # top-up the head already gets. Its budget is the load-bearing part: the
+      # reminder is itself a prompt, so a dedupe that re-arms on new output
+      # re-arms on its own echo and nags every window forever (measured: 12
+      # reminders in 12 windows before the budget landed).
+      - name: Member completion reminder contract
+        run: npm run test:contract:member-completion-reminder
+
       # The roster barrier must not clear the seat that issued the dispatch, and
       # must defer a seat that is mid-turn rather than wiping it. Defined but
       # never invoked until now — the exact "green while incomplete" hole.

@@ -95,22 +95,31 @@ The card carries the answer — a posted completion means the instruction was fo
 
 ## Review Findings
 
-**This subtask received no implementation.** `a5f1832f` is the feature's only commit and its message
-does not claim this card either. Verified by search, not inference: `.switchboard/teams/<teamId>/`
-still has exactly one writer and one file — `head-prompt.md` (`agentGroupInstantiation.ts:256`) — with
-no member equivalent; and `_turnEndNotifier` has seven production call sites
-(`PlanIngestionEngine.ts:1192, 1402, 1474, 1554, 1622, 1651, 1788`), every one addressed to a head or a
-queue pacer, none re-delivering a member's completion fragment. Verification items 1 through 9 are all
-unmet. No code was changed by this review pass: the card needs a new quiet-period sweep with its own
-dedupe state, a run-scoped member orders file, and external-head fragment selection in both hosts —
-that is the subtask's whole build, not a reviewer's fix.
+Second review pass, after implementation landed in `4df122fd`. The mechanism is real and in the
+right place: the sweep lives in the shared `PlanIngestionEngine`, both roots wire
+`setTurnEndNotifier` and `setTerminalLivenessProvider`, and both honour `bareDelivery`. The
+persisted group fields the sweep reads (`teamGroup`, `teamKind`, `head`, `order`, `externalHead`)
+were verified in `wireSpawnedTeam`'s own object literal, not in a type. Two defects were found and
+fixed. First, a CRITICAL unbounded nag loop: the dedupe re-armed whenever `lastDataAt` advanced past
+the pacing floor, but the reminder is itself a prompt whose echo and answer always advance
+`lastDataAt` — measured at 12 reminders in 12 windows before the fix. It is now a bounded budget of
+2 per card dispatch, re-armed only by a new `dispatchedAt`. Second, the body pointed at
+`.switchboard/teams/<id>/member-orders.md` relatively and unconditionally; the path is now absolute
+and existence-checked, falling back to naming the completion route. Files changed:
+`src/services/PlanIngestionEngine.ts`, `src/services/teamWiring.ts` (docblock corrections), new
+`src/test/member-completion-reminder-contract.test.js` (17 tests, wired into `package.json` and
+`.github/workflows/integration-tests.yml`). Verification: `tsc --noEmit` clean, `npm run compile`
+clean, `npm test` aggregate green, `host-seam-parity:check` 9/9 both roots, eslint 0 errors, and the
+new suite fails 12-vs-2 against the pre-fix dedupe (confirmed by reverting it).
 
 ## Deferred Findings
 
-- CRITICAL — Change 1 (a durable, re-readable member orders file alongside `head-prompt.md`, with the prompt pointing the seat at it) is not implemented. `src/services/agentGroupInstantiation.ts:256`
-- CRITICAL — Change 2 (re-deliver the completion fragment to a member seat that goes quiet holding an uncompleted card) is not implemented; no turn-end delivery is addressed to a member. `src/services/PlanIngestionEngine.ts:1271`
-- CRITICAL — Changes 3, 4 and 5 (fragment only rather than the whole block; once per quiet period; skip a seat that has already reported) are moot until change 2 exists. `src/services/PlanIngestionEngine.ts:1271`
-- MAJOR — Edge-case audit item 4 (an external-head member must be re-delivered its file-report fragment, not the POST recipe) is unaddressed. `src/services/standingOrderFragments.ts:161`
+- MAJOR — Verification item 3 is only PARTLY met. `completed_at` has one writer, `KanbanDatabase.setCompletedAt`, reached only from `completeCardInternal` on POST /kanban/task/complete — the LEAD's assertion. A member reporting through its own route (`switchboard done` → queue/done, or a ptySendPrompt to its head) writes no `completed_at`; queue/done only calls `markSeatAtRest`, which is in-memory in `LocalApiServer` with no engine seam. So a coder that has already reported and is waiting on its lead still passes the gate and gets up to two redundant prompts. Closing it needs `isSeatAtRest` exposed as an engine seam wired in both roots. `src/services/PlanIngestionEngine.ts:1993`
+- MAJOR — `4df122fd` staged `src/services/LocalApiServer.ts` (70 lines), which belongs to `three-clear-path-defects-wiped-context-that-was-promised-preserved` and was uncommitted in the shared tree before this card was dispatched. Its message claims those changes as "surfaced during the work". The commit also carries no `Switchboard-Stage` / `Switchboard-Plan` trailers. Not corrected here — history is not rewritten. `src/services/LocalApiServer.ts:4036`
+- MAJOR — Plan change 4 as literally written ("produces output and goes quiet again receives a second re-delivery") is unbounded by construction, because the reminder is itself output. Implemented as a bounded 2 per dispatch. If the intent was genuinely unlimited re-delivery, that needs a signal the reminder cannot manufacture — a seat-at-rest seam, or agent-side acknowledgement. `src/services/PlanIngestionEngine.ts:414`
+- NIT — the standing-order fragments name `member-orders.md` unconditionally, so a team wired without a workspace root (or into a tree with no `.switchboard/`) carries a dangling pointer in its establish-time block. Tolerable because that block already contains the full recipe the file duplicates. `src/services/standingOrderFragments.ts:87`
+- NIT — `_memberReminderState` is never pruned for dead seats or removed workspaces. One entry per (workspace, seat) ever reminded; negligible in practice. `src/services/PlanIngestionEngine.ts:437`
+- NIT — the coder's report lists `queue-stall-watch-contract: PASS` and `completion-asserted-never-inferred: 2 failed`, but both crash on `Cannot find module 'vscode'` before a single assertion runs — the same `RetentionService` → `ArchiveManager` import-graph failure it correctly diagnosed for `external-headed-team-contract`. A crash prints no failure string, so absence of one was read as success. `package.json:1055`
 
 ## Implementation Summary
 

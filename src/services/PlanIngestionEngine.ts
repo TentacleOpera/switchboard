@@ -413,21 +413,36 @@ export class PlanIngestionEngine {
 
     /**
      * Per-seat dedupe state for the member completion reminder sweep. Keyed on
-     * `${workspaceRoot}:${seatName}`. Tracks the seat's `lastDataAt` at the
-     * time of the last re-delivery and the timestamp of the re-delivery, so:
-     *   - a seat that stays quiet (lastDataAt unchanged) gets ONE re-delivery,
-     *     not a stream (plan change 4);
-     *   - a seat that produces output (lastDataAt advances) ends its quiet
-     *     period, and a fresh re-delivery is correct when it goes quiet again
-     *     (plan change 4, verification item 4).
+     * `${workspaceRoot}:${seatName}`, and carrying the card's `dispatchedAt` so
+     * the budget below is scoped to ONE dispatch of one card.
      *
-     * The `nudgeSilenceMs` pacing floor after a re-delivery prevents the
-     * prompt's own terminal echo from resetting the state on the next tick —
-     * the echo updates `lastDataAt`, but the pacing floor holds the state
-     * until enough time has passed for the echo to have settled and genuine
-     * agent output to be distinguishable.
+     * **Why the budget is not "re-arm on new output".** The plan asks for a
+     * second re-delivery once a reminded seat produces output and goes quiet
+     * again (verification item 4). Taken literally that is unbounded, because
+     * the reminder is ITSELF a prompt: it echoes into the pty and the agent
+     * answers it, so `lastDataAt` always advances after a re-delivery. An
+     * "advanced since last reminder" test therefore re-arms on the reminder's
+     * own consequence and nags every `nudgeSilenceMs` forever — on a seat whose
+     * card may never gain a `completedAt` at all (see gate 3). A pacing floor
+     * does not fix that; it only delays each re-arm, and waiting does not make
+     * an echo distinguishable from genuine output.
+     *
+     * So item 4 is honoured as a BOUNDED second re-delivery:
+     * `MAX_MEMBER_REMINDERS_PER_DISPATCH` per dispatch of a card, with the
+     * counter re-armed only by a NEW `dispatchedAt` — new work, the one signal
+     * the reminder cannot manufacture. `_runQueueNudgeSweep` reaches the same
+     * conclusion more bluntly with `nudgeCount >= 1` ("One nudge, then stop.
+     * A pacer that ignored the first nudge is not going to answer a second —
+     * repeating every window is the noise this fix exists to eliminate").
      */
-    private _memberReminderState = new Map<string, { lastDataAt: number; remindedAt: number }>();
+    private _memberReminderState = new Map<string, { dispatchedAt: string; count: number; remindedAt: number }>();
+
+    /**
+     * Reminders per dispatch of a card. Two, not one: the plan explicitly wants
+     * a second re-delivery after a reminded seat works and goes quiet again.
+     * Not unbounded — see `_memberReminderState`.
+     */
+    private static readonly MAX_MEMBER_REMINDERS_PER_DISPATCH = 2;
 
     public setFeatureFileRegenerator(cb: (workspaceRoot: string, featureId: string) => Promise<void>): void {
         this._regenerateFeatureFile = cb;
@@ -1883,11 +1898,23 @@ export class PlanIngestionEngine {
      *  1. No notifier → nothing to do.
      *  2. Empty liveness → no evidence (not "everyone is quiet").
      *  3. Card has `dispatchedAt` set and `completedAt` NULL — the seat is
-     *     holding an uncompleted card. `completedAt` is the lead's asserted
-     *     POST /kanban/task/complete; a card with it set means the seat
-     *     reported and nothing needs saying (plan change 5, verification
-     *     item 3). Keyed on `completedAt`, NEVER on `kanbanColumn` — same
-     *     contract as the feature sweep's gate (1).
+     *     holding a card nobody has asserted complete. Keyed on `completedAt`,
+     *     NEVER on `kanbanColumn` — same predicate `_runQueueNudgeSweep` uses
+     *     for its held card, and a column advances when work STARTS.
+     *
+     *     **This is NOT "the member has not reported".** `completed_at` has one
+     *     writer, `KanbanDatabase.setCompletedAt`, reached only from
+     *     `completeCardInternal` on POST /kanban/task/complete — the LEAD's
+     *     assertion. A member reporting through its own completion route
+     *     (`switchboard done` → queue/done, or a ptySendPrompt to its head)
+     *     writes no `completed_at`; queue/done only calls `markSeatAtRest`,
+     *     which is in-memory in LocalApiServer and has no engine seam. So a
+     *     coder that has already reported and is waiting on its lead still
+     *     passes this gate, and verification item 3 is only PARTLY met: the
+     *     bounded budget in `_memberReminderState` caps the cost at one
+     *     redundant prompt per dispatch instead of a standing nag. Closing it
+     *     properly needs `isSeatAtRest` exposed as an engine seam wired in both
+     *     composition roots.
      *  4. The seat is a team MEMBER, not a head. Heads already have both
      *     `head-prompt.md` and the turn-end top-up (plan edge-case 7). Resolved
      *     by reading `terminals.groups` from the DB config — the same path
@@ -1897,20 +1924,18 @@ export class PlanIngestionEngine {
      *     `turnEndSilenceMs`. Delivering a prompt to a terminal whose agent is
      *     actively working injects text into a running turn (plan edge-case 2).
      *  6. Not already notified this tick (shared `notifiedSeatsThisTick` set).
-     *  7. Dedupe: one re-delivery per quiet period, not a stream (plan change
-     *     4). A seat that stays quiet (lastDataAt unchanged) gets one
-     *     re-delivery. A seat that produces output (lastDataAt advances) ends
-     *     its quiet period; a fresh re-delivery is correct when it goes quiet
-     *     again (verification item 4). The `nudgeSilenceMs` pacing floor after
-     *     a re-delivery prevents the prompt's own terminal echo from resetting
-     *     the state on the next tick.
+     *  7. Dedupe: a bounded budget per dispatch of the card, re-armed only by
+     *     a new `dispatchedAt`, with a `nudgeSilenceMs` floor between reminders
+     *     — see `_memberReminderState` for why "re-arm when the seat produces
+     *     output" is an unbounded nag rather than plan change 4.
      *
-     * The re-delivery is a SHORT POINTER to the member orders file
-     * (`.switchboard/teams/<teamId>/member-orders.md`), not the full
-     * standing-orders block (plan change 3, verification item 2). Context
+     * The re-delivery is a SHORT POINTER to the member orders file, not the
+     * full standing-orders block (plan change 3, verification item 2). Context
      * exhaustion is the reported cause; re-delivering the entire block makes
      * the problem worse. `bareDelivery: true` tells the host to send the body
-     * without the standing-orders block prepended.
+     * without the standing-orders block prepended. The path is absolute and
+     * existence-checked — see the body composition below for why neither is
+     * optional.
      *
      * NOT gated on an armed queue or feature watch — this sweep applies to ANY
      * team member holding an uncompleted card, regardless of whether there is
@@ -2038,26 +2063,24 @@ export class PlanIngestionEngine {
             // injects text into a running turn (plan edge-case 2).
             if (live.lastDataAt <= 0 || nowMs - live.lastDataAt < turnEndSilenceMs) { continue; }
 
-            // (7) Dedupe: one re-delivery per quiet period.
+            // (7) Dedupe: a bounded budget per dispatch of this card.
             const stateKey = `${folder}:${seatName}`;
+            const cardDispatchedAt = String(card.dispatchedAt);
             const state = this._memberReminderState.get(stateKey);
             if (state) {
-                // Within the pacing floor since the last re-delivery — the
-                // prompt's own terminal echo may have updated `lastDataAt`,
-                // so hold the state until the echo has settled. Don't
-                // re-deliver, don't reset.
-                if (nowMs - state.remindedAt < nudgeSilenceMs) { continue; }
-                // Past the pacing floor. If `lastDataAt` hasn't changed since
-                // the re-delivery, the seat stayed quiet — same quiet period,
-                // one re-delivery is enough (plan change 5: "one, not a
-                // stream"). Don't re-deliver.
-                if (live.lastDataAt === state.lastDataAt) { continue; }
-                // `lastDataAt` advanced past the pacing floor — the agent
-                // produced genuine output, ending the quiet period. Fall
-                // through: if the seat is now quiet (it is — gate 5 passed),
-                // this is a new quiet period and a fresh re-delivery is
-                // correct (verification item 4). Remove the stale state.
-                this._memberReminderState.delete(stateKey);
+                if (state.dispatchedAt !== cardDispatchedAt) {
+                    // A NEW dispatch — new work, and the one re-arm signal the
+                    // reminder cannot manufacture for itself. Drop the state.
+                    this._memberReminderState.delete(stateKey);
+                } else {
+                    // Budget spent for this dispatch. A seat that ignored two
+                    // reminders will not answer a third, and its card may never
+                    // gain a `completedAt` (gate 3), so "keep going" is an
+                    // unbounded nag, not a backstop.
+                    if (state.count >= PlanIngestionEngine.MAX_MEMBER_REMINDERS_PER_DISPATCH) { continue; }
+                    // Pacing floor between reminders for the same dispatch.
+                    if (nowMs - state.remindedAt < nudgeSilenceMs) { continue; }
+                }
             }
 
             // Compose the re-delivery body — a SHORT POINTER to the member
@@ -2065,7 +2088,34 @@ export class PlanIngestionEngine {
             // The file contains the correct fragment for the team type: the
             // POST recipe for regular teams, the file-report callback for
             // external-headed teams (plan edge-case 4, verification item 6).
-            const body = `[switchboard:turn-end] You have gone idle holding card '${card.planId}'. Before reporting your completion, re-read your orders at .switchboard/teams/${team.teamId}/member-orders.md`;
+            //
+            // The path is ABSOLUTE, resolved against `folder`. A relative
+            // `.switchboard/...` resolves against the SEAT's cwd, and a member
+            // spawned into a worktree inherits `parent.worktreePath` — so the
+            // relative form points at a file that was written somewhere else.
+            // The two hosts also choose different roots for the write
+            // (`groupRoot || workspaceRoot` vs `_apiServerWorkspaceRoot`), so
+            // "resolve it yourself" was never safe.
+            //
+            // And the file is only written when a workspace root reached
+            // `wireSpawnedTeam` and `.switchboard/` already existed, so its
+            // absence is a real state. Pointing a context-starved agent at a
+            // file that is not there is worse than not mentioning it: check,
+            // and otherwise name the route itself. This IS the fallback the
+            // surrounding docblocks claim — before this it did not exist, and
+            // the pointer was emitted unconditionally.
+            const ordersPath = path.join(folder, '.switchboard', 'teams', team.teamId, 'member-orders.md');
+            let ordersFileExists = false;
+            try { ordersFileExists = fs.existsSync(ordersPath); } catch { /* unreadable → treat as absent */ }
+            const route = team.externalHead
+                ? `write your report file to ${path.join(folder, '.switchboard', 'teams', team.teamId, 'reports')}`
+                : `run node "<cliPath>" done --from "${seatName}" (or switchboard done --from "${seatName}")`;
+            const body = substituteCliPath(
+                `[switchboard:turn-end] You have gone idle holding card '${card.planId}'. `
+                + (ordersFileExists
+                    ? `Before reporting your completion, re-read your orders at ${ordersPath}`
+                    : `When you finish it, ${route}.`)
+            );
 
             try {
                 this._turnEndNotifier({
@@ -2083,9 +2133,14 @@ export class PlanIngestionEngine {
                 this._host.logger.appendLine(`[GlobalPlanWatcher] member completion reminder notifier failed for seat '${seatName}' in ${folder}: ${cbErr}`);
             }
             notifiedSeatsThisTick.add(seatName);
-            this._memberReminderState.set(stateKey, { lastDataAt: live.lastDataAt, remindedAt: nowMs });
+            const priorCount = (this._memberReminderState.get(stateKey)?.dispatchedAt === cardDispatchedAt)
+                ? this._memberReminderState.get(stateKey)!.count
+                : 0;
+            this._memberReminderState.set(stateKey, { dispatchedAt: cardDispatchedAt, count: priorCount + 1, remindedAt: nowMs });
             this._host.logger.appendLine(
-                `[GlobalPlanWatcher] Member completion reminder fired for seat '${seatName}' in ${folder} → holding '${card.planId}' (team ${team.teamId}, externalHead=${team.externalHead}).`
+                `[GlobalPlanWatcher] Member completion reminder ${priorCount + 1}/${PlanIngestionEngine.MAX_MEMBER_REMINDERS_PER_DISPATCH}`
+                + ` fired for seat '${seatName}' in ${folder} → holding '${card.planId}'`
+                + ` (team ${team.teamId}, externalHead=${team.externalHead}, ordersFile=${ordersFileExists ? 'present' : 'absent'}).`
             );
         }
     }
