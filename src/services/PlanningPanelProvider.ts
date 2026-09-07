@@ -3859,6 +3859,29 @@ Start by checking which documents exist, then present the menu.`;
                             path.resolve(r) === path.resolve(requestedRoot)
                             || path.resolve(this._resolveEffectiveWorkspaceRoot(r) || r) === path.resolve(requestedRoot))
                         : Array.from(this._getAllowedRoots());
+                    // A named root that matches NO allowed root must fail loudly. Posting
+                    // the scoped payload anyway would carry `plans: []` tagged with that
+                    // root, and the webview's merge-by-workspace branch (project.js:491)
+                    // would drop every cached plan for it and add nothing back — a silent
+                    // cache wipe dressed as a successful fetch.
+                    if (requestedRoot && allRoots.length === 0) {
+                        const scopeErr = {
+                            type: 'kanbanPlansReady', plans: [], columns: [], requestId,
+                            error: `workspaceRoot is not an allowed root: ${requestedRoot}`
+                        };
+                        this._postToBothPanels(scopeErr);
+                        return { success: false, ...scopeErr };
+                    }
+                    // The plans below are tagged with each root's EFFECTIVE root, not the
+                    // string the caller sent. The webview de-duplicates by comparing
+                    // `p.workspaceRoot` to this field, so it must carry the same value the
+                    // plans do or the filter removes nothing and appends duplicates. Every
+                    // other scoped kanbanPlansReady sender in this file uses effectiveRoot.
+                    const scopedTagRoot = requestedRoot
+                        ? (allRoots.length === 1
+                            ? this._resolveEffectiveWorkspaceRoot(allRoots[0])
+                            : path.resolve(requestedRoot))
+                        : undefined;
                     const allPlans: any[] = [];
                     const seenIds = new Set<string>();
                     const allWorkspaceProjects: Record<string, string[]> = {};
@@ -3934,7 +3957,7 @@ Start by checking which documents exist, then present the menu.`;
                             // Carry the scoped root so the webview merges by workspace
                             // (preserving other workspaces' cached plans) instead of
                             // replacing the whole cache with one workspace's slice.
-                            workspaceRoot: requestedRoot || undefined,
+                            workspaceRoot: scopedTagRoot,
                             requestId
                         };
                         if (!this._fullKanbanPlansSent) {
@@ -3953,7 +3976,7 @@ Start by checking which documents exist, then present the menu.`;
                         allWorkspaceProjectPaths,
                         columns: mergedColumns,
                         kanbanWorkspaceRoot: this._kanbanProvider?.getCurrentWorkspaceRoot() || null,
-                        workspaceRoot: requestedRoot || undefined,
+                        workspaceRoot: scopedTagRoot,
                         requestId
                     };
                     this._postToBothPanels(resultPayload);

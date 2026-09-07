@@ -499,22 +499,39 @@
                 // Proactive "plans changed" pushes (e.g. after a complexity edit / move) carry
                 // only `plans` — they must NOT wipe the workspace/project/column lists, which a
                 // bare `|| {}` would. Overwrite these only when the full payload includes them.
+                //
+                // A WORKSPACE-SCOPED payload (msg.workspaceRoot set — a Review Plan
+                // navigation, which deliberately does not build the all-roots list) carries
+                // these maps for the scoped root ONLY. Assigning them wholesale there would
+                // drop every other workspace's project list and any column contributed only
+                // by another workspace — the same wipe the paragraph above guards against,
+                // one payload shape further along. So scoped payloads MERGE by key.
+                const _kanbanScoped = !!msg.workspaceRoot;
                 if (msg.allWorkspaceProjects) {
-                    const normalized = {};
+                    const normalized = _kanbanScoped ? { ..._kanbanAllWorkspaceProjects } : {};
                     for (const [k, v] of Object.entries(msg.allWorkspaceProjects)) {
                         normalized[normalizeRoot(k)] = v;
                     }
                     _kanbanAllWorkspaceProjects = normalized;
                 }
                 if (msg.allWorkspaceProjectPaths) {
-                    const normalized = {};
+                    const normalized = _kanbanScoped ? { ..._kanbanAllWorkspaceProjectPaths } : {};
                     for (const [k, v] of Object.entries(msg.allWorkspaceProjectPaths)) {
                         normalized[normalizeRoot(k)] = v;
                     }
                     _kanbanAllWorkspaceProjectPaths = normalized;
                 }
                 if (msg.workspaceItems) _kanbanWorkspaceItems = msg.workspaceItems;
-                if (msg.columns) _kanbanAvailableColumns = msg.columns;
+                if (msg.columns) {
+                    if (_kanbanScoped && Array.isArray(_kanbanAvailableColumns) && _kanbanAvailableColumns.length) {
+                        const byId = new Map(_kanbanAvailableColumns.map(c => [c.id, c]));
+                        (msg.columns || []).forEach(c => { if (c && c.id) byId.set(c.id, c); });
+                        _kanbanAvailableColumns = Array.from(byId.values())
+                            .sort((a, b) => (a.order || 0) - (b.order || 0));
+                    } else {
+                        _kanbanAvailableColumns = msg.columns;
+                    }
+                }
                 if (!_pendingKanbanSelection && msg.kanbanWorkspaceRoot && _kanbanWorkspaceItems.some(ws => ws.workspaceRoot === msg.kanbanWorkspaceRoot)) {
                     if (!kanbanFilters.workspaceRoot) {
                         kanbanFilters.workspaceRoot = msg.kanbanWorkspaceRoot;

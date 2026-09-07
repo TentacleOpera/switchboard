@@ -185,13 +185,24 @@ check('the planner fan-out filters in-flight cards before sorting, and reports w
 });
 
 check('the frontend display comparator applies the same precedence as the resolver', () => {
-    const sortIdx = kanbanHtml.indexOf('const sortedItems = [...items].sort((a, b) => {');
-    assert.notStrictEqual(sortIdx, -1, 'the display comparator must exist');
+    // The precedence rules used to be inlined in renderBoard's per-column sort. They
+    // were extracted to `compareCardsByPrecedence` so the optimistic same-column
+    // reposition after a star toggle honours the SAME ordering instead of mirroring it
+    // (a mirror is what drifts). Anchor on the shared comparator, and assert renderBoard
+    // actually consumes it — an extracted comparator nobody calls is the hollow version
+    // of this refactor, and would leave the render ordering unpinned.
+    const sortIdx = kanbanHtml.indexOf('function compareCardsByPrecedence(a, b, colId) {');
+    assert.notStrictEqual(sortIdx, -1, 'the shared display comparator must exist');
     const body = kanbanHtml.slice(sortIdx, sortIdx + 6000);
     assert.ok(/a\.priorityStarred\s*\?\s*1\s*:\s*0/.test(body), 'display sort must apply starred-first');
     assert.ok(/a\.queuePosition/.test(body) && /a\.columnOrder/.test(body),
         'display sort must read queue_position in STAGING and column_order elsewhere');
     assert.ok(/_colTs/.test(body), 'display sort must fall back to column_entered_at DESC');
+    assert.ok(/const sortedItems = \[\.\.\.items\]\.sort\(\(a, b\) => compareCardsByPrecedence\(a, b, col\)\);/.test(kanbanHtml),
+        "renderBoard must sort each column THROUGH the shared comparator — an unconsumed comparator leaves the render ordering unpinned");
+    assert.ok(/repositionCardInColumn/.test(kanbanHtml)
+        && /compareCardsByPrecedence\(ca, cb, logicalCol\)/.test(kanbanHtml),
+        'the optimistic same-column reposition must consume the same comparator, not a third copy of the rules');
 });
 
 // ── V67: the order-by mode reaches every consumer, and priority reaches the card ──
@@ -390,10 +401,23 @@ check('the star control is on the card and does not gate on a confirm', () => {
     // on the retired binding loop — the behaviour pinned below is unchanged.
     const handlerIdx = kanbanHtml.indexOf("btn.classList.contains('star-btn')");
     assert.notStrictEqual(handlerIdx, -1, 'the star button must have a click handler');
-    const body = kanbanHtml.slice(handlerIdx, handlerIdx + 700);
+    // Slice to the branch's real end, not a fixed byte window: the star now applies
+    // OPTIMISTICALLY (class + data-starred + model + same-column reposition all before
+    // the post), which pushed postKanbanMessage past any fixed offset. A byte window
+    // makes this check fail on a correct implementation.
+    const branchEnd = kanbanHtml.indexOf("btn.classList.contains('priority-btn')", handlerIdx);
+    assert.notStrictEqual(branchEnd, -1, 'the priority-btn branch must follow the star-btn branch');
+    const body = kanbanHtml.slice(handlerIdx, branchEnd);
     assert.ok(/e\.stopPropagation\(\)/.test(body), 'the star click must not reach the card selection handler');
     assert.ok(!/confirm\(/.test(body), 'no confirm gate — project rule, and confirm() is a silent no-op in webviews');
     assert.ok(/type:\s*'setPriorityStarred'/.test(body), 'the handler must post setPriorityStarred');
+    // The visual change must not await the host round trip: over the tailnet the board
+    // push is a network hop plus a full board rebuild, long enough to read as a dead
+    // button. A handler that only posts is the reported bug.
+    const flipIdx = body.indexOf('btn.dataset.starred = nextStarred');
+    const postIdx = body.indexOf("type: 'setPriorityStarred'");
+    assert.ok(flipIdx !== -1 && flipIdx < postIdx,
+        'the star must flip data-starred locally BEFORE posting — the visual change cannot await the host');
 });
 
 // ── PUT /kanban/plans/priority — the agent-reachable write path ──────────────

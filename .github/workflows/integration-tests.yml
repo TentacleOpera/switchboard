@@ -737,6 +737,18 @@ jobs:
       - name: Kanban optimistic render guard contract
         run: npm run test:contract:render-guard
 
+      # Three board actions that used to wait on a host round trip — send-to-backlog /
+      # send-to-new, the priority star, and Review Plan navigation. Every one of them
+      # fails as "the click did nothing", which is invisible on loopback and only shows
+      # over the tailnet, so no manual pass on a dev box would catch a regression. The
+      # traps this pins: moveCardsOptimistically resolving through resolveDomColumn
+      # (a provable no-op for a target with no container), a star handler that posts and
+      # does nothing else, an unbounded pendingStars ledger forcing a stale star onto
+      # every later push, and a Review Plan click that drags the 2,555-plan
+      # multi-workspace list refetch behind it.
+      - name: Kanban optimistic board actions contract (backlog/new, priority star, Review Plan)
+        run: npm run test:contract:kanban-optimistic-actions
+
       # The kanban-surface `viewPlan` verb (raw markdown preview) was deliberately
       # deleted; `reviewPlan` (opens the Project panel) replaced it. This test pinned
       # that removal but was never wired here, so it sat red and unnoticed for months

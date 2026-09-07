@@ -6433,14 +6433,39 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
         // Ledger of pending optimistic moves: Map<cardId, targetColumn>
         const pendingOptimisticMoves = new Map();
-        // Ledger of pending optimistic priority-star toggles: Map<planId, boolean>.
+        // Ledger of pending optimistic priority-star toggles:
+        // Map<planId, { value: boolean, until: number }>.
         // Mirrors command.js's pendingStars. Cleared by a MATCHING updateBoard push
         // (server confirms our write), NOT by the 2s optimistic-move timer — the
         // timer is tuned for the local postMessage round trip and expires mid-flight
         // on the remote tailnet case this plan exists to fix. The ledger holds the
         // optimistic value across guard expiries and full re-renders until the server
         // confirms it, so a slow remote push cannot revert a fast local click.
+        //
+        // It is nonetheless TTL-BOUNDED, because the board has no card-keyed ack.
+        // command.js can afford an unbounded ledger: it issues a direct REST call and
+        // deletes the entry on `!res.ok` (command.js:1735). postKanbanMessage is
+        // fire-and-forget in both hosts, so a failed write — or a concurrent unstar
+        // from another client — never produces a matching push, and an unbounded entry
+        // would force the optimistic value onto EVERY later board push for the life of
+        // the board. That is the same unresolving forcing-overlay defect the sibling
+        // send-to-backlog plan calls "worse than not arming it". Past the TTL the
+        // server wins, which is what the plan's §4 reconciliation rule asks for.
+        // The value is well clear of the 2.1–2.3 s remote list/board push measured
+        // over the tailnet, and bounded so divergence always self-heals.
+        const PENDING_STAR_TTL_MS = 15000;
         const pendingStars = new Map();
+
+        /** Drop pending-star entries whose TTL has elapsed. Called on every board push
+         *  and before every overlay read, so a never-confirmed toggle cannot force a
+         *  stale star forever. Returns nothing; mutates the ledger in place. */
+        function expirePendingStars(now) {
+            if (pendingStars.size === 0) return;
+            const t = typeof now === 'number' ? now : Date.now();
+            for (const [id, entry] of pendingStars) {
+                if (!entry || t >= entry.until) pendingStars.delete(id);
+            }
+        }
         let suppressedRenderPending = false;
         let optimisticExpiryTimer = null;
 
@@ -8223,6 +8248,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (!Array.isArray(cards) || cards.length === 0) {
                 return cards;
             }
+            // Expire first: an overlay read must never apply a toggle the server has
+            // had 15 s to confirm and did not (failed write, or a concurrent edit by
+            // another client). Past the TTL the server value wins.
+            expirePendingStars();
             if (pendingOptimisticMoves.size === 0 && pendingStars.size === 0) {
                 return cards;
             }
@@ -8239,7 +8268,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 // the updateBoard path once the server value MATCHES the pending
                 // value — see the comment there.
                 if (pendingStars.has(id)) {
-                    result = { ...result, priorityStarred: pendingStars.get(id) };
+                    result = { ...result, priorityStarred: pendingStars.get(id).value };
                 }
                 return result;
             });
@@ -10090,8 +10119,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
                     // 3. Record the optimistic value in the pendingStars ledger.
                     //    Keyed by planId so a double click's last intended state
-                    //    overwrites the first; cleared only by a matching push.
-                    pendingStars.set(cardKey, nextStarred);
+                    //    overwrites the first; cleared by a matching push, or by the
+                    //    TTL if no push ever confirms it (a failed fire-and-forget
+                    //    write must not force a stale star forever).
+                    pendingStars.set(cardKey, { value: nextStarred, until: Date.now() + PENDING_STAR_TTL_MS });
 
                     // 4. Advance the board signature so the next push reconciles
                     //    against the optimistic state rather than treating the
@@ -11245,14 +11276,21 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     // forward. A mismatch (stale push with the write still in flight,
                     // OR a concurrent edit by another client) leaves the entry in
                     // place so the overlay keeps the optimistic value visible until
-                    // a matching push arrives — this is the latency-robust pattern
-                    // from command.js's pendingStars, NOT the 2s optimistic-move
-                    // timer which expires mid-flight on the remote tailnet case.
+                    // a matching push arrives or PENDING_STAR_TTL_MS elapses — this is
+                    // the latency-robust pattern from command.js's pendingStars, NOT
+                    // the 2s optimistic-move timer which expires mid-flight on the
+                    // remote tailnet case. The TTL is the outer bound: command.js can
+                    // revert per-card on `!res.ok`, this surface has no such ack.
+                    // Expired entries go first: past PENDING_STAR_TTL_MS the write is
+                    // presumed lost (no card-keyed ack exists in either host) or
+                    // overtaken by another client, and the server value must win rather
+                    // than the overlay forcing a stale star forever.
+                    expirePendingStars();
                     if (pendingStars.size > 0) {
                         for (const card of rawCards) {
                             const id = card.planId || card.sessionId;
                             if (!id || !pendingStars.has(id)) continue;
-                            if (!!card.priorityStarred === !!pendingStars.get(id)) {
+                            if (!!card.priorityStarred === !!pendingStars.get(id).value) {
                                 pendingStars.delete(id);
                             }
                         }
