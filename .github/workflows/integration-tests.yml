@@ -676,6 +676,17 @@ jobs:
       - name: Design per-client view state contract (seats, poll lifecycle, wsHub keepalive)
         run: npm run test:contract:design-view-state
 
+      # The reaper is the ONLY code that knows a connection is dead, and before the
+      # fix it terminated without removing — for an already-dead socket terminate()
+      # emits no `close`, so handleDisconnect never ran and the same clients were
+      # re-reaped every 30s for the process lifetime (7.7 MB server.log, a leaking
+      # broadcast set, a send() into a dead socket per push). The design-view-state
+      # suite above does NOT cover this: its keepalive test uses `autoPong: false`
+      # against a still-OPEN socket, so `close` fires and hides the bug. This suite
+      # stubs terminate() to a true no-op to reproduce the production condition.
+      - name: wsHub reaper removal contract (synchronous removal, single reap, late-close no-op)
+        run: npm run test:contract:wshub-reaper
+
       - name: STITCH HTML tab contract (preview failure in body, docs in body, spinner-lowering table)
         run: npm run test:contract:stitch-html-tab
 
