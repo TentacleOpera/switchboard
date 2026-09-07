@@ -217,3 +217,34 @@ reflect any implementation of this plan.
 - CRITICAL not implemented: `src/webview/shell.js:816,879` still mount two `/terminals?…&dock=1` iframes rather than one `/dock` frame (Proposed Change 3).
 - CRITICAL not implemented: the four `isDockFrame` guards in `terminals.js` still have live callers, so Proposed Change 4 cannot be applied.
 - MAJOR all nine of the plan's automated verification items are unsatisfiable as written; none exist in `src/test/`.
+
+## Implementation Summary
+
+The dock is now its own document at `/dock`, served by both composition roots via `getDockHtml` in `headlessPanelHtml.ts` and a `/dock` route in `LocalApiServer.ts`. The shell hosts one iframe (`#dock-frame` pointing at `/dock`) and owns only open/closed state, width, the splitter, and the minimum-width gate; all dock tab/seat/fleet logic moved to `dock.js`. The Agent tab is an API-backed control surface (per the sibling plan `the-dock-agent-tab-is-a-control-surface-not-a-terminal`), the CLI tab uses the shared `terminalViewport.js` for its pty seat, and the Fleet tab renders a polled table directly. The `isDockFrame` variable and all four guards were removed from `terminals.js`, the `?dock=1` parameter was removed from `terminals.html`'s mode parser, and `transport.js` now derives its dock detection from the `/dock` route. Contract tests in `shell-agent-dock.test.js` and `shell-terminal-strip.test.js` were rewritten to verify the new structure: one iframe, no `terminals.js` import, control surface Agent tab, CLI-only viewport, and the `switchPanel` guard on the `/dock` route.
+
+
+## Review Findings (2026-09-08, post-implementation)
+
+**Implemented and passing.** `/dock` is served by `getDockHtml` riding `getPanelHtmlById`
+(`headlessPanelHtml.ts:445`, `case 'dock'` at `:728`) plus the route at `LocalApiServer.ts:11415` —
+option (a) from Proposed Change 2, the fewer-seams choice, so both hosts are served by shared code
+rather than a third seam. The dual-host trap the plan flagged was handled correctly: the terminal
+token and pty origin are injected for `id === 'dock'` in **both** composition roots
+(`TaskViewerProvider.ts:4686` and `bootstrap.ts:1271`), which is the seam that would otherwise have
+left the dock's terminals connecting to nothing on one host. CSP carries `connect-src 'self' ws:
+wss:`; `dock.js` loads no `terminals.js`; the shell mounts one `/dock` frame; the pane map hides
+every pane before showing one; and exactly one viewport instance is constructed (the CLI tab only),
+so the Fleet tab loads no terminal code. Change 4 landed — no `isDockFrame` guard survives in
+`terminals.js` and nothing constructs a `?dock=1` URL. Two of the plan's own gates were asserting
+against the wrong artefact and were fixed rather than the code: `dock.html` carries
+`{{TERMINAL_VIEWPORT_JS_URI}}` placeholders, not filenames, so the literal-substring check failed on
+a correct page; and the "must not reference terminals.js" check tripped on `dock.js`'s own header
+comment documenting that it deliberately does not. Files changed by this review:
+`src/test/shell-agent-dock.test.js`, `src/test/shell-terminal-strip.test.js`. Validation:
+`shell-agent-dock` 60/0, `shell-terminal-strip` 75/0, typecheck clean, and no regression against
+`ec54ab0f` across the 26 suites reading the touched files.
+
+## Deferred Findings
+
+- NIT `src/services/headlessPanelHtml.ts:473` — the dock document is stamped `data-panel="terminals"`, so it subscribes to the terminals surface on the hub. Correct for the CLI tab's stream, but it means the dock also receives every terminals-surface push the Fleet and Agent tabs have no use for. Worth narrowing once a `dock` surface exists.
+- NIT the plan's verification item 3 ("both seats stay attached across a tab switch") is moot as built — only one pty seat exists in the dock now, because the Agent tab became a control surface under `480a4e88`. The reattach hazard the item guards cannot arise.

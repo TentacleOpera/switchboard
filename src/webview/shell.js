@@ -18,37 +18,12 @@
     if (!strip || !content) { return; }
 
     // ── Right-hand agent dock element refs ───────────────────────────
-    // The dock is a third flex child beside #content, hosting one live agent
-    // terminal via /terminals?solo=&dock=1. All visibility is class-driven
-    // (.is-open / .is-visible), never [hidden] alone — see shell.html's
-    // dock CSS comment for the cascade reason.
+    // The dock is one iframe pointing at /dock. The dock document owns its
+    // tab strip, panes, seat lifecycle and fleet table; the shell owns only
+    // open/closed, width, splitter and the minimum-width gate.
     const dockEl = document.getElementById('agent-dock');
     const splitterEl = document.getElementById('dock-splitter');
     const dockFrame = document.getElementById('dock-frame');
-    const dockCliFrame = document.getElementById('dock-cli-frame');
-    const dockTabAgentBtn = document.getElementById('dock-tab-agent');
-    const dockTabCliBtn = document.getElementById('dock-tab-cli');
-    const dockTabFleetBtn = document.getElementById('dock-tab-fleet');
-    const dockTitleEl = document.getElementById('dock-title');
-    const dockCloseBtn = document.getElementById('dock-close');
-    const emptyEl = document.getElementById('dock-empty');
-    const startBtn = document.getElementById('dock-start');
-    const dockCliInput = document.getElementById('dock-cli-input');
-    const dockCliWrap = document.getElementById('dock-cli-wrap');
-    const dockRestartBtn = document.getElementById('dock-restart');
-    const dockEmptyHint = document.getElementById('dock-empty-hint');
-    const dockFleetEl = document.getElementById('dock-fleet');
-    const dockFleetOfflineEl = document.getElementById('dock-fleet-offline');
-    const dockFleetContentEl = document.getElementById('dock-fleet-content');
-    const dockFleetTbody = document.getElementById('dock-fleet-tbody');
-    const dockHopPlanCb = document.getElementById('dock-hop-plan');
-    const dockHopCodeCb = document.getElementById('dock-hop-code');
-    const dockHopReviewCb = document.getElementById('dock-hop-review');
-    const dockHopPlanReason = document.getElementById('dock-hop-plan-reason');
-    const dockHopCodeReason = document.getElementById('dock-hop-code-reason');
-    const dockHopReviewReason = document.getElementById('dock-hop-review-reason');
-    const dockHopsBtn = document.getElementById('dock-hops-btn');
-    const dockFleetFeedEl = document.getElementById('dock-fleet-feed');
 
     const frames = new Map(); // id -> HTMLIFrameElement
     const icons = new Map();  // id -> HTMLButtonElement
@@ -73,25 +48,31 @@
     const DOCK_VIABLE_MIN = 48 + 4 + DOCK_MIN + DOCK_MIN_CONTENT; // 980
 
     let dockOpen = false;
-    let lastFleet = [];
-    let lastAutobanArmed = false;
 
     function readDockState() {
         try {
             const raw = localStorage.getItem(DOCK_STATE_KEY);
             const s = raw ? JSON.parse(raw) : {};
+            // The shell owns `open` and `width`; the dock document owns
+            // `activeTab` and `seat`. Both read/write the same key — each
+            // writer only patches its own fields, so the merge is safe.
             return {
                 open: s.open === true,
                 width: clampDockWidth(Number(s.width) || DOCK_DEFAULT),
-                seat: typeof s.seat === 'string' ? s.seat : null,
-                activeTab: (s.activeTab === 'fleet' || s.activeTab === 'cli') ? s.activeTab : 'agent',
             };
-        } catch { return { open: false, width: DOCK_DEFAULT, seat: null, activeTab: 'agent' }; }
+        } catch { return { open: false, width: DOCK_DEFAULT }; }
     }
     function writeDockState(patch) {
-        const next = { ...readDockState(), ...patch };
-        try { localStorage.setItem(DOCK_STATE_KEY, JSON.stringify(next)); } catch { /* ignore */ }
-        return next;
+        // Merge with the RAW stored state (not the shell's trimmed readDockState)
+        // so the dock document's activeTab/seat fields are preserved across
+        // shell writes.
+        try {
+            const raw = localStorage.getItem(DOCK_STATE_KEY);
+            const s = raw ? JSON.parse(raw) : {};
+            const next = { ...s, ...patch };
+            localStorage.setItem(DOCK_STATE_KEY, JSON.stringify(next));
+            return next;
+        } catch { return patch; }
     }
     function clampDockWidth(px) {
         const max = Math.min(DOCK_MAX, window.innerWidth - 48 - 4 - DOCK_MIN_CONTENT);
@@ -408,16 +389,12 @@
                 frame.contentWindow?.postMessage({ type: 'switchboardThemeChanged', theme: themeName }, '*');
             } catch { /* ignore */ }
         }
-        // The dock frames are NOT in `frames` (they are /terminals?solo=&dock=1
-        // iframes, not manifest panels), so applyThemeToAll's loop above misses
-        // them — a live theme toggle would leave the dock in the old palette
-        // until reload. Fan out explicitly to every dock iframe.
+        // The dock frame is NOT in `frames` (it is a /dock iframe, not a
+        // manifest panel), so applyThemeToAll's loop above misses it — a
+        // live theme toggle would leave the dock in the old palette until
+        // reload. Fan out explicitly to the dock iframe.
         try {
             dockFrame?.contentWindow?.postMessage(
-                { type: 'switchboardThemeChanged', theme: themeName }, '*');
-        } catch { /* ignore */ }
-        try {
-            dockCliFrame?.contentWindow?.postMessage(
                 { type: 'switchboardThemeChanged', theme: themeName }, '*');
         } catch { /* ignore */ }
         for (const win of Array.from(popoutWindows)) {
@@ -442,294 +419,10 @@
     }
 
     /* ══ Agent dock module ══════════════════════════════════════════════
-       The dock hosts one live agent terminal beside #content, mirroring the
-       right-sidebar agent-chat placement users know from agentic IDEs. It
-       reuses /terminals?solo=&dock=1 as its iframe src — no new terminal
-       renderer. Seats are adopt-if-present-else-create, keyed by a stable
-       dock seat name; the friendlyName the server actually returned is
-       persisted and treated as opaque (edge case 4). */
-
-    const CONTROLLER_ROLES = new Set(['mission-control', 'project_manager']);
-    function isControllerTerminal(t) {
-        if (!t) { return false; }
-        if (t.role && CONTROLLER_ROLES.has(t.role)) { return true; }
-        if (t.name === 'Mission Control') { return true; }
-        return false;
-    }
-
-    function dockSeatName() { return 'dock-project_manager'; }
-    function dockCliSeatName() { return 'dock-cli'; }
-
-    let fleetPollTimer = null;
-
-    // ── Dock tab pane map ──────────────────────────────────────────────
-    // Each tab entry declares its pane element(s) and how to show/hide them.
-    // Agent and CLI are lazy-mounted iframes (src set on first show); Fleet
-    // is a plain div toggled by display class. Exactly one pane is visible
-    // at a time — by construction, not by careful if/else ordering.
-    const DOCK_TABS = ['agent', 'cli', 'fleet'];
-    const DOCK_TAB_BTNS = { agent: dockTabAgentBtn, cli: dockTabCliBtn, fleet: dockTabFleetBtn };
-
-    /** Normalise a persisted activeTab: 'kanban' (retired) and any unknown
-     *  value resolve to 'agent'. Writes back the normalised value so the
-     *  upgrade is complete after one read — without this, a user who last
-     *  had the Kanban tab active opens to a blank dock on every reload. */
-    function normaliseDockTab(tab) {
-        if (DOCK_TABS.includes(tab)) { return tab; }
-        return 'agent';
-    }
-
-    function setDockActiveTab(tab) {
-        const activeTab = normaliseDockTab(tab);
-        // Persist the normalised value — completes the upgrade for a stored
-        // 'kanban' or any future retired tab id.
-        writeDockState({ activeTab });
-
-        // Toggle tab button states.
-        for (const id of DOCK_TABS) {
-            const btn = DOCK_TAB_BTNS[id];
-            if (!btn) { continue; }
-            btn.classList.toggle('is-active', id === activeTab);
-            btn.setAttribute('aria-selected', String(id === activeTab));
-        }
-
-        // Hide every pane first; then show exactly the active one. By
-        // construction exactly one pane ends up visible — a third `if`
-        // bolted onto the old two-branch body produced two-panes-visible
-        // states.
-        dockFrame.classList.remove('is-visible');
-        dockFrame.hidden = true;
-        if (dockCliFrame) {
-            dockCliFrame.classList.remove('is-visible');
-            dockCliFrame.hidden = true;
-        }
-        emptyEl.classList.remove('is-visible');
-        emptyEl.hidden = true;
-        if (dockFleetEl) {
-            dockFleetEl.classList.remove('is-visible');
-            dockFleetEl.hidden = true;
-        }
-
-        if (activeTab === 'fleet') {
-            if (dockFleetEl) {
-                dockFleetEl.classList.add('is-visible');
-                dockFleetEl.hidden = false;
-            }
-            updateDockTitle();
-            startFleetPoll();
-        } else if (activeTab === 'cli') {
-            stopFleetPoll();
-            syncCliSeat();
-        } else {
-            // 'agent' — the default and the normalised fallback.
-            stopFleetPoll();
-            syncDockSeat();
-        }
-    }
-
-    function startFleetPoll() {
-        stopFleetPoll();
-        void refreshFleetTab();
-        fleetPollTimer = setInterval(() => {
-            if (readDockState().activeTab === 'fleet' && !document.hidden) {
-                void refreshFleetTab();
-            }
-        }, 60000);
-    }
-
-    function stopFleetPoll() {
-        if (fleetPollTimer) {
-            clearInterval(fleetPollTimer);
-            fleetPollTimer = null;
-        }
-    }
-
-    document.addEventListener('visibilitychange', () => {
-        if (document.hidden) {
-            stopFleetPoll();
-        } else if (dockOpen && readDockState().activeTab === 'fleet') {
-            startFleetPoll();
-        }
-    });
-
-    async function refreshFleetTab() {
-        if (!dockFleetEl) return;
-        try {
-            const [termRes, hopRes] = await Promise.all([
-                fetch('/terminals/verb/ptyListTerminals', {
-                    method: 'POST',
-                    credentials: 'same-origin',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: '{}'
-                }).catch(() => null),
-                fetch('/terminals/verb/getHopState', {
-                    method: 'POST',
-                    credentials: 'same-origin',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: '{}'
-                }).catch(() => null)
-            ]);
-
-            if (!termRes || termRes.status !== 200 || !hopRes || hopRes.status !== 200) {
-                renderFleetOffline();
-                return;
-            }
-
-            const termData = await termRes.json();
-            const hopData = await hopRes.json();
-            renderFleetContent(termData, hopData);
-        } catch {
-            renderFleetOffline();
-        }
-    }
-
-    function renderFleetOffline() {
-        if (dockFleetOfflineEl) dockFleetOfflineEl.hidden = false;
-        if (dockFleetContentEl) dockFleetContentEl.hidden = true;
-        if (dockHopPlanReason) dockHopPlanReason.textContent = 'unknown: offline';
-        if (dockHopCodeReason) dockHopCodeReason.textContent = 'unknown: offline';
-        if (dockHopReviewReason) dockHopReviewReason.textContent = 'unknown: offline';
-    }
-
-    function escapeHtml(str) {
-        if (!str) return '';
-        return String(str)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
-    }
-
-    function formatTime(ts) {
-        if (!ts) return '';
-        const d = new Date(ts);
-        const hh = String(d.getHours()).padStart(2, '0');
-        const mm = String(d.getMinutes()).padStart(2, '0');
-        return `${hh}:${mm}`;
-    }
-
-    function renderFleetContent(termData, hopData) {
-        if (dockFleetOfflineEl) dockFleetOfflineEl.hidden = true;
-        if (dockFleetContentEl) dockFleetContentEl.hidden = false;
-
-        // 1. Table
-        const seatCards = (hopData && hopData.seatCards) || {};
-        let terminals = [];
-        if (Array.isArray(termData)) { terminals = termData; }
-        else if (termData?.terminals && Array.isArray(termData.terminals)) { terminals = termData.terminals; }
-        else if (termData?.result && Array.isArray(termData.result)) { terminals = termData.result; }
-
-        if (dockFleetTbody) {
-            dockFleetTbody.innerHTML = '';
-            if (terminals.length === 0) {
-                const tr = document.createElement('tr');
-                tr.innerHTML = '<td colspan="4" style="color:var(--text-dim); text-align:center; padding:12px;">No active seats in fleet</td>';
-                dockFleetTbody.appendChild(tr);
-            } else {
-                for (const t of terminals) {
-                    const tr = document.createElement('tr');
-                    const name = String(t?.friendlyName || t?.name || t?.terminalName || '?');
-                    const role = String(t?.role || '-');
-                    const status = String(t?.status || (t?.alive || t?.active ? 'active' : 'idle'));
-                    // CURRENT PLAN / TASK comes from the hop state's seat→held-card
-                    // map, NOT from the terminal row: ptyListTerminals rows carry no
-                    // plan-shaped field at all, so reading one off `t` renders every
-                    // seat idle while the hop beside it says that seat is working.
-                    // Same source and same rule as the readiness predicate.
-                    const heldCard = seatCards[name];
-                    const plan = String((heldCard && (heldCard.title || heldCard.planId)) || '-');
-
-                    tr.innerHTML = `
-                        <td>${escapeHtml(name)}</td>
-                        <td>${escapeHtml(role)}</td>
-                        <td>${escapeHtml(status)}</td>
-                        <td title="${escapeHtml(plan)}">${escapeHtml(plan)}</td>
-                    `;
-                    dockFleetTbody.appendChild(tr);
-                }
-            }
-        }
-
-        // 2. Checkboxes
-        if (dockHopPlanCb && hopData.hops) dockHopPlanCb.checked = !!hopData.hops.plan;
-        if (dockHopCodeCb && hopData.hops) dockHopCodeCb.checked = !!hopData.hops.code;
-        if (dockHopReviewCb && hopData.hops) dockHopReviewCb.checked = !!hopData.hops.review;
-
-        // 3. Reasons
-        const resolveReason = (hop) => {
-            const readiness = hopData.readiness?.[hop];
-            if (readiness) {
-                if ('unknown' in readiness) return readiness.unknown;
-                return readiness.reason || (readiness.free ? 'free' : 'busy');
-            }
-            return hopData.reasons?.[hop] || '';
-        };
-
-        if (dockHopPlanReason) dockHopPlanReason.textContent = resolveReason('plan');
-        if (dockHopCodeReason) dockHopCodeReason.textContent = resolveReason('code');
-        if (dockHopReviewReason) dockHopReviewReason.textContent = resolveReason('review');
-
-        // 4. Start / Stop button
-        if (dockHopsBtn) {
-            dockHopsBtn.textContent = hopData.started ? 'Stop' : 'Start';
-            dockHopsBtn.setAttribute('data-started', String(!!hopData.started));
-        }
-
-        // 5. Feed
-        if (dockFleetFeedEl) {
-            dockFleetFeedEl.innerHTML = '';
-            const feed = hopData.feed || [];
-            if (feed.length === 0) {
-                const emptyLine = document.createElement('div');
-                emptyLine.className = 'dock-feed-line';
-                emptyLine.textContent = 'No fleet events recorded this session.';
-                emptyLine.style.color = 'var(--text-dim)';
-                dockFleetFeedEl.appendChild(emptyLine);
-            } else {
-                for (const item of feed) {
-                    const line = document.createElement('div');
-                    line.className = 'dock-feed-line';
-                    const timeSpan = document.createElement('span');
-                    timeSpan.className = 'dock-feed-time';
-                    timeSpan.textContent = formatTime(item.timestamp);
-
-                    const glyphSpan = document.createElement('span');
-                    glyphSpan.className = 'dock-feed-glyph' + (item.kind === 'finish' ? ' is-finish' : '');
-                    glyphSpan.textContent = item.kind === 'dispatch' ? '✓' : '·';
-
-                    const textSpan = document.createElement('span');
-                    textSpan.className = 'dock-feed-text';
-                    textSpan.textContent = item.text;
-                    textSpan.dataset.tooltip = item.text;
-
-                    line.appendChild(timeSpan);
-                    line.appendChild(glyphSpan);
-                    line.appendChild(textSpan);
-                    dockFleetFeedEl.appendChild(line);
-                }
-            }
-        }
-    }
-
-    async function toggleHopCheckbox(hop, enabled) {
-        try {
-            const res = await fetch('/terminals/verb/setHopCheckbox', {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ hop, enabled })
-            });
-            if (res.ok) {
-                const data = await res.json();
-                if (data && data.success) {
-                    void refreshFleetTab();
-                }
-            }
-        } catch (err) {
-            console.warn('[shell] Failed to toggle hop checkbox:', err);
-        }
-    }
+       The dock is one iframe pointing at /dock. The dock document owns its
+       tab strip (Agent / CLI / Fleet), its seat lifecycle, its terminal
+       viewports and its fleet table. The shell owns only open/closed, width,
+       the splitter and the minimum-width gate. */
 
     function setDockOpen(open) {
         dockOpen = !!open;
@@ -744,366 +437,21 @@
         }
         writeDockState({ open: dockOpen });
         if (dockOpen) {
-            // Apply the persisted width BEFORE the frame gets a box, so the pty
-            // is sized once. Without this the dock always reopens at the CSS
-            // default and the saved width is write-only.
+            // Apply the persisted width BEFORE the frame gets a box, so the
+            // pty is sized once. Without this the dock always reopens at the
+            // CSS default and the saved width is write-only.
             const w = clampDockWidth(readDockState().width);
             dockEl.style.width = w + 'px';
-            const state = readDockState();
-            setDockActiveTab(state.activeTab);
+            // Mount the single /dock iframe. The dock document handles the
+            // rest — tab strip, seats, fleet, theme.
+            if (dockFrame.getAttribute('src') !== '/dock') { dockFrame.src = '/dock'; }
+            dockFrame.hidden = false;
+            dockFrame.classList.add('is-visible');
         } else {
-            stopFleetPoll();
-        }
-    }
-
-    async function checkDockLiveness() {
-        const saved = readDockState();
-        const wanted = saved.seat || dockSeatName();
-        try {
-            const res = await fetch('/terminals/verb/ptyListTerminals', {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: { 'Content-Type': 'application/json' },
-                body: '{}'
-            });
-            const data = await res.json();
-            const hidden = Array.isArray(data.hiddenTerminals) ? data.hiddenTerminals : [];
-            const terminals = Array.isArray(data.terminals) ? data.terminals : [];
-            const all = [...hidden, ...terminals];
-            const live = all.find(t => (t.friendlyName === wanted || t.name === wanted || isControllerTerminal(t)) && t.status !== 'exited' && t.light !== 'exited');
-            const exited = all.find(t => (t.friendlyName === wanted || t.name === wanted || isControllerTerminal(t)) && (t.status === 'exited' || t.light === 'exited'));
-            return { wanted, live, exited, hidden };
-        } catch { return { wanted, live: null, exited: null, hidden: [] }; }
-    }
-
-    async function syncDockSeat() {
-        const saved = readDockState();
-        // Tab-aware: only act on the agent tab. The CLI tab has its own
-        // sync path (syncCliSeat). Fleet has no seat.
-        if (saved.activeTab !== 'agent') { return; }
-        const { live, exited } = await checkDockLiveness();
-        // Re-check AFTER the round trip. checkDockLiveness is a ptyListTerminals
-        // fetch and this runs on every terminalFleetState push, so a tab click
-        // lands inside the await routinely. Without this the resolved call mounts
-        // the agent frame over whichever pane the operator just switched to —
-        // two panes visible at once, which is the exact state setDockActiveTab's
-        // pane map exists to make unreachable.
-        if (normaliseDockTab(readDockState().activeTab) !== 'agent') { return; }
-        if (live) {
-            if (dockRestartBtn) { dockRestartBtn.style.display = 'none'; }
-            mountDockFrame(live.friendlyName || live.name || saved.seat || dockSeatName());
-        } else if (exited) {
-            if (dockRestartBtn) { dockRestartBtn.style.display = 'inline-block'; }
-            showDockEmptyState();
-        } else {
-            if (dockRestartBtn) { dockRestartBtn.style.display = 'none'; }
-            showDockEmptyState();
-        }
-    }
-
-    function updateDockTitle(name) {
-        const tab = normaliseDockTab(readDockState().activeTab);
-        if (tab === 'fleet') {
-            dockTitleEl.textContent = 'Fleet';
-            return;
-        }
-        if (tab === 'cli') {
-            // The CLI seat's title is its seat name; the armed-status suffix
-            // is meaningful for the controller seat and meaningless for a CLI.
-            dockTitleEl.textContent = name || dockCliSeatName();
-            return;
-        }
-        // 'agent' — the controller seat. The armed suffix is meaningful here.
-        if (!name) { dockTitleEl.textContent = ''; return; }
-        const status = lastAutobanArmed ? 'Armed' : 'Awaiting confirmation';
-        dockTitleEl.textContent = `${name} — ${status}`;
-    }
-
-    function mountDockFrame(name) {
-        const url = `/terminals?solo=${encodeURIComponent(name)}&dock=1`;
-        if (dockFrame.getAttribute('src') !== url) { dockFrame.src = url; }
-        dockFrame.hidden = false;
-        dockFrame.classList.add('is-visible');
-        emptyEl.hidden = true;
-        emptyEl.classList.remove('is-visible');
-        if (dockCliInput && dockCliWrap) {
-            dockCliWrap.appendChild(dockCliInput);
-            dockCliWrap.classList.add('is-visible', 'collapsed');
-        }
-        updateDockTitle(name);
-        writeDockState({ seat: name });
-    }
-
-    // ── CLI tab seat lifecycle ─────────────────────────────────────────
-    // The CLI tab hosts a pty seat running `switchboard` — a distinct
-    // creation path from the controller seat's. The seat name (`dock-cli`)
-    // differs from the controller's (`dock-project_manager`) to avoid
-    // collision, and the startup command is hard-coded to `switchboard`
-    // rather than read from the operator's input field.
-
-    /** Check whether the CLI seat is live, exited, or absent — mirroring
-     *  checkDockLiveness but keyed on the CLI seat name and role. */
-    async function checkCliLiveness() {
-        const wanted = dockCliSeatName();
-        try {
-            const res = await fetch('/terminals/verb/ptyListTerminals', {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: { 'Content-Type': 'application/json' },
-                body: '{}'
-            });
-            const data = await res.json();
-            const hidden = Array.isArray(data.hiddenTerminals) ? data.hiddenTerminals : [];
-            const terminals = Array.isArray(data.terminals) ? data.terminals : [];
-            const all = [...hidden, ...terminals];
-            const live = all.find(t => (t.friendlyName === wanted || t.name === wanted) && t.status !== 'exited' && t.light !== 'exited');
-            const exited = all.find(t => (t.friendlyName === wanted || t.name === wanted) && (t.status === 'exited' || t.light === 'exited'));
-            return { wanted, live, exited };
-        } catch { return { wanted, live: null, exited: null }; }
-    }
-
-    /** Sync the CLI tab: mount the iframe if the seat is live, show the
-     *  empty state if it is exited or absent. */
-    async function syncCliSeat() {
-        const saved = readDockState();
-        if (normaliseDockTab(saved.activeTab) !== 'cli') { return; }
-        const { live, exited } = await checkCliLiveness();
-        // Re-check AFTER the round trip — see syncDockSeat. Both seat-bearing
-        // tabs can have a sync in flight at once, and each one mounts an iframe.
-        if (normaliseDockTab(readDockState().activeTab) !== 'cli') { return; }
-        if (live) {
-            if (dockRestartBtn) { dockRestartBtn.style.display = 'none'; }
-            mountCliFrame(live.friendlyName || live.name || dockCliSeatName());
-        } else if (exited) {
-            if (dockRestartBtn) { dockRestartBtn.style.display = 'inline-block'; }
-            showCliEmptyState();
-        } else {
-            if (dockRestartBtn) { dockRestartBtn.style.display = 'none'; }
-            showCliEmptyState();
-        }
-    }
-
-    /** Mount the CLI iframe against the dock-cli seat. */
-    function mountCliFrame(name) {
-        if (!dockCliFrame) { return; }
-        const url = `/terminals?solo=${encodeURIComponent(name)}&dock=1`;
-        if (dockCliFrame.getAttribute('src') !== url) { dockCliFrame.src = url; }
-        dockCliFrame.hidden = false;
-        dockCliFrame.classList.add('is-visible');
-        emptyEl.hidden = true;
-        emptyEl.classList.remove('is-visible');
-        updateDockTitle(name);
-    }
-
-    /** Show the CLI tab's empty state — a start button that creates a
-     *  `switchboard` seat, not the controller seat's input field. */
-    async function showCliEmptyState() {
-        if (dockCliFrame) {
-            dockCliFrame.hidden = true;
-            dockCliFrame.classList.remove('is-visible');
-        }
-        emptyEl.hidden = false;
-        emptyEl.classList.add('is-visible');
-        if (dockCliWrap) {
-            dockCliWrap.classList.remove('is-visible', 'collapsed');
-        }
-        // The CLI tab's empty state does NOT use the startup-command input
-        // field — the command is always `switchboard`. Hide it and show a
-        // simple start button instead.
-        if (dockCliInput) { dockCliInput.style.display = 'none'; }
-        startBtn.style.display = '';
-        startBtn.textContent = 'Start switchboard';
-        startBtn.disabled = false;
-        dockEmptyHint.innerHTML = '<p style="color:var(--text-dim);font-size:11px;line-height:1.5;">A live terminal running the <code>switchboard</code> CLI front door.</p>';
-        dockTitleEl.textContent = '';
-    }
-
-    /** Create the CLI seat on explicit click. The startup command is
-     *  `switchboard` — hard-coded, not from the input field. Saved via
-     *  saveStartupCommands for role `dock_cli` so the pty host resolves it. */
-    async function startCliSeat() {
-        startBtn.disabled = true;
-        if (dockRestartBtn) { dockRestartBtn.style.display = 'none'; }
-        try {
-            // Save `switchboard` as the startup command for the dock_cli
-            // role so the pty host can resolve it. Merge with existing
-            // commands so no other role's config is lost.
-            let existing = {};
-            try {
-                const getRes = await fetch('/kanban/verb/getStartupCommands', {
-                    method: 'POST', credentials: 'same-origin',
-                    headers: { 'Content-Type': 'application/json' }, body: '{}'
-                });
-                if (getRes.ok) {
-                    const d = await getRes.json();
-                    existing = d.commands || {};
-                }
-            } catch { /* ignore */ }
-            await fetch('/kanban/verb/saveStartupCommands', {
-                method: 'POST', credentials: 'same-origin',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ commands: { ...existing, dock_cli: 'switchboard' } })
-            });
-            const res = await fetch('/terminals/verb/ptyCreateTerminal', {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ role: 'dock_cli', name: dockCliSeatName(), hidden: true })
-            });
-            if (res.status === 503) {
-                dockEmptyHint.textContent = 'Terminal backend is not available in this host.';
-                return;
-            }
-            const data = await res.json();
-            if (data && data.success !== false) {
-                const name = data.friendlyName || data.name || (data.terminal && data.terminal.friendlyName) || dockCliSeatName();
-                mountCliFrame(name);
-            } else {
-                dockEmptyHint.textContent = (data && data.error) || 'Could not start CLI terminal.';
-            }
-        } catch (err) {
-            dockEmptyHint.textContent = 'Could not reach the server.';
-        } finally {
-            startBtn.disabled = false;
-        }
-    }
-
-    async function showDockEmptyState() {
-        dockFrame.hidden = true;
-        dockFrame.classList.remove('is-visible');
-        emptyEl.hidden = false;
-        emptyEl.classList.add('is-visible');
-        if (dockCliWrap) {
-            dockCliWrap.classList.remove('is-visible', 'collapsed');
-        }
-        if (dockCliInput && emptyEl && !emptyEl.contains(dockCliInput)) {
-            emptyEl.insertBefore(dockCliInput, startBtn);
-        }
-        // Restore the CLI input visibility — showCliEmptyState hides it.
-        if (dockCliInput) { dockCliInput.style.display = ''; }
-        startBtn.style.display = '';
-        startBtn.textContent = 'Start';
-        dockEmptyHint.innerHTML = '';
-        dockTitleEl.textContent = '';
-        if (dockCliInput) {
-            await prefillDockCliInput();
-            startBtn.disabled = !dockCliInput.value.trim();
-        }
-    }
-
-    // Pre-fill the CLI input from the configured startup command — ONCE, and
-    // never over text the operator has typed.
-    //
-    // showDockEmptyState() runs again on every `terminalFleetState` push (the
-    // terminals panel polls the fleet every 5s), so an unconditional assignment
-    // here wipes a half-typed command out from under the operator every five
-    // seconds, and re-hits /kanban/verb/getStartupCommands — which fans out to
-    // agent names, visible agents and two DB reads — for a value that has not
-    // changed. Both are avoided by latching: the fetch happens on the first
-    // empty-state render, and the value is only written into an untouched input.
-    let dockCliPrefilled = false;
-    async function prefillDockCliInput() {
-        if (!dockCliInput || dockCliPrefilled) { return; }
-        dockCliPrefilled = true;
-        try {
-            const res = await fetch('/kanban/verb/getStartupCommands', {
-                method: 'POST', credentials: 'same-origin',
-                headers: { 'Content-Type': 'application/json' }, body: '{}'
-            });
-            if (res.ok) {
-                const data = await res.json();
-                const cmds = data.commands || {};
-                // Only fill an input the operator has not typed into.
-                if (!dockCliInput.value.trim()) {
-                    dockCliInput.value = cmds['project_manager'] || cmds['mission-control'] || '';
-                }
-            }
-        } catch { /* a missing pre-fill leaves an empty input, which is honest */ }
-        if (startBtn) { startBtn.disabled = !dockCliInput.value.trim(); }
-    }
-
-    function renderDockClipboardPrompt(promptText) {
-        dockFrame.hidden = true;
-        dockFrame.classList.remove('is-visible');
-        emptyEl.hidden = false;
-        emptyEl.classList.add('is-visible');
-        startBtn.style.display = 'none';
-        dockTitleEl.textContent = 'Mission Control (Clipboard)';
-        dockEmptyHint.innerHTML = '';
-
-        const msg = document.createElement('p');
-        msg.textContent = 'No agent CLI configured. Copy the prompt below to run Mission Control:';
-        msg.style.marginBottom = '8px';
-
-        const box = document.createElement('div');
-        box.style.cssText = 'background: var(--bg-elev); border: 1px solid var(--border); border-radius: 4px; padding: 8px; font-family: monospace; font-size: 11px; word-break: break-all; margin-bottom: 8px; text-align: left; max-height: 120px; overflow-y: auto; user-select: all;';
-        box.textContent = promptText;
-
-        const copyBtn = document.createElement('button');
-        copyBtn.type = 'button';
-        copyBtn.className = 'dock-start-btn';
-        copyBtn.textContent = 'Copy Prompt';
-        copyBtn.addEventListener('click', async () => {
-            try {
-                await navigator.clipboard.writeText(promptText);
-                copyBtn.textContent = 'Copied!';
-                setTimeout(() => { copyBtn.textContent = 'Copy Prompt'; }, 2000);
-            } catch {
-                copyBtn.textContent = 'Failed to copy';
-            }
-        });
-
-        dockEmptyHint.appendChild(msg);
-        dockEmptyHint.appendChild(box);
-        dockEmptyHint.appendChild(copyBtn);
-    }
-
-    // Create on explicit click only — never implicitly on shell load (edge
-    // case 4). Saves startup commands and creates hidden terminal.
-    async function startDockTerminal() {
-        startBtn.disabled = true;
-        if (dockRestartBtn) { dockRestartBtn.style.display = 'none'; }
-        const cmdVal = dockCliInput ? dockCliInput.value.trim() : '';
-        try {
-            if (cmdVal) {
-                let existing = {};
-                try {
-                    const getRes = await fetch('/kanban/verb/getStartupCommands', {
-                        method: 'POST', credentials: 'same-origin',
-                        headers: { 'Content-Type': 'application/json' }, body: '{}'
-                    });
-                    if (getRes.ok) {
-                        const d = await getRes.json();
-                        existing = d.commands || {};
-                    }
-                } catch { /* ignore */ }
-                await fetch('/kanban/verb/saveStartupCommands', {
-                    method: 'POST', credentials: 'same-origin',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ commands: { ...existing, project_manager: cmdVal } })
-                });
-            }
-            const res = await fetch('/terminals/verb/ptyCreateTerminal', {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ role: 'project_manager', name: 'dock-project_manager', hidden: true })
-            });
-            if (res.status === 503) {
-                dockEmptyHint.textContent = 'Terminal backend is not available in this host.';
-                return;
-            }
-            const data = await res.json();
-            if (data && data.success !== false) {
-                const name = data.friendlyName || data.name || (data.terminal && data.terminal.friendlyName) || 'dock-project_manager';
-                mountDockFrame(name);
-            } else {
-                dockEmptyHint.textContent = (data && data.error) || 'Could not start dock terminal.';
-            }
-        } catch (err) {
-            dockEmptyHint.textContent = 'Could not reach the server.';
-        } finally {
-            startBtn.disabled = dockCliInput ? !dockCliInput.value.trim() : false;
+            // Hide the frame; the dock document keeps its state across
+            // open/close cycles (same origin, same iframe — no reload).
+            dockFrame.hidden = true;
+            dockFrame.classList.remove('is-visible');
         }
     }
 
@@ -1164,105 +512,9 @@
         dockEl.style.width = w + 'px';
     });
 
-    // Dock close button.
-    if (dockCloseBtn) {
-        dockCloseBtn.addEventListener('click', () => setDockOpen(false));
-    }
-
-    // Start button — the ONLY create path (edge case 4). Tab-aware:
-    // on the agent tab it creates the controller seat; on the CLI tab
-    // it creates the `switchboard` CLI seat.
-    if (startBtn) {
-        startBtn.addEventListener('click', () => {
-            const tab = normaliseDockTab(readDockState().activeTab);
-            if (tab === 'cli') {
-                void startCliSeat();
-            } else {
-                void startDockTerminal();
-            }
-        });
-    }
-
-    if (dockCliInput) {
-        dockCliInput.addEventListener('input', () => {
-            if (startBtn) { startBtn.disabled = !dockCliInput.value.trim(); }
-        });
-        dockCliInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && startBtn && !startBtn.disabled) {
-                void startDockTerminal();
-            }
-        });
-    }
-
-    if (dockRestartBtn) {
-        dockRestartBtn.addEventListener('click', () => {
-            const tab = normaliseDockTab(readDockState().activeTab);
-            if (tab === 'cli') {
-                void startCliSeat();
-            } else {
-                void startDockTerminal();
-            }
-        });
-    }
-
-    if (dockCliWrap) {
-        dockCliWrap.addEventListener('click', () => {
-            if (dockCliWrap.classList.contains('collapsed')) {
-                dockCliWrap.classList.remove('collapsed');
-                if (dockCliInput) { dockCliInput.focus(); }
-            }
-        });
-    }
-
-    // Dock tab buttons.
-    if (dockTabAgentBtn) {
-        dockTabAgentBtn.addEventListener('click', () => setDockActiveTab('agent'));
-    }
-    if (dockTabCliBtn) {
-        dockTabCliBtn.addEventListener('click', () => setDockActiveTab('cli'));
-    }
-    if (dockTabFleetBtn) {
-        dockTabFleetBtn.addEventListener('click', () => setDockActiveTab('fleet'));
-    }
-
-    // Dock Fleet hop checkboxes
-    if (dockHopPlanCb) {
-        dockHopPlanCb.addEventListener('change', () => toggleHopCheckbox('plan', dockHopPlanCb.checked));
-    }
-    if (dockHopCodeCb) {
-        dockHopCodeCb.addEventListener('change', () => toggleHopCheckbox('code', dockHopCodeCb.checked));
-    }
-    if (dockHopReviewCb) {
-        dockHopReviewCb.addEventListener('change', () => toggleHopCheckbox('review', dockHopReviewCb.checked));
-    }
-
-    // Dock Fleet hop Start/Stop button
-    if (dockHopsBtn) {
-        dockHopsBtn.addEventListener('click', async () => {
-            const currentStarted = dockHopsBtn.getAttribute('data-started') === 'true';
-            const nextStarted = !currentStarted;
-            dockHopsBtn.disabled = true;
-            try {
-                const res = await fetch('/terminals/verb/setHopsStarted', {
-                    method: 'POST',
-                    credentials: 'same-origin',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ started: nextStarted })
-                });
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data && data.success) {
-                        void refreshFleetTab();
-                    }
-                }
-            } catch (err) {
-                console.warn('[shell] Failed to toggle hop start state:', err);
-            } finally {
-                dockHopsBtn.disabled = false;
-            }
-        });
-    }
-
+    // Dock controls (close button, tab buttons, start/restart, CLI input,
+    // fleet hops) all live in the dock document now — see dock.js. The shell
+    // only listens for dockCloseRequested from the dock iframe.
 
 
     /**
@@ -1612,40 +864,27 @@
             }
         } else if (data.type === 'switchboardThemeChanged') {
             applyThemeToAll(data.theme);
-        } else if (data.type === 'missionControlArmed' && typeof data.armed === 'boolean') {
-            // Relayed by the Terminals panel: the shell has no WebSocket, so the
-            // autoban broadcast rail (autobanStateSync / updateAutobanConfig) is
-            // not audible here. Without the relay this stayed false forever and the
-            // dock title read "Awaiting confirmation" for an armed session.
+        } else if (data.type === 'dockCloseRequested') {
+            // The dock document's close button asks the shell to close the
+            // dock — the shell owns open/closed.
             if (event.origin !== location.origin) { return; }
-            lastAutobanArmed = data.armed;
-            const saved = readDockState();
-            if (saved.seat && saved.activeTab === 'agent' && dockFrame.classList.contains('is-visible')) {
-                updateDockTitle(saved.seat);
-            }
+            setDockOpen(false);
         } else if (data.type === 'terminalFleetState' && Array.isArray(data.terminals)) {
             if (event.origin !== location.origin) { return; }
-            // Cache the fleet snapshot as the dock's liveness oracle. The dock
-            // treats the friendlyName as opaque (edge case 4) and uses this
-            // cache to decide adopt-vs-empty-state on every push.
-            lastFleet = data.terminals;
             renderTerminalSection(data.terminals, Array.isArray(data.teams) ? data.teams : []);
-            // Re-sync the active tab's seat — a fleet push may report the seat
-            // we just created, or report that a previously-live seat has exited.
-            if (dockOpen) {
-                const tab = normaliseDockTab(readDockState().activeTab);
-                if (tab === 'agent') { void syncDockSeat(); }
-                else if (tab === 'cli') { void syncCliSeat(); }
-            }
+            // The dock document handles its own seat sync on fleet pushes —
+            // it has its own transport WS and hears the same broadcast.
         } else if (data.type === 'dockTerminalExited' && typeof data.name === 'string') {
+            // The dock document's viewport posts this when a terminal exits.
+            // Relay it back to the dock iframe so dock.js can show the restart
+            // button and empty state immediately. The viewport posts to
+            // window.parent (the shell) because its isDockFrame flag is true;
+            // dock.js listens on its own window for this relay.
             if (event.origin !== location.origin) { return; }
-            // Show the restart button and the appropriate empty state for the
-            // active tab. The exited terminal may be the controller seat or the
-            // CLI seat — the active tab determines which empty state to show.
-            if (dockRestartBtn) { dockRestartBtn.style.display = 'inline-block'; }
-            const tab = normaliseDockTab(readDockState().activeTab);
-            if (tab === 'cli') { void showCliEmptyState(); }
-            else { void showDockEmptyState(); }
+            try {
+                dockFrame?.contentWindow?.postMessage(
+                    { type: 'dockTerminalExited', name: data.name }, location.origin);
+            } catch { /* ignore */ }
         } else if (data.type === 'popoutTerminal' && typeof data.name === 'string') {
             if (event.origin !== location.origin) { return; }
             const slug = data.name.replace(/[^A-Za-z0-9_-]/g, '_');

@@ -604,6 +604,13 @@ interface LocalApiServerOptions {
     setupVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
     allowSecretWritesOverHttp?: boolean;
     taskViewerVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
+    /**
+     * Encrypted secrets store — used by the agent control surface to read
+     * the model API key (`switchboard.agentControl.apiKey`). Optional —
+     * absent in test harnesses; the controller then falls back to the
+     * `SWITCHBOARD_AGENT_API_KEY` env var.
+     */
+    encryptedSecretsStore?: { get(key: string): Promise<string | undefined> } | null;
     cleanupWorktree?: (
         workspaceRoot: string,
         worktreeId: string | number
@@ -8814,6 +8821,485 @@ export class LocalApiServer {
         return (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    //  Agent Control Surface — the dock's Agent tab is an API-backed controller,
+    //  not a pty seat. POST /agent/control resolves phrases to plan ids, fires
+    //  mechanical actions directly, and optionally calls a configured model
+    //  endpoint for fuzzy resolution. GET /agent/control/config reports whether
+    //  a model is configured and which quick actions are available.
+    //  See plan: the-dock-agent-tab-is-a-control-surface-not-a-terminal.
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /**
+     * Resolve the model endpoint configured for the controller role. The
+     * `project_manager` startup command, when it starts with `http://` or
+     * `https://`, is treated as an HTTP model endpoint rather than a CLI
+     * command. Returns `{ url, apiKey }` or `null` when no model is configured.
+     * The API key is read from the `switchboard.agentControl.apiKey` secret
+     * (stored via the encrypted secrets store) or the
+     * `SWITCHBOARD_AGENT_API_KEY` env var as a fallback.
+     */
+    private async _resolveAgentControlModel(): Promise<{
+        url: string; apiKey: string; keySource: 'secrets-store' | 'env';
+    } | { error: string } | null> {
+        // Tagged, not silently defaulted. This is a CONFIGURATION read, and
+        // CLAUDE.md's rule applies in full: a default that behaves like a
+        // configured value turns a loud failure into a quiet wrong answer.
+        // Three distinct outcomes, never collapsed into one:
+        //   null            — no model endpoint configured (the ordinary case)
+        //   { error }       — configured but unusable; the tab SAYS SO
+        //   { url, apiKey } — usable, with the store that answered recorded
+        let commands: Record<string, string> | undefined;
+        try {
+            commands = await GlobalIntegrationConfigService.getAgentStartupCommands();
+        } catch (err) {
+            // A corrupt integration-config.json is NOT an unconfigured one.
+            // Returning null here would report "no model configured" for a file
+            // that is merely unreadable — the exact conflation CLAUDE.md names
+            // (`catch { return {} }` reading a corrupt file as unconfigured),
+            // and integration-config.json has a documented corruption history.
+            console.error('[LocalApiServer] agent-control: startup commands unreadable:', err);
+            return { error: 'Agent startup commands could not be read (config may be corrupt). Fix the config; the model is not being treated as unconfigured.' };
+        }
+        // Which store answered is recorded, so "why is it using that URL?" is
+        // answerable after the fact rather than guessed from two candidates.
+        const fromPm = String(commands?.['project_manager'] || '').trim();
+        const fromMc = String(commands?.['mission-control'] || '').trim();
+        const trimmed = fromPm || fromMc;
+        if (!trimmed || !/^https?:\/\//i.test(trimmed)) { return null; }
+
+        let apiKey = '';
+        let keySource: 'secrets-store' | 'env' = 'env';
+        const secretsStore = this._options.encryptedSecretsStore;
+        if (secretsStore && typeof secretsStore.get === 'function') {
+            try {
+                apiKey = String(await secretsStore.get('switchboard.agentControl.apiKey') || '');
+                if (apiKey) { keySource = 'secrets-store'; }
+            } catch (err) {
+                // Swallowing this made a locked/!unlocked keychain look identical
+                // to an unset key, and the caller then reported the model as
+                // configured with an empty credential.
+                console.error('[LocalApiServer] agent-control: secrets store read failed:', err);
+                return { error: 'The stored API key could not be read (secrets store unavailable).' };
+            }
+        }
+        if (!apiKey) {
+            apiKey = String(process.env.SWITCHBOARD_AGENT_API_KEY || '');
+            keySource = 'env';
+        }
+        if (!apiKey) {
+            // Previously returned `{ url, apiKey: '' }` — a truthy object, so
+            // `modelConfigured: !!model` reported TRUE with no credential and
+            // every model call 401'd behind a UI claiming it was configured.
+            // An endpoint with no key is a misconfiguration, and it says so.
+            return { error: `Model endpoint ${trimmed} is configured but no API key is set (switchboard.agentControl.apiKey or SWITCHBOARD_AGENT_API_KEY).` };
+        }
+        return { url: trimmed, apiKey, keySource };
+    }
+
+    /** Narrow the tagged result to a usable model, or null. */
+    private static _usableAgentModel(
+        m: { url: string; apiKey: string; keySource: string } | { error: string } | null
+    ): { url: string; apiKey: string; keySource: string } | null {
+        return m && !('error' in m) ? m : null;
+    }
+
+    /**
+     * GET /agent/control/config — report whether the model endpoint is
+     * configured and available, plus the list of quick (mechanical) actions
+     * the controller can fire without a model call.
+     */
+    private async _handleAgentControlConfig(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        await this._handleReadEndpoint(req, res, async () => {
+            const model = await this._resolveAgentControlModel();
+            const usable = LocalApiServer._usableAgentModel(model);
+            // The mechanical actions below need no model, and stay available
+            // when it is broken — plan edge case 1: "a control surface that
+            // goes blank is worse than a terminal".
+            const quickActions = [
+                { id: 'dispatch-starred', label: 'Dispatch starred cards', needsModel: false },
+                { id: 'refresh-board', label: 'Refresh board state', needsModel: false },
+                { id: 'list-columns', label: 'List columns', needsModel: false },
+                { id: 'advance-plan', label: 'Advance a plan (by id)', needsModel: false },
+                { id: 'move-plan', label: 'Move a plan (by id + column)', needsModel: false },
+                { id: 'star-plan', label: 'Star a plan (by id)', needsModel: false },
+            ];
+            return {
+                // TRUE only for a model that can actually be called. A
+                // configured-but-keyless endpoint reports false WITH a reason,
+                // so the tab says what is wrong instead of claiming health.
+                modelConfigured: !!usable,
+                modelUrl: usable ? usable.url : null,
+                modelKeySource: usable ? usable.keySource : null,
+                modelError: model && 'error' in model ? model.error : null,
+                quickActions,
+            };
+        });
+    }
+
+    /**
+     * Resolve a free-text phrase to a set of plan ids using the current board
+     * state. This is the "resolution" half of the controller — the part that
+     * can be wrong, so it is reported back to the operator before/within the
+     * action reply. When a model is configured, the phrase is sent to the
+     * model for fuzzy matching against the board's plan topics; when no model
+     * is available, a keyword-based fallback resolves common patterns
+     * ("starred", "my cards", column names, plan ids, topic substrings).
+     */
+    private async _resolveAgentPhrase(
+        phrase: string,
+        board: any[],
+        history: Array<{ role: string; content: string }>
+    ): Promise<{ resolved: any[]; reply: string; usedModel: boolean }> {
+        const text = String(phrase || '').trim().toLowerCase();
+        if (!text) { return { resolved: [], reply: 'Empty command.', usedModel: false }; }
+
+        // ── Mechanical / keyword resolution (no model needed) ──────────────
+        // "starred" / "my starred cards" → all starred plans
+        if (/\bstarred\b|\bstar\b/.test(text) && !/\bunstar\b/.test(text)) {
+            const starred = board.filter(p => p.starred === 1 || p.starred === true || p.priority === 1 || p.priority === true);
+            return {
+                resolved: starred,
+                reply: starred.length
+                    ? `Resolved ${starred.length} starred card(s): ${starred.map(p => p.topic || p.planId).join(', ')}`
+                    : 'No starred cards on the board.',
+                usedModel: false,
+            };
+        }
+
+        // "my cards" / "all cards" / "board" → entire board
+        if (/\bmy cards\b|\ball cards\b|\bboard\b|\beverything\b/.test(text)) {
+            return {
+                resolved: board,
+                reply: board.length
+                    ? `Resolved all ${board.length} card(s) on the board.`
+                    : 'Board is empty.',
+                usedModel: false,
+            };
+        }
+
+        // Column name match: "dispatch the created plans" / "show coded" etc.
+        for (const col of DEFAULT_KANBAN_COLUMNS) {
+            const label = String(col.label || col.id || '').toLowerCase();
+            const id = String(col.id || '').toLowerCase();
+            if (label && (text.includes(label) || text.includes(id))) {
+                const inCol = board.filter(p => String(p.kanbanColumn || '').toLowerCase() === id);
+                return {
+                    resolved: inCol,
+                    reply: inCol.length
+                        ? `Resolved ${inCol.length} card(s) in ${col.label}: ${inCol.map(p => p.topic || p.planId).join(', ')}`
+                        : `No cards in ${col.label}.`,
+                    usedModel: false,
+                };
+            }
+        }
+
+        // Plan ID match (UUID or session id substring)
+        const idMatch = board.filter(p => {
+            const pid = String(p.planId || '').toLowerCase();
+            const sid = String(p.sessionId || '').toLowerCase();
+            return (pid && text.includes(pid)) || (sid && text.includes(sid));
+        });
+        if (idMatch.length) {
+            return {
+                resolved: idMatch,
+                reply: `Resolved ${idMatch.length} card(s) by id: ${idMatch.map(p => p.topic || p.planId).join(', ')}`,
+                usedModel: false,
+            };
+        }
+
+        // Topic substring match (case-insensitive) — match if any word
+        // from the phrase (4+ chars) appears in a plan's topic
+        const phraseWords = text.split(/\s+/).filter(w => w.length >= 4);
+        const topicMatch = phraseWords.length > 0
+            ? board.filter(p => {
+                const topic = String(p.topic || '').toLowerCase();
+                if (!topic) { return false; }
+                return phraseWords.some(w => topic.includes(w));
+            })
+            : [];
+        if (topicMatch.length) {
+            return {
+                resolved: topicMatch,
+                reply: `Resolved ${topicMatch.length} card(s) by topic: ${topicMatch.map(p => p.topic || p.planId).join(', ')}`,
+                usedModel: false,
+            };
+        }
+
+        // ── Model-based fuzzy resolution (if configured) ───────────────────
+        // Narrowed: the resolver now returns a tagged union, and a
+        // configured-but-unusable model ({ error }) must NOT be called — it
+        // carries no url or apiKey. Keyword resolution below still runs, which
+        // is the point of keeping mechanical actions off the model path.
+        const model = LocalApiServer._usableAgentModel(await this._resolveAgentControlModel());
+        if (model) {
+            try {
+                const modelReply = await this._callModelForResolution(model, text, board, history);
+                if (modelReply && Array.isArray(modelReply.planIds)) {
+                    const resolved = board.filter(p => modelReply.planIds.includes(p.planId) || modelReply.planIds.includes(p.sessionId));
+                    return {
+                        resolved,
+                        reply: modelReply.reply || `Model resolved ${resolved.length} card(s).`,
+                        usedModel: true,
+                    };
+                }
+            } catch (err) {
+                // Model call failed — fall through to "no resolution" with the error
+                return {
+                    resolved: [],
+                    reply: `Model resolution failed: ${err instanceof Error ? err.message : 'unknown error'}. Try a plan id or column name.`,
+                    usedModel: true,
+                };
+            }
+        }
+
+        return {
+            resolved: [],
+            reply: `Could not resolve "${phrase}" to any card. Try a plan id, column name, "starred", or "my cards".`,
+            usedModel: false,
+        };
+    }
+
+    /**
+     * Call the configured HTTP model endpoint for fuzzy phrase resolution.
+     * Sends the board's plan summaries (id + topic + column) and the phrase,
+     * asks the model to return matching plan ids. Uses a minimal
+     * OpenAI-compatible chat completions request format.
+     */
+    private async _callModelForResolution(
+        model: { url: string; apiKey: string },
+        phrase: string,
+        board: any[],
+        history: Array<{ role: string; content: string }>
+    ): Promise<{ planIds: string[]; reply: string } | null> {
+        const planSummaries = board.map(p => ({
+            planId: p.planId,
+            sessionId: p.sessionId,
+            topic: p.topic,
+            column: p.kanbanColumn,
+            starred: !!(p.starred === 1 || p.starred === true || p.priority === 1 || p.priority === true),
+        }));
+        const systemPrompt = `You are a board controller. Given a user phrase and the current board state, resolve the phrase to a list of planIds. Reply with JSON: {"planIds": ["uuid1", ...], "reply": "one-line summary of what you resolved"}. Only include planIds that exist on the board. If no cards match, return empty planIds and explain in reply.`;
+        const userContent = `Board state:\n${JSON.stringify(planSummaries, null, 2)}\n\nUser phrase: "${phrase}"`;
+        const messages = [
+            { role: 'system', content: systemPrompt },
+            ...(history || []).slice(-6).map(h => ({ role: h.role || 'user', content: h.content })),
+            { role: 'user', content: userContent },
+        ];
+        const body = JSON.stringify({
+            model: 'gpt-4o-mini',
+            messages,
+            temperature: 0,
+            max_tokens: 500,
+        });
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (model.apiKey) { headers['Authorization'] = `Bearer ${model.apiKey}`; }
+        const resp = await this._fetchUrl(model.url, { method: 'POST', headers, body });
+        if (!resp.ok) { throw new Error(`Model endpoint returned ${resp.status}`); }
+        const data = JSON.parse(resp.body);
+        // OpenAI-compatible: data.choices[0].message.content
+        const content = data?.choices?.[0]?.message?.content || data?.content || '';
+        try {
+            const parsed = JSON.parse(content);
+            return { planIds: Array.isArray(parsed.planIds) ? parsed.planIds : [], reply: String(parsed.reply || '') };
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * Minimal HTTP fetch helper — uses the global fetch (Node 18+) if
+     * available, otherwise falls back to http/https. Returns { ok, status,
+     * body }.
+     */
+    private async _fetchUrl(url: string, opts: { method: string; headers: Record<string, string>; body: string }): Promise<{ ok: boolean; status: number; body: string }> {
+        if (typeof (globalThis as any).fetch === 'function') {
+            const r = await (globalThis as any).fetch(url, opts);
+            const text = await r.text();
+            return { ok: r.ok, status: r.status, body: text };
+        }
+        // Fallback for older Node: use http/https modules
+        return new Promise((resolve, reject) => {
+            const lib = url.startsWith('https:') ? require('https') : require('http');
+            const req = lib.request(url, { method: opts.method, headers: opts.headers }, (r: any) => {
+                let body = '';
+                r.on('data', (chunk: any) => { body += chunk; });
+                r.on('end', () => resolve({ ok: r.statusCode >= 200 && r.statusCode < 300, status: r.statusCode, body }));
+            });
+            req.on('error', reject);
+            req.write(opts.body);
+            req.end();
+        });
+    }
+
+    /**
+     * POST /agent/control — the controller brain. Takes the operator's text
+     * + conversation history, resolves phrases to plan ids, and either fires
+     * a mechanical action directly or asks the model for fuzzy resolution.
+     *
+     * Body: { text: string, history?: Array<{role, content}>, workspaceRoot?: string }
+     * Response: { success, reply, resolved: Array<{planId, topic, kanbanColumn}>, actions: Array<{type, result, error?}>, usedModel: boolean, history: Array<...> }
+     */
+    private async _handleAgentControl(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const body = await this._parseJsonBody(req);
+            const text = String(body?.text || '').trim();
+            const history = Array.isArray(body?.history) ? body.history : [];
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            if (!text) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Missing required field: text' }));
+                return;
+            }
+
+            // Fetch the board for resolution
+            const db = await this._options.getKanbanDatabase?.(workspaceRoot || this._options.workspaceRoot || '');
+            if (!db) {
+                res.writeHead(503, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Kanban database not available' }));
+                return;
+            }
+            await db.ensureReady?.();
+            const board = await this._resolveBoard(db);
+
+            // Resolve the phrase to plan ids
+            const { resolved, reply, usedModel } = await this._resolveAgentPhrase(text, board, history);
+
+            // Determine and execute the action
+            const actions: Array<{ type: string; result: any; error?: string }> = [];
+            const lowerText = text.toLowerCase();
+
+            if (resolved.length > 0) {
+                // "dispatch" → advance the resolved cards
+                if (/\bdispatch\b|\badvance\b|\bsend\b/.test(lowerText)) {
+                    const planIds = resolved.map(p => p.planId || p.sessionId).filter(Boolean);
+                    const kanbanVerb = this._options.kanbanVerb;
+                    if (kanbanVerb) {
+                        try {
+                            // Group by source column and advance each group
+                            const byColumn = new Map<string, string[]>();
+                            for (const r of resolved) {
+                                const col = String(r.kanbanColumn || '');
+                                const key = col || '';
+                                (byColumn.get(key) ?? byColumn.set(key, []).get(key)!).push(r.sessionId || r.planId);
+                            }
+                            const moved: any[] = [];
+                            for (const [column, sessionIds] of byColumn) {
+                                if (!column) { moved.push({ from: '(no column)', count: 0, error: 'No column to advance from' }); continue; }
+                                const result = await kanbanVerb('promptSelected', { column, sessionIds, workspaceRoot }, workspaceRoot);
+                                moved.push({ from: column, count: sessionIds.length, ...(result?.success ? {} : { error: result?.error }) });
+                            }
+                            actions.push({ type: 'advance', result: { moved, count: planIds.length } });
+                        } catch (err) {
+                            actions.push({ type: 'advance', result: null, error: err instanceof Error ? err.message : 'advance failed' });
+                        }
+                    } else {
+                        actions.push({ type: 'advance', result: null, error: 'Advance not available: kanbanVerb seam not wired' });
+                    }
+                }
+                // "move to <column>" → move the resolved cards
+                else if (/\bmove\b/.test(lowerText)) {
+                    const moveCard = this._options.moveCard;
+                    if (moveCard) {
+                        // Try to extract target column from the phrase
+                        let targetColumn = '';
+                        for (const col of DEFAULT_KANBAN_COLUMNS) {
+                            const label = String(col.label || '').toLowerCase();
+                            const id = String(col.id || '').toLowerCase();
+                            if (label && lowerText.includes(label)) { targetColumn = col.id; break; }
+                            if (id && lowerText.includes(id)) { targetColumn = col.id; break; }
+                        }
+                        if (targetColumn) {
+                            try {
+                                const ids = resolved.map(p => p.planId || p.sessionId).filter(Boolean);
+                                let movedCount = 0;
+                                const errors: string[] = [];
+                                for (const id of ids) {
+                                    try {
+                                        const result = await moveCard(workspaceRoot, id, targetColumn);
+                                        if (result?.success) { movedCount++; }
+                                        else { errors.push(result?.error || 'move failed'); }
+                                    } catch (err) {
+                                        errors.push(err instanceof Error ? err.message : 'move failed');
+                                    }
+                                }
+                                actions.push({ type: 'move', result: { targetColumn, count: movedCount, ...(errors.length ? { errors } : {}) } });
+                            } catch (err) {
+                                actions.push({ type: 'move', result: null, error: err instanceof Error ? err.message : 'move failed' });
+                            }
+                        } else {
+                            actions.push({ type: 'move', result: null, error: 'No target column found in phrase. Try "move to <column>".' });
+                        }
+                    } else {
+                        actions.push({ type: 'move', result: null, error: 'Move not available: moveCard seam not wired' });
+                    }
+                }
+                // "star" → star the resolved cards
+                else if (/\bstar\b|\bprioriti[sz]e\b/.test(lowerText) && !/\bunstar\b/.test(lowerText)) {
+                    const planIds = resolved.map(p => p.planId).filter(Boolean);
+                    let starred = 0;
+                    const errors: string[] = [];
+                    for (const pid of planIds) {
+                        try {
+                            await this._setPlanPriority(pid, true, workspaceRoot);
+                            starred++;
+                        } catch (err) {
+                            errors.push(String(err instanceof Error ? err.message : err));
+                        }
+                    }
+                    actions.push({ type: 'star', result: { starred, errors } });
+                }
+            }
+
+            // Build the updated history (append this turn)
+            const updatedHistory = [
+                ...history,
+                { role: 'user', content: text },
+                { role: 'assistant', content: reply },
+            ].slice(-20); // keep last 20 turns
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: true,
+                reply,
+                resolved: resolved.map(p => ({
+                    planId: p.planId,
+                    sessionId: p.sessionId,
+                    topic: p.topic,
+                    kanbanColumn: p.kanbanColumn,
+                    starred: !!(p.starred === 1 || p.starred === true || p.priority === 1 || p.priority === true),
+                })),
+                actions,
+                usedModel,
+                history: updatedHistory,
+            }));
+        } catch (err) {
+            console.error('[LocalApiServer] agentControl error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'agentControl failed' }));
+        }
+    }
+
+    /**
+     * Set a plan's priority star — used by the agent control surface's
+     * "star" action. Resolves the plan by planId or sessionId, then calls
+     * db.setPriorityStarred. Does NOT push to Linear/ClickUp (same caveat
+     * as _handleSetPlanPriority's direct-DB path).
+     */
+    private async _setPlanPriority(planId: string, starred: boolean, workspaceRoot?: string): Promise<boolean> {
+        const db = await this._resolveDbForRoot(workspaceRoot || undefined);
+        if (!db) { throw new Error('Kanban database not available'); }
+        let record = await db.getPlanByPlanId(planId);
+        if (!record) { record = await db.getPlanBySessionId(planId); }
+        if (!record) { throw new Error(`Plan not found: ${planId}`); }
+        const wsId = record.workspaceId || await this._wsId(db);
+        return db.setPriorityStarred(record.planId, wsId, starred);
+    }
+
     /** GET /kanban/plan?planId= — a single plan record plus its full file content. */
     private async _handleGetPlan(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         await this._handleReadEndpoint(req, res, async () => {
@@ -10672,6 +11158,10 @@ export class LocalApiServer {
                 await this._handleUpdateClickUpTask(taskId, req, res);
             } else if (pathname === '/kanban/dispatch' && req.method === 'POST') {
                 await this._handleKanbanDispatch(req, res);
+            } else if (pathname === '/agent/control' && req.method === 'POST') {
+                await this._handleAgentControl(req, res);
+            } else if (pathname === '/agent/control/config' && req.method === 'GET') {
+                await this._handleAgentControlConfig(req, res);
             } else if (pathname === '/kanban/advance' && req.method === 'POST') {
                 await this._handleKanbanAdvance(req, res);
             } else if (pathname === '/teams/create-external' && req.method === 'POST') {
@@ -10980,6 +11470,8 @@ export class LocalApiServer {
                 await this._handleServePanelById('connections', req, res);
             } else if ((pathname === '/terminals' || pathname === '/terminals.html') && req.method === 'GET') {
                 await this._handleServePanelById('terminals', req, res);
+            } else if ((pathname === '/dock' || pathname === '/dock.html') && req.method === 'GET') {
+                await this._handleServePanelById('dock', req, res);
             } else if ((pathname === '/agent-control' || pathname === '/agent-control.html') && req.method === 'GET') {
                 await this._handleServePanelById('agent-control', req, res);
             } else if ((pathname === '/mission-control' || pathname === '/mission-control.html') && req.method === 'GET') {

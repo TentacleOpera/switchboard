@@ -1148,72 +1148,81 @@ test('top-right cluster exists and satisfies invariants', () => {
 });
 
 test('dock has three tabs (Agent, CLI, Fleet) and no Kanban pane', () => {
-    assert.ok(shellHtml.includes('id="dock-tab-agent"'), 'Agent tab must exist');
-    assert.ok(shellHtml.includes('id="dock-tab-cli"'), 'CLI tab must exist');
-    assert.ok(shellHtml.includes('id="dock-tab-fleet"'), 'Fleet tab must exist');
-    assert.ok(!shellHtml.includes('id="dock-tab-kanban"'), 'Kanban tab must be removed');
-    assert.ok(!shellHtml.includes('id="dock-kanban-frame"'), 'Kanban iframe must be removed');
-    assert.ok(shellHtml.includes('id="dock-cli-frame"'), 'CLI iframe must exist');
-    // dock-dragging pointer-inert selector must cover every dock frame.
-    assert.ok(/body\.dock-dragging #dock-cli-frame/.test(shellHtml),
-        'dock-dragging selector must include #dock-cli-frame');
+    // The dock tab strip moved to dock.html — the shell only hosts the /dock iframe.
+    const dockHtml = fs.readFileSync(path.join(__dirname, '../webview/dock.html'), 'utf8');
+    assert.ok(dockHtml.includes('id="dock-tab-agent"'), 'Agent tab must exist in dock.html');
+    assert.ok(dockHtml.includes('id="dock-tab-cli"'), 'CLI tab must exist in dock.html');
+    assert.ok(dockHtml.includes('id="dock-tab-fleet"'), 'Fleet tab must exist in dock.html');
+    assert.ok(!dockHtml.includes('id="dock-tab-kanban"'), 'Kanban tab must be removed');
+    assert.ok(!dockHtml.includes('id="dock-kanban-frame"'), 'Kanban iframe must be removed');
+    assert.ok(!dockHtml.includes('<iframe'), 'dock.html must not contain any iframes — panes are divs, not frames');
+    // The shell has only one dock iframe — no dock-cli-frame.
+    assert.ok(!shellHtml.includes('id="dock-cli-frame"'), '#dock-cli-frame must be removed from shell.html');
+    assert.ok(!/body\.dock-dragging #dock-cli-frame/.test(shellHtml),
+        'dock-dragging selector must not reference the removed #dock-cli-frame');
     assert.ok(!/body\.dock-dragging #dock-kanban-frame/.test(shellHtml),
         'dock-dragging selector must not reference the removed #dock-kanban-frame');
 });
 
 test('setDockActiveTab uses a pane map with exactly one visible pane per tab', () => {
-    const fn = block(shellJs, 'function setDockActiveTab(tab) {', 'function startFleetPoll() {');
+    // setDockActiveTab moved to dock.js — the dock document owns tab switching.
+    const dockJs = fs.readFileSync(path.join(__dirname, '../webview/dock.js'), 'utf8');
+    const fn = block(dockJs, 'function setDockActiveTab', 'function updateDockTitle');
     // Every pane is hidden unconditionally BEFORE the active one is shown.
-    assert.ok(fn.includes('dockFrame.classList.remove(\'is-visible\')'), 'agent frame must be hidden by default');
-    assert.ok(fn.includes('dockCliFrame') && fn.includes('dockCliFrame.classList.remove(\'is-visible\')'),
-        'CLI frame must be hidden by default');
-    assert.ok(fn.includes('dockFleetEl') && fn.includes('dockFleetEl.classList.remove(\'is-visible\')'),
-        'Fleet pane must be hidden by default');
+    assert.ok(/agentPane\.classList\.remove\('is-visible'\)/.test(fn), 'agent pane must be hidden by default');
+    assert.ok(/cliPane\.classList\.remove\('is-visible'\)/.test(fn), 'CLI pane must be hidden by default');
+    // The fleet pane's element is `dockFleetEl` (kept from shell.js), not
+    // `fleetPane` — assert the real identifier, not the one the trio implies.
+    assert.ok(/dockFleetEl\.classList\.remove\('is-visible'\)/.test(fn), 'Fleet pane must be hidden by default');
+    assert.ok(/dockFleetEl\.hidden = true/.test(fn), 'Fleet pane must also be hidden via .hidden, matching the other panes');
     // Normalises 'kanban' (retired) and unknown values to 'agent'.
     assert.ok(fn.includes('normaliseDockTab'), 'setDockActiveTab must normalise the tab id');
     assert.ok(/normaliseDockTab\(tab\)/.test(fn), 'setDockActiveTab must call normaliseDockTab');
 });
 
 test('persisted kanban tab normalises to agent', () => {
-    const fn = block(shellJs, 'function normaliseDockTab(tab) {', 'function setDockActiveTab(tab) {');
+    const dockJs = fs.readFileSync(path.join(__dirname, '../webview/dock.js'), 'utf8');
+    const fn = block(dockJs, 'function normaliseDockTab', 'function setDockActiveTab');
     assert.ok(/DOCK_TABS\.includes\(tab\)/.test(fn), 'normaliseDockTab must check against DOCK_TABS');
     assert.ok(/return 'agent'/.test(fn), 'normaliseDockTab must fall back to agent');
     assert.ok(!/kanban/.test(fn), 'normaliseDockTab must not special-case kanban — it falls through to agent');
 });
 
-test('syncDockSeat is tab-aware and does not early-return for CLI', () => {
-    const fn = block(shellJs, 'async function syncDockSeat() {', 'function updateDockTitle(name) {');
-    assert.ok(/saved\.activeTab !== 'agent'/.test(fn), 'syncDockSeat must early-return when not on the agent tab');
-    // CLI has its own sync path.
-    assert.ok(shellJs.includes('async function syncCliSeat()'), 'syncCliSeat must exist');
-    const cliFn = block(shellJs, 'async function syncCliSeat() {', 'function mountCliFrame(name) {');
+test('syncCliSeat is tab-aware and calls checkCliLiveness', () => {
+    const dockJs = fs.readFileSync(path.join(__dirname, '../webview/dock.js'), 'utf8');
+    // The Agent tab is a control surface — no syncDockSeat exists.
+    assert.ok(!/function\s+syncDockSeat/.test(dockJs), 'syncDockSeat must NOT exist — the Agent tab is a control surface, not a terminal');
+    assert.ok(dockJs.includes('async function syncCliSeat()'), 'syncCliSeat must exist in dock.js');
+    const cliFn = block(dockJs, 'async function syncCliSeat()', 'function mountCliViewport');
     assert.ok(/normaliseDockTab\(saved\.activeTab\) !== 'cli'/.test(cliFn),
         'syncCliSeat must early-return when not on the CLI tab');
     assert.ok(/checkCliLiveness\(\)/.test(cliFn), 'syncCliSeat must call checkCliLiveness');
-    assert.ok(/mountCliFrame/.test(cliFn), 'syncCliSeat must mount the CLI frame when live');
+    assert.ok(/mountCliViewport/.test(cliFn), 'syncCliSeat must mount the CLI viewport when live');
 });
 
-test('CLI seat name differs from the controller seat name', () => {
-    assert.ok(/function dockCliSeatName\(\) \{ return 'dock-cli'/.test(shellJs),
+test('CLI seat name is dock-cli (no controller seat — Agent tab is a control surface)', () => {
+    const dockJs = fs.readFileSync(path.join(__dirname, '../webview/dock.js'), 'utf8');
+    assert.ok(/function dockCliSeatName\(\) \{ return 'dock-cli'/.test(dockJs),
         'dockCliSeatName must return dock-cli');
-    assert.ok(/function dockSeatName\(\) \{ return 'dock-project_manager'/.test(shellJs),
-        'dockSeatName must return dock-project_manager (the controller seat)');
-    // The CLI seat is created with role 'dock_cli' and startup command 'switchboard'.
-    const startFn = block(shellJs, 'async function startCliSeat() {', 'async function showDockEmptyState() {');
+    assert.ok(!/function dockSeatName/.test(dockJs),
+        'dockSeatName must NOT exist — the Agent tab is a control surface with no pty seat');
+    const startFn = block(dockJs, 'async function startCliSeat()', 'function startFleetPoll()');
     assert.ok(/role:\s*'dock_cli'/.test(startFn), 'startCliSeat must create with role dock_cli');
     assert.ok(/name:\s*dockCliSeatName\(\)/.test(startFn), 'startCliSeat must use dockCliSeatName()');
     assert.ok(/dock_cli:\s*'switchboard'/.test(startFn), 'startCliSeat must save switchboard as the dock_cli startup command');
 });
 
-test('theme fan-out includes every dock frame', () => {
+test('theme fan-out includes the dock frame', () => {
+    // The shell now has ONE dock iframe — theme fan-out goes to dockFrame only.
     const fn = block(shellJs, 'function applyThemeToAll(themeName) {', 'function buildFrame(panel) {');
     assert.ok(/dockFrame\?\.contentWindow\?\.postMessage/.test(fn), 'theme fan-out must include dockFrame');
-    assert.ok(/dockCliFrame\?\.contentWindow\?\.postMessage/.test(fn), 'theme fan-out must include dockCliFrame');
+    assert.ok(!/dockCliFrame/.test(fn), 'theme fan-out must not reference the removed dockCliFrame');
     assert.ok(!/dockKanbanFrame/.test(fn), 'theme fan-out must not reference the removed dockKanbanFrame');
 });
 
 test('Fleet offline path renders offline guidance, not an empty table', () => {
-    const fn = block(shellJs, 'function renderFleetOffline() {', 'function escapeHtml(str) {');
+    const dockJs = fs.readFileSync(path.join(__dirname, '../webview/dock.js'), 'utf8');
+    const fn = block(dockJs, 'function renderFleetOffline()', 'function escapeHtml');
     assert.ok(/dockFleetOfflineEl\) dockFleetOfflineEl\.hidden = false/.test(fn),
         'renderFleetOffline must show the offline guidance element');
     assert.ok(/dockFleetContentEl\) dockFleetContentEl\.hidden = true/.test(fn),
@@ -1221,13 +1230,13 @@ test('Fleet offline path renders offline guidance, not an empty table', () => {
 });
 
 test('Fleet poll lifecycle stops when Fleet is hidden or page backgrounded', () => {
-    const start = block(shellJs, 'function startFleetPoll() {', 'function stopFleetPoll() {');
+    const dockJs = fs.readFileSync(path.join(__dirname, '../webview/dock.js'), 'utf8');
+    const start = block(dockJs, 'function startFleetPoll()', 'function stopFleetPoll()');
     assert.ok(/setInterval/.test(start), 'startFleetPoll must set an interval');
-    const stop = block(shellJs, 'function stopFleetPoll() {', 'document.addEventListener(\'visibilitychange\'');
+    const stop = block(dockJs, 'function stopFleetPoll()', "document.addEventListener('visibilitychange'");
     assert.ok(/clearInterval\(fleetPollTimer\)/.test(stop), 'stopFleetPoll must clear the interval');
     assert.ok(/fleetPollTimer = null/.test(stop), 'stopFleetPoll must null the timer');
-    // visibilitychange handler must stop on hidden and resume on visible.
-    const vis = block(shellJs, "document.addEventListener('visibilitychange',", 'async function refreshFleetTab() {');
+    const vis = block(dockJs, "document.addEventListener('visibilitychange',", 'async function refreshFleetTab() {');
     assert.ok(/document\.hidden/.test(vis), 'visibilitychange must check document.hidden');
     assert.ok(/stopFleetPoll\(\)/.test(vis), 'visibilitychange must stop the poll when hidden');
     assert.ok(/startFleetPoll\(\)/.test(vis), 'visibilitychange must resume the poll when visible');

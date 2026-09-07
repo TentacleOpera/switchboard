@@ -2719,14 +2719,15 @@
          `script-src 'nonce-...' 'self'` — a bare inline script is blocked outright. -->
     <script nonce="{{NONCE}}">
         (function () {
-            var mode = { solo: null, kanban: false, team: null, dock: false };
+            // dock mode (`?dock=1`) is retired — the dock is now its own
+            // document at /dock and no longer embeds /terminals iframes.
+            var mode = { solo: null, kanban: false, team: null };
             try {
                 var p = new URLSearchParams(location.search);
                 // Precedence: solo > kanban > team (narrower scope wins).
                 if (p.has('solo')) { mode.solo = p.get('solo'); }
                 if (p.has('kanban') && !mode.solo) { mode.kanban = p.get('kanban') === '1'; }
                 if (p.has('team') && !mode.solo && !mode.kanban) { mode.team = p.get('team'); }
-                mode.dock = p.get('dock') === '1';
             } catch (e) {
                 console.error('[terminals] mode parse failed; the panel will render as the full grid:', e);
             }

@@ -26,18 +26,19 @@
     const routePrefix = panel === 'kanban' ? '/kanban/verb' : `/${panel}/verb`;
     const localStorageKey = `sb-state-${panel}`;
 
-    // Defect 3 fix: derive isDockFrame from location.search here, mirroring
-    // terminals.js's parse of the `dock` parameter. transport.js is shared
-    // by every panel (including the dock's /terminals?…&dock=1 iframes) and
-    // has no notion of a dock — the switchPanel bridge below must not fire
-    // from a side pane, or a dock document repaints the shell's whole content
-    // area. terminals.js has its OWN isDockFrame parse for its own relays
-    // (postFleetStateToShell, missionControlArmed); this one covers the
-    // transport-level senders. If you change the dock parameter's name or
-    // semantics, update BOTH parsers — see the cross-reference in terminals.js.
+    // Defect 3 fix: derive isDockFrame here. transport.js is shared by every
+    // panel (including the dock document) and has no notion of a dock — the
+    // switchPanel bridge below must not fire from a side pane, or a dock
+    // document repaints the shell's whole content area.
+    //
+    // The dock was previously a /terminals?…&dock=1 iframe; it is now its own
+    // document at /dock. The ?dock=1 parameter is retired (no live caller),
+    // so the parse now keys on the /dock route. terminals.js no longer has an
+    // isDockFrame variable — it passes `false` to the viewport dep bag — so
+    // this is the ONLY isDockFrame parse left in the webview layer.
     let isDockFrame = false;
     try {
-        isDockFrame = new URLSearchParams(window.location.search).get('dock') === '1';
+        isDockFrame = window.location.pathname === '/dock' || window.location.pathname === '/dock.html';
     } catch { /* ignore */ }
 
     function loadState() {
@@ -590,11 +591,19 @@
     //
     //   transport.js  PANEL_SWITCH_VERBS switchPanel     — dock-guarded + origin (this file)
     //   transport.js  __switchboardSwitchPanel           — dock-guarded + origin (this file)
-    //   terminals.js  missionControlArmed                — dock-guarded (!isDockFrame)
-    //   terminals.js  terminalFleetState                 — dock-guarded (isDockFrame early return)
+    //   terminals.js  missionControlArmed                — origin-guarded (no dock branch; the
+    //                                                       dock document has its own WS and
+    //                                                       handles this in dock.js)
+    //   terminals.js  terminalFleetState                 — origin-guarded (the dock document is
+    //                                                       no longer a /terminals iframe)
     //   terminals.js  popoutTerminal                     — dock-safe: solo/kanban CSS hides the
     //                                                       popout button; posts with location.origin
-    //   terminals.js  dockTerminalExited                 — dock-ONLY (gated by isDockFrame)
+    //   terminals.js  dockTerminalExited                 — retired: the dock document handles
+    //                                                       exit in dock.js; terminals.js no
+    //                                                       longer has an isDockFrame gate
+    //   dock.js       dockTerminalExited (viewport→shell) — dock viewport posts to window.parent
+    //                                                       (shell); shell relays back to dock
+    //   dock.js       dockCloseRequested                 — dock→shell close; origin-guarded
     //   linear.js     switchPanel → tickets              — dock-safe: linear.js is a content-area
     //                                                       panel, not a dock document; posts with
     //                                                       location.origin

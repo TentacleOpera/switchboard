@@ -442,6 +442,40 @@ export function getMemoHtml(repoRoot: string, workspaceRoot: string, capabilitie
     return { html: content, csp };
 }
 
+export function getDockHtml(repoRoot: string, workspaceRoot: string, capabilities?: HostCapabilities, themeClass?: string): PanelHtmlResult {
+    const candidates = [
+        path.join(repoRoot, 'dist', 'webview', 'dock.html'),
+        path.join(repoRoot, 'src', 'webview', 'dock.html'),
+    ];
+    const htmlPath = findFile(candidates);
+    if (!htmlPath) {
+        return { html: '<html><body>Dock panel HTML not found.</body></html>', csp: '' };
+    }
+    let content = fs.readFileSync(htmlPath, 'utf8');
+    const nonce = makeNonce();
+    // CSP mirrors terminals.html: the dock embeds terminal viewports that need
+    // ws: for the pty stream. Without connect-src ws: wss: the terminals connect
+    // to nothing, silently — the exact failure the plan's Complexity Audit names.
+    const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws: wss:; frame-src 'none';`;
+    content = content.replace(/\{\{NONCE\}\}/g, nonce);
+    content = content.replace(/\{\{DOCK_JS_URI\}\}/g, '/static/webview/dock.js');
+    content = content.replace(/\{\{TERMINAL_VIEWPORT_JS_URI\}\}/g, '/static/webview/terminalViewport.js');
+    content = content.replace(/\{\{SHARED_UTILS_URI\}\}/g, '/static/webview/sharedUtils.js');
+    content = content.replace(/\{\{XTERM_JS_URI\}\}/g, '/static/webview/vendor/xterm/xterm.js');
+    content = content.replace(/\{\{XTERM_CSS_URI\}\}/g, '/static/webview/vendor/xterm/xterm.css');
+    content = content.replace(/\{\{XTERM_ADDON_FIT_URI\}\}/g, '/static/webview/vendor/xterm/addon-fit.js');
+    content = content.replace(/\{\{XTERM_ADDON_WEBGL_URI\}\}/g, '/static/webview/vendor/xterm/addon-webgl.js');
+    content = content.replace(/\{\{XTERM_ADDON_CANVAS_URI\}\}/g, '/static/webview/vendor/xterm/addon-canvas.js');
+    content = content.replace(/\{\{HANKEN_FONT_URI\}\}/g, '/static/designs/HankenGrotesk-Variable.woff2');
+    content = content.replace(/\{\{GEIST_PIXEL_FONT_URI\}\}/g, '/static/designs/GeistPixel-Square.woff2');
+    content = injectTransportShim(content, nonce, '<!-- SHARED_DEFAULTS_SCRIPT -->', `<script nonce="${nonce}" src="/static/webview/dock.js"></script>`);
+    const caps = { ...DEFAULT_HOST_CAPABILITIES, ...capabilities };
+    const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="terminals" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}"`;
+    content = injectBodyAttributes(content, bodyAttr);
+    content = applyThemeClass(content, themeClass);
+    return { html: content, csp };
+}
+
 export function getTerminalsHtml(repoRoot: string, workspaceRoot: string, capabilities?: HostCapabilities, themeClass?: string): PanelHtmlResult {
     const candidates = [
         path.join(repoRoot, 'dist', 'webview', 'terminals.html'),
@@ -691,6 +725,7 @@ export function getPanelHtmlById(id: string, repoRoot: string, workspaceRoot: st
         case 'database': return getDatabaseHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'connections': return getConnectionsHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'terminals': return getTerminalsHtml(repoRoot, workspaceRoot, capabilities, themeClass);
+        case 'dock': return getDockHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'linear': return getLinearHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         case 'command': return getCommandHtml(repoRoot, workspaceRoot, capabilities, themeClass);
         default: return null;

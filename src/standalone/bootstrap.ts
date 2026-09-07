@@ -1268,7 +1268,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     const getPanelHtml = async (id: string): Promise<{ html: string; csp?: string } | null> => {
         const result = sharedGetPanelHtmlById(id, repoRoot, workspaceRoot, await getStandaloneCaps(), getTheme());
         if (!result) { return null; }
-        if (id === 'terminals' && terminalSessionToken) {
+        if ((id === 'terminals' || id === 'dock') && terminalSessionToken) {
             // The terminal WS channel is RCE-grade and keeps its own credential,
             // independent of the HTTP auth token (see the terminalSessionToken
             // comment above). Carried as a body data-attribute — NOT an inline
@@ -1294,6 +1294,12 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
             // token above. terminals.js reads document.body.dataset.workingSilenceMs
             // and falls back to 90000 when absent (older host / pre-injection).
             const silenceMs = configProvider.getConfigNumber('activityLight.turnEndSilenceMs', 90000);
+            // NO data-pty-host-origin here, deliberately. The Go PTY host binds
+            // loopback only, so pointing the page at it directly works on the
+            // serving machine and breaks every remote viewer. The board proxies
+            // /ws/terminal instead, so the page's own `ws://location.host`
+            // fallback is the correct address from anywhere — including over the
+            // tailnet, which is the whole point of the browser cockpit.
             return {
                 ...result,
                 html: injectBodyAttributes(result.html,
@@ -4168,6 +4174,26 @@ Each plan file must include:
         getFullState,
         consumeOneTimeToken,
         mintEnrolmentToken,
+        // Agent-control model credential. Declared optional on the options
+        // interface and read by _resolveAgentControlModel, but wired by NEITHER
+        // composition root — the exact shape CLAUDE.md warns about, where "never
+        // wired" and "working" are the same value because the read is optional
+        // and falls through to an env var. Wired here and in
+        // TaskViewerProvider so both hosts read the same store.
+        encryptedSecretsStore: { get: (key: string) => secrets.get(key) },
+        // The board proxies /ws/terminal to the Go PTY host so terminals share the
+        // board's origin — and therefore its tailnet listener. Resolved per call,
+        // not captured: the child restarts on its own and takes a new port with it.
+        getPtyHostPort: () => ptyHostSupervisor?.getReady()?.port,
+        // Validate the page's token, hand back the CHILD's. The Go host mints its
+        // own credential at boot (PtyHostReady.terminalToken) which is not the one
+        // the page carries, so forwarding the page's token verbatim 401s forever.
+        authorizePtyHostUpgrade: (supplied: string) => {
+            const ready = ptyHostSupervisor?.getReady();
+            if (!ready || !terminalSessionToken) { return undefined; }
+            if (supplied !== terminalSessionToken) { return undefined; }
+            return { port: ready.port, token: ready.terminalToken };
+        },
         serveStatic: {
             getBoardHtml,
             getProjectHtml,

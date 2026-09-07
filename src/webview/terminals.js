@@ -196,12 +196,10 @@
     let soloTerminalName = null;
     let peekTerminalName = null;
     let hasFetchedList = false;
-    // The right-hand dock iframe carries &dock=1 alongside its solo name. Solo
-    // mode skips fetchAgentNames, so the dock's fleet snapshot would repaint
-    // the rail with default brand icons — postFleetStateToShell returns early
-    // when this flag is set (edge case 2). Everything else in solo mode is
-    // unchanged; the dock is an ordinary solo page.
-    let isDockFrame = false;
+    // The dock was previously a /terminals?…&dock=1 iframe; it is now its own
+    // document at /dock and no longer embeds /terminals iframes. The
+    // isDockFrame flag and all its guards have been removed. The /terminals
+    // route remains for the standalone Terminals panel.
     // Mode precedence: solo > kanban > team (narrower scope wins).
     let isKanbanDock = false;
     /** Team-scoped mode: when set, the sidebar and grid show only this team's
@@ -229,13 +227,12 @@
     const publishedMode = window.__SB_TERMINAL_MODE__;
     if (!publishedMode) {
         console.error('[terminals] window.__SB_TERMINAL_MODE__ is missing — terminals.html\'s'
-            + ' body-top mode script did not run. Solo/kanban/team/dock mode is UNRESOLVED and'
+            + ' body-top mode script did not run. Solo/kanban/team mode is UNRESOLVED and'
             + ' this document will render as the full grid.');
     } else {
         soloTerminalName = publishedMode.solo;
         isKanbanDock = publishedMode.kanban === true;
         teamScopeId = publishedMode.team;
-        isDockFrame = publishedMode.dock === true;
     }
 
     const PTY_HOST_ORIGIN = (document.body && document.body.dataset && document.body.dataset.ptyHostOrigin)
@@ -1004,8 +1001,8 @@
                 // exists. The shell document has no WebSocket and no
                 // transport shim, so autobanStateSync cannot reach it directly; this
                 // panel is the only surface that hears it. Mirrors
-                // postFleetStateToShell's embedded + dock guards for the same reasons.
-                if (window.parent !== window && !isDockFrame) {
+                // postFleetStateToShell's embedded guard for the same reasons.
+                if (window.parent !== window) {
                     try {
                         window.parent.postMessage({
                             type: 'missionControlArmed',
@@ -1262,14 +1259,10 @@
 
     function postFleetStateToShell() {
         if (window.parent === window) { return; }
-        // The right-hand dock is a SECOND /terminals page inside the same shell.
-        // The guard above covers pop-outs (no parent) but NOT the dock, which has
-        // one. Its snapshot comes from the same ptyListTerminals, so relaying it
-        // only adds a racing writer for the rail's fleet strip — and a WORSE one:
-        // solo mode skips fetchAgentNames, so agentLabelForRole returns '' for
-        // every role and the dock's snapshot would repaint the whole rail with
-        // default brand icons. The panel is the single relay; the dock is mute.
-        if (isDockFrame) { return; }
+        // The dock is now its own document at /dock and no longer embeds
+        // /terminals iframes, so the only /terminals page inside the shell is
+        // this one. The guard above covers pop-outs (no parent). The panel is
+        // the single relay for the rail's fleet strip.
         const terminals = fleetList.map(t => {
             let light = 'active';
             let doneStamp = 0;
@@ -1898,20 +1891,11 @@
             paneModes = ['kanban'];
         }
 
-        // Defect 1 fix: a dock frame must not inherit the main panel's
-        // pane-scoped kanban settings. The three arrays above are restored
-        // from the shared `terminals.*` keys (no dock namespace) and never
-        // re-clamped by the solo/kanban branches above, so a dock document
-        // renders against a different pane's chosen column/workspace/project.
-        // Reset them to dock-local defaults — empty for solo (no kanban panes),
-        // a single unchosen slot for the kanban dock (the missing-column default
-        // is a deliberate non-goal; see the plan's Non-goals). saveLayoutSettings
-        // already early-returns for solo/kanban-dock, so this is read-side only.
-        if (isDockFrame) {
-            kanbanPaneColumn = isKanbanDock ? [undefined] : [];
-            kanbanPaneWorkspace = isKanbanDock ? [undefined] : [];
-            kanbanPaneProject = isKanbanDock ? [''] : [];
-        }
+        // Defect 1 fix (retired dock branch): the dock is now its own
+        // document at /dock and no longer embeds /terminals iframes, so the
+        // dock-frame kanban-pane reset below no longer has a caller. The
+        // kanban-dock solo path (isKanbanDock) still applies its own
+        // single-unchosen-slot defaults in the solo/kanban branches above.
 
         // Seed the currently-active scope from the flat settings if it has no snapshot
         // yet. Without this, an install upgrading into this change loses its existing
@@ -8173,7 +8157,7 @@
         getFleetList: () => fleetList,
         getPaneAssignments: () => paneAssignments,
         getFocusedPaneIndex: () => focusedPaneIndex,
-        isDockFrame,
+        isDockFrame: false,
         ptyHostOrigin: PTY_HOST_ORIGIN,
         resyncPaneRenderer,
         startFitLadder,

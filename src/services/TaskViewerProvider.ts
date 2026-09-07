@@ -4289,6 +4289,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         this._localApiServer = new LocalApiServer({
             workspaceRoot: effectiveRoot,
             port: preferredPort ?? 0,
+            // Agent-control model credential. See the twin in bootstrap.ts: the
+            // option is declared and read but was wired by NEITHER root, so the
+            // key silently fell through to SWITCHBOARD_AGENT_API_KEY on both
+            // hosts. vscode.SecretStorage is the extension-side store.
+            encryptedSecretsStore: { get: async (key: string) => await this._context.secrets.get(key) },
             // The roster-clear busy predicate's window. Read from the same
             // setting the other three readers honour — without this wiring the
             // option is a dead seam and changing the setting changes nothing
@@ -4683,7 +4688,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             integrationsConfigured: await computeIntegrationsConfigured()
                         };
                         const result = sharedGetPanelHtmlById(id, repoRoot, currentWsRoot(), caps, getTheme());
-                        if (result && id === 'terminals' && this._terminalSessionToken) {
+                        if (result && (id === 'terminals' || id === 'dock') && this._terminalSessionToken) {
                             // Carried as a body data-attribute, NOT an inline <script>.
                             // The terminals panel serves `script-src 'nonce-<n>' 'self'`
                             // (headlessPanelHtml.getTerminalsHtml + the CSP meta tag in
