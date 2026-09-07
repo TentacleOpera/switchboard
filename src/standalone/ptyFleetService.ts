@@ -898,7 +898,7 @@ export class PtyFleetService {
         parent: ExtendedTerminalHandle,
         definitions: DelegateDefinition[],
         opts?: { teamName?: string }
-    ): Promise<{ children: ExtendedTerminalHandle[]; error?: string }> {
+    ): Promise<{ children: ExtendedTerminalHandle[]; createdNames: string[]; error?: string }> {
         // Per-team (parented) delegates count against caps. Shared members are
         // unparented and outside both caps — their count is bounded by the
         // number of team definitions, not by head starts.
@@ -906,14 +906,15 @@ export class PtyFleetService {
             .filter(d => d.scope !== 'shared')
             .reduce((n, d) => n + Math.max(1, Math.min(d.count || 1, MAX_DELEGATES_PER_PARENT)), 0);
         if (perTeamRequested > MAX_DELEGATES_PER_PARENT) {
-            return { children: [], error: `Delegate cap: ${perTeamRequested} requested, ${MAX_DELEGATES_PER_PARENT} allowed per head agent` };
+            return { children: [], createdNames: [], error: `Delegate cap: ${perTeamRequested} requested, ${MAX_DELEGATES_PER_PARENT} allowed per head agent` };
         }
         const liveDelegates = Array.from(this.terminals.values()).filter(t => t.parentInstanceId).length;
         if (liveDelegates + perTeamRequested > MAX_LIVE_DELEGATE_PTYS) {
-            return { children: [], error: `Delegate cap: ${liveDelegates} live, ${perTeamRequested} requested, ${MAX_LIVE_DELEGATE_PTYS} allowed in total` };
+            return { children: [], createdNames: [], error: `Delegate cap: ${liveDelegates} live, ${perTeamRequested} requested, ${MAX_LIVE_DELEGATE_PTYS} allowed in total` };
         }
 
         const children: ExtendedTerminalHandle[] = [];
+        const createdNames: string[] = [];
         for (const d of definitions) {
             const count = Math.max(1, Math.min(d.count || 1, MAX_DELEGATES_PER_PARENT));
 
@@ -930,12 +931,14 @@ export class PtyFleetService {
                     // heads starting concurrently do not both spawn. The chain
                     // is per-name, not global — different shared members do
                     // not block each other.
+                    let wasCreated = false;
                     try {
                         const existing = await this._sharedMemberChain(sharedName, async () => {
                             // Check for a live instance with this name.
                             const live = this.listActive().find(t => t.friendlyName === sharedName);
                             if (live) { return live; }
                             // No live instance — spawn unparented.
+                            wasCreated = true;
                             return this.create(
                                 d.role,
                                 sharedName,
@@ -948,6 +951,7 @@ export class PtyFleetService {
                             );
                         });
                         children.push(existing);
+                        if (wasCreated) { createdNames.push(existing.friendlyName); }
                     } catch (err) {
                         // Same best-effort contract as the per-team branch below:
                         // the head and any already-spawned siblings are real and
@@ -957,6 +961,7 @@ export class PtyFleetService {
                         // prevent.
                         return {
                             children,
+                            createdNames,
                             error: `Shared member '${sharedName}' failed to spawn: ${err instanceof Error ? err.message : String(err)}`
                         };
                     }
@@ -973,7 +978,7 @@ export class PtyFleetService {
                 const suffix = count > 1 ? `-${i + 1}` : '';
                 const baseName = `${parent.friendlyName}-${d.label || d.role}${suffix}`;
                 try {
-                    children.push(await this.create(
+                    const child = await this.create(
                         d.role,
                         baseName,
                         parent.cwd,
@@ -982,18 +987,21 @@ export class PtyFleetService {
                         d.startupCommand,
                         // Inherit the head's env decision — see ExtendedTerminalHandle.
                         { _isTeamMember: true, claudeInlineRendering: parent.claudeInlineRendering }
-                    ));
+                    );
+                    children.push(child);
+                    createdNames.push(child.friendlyName);
                 } catch (err) {
                     // Best-effort with a report: the parent and any already-spawned
                     // siblings are real and stay. The caller surfaces the reason.
                     return {
                         children,
+                        createdNames,
                         error: `Delegate '${baseName}' failed to spawn: ${err instanceof Error ? err.message : String(err)}`
                     };
                 }
             }
         }
-        return { children };
+        return { children, createdNames };
     }
 
     /**

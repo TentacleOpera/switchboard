@@ -253,19 +253,20 @@ export class GoPtyFleetProjection {
         parent: ExtendedTerminalHandle,
         definitions: DelegateDefinition[],
         opts?: { teamName?: string },
-    ): Promise<{ children: ExtendedTerminalHandle[]; error?: string }> {
+    ): Promise<{ children: ExtendedTerminalHandle[]; createdNames: string[]; error?: string }> {
         const perTeamRequested = definitions
             .filter(d => d.scope !== 'shared')
             .reduce((n, d) => n + Math.max(1, Math.min(d.count || 1, MAX_DELEGATES_PER_PARENT)), 0);
         if (perTeamRequested > MAX_DELEGATES_PER_PARENT) {
-            return { children: [], error: `Delegate cap: ${perTeamRequested} requested, ${MAX_DELEGATES_PER_PARENT} allowed per head agent` };
+            return { children: [], createdNames: [], error: `Delegate cap: ${perTeamRequested} requested, ${MAX_DELEGATES_PER_PARENT} allowed per head agent` };
         }
         const liveDelegates = Array.from(this.cache.values()).filter(t => t.parentInstanceId).length;
         if (liveDelegates + perTeamRequested > MAX_LIVE_DELEGATE_PTYS) {
-            return { children: [], error: `Delegate cap: ${liveDelegates} live, ${perTeamRequested} requested, ${MAX_LIVE_DELEGATE_PTYS} allowed in total` };
+            return { children: [], createdNames: [], error: `Delegate cap: ${liveDelegates} live, ${perTeamRequested} requested, ${MAX_LIVE_DELEGATE_PTYS} allowed in total` };
         }
 
         const children: ExtendedTerminalHandle[] = [];
+        const createdNames: string[] = [];
         for (const d of definitions) {
             const count = Math.max(1, Math.min(d.count || 1, MAX_DELEGATES_PER_PARENT));
             if (d.scope === 'shared') {
@@ -274,18 +275,21 @@ export class GoPtyFleetProjection {
                 for (let i = 0; i < count; i++) {
                     const suffix = count > 1 ? `-${i + 1}` : '';
                     const sharedName = `${sharedBaseName}${suffix}`;
+                    let wasCreated = false;
                     try {
                         const existing = await this._sharedMemberChain(sharedName, async () => {
                             const live = this.listActive().find(t => t.friendlyName === sharedName);
                             if (live) { return live; }
+                            wasCreated = true;
                             return this.create(d.role, sharedName, parent.cwd, parent.worktreePath, undefined, d.startupCommand, {
                                 _isTeamMember: true,
                                 claudeInlineRendering: parent.claudeInlineRendering,
                             });
                         });
                         children.push(existing);
+                        if (wasCreated) { createdNames.push(existing.friendlyName); }
                     } catch (err) {
-                        return { children, error: `Shared member '${sharedName}' failed to spawn: ${err instanceof Error ? err.message : String(err)}` };
+                        return { children, createdNames, error: `Shared member '${sharedName}' failed to spawn: ${err instanceof Error ? err.message : String(err)}` };
                     }
                 }
                 continue;
@@ -294,16 +298,18 @@ export class GoPtyFleetProjection {
                 const suffix = count > 1 ? `-${i + 1}` : '';
                 const baseName = `${parent.friendlyName}-${d.label || d.role}${suffix}`;
                 try {
-                    children.push(await this.create(
+                    const child = await this.create(
                         d.role, baseName, parent.cwd, parent.worktreePath, parent.agentInstanceId, d.startupCommand,
                         { _isTeamMember: true, claudeInlineRendering: parent.claudeInlineRendering },
-                    ));
+                    );
+                    children.push(child);
+                    createdNames.push(child.friendlyName);
                 } catch (err) {
-                    return { children, error: `Delegate '${baseName}' failed to spawn: ${err instanceof Error ? err.message : String(err)}` };
+                    return { children, createdNames, error: `Delegate '${baseName}' failed to spawn: ${err instanceof Error ? err.message : String(err)}` };
                 }
             }
         }
-        return { children };
+        return { children, createdNames };
     }
 
     public async createBatch(

@@ -321,7 +321,7 @@ export async function installGlobalQueueDoneOrder(db: any): Promise<void> {
             return orders;
         }
         const order = makeFragmentStandingOrder(
-            '', '', [STANDING_ORDER_FRAGMENT_IDS.globalCompletion], 'global',
+            '', '', [STANDING_ORDER_FRAGMENT_IDS.globalCompletion, STANDING_ORDER_FRAGMENT_IDS.subagentPolicy], 'global',
         );
         // makeStandingOrder mints a random id; overwrite with the deterministic
         // one so a re-run finds it rather than duplicating.
@@ -1403,8 +1403,8 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
         ? prompt.replace(/\{child\}/g, headName).replace(/\{teamId\}/g, groupId)
         : undefined;
     const teamFragments = opts.externalHead
-        ? [STANDING_ORDER_FRAGMENT_IDS.externalMemberCallback, STANDING_ORDER_FRAGMENT_IDS.gitSafety]
-        : [STANDING_ORDER_FRAGMENT_IDS.memberCompletion, STANDING_ORDER_FRAGMENT_IDS.memberWork, STANDING_ORDER_FRAGMENT_IDS.gitSafety];
+        ? [STANDING_ORDER_FRAGMENT_IDS.externalMemberCallback, STANDING_ORDER_FRAGMENT_IDS.gitSafety, STANDING_ORDER_FRAGMENT_IDS.subagentPolicy]
+        : [STANDING_ORDER_FRAGMENT_IDS.memberCompletion, STANDING_ORDER_FRAGMENT_IDS.memberWork, STANDING_ORDER_FRAGMENT_IDS.gitSafety, STANDING_ORDER_FRAGMENT_IDS.subagentPolicy];
 
     // ── Resolve pair-scoped relationships per child ───────────────────
     // Walk the member definitions and children together — children are in the
@@ -1532,6 +1532,7 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
                             STANDING_ORDER_FRAGMENT_IDS.headCompletion,
                             STANDING_ORDER_FRAGMENT_IDS.headNext,
                             STANDING_ORDER_FRAGMENT_IDS.orchestratorReport,
+                            STANDING_ORDER_FRAGMENT_IDS.subagentPolicy,
                         ], 'team-head', groupId);
                     next.push({ ...headOrder, id: `composed-head:${groupId}` });
                 }
@@ -1847,6 +1848,7 @@ export function migrateSystemOrdersToFragments(orders: StandingOrder[]): Standin
         STANDING_ORDER_FRAGMENT_IDS.memberWork,
         STANDING_ORDER_FRAGMENT_IDS.externalMemberCallback,
         STANDING_ORDER_FRAGMENT_IDS.gitSafety,
+        STANDING_ORDER_FRAGMENT_IDS.subagentPolicy,
     ];
     const headFragments = [
         STANDING_ORDER_FRAGMENT_IDS.codingHead,
@@ -1855,6 +1857,7 @@ export function migrateSystemOrdersToFragments(orders: StandingOrder[]): Standin
         STANDING_ORDER_FRAGMENT_IDS.headCompletion,
         STANDING_ORDER_FRAGMENT_IDS.headNext,
         STANDING_ORDER_FRAGMENT_IDS.orchestratorReport,
+        STANDING_ORDER_FRAGMENT_IDS.subagentPolicy,
     ];
     const seen = new Set<string>();
     const next: StandingOrder[] = [];
@@ -1870,7 +1873,7 @@ export function migrateSystemOrdersToFragments(orders: StandingOrder[]): Standin
             seen.add(key);
             fragments = scope === 'team' ? memberFragments : headFragments;
         } else if (scope === 'global' && order.id === GLOBAL_QUEUE_ORDER_ID) {
-            fragments = [STANDING_ORDER_FRAGMENT_IDS.globalCompletion];
+            fragments = [STANDING_ORDER_FRAGMENT_IDS.globalCompletion, STANDING_ORDER_FRAGMENT_IDS.subagentPolicy];
         }
         if (!fragments) { next.push(order); continue; }
         const sameFragments = Array.isArray(order.fragments)

@@ -36,6 +36,8 @@ export interface AgentGroupCreateResult {
     success: boolean;
     terminal?: { friendlyName?: string;[k: string]: any };
     delegates?: Array<{ friendlyName: string;[k: string]: any }>;
+    /** Names of delegates actually spawned (not reused). Absent when unknown. */
+    createdDelegates?: string[];
     delegateError?: string;
     error?: string;
 }
@@ -61,7 +63,10 @@ export interface InstantiateAgentGroupOptions {
 
 export interface InstantiateAgentGroupResult {
     success: boolean;
+    /** Names of seats actually created on this call (head + newly-spawned delegates, not reused). */
     created?: string[];
+    /** Full roster: head + all delegates (created or reused). Callers that need the team roster, not the creation list, read this. */
+    roster?: string[];
     workers?: any[];
     delegateError?: string;
     error?: string;
@@ -144,7 +149,15 @@ export async function instantiateAgentGroupCore(
 
     const headName = result.terminal?.friendlyName || group?.name;
     const workers: any[] = Array.isArray(result.delegates) ? result.delegates : [];
-    const created: string[] = [headName, ...workers.map((w: any) => w.friendlyName)];
+    // `created` lists only seats actually created on this call — the head
+    // (always created) plus delegates that were spawned, not reused. A shared
+    // member that already had a live instance is in `roster` but not `created`.
+    // `createdDelegates` is absent when the host cannot distinguish (e.g. the
+    // Go pty host), in which case only the head is listed — the safe default,
+    // since the roster is available separately.
+    const createdDelegates: string[] = Array.isArray(result.createdDelegates) ? result.createdDelegates : [];
+    const created: string[] = [headName, ...createdDelegates];
+    const roster: string[] = [headName, ...workers.map((w: any) => w.friendlyName)];
 
     onCreated?.();
 
@@ -164,6 +177,7 @@ export async function instantiateAgentGroupCore(
         return {
             success: true,
             created,
+            roster,
             workers,
             delegateError: result.delegateError || undefined,
             error: `Terminals created but team wiring failed: ${wired.error}`,
@@ -174,6 +188,7 @@ export async function instantiateAgentGroupCore(
     return {
         success: true,
         created,
+        roster,
         workers,
         delegateError: result.delegateError || undefined,
         ...(wired.groupId ? { teamGroupId: wired.groupId } : {}),

@@ -9,7 +9,7 @@
  * must not read its own orientation as a start signal.
  */
 export const ORIENTATION_PREAMBLE =
-    'Startup orientation — your standing orders follow. Acknowledge them in one line and wait; do not begin any work until you are given a task.';
+    'Startup orientation — your standing orders follow. Acknowledge them in one line and wait for a task; if you already have one, proceed with it — the orders are the point, not the wait.';
 
 /**
  * Quiescence numbers, lifted from the webview's startup curtain
@@ -30,7 +30,7 @@ export const ORIENTATION_NO_OUTPUT_MS = 4000;  // no output at all => nothing co
  * an-idle-heartbeat-eats-two-thirds-of-the-scrollback-and-the-seat-looks-dead
  * and prompt-delivery-should-be-patient-not-precise.md.
  */
-export const ORIENTATION_MAX_WAIT_MS = 15000;  // hard cap: always relay eventually
+export const ORIENTATION_MAX_WAIT_MS = 15000;  // hard cap: relay if still idle, else log the drop
 export const ORIENTATION_POLL_MS = 250;
 
 export interface SeatActivitySnapshot {

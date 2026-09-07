@@ -418,6 +418,15 @@ function selectOrders(
 export interface StandingOrderRenderOptions {
     orchestratorPresent?: boolean;
     attended?: boolean;
+    /**
+     * The seat's resolved subagent policy, threaded from
+     * `KanbanProvider.resolveSeatPromptOptions` so the subagent-policy standing
+     * order fragment composes the canonical directive into the standing-orders
+     * block on the same delivery channel as git safety. Absent → `'default'`
+     * → the fragment emits nothing (a seat with no policy set gains no order).
+     */
+    subagentPolicy?: 'noSubagents' | 'useSubagents' | 'customSubagent' | 'default';
+    customSubagentName?: string;
 }
 
 function compositionContext(
@@ -444,6 +453,8 @@ function compositionContext(
         orchestratorPresent: options.orchestratorPresent === true,
         attended: options.attended !== false,
         externalHead: group?.externalHead === true,
+        subagentPolicy: options.subagentPolicy,
+        customSubagentName: options.customSubagentName,
     };
 }
 

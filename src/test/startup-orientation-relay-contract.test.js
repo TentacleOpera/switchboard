@@ -52,6 +52,15 @@ const BOOTSTRAP_SRC = fs.readFileSync(
 const TERMINALS_JS_SRC = fs.readFileSync(
     path.join(__dirname, '..', 'webview', 'terminals.js'), 'utf8'
 );
+const AGENT_GROUP_SRC = fs.readFileSync(
+    path.join(__dirname, '..', 'services', 'agentGroupInstantiation.ts'), 'utf8'
+);
+const PTY_FLEET_SERVICE_SRC = fs.readFileSync(
+    path.join(__dirname, '..', 'standalone', 'ptyFleetService.ts'), 'utf8'
+);
+const GO_PTY_FLEET_PROJECTION_SRC = fs.readFileSync(
+    path.join(__dirname, '..', 'services', 'goPtyFleetProjection.ts'), 'utf8'
+);
 
 let passed = 0;
 let failed = 0;
@@ -216,70 +225,114 @@ test('SOURCE: orientationOnly is stripped at the HTTP boundary beside addonsComp
 });
 
 // ── 4. SOURCE: both hosts relay on ptyCreateTerminal (head + delegates) and ptyCreateBatch ─
+//
+// The relay fires for hand-driven seats (a planner/controller the operator types
+// into). Team seats are suppressed via `suppressStartupOrientation` — a
+// dispatch-driven seat gets its orders with the work dispatch and via the
+// after-clear envelope, never from the startup orientation.
 
-test('SOURCE: extension host relays on ptyCreateTerminal for the head and its delegates', () => {
+test('SOURCE: extension host relays on ptyCreateTerminal, gated by suppressStartupOrientation', () => {
     const callIdx = TASK_VIEWER_SRC.indexOf("verb === 'ptyCreateTerminal' && result && result.success !== false && result.terminal?.friendlyName");
     assert.ok(callIdx > -1, 'extension host must relay after a successful ptyCreateTerminal');
     const window = TASK_VIEWER_SRC.slice(callIdx, callIdx + 320);
     assert.ok(/_relayStartupOrientation/.test(window), 'the call must invoke _relayStartupOrientation');
     assert.ok(/result\.terminal\.friendlyName/.test(window), 'the head terminal must be relayed');
-    assert.ok(/result\.delegates/.test(window),
-        'delegates (spawned team children) must be relayed too — a team start orients every seat');
+    assert.ok(/suppressStartupOrientation.*!==\s*true/.test(window),
+        'the ptyCreateTerminal relay must be gated by suppressStartupOrientation — team seats are dispatch-driven');
 });
 
-test('SOURCE: extension host relays on ptyCreateBatch', () => {
+test('SOURCE: extension host relays on ptyCreateBatch, gated by suppressStartupOrientation', () => {
     const callIdx = TASK_VIEWER_SRC.indexOf("verb === 'ptyCreateBatch' && result && Array.isArray(result.created)");
     assert.ok(callIdx > -1, 'extension host must relay after a successful ptyCreateBatch');
-    const window = TASK_VIEWER_SRC.slice(callIdx, callIdx + 200);
+    const window = TASK_VIEWER_SRC.slice(callIdx, callIdx + 250);
     assert.ok(/_relayStartupOrientation/.test(window), 'the call must invoke _relayStartupOrientation');
     assert.ok(/result\.created\.map/.test(window), 'every created seat in the batch must be relayed');
+    assert.ok(/suppressStartupOrientation.*!==\s*true/.test(window),
+        'the ptyCreateBatch relay must be gated by suppressStartupOrientation');
 });
 
-test('SOURCE: standalone host relays on ptyCreateTerminal for the head and its delegates', () => {
+test('SOURCE: standalone host relays on ptyCreateTerminal, gated by suppressStartupOrientation', () => {
     const callIdx = BOOTSTRAP_SRC.indexOf('relayStartupOrientation([terminal.friendlyName, ...spawned.children.map(c => c.friendlyName)]');
     assert.ok(callIdx > -1, 'standalone host must relay after ptyCreateTerminal, covering the head and spawned children');
+    const window = BOOTSTRAP_SRC.slice(callIdx - 80, callIdx + 80);
+    assert.ok(/suppressStartupOrientation/.test(window),
+        'the standalone ptyCreateTerminal relay must be gated by suppressStartupOrientation');
 });
 
-test('SOURCE: standalone host relays on ptyCreateBatch', () => {
-    // The batch arm relays over result.created.
+test('SOURCE: standalone host relays on ptyCreateBatch, gated by suppressStartupOrientation', () => {
     const callIdx = BOOTSTRAP_SRC.indexOf('relayStartupOrientation(result.created.map((c: any) => c.friendlyName))');
     assert.ok(callIdx > -1, 'standalone host must relay after ptyCreateBatch over result.created');
+    const window = BOOTSTRAP_SRC.slice(callIdx - 120, callIdx + 80);
+    assert.ok(/suppressStartupOrientation/.test(window),
+        'the standalone ptyCreateBatch relay must be gated by suppressStartupOrientation');
 });
 
-test('SOURCE: standalone setAgentGroupInstantiator relays only after team wiring resolves', () => {
+test('SOURCE: standalone strips suppressStartupOrientation at the ptyCreateTerminal boundary', () => {
+    const caseStart = BOOTSTRAP_SRC.indexOf("case 'ptyCreateTerminal':");
+    const caseEnd = BOOTSTRAP_SRC.indexOf("case 'ptyCreateBatch':", caseStart);
+    const caseBody = BOOTSTRAP_SRC.slice(caseStart, caseEnd);
+    assert.ok(/suppressStartupOrientation\s*=\s*payload\?\.suppressStartupOrientation\s*===\s*true/.test(caseBody),
+        'standalone ptyCreateTerminal must capture suppressStartupOrientation from the payload');
+    assert.ok(/delete\s+payload\.suppressStartupOrientation/.test(caseBody),
+        'standalone ptyCreateTerminal must strip suppressStartupOrientation before it reaches the fleet');
+});
+
+test('SOURCE: standalone strips suppressStartupOrientation at the ptyCreateBatch boundary', () => {
+    const caseStart = BOOTSTRAP_SRC.indexOf("case 'ptyCreateBatch':");
+    const caseEnd = BOOTSTRAP_SRC.indexOf("case 'ptyCloseTerminal':", caseStart);
+    const caseBody = BOOTSTRAP_SRC.slice(caseStart, caseEnd);
+    assert.ok(/suppressStartupOrientation\s*=\s*payload\?\.suppressStartupOrientation\s*===\s*true/.test(caseBody),
+        'standalone ptyCreateBatch must capture suppressStartupOrientation from the payload');
+    assert.ok(/delete\s+payload\.suppressStartupOrientation/.test(caseBody),
+        'standalone ptyCreateBatch must strip suppressStartupOrientation before it reaches the fleet');
+});
+
+// ── 4b. SOURCE: team seats receive NO orientation in either host ─
+
+test('SOURCE: standalone setAgentGroupInstantiator does NOT relay startup orientation', () => {
     const callbackStart = BOOTSTRAP_SRC.indexOf('setAgentGroupInstantiator(async (group: any, groupRoot: string) => {');
     assert.ok(callbackStart > -1, 'setAgentGroupInstantiator callback must be present in bootstrap');
     const instantiateIdx = BOOTSTRAP_SRC.indexOf('const result = await instantiateAgentGroupCore({', callbackStart);
-    const relayIdx = BOOTSTRAP_SRC.indexOf('relayStartupOrientation(result.created);', instantiateIdx);
-    const returnIdx = BOOTSTRAP_SRC.indexOf('return result;', relayIdx);
+    const callbackEnd = BOOTSTRAP_SRC.indexOf('});', instantiateIdx);
+    const callbackBody = BOOTSTRAP_SRC.slice(instantiateIdx, callbackEnd);
     assert.ok(instantiateIdx > callbackStart, 'the callback must await instantiateAgentGroupCore');
-    assert.ok(relayIdx > instantiateIdx,
-        'the startup relay must run after instantiateAgentGroupCore resolves and wireSpawnedTeam has installed orders');
-    assert.ok(returnIdx > relayIdx, 'the wired result must return after the relay is scheduled');
+    assert.ok(!/relayStartupOrientation/.test(callbackBody),
+        'a team started from the TEAMS tab is dispatch-driven — no startup orientation relay');
 });
 
-test('SOURCE: external-headed teams relay after wiring in both hosts', () => {
-    const extensionStart = TASK_VIEWER_SRC.indexOf('const result = await instantiateExternalHeadedTeam({');
-    const extensionRelay = TASK_VIEWER_SRC.indexOf('this._relayStartupOrientation(result.workers.map', extensionStart);
-    assert.ok(extensionStart > -1 && extensionRelay > extensionStart,
-        'extension external-team workers must relay only after instantiateExternalHeadedTeam resolves');
-
-    const standaloneStart = BOOTSTRAP_SRC.indexOf('const result = await instantiateExternalHeadedTeam({');
-    const standaloneRelay = BOOTSTRAP_SRC.indexOf('relayStartupOrientation(result.workers.map', standaloneStart);
-    assert.ok(standaloneStart > -1 && standaloneRelay > standaloneStart,
-        'standalone external-team workers must relay only after instantiateExternalHeadedTeam resolves');
+test('SOURCE: extension instantiateAgentGroup passes suppressStartupOrientation: true', () => {
+    const fnStart = TASK_VIEWER_SRC.indexOf('public async instantiateAgentGroup(');
+    const fnEnd = TASK_VIEWER_SRC.indexOf('\n    public ', fnStart + 10);
+    const fnBody = TASK_VIEWER_SRC.slice(fnStart, fnEnd);
+    assert.ok(/suppressStartupOrientation:\s*true/.test(fnBody),
+        'extension instantiateAgentGroup must pass suppressStartupOrientation: true — team seats are dispatch-driven');
 });
 
-test('SOURCE: extension external-team workers suppress the pre-wiring create relay', () => {
+test('SOURCE: standalone external-headed team does NOT relay startup orientation', () => {
+    const externalStart = BOOTSTRAP_SRC.indexOf('const result = await instantiateExternalHeadedTeam({');
+    const externalEnd = BOOTSTRAP_SRC.indexOf('return result;', externalStart);
+    const body = BOOTSTRAP_SRC.slice(externalStart, externalEnd);
+    assert.ok(externalStart > -1, 'standalone external-headed team path must be present');
+    assert.ok(!/relayStartupOrientation/.test(body),
+        'external-headed team workers are dispatch-driven — no startup orientation relay');
+});
+
+test('SOURCE: extension external-headed team does NOT relay startup orientation', () => {
     const externalStart = TASK_VIEWER_SRC.indexOf('const result = await instantiateExternalHeadedTeam({');
-    const externalRelay = TASK_VIEWER_SRC.indexOf('this._relayStartupOrientation(result.workers.map', externalStart);
-    const body = TASK_VIEWER_SRC.slice(externalStart, externalRelay);
+    const externalEnd = TASK_VIEWER_SRC.indexOf('return result;', externalStart);
+    const body = TASK_VIEWER_SRC.slice(externalStart, externalEnd);
+    assert.ok(externalStart > -1, 'extension external-headed team path must be present');
+    assert.ok(!/_relayStartupOrientation/.test(body),
+        'extension external-headed team workers are dispatch-driven — no startup orientation relay');
     assert.ok(/suppressStartupOrientation:\s*true/.test(body),
-        'external-team ptyCreateTerminal calls must not race a relay ahead of wireSpawnedTeam');
-    assert.ok(TASK_VIEWER_SRC.includes('payload?.suppressStartupOrientation !== true'),
-        'the ptyCreateTerminal relay gate must honour the internal suppression flag');
+        'external-team ptyCreateTerminal calls must pass suppressStartupOrientation: true');
+});
+
+test('SOURCE: extension HTTP boundary strips suppressStartupOrientation', () => {
     assert.ok(TASK_VIEWER_SRC.includes('payload.suppressStartupOrientation !== undefined'),
         'the HTTP boundary must strip the internal suppression flag');
+    assert.ok(TASK_VIEWER_SRC.includes('payload?.suppressStartupOrientation !== true'),
+        'the ptyCreateTerminal relay gate must honour the internal suppression flag');
 });
 
 // ── 5. SOURCE: every relay call site is fire-and-forget (void-ed or .catch-ed) ─
@@ -303,15 +356,69 @@ test('SOURCE: _relayStartupOrientation voids and .catch-es every per-name relay'
 });
 
 test('SOURCE: standalone relayStartupOrientation voids and .catch-es every per-name relay', () => {
-    const fnStart = BOOTSTRAP_SRC.indexOf('const relayStartupOrientation = (names: string[]): void => {');
+    const fnStart = BOOTSTRAP_SRC.indexOf('const relayStartupOrientation = async (names: string[]): Promise<void> => {');
     const fnEnd = BOOTSTRAP_SRC.indexOf('\n    const secrets', fnStart);
     const fnBody = BOOTSTRAP_SRC.slice(fnStart, fnEnd);
-    assert.ok(/void\s*\(async/.test(fnBody), 'each relay must be void-ed (fire-and-forget)');
+    assert.ok(fnStart > -1, 'standalone relayStartupOrientation must be defined');
     assert.ok(/\.catch\(/.test(fnBody), 'each relay must self-catch');
     assert.ok(/clearBeforePrompt:\s*false/.test(fnBody), 'clearBeforePrompt must be false on the relay path');
     // The standalone relay disables the seat block and passes orientationOnly=true.
     assert.ok(/,\s*true,\s*false,\s*undefined,\s*false,\s*true\)/.test(fnBody),
         'the standalone relay must apply orders only, without consuming seat-block cache state');
+});
+
+// ── 5b. SOURCE: send-time dispatch check — orientation dropped if work arrived ─
+
+test('SOURCE: standalone relayStartupOrientation drops orientation when promptCount > 0', () => {
+    const fnStart = BOOTSTRAP_SRC.indexOf('const relayStartupOrientation = async (names: string[]): Promise<void> => {');
+    const fnEnd = BOOTSTRAP_SRC.indexOf('\n    const secrets', fnStart);
+    const fnBody = BOOTSTRAP_SRC.slice(fnStart, fnEnd);
+    assert.ok(/promptCount\s*>\s*0/.test(fnBody),
+        'standalone relay must check promptCount at send time and drop orientation if work arrived');
+    assert.ok(/dropped/.test(fnBody),
+        'standalone relay must log the drop rather than delivering orientation onto a dispatched seat');
+});
+
+test('SOURCE: extension _relayStartupOrientation drops orientation when promptCount > 0', () => {
+    const fnStart = TASK_VIEWER_SRC.indexOf('private _relayStartupOrientation(names: string[]): void {');
+    const fnEnd = TASK_VIEWER_SRC.indexOf('\n    private ', fnStart + 10);
+    const fnBody = TASK_VIEWER_SRC.slice(fnStart, fnEnd);
+    assert.ok(/promptCount\s*>\s*0/.test(fnBody),
+        'extension relay must check promptCount at send time and drop orientation if work arrived');
+    assert.ok(/dropped/.test(fnBody),
+        'extension relay must log the drop rather than delivering orientation onto a dispatched seat');
+});
+
+// ── 5c. SOURCE: ORIENTATION_PREAMBLE softened — no longer "do not begin any work" ─
+
+test('SOURCE: ORIENTATION_PREAMBLE does not imperatively forbid work', () => {
+    assert.ok(!/do not begin any work/.test(STARTUP_ORIENTATION_SRC),
+        'the preamble must not imperatively tell a seat not to begin work — a seat with a task must proceed');
+    assert.ok(/if you already have one, proceed/.test(STARTUP_ORIENTATION_SRC),
+        'the preamble must soften the wait so a seat that already has a task proceeds with it');
+});
+
+// ── 5d. SOURCE: agentGroupInstantiation created lists only actually-created seats ─
+
+test('SOURCE: instantiateAgentGroupCore returns created (actually-created) and roster (full)', () => {
+    const fnStart = AGENT_GROUP_SRC.indexOf('export async function instantiateAgentGroupCore(');
+    const fnEnd = AGENT_GROUP_SRC.indexOf('\nexport ', fnStart + 10);
+    const fnBody = AGENT_GROUP_SRC.slice(fnStart, fnEnd);
+    assert.ok(/const createdDelegates/.test(fnBody),
+        'instantiateAgentGroupCore must read createdDelegates from the create result');
+    assert.ok(/const created: string\[\] = \[headName, \.\.\.createdDelegates\]/.test(fnBody),
+        'created must list head + actually-created delegates, not the full roster');
+    assert.ok(/const roster: string\[\] = \[headName, \.\.\.workers\.map/.test(fnBody),
+        'roster must list head + all delegates (created or reused) — callers that need the team read this');
+    assert.ok(/roster/.test(fnBody.replace(/const roster[^\n]*/, '')),
+        'roster must be returned in the result');
+});
+
+test('SOURCE: spawnDelegates returns createdNames (actually-spawned only)', () => {
+    assert.ok(/createdNames: string\[\]/.test(PTY_FLEET_SERVICE_SRC),
+        'PtyFleetService.spawnDelegates must return createdNames — names of delegates actually spawned, not reused');
+    assert.ok(/createdNames: string\[\]/.test(GO_PTY_FLEET_PROJECTION_SRC),
+        'GoPtyFleetProjection.spawnDelegates must return createdNames — names of delegates actually spawned, not reused');
 });
 
 // ── 6. SOURCE: quiescence numbers are pinned to the webview curtain (drift pin) ─

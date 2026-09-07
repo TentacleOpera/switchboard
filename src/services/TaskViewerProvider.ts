@@ -87,7 +87,8 @@ import {
     roleTakesDispatchDirectives,
     validateDispatchPayload,
     PHONE_A_FRIEND_DONE_DIRECTIVE,
-    TEAM_BATCH_PLAN_CAP
+    TEAM_BATCH_PLAN_CAP,
+    type SeatDirectiveOptions,
 } from './agentPromptBuilder';
 import { buildAccuracyDirective, resolveProtocolSet, DIRECTIVE_PROTOCOL_NAMES } from './protocolDirectives';
 import type { ProtocolResolution } from './protocolDirectives';
@@ -1125,20 +1126,30 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         ? this._kanbanProvider._getScopedSetting<TerminalGroup[]>(TERMINALS_GROUPS_KEY, [])
                         : (db ? await db.getConfigJson<TerminalGroup[]>(TERMINALS_GROUPS_KEY, []) : []);
 
+                    // Hoist seat-options resolution above the seat-block branch so
+                    // BOTH the seat-block composition and the standing-orders
+                    // composition share one resolution. The subagent policy
+                    // threaded into `applyStandingOrders` below is what gives the
+                    // policy the same durable delivery channel as git safety
+                    // (re-delivered on establish and after clear). Resolved only
+                    // when at least one consumer may run.
+                    let seatOpts: SeatDirectiveOptions | null = null;
+                    const targetRow = roleRows.find((t: any) => t.friendlyName === payload.name);
+                    const role = targetRow?.role || '';
+                    if ((applySeatBlock || applySO) && this._kanbanProvider) {
+                        try {
+                            seatOpts = await this._kanbanProvider.resolveSeatPromptOptions(role);
+                        } catch { /* a degraded prompt beats a lost dispatch */ }
+                    }
+
                     // Seat block — resolve role from the terminal record, build
                     // the block from the shared resolver, and append it AFTER
                     // stripping any inbound SO block. An unresolved role (empty
                     // string, unknown name) falls back to workspace defaults
                     // (guardrail ON) — never an empty block.
                     if (applySeatBlock) {
-                        let role = '';
                         try {
                             data = stripStandingOrdersBlock(data);
-                            const targetRow = roleRows.find((t: any) => t.friendlyName === payload.name);
-                            role = targetRow?.role || '';
-                            const seatOpts = this._kanbanProvider
-                                ? await this._kanbanProvider.resolveSeatPromptOptions(role)
-                                : null;
                             // Team-commit gate: a non-head member of a live team
                             // is forced to dontCommit (it reports to its head); the
                             // head is forced to whenDone (it closes the body). The
@@ -1251,7 +1262,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                 }
                             }
                             const beforeSO = data;
-                            data = applyStandingOrders(data, payload.name, effectiveOrders, live, groups || [], roleMap);
+                            data = applyStandingOrders(data, payload.name, effectiveOrders, live, groups || [], roleMap, {
+                                subagentPolicy: seatOpts?.subagentPolicy,
+                                customSubagentName: seatOpts?.customSubagentName,
+                            });
                             soBlockAdded = data !== beforeSO;
                         }
                     }
@@ -1397,6 +1411,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * terminal is the product, and a relay that fails must cost nothing.
      * The no-orders decision is made inside _ptyHostVerb (orientationOnly), so
      * this method never resolves standing orders itself.
+     *
+     * The orientation is for a seat a human will prompt by hand — a planner or
+     * controller the operator types into. A dispatch-driven seat (a team coder,
+     * a lead) never receives one: every work dispatch attaches the standing
+     * orders by default, and the after-clear envelope restores them via the
+     * reserved `orders-refresh` kind. Team seats are suppressed at every call
+     * site via `suppressStartupOrientation`.
      */
     private _relayStartupOrientation(names: string[]): void {
         for (const name of names) {
@@ -1409,6 +1430,18 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     return row ? { lastDataAt: row.lastDataAt || 0, status: row.status || '' } : null;
                 });
                 if (!ok) { return; }
+                // Send-time dispatch check: if the seat has already received a
+                // prompt (promptCount > 0), a dispatch arrived during the
+                // quiescence wait. The hard cap means "send if still idle", not
+                // "send regardless" — log the drop rather than delivering an
+                // orientation onto a seat that already has work.
+                const listed = await this._ptyHostVerb('ptyListTerminals', {});
+                const rows = [...(listed?.terminals || []), ...(listed?.hiddenTerminals || [])];
+                const row = rows.find((t: any) => t?.friendlyName === name);
+                if (row && typeof row.promptCount === 'number' && row.promptCount > 0) {
+                    console.log(`[TaskViewerProvider] Startup orientation for '${name}' dropped: seat already dispatched (promptCount=${row.promptCount}).`);
+                    return;
+                }
                 await this._ptyHostVerb('ptySendPrompt', {
                     name,
                     data: ORIENTATION_PREAMBLE,
@@ -2551,7 +2584,26 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 if (base && base !== name) { roleMap.set(base, info.role); }
             }
 
-            const block = renderStandaloneOrdersBlock(orders, terminalName, live, groups || [], roleMap);
+            // Resolve the seat's subagent policy so the subagent-policy standing
+            // order fragment composes into the establish/clear block — the same
+            // durable channel git safety uses. The role argument is '' on the
+            // clear path (deliverStandingOrdersAfterClear); fall back to the
+            // roleMap lookup so a cleared seat still gets its policy.
+            let subagentPolicy: SeatDirectiveOptions['subagentPolicy'] | undefined;
+            let customSubagentName: string | undefined;
+            if (this._kanbanProvider) {
+                try {
+                    const resolvedRole = role || roleMap.get(terminalName) || '';
+                    const seatOpts = await this._kanbanProvider.resolveSeatPromptOptions(resolvedRole);
+                    subagentPolicy = seatOpts.subagentPolicy;
+                    customSubagentName = seatOpts.customSubagentName;
+                } catch { /* a degraded block beats a lost policy */ }
+            }
+
+            const block = renderStandaloneOrdersBlock(orders, terminalName, live, groups || [], roleMap, {
+                subagentPolicy,
+                customSubagentName,
+            });
             if (block === null) { return; }
 
             // After a clear, wrap the block in a non-action envelope so the
@@ -4141,7 +4193,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     ...(Array.isArray(result.delegates) ? result.delegates.map((d: any) => d?.friendlyName) : []),
                 ].filter(Boolean));
             }
-            if (verb === 'ptyCreateBatch' && result && Array.isArray(result.created)) {
+            if (verb === 'ptyCreateBatch' && result && Array.isArray(result.created)
+                && payload?.suppressStartupOrientation !== true) {
                 this._relayStartupOrientation(result.created.map((c: any) => c?.friendlyName).filter(Boolean));
             }
             if (verb === 'ptyListTerminals' && result && result.success !== false && Array.isArray(result.terminals)) {
@@ -13767,6 +13820,11 @@ Each plan file must include:
                 claudeInlineRendering: vscode.workspace
                     .getConfiguration('switchboard')
                     .get<boolean>('terminal.claudeInlineRendering', true),
+                // Team seats are dispatch-driven — suppress the startup
+                // orientation. This call bypasses handlePtyVerb (and its
+                // relay gate), so the flag is belt-and-suspenders: it prevents
+                // a future routing change from accidentally enabling the relay.
+                suppressStartupOrientation: true,
             }),
             // Bypassing handlePtyVerb also skips its post-create hook, which is the
             // sole writer of the `runtime.terminals` registry mirror in this host.
@@ -13870,9 +13928,13 @@ Each plan file must include:
             },
             onCreated: () => { void this._updatePtyMirrorRegistry?.(db); },
         });
-        if (result.success && Array.isArray(result.workers)) {
-            this._relayStartupOrientation(result.workers.map((worker: any) => worker.friendlyName));
-        }
+        // No startup orientation relay: external-headed team workers are
+        // dispatch-driven — the head prompt file carries their standing orders
+        // and every dispatch attaches them. Each worker is already created with
+        // suppressStartupOrientation: true (above), which gates the
+        // ptyCreateTerminal relay in handlePtyVerb. Relaying here too bypassed
+        // that gate and delivered the orientation onto seats that already have
+        // work.
         return result;
     }
 

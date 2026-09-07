@@ -28,6 +28,7 @@ import {
     validateDispatchPayload,
     partitionPlansByFeature,
     TEAM_BATCH_PLAN_CAP,
+    type SeatDirectiveOptions,
 } from '../services/agentPromptBuilder';
 import { resolveProtocolSet } from '../services/protocolDirectives';
 import type { ProtocolResolution } from '../services/protocolDirectives';
@@ -477,16 +478,25 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                 ? kanbanProvider._getScopedSetting<TerminalGroup[]>(TERMINALS_GROUPS_KEY, [])
                 : await db.getConfigJson<TerminalGroup[]>(TERMINALS_GROUPS_KEY, []);
         } catch { /* inTeam stays false — a degraded prompt beats a lost dispatch */ }
+        // Hoist seat-options resolution above the seat-block branch so BOTH the
+        // seat-block composition and the standing-orders composition share one
+        // resolution. The subagent policy threaded into `applyStandingOrders`
+        // below is what gives the policy the same durable delivery channel as
+        // git safety (re-delivered on establish and after clear) — without it,
+        // a `noSubagents` seat loses the policy on the orientation relay path,
+        // which runs with `applySeatBlock=false, applyOrders=true`. Resolved
+        // only when at least one consumer may run; a machine-origin delivery
+        // skips both and skips this read too.
+        let seatOpts: SeatDirectiveOptions | null = null;
+        if ((applySeatBlock || applyOrders) && kanbanProvider) {
+            try {
+                const role = handle.role || '';
+                seatOpts = await kanbanProvider.resolveSeatPromptOptions(role);
+            } catch { /* a degraded prompt beats a lost dispatch */ }
+        }
         if (applySeatBlock) {
             try {
                 out = stripStandingOrdersBlock(out);
-                // Role comes straight off the terminal handle — no IPC needed.
-                // An unresolved role (empty string) falls back to workspace
-                // defaults (guardrail ON) — never an empty block.
-                const role = handle.role || '';
-                const seatOpts = kanbanProvider
-                    ? await kanbanProvider.resolveSeatPromptOptions(role)
-                    : null;
                 // Team-commit gate: a non-head member of a live team is forced
                 // to dontCommit (it reports to its head); the head is forced to
                 // whenDone (it closes the body). The gate MUST be symmetric —
@@ -573,7 +583,10 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                             roleMap.set(h.friendlyName, h.role);
                         }
                     }
-                    out = applyStandingOrders(out, handle.friendlyName, effectiveOrders, live, groups || [], roleMap);
+                    out = applyStandingOrders(out, handle.friendlyName, effectiveOrders, live, groups || [], roleMap, {
+                        subagentPolicy: seatOpts?.subagentPolicy,
+                        customSubagentName: seatOpts?.customSubagentName,
+                    });
                     soBlockAdded = out !== beforeSO;
                 }
             } catch { /* a degraded prompt beats a lost dispatch */ }
@@ -685,6 +698,17 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         return receipt;
     };
 
+    // The startup orientation is for a seat a human will prompt by hand — a
+    // planner or controller the operator types into. A dispatch-driven seat
+    // (a team coder, a lead) never receives one: every work dispatch attaches
+    // the standing orders by default, and the after-clear envelope restores
+    // them via the reserved `orders-refresh` kind. The orientation adds only a
+    // hold instruction in a window where a dispatch-driven seat has no work to
+    // hold off from, and — observed 2026-09-04 — it can land on a mid-clear
+    // CLI as literal bracketed-paste escape sequences. Team seats are
+    // suppressed at every call site; the remaining call sites (ptyCreateTerminal,
+    // ptyCreateBatch) serve hand-driven seats and honour `suppressStartupOrientation`
+    // for parity with the extension host.
     const relayStartupOrientation = async (names: string[]): Promise<void> => {
         // Awaitable so the clear callback can serialize the standing-orders relay
         // against the next dispatch. Creation-site callers keep `void` — awaiting
@@ -699,6 +723,15 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                 if (!ok) { return; }
                 const handle = ptyFleetService.get(name);
                 if (!handle || handle.status !== 'active') { return; }
+                // Send-time dispatch check: if the seat has already received a
+                // prompt (promptCount > 0), a dispatch arrived during the
+                // quiescence wait. The hard cap means "send if still idle", not
+                // "send regardless" — log the drop rather than delivering an
+                // orientation onto a seat that already has work.
+                if (handle.promptCount > 0) {
+                    console.log(`[bootstrap] Startup orientation for '${name}' dropped: seat already dispatched (promptCount=${handle.promptCount}).`);
+                    return;
+                }
                 await deliverPrompt(handle, ORIENTATION_PREAMBLE, { clearBeforePrompt: false }, true, false, undefined, false, true);
             })().catch(err => console.warn(`[bootstrap] Startup orientation relay for '${name}' failed:`, err))
         ));
@@ -2072,6 +2105,13 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // the boot root and reports success. Same UI, same behaviour required.
                     const targetCwd = payload.cwd
                         || (!payload.worktreePath && payload.parentRoot ? payload.parentRoot : undefined);
+                    // Capture and strip the host-only suppressStartupOrientation flag —
+                    // same boundary strip as TaskViewerProvider.handlePtyVerb. The flag
+                    // tells this relay to skip the startup orientation for a seat that is
+                    // dispatch-driven (e.g. a team member created over HTTP). The fleet
+                    // never sees it.
+                    const suppressStartupOrientation = payload?.suppressStartupOrientation === true;
+                    if (payload?.suppressStartupOrientation !== undefined) { delete payload.suppressStartupOrientation; }
                     // Delegate definitions are HOST-resolved, never caller-supplied —
                     // mirror TaskViewerProvider.handlePtyVerb exactly. Each delegate
                     // carries a shell command the host runs in the user's tree, so an
@@ -2101,7 +2141,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     const rawDelegates = Array.isArray(payload.delegates) ? payload.delegates : [];
                     const spawned = rawDelegates.length > 0
                         ? await ptyFleetService.spawnDelegates(terminal, rawDelegates, { teamName: payload.teamName })
-                        : { children: [], error: undefined as string | undefined };
+                        : { children: [], createdNames: [], error: undefined as string | undefined };
                     // Wire the team (standing orders + group registration) when
                     // children were created. Runs in the host that holds the DB,
                     // not in spawnDelegates — the standalone twin of the
@@ -2130,11 +2170,16 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             try { server.broadcastWs('terminalsGroupsChanged', { type: 'terminalsGroupsChanged' }, SURFACES.terminals); } catch { /* broadcast failure must not fail the create */ }
                         }
                     }
-                    void relayStartupOrientation([terminal.friendlyName, ...spawned.children.map(c => c.friendlyName)]);
+                    if (!suppressStartupOrientation) {
+                        void relayStartupOrientation([terminal.friendlyName, ...spawned.children.map(c => c.friendlyName)]);
+                    }
                     return { success: true, terminal: { friendlyName: terminal.friendlyName, agentInstanceId: terminal.agentInstanceId, parentInstanceId: terminal.parentInstanceId, role: terminal.role, status: terminal.status }, delegates: spawned.children.map(t => ({ friendlyName: t.friendlyName, agentInstanceId: t.agentInstanceId, role: t.role, status: t.status })), ...(spawned.error ? { delegateError: spawned.error } : {}), ...(wiringError ? { wiringError } : {}), ...(teamGroupId ? { teamGroupId } : {}) };
                 }
 
                 case 'ptyCreateBatch': {
+                    // Same boundary strip as ptyCreateTerminal above.
+                    const suppressStartupOrientation = payload?.suppressStartupOrientation === true;
+                    if (payload?.suppressStartupOrientation !== undefined) { delete payload.suppressStartupOrientation; }
                     const result = await ptyFleetService.createBatch(
                         Array.isArray(payload.allocation) ? payload.allocation : [],
                         payload.cwd,
@@ -2142,7 +2187,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         // HOST-resolved, never from the wire — see CreateOptions.
                         configProvider.getConfigBoolean('terminal.claudeInlineRendering', true)
                     );
-                    if (result && Array.isArray(result.created)) {
+                    if (result && Array.isArray(result.created) && !suppressStartupOrientation) {
                         void relayStartupOrientation(result.created.map((c: any) => c.friendlyName));
                     }
                     return {
@@ -3505,7 +3550,7 @@ Each plan file must include:
                     );
                     const spawned = spec.delegates.length > 0
                         ? await ptyFleetService.spawnDelegates(head, spec.delegates, { teamName: group?.name })
-                        : { children: [], error: undefined as string | undefined };
+                        : { children: [], createdNames: [], error: undefined as string | undefined };
                     return {
                         success: true,
                         terminal: { friendlyName: head.friendlyName, agentInstanceId: head.agentInstanceId },
@@ -3515,6 +3560,7 @@ Each plan file must include:
                             role: t.role,
                             status: t.status,
                         })),
+                        createdDelegates: spawned.createdNames,
                         ...(spawned.error ? { delegateError: spawned.error } : {}),
                     };
                 } catch (err) {
@@ -3526,9 +3572,13 @@ Each plan file must include:
             // (The extension host's child fleet has no db, which is why that host
             // needs an explicit mirror write.)
         });
-        if (result.success && Array.isArray(result.created)) {
-            void relayStartupOrientation(result.created);
-        }
+        // No startup orientation relay: a team started from the TEAMS tab is
+        // dispatch-driven — every work dispatch attaches the standing orders by
+        // default, and the after-clear envelope restores them. Relaying here
+        // re-orients every seat on the team (including seats running for hours)
+        // on every lead-to-coder post, because `result.created` is the roster,
+        // not the actually-created set. Observed 2026-09-04: the orientation
+        // landed on a coder mid-clear as literal bracketed-paste escape codes.
         return result;
     });
     // Both hosts own one Go supervisor. HTTP and board verbs still run the
@@ -4003,9 +4053,11 @@ Each plan file must include:
                     return { success: true, delegates };
                 },
             });
-            if (result.success && Array.isArray(result.workers)) {
-                void relayStartupOrientation(result.workers.map((worker: any) => worker.friendlyName));
-            }
+            // No startup orientation relay: external-headed team workers are
+            // dispatch-driven — the head prompt file carries their standing
+            // orders and every dispatch attaches them. Mirrors the extension
+            // host, which passes suppressStartupOrientation: true on the
+            // ptyCreateTerminal call for each worker.
             return result;
         },
         moveCard: async (wsRoot: string, sessionId: string, targetColumn: string, planFile?: string) => {
