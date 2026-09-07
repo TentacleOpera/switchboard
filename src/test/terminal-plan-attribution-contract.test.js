@@ -11,6 +11,7 @@ const bootstrapTs = fs.readFileSync(path.join(__dirname, '../standalone/bootstra
 const ptyHostTs = fs.readFileSync(path.join(__dirname, '../standalone/ptyHost.ts'), 'utf8');
 const taskViewerTs = fs.readFileSync(path.join(__dirname, '../services/TaskViewerProvider.ts'), 'utf8');
 const terminalsJs = fs.readFileSync(path.join(__dirname, '../webview/terminals.js'), 'utf8');
+const terminalViewportJs = fs.readFileSync(path.join(__dirname, '../webview/terminalViewport.js'), 'utf8');
 const planIngestionTs = fs.readFileSync(path.join(__dirname, '../services/PlanIngestionEngine.ts'), 'utf8');
 const localApiServerTs = fs.readFileSync(path.join(__dirname, '../services/LocalApiServer.ts'), 'utf8');
 const kanbanProviderTs = fs.readFileSync(path.join(__dirname, '../services/KanbanProvider.ts'), 'utf8');
@@ -362,7 +363,31 @@ test('the feature nudge sweep treats an empty liveness snapshot as no evidence',
     assert.ok(sweep.includes('headLive.lastDataAt <= 0'), 'a zero/absent head lastDataAt is no evidence of silence');
     // Gate 4: no double-wake.
     assert.ok(sweep.includes('notifiedSeatsThisTick.has('), 'a seat notified this tick must suppress the nudge');
-    assert.ok(sweep.includes('!!s.dispatchedAt'), 'an outstanding dispatch must suppress the nudge — the per-dispatch backstop owns that window');
+    // The old gate 4a suppressed the feature nudge for any dispatched subtask,
+    // deferring to a "per-dispatch backstop" that did not exist. The
+    // dispatch-stall sweep (`_runDispatchStallSweep`) is that backstop now, and
+    // the feature nudge no longer suppresses on an outstanding dispatch — the
+    // suppression is GONE, and a separate sweep owns the dispatched-card window.
+    // An assertion whose justification was a mechanism nobody wrote is worse
+    // than no test; this one asserts the new arrangement, not the old gap.
+    assert.ok(!sweep.includes('!!s.dispatchedAt'),
+        'the feature nudge must NOT suppress on an outstanding dispatch — the old gate 4a deferred to a backstop that did not exist; _runDispatchStallSweep owns that window now');
+    assert.ok(planIngestionTs.includes('_runDispatchStallSweep'),
+        'the dispatch-stall sweep must exist — it is the backstop the feature nudge used to defer to');
+    const dispatchStallSweep = planIngestionTs.substring(
+        planIngestionTs.indexOf('private async _runDispatchStallSweep('),
+        planIngestionTs.indexOf('private async _retryPendingFeatureLinks(')
+    );
+    assert.ok(dispatchStallSweep.length > 0, '_runDispatchStallSweep must be a readable method');
+    assert.ok(dispatchStallSweep.includes('dispatchStallMs'), 'the dispatch-stall sweep must key on the dispatchStallMs threshold');
+    assert.ok(dispatchStallSweep.includes('p.dispatchedAt') && dispatchStallSweep.includes('!p.completedAt'),
+        'the dispatch-stall predicate must be dispatched_at set AND completed_at NULL');
+    assert.ok(dispatchStallSweep.includes('nowMs - dispatchedAtMs') && dispatchStallSweep.includes('dispatchStallMs'),
+        'the dispatch-stall predicate must compare elapsed-since-dispatched_at against the threshold');
+    assert.ok(dispatchStallSweep.includes('lastObservedMtime') && dispatchStallSweep.includes('lastObservedSeatOutputAt'),
+        'the dispatch-stall nudge must re-arm on plan-file mtime or seat output, NOT on dispatched_at');
+    assert.ok(!/nudgeCount\s*[><=]/.test(dispatchStallSweep) || dispatchStallSweep.includes('_dispatchStallState'),
+        'the dispatch-stall nudge must not carry a watch-registry nudgeCount — state is in-memory per-card');
     // Cancellation + pacing.
     // Paced on `nudgeSilenceMs` (default 10 min), deliberately NOT `turnEndSilenceMs`
     // (90s): the nudge is a backstop, not a turn-boundary probe. This assertion
@@ -681,7 +706,7 @@ test('terminals.js extractPastedDispatchIdentity body is byte-equal to dispatchI
             .replace(/\(text: string\)/g, '(text)');
     }
     const sharedBody = stripTsAnnotations(extractFnBody(dispatchIdentityTs, 'extractDispatchIdentity'));
-    const clientBody = extractFnBody(terminalsJs, 'extractPastedDispatchIdentity');
+    const clientBody = extractFnBody(terminalViewportJs, 'extractPastedDispatchIdentity');
     // The shared module references PASTE_SCAN_MIN_CHARS (module-scoped const);
     // the client references the same name (function-scoped const above it).
     // The logic, regex and guards must be identical.

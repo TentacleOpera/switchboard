@@ -444,6 +444,24 @@ export class PlanIngestionEngine {
      */
     private static readonly MAX_MEMBER_REMINDERS_PER_DISPATCH = 2;
 
+    /**
+     * Per-card state for the dispatch-stall nudge (`_runDispatchStallSweep`).
+     * Keyed on `${workspaceRoot}:${planId}`. Carries the signals the re-arm
+     * condition needs: when the nudge last fired, the plan-file mtime and the
+     * seat's `lastDataAt` observed at that nudge. A subsequent stall re-arms
+     * (gets a fresh nudge) ONLY when one of those has advanced since — see the
+     * sweep for why re-arming on `dispatchedAt` (the existing feature nudge's
+     * choice) fails for this case.
+     *
+     * In-memory only, deliberately NOT a watch registry (plan edge-case 4c): a
+     * predicate over card fields has no arming, dropping, `nudgeCount` or
+     * `lastNudgedAt`-per-feature surface. A card stops matching the predicate
+     * when its completion is posted or its `dispatched_at` is cleared; the
+     * state is dropped on the next tick where the card no longer matches, so
+     * nothing leaks and no separate lifecycle exists to get wrong.
+     */
+    private _dispatchStallState = new Map<string, { lastNudgedAt: number; lastObservedMtime: number; lastObservedSeatOutputAt: number }>();
+
     public setFeatureFileRegenerator(cb: (workspaceRoot: string, featureId: string) => Promise<void>): void {
         this._regenerateFeatureFile = cb;
     }
@@ -551,6 +569,13 @@ export class PlanIngestionEngine {
                 // Nudge silence paces feature- and queue-level stall reminders.
                 // Default 10 min; the nudge is a backstop, not a completion signal.
                 const nudgeSilenceMs = activityCfg.getNumber('nudgeSilenceMs', 600000);
+                // Dispatch-stall threshold: how long a dispatched card may be out
+                // with no completion posted before the dispatch-stall nudge fires
+                // once for its lead. Default 30 min. Independent of the queue, of
+                // seat activity, and of the card's column — the only inputs are
+                // dispatched_at, completed_at and a clock. See
+                // `_runDispatchStallSweep`.
+                const dispatchStallMs = activityCfg.getNumber('dispatchStallMs', 1800000);
                 // Partition the fleet ONCE per tick (not per folder) — the fleet
                 // is process-global and the snapshot is cheap. A miss on the
                 // provider (fleet-less host) yields empty arrays and the sweep
@@ -664,6 +689,28 @@ export class PlanIngestionEngine {
                             });
                         } catch (reminderErr) {
                             this._host.logger.appendLine(`[GlobalPlanWatcher] member completion reminder sweep failed for ${folder}: ${reminderErr}`);
+                        }
+                        // ── Dispatch-stall nudge ────────────────────────────────
+                        // The backstop for a card that has been dispatched for
+                        // longer than the threshold with no completion posted.
+                        // Independent of the queue, of seat activity, and of the
+                        // card's column — the only inputs are dispatched_at,
+                        // completed_at and a clock. Fires once per stall for the
+                        // lead of the team holding the card; re-arms on evidence
+                        // of progress (plan-file mtime advancing or the seat
+                        // producing output after the nudge). A dead head
+                        // escalates to the operator instead of dropping the
+                        // watch. Shares the same liveness snapshot, `nowMs`,
+                        // `turnEndSilenceMs`, `nudgeSilenceMs` and
+                        // `notifiedSeatsThisTick` set as the other sweeps so a
+                        // seat that is both a pacer and a member is nudged at
+                        // most once per tick.
+                        try {
+                            await this._runDispatchStallSweep({
+                                db, folder, liveness, nowMs, turnEndSilenceMs, nudgeSilenceMs, dispatchStallMs, notifiedSeatsThisTick,
+                            });
+                        } catch (dispatchStallErr) {
+                            this._host.logger.appendLine(`[GlobalPlanWatcher] dispatch-stall sweep failed for ${folder}: ${dispatchStallErr}`);
                         }
                         await this._retryPendingFeatureLinks(db, folder);
                     } catch (sweepErr) {
@@ -1034,12 +1081,11 @@ export class PlanIngestionEngine {
 
     /**
      * Feature-level stall nudge — one sweep tick's worth. For every armed watch
-     * (config key `kanban.featureWatches`), wake the head ONLY when all five hold:
+     * (config key `kanban.featureWatches`), wake the head ONLY when all hold:
      *   1. the feature still has at least one un-accepted subtask;
      *   2. the head terminal is live and `active`;
      *   3. the head's own `lastDataAt` is older than `turnEndSilenceMs` (not mid-turn);
-     *   4. no dispatch record for any of the feature's seats is outstanding, and
-     *      no turn-end notice for one of them fired on this tick;
+     *   4. no turn-end notice for one of the feature's seats fired on this tick;
      *   5. no member of the head's team has produced output within `nudgeSilenceMs`
      *      — a head waiting on a live coder is idle on purpose, not stalled.
      * The wake carries evidence (remaining subtasks, their seats, silence, mtime),
@@ -1049,8 +1095,17 @@ export class PlanIngestionEngine {
      * the head terminal is absent/`exited`. Paced by `lastNudgedAt` with a floor of
      * `nudgeSilenceMs` (default 10 min) so a stalled feature produces a periodic
      * reminder, not a stream. One nudge per stall — `nudgeCount` stops repeat
-     * nudges; a dispatch re-arms it via gate (4a). A watch is never retried
-     * against a dead head.
+     * nudges. A watch is never retried against a dead head.
+     *
+     * NOTE: this sweep no longer suppresses on an outstanding dispatch (the old
+     * gate 4a is removed). A dispatched subtask is covered by the
+     * `_runDispatchStallSweep` backstop, which keys on elapsed-since-`dispatchedAt`
+     * — the window this sweep handed to an imaginary mechanism. The remaining gates
+     * (head silence, team liveness) still suppress the feature nudge in the normal
+     * "a coder is working" case, so the two sweeps do not double-wake: the feature
+     * nudge fires when the HEAD has gone idle with no coder active; the
+     * dispatch-stall nudge fires when a CARD has been out too long regardless of
+     * who is quiet.
      */
     private async _runFeatureNudgeSweep(args: {
         db: KanbanDatabase;
@@ -1133,27 +1188,6 @@ export class PlanIngestionEngine {
                     `[GlobalPlanWatcher] Feature nudge: dropping watch for feature ${watch.featureId} — every subtask has a completion post.`
                 );
                 mutated = true;
-                continue;
-            }
-
-            // (4a) No dispatch record for any of the feature's seats is outstanding.
-            // A subtask with a non-null dispatchedAt is being worked by a coder —
-            // the per-dispatch backstop covers it, so the nudge stays silent. This
-            // is the "no dispatch to observe" window the nudge exists for.
-            const outstanding = remaining.some(s => !!s.dispatchedAt);
-            if (outstanding) {
-                // A dispatch is in progress — the head is working, not stalled.
-                // Re-arm the nudge state so the next idle window after this dispatch
-                // completes gets a fresh nudge (mirrors the queue watch's in-flight
-                // reset). Without this, nudgeCount latches at 1 after the first
-                // nudge and the head is never nudged again for this feature — even
-                // across new stall cycles.
-                if ((watch.nudgeCount ?? 0) > 0 || watch.lastNudgedAt > 0) {
-                    watch.nudgeCount = 0;
-                    watch.lastNudgedAt = 0;
-                    mutated = true;
-                }
-                kept.push(watch);
                 continue;
             }
 
@@ -2142,6 +2176,331 @@ export class PlanIngestionEngine {
                 + ` fired for seat '${seatName}' in ${folder} → holding '${card.planId}'`
                 + ` (team ${team.teamId}, externalHead=${team.externalHead}, ordersFile=${ordersFileExists ? 'present' : 'absent'}).`
             );
+        }
+    }
+
+    /**
+     * Dispatch-stall nudge — the backstop for a card that has been dispatched
+     * for longer than the threshold with no completion posted.
+     *
+     * The problem this solves (plan: "A Card Dispatched Long Enough With No
+     * Report Nudges the Lead"): a coder finished its work and did not post its
+     * completion report. Its lead waited hours. Nothing told either of them,
+     * and the operator noticed by hand. The feature nudge tracked exactly the
+     * right thing and then suppressed itself deferring to a "per-dispatch
+     * backstop" that did not exist; the queue nudge excluded dispatched
+     * subtasks by definition. The card fell between them by construction.
+     *
+     * The rule is a predicate evaluated each sweep, not a watch that is armed
+     * and dropped:
+     *
+     *     dispatched_at set  AND  completed_at NULL  AND  now - dispatched_at > threshold
+     *
+     * A card stops matching when the lead posts its completion. That is the
+     * only intended off switch. Two things must NOT turn it off:
+     *   - a dead head (a lead that has died is the strongest reason to tell
+     *     someone about the cards it was holding — escalate to the operator);
+     *   - the end of a queue (nothing about what is or is not staged has any
+     *     bearing on whether a dispatched card has been out too long).
+     *
+     * One thing that WILL turn it off, silently, and is accepted: `dispatched_at`
+     * being cleared. A column move clears the stamp (KanbanDatabase
+     * `moveCardToColumn` / `moveFeatureCards` reset `dispatched_at = NULL`),
+     * which is the bf23c37f path. When the stamp is cleared the card leaves the
+     * predicate and is not looked at again — that is correct, because a card
+     * whose dispatch was cleared is no longer "out": it has been moved (re-
+     * staged, dragged to another column). The predicate watches dispatched
+     * cards, and a cleared stamp means the dispatch ended by a path other than
+     * completion. Re-staging re-dispatches and re-stamps, re-entering the
+     * predicate with a fresh `dispatched_at`.
+     *
+     * Gates, in order:
+     *  1. No notifier → nothing to do.
+     *  2. Empty liveness → no evidence (not "everyone is quiet"). Same guard
+     *     as the feature/queue/member sweeps.
+     *  3. Read the board; filter to cards matching the predicate.
+     *  4. Resolve the team for the seat holding each card (same
+     *     `terminals.groups` path the member reminder sweep uses).
+     *  5. Re-arm check: if the card was nudged before, suppress UNLESS the
+     *     plan-file mtime advanced or the seat produced output after the last
+     *     nudge. Re-arming on `dispatched_at` (the feature nudge's choice)
+     *     fails for this case — `dispatched_at` is stamped once at dispatch
+     *     and does not change while a coder stalls, resumes and stalls again,
+     *     so it allows one nudge per dispatch, ever, leaving a second stall
+     *     silent.
+     *  6. Pacing floor: at most one nudge per `nudgeSilenceMs` window, so a
+     *     re-armed stall is not announced the instant progress is observed.
+     *  7. Mid-turn guard: do not inject a prompt into a running turn. The
+     *     addressee is the LEAD, not the seat holding the card — the lead's
+     *     own `lastDataAt` is the gate, not the seat's. A coder mid-turn
+     *     while the lead is idle is the normal case and must not suppress a
+     *     nudge about a card that has been out too long.
+     *  8. No double-wake: if the lead was notified this tick by another
+     *     sweep, stay silent.
+     *  9. Deliver: name the seat and the card so the lead can act without
+     *     asking. If the lead is dead/absent, escalate to the operator. If
+     *     there is no lead (solo seat, direct dispatch), notify the operator.
+     *
+     * Never infers completion: the nudge says a card has been out a long
+     * time. It never marks the card complete, never clears the seat, never
+     * advances the column. `completed_at` remains NULL until the lead posts.
+     */
+    private async _runDispatchStallSweep(args: {
+        db: KanbanDatabase;
+        folder: string;
+        liveness: Array<{ friendlyName: string; lastDataAt: number; status: string }>;
+        nowMs: number;
+        turnEndSilenceMs: number;
+        nudgeSilenceMs: number;
+        dispatchStallMs: number;
+        notifiedSeatsThisTick: Set<string>;
+    }): Promise<void> {
+        if (!this._turnEndNotifier) return; // no notifier → no delivery → nothing to do.
+        const { db, folder, liveness, nowMs, turnEndSilenceMs, nudgeSilenceMs, dispatchStallMs, notifiedSeatsThisTick } = args;
+
+        // (2) Empty liveness is NO EVIDENCE — same guard as the other sweeps.
+        // `getFleetLiveness()` returns [] whenever the fleet is unavailable;
+        // without this guard every lead would be read as "absent" and every
+        // stalled card would escalate to the operator on the next tick, for a
+        // lead that is still running.
+        if (liveness.length === 0) return;
+
+        const livenessByName = new Map<string, { lastDataAt: number; status: string }>();
+        for (const entry of liveness) {
+            if (entry.friendlyName) livenessByName.set(entry.friendlyName, { lastDataAt: entry.lastDataAt, status: entry.status });
+        }
+
+        // (3) Read the board and filter to cards matching the predicate.
+        let board: KanbanPlanRecord[] = [];
+        try {
+            const wsId = (await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '';
+            board = await db.getBoard(wsId) || [];
+        } catch { return; } // unreadable board is no evidence — try next tick.
+        if (board.length === 0) return;
+
+        const stalledCards = board.filter(p =>
+            p && p.dispatchedAt
+            && !p.completedAt
+            && typeof p.dispatchedTerminal === 'string'
+            && p.dispatchedTerminal.length > 0
+        );
+        if (stalledCards.length === 0) {
+            // Nothing matches — drop any state we held for cards that no longer
+            // match the predicate (completion posted or dispatch cleared). This
+            // is the only cleanup: no registry, no lifecycle.
+            if (this._dispatchStallState.size > 0) this._dispatchStallState.clear();
+            return;
+        }
+
+        // (4) Resolve team membership from `terminals.groups` — the same path
+        // the member reminder sweep uses (prefixed key + bare-key merge). Both
+        // hosts get this for free with no divergence risk: it is a DB config
+        // read, not a host seam. Build a map from seat name → team info
+        // (teamId, headName, externalHead). Heads are INCLUDED here — a head
+        // holding a dispatched card is a valid addressee for its own nudge.
+        interface DispatchStallTeamInfo { teamId: string; headName: string; }
+        const seatToTeam = new Map<string, DispatchStallTeamInfo>();
+        try {
+            let groups: any[] = [];
+            try {
+                const prefixed = await db.getConfigJson<any[]>(TERMINALS_GROUPS_KEY, []) as any[];
+                if (Array.isArray(prefixed)) { groups = [...prefixed]; }
+            } catch { /* unreadable config is no evidence — try bare key */ }
+            try {
+                const bare = await db.getConfigJson<any[]>('terminals.groups', []) as any[];
+                if (Array.isArray(bare)) {
+                    const existingIds = new Set(groups.map((g: any) => g && g.id).filter(Boolean));
+                    for (const g of bare) {
+                        if (g && typeof g.id === 'string' && !existingIds.has(g.id)) {
+                            groups.push(g);
+                            existingIds.add(g.id);
+                        }
+                    }
+                }
+            } catch { /* best effort */ }
+            for (const g of groups) {
+                if (!g || typeof g.id !== 'string') { continue; }
+                if (g.teamGroup !== true && g.teamKind !== 'spawned') { continue; }
+                const headName = typeof g.head === 'string' ? g.head : (typeof g.name === 'string' ? g.name : '');
+                if (!headName) { continue; }
+                const roster: string[] = Array.isArray(g.order) && g.order.length
+                    ? g.order
+                    : (Array.isArray(g.members) ? g.members : []);
+                for (const name of roster) {
+                    if (typeof name !== 'string' || name.length === 0) { continue; }
+                    if (!seatToTeam.has(name)) {
+                        seatToTeam.set(name, { teamId: g.id, headName });
+                    }
+                }
+            }
+        } catch { /* unreadable groups is no evidence — fall through to operator path */ }
+
+        // Track which planIds still match the predicate so stale state can be
+        // pruned after the loop.
+        const stillStalled = new Set<string>();
+        for (const card of stalledCards) {
+            const planId = card.planId;
+            stillStalled.add(planId);
+            const stateKey = `${folder}:${planId}`;
+            const dispatchedAtMs = new Date(card.dispatchedAt!).getTime();
+            if (!dispatchedAtMs || Number.isNaN(dispatchedAtMs)) { continue; } // unreadable stamp is no evidence
+            const elapsed = nowMs - dispatchedAtMs;
+            if (elapsed < dispatchStallMs) {
+                // Below threshold — not stalled yet. Drop any prior state so a
+                // later stall starts fresh (the card re-entered the predicate
+                // after a completion-and-re-dispatch cycle, or the threshold
+                // was raised). Do NOT carry a stale nudge count into a new
+                // stall window.
+                this._dispatchStallState.delete(stateKey);
+                continue;
+            }
+
+            const seatName = card.dispatchedTerminal!;
+            const team = seatToTeam.get(seatName);
+            const headName = team?.headName ?? '';
+            // Resolve the addressee: the lead of the team holding the card. If
+            // the seat is not on a team (solo seat, direct dispatch, unknown),
+            // the operator is the addressee — plan edge-case 2: decide, do not
+            // silently drop it.
+            const addressee = headName || '';
+            const addresseeLive = addressee ? livenessByName.get(addressee) : undefined;
+            const addresseeDead = !!addressee && (!addresseeLive || addresseeLive.status === 'exited');
+            const noTeam = !team;
+
+            // (5) Re-arm check. If the card was nudged before, suppress UNLESS
+            // the plan-file mtime advanced or the seat produced output after
+            // the last nudge. Re-arming on `dispatched_at` fails for this case
+            // (see the docblock) — `dispatched_at` is stamped once and does not
+            // change while a coder stalls, resumes and stalls again.
+            const prior = this._dispatchStallState.get(stateKey);
+            if (prior) {
+                // Read the plan-file mtime and the seat's lastDataAt to compare
+                // against the values observed at the last nudge.
+                let currentMtime = prior.lastObservedMtime;
+                try {
+                    const stat = await fs.promises.stat(path.join(folder, card.planFile));
+                    currentMtime = stat.mtimeMs;
+                } catch { /* unreadable at this root is no evidence — keep prior */ }
+                const seatLive = livenessByName.get(seatName);
+                const currentSeatOutput = seatLive?.lastDataAt ?? prior.lastObservedSeatOutputAt;
+                const mtimeAdvanced = currentMtime > prior.lastObservedMtime;
+                const seatProduced = currentSeatOutput > prior.lastObservedSeatOutputAt;
+                if (!mtimeAdvanced && !seatProduced) {
+                    // No progress since the last nudge — one nudge per stall.
+                    // Do not repeat into an unchanged situation.
+                    continue;
+                }
+                // Progress observed — re-arm: fall through to the pacing and
+                // mid-turn gates, then nudge again if they pass.
+            }
+
+            // (6) Pacing floor: at most one nudge per `nudgeSilenceMs` window,
+            // so a re-armed stall is not announced the instant progress is
+            // observed. `nudgeSilenceMs` (default 10 min) is deliberately
+            // separate from `turnEndSilenceMs` (90s) — the nudge is a
+            // backstop, not a turn-boundary probe.
+            if (prior && prior.lastNudgedAt > 0 && nowMs - prior.lastNudgedAt < nudgeSilenceMs) {
+                continue;
+            }
+
+            // (7) Mid-turn guard — do not inject a prompt into a running turn.
+            // The addressee is the LEAD; the lead's own `lastDataAt` is the
+            // gate, not the seat's. A coder mid-turn while the lead is idle is
+            // the normal case and must not suppress a nudge about a card that
+            // has been out too long. When escalating to the operator (no team,
+            // or dead head) there is no terminal to gate on — skip this check.
+            if (addressee && !addresseeDead) {
+                if (!addresseeLive || addresseeLive.lastDataAt <= 0 || nowMs - addresseeLive.lastDataAt < turnEndSilenceMs) {
+                    continue;
+                }
+            }
+
+            // (8) No double-wake: if the addressee was notified this tick by
+            // another sweep, stay silent. When escalating to the operator
+            // (empty seatName) the shared set is keyed on seat names, so this
+            // is a no-op for the operator path — the operator gets one notice
+            // per stall, paced by the re-arm check above.
+            if (addressee && notifiedSeatsThisTick.has(addressee)) {
+                continue;
+            }
+
+            // (9) Deliver. Name the seat and the card so the lead can act
+            // without asking. If the lead is dead/absent, escalate to the
+            // operator. If there is no lead (solo seat, direct dispatch),
+            // notify the operator.
+            const elapsedMin = Math.round(elapsed / 60000);
+            const seatLive = livenessByName.get(seatName);
+            const seatStatus = !seatLive ? 'absent' : seatLive.status === 'exited' ? 'exited' : 'live';
+            let body: string;
+            let recipientSeat: string | undefined;
+            let notifySeatName: string;
+            if (noTeam) {
+                // No team — notify the operator. The operator is not a seat;
+                // deliver with an empty seatName so the host resolves to its
+                // operator/Mission-Control fallback.
+                body = `[switchboard:turn-end] Dispatch stall — card '${planId}' held by seat '${seatName}' has been dispatched for ${elapsedMin} min with no completion posted. The seat is not on a team, so there is no lead to nudge. The card may be stuck.`;
+                notifySeatName = '';
+                recipientSeat = undefined;
+            } else if (addresseeDead) {
+                // Dead head — escalate to the operator. A lead that has died is
+                // the strongest reason to tell someone about the cards it was
+                // holding, not a reason to stop looking.
+                body = `[switchboard:turn-end] Dispatch stall — card '${planId}' held by seat '${seatName}' has been dispatched for ${elapsedMin} min with no completion posted. Its lead '${addressee}' is ${!addresseeLive ? 'absent' : 'exited'}. The card may be stuck.`;
+                notifySeatName = addressee;
+                recipientSeat = undefined;
+            } else {
+                // Notify the lead, naming the seat and the card.
+                body = `[switchboard:turn-end] Dispatch stall — card '${planId}' held by seat '${seatName}' has been dispatched for ${elapsedMin} min with no completion posted (seat is ${seatStatus}). If the work is finished, post its completion; if the seat is stuck, prod it or re-stage the card.`;
+                notifySeatName = addressee;
+                recipientSeat = addressee;
+            }
+
+            try {
+                this._turnEndNotifier({
+                    seatName: notifySeatName,
+                    planFile: card.planFile || '',
+                    outcome: 'stalled',
+                    workspaceRoot: folder,
+                    recipientSeat,
+                    body,
+                });
+            } catch (cbErr) {
+                this._host.logger.appendLine(`[GlobalPlanWatcher] dispatch-stall notifier failed for card '${planId}' in ${folder}: ${cbErr}`);
+            }
+            if (addressee && !addresseeDead) {
+                notifiedSeatsThisTick.add(addressee);
+            }
+            this._host.logger.appendLine(
+                `[GlobalPlanWatcher] Dispatch-stall nudge fired for card '${planId}' in ${folder} → held by '${seatName}' for ${elapsedMin} min`
+                + (noTeam ? ' (no team — operator notified)' : addresseeDead ? ` (lead '${addressee}' dead — operator notified)` : ` (lead '${addressee}' notified).`)
+            );
+
+            // Record the state for the re-arm check: the mtime and the seat's
+            // lastDataAt observed AT this nudge. A subsequent stall re-arms
+            // only when one of them has advanced.
+            let observedMtime = 0;
+            try {
+                const stat = await fs.promises.stat(path.join(folder, card.planFile));
+                observedMtime = stat.mtimeMs;
+            } catch { /* unreadable → 0, so any later successful read counts as advance */ }
+            const observedSeatOutput = livenessByName.get(seatName)?.lastDataAt ?? 0;
+            this._dispatchStallState.set(stateKey, {
+                lastNudgedAt: nowMs,
+                lastObservedMtime: observedMtime,
+                lastObservedSeatOutputAt: observedSeatOutput,
+            });
+        }
+
+        // Prune state for cards that no longer match the predicate (completion
+        // posted or dispatch cleared). This is the only cleanup — no registry,
+        // no lifecycle, no separate drop conditions.
+        if (this._dispatchStallState.size > stillStalled.size) {
+            for (const key of [...this._dispatchStallState.keys()]) {
+                const planId = key.slice(folder.length + 1);
+                if (!stillStalled.has(planId)) {
+                    this._dispatchStallState.delete(key);
+                }
+            }
         }
     }
 

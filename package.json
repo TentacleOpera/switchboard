@@ -637,6 +637,14 @@
           "description": "How long (ms) a team lead must be silent with work pending before a stall nudge fires. Default 10 min. Separate from turnEndSilenceMs (which gates turn-end detection at 90s) — a nudge is a backstop, not a turn-boundary probe. Only applies to the feature-level and queue-level stall nudges.",
           "scope": "resource"
         },
+        "switchboard.activityLight.dispatchStallMs": {
+          "type": "integer",
+          "default": 1800000,
+          "minimum": 300000,
+          "maximum": 14400000,
+          "description": "How long (ms) a dispatched card may be out with no completion posted before the dispatch-stall nudge fires once for its lead. Default 30 min. Independent of the queue, of seat activity, and of the card's column — the only inputs are dispatched_at, completed_at and a clock. A legitimately long task will trip it; that is acceptable and what the threshold is for. Re-arms on evidence of progress (plan-file mtime advancing or the seat producing output after the nudge), so a card that stalls twice is nudged twice.",
+          "scope": "resource"
+        },
         "switchboard.boardStateExport": {
           "type": "string",
           "enum": [
