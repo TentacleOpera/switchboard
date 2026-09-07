@@ -3,6 +3,8 @@
 <!-- board-collapse-audit -->
 > **REDIRECT 2026-09-04 (Board Collapse audit).** This plan names `backups-that-can-actually-be-restored.md` twice. That plan has been **merged into `board-backup-and-per-project-export.md` and deleted**; the surviving plan carries its definition of a backup as a verified set of database, plan files and manifest. Read both references as pointing there.
 > > 
+> > **2026-09-07:** both backup references above are moot — the `-backups` sibling is gone (see the supersession in change 2) because `9c367927` deletes backup entirely.
+> > 
 > > Note also that this plan is now **parked in Backlog** behind the storage programme's first step, as are the plans that depend on its `controlPlaneRoot`.
 
 
@@ -26,7 +28,6 @@ Switchboard-Agents/          ← control plane. Agents start here.
 ├── Switchboard/             ← code repo                 (own git)
 ├── Switchboard-plans/       ← plans + board state       (own git)
 ├── Switchboard-remote/      ← instructions + receipts   (own git)
-├── Switchboard-backups/     ← plan + DB backups         (plain folder, or a repo)
 └── Switchboard-logs/        ← terminal logs             (plain folder, or a repo)
 ```
 
@@ -78,12 +79,12 @@ The rest of that plan stands: `GitStateProvider`, the cursor, the trust guard, t
 **One purpose per sibling means one grant per purpose.** That is the property
 worth the extra folders:
 
-| Party | code | plans | remote | backups | logs |
-|---|---|---|---|---|---|
-| the user's machine | write | write | **read** | write | write |
-| a cloud / remote author | — | read | **write** | — | — |
-| a teammate reviewing code | write | — | — | — | — |
-| CI on the code repo | write | — | — | — | — |
+| Party | code | plans | remote | logs |
+|---|---|---|---|---|
+| the user's machine | write | write | **read** | write |
+| a cloud / remote author | — | read | **write** | — |
+| a teammate reviewing code | write | — | — | — |
+| CI on the code repo | write | — | — | — |
 
 No row is "everything", which is what a branch or a shared repo forces. A
 compromised remote credential can file instructions and cannot read the code, edit
@@ -106,19 +107,23 @@ new plumbing:
   managed project subdirectories by name.
 - `BoardSnapshotPublisher` already produces `board.json` / `.md` / `.html`.
 
-**Backups currently live inside the thing they back up.** `dbbackup/` writes to
-`<workspaceRoot>/.switchboard/dbbackup` (`KanbanDatabase.ts:7340`) and the state
-snapshot to `<workspaceRoot>/.switchboard/kanban-state-backup.json` (`:9102`).
-Both are inside the code repo's checkout, so deleting or losing that clone takes
-the backups with it — which is the one scenario a backup exists for. A sibling
-fixes a real weakness rather than tidying a path, and it is also where the storage
-topology plan's *"backups are local always, plus the target when it can hold
-them"* lands: derived from the target, not resolved independently.
+> **Superseded 2026-09-07:** this plan carried a `-backups` sibling and a case for
+> it ("*backups currently live inside the thing they back up*" — `dbbackup/` and
+> `kanban-state-backup.json` writing inside the code checkout).
+> **Reason:** Switchboard no longer backs up at all. *The Board Takes an Hourly
+> Backup Nobody Asked For, Onto the Same Disk, With No Way to Turn It Off*
+> (`9c367927`) deletes every backup mechanism, on the position that backup is the
+> wrong layer for this product and is already handled by system-managed backup.
+> A sibling for an artefact that is being removed is work on a deleted feature.
+> **Replaced with:** four siblings, not five. The recovery story the backups
+> sibling was reaching for is now served by the plans sibling being a real git
+> repo that commits every operation (change 3a) — history and restore come from
+> git, which is the tool that already does this well.
 
 **On storing plans as database entries.** Worth doing for *history*, not as the
 medium for *current*. The line, and the reason:
 
-- **A backup's job is to be recoverable without the tool that wrote it.** A plan
+- **A plan's job is to be recoverable without the tool that wrote it.** A plan
   `.md` is recoverable with `cp` and readable by a human in ten years. A row is
   recoverable only by code that still understands the schema, which is exactly the
   code you may be recovering *from*.
@@ -133,16 +138,15 @@ medium for *current*. The line, and the reason:
   direction already: the scaffold work moves control-plane definitions into the
   store as bodies with a version and content hash per row.
 
-So the rule: **the backups store keeps plan files as files, and a revision
+So the rule: **the plans sibling keeps plan files as files, and a revision
 database beside them is additive.** A database may be the only copy of history; it
 must never be the only copy of current. Building that revision store is a separate,
 optional plan — not folded in here, because it has its own schema, its own growth
 profile, and its own recovery story.
 
-What *does* go in the sibling, and what it takes to make it worth keeping, is
-`backups-that-can-actually-be-restored.md`. Short version of its finding: nothing
-in the codebase reads `dbbackup/` today, so relocating the backups is necessary and
-not sufficient.
+And this is what change 3a rests on: if the plan file is the medium of record,
+then losing one is losing the work, which is why the sibling commits every write
+rather than waiting for something else to notice.
 
 **Logs do not need to be a repo, and that is a feature.** A plain folder has no
 history, so retention is deleting files and long retention costs nothing but disk.
@@ -187,13 +191,12 @@ does my data live"); this plan supplies the answer for the git-carried side.
   path gain a derived remote) and `board-state-remote-mirror-channels.md` (whose
   `GitStateProvider` reads a sibling instead of the control plane).
 - **Required by** `board-control-instruction-format-and-executor.md` for a
-  private channel, `terminal-logs-live-in-the-logs-sibling.md` for the logs
-  location, and `backups-that-can-actually-be-restored.md` for the backups
+  private channel and `terminal-logs-live-in-the-logs-sibling.md` for the logs
   location.
 
 ## Proposed Changes
 
-### 1. One choice, five derived paths
+### 1. One choice, four derived paths
 
 The operator picks the **control plane root**. Everything else derives by
 convention — which is exactly the storage topology plan's model ("*a target, not a
@@ -202,7 +205,6 @@ path*", and "*derive Archive placement from the target*"), applied here.
 ```
 controlPlaneRoot/<codeRepoName>-plans      → plans + board state
 controlPlaneRoot/<codeRepoName>-remote     → instructions + receipts
-controlPlaneRoot/<codeRepoName>-backups    → plan + DB backups
 controlPlaneRoot/<codeRepoName>-logs       → logs
 ```
 
@@ -249,6 +251,64 @@ unlinked, and plan files are user content — the most valuable content in the
 system. A relocation that moves 2,000 plan files and half-fails is unrecoverable;
 one that copies is not.
 
+### 3a. The plans sibling commits itself, on every atomic operation
+
+`Switchboard-plans/` **auto-commits**. Writing a plan, improving a plan and
+deleting a plan are each one complete unit of work, so each is one commit — made
+by the repo, not by whoever wrote the file.
+
+**This is the change that makes the sibling worth having.** A dedicated repo that
+nothing commits to loses files exactly the way `.switchboard/plans/` does today.
+Observed 2026-09-07: ten board rows carried a `plan_file` that existed only in
+one machine's working tree. On every other machine the watcher resolved the path
+to nothing and set `status='missing'`, which drops the card from the board while
+its subtasks stay active — an orphaned feature with visible children and no
+parent. Eight were recovered off the Pi; two (`94122291`, `d723cc0c`) were not
+found on any machine and their hand-written content is gone.
+
+The mechanism behind that loss is that **nothing commits board state
+deliberately**. Plan and feature files reach git only when an agent happens to
+commit *code* while they sit in its tree — every commit touching
+`.switchboard/features/` also carries `src/` changes. So survival is a
+coincidence: a card that gets dispatched has its file swept up by the coder's
+commit; a card that sits in PLAN REVIEWED never does. Two features created in the
+*same second* went different ways on exactly that.
+
+**Do not fix this by asking agents to commit.** That is the failure mode already
+on the board: `agent-commits-sweep-the-whole-shared-tree` exists because a
+coder's `git add -A` swept a peer's unfinished work into commit `226b7f09`. An
+agent instruction is a rule that has to be delivered, retained across a clear,
+and obeyed; the loss above happened on a machine whose planner is *prohibited*
+from git (`roleConfig_planner` carries `gitProhibition: true` and no
+`gitCommitStrategy`). Auto-commit needs none of that — no role learns a git verb,
+and it behaves the same on every host and every machine.
+
+**Hang it off the watcher that already fires.** The plan watcher already observes
+create, change and delete in this directory — it is what imports a plan and hard-
+deletes its row when the file goes away. The commit rides that existing event, so
+the operation is known at the point it fires and the message needs no author:
+
+```
+plan: add <title>
+plan: improve <title>
+plan: delete <title>
+```
+
+**Why this is safe here and not in the code repo.** Every objection to committing
+plans is an objection to committing them *into a code review*: diff noise, a
+peer's half-finished work, an unrelated tree swept in. A sibling repo has no code
+in it, so a commit per plan costs nothing and reviews nothing. This is the payoff
+that justifies the split, not merely a tidier directory listing.
+
+**A deletion becomes recoverable.** Today a removed plan file is unrecoverable —
+the two lost features above are not in any commit, any branch, or any loose
+object, so there is nothing to restore. Under auto-commit a delete is a commit,
+and the content is one `git show` away.
+
+Scope: commits only. Pushing is a separate question and is not assumed here — a
+committed file already survives a clean tree and a machine handoff via git, which
+is the failure this addresses.
+
 ### 4. Degradation is the common case
 
 Every sibling is independent. Absent means that capability is off, with a
@@ -258,8 +318,6 @@ a silent one:
 - no `-plans` → plans and board state stay where they are;
 - no `-remote` → the instruction channel is unavailable; Linear/Notion sync is
   unaffected, since it never used a sibling;
-- no `-backups` → backups stay in `.switchboard/dbbackup/` and
-  `.switchboard/kanban-state-backup.json`, as today;
 - no `-logs` → logs stay in `.switchboard/logs/`, as today;
 - no control plane at all → everything behaves exactly as it does now.
 
@@ -297,25 +355,27 @@ install that ignores this panel is unaffected.
    the control plane.
 9. **Logs as a folder** — logs work with `-logs` as a plain non-git folder; assert
    no git command is run against it. Then as a repo, and assert it is opt-in.
-9a. **Backups survive losing the code checkout** — with `-backups` configured, take
-    a DB backup and a state snapshot, then delete the code repo's `.switchboard/`
-    directory entirely. Assert both backups are still present and still restore. On
-    the current layout that test fails by construction, which is the point of the
-    sibling.
-9b. **Backup throttling and dedupe survive relocation** — `writeDbBackup`'s
-    per-reason throttle and its newest-for-reason dedupe both scan the backup
-    directory (`:7345`). Assert they behave identically against the sibling,
-    including the future-stamped-file case that must read as "no recent snapshot"
-    rather than blocking writes.
 10. **Degradation** — remove each sibling in turn; assert the matching capability
     reports unavailable with a reason, and that the board keeps working.
 11. **Both hosts** — detection, derivation and publishing under the extension host
     and the standalone host.
+12. **Every atomic plan operation is one commit** — write a plan, improve it, then
+   delete it, and assert the plans sibling gained exactly three commits naming
+   those operations. No agent was given a git instruction in any of the three.
+13. **A deleted plan is recoverable** — after the delete in 12, `git show` returns
+   the file's last content. This is the check the 2026-09-07 loss would have
+   failed.
+14. **A second machine sees no `missing` rows** — author a plan on machine A, let
+   the auto-commit land, sync, and assert machine B resolves the `plan_file` and
+   the card renders. Then assert the reverse of the observed bug: no row in the
+   shared database has `status='missing'` while its file exists in the sibling.
+15. **The code repo is untouched** — after the three operations in 12, `git status`
+   in the code repo is unchanged and its log gained no commit.
+
 
 ### Goal Invariants
 
 - The operator sets one path; the rest are derived.
-- Backups outlive the loss of the repository they back up.
 - No plan exists only as a database row.
 - No board data, instruction, receipt or log ever lands under the control plane
   root outside a sibling.
