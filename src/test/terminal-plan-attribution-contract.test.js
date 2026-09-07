@@ -388,6 +388,29 @@ test('the feature nudge sweep treats an empty liveness snapshot as no evidence',
         'the dispatch-stall nudge must re-arm on plan-file mtime or seat output, NOT on dispatched_at');
     assert.ok(!/nudgeCount\s*[><=]/.test(dispatchStallSweep) || dispatchStallSweep.includes('_dispatchStallState'),
         'the dispatch-stall nudge must not carry a watch-registry nudgeCount — state is in-memory per-card');
+    // The predicate is dispatched_at + completed_at ONLY. `dispatched_terminal`
+    // is written as '' by updateDispatchInfoByPlanFile / attributePasteDispatch
+    // whenever the caller omits a name, and by every pre-V57 row, so gating on
+    // it makes "no seat attributed" look exactly like "not dispatched" and drops
+    // the very cards this backstop exists for.
+    assert.ok(!/p\.dispatchedTerminal/.test(dispatchStallSweep),
+        'the dispatch-stall predicate must NOT gate on dispatchedTerminal — an unattributed dispatched card still nudges, via the operator path');
+    // getBoard() returns planFile ABSOLUTE (_resolveAbsolutePlanFile), so
+    // path.join(folder, planFile) concatenates into a path that never exists and
+    // every stat throws — silently deleting the plan-file-mtime half of the
+    // re-arm signal.
+    assert.ok(!/path\.join\(folder,\s*card\.planFile\)/.test(dispatchStallSweep),
+        'the dispatch-stall sweep must not path.join an already-absolute planFile — use _resolvePlanFilePath');
+    assert.ok(planIngestionTs.includes('private _resolvePlanFilePath('),
+        'plan-file paths from getBoard() must go through _resolvePlanFilePath, which honours an absolute planFile');
+    // The state map is process-global; the sweep runs once per workspace folder.
+    // An unscoped clear/prune wipes other folders' lastNudgedAt, which is the
+    // only thing pacing the nudge — "one nudge per stall" becomes one per tick.
+    assert.ok(!/_dispatchStallState\.clear\(\)/.test(planIngestionTs),
+        'dispatch-stall state must never be cleared wholesale — a blanket clear wipes every other workspace folder\'s pacing state');
+    const prune = planIngestionTs.substring(planIngestionTs.indexOf('private _pruneDispatchStallState('));
+    assert.ok(prune.includes('key.startsWith(prefix)'),
+        'the dispatch-stall state prune must be scoped to the sweeping folder\'s key prefix');
     // Cancellation + pacing.
     // Paced on `nudgeSilenceMs` (default 10 min), deliberately NOT `turnEndSilenceMs`
     // (90s): the nudge is a backstop, not a turn-boundary probe. This assertion

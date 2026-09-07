@@ -1270,8 +1270,11 @@ export class PlanIngestionEngine {
                 // is gate 4a), so there is no dispatch stamp to compare against.
                 let writtenAgo = '';
                 try {
-                    const stat = await fs.promises.stat(path.join(folder, s.planFile));
-                    writtenAgo = `, plan file written ${Math.round((nowMs - stat.mtimeMs) / 1000)}s ago`;
+                    const subtaskPath = this._resolvePlanFilePath(folder, s.planFile);
+                    if (subtaskPath) {
+                        const stat = await fs.promises.stat(subtaskPath);
+                        writtenAgo = `, plan file written ${Math.round((nowMs - stat.mtimeMs) / 1000)}s ago`;
+                    }
                 } catch { /* unreadable at this root is no evidence — omit the clause */ }
                 lines.push(`  - ${s.planFile} (column ${s.kanbanColumn}, ${seat}${silentFor}${writtenAgo})`);
             }
@@ -2245,6 +2248,23 @@ export class PlanIngestionEngine {
      * time. It never marks the card complete, never clears the seat, never
      * advances the column. `completed_at` remains NULL until the lead posts.
      */
+    /**
+     * Resolve a `KanbanPlanRecord.planFile` to a path `fs.stat` can read.
+     *
+     * `getBoard()` runs every row through `KanbanDatabase._resolveAbsolutePlanFile`,
+     * so `planFile` comes back ABSOLUTE. `path.join(folder, planFile)` does NOT
+     * treat an absolute second segment as a reset (that is `path.resolve`) — it
+     * concatenates, producing `/root/root/.switchboard/plans/x.md`, which never
+     * exists. Every `stat` then throws and the caller's `catch` reads the miss as
+     * "no evidence", which is indistinguishable from "the file did not change".
+     * For the dispatch-stall re-arm that silently deletes the plan-file-mtime half
+     * of the progress signal.
+     */
+    private _resolvePlanFilePath(folder: string, planFile: string): string | null {
+        if (!planFile) return null;
+        return path.isAbsolute(planFile) ? planFile : path.join(folder, planFile);
+    }
+
     private async _runDispatchStallSweep(args: {
         db: KanbanDatabase;
         folder: string;
@@ -2278,17 +2298,28 @@ export class PlanIngestionEngine {
         } catch { return; } // unreadable board is no evidence — try next tick.
         if (board.length === 0) return;
 
-        const stalledCards = board.filter(p =>
-            p && p.dispatchedAt
-            && !p.completedAt
-            && typeof p.dispatchedTerminal === 'string'
-            && p.dispatchedTerminal.length > 0
-        );
+        // The predicate is exactly the plan's rule: dispatched_at set AND
+        // completed_at NULL. It deliberately does NOT also require
+        // `dispatchedTerminal`. `updateDispatchInfoByPlanFile` and
+        // `attributePasteDispatch` both stamp `dispatched_at` while writing
+        // `dispatched_terminal = ''` whenever the caller omits the name, and
+        // every row dispatched before V57 carries '' as well. Gating on it makes
+        // "no seat attributed to this card" indistinguishable from "this card is
+        // not dispatched", silently dropping the exact class of card this
+        // backstop exists for. An unattributed card still nudges — it takes the
+        // operator path below (plan edge-case 2: decide, do not silently drop).
+        const stalledCards = board.filter(p => p && p.dispatchedAt && !p.completedAt);
         if (stalledCards.length === 0) {
             // Nothing matches — drop any state we held for cards that no longer
             // match the predicate (completion posted or dispatch cleared). This
             // is the only cleanup: no registry, no lifecycle.
-            if (this._dispatchStallState.size > 0) this._dispatchStallState.clear();
+            //
+            // Scoped to THIS folder's keys. The map is process-global and the
+            // sweep runs once per workspace folder, so a blanket `.clear()`
+            // wipes the pacing state of every OTHER folder — which drops their
+            // `lastNudgedAt` and turns the "one nudge per stall" rule into a
+            // nudge every tick.
+            this._pruneDispatchStallState(folder, new Set<string>());
             return;
         }
 
@@ -2355,8 +2386,10 @@ export class PlanIngestionEngine {
                 continue;
             }
 
-            const seatName = card.dispatchedTerminal!;
-            const team = seatToTeam.get(seatName);
+            // '' = no seat attributed (a pre-V57 row, or a dispatch path that
+            // passed no terminal name). Never treated as a seat name.
+            const seatName = (card.dispatchedTerminal || '').trim();
+            const team = seatName ? seatToTeam.get(seatName) : undefined;
             const headName = team?.headName ?? '';
             // Resolve the addressee: the lead of the team holding the card. If
             // the seat is not on a team (solo seat, direct dispatch, unknown),
@@ -2377,12 +2410,15 @@ export class PlanIngestionEngine {
                 // Read the plan-file mtime and the seat's lastDataAt to compare
                 // against the values observed at the last nudge.
                 let currentMtime = prior.lastObservedMtime;
-                try {
-                    const stat = await fs.promises.stat(path.join(folder, card.planFile));
-                    currentMtime = stat.mtimeMs;
-                } catch { /* unreadable at this root is no evidence — keep prior */ }
-                const seatLive = livenessByName.get(seatName);
-                const currentSeatOutput = seatLive?.lastDataAt ?? prior.lastObservedSeatOutputAt;
+                const planPath = this._resolvePlanFilePath(folder, card.planFile);
+                if (planPath) {
+                    try {
+                        const stat = await fs.promises.stat(planPath);
+                        currentMtime = stat.mtimeMs;
+                    } catch { /* unreadable is no evidence — keep prior, so a miss reads as "no change", never as progress */ }
+                }
+                const priorSeatLive = seatName ? livenessByName.get(seatName) : undefined;
+                const currentSeatOutput = priorSeatLive?.lastDataAt ?? prior.lastObservedSeatOutputAt;
                 const mtimeAdvanced = currentMtime > prior.lastObservedMtime;
                 const seatProduced = currentSeatOutput > prior.lastObservedSeatOutputAt;
                 if (!mtimeAdvanced && !seatProduced) {
@@ -2429,8 +2465,11 @@ export class PlanIngestionEngine {
             // operator. If there is no lead (solo seat, direct dispatch),
             // notify the operator.
             const elapsedMin = Math.round(elapsed / 60000);
-            const seatLive = livenessByName.get(seatName);
+            const seatLive = seatName ? livenessByName.get(seatName) : undefined;
             const seatStatus = !seatLive ? 'absent' : seatLive.status === 'exited' ? 'exited' : 'live';
+            // Name the holder, or say plainly that no seat was attributed — never
+            // render an empty-quoted seat name, which reads as a real one.
+            const heldBy = seatName ? `held by seat '${seatName}'` : 'with no seat attributed';
             let body: string;
             let recipientSeat: string | undefined;
             let notifySeatName: string;
@@ -2438,19 +2477,19 @@ export class PlanIngestionEngine {
                 // No team — notify the operator. The operator is not a seat;
                 // deliver with an empty seatName so the host resolves to its
                 // operator/Mission-Control fallback.
-                body = `[switchboard:turn-end] Dispatch stall — card '${planId}' held by seat '${seatName}' has been dispatched for ${elapsedMin} min with no completion posted. The seat is not on a team, so there is no lead to nudge. The card may be stuck.`;
+                body = `[switchboard:turn-end] Dispatch stall — card '${planId}' ${heldBy} has been dispatched for ${elapsedMin} min with no completion posted. ${seatName ? `Seat '${seatName}' is not on a team, so there is no lead to nudge.` : 'No seat is attributed to the card, so there is no lead to nudge.'} The card may be stuck.`;
                 notifySeatName = '';
                 recipientSeat = undefined;
             } else if (addresseeDead) {
                 // Dead head — escalate to the operator. A lead that has died is
                 // the strongest reason to tell someone about the cards it was
                 // holding, not a reason to stop looking.
-                body = `[switchboard:turn-end] Dispatch stall — card '${planId}' held by seat '${seatName}' has been dispatched for ${elapsedMin} min with no completion posted. Its lead '${addressee}' is ${!addresseeLive ? 'absent' : 'exited'}. The card may be stuck.`;
+                body = `[switchboard:turn-end] Dispatch stall — card '${planId}' ${heldBy} has been dispatched for ${elapsedMin} min with no completion posted. Its lead '${addressee}' is ${!addresseeLive ? 'absent' : 'exited'}. The card may be stuck.`;
                 notifySeatName = addressee;
                 recipientSeat = undefined;
             } else {
                 // Notify the lead, naming the seat and the card.
-                body = `[switchboard:turn-end] Dispatch stall — card '${planId}' held by seat '${seatName}' has been dispatched for ${elapsedMin} min with no completion posted (seat is ${seatStatus}). If the work is finished, post its completion; if the seat is stuck, prod it or re-stage the card.`;
+                body = `[switchboard:turn-end] Dispatch stall — card '${planId}' ${heldBy} has been dispatched for ${elapsedMin} min with no completion posted (seat is ${seatStatus}). If the work is finished, post its completion; if the seat is stuck, prod it or re-stage the card.`;
                 notifySeatName = addressee;
                 recipientSeat = addressee;
             }
@@ -2471,7 +2510,7 @@ export class PlanIngestionEngine {
                 notifiedSeatsThisTick.add(addressee);
             }
             this._host.logger.appendLine(
-                `[GlobalPlanWatcher] Dispatch-stall nudge fired for card '${planId}' in ${folder} → held by '${seatName}' for ${elapsedMin} min`
+                `[GlobalPlanWatcher] Dispatch-stall nudge fired for card '${planId}' in ${folder} → ${seatName ? `held by '${seatName}'` : 'no seat attributed'} for ${elapsedMin} min`
                 + (noTeam ? ' (no team — operator notified)' : addresseeDead ? ` (lead '${addressee}' dead — operator notified)` : ` (lead '${addressee}' notified).`)
             );
 
@@ -2479,11 +2518,14 @@ export class PlanIngestionEngine {
             // lastDataAt observed AT this nudge. A subsequent stall re-arms
             // only when one of them has advanced.
             let observedMtime = 0;
-            try {
-                const stat = await fs.promises.stat(path.join(folder, card.planFile));
-                observedMtime = stat.mtimeMs;
-            } catch { /* unreadable → 0, so any later successful read counts as advance */ }
-            const observedSeatOutput = livenessByName.get(seatName)?.lastDataAt ?? 0;
+            const observePath = this._resolvePlanFilePath(folder, card.planFile);
+            if (observePath) {
+                try {
+                    const stat = await fs.promises.stat(observePath);
+                    observedMtime = stat.mtimeMs;
+                } catch { /* unreadable → 0, so any later successful read counts as advance */ }
+            }
+            const observedSeatOutput = (seatName ? livenessByName.get(seatName)?.lastDataAt : 0) ?? 0;
             this._dispatchStallState.set(stateKey, {
                 lastNudgedAt: nowMs,
                 lastObservedMtime: observedMtime,
@@ -2494,12 +2536,29 @@ export class PlanIngestionEngine {
         // Prune state for cards that no longer match the predicate (completion
         // posted or dispatch cleared). This is the only cleanup — no registry,
         // no lifecycle, no separate drop conditions.
-        if (this._dispatchStallState.size > stillStalled.size) {
-            for (const key of [...this._dispatchStallState.keys()]) {
-                const planId = key.slice(folder.length + 1);
-                if (!stillStalled.has(planId)) {
-                    this._dispatchStallState.delete(key);
-                }
+        this._pruneDispatchStallState(folder, stillStalled);
+    }
+
+    /**
+     * Drop `_dispatchStallState` entries for cards in `folder` that no longer
+     * match the dispatch-stall predicate.
+     *
+     * Scoped by the `${folder}:` key prefix, and ONLY that prefix. The map is
+     * process-global while the sweep runs once per workspace folder, so an
+     * unscoped pass slices every key by the current folder's length — yielding a
+     * garbage planId for every other folder's entries, none of which are in this
+     * folder's `stillStalled` set, so all of them get deleted. Losing an entry
+     * loses its `lastNudgedAt`, which is the only thing pacing the nudge: the
+     * next tick re-nudges as if for the first time, and a multi-root workspace
+     * turns "one nudge per stall" into one nudge per tick.
+     */
+    private _pruneDispatchStallState(folder: string, stillStalled: Set<string>): void {
+        if (this._dispatchStallState.size === 0) return;
+        const prefix = `${folder}:`;
+        for (const key of [...this._dispatchStallState.keys()]) {
+            if (!key.startsWith(prefix)) continue; // another folder's entry — not ours to prune.
+            if (!stillStalled.has(key.slice(prefix.length))) {
+                this._dispatchStallState.delete(key);
             }
         }
     }
