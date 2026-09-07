@@ -102,8 +102,9 @@ as an option or removed) is unanswered, and its own file carries no implementati
 summary and was unmodified in the working tree. Its stated dependency, the CLI tab from
 `c2502571`, has now landed and was reviewed in this pass, so the prerequisite is
 satisfied and the plan is unblocked. No code was changed and no verification was run
-against this plan, because there is nothing to verify. The card should go back to a
-pre-coding column rather than be treated as reviewed.
+against this plan, because there is nothing to verify. This card was returned to PLAN REVIEWED via POST /kanban/move. It was stamped
+`Switchboard-Stage: reviewed` in commit 36e42cb9 in error; that trailer does not
+reflect any implementation of this plan.
 
 ## Deferred Findings
 

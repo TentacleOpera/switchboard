@@ -206,8 +206,9 @@ at `/terminals?solo=<name>&dock=1` (`src/webview/shell.js:816` for the Agent tab
 not reachable either. Its two hard prerequisites — the viewport extraction and the
 three-tab rework — have both landed and were reviewed in this pass, so the plan is
 unblocked; nothing else about it has started. No code was changed for this plan and no
-verification was run against it, because there is nothing to verify. The card should go
-back to a pre-coding column rather than be treated as reviewed.
+verification was run against it, because there is nothing to verify. This card was returned to PLAN REVIEWED via POST /kanban/move. It was stamped
+`Switchboard-Stage: reviewed` in commit 36e42cb9 in error; that trailer does not
+reflect any implementation of this plan.
 
 ## Deferred Findings
 
