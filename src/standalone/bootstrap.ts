@@ -2160,7 +2160,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         // the fleet root and spawn root are identical by construction.
                         // (In the extension host, standing orders write to the latched
                         // _apiServerWorkspaceRoot rather than the spawn or definition root.)
-                        const wired = await wireSpawnedTeam({ db, settings, headName: terminal.friendlyName, children: spawned.children, members: rawDelegates });
+                        const wired = await wireSpawnedTeam({ db, settings, headName: terminal.friendlyName, children: spawned.children, members: rawDelegates, workspaceRoot });
                         if (!wired.ok) {
                             wiringError = wired.error;
                         } else {
@@ -3446,7 +3446,11 @@ Each plan file must include:
                 // standingOrders (4th arg) true — the recipient acts on this notification.
                 // applySeatBlock (5th arg) false — a machine notice has no task to
                 // constrain; the seat block is noise here.
-                await deliverPrompt(handle, message, { clearBeforePrompt: false }, true, false);
+                // `bareDelivery` suppresses the standing-orders block — the member
+                // completion reminder sends a short pointer to the member orders
+                // file, not the full block (plan change 3). Re-delivering the whole
+                // block on a relay path makes the context-exhaustion problem worse.
+                await deliverPrompt(handle, message, { clearBeforePrompt: false }, !info.bareDelivery, false);
             } catch (err) {
                 log(opts, `turn-end delivery to '${recipientName}' failed: ${err}`);
             }

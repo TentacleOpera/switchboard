@@ -4036,20 +4036,29 @@ export class LocalApiServer {
             // Reject a feature planId — use POST /kanban/feature/complete instead.
             try {
                 let isFeature = false;
+                let subs: any[] = [];
                 if (typeof db.getSubtasksByFeatureId === 'function') {
-                    const subs = await db.getSubtasksByFeatureId(planId);
-                    isFeature = Array.isArray(subs) && subs.length > 0;
+                    const found = await db.getSubtasksByFeatureId(planId);
+                    subs = Array.isArray(found) ? found : [];
+                    isFeature = subs.length > 0;
                 }
                 if (!isFeature && typeof db.getPlanByPlanId === 'function') {
                     const row = await db.getPlanByPlanId(planId);
                     isFeature = !!row && !!row.isFeature;
                 }
                 if (isFeature) {
+                    // Only point at feature/complete when the feature is ACTUALLY
+                    // done. That endpoint completes every subtask and tears the
+                    // team down, so recommending it while subtasks are outstanding
+                    // is how a mid-feature teardown happens: the lead follows the
+                    // instruction it was handed. The subtasks are already loaded
+                    // above, so the count costs nothing.
+                    const outstanding = subs.filter(sub => sub && !sub.completedAt).length;
+                    const error = outstanding > 0
+                        ? `This planId is a feature with ${outstanding} of ${subs.length} subtasks still incomplete. Do NOT complete the feature. POST /kanban/task/complete with the planId of the SUBTASK you were dispatched, not the feature. POST /kanban/feature/complete only once every subtask has reported done.`
+                        : 'This planId is a feature. Use POST /kanban/feature/complete with { from, planId, workspaceRoot } to complete all subtasks and clear the team.';
                     res.writeHead(400, { 'Content-Type': 'application/json' });
-                    res.end(JSON.stringify({
-                        success: false,
-                        error: 'This planId is a feature. Use POST /kanban/feature/complete with { from, planId, workspaceRoot } to complete all subtasks and clear the team.'
-                    }));
+                    res.end(JSON.stringify({ success: false, error, outstandingSubtasks: outstanding }));
                     return;
                 }
             } catch { /* best effort — if the check fails, proceed to normal completion */ }
@@ -4308,8 +4317,27 @@ export class LocalApiServer {
                 }
             }
 
-            // Clear EVERY roster seat including the lead.
+            // Clear every roster seat EXCEPT the caller.
+            //
+            // The caller is mid-turn by definition: it is awaiting this response
+            // and still has work after it — commit, report, advance the card.
+            // Clearing it as a SIDE EFFECT of a roster operation wipes the context
+            // of the agent that asked for the teardown, and when resolveTeamMembers
+            // returns nothing the roster falls back to `[from]`, so this endpoint
+            // would clear the caller and nobody else.
+            //
+            // completeCardInternal states the same invariant ("Never clear the lead
+            // in `from`") and team/release respects it by iterating coderSeats.
+            // This path was the only one that did not.
+            //
+            // This is NOT a ban on self-clear: queue/done deliberately stands a
+            // finishing non-team seat down, and the bulk clear route can target any
+            // named seat including the caller. What is removed is the side effect.
             for (const name of roster) {
+                if (name === from) {
+                    cleared.push({ name, cleared: false, reason: `Caller '${from}' is never cleared — it is mid-turn` });
+                    continue;
+                }
                 if (this._options.clearTerminalContext) {
                     try {
                         const clr = await this._options.clearTerminalContext(workspaceRoot, name);
@@ -4959,11 +4987,32 @@ export class LocalApiServer {
                     }
 
                     // ── Clear the finishing seat ───────────────────────────
-                    // Stand down the finishing seat on completion. Both team
-                    // and non-team seats clear on completion.
+                    // A NON-team seat stands down here. A team member does not:
+                    // its context is what the lead reads to accept the work, and
+                    // what a fix request lands on. The relay above has just told
+                    // the lead exactly that. `isTeamMember` is resolved ONCE above
+                    // the relay so the message and this decision cannot disagree —
+                    // this branch is the consumer that makes that hoist mean
+                    // something. Before it existed the variable had exactly two
+                    // references, its declaration and the relay string, so the
+                    // lead was promised a preserved seat and handed a wiped one.
+                    //
+                    // Not clearing here leaks nothing. `terminal.clearBeforePrompt`
+                    // (default true, KanbanProvider.ts) wipes a seat when its next
+                    // plan arrives, so context lives exactly as long as it is
+                    // useful. Clearing on completion was a second, earlier clear
+                    // that destroyed the report before anyone could read it.
+                    //
+                    // At-rest is bookkeeping about WORK, not about context, so a
+                    // preserved seat is still marked at rest — otherwise the
+                    // blocked-notice backstop reads a finished member as busy.
                     let cleared = false;
                     let clearError: string | undefined;
-                    if (this._options.clearTerminalContext) {
+                    let clearSkipped: string | undefined;
+                    if (isTeamMember) {
+                        clearSkipped = 'team member — context preserved for review and fix requests';
+                        this.markSeatAtRest(workspaceRoot, from, held.planId || planId);
+                    } else if (this._options.clearTerminalContext) {
                         try {
                             const clr = await this._options.clearTerminalContext(workspaceRoot, from);
                             cleared = !!clr?.cleared;
@@ -5172,6 +5221,7 @@ export class LocalApiServer {
                         outcome,
                         escalated,
                         ...(clearError ? { clearError } : {}),
+                        ...(clearSkipped ? { clearSkipped } : {}),
                         ...(parkReason ? { parkReason } : {}),
                     };
                     // If the pop succeeded with a dispatch, label the reason

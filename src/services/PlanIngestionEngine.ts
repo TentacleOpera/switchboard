@@ -26,6 +26,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { KanbanDatabase, type KanbanPlanRecord } from './KanbanDatabase';
 import { parsePlanMetadata, extractClickUpTaskId, extractLinearIssueId } from './planMetadataUtils';
 import { isRuntimeMirrorPlanFile } from './PlanFileImporter';
+import { TERMINALS_GROUPS_KEY } from './teamWiring';
 import type { ClickUpSyncService } from './ClickUpSyncService';
 import type { LinearSyncService } from './LinearSyncService';
 import type { NotionFetchService } from './NotionFetchService';
@@ -97,6 +98,14 @@ export interface TurnEndInfo {
     /** Pre-composed evidence body for the nudge (remaining subtasks, their seats, silence, mtime).
      *  Hosts send this verbatim when set and fall back to their own one-line message when absent. */
     body?: string;
+    /**
+     * When true, the host delivers the body WITHOUT the standing-orders block
+     * prepended. Used by the member completion reminder, which sends a short
+     * pointer to the member orders file — re-delivering the whole block on a
+     * relay path makes the context-exhaustion problem worse (see plan change 3).
+     * Absent / false preserves the existing behaviour (standing orders applied).
+     */
+    bareDelivery?: boolean;
 }
 
 /**
@@ -402,6 +411,24 @@ export class PlanIngestionEngine {
         this._queueEscalationRecorder = fn;
     }
 
+    /**
+     * Per-seat dedupe state for the member completion reminder sweep. Keyed on
+     * `${workspaceRoot}:${seatName}`. Tracks the seat's `lastDataAt` at the
+     * time of the last re-delivery and the timestamp of the re-delivery, so:
+     *   - a seat that stays quiet (lastDataAt unchanged) gets ONE re-delivery,
+     *     not a stream (plan change 4);
+     *   - a seat that produces output (lastDataAt advances) ends its quiet
+     *     period, and a fresh re-delivery is correct when it goes quiet again
+     *     (plan change 4, verification item 4).
+     *
+     * The `nudgeSilenceMs` pacing floor after a re-delivery prevents the
+     * prompt's own terminal echo from resetting the state on the next tick —
+     * the echo updates `lastDataAt`, but the pacing floor holds the state
+     * until enough time has passed for the echo to have settled and genuine
+     * agent output to be distinguishable.
+     */
+    private _memberReminderState = new Map<string, { lastDataAt: number; remindedAt: number }>();
+
     public setFeatureFileRegenerator(cb: (workspaceRoot: string, featureId: string) => Promise<void>): void {
         this._regenerateFeatureFile = cb;
     }
@@ -605,6 +632,23 @@ export class PlanIngestionEngine {
                             });
                         } catch (queueNudgeErr) {
                             this._host.logger.appendLine(`[GlobalPlanWatcher] queue nudge sweep failed for ${folder}: ${queueNudgeErr}`);
+                        }
+                        // ── Member completion reminder ──────────────────────────────
+                        // Re-delivers the completion instruction to a team member
+                        // seat that has gone quiet holding an uncompleted card —
+                        // the member's equivalent of the head's turn-end top-up.
+                        // Shares the same liveness snapshot, `nowMs`,
+                        // `turnEndSilenceMs`, `nudgeSilenceMs` and
+                        // `notifiedSeatsThisTick` set as the other sweeps so a
+                        // seat that is both a pacer and a member is nudged at
+                        // most once per tick. NOT gated on an armed watch —
+                        // applies to any team member holding an uncompleted card.
+                        try {
+                            await this._runMemberCompletionReminderSweep({
+                                db, folder, liveness, nowMs, turnEndSilenceMs, nudgeSilenceMs, notifiedSeatsThisTick,
+                            });
+                        } catch (reminderErr) {
+                            this._host.logger.appendLine(`[GlobalPlanWatcher] member completion reminder sweep failed for ${folder}: ${reminderErr}`);
                         }
                         await this._retryPendingFeatureLinks(db, folder);
                     } catch (sweepErr) {
@@ -1819,6 +1863,230 @@ export class PlanIngestionEngine {
             } catch (writeErr) {
                 this._host.logger.appendLine(`[GlobalPlanWatcher] queue nudge: failed to persist watch state: ${writeErr}`);
             }
+        }
+    }
+
+    /**
+     * Member completion reminder sweep — re-delivers the completion instruction
+     * to a team member seat that has gone quiet holding an uncompleted card.
+     *
+     * The problem this solves (plan: "A Coder Is Told How to Report Once, at
+     * the Start, and Needs It Hours Later"): coders are dispatched with their
+     * completion instructions once, at the start. A long task fills the context
+     * and the instruction is gone by the time it is needed. The head is topped
+     * up throughout its life (turn-end notifications with standing orders, plus
+     * a durable `head-prompt.md`); a member has neither. This sweep is the
+     * member's equivalent of the head's turn-end top-up, delivered at the
+     * moment the instruction is about to be used.
+     *
+     * Gates (mirrors the hard-won guards of the feature/queue sweeps):
+     *  1. No notifier → nothing to do.
+     *  2. Empty liveness → no evidence (not "everyone is quiet").
+     *  3. Card has `dispatchedAt` set and `completedAt` NULL — the seat is
+     *     holding an uncompleted card. `completedAt` is the lead's asserted
+     *     POST /kanban/task/complete; a card with it set means the seat
+     *     reported and nothing needs saying (plan change 5, verification
+     *     item 3). Keyed on `completedAt`, NEVER on `kanbanColumn` — same
+     *     contract as the feature sweep's gate (1).
+     *  4. The seat is a team MEMBER, not a head. Heads already have both
+     *     `head-prompt.md` and the turn-end top-up (plan edge-case 7). Resolved
+     *     by reading `terminals.groups` from the DB config — the same path
+     *     `resolveTeamMembersForHead` uses, so membership is derived identically
+     *     to dispatch routing.
+     *  5. The seat is live but quiet — `lastDataAt` older than
+     *     `turnEndSilenceMs`. Delivering a prompt to a terminal whose agent is
+     *     actively working injects text into a running turn (plan edge-case 2).
+     *  6. Not already notified this tick (shared `notifiedSeatsThisTick` set).
+     *  7. Dedupe: one re-delivery per quiet period, not a stream (plan change
+     *     4). A seat that stays quiet (lastDataAt unchanged) gets one
+     *     re-delivery. A seat that produces output (lastDataAt advances) ends
+     *     its quiet period; a fresh re-delivery is correct when it goes quiet
+     *     again (verification item 4). The `nudgeSilenceMs` pacing floor after
+     *     a re-delivery prevents the prompt's own terminal echo from resetting
+     *     the state on the next tick.
+     *
+     * The re-delivery is a SHORT POINTER to the member orders file
+     * (`.switchboard/teams/<teamId>/member-orders.md`), not the full
+     * standing-orders block (plan change 3, verification item 2). Context
+     * exhaustion is the reported cause; re-delivering the entire block makes
+     * the problem worse. `bareDelivery: true` tells the host to send the body
+     * without the standing-orders block prepended.
+     *
+     * NOT gated on an armed queue or feature watch — this sweep applies to ANY
+     * team member holding an uncompleted card, regardless of whether there is
+     * staged queue work or an armed feature watch. The queue-stall seat-pacing
+     * nudge (`_runQueueNudgeSweep`) is a different addressee (the pacer seat
+     * about a staged queue) and neither covers the other (plan edge-case 1).
+     */
+    private async _runMemberCompletionReminderSweep(args: {
+        db: KanbanDatabase;
+        folder: string;
+        liveness: Array<{ friendlyName: string; lastDataAt: number; status: string }>;
+        nowMs: number;
+        turnEndSilenceMs: number;
+        nudgeSilenceMs: number;
+        notifiedSeatsThisTick: Set<string>;
+    }): Promise<void> {
+        if (!this._turnEndNotifier) return; // no notifier → no delivery → nothing to do.
+        const { db, folder, liveness, nowMs, turnEndSilenceMs, nudgeSilenceMs, notifiedSeatsThisTick } = args;
+
+        // (2) Empty liveness is NO EVIDENCE — same guard as the feature/queue
+        // sweeps. `getFleetLiveness()` returns [] whenever the fleet is
+        // unavailable; without this guard every team member would be read as
+        // "quiet" and re-delivered on the next tick, for a seat that is still
+        // running.
+        if (liveness.length === 0) return;
+
+        const livenessByName = new Map<string, { lastDataAt: number; status: string }>();
+        for (const entry of liveness) {
+            if (entry.friendlyName) livenessByName.set(entry.friendlyName, { lastDataAt: entry.lastDataAt, status: entry.status });
+        }
+
+        // (4) Resolve team membership from `terminals.groups` — the same path
+        // `resolveTeamMembersForHead` uses (prefixed key + bare-key merge). This
+        // is a DB config read, not a host seam, so both hosts get it for free
+        // with no divergence risk. Build a map from seat name → team info
+        // (teamId, headName, externalHead), excluding heads (heads already have
+        // both `head-prompt.md` and the turn-end top-up — plan edge-case 7).
+        interface TeamInfo { teamId: string; headName: string; externalHead: boolean; }
+        const seatToTeam = new Map<string, TeamInfo>();
+        try {
+            let groups: any[] = [];
+            try {
+                const prefixed = await db.getConfigJson<any[]>(TERMINALS_GROUPS_KEY, []) as any[];
+                if (Array.isArray(prefixed)) { groups = [...prefixed]; }
+            } catch { /* unreadable config is no evidence — try bare key */ }
+            try {
+                const bare = await db.getConfigJson<any[]>('terminals.groups', []) as any[];
+                if (Array.isArray(bare)) {
+                    const existingIds = new Set(groups.map((g: any) => g && g.id).filter(Boolean));
+                    for (const g of bare) {
+                        if (g && typeof g.id === 'string' && !existingIds.has(g.id)) {
+                            groups.push(g);
+                            existingIds.add(g.id);
+                        }
+                    }
+                }
+            } catch { /* best effort */ }
+            for (const g of groups) {
+                if (!g || typeof g.id !== 'string') { continue; }
+                // Only spawned team groups — a manual group with no teamGroup
+                // flag is not a team we re-deliver to.
+                if (g.teamGroup !== true && g.teamKind !== 'spawned') { continue; }
+                const headName = typeof g.head === 'string' ? g.head : (typeof g.name === 'string' ? g.name : '');
+                if (!headName) { continue; }
+                const externalHead = g.externalHead === true;
+                const roster: string[] = Array.isArray(g.order) && g.order.length
+                    ? g.order
+                    : (Array.isArray(g.members) ? g.members : []);
+                for (const name of roster) {
+                    if (typeof name !== 'string' || name.length === 0) { continue; }
+                    // Skip the head — heads already have head-prompt.md and the
+                    // turn-end top-up (plan edge-case 7). For external-headed
+                    // teams the head is already excluded from the roster, so
+                    // this is a no-op there; for regular teams the head is
+                    // roster[0] and must be filtered out here.
+                    if (name === headName) { continue; }
+                    // First group wins — a seat on multiple teams (e.g. a shared
+                    // reviewer) gets one re-delivery, not one per team.
+                    if (!seatToTeam.has(name)) {
+                        seatToTeam.set(name, { teamId: g.id, headName, externalHead });
+                    }
+                }
+            }
+        } catch { return; } // unreadable groups is no evidence — try next tick.
+        if (seatToTeam.size === 0) return; // no team members → nothing to do.
+
+        // (3) Find cards being worked on but not yet completed. Keyed on
+        // `completedAt` — the lead's asserted POST /kanban/task/complete —
+        // and NEVER on `kanbanColumn` (same contract as the feature sweep's
+        // gate 1). A card with `completedAt` set means the seat reported and
+        // nothing needs saying (plan change 5, verification item 3).
+        let board: KanbanPlanRecord[] = [];
+        try {
+            const wsId = (await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '';
+            board = await db.getBoard(wsId) || [];
+        } catch { return; } // unreadable board is no evidence — try next tick.
+        if (board.length === 0) return;
+
+        const heldCards = board.filter(p =>
+            p && p.dispatchedAt
+            && !p.completedAt
+            && typeof p.dispatchedTerminal === 'string'
+            && p.dispatchedTerminal.length > 0
+        );
+        if (heldCards.length === 0) return;
+
+        for (const card of heldCards) {
+            const seatName = card.dispatchedTerminal!;
+            const team = seatToTeam.get(seatName);
+            // (4) Not a team member (standalone seat, head, or unknown) → skip.
+            if (!team) { continue; }
+
+            const live = livenessByName.get(seatName);
+            // Seat absent or exited — the queue sweep's dead-pacer branch
+            // handles re-staging. This sweep is for LIVE seats that have gone
+            // quiet, not dead ones (plan edge-case 1).
+            if (!live || live.status === 'exited') { continue; }
+
+            // (6) Already notified this tick — shared set prevents a double-wake
+            // across the feature, queue, and member sweeps.
+            if (notifiedSeatsThisTick.has(seatName)) { continue; }
+
+            // (5) Seat is mid-turn — `lastDataAt` within `turnEndSilenceMs`.
+            // Delivering a prompt to a terminal whose agent is actively working
+            // injects text into a running turn (plan edge-case 2).
+            if (live.lastDataAt <= 0 || nowMs - live.lastDataAt < turnEndSilenceMs) { continue; }
+
+            // (7) Dedupe: one re-delivery per quiet period.
+            const stateKey = `${folder}:${seatName}`;
+            const state = this._memberReminderState.get(stateKey);
+            if (state) {
+                // Within the pacing floor since the last re-delivery — the
+                // prompt's own terminal echo may have updated `lastDataAt`,
+                // so hold the state until the echo has settled. Don't
+                // re-deliver, don't reset.
+                if (nowMs - state.remindedAt < nudgeSilenceMs) { continue; }
+                // Past the pacing floor. If `lastDataAt` hasn't changed since
+                // the re-delivery, the seat stayed quiet — same quiet period,
+                // one re-delivery is enough (plan change 5: "one, not a
+                // stream"). Don't re-deliver.
+                if (live.lastDataAt === state.lastDataAt) { continue; }
+                // `lastDataAt` advanced past the pacing floor — the agent
+                // produced genuine output, ending the quiet period. Fall
+                // through: if the seat is now quiet (it is — gate 5 passed),
+                // this is a new quiet period and a fresh re-delivery is
+                // correct (verification item 4). Remove the stale state.
+                this._memberReminderState.delete(stateKey);
+            }
+
+            // Compose the re-delivery body — a SHORT POINTER to the member
+            // orders file, not the full standing-orders block (plan change 3).
+            // The file contains the correct fragment for the team type: the
+            // POST recipe for regular teams, the file-report callback for
+            // external-headed teams (plan edge-case 4, verification item 6).
+            const body = `[switchboard:turn-end] You have gone idle holding card '${card.planId}'. Before reporting your completion, re-read your orders at .switchboard/teams/${team.teamId}/member-orders.md`;
+
+            try {
+                this._turnEndNotifier({
+                    seatName,
+                    planFile: card.planFile || '',
+                    outcome: 'stalled',
+                    workspaceRoot: folder,
+                    recipientSeat: seatName,
+                    body,
+                    // Suppress the standing-orders block — the re-delivery is
+                    // a short pointer, not the full block (plan change 3).
+                    bareDelivery: true,
+                });
+            } catch (cbErr) {
+                this._host.logger.appendLine(`[GlobalPlanWatcher] member completion reminder notifier failed for seat '${seatName}' in ${folder}: ${cbErr}`);
+            }
+            notifiedSeatsThisTick.add(seatName);
+            this._memberReminderState.set(stateKey, { lastDataAt: live.lastDataAt, remindedAt: nowMs });
+            this._host.logger.appendLine(
+                `[GlobalPlanWatcher] Member completion reminder fired for seat '${seatName}' in ${folder} → holding '${card.planId}' (team ${team.teamId}, externalHead=${team.externalHead}).`
+            );
         }
     }
 

@@ -2256,7 +2256,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * malformed parent chain), skip. Derived entirely from the pty stream — no
      * hooks, no tokens, no agent-side obligation.
      */
-    public notifyTurnEnd(info: { seatName: string; planFile: string; outcome: 'completed' | 'blocked' | 'stalled'; workspaceRoot: string; recipientSeat?: string; body?: string; liveDelivery?: boolean }): void {
+    public notifyTurnEnd(info: { seatName: string; planFile: string; outcome: 'completed' | 'blocked' | 'stalled'; workspaceRoot: string; recipientSeat?: string; body?: string; liveDelivery?: boolean; bareDelivery?: boolean }): void {
         // Hops turn-end trigger: completed outcome only (coalesced 2s debounce evaluation pass + feed)
         if (info.outcome === 'completed') {
             try {
@@ -2409,6 +2409,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     // HTTP boundary; an HTTP caller cannot set this.
                     seatBlock: false,
                     kind: 'dispatch',
+                    // `bareDelivery` suppresses the standing-orders block — the
+                    // member completion reminder sends a short pointer to the
+                    // member orders file, not the full block (plan change 3).
+                    // Re-delivering the whole block on a relay path makes the
+                    // context-exhaustion problem worse.
+                    ...(info.bareDelivery ? { standingOrders: false as const } : {}),
                 });
                 if (sendRes?.success === false) {
                     console.warn(`[TaskViewerProvider] turn-end delivery to '${recipientName}' failed: ${sendRes.error || 'unknown error'} (seat '${seatName}', ${info.outcome} on ${planFile}).`);
@@ -4161,7 +4167,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                 }
                                 : undefined;
                             const wired = wiringDb
-                                ? await wireSpawnedTeam({ db: wiringDb, settings, headName, children: result.delegates, members: Array.isArray(payload.delegates) ? payload.delegates : undefined, prompt: payload.teamPrompt, headPrompt: payload.teamHeadPrompt })
+                                ? await wireSpawnedTeam({ db: wiringDb, settings, headName, children: result.delegates, members: Array.isArray(payload.delegates) ? payload.delegates : undefined, prompt: payload.teamPrompt, headPrompt: payload.teamHeadPrompt, workspaceRoot: this._apiServerWorkspaceRoot || effectiveRoot })
                                 : { ok: false as const, error: 'Fleet Kanban DB unavailable' };
                             if (!wired.ok) {
                                 // Surface the wiring error on the verb result;

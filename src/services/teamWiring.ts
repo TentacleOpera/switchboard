@@ -14,12 +14,17 @@ import {
     buildHeadCompletionFragment,
     buildHeadNextFragment,
     buildMemberCompletionFragment,
+    composeStandingOrderFragments,
     GLOBAL_QUEUE_COMPLETION_FRAGMENT_BODY,
     STANDING_ORDER_FRAGMENT_IDS,
+    StandingOrderCompositionContext,
     TEAM_HEAD_COMMIT_FRAGMENT_BODY,
 } from './standingOrderFragments';
 import { resolvePreset, resolvePresetMeta, DEFAULT_MEMBER_RELATIONSHIP } from './linkPresets';
 import { GIT_SAFETY_DIRECTIVE } from './agentPromptBuilder';
+import { substituteCliPath } from '../utils/cliPathToken';
+import * as fs from 'fs';
+import * as path from 'path';
 
 /**
  * Host-agnostic team wiring — the shared step every caller runs after a head
@@ -1399,6 +1404,16 @@ export interface WireSpawnedTeamOptions {
      * properties (icon, name, head, roster) without re-deriving the link.
      */
     definitionId?: string;
+    /**
+     * The workspace root for writing the run-scoped member orders file
+     * (`.switchboard/teams/<teamId>/member-orders.md`). When provided,
+     * `wireSpawnedTeam` writes the file after the group registration lands,
+     * mirroring the head-prompt file pattern for external-headed teams. Absent
+     * for callers that have no workspace root (tests, headless harnesses) —
+     * no file is written, which is the safe default (the re-delivery at
+     * turn-end falls back to the fragment text).
+     */
+    workspaceRoot?: string;
 }
 
 export interface WireSpawnedTeamResult {
@@ -1412,6 +1427,89 @@ export interface WireSpawnedTeamResult {
      * Absent when no group was registered (no children, or a failure above).
      */
     groupId?: string;
+}
+
+/**
+ * Write `.switchboard/teams/<teamId>/member-orders.md` — the durable,
+ * re-readable orders file for team members, mirroring the head's
+ * `head-prompt.md`. A member under context pressure attends to a file it is
+ * pointed at; without this file, the completion recipe delivered once at
+ * dispatch is gone by the time it is needed hours later.
+ *
+ * The file contains the composed member standing orders (the completion
+ * fragment for regular teams, the file-report callback for external-headed
+ * teams) plus git safety and work obligations. It is run-scoped: it names
+ * this head, this team, this port, and is replaced on the next team start.
+ * `.switchboard/*` is gitignored, so the file is never committed.
+ */
+export async function writeMemberOrdersFile(
+    workspaceRoot: string,
+    teamId: string,
+    opts: {
+        headName: string;
+        headRole?: string;
+        children: Array<{ friendlyName: string; role?: string }>;
+        externalHead?: boolean;
+        pacing?: 'head' | 'seat';
+    }
+): Promise<string | null> {
+    const sbDir = path.join(workspaceRoot, '.switchboard');
+    // Same guard as writeHeadPromptFile / bootstrapTeamReportsDirectory:
+    // `.switchboard` is created by the extension's own scaffolder, never by a
+    // writer that happens to want a subdirectory. `mkdir -p` here would litter
+    // a non-Switchboard workspace with a half-built control directory.
+    if (!fs.existsSync(sbDir)) { return null; }
+    const teamDir = path.join(sbDir, 'teams', teamId);
+    await fs.promises.mkdir(teamDir, { recursive: true });
+
+    const { headName, headRole, children, externalHead, pacing } = opts;
+    const childNames = children.map(c => c.friendlyName).filter(n => typeof n === 'string' && n.length > 0);
+    const reviewerSeat = children.some(c => String(c.role || '').toLowerCase() === 'reviewer');
+
+    // Compose the member standing orders from the same fragments
+    // `wireSpawnedTeam` installs as the team-scoped standing order. The
+    // fragment body functions carry the `<cliPath>` token; substitute it
+    // before writing so the file contains a runnable command, not a token.
+    const memberFragments = externalHead
+        ? [STANDING_ORDER_FRAGMENT_IDS.externalMemberCallback, STANDING_ORDER_FRAGMENT_IDS.gitSafety, STANDING_ORDER_FRAGMENT_IDS.subagentPolicy]
+        : [STANDING_ORDER_FRAGMENT_IDS.memberCompletion, STANDING_ORDER_FRAGMENT_IDS.memberWork, STANDING_ORDER_FRAGMENT_IDS.gitSafety, STANDING_ORDER_FRAGMENT_IDS.subagentPolicy];
+
+    const ctx: StandingOrderCompositionContext = {
+        targetName: childNames[0] || '',
+        inTeam: true,
+        isHead: false,
+        teamId,
+        headName,
+        headRole: headRole || 'lead',
+        members: childNames,
+        reviewerSeat,
+        workKind: (headRole || 'lead') === 'planner' ? 'plan' : 'feature',
+        pacing: pacing === 'seat' ? 'seat' : 'head',
+        orchestratorPresent: false,
+        attended: false,
+        externalHead: !!externalHead,
+    };
+
+    const composed = composeStandingOrderFragments(memberFragments, ctx);
+    const ordersText = substituteCliPath(composed.text);
+
+    const content = `# Member Orders — Team ${headName}
+
+You are a member of this team. Read this file to re-orient before reporting
+your completion. Your standing orders are below.
+
+## Team Roster
+- **Head:** ${headName}
+${childNames.map(n => `- **Member:** ${n}`).join('\n')}
+
+## Your Standing Orders
+
+${ordersText}
+`;
+
+    const filePath = path.join(teamDir, 'member-orders.md');
+    await fs.promises.writeFile(filePath, content, 'utf8');
+    return filePath;
 }
 
 /**
@@ -1719,6 +1817,24 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
     if (opts.externalHead && opts.regenerateHeadPrompt) {
         try { await opts.regenerateHeadPrompt({ groupId, memberNames: groupMembers }); }
         catch (err) { console.warn('[teamWiring] regenerateHeadPrompt failed:', err); }
+    }
+
+    // Member orders file — the durable, re-readable orders file for team
+    // members, mirroring the head's `head-prompt.md`. Written for ALL teams
+    // (regular and external-headed) when a workspace root is available. A
+    // failure here leaves a missing file, not a broken team — the turn-end
+    // re-delivery falls back to the fragment text when the file is absent.
+    // Runs AFTER the group write so `groupId` is the persisted team id.
+    if (opts.workspaceRoot && childNames.length > 0) {
+        try {
+            await writeMemberOrdersFile(opts.workspaceRoot, groupId, {
+                headName,
+                headRole: opts.headRole,
+                children: children as Array<{ friendlyName: string; role?: string }>,
+                externalHead: opts.externalHead,
+                pacing: opts.pacing,
+            });
+        } catch (err) { console.warn('[teamWiring] writeMemberOrdersFile failed:', err); }
     }
 
     return { ok: true, groupId };

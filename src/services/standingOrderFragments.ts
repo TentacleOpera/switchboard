@@ -83,7 +83,8 @@ export function buildMemberCompletionFragment(ctx: Pick<StandingOrderComposition
         + 'Report YOUR task, and only yours. Do not infer that a feature is finished from board\n'
         + 'position: a column advances when work STARTS, not when it finishes, so "every subtask is\n'
         + 'in a coding column" is not evidence of anything. Handing a feature to review is your\n'
-        + 'lead\'s call, not yours — the lead asserts completion with POST /kanban/task/complete.';
+        + 'lead\'s call, not yours — the lead asserts completion with POST /kanban/task/complete.\n\n'
+        + 'Before reporting, re-read your full orders at .switchboard/teams/' + ctx.teamId + '/member-orders.md';
 }
 
 export function buildHeadCompletionFragment(): string {
@@ -159,7 +160,7 @@ export const GLOBAL_QUEUE_COMPLETION_FRAGMENT_BODY =
 export const STANDING_ORDER_FRAGMENTS: ReadonlyArray<StandingOrderFragment> = [
     { id: STANDING_ORDER_FRAGMENT_IDS.memberCompletion, name: 'Route member completion', order: 10, obligation: 'completion', applies: ctx => ctx.inTeam && !ctx.isHead && !ctx.externalHead, body: buildMemberCompletionFragment },
     { id: STANDING_ORDER_FRAGMENT_IDS.memberWork, name: 'Team member work', order: 20, obligation: 'work', applies: ctx => ctx.inTeam && !ctx.isHead && !ctx.externalHead, body: ctx => ctx.headRole === 'lead' ? `Work your assigned subtask to completion.${ctx.reviewerSeat ? ' The shared reviewer reviews finished work before it ships.' : ''}` : '' },
-    { id: STANDING_ORDER_FRAGMENT_IDS.externalMemberCallback, name: 'External head callback', order: 10, obligation: 'callback', applies: ctx => ctx.inTeam && !ctx.isHead && ctx.externalHead, body: ctx => `${ctx.headName} is your head agent. When you finish a task, report to it — write a report file to .switchboard/teams/${ctx.teamId}/reports/ named report-<UTC-compact>-<kind>-<5 digits>.md with frontmatter (from: <your seat name>, kind: finished|blocked|question|status, planId: <plan id>, created: <UTC timestamp>) and a one-line message body. Do not wait to be asked.` },
+    { id: STANDING_ORDER_FRAGMENT_IDS.externalMemberCallback, name: 'External head callback', order: 10, obligation: 'callback', applies: ctx => ctx.inTeam && !ctx.isHead && ctx.externalHead, body: ctx => `${ctx.headName} is your head agent. When you finish a task, report to it — write a report file to .switchboard/teams/${ctx.teamId}/reports/ named report-<UTC-compact>-<kind>-<5 digits>.md with frontmatter (from: <your seat name>, kind: finished|blocked|question|status, planId: <plan id>, created: <UTC timestamp>) and a one-line message body. Do not wait to be asked.\n\nBefore reporting, re-read your full orders at .switchboard/teams/${ctx.teamId}/member-orders.md` },
     { id: STANDING_ORDER_FRAGMENT_IDS.gitSafety, name: 'Team git safety', order: 30, obligation: 'safety', applies: ctx => ctx.inTeam && !ctx.isHead, body: () => GIT_SAFETY_DIRECTIVE },
     // Subagent policy — gated on the seat's RESOLVED policy, not on team
     // membership, so heads and standalone (non-team) seats whose policy is set
