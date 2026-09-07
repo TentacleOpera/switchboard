@@ -92,3 +92,22 @@ The card carries the answer — a posted completion means the instruction was fo
 7. A member can re-read its orders from a file under `.switchboard/teams/<teamId>/` and is told to.
 8. No standing orders are written into any plan file.
 9. Both hosts behave identically.
+
+## Review Findings
+
+**This subtask received no implementation.** `a5f1832f` is the feature's only commit and its message
+does not claim this card either. Verified by search, not inference: `.switchboard/teams/<teamId>/`
+still has exactly one writer and one file — `head-prompt.md` (`agentGroupInstantiation.ts:256`) — with
+no member equivalent; and `_turnEndNotifier` has seven production call sites
+(`PlanIngestionEngine.ts:1192, 1402, 1474, 1554, 1622, 1651, 1788`), every one addressed to a head or a
+queue pacer, none re-delivering a member's completion fragment. Verification items 1 through 9 are all
+unmet. No code was changed by this review pass: the card needs a new quiet-period sweep with its own
+dedupe state, a run-scoped member orders file, and external-head fragment selection in both hosts —
+that is the subtask's whole build, not a reviewer's fix.
+
+## Deferred Findings
+
+- CRITICAL — Change 1 (a durable, re-readable member orders file alongside `head-prompt.md`, with the prompt pointing the seat at it) is not implemented. `src/services/agentGroupInstantiation.ts:256`
+- CRITICAL — Change 2 (re-deliver the completion fragment to a member seat that goes quiet holding an uncompleted card) is not implemented; no turn-end delivery is addressed to a member. `src/services/PlanIngestionEngine.ts:1271`
+- CRITICAL — Changes 3, 4 and 5 (fragment only rather than the whole block; once per quiet period; skip a seat that has already reported) are moot until change 2 exists. `src/services/PlanIngestionEngine.ts:1271`
+- MAJOR — Edge-case audit item 4 (an external-head member must be re-delivered its file-report fragment, not the POST recipe) is unaddressed. `src/services/standingOrderFragments.ts:161`

@@ -197,15 +197,21 @@ test('SOURCE: deliverPrompt declares soBlockAdded beside the applyStandingOrders
         'the deliverPrompt orientationOnly gate must come AFTER the applyStandingOrders call');
 });
 
-test('SOURCE: deliverPrompt orientationOnly gate precedes await sendPromptToPty', () => {
+// The delivery call this gate must precede is the supervisor request, not the
+// retired local `sendPromptToPty` helper: the Go pty-host migration replaced
+// that call with `ptyHostSupervisor.request('ptySendPrompt', ...)` and left
+// `sendPromptToPty` alive only in comments, so the old marker matched nothing
+// and this assertion was red in CI while asserting nothing about the product.
+test('SOURCE: deliverPrompt orientationOnly gate precedes the PTY send', () => {
     const fnStart = BOOTSTRAP_SRC.indexOf('const deliverPrompt = async');
     const fnEnd = BOOTSTRAP_SRC.indexOf('const relayStartupOrientation =', fnStart);
     const fnBody = BOOTSTRAP_SRC.slice(fnStart, fnEnd);
     const gateIdx = fnBody.indexOf('orientationOnly && !soBlockAdded');
-    const sendIdx = fnBody.indexOf('await sendPromptToPty(');
-    assert.ok(gateIdx > -1 && sendIdx > -1, 'both the gate and sendPromptToPty must be present in deliverPrompt');
+    const sendIdx = fnBody.indexOf("ptyHostSupervisor.request('ptySendPrompt'");
+    assert.ok(gateIdx > -1, 'the orientationOnly gate must be present in deliverPrompt');
+    assert.ok(sendIdx > -1, "deliverPrompt must send via ptyHostSupervisor.request('ptySendPrompt', ...)");
     assert.ok(gateIdx < sendIdx,
-        'a skipped relay must return BEFORE sendPromptToPty — a carrier line with no block must never reach the PTY');
+        'a skipped relay must return BEFORE the PTY send — a carrier line with no block must never reach the PTY');
 });
 
 // ── 3. SOURCE: orientationOnly is stripped at the HTTP boundary ──────────

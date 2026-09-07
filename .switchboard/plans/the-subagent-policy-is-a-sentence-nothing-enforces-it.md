@@ -81,3 +81,28 @@ Where no mechanism exists, the prompt is what there is — but the setting shoul
 5. A seat with `default` gains no subagent standing order.
 6. Both hosts compose the fragment identically.
 7. Where a host supports tool restriction, a seat cannot spawn a subagent regardless of the prompt.
+
+## Review Findings
+
+Reviewed the `seat.subagent-policy` fragment landed in `a5f1832f`. The fragment, both policy
+variants, and the `default`/`useSubagents` no-op gate are correct, and `subagentPolicy` /
+`customSubagentName` were verified present in the object literal `KanbanProvider.resolveSeatPromptOptions`
+returns (`KanbanProvider.ts:6626-6641`), not merely in a type. One MAJOR was found and fixed: the
+fragment id was added only to lists that are consulted when a standing-order row is **created**, so on
+any install that had already popped a queue card or wired a team under that head name it could not
+reach a single persisted row — `installGlobalQueueDoneOrder` returns early on its deterministic id,
+`wireSpawnedTeam` skips an existing `(scope, teamId)` row and `groupId` is `team_<headName>`, and
+`migrateSystemOrdersToFragments` (also edited by the commit) has zero production callers. Files
+changed: `src/services/teamWiring.ts` (new `reconcileSystemFragmentRows`, called from both writers) and
+`src/test/standing-orders-definitions-contract.test.js` (5 new tests). Verification: `tsc -p
+tsconfig.test.json --noEmit` clean, `npm run compile` clean, `npm test` aggregate green,
+`test:contract:standing-orders-definitions` 16/17 (the 1 failure pre-dates this work — see below).
+
+## Deferred Findings
+
+- MAJOR — Proposed change 3 (host-level enforcement where the CLI family supports restricting tools, plus surfacing which seats are enforced vs on the honour system) is not implemented; the policy is still prompt-only. `src/services/agentPromptBuilder.ts:1374`
+- MAJOR — Edge-case audit item 1 (reconcile the dispatch-only and standing-order directive lists) is not done: `SKIP_COMPILATION_DIRECTIVE`, `SKIP_TESTS_DIRECTIVE`, `CAVEMAN_OUTPUT_DIRECTIVE`, `SUPPRESS_WALKTHROUGH_DIRECTIVE` and the accuracy directive are all "how you work" constraints still delivered once, with no standing-order fragment. `src/services/agentPromptBuilder.ts:1405`
+- MAJOR (pre-existing, unrelated) — `wireSpawnedTeam` never calls `ensureStandingOrderDefinition`, so team/head orders are persisted without a `definitionId` and one CI-wired assertion in `test:contract:standing-orders-definitions` is red at `a5f1832f^` too. The docblock claiming otherwise is a false claim. `src/services/teamWiring.ts:1516`
+- NIT — `materializeStandingOrderForInspection` has zero callers, so no inspection surface renders the new fragment. `src/services/standingOrders.ts:653`
+- NIT — the directive is now emitted twice on a dispatch (seat block + standing-orders block). `gitSafety` already does exactly this, so this is precedent rather than a regression. `src/services/agentPromptBuilder.ts:1400`
+- NIT — `applyStandingOrdersClient` in the webview renders `o.instruction` directly, so fragment-only rows (including this one) contribute nothing to the panel preview. Pre-existing for every fragment. `src/webview/terminals.js:12513`

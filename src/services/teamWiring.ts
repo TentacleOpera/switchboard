@@ -305,6 +305,62 @@ export const GLOBAL_QUEUE_DONE_ORDER_BODY = GLOBAL_QUEUE_COMPLETION_FRAGMENT_BOD
 const GLOBAL_QUEUE_ORDER_ID = 'global-queue-done:global';
 
 /**
+ * Fragment ids that every SYSTEM fragment row must carry, added additively to
+ * rows that were persisted before the id existed.
+ *
+ * `seat.subagent-policy` is seat-scoped and self-gating: its `applies` returns
+ * false unless the seat's resolved policy is `noSubagents` or a named custom
+ * subagent, so carrying it on a row costs nothing for a seat with no policy set.
+ */
+const REQUIRED_SYSTEM_FRAGMENT_IDS: readonly string[] = [
+    STANDING_ORDER_FRAGMENT_IDS.subagentPolicy,
+];
+
+/**
+ * Additively reconcile the system fragment list on ALREADY-PERSISTED rows.
+ *
+ * Every system writer keys on `(scope, teamId)` or a deterministic id and
+ * SKIPS a row that already exists. `groupId` is `team_<headName>` and standing
+ * orders persist across sessions, so a team started a second time under the
+ * same head keeps whatever fragment list it was FIRST written with, and
+ * `installGlobalQueueDoneOrder` returns early on its deterministic row.
+ * Adding a fragment id to those lists therefore reaches only head names that
+ * have never been wired: on every existing install the new fragment is inert.
+ * That is not hypothetical — `seat.subagent-policy` was added to all three
+ * lists and could not reach a single shipped row.
+ *
+ * `migrateSystemOrdersToFragments` is NOT the tool for this. It rewrites ANY
+ * team-scoped row to the canonical member list and strips `instruction`, which
+ * would destroy an operator-authored team prompt (`teamPromptInstruction` from
+ * a team definition is stored exactly that way). This helper touches only
+ * fragment-carrying rows — an `instruction` row is left alone — and only
+ * appends. Composition sorts by each fragment's own `order`, so array position
+ * does not matter.
+ *
+ * Returns the same array when nothing changed, so callers can use it inside a
+ * `mutateStandingOrders` mutator without forcing a write.
+ */
+export function reconcileSystemFragmentRows(orders: StandingOrder[]): StandingOrder[] {
+    if (!Array.isArray(orders) || orders.length === 0) { return orders; }
+    let changed = false;
+    const next = orders.map((order) => {
+        if (!order || typeof order !== 'object') { return order; }
+        // An instruction row is operator- or definition-authored text. Never touched.
+        if (typeof order.instruction === 'string') { return order; }
+        if (!Array.isArray(order.fragments) || order.fragments.length === 0) { return order; }
+        const scope = order.scope || 'pair';
+        const isSystemRow = scope === 'team' || scope === 'team-head'
+            || (scope === 'global' && order.id === GLOBAL_QUEUE_ORDER_ID);
+        if (!isSystemRow) { return order; }
+        const missing = REQUIRED_SYSTEM_FRAGMENT_IDS.filter(id => !order.fragments!.includes(id));
+        if (missing.length === 0) { return order; }
+        changed = true;
+        return { ...order, fragments: [...order.fragments, ...missing] };
+    });
+    return changed ? next : orders;
+}
+
+/**
  * Install the `global`-scoped `queue/done` standing order so a standalone
  * agent (not on any team) knows to POST `queue/done` when it finishes a
  * dispatched card. Idempotent: if the order already exists, the mutation is a
@@ -317,15 +373,21 @@ const GLOBAL_QUEUE_ORDER_ID = 'global-queue-done:global';
 export async function installGlobalQueueDoneOrder(db: any): Promise<void> {
     if (!db) return;
     await mutateStandingOrders(db, async (orders) => {
-        if (orders.some(o => o.id === GLOBAL_QUEUE_ORDER_ID)) {
-            return orders;
+        // Reconcile FIRST, then install-if-missing. The early return below is
+        // correct for creation and wrong for upgrade: a row written by an older
+        // version carries the fragment list of that version forever, so a
+        // fragment added to the list here would never reach an install that has
+        // already popped one queue card. See `reconcileSystemFragmentRows`.
+        const reconciled = reconcileSystemFragmentRows(orders);
+        if (reconciled.some(o => o.id === GLOBAL_QUEUE_ORDER_ID)) {
+            return reconciled;
         }
         const order = makeFragmentStandingOrder(
             '', '', [STANDING_ORDER_FRAGMENT_IDS.globalCompletion, STANDING_ORDER_FRAGMENT_IDS.subagentPolicy], 'global',
         );
         // makeStandingOrder mints a random id; overwrite with the deterministic
         // one so a re-run finds it rather than duplicating.
-        return [...orders, { ...order, id: GLOBAL_QUEUE_ORDER_ID }];
+        return [...reconciled, { ...order, id: GLOBAL_QUEUE_ORDER_ID }];
     });
 }
 
@@ -1498,7 +1560,13 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
 
     try {
         await mutateStandingOrders(db, async (orders) => {
-            const next = [...orders];
+            // Reconcile before the exists-checks below. `groupId` is
+            // `team_<headName>` and every check here is "skip if a row for this
+            // (scope, teamId) exists", so re-starting a team under a name that
+            // has been wired before leaves its rows on the fragment list they
+            // were first written with. Reconciling here makes a team start the
+            // upgrade path as well as the creation path.
+            const next = [...reconcileSystemFragmentRows(orders)];
 
             // One team-scoped order carrying the team prompt. `parent` stores
             // the head name so `selectOrders` can exclude the head from
