@@ -453,6 +453,31 @@ CREATE TABLE IF NOT EXISTS control_plane (
     updated_at TEXT NOT NULL,
     PRIMARY KEY (name, kind)
 );
+-- coding_rounds: one row per coding round (Coding Rounds feature, subtask 01).
+-- Records the durable round state that previously lived only in the lead's context:
+-- which feature/team the round belongs to, its ordinal among the registered rounds,
+-- the per-subtask seat map, the round state, and the registered/dispatched/closed
+-- timestamps. This is RECORD-KEEPING state only — the operational source of "when
+-- was this subtask dispatched" remains plans.dispatched_at, which isStaleCompletedAt
+-- reads (LocalApiServer.ts). The round row's subtask_seats.dispatched_at describes
+-- what happened for audit/recovery; the plans row drives behaviour. They are written
+-- together in the same dispatch operation (subtask 03) so they agree at write time,
+-- but they serve different readers and MUST NOT be unified — the plans row is read
+-- by completion logic that predates this feature.
+CREATE TABLE IF NOT EXISTS coding_rounds (
+    round_id         TEXT PRIMARY KEY,
+    feature_id       TEXT NOT NULL,
+    team_id          TEXT NOT NULL,
+    workspace_id     TEXT NOT NULL,
+    ordinal          INTEGER NOT NULL,
+    total_registered INTEGER NOT NULL DEFAULT 0,
+    state            TEXT NOT NULL DEFAULT 'registered',
+    subtask_seats    TEXT NOT NULL DEFAULT '{}',
+    registered_at    TEXT NOT NULL,
+    dispatched_at    TEXT DEFAULT NULL,
+    closed_at        TEXT DEFAULT NULL,
+    UNIQUE(feature_id, ordinal)
+);
 `;
 
 // Index DDL, one statement per entry so a single failure (e.g. a column not yet
@@ -482,6 +507,8 @@ export const SCHEMA_INDEX_STATEMENTS: string[] = [
     `CREATE INDEX IF NOT EXISTS idx_worktrees_workspace ON worktrees(workspace_id)`,
     `CREATE INDEX IF NOT EXISTS idx_job_instructions_workspace ON job_instructions(workspace_id)`,
     `CREATE INDEX IF NOT EXISTS idx_kanban_meta_workspace ON kanban_meta(workspace_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_coding_rounds_feature ON coding_rounds(feature_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_coding_rounds_workspace ON coding_rounds(workspace_id)`,
 ];
 
 // Migration SQL to add new columns to existing databases
@@ -812,6 +839,43 @@ const MIGRATION_V71_SQL = [
 // stable machine id, but historical hostname values are intentionally tolerated.
 const MIGRATION_V72_SQL = [
     `ALTER TABLE plan_events ADD COLUMN user_id TEXT DEFAULT ''`,
+];
+
+// V73: coding_rounds table — the durable Coding Rounds record (feature: Coding
+// Rounds, subtask 01). One row per round, recording which feature/team the round
+// belongs to, its ordinal among the registered rounds, the per-subtask seat map,
+// the round state, and the registered/dispatched/closed timestamps. Coding rounds
+// have never shipped, so this is a clean break — no back-compat, no backfill.
+//
+// RECORD-KEEPING vs OPERATIONAL: the round row's subtask_seats JSON records
+// per-subtask dispatch timestamps for audit/recovery; plans.dispatched_at remains
+// the operational field isStaleCompletedAt reads (LocalApiServer.ts). They are
+// written together in the same dispatch operation (subtask 03) so they agree at
+// write time, but they serve different readers and MUST NOT be unified — the
+// plans row is read by completion logic that predates this feature. See the
+// matching comment in SCHEMA_TABLES_SQL.
+//
+// The column set is identical to the CREATE TABLE in SCHEMA_TABLES_SQL so a fresh
+// DB (which gets the table at creation) and an upgraded DB (which gets it here)
+// end up with the same shape. Additive CREATE TABLE IF NOT EXISTS; idempotent
+// under the version gate. Never edit a shipped V70–V72 body.
+const MIGRATION_V73_SQL = [
+    `CREATE TABLE IF NOT EXISTS coding_rounds (
+        round_id         TEXT PRIMARY KEY,
+        feature_id       TEXT NOT NULL,
+        team_id          TEXT NOT NULL,
+        workspace_id     TEXT NOT NULL,
+        ordinal          INTEGER NOT NULL,
+        total_registered INTEGER NOT NULL DEFAULT 0,
+        state            TEXT NOT NULL DEFAULT 'registered',
+        subtask_seats    TEXT NOT NULL DEFAULT '{}',
+        registered_at    TEXT NOT NULL,
+        dispatched_at    TEXT DEFAULT NULL,
+        closed_at        TEXT DEFAULT NULL,
+        UNIQUE(feature_id, ordinal)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_coding_rounds_feature ON coding_rounds(feature_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_coding_rounds_workspace ON coding_rounds(workspace_id)`,
 ];
 
 const MIGRATION_V13_SQL = [
@@ -6587,6 +6651,34 @@ export class KanbanDatabase {
     }
 
     /**
+     * Delete every coding_rounds row for a feature. Called from the feature-delete
+     * path (KanbanProvider._deleteFeature) to prevent orphaned round records: SQLite
+     * FK enforcement is OFF in this codebase (PRAGMA foreign_keys is not set to ON),
+     * so an ON DELETE CASCADE on coding_rounds.feature_id would be a silent no-op.
+     * This explicit cleanup is the only thing standing between a deleted feature and
+     * a round row that points at a feature_id that no longer exists. Best-effort:
+     * a failure warns but does not block the feature delete (the feature row is
+     * tombstoned regardless).
+     */
+    public async deleteCodingRoundsByFeature(featureId: string): Promise<number> {
+        if (!(await this.ensureReady()) || !this._db) return 0;
+        try {
+            const result = this._db.run(
+                'DELETE FROM coding_rounds WHERE feature_id = ?',
+                [featureId]
+            );
+            const changed = Number(result?.changes ?? 0);
+            if (changed > 0) {
+                console.log(`[KanbanDatabase] deleteCodingRoundsByFeature: removed ${changed} coding_rounds row(s) for feature ${featureId}`);
+            }
+            return changed;
+        } catch (e) {
+            console.warn(`[KanbanDatabase] deleteCodingRoundsByFeature failed for feature ${featureId}:`, e);
+            return 0;
+        }
+    }
+
+    /**
      * Find active plans whose plan_file no longer exists on disk and tombstone them.
      * Only checks local-source plans (skips brain-source).
      * Missing files must still be absent after a short confirmation delay so
@@ -9131,6 +9223,19 @@ export class KanbanDatabase {
                     console.error('[KanbanDatabase] V72 migration failed:', e);
                 }
             }
+        }
+
+        // V73: coding_rounds table — the durable Coding Rounds record (subtask 01).
+        // Additive CREATE TABLE IF NOT EXISTS; fresh DBs already get it from
+        // SCHEMA_TABLES_SQL. Idempotent under the version gate. Never edit a
+        // shipped V70–V72 body.
+        const v73 = await this.getMigrationVersion();
+        if (v73 < 73) {
+            for (const sql of MIGRATION_V73_SQL) {
+                try { this._db.exec(sql); } catch { /* table or index already exists */ }
+            }
+            await this.setMigrationVersion(73);
+            console.log('[KanbanDatabase] V73 migration completed: coding_rounds table added');
         }
     }
 

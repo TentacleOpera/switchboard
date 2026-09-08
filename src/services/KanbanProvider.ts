@@ -15919,6 +15919,12 @@ After the merge succeeds, **ask the user whether they want you to clean up this 
             }
         }
         await db.tombstonePlan(feature.planId);
+        // Orphan prevention: delete this feature's coding_rounds rows. SQLite FK
+        // enforcement is OFF in this codebase, so a CASCADE on coding_rounds.feature_id
+        // would be a silent no-op — this explicit call is the only thing that prevents
+        // round rows from outliving their feature. Best-effort: a failure warns but
+        // does not block the delete (the feature row is tombstoned regardless).
+        await db.deleteCodingRoundsByFeature(feature.planId);
         // Reap the feature file so the watcher's delete handler hard-deletes the row
         // (not just tombstone) and the file can't resurrect on the next scan/clone.
         await this._reapPlanFile(workspaceRoot, feature.planFile);
