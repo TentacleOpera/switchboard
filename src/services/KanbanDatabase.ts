@@ -6896,6 +6896,74 @@ export class KanbanDatabase {
     }
 
     /**
+     * Read all coding_rounds rows for a team, ordered by ordinal ASC. Used by
+     * the round/complete handler (subtask 04) to discover the team's registered
+     * rounds — to find the in-flight (dispatched/partial) round to close, to
+     * decide whether the closed round was the last, and to identify the next
+     * registered round to auto-dispatch. The subtask_seats JSON is parsed back
+     * into an object (same shape as getCodingRoundsByFeature).
+     */
+    public async getCodingRoundsByTeam(teamId: string): Promise<CodingRoundRecord[]> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        const stmt = this._db.prepare(
+            `SELECT round_id, feature_id, team_id, workspace_id, ordinal, total_registered, state, subtask_seats, registered_at, dispatched_at, closed_at
+             FROM coding_rounds WHERE team_id = ? ORDER BY ordinal ASC`,
+            [teamId]
+        );
+        const rows: CodingRoundRecord[] = [];
+        try {
+            while (stmt.step()) {
+                const r = stmt.getAsObject();
+                let subtaskSeats: Record<string, { seat: string; delivered: boolean; delivered_at: string | null }> = {};
+                try {
+                    const parsed = JSON.parse(String(r.subtask_seats ?? '{}'));
+                    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                        subtaskSeats = parsed as any;
+                    }
+                } catch { /* corrupt JSON — treat as empty */ }
+                rows.push({
+                    roundId: String(r.round_id ?? ''),
+                    featureId: String(r.feature_id ?? ''),
+                    teamId: String(r.team_id ?? ''),
+                    workspaceId: String(r.workspace_id ?? ''),
+                    ordinal: Number(r.ordinal ?? 0),
+                    totalRegistered: Number(r.total_registered ?? 0),
+                    state: String(r.state ?? 'registered'),
+                    subtaskSeats,
+                    registeredAt: String(r.registered_at ?? ''),
+                    dispatchedAt: r.dispatched_at ? String(r.dispatched_at) : null,
+                    closedAt: r.closed_at ? String(r.closed_at) : null,
+                });
+            }
+        } finally {
+            stmt.free();
+        }
+        return rows;
+    }
+
+    /**
+     * Close a coding_rounds row: set state='closed' and stamp closed_at. Called
+     * by the round/complete handler (subtask 04) when the lead marks the round
+     * done. The caller has already verified the round is in flight
+     * (state='dispatched' or 'partial'); this method does not re-check state —
+     * it stamps unconditionally so a close is never silently dropped. Returns
+     * true when a row was updated.
+     */
+    public async closeCodingRound(roundId: string, closedAt: string): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        try {
+            const result = this._db.run(
+                `UPDATE coding_rounds SET state = 'closed', closed_at = ? WHERE round_id = ?`,
+                [closedAt, roundId]
+            );
+            return Number(result?.changes ?? 0) > 0;
+        } catch (e) {
+            console.warn(`[KanbanDatabase] closeCodingRound failed for round ${roundId}:`, e);
+            return false;
+        }
+    }
+
+    /**
      * Find active plans whose plan_file no longer exists on disk and tombstone them.
      * Only checks local-source plans (skips brain-source).
      * Missing files must still be absent after a short confirmation delay so

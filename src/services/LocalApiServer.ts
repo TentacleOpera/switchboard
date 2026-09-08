@@ -4187,12 +4187,44 @@ export class LocalApiServer {
     }
 
     /**
-     * POST /kanban/round/complete — batch completion for a round boundary.
-     * Completes every outstanding card dispatched to the poster's team, clears
-     * those coder seats, runs the release check once, and returns one response.
-     * The lead is NOT cleared — it orchestrates the next round.
+     * POST /kanban/round/complete — the lead marks the round end, the system
+     * advances (Coding Rounds feature, subtask 04).
      *
-     * Body: `{ from, workspaceRoot? }`.
+     * The lead's post is the authority: it decides the round is over. The
+     * system does not re-derive whether the work is finished, sample activity,
+     * or consult timestamps to second-guess it.
+     *
+     * When the team has NO registered rounds, the handler behaves exactly as
+     * it did before this subtask landed (stateless completion): complete every
+     * outstanding card dispatched to the team, clear the coder seats, run the
+     * release check once, return `{ completed, cleared }`. A team that never
+     * adopted rounds is unaffected.
+     *
+     * When the team HAS registered rounds, the handler gains intelligence
+     * behind the same verb:
+     *  - finds the team's single in-flight round (state='dispatched' or
+     *    'partial'); rejects if more than one is in flight (ambiguous);
+     *    no-ops if none is in flight.
+     *  - completes the round's outstanding cards and clears the coder seats.
+     *  - closes the round row (state='closed', closed_at stamped).
+     *  - if the closed round was the LAST registered round (no registered
+     *    round follows it), delegates to `_completeFeatureCore` (the same
+     *    core `POST /kanban/feature/complete` uses) to complete the feature's
+     *    remaining subtasks, clear every roster seat, and release the team
+     *    exactly once — the round handler skips its own `onTeamReleased` call
+     *    on this path so the team is not released twice.
+     *  - otherwise auto-dispatches the next registered round via
+     *    `_dispatchRoundCore` (subtask 03) — the "system advances" half. The
+     *    round handler does NOT run its own release check on this path: the
+     *    team is still working (the next round is in flight), and a fully
+     *    failed dispatch must not release the team out from under a round that
+     *    still needs recovery.
+     *
+     * The response names what happened: `roundClosed` (ordinal), plus either
+     * `nextRound` (ordinal/roundId/state, with `partial: true` when the
+     * auto-dispatch did not fully deliver) or `featureComplete: true`.
+     *
+     * Body: `{ from, workspaceRoot? }` — unchanged.
      */
     private async _handleKanbanRoundComplete(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
@@ -4249,12 +4281,147 @@ export class LocalApiServer {
                 && !p.isFeature
             );
 
-            if (outstanding.length === 0) {
+            // Discover the team's registered rounds (subtask 04). team_id is
+            // derived from the poster the same way round/register derives it.
+            const teamId = 'team_' + encodeURIComponent(from).replace(/[^a-zA-Z0-9_]/g, '_');
+            let teamRounds: any[] = [];
+            try {
+                teamRounds = (await db.getCodingRoundsByTeam?.(teamId)) || [];
+            } catch (err) {
+                console.warn('[LocalApiServer] round/complete: getCodingRoundsByTeam failed:', err);
+                teamRounds = [];
+            }
+
+            // Stateless fallback — a team with zero registered rounds receives
+            // the exact response it got before this subtask landed.
+            if (teamRounds.length === 0) {
+                if (outstanding.length === 0) {
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: true, completed: [], cleared: [], note: 'No outstanding cards for this team' }));
+                    return;
+                }
+
+                const completed: Array<{ planId: string; seat: string }> = [];
+                const cleared: Array<{ name: string; cleared: boolean; reason?: string }> = [];
+                const coderSeats = roster.filter(name => name !== from);
+
+                for (const card of outstanding) {
+                    const planId = card.planId || card.sessionId;
+                    if (!planId) continue;
+                    const seat = String(card.dispatchedTerminal || '').trim();
+                    const result = await this.completeCardInternal(db, planId, from, {
+                        workspaceRoot,
+                        workflow: 'round-complete',
+                    });
+                    if (result.success) {
+                        completed.push({ planId, seat });
+                    }
+                }
+
+                // Clear all coder seats (unconditional — a round is a barrier).
+                for (const name of coderSeats) {
+                    if (this._options.clearTerminalContext) {
+                        try {
+                            const clr = await this._options.clearTerminalContext(workspaceRoot, name);
+                            cleared.push({ name, cleared: !!clr?.cleared, ...(clr?.error ? { reason: clr.error } : {}) });
+                        } catch (err: any) {
+                            cleared.push({ name, cleared: false, reason: err instanceof Error ? err.message : String(err) });
+                        }
+                    } else {
+                        cleared.push({ name, cleared: false, reason: 'clearTerminalContext not available' });
+                    }
+                }
+
+                // Run the release check once.
+                if (this._options.onTeamReleased) {
+                    try {
+                        const inFlightCheck = await resolveTeamInFlight(db, roster);
+                        if (!inFlightCheck.inFlight) {
+                            await this._options.onTeamReleased(workspaceRoot, roster);
+                        }
+                    } catch (releaseErr) {
+                        console.warn('[LocalApiServer] round-complete onTeamReleased error:', releaseErr);
+                    }
+                }
+
                 res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: true, completed: [], cleared: [], note: 'No outstanding cards for this team' }));
+                res.end(JSON.stringify({ success: true, completed, cleared }));
                 return;
             }
 
+            // Round-aware path — the team has registered rounds.
+            const inFlightRounds = teamRounds.filter(r => r.state === 'dispatched' || r.state === 'partial');
+            if (inFlightRounds.length === 0) {
+                // Closing with no round in flight is a no-op that says so.
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: true, completed: [], cleared: [], note: 'No round in flight for this team — nothing to close' }));
+                return;
+            }
+            if (inFlightRounds.length > 1) {
+                // One in-flight round per team. More than one is an inconsistent
+                // state — refuse to close an ambiguous round set rather than
+                // guessing which round the lead meant.
+                res.writeHead(409, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: false,
+                    error: `Team has ${inFlightRounds.length} rounds in flight (expected one) — refusing to close an ambiguous round set`,
+                }));
+                return;
+            }
+
+            const currentRound = inFlightRounds[0];
+            // The next round to dispatch is the lowest-ordinal registered round
+            // after the current one. If none exists, the current round is the
+            // last — its close is the feature's end.
+            const nextRound = teamRounds
+                .filter(r => r.state === 'registered' && r.ordinal > currentRound.ordinal)
+                .sort((a, b) => a.ordinal - b.ordinal)[0];
+            const isLast = !nextRound;
+            const now = new Date().toISOString();
+
+            if (isLast) {
+                // Close the round row, then delegate to the feature-complete
+                // core (the same core POST /kanban/feature/complete uses). The
+                // core completes the feature's remaining subtasks, clears every
+                // roster seat, and releases the team exactly once. The round
+                // handler does NOT run its own release check on this path —
+                // two release paths is how onTeamReleased gets double-fired.
+                const closed = await db.closeCodingRound?.(currentRound.roundId, now);
+                if (!closed) {
+                    console.warn(`[LocalApiServer] round/complete: failed to close round row '${currentRound.roundId}'`);
+                }
+                const featureResult = await this._completeFeatureCore({
+                    db,
+                    workspaceRoot,
+                    from,
+                    featureId: currentRound.featureId,
+                    roster,
+                    clearLead: true,
+                });
+                if (!featureResult.success) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        ...featureResult,
+                        roundClosed: currentRound.ordinal,
+                        featureComplete: false,
+                    }));
+                    return;
+                }
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    ...featureResult,
+                    roundClosed: currentRound.ordinal,
+                    featureComplete: true,
+                }));
+                return;
+            }
+
+            // Not the last round: complete the round's outstanding cards, clear
+            // the coder seats, close the round row, and auto-dispatch the next
+            // registered round. The release check is NOT run — the team is
+            // still working (the next round is in flight), and a fully failed
+            // dispatch must not release the team out from under a round that
+            // still needs recovery.
             const completed: Array<{ planId: string; seat: string }> = [];
             const cleared: Array<{ name: string; cleared: boolean; reason?: string }> = [];
             const coderSeats = roster.filter(name => name !== from);
@@ -4286,20 +4453,37 @@ export class LocalApiServer {
                 }
             }
 
-            // Run the release check once.
-            if (this._options.onTeamReleased) {
-                try {
-                    const inFlightCheck = await resolveTeamInFlight(db, roster);
-                    if (!inFlightCheck.inFlight) {
-                        await this._options.onTeamReleased(workspaceRoot, roster);
-                    }
-                } catch (releaseErr) {
-                    console.warn('[LocalApiServer] round-complete onTeamReleased error:', releaseErr);
-                }
+            // Close the round row.
+            const closed = await db.closeCodingRound?.(currentRound.roundId, now);
+            if (!closed) {
+                console.warn(`[LocalApiServer] round/complete: failed to close round row '${currentRound.roundId}'`);
             }
 
+            // Auto-dispatch the next registered round (the "system advances"
+            // half). A partial dispatch is reported so the lead knows recovery
+            // is needed — it is not an error that aborts the close.
+            const nextDispatch = await this._dispatchRoundCore({
+                db,
+                workspaceRoot,
+                from,
+                round: nextRound,
+                roster,
+            });
+
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: true, completed, cleared }));
+            res.end(JSON.stringify({
+                success: true,
+                completed,
+                cleared,
+                roundClosed: currentRound.ordinal,
+                nextRound: {
+                    ordinal: nextRound.ordinal,
+                    roundId: nextRound.roundId,
+                    state: nextDispatch.state,
+                    dispatched: nextDispatch.success,
+                    ...(nextDispatch.success ? {} : { partial: true, error: nextDispatch.error }),
+                },
+            }));
         } catch (err) {
             console.error('[LocalApiServer] kanbanRoundComplete error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -4654,95 +4838,142 @@ export class LocalApiServer {
                 return;
             }
 
-            // Assign seats round-robin. Skip subtasks already delivered
-            // (idempotent re-dispatch: do not re-send delivered subtasks).
-            const now = new Date().toISOString();
-            const subtaskSeats = { ...round.subtaskSeats };
-            const results: Array<{ planId: string; seat: string | null; delivered: boolean; deliveredAt: string | null; error?: string }> = [];
-            let seatCursor = 0;
-            let firstDispatchedAt = round.dispatchedAt || null;
-
-            for (const planId of subtaskPlanIds) {
-                const existing = subtaskSeats[planId];
-                // Idempotent: skip already-delivered subtasks.
-                if (existing && existing.delivered) {
-                    results.push({
-                        planId,
-                        seat: existing.seat || null,
-                        delivered: true,
-                        deliveredAt: existing.delivered_at || null,
-                    });
-                    continue;
-                }
-
-                // Assign the next seat (round-robin).
-                const seat = seats[seatCursor % seats.length];
-                seatCursor++;
-
-                // Dispatch through the existing machinery. skipClear: true
-                // skips the roster barrier (which would clear the ENTIRE
-                // roster). The destination clearBeforePrompt uses the config
-                // default (the seat IS cleared before the prompt — it is
-                // receiving new work).
-                const dispatchRes = await this.performKanbanDispatch(workspaceRoot, planId, undefined, {
-                    targetTerminalOverride: seat,
-                    originTerminal: from,
-                    skipClear: true,
-                });
-
-                const delivered = dispatchRes.status === 200 && dispatchRes.payload?.success === true;
-                const deliveredAt = delivered ? now : null;
-                subtaskSeats[planId] = {
-                    seat: delivered ? seat : (seat || ''),
-                    delivered,
-                    delivered_at: deliveredAt,
-                };
-                if (firstDispatchedAt === null && delivered) {
-                    firstDispatchedAt = now;
-                }
-                results.push({
-                    planId,
-                    seat: delivered ? seat : (seat || null),
-                    delivered,
-                    deliveredAt,
-                    ...(delivered ? {} : { error: dispatchRes.payload?.error || 'Dispatch failed' }),
-                });
-            }
-
-            // Compute aggregate state.
-            const allDelivered = results.every(r => r.delivered);
-            const newState = allDelivered ? 'dispatched' : 'partial';
-
-            // Persist the updated subtask_seats, state, and dispatched_at.
-            // dispatched_at is stamped on the first successful dispatch and
-            // left untouched on re-dispatch (the round was already
-            // dispatched).
-            const updated = await db.updateCodingRoundAfterDispatch?.(
-                roundId,
-                JSON.stringify(subtaskSeats),
-                newState,
-                firstDispatchedAt
-            );
-            if (!updated) {
-                console.warn(`[LocalApiServer] round/dispatch: failed to persist round state for round '${roundId}'`);
-            }
-
-            const success = allDelivered;
-            res.writeHead(success ? 200 : 207, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-                success,
-                roundId,
-                featureId: round.featureId,
-                state: newState,
-                dispatchedAt: firstDispatchedAt,
-                subtasks: results,
-                ...(success ? {} : { error: 'One or more subtasks failed to deliver — see subtasks for details' }),
-            }));
+            // Delegate to the shared dispatch core (also used by round/complete
+            // to auto-dispatch the next registered round — subtask 04).
+            const result = await this._dispatchRoundCore({ db, workspaceRoot, from, round, roster });
+            res.writeHead(result.success ? 200 : 207, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result));
         } catch (err) {
             console.error('[LocalApiServer] kanbanRoundDispatch error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'kanbanRoundDispatch failed' }));
         }
+    }
+
+    /**
+     * Shared core for dispatching a registered round (Coding Rounds feature,
+     * subtask 03). Assigns each subtask to a seat round-robin (excluding the
+     * lead), delivers each prompt through `performKanbanDispatch` with
+     * `skipClear: true` (the roster barrier is skipped; the destination seat
+     * is cleared via clearBeforePrompt), records per-subtask
+     * `{ seat, delivered, delivered_at }` in `coding_rounds.subtask_seats`,
+     * and updates the round state (`dispatched` when every subtask delivered,
+     * `partial` otherwise). Idempotent: already-delivered subtasks are not
+     * re-sent.
+     *
+     * Called by `_handleKanbanRoundDispatch` (the `POST /kanban/round/dispatch`
+     * HTTP handler) and by `_handleKanbanRoundComplete` (subtask 04) to
+     * auto-dispatch the next registered round after closing the current one.
+     * The caller MUST have already validated that the round exists, is not
+     * closed, the roster is non-empty, the seat pool (roster minus the lead)
+     * is non-empty, and the round has subtasks.
+     *
+     * Returns the dispatch result object (the HTTP handler writes it as the
+     * response body; round/complete folds it into its own response).
+     */
+    private async _dispatchRoundCore(args: {
+        db: any;
+        workspaceRoot: string;
+        from: string;
+        round: any;
+        roster: string[];
+    }): Promise<{
+        success: boolean;
+        roundId: string;
+        featureId: string;
+        state: string;
+        dispatchedAt: string | null;
+        subtasks: Array<{ planId: string; seat: string | null; delivered: boolean; deliveredAt: string | null; error?: string }>;
+        error?: string;
+    }> {
+        const { db, workspaceRoot, from, round, roster } = args;
+        const roundId = round.roundId;
+        // The lead is never a dispatched seat. Exclude the lead from the pool.
+        const seats = roster.filter(s => s !== from);
+        const subtaskPlanIds = Object.keys(round.subtaskSeats || {});
+
+        // Assign seats round-robin. Skip subtasks already delivered
+        // (idempotent re-dispatch: do not re-send delivered subtasks).
+        const now = new Date().toISOString();
+        const subtaskSeats = { ...(round.subtaskSeats || {}) };
+        const results: Array<{ planId: string; seat: string | null; delivered: boolean; deliveredAt: string | null; error?: string }> = [];
+        let seatCursor = 0;
+        let firstDispatchedAt = round.dispatchedAt || null;
+
+        for (const planId of subtaskPlanIds) {
+            const existing = subtaskSeats[planId];
+            // Idempotent: skip already-delivered subtasks.
+            if (existing && existing.delivered) {
+                results.push({
+                    planId,
+                    seat: existing.seat || null,
+                    delivered: true,
+                    deliveredAt: existing.delivered_at || null,
+                });
+                continue;
+            }
+
+            // Assign the next seat (round-robin).
+            const seat = seats[seatCursor % seats.length];
+            seatCursor++;
+
+            // Dispatch through the existing machinery. skipClear: true
+            // skips the roster barrier (which would clear the ENTIRE
+            // roster). The destination clearBeforePrompt uses the config
+            // default (the seat IS cleared before the prompt — it is
+            // receiving new work).
+            const dispatchRes = await this.performKanbanDispatch(workspaceRoot, planId, undefined, {
+                targetTerminalOverride: seat,
+                originTerminal: from,
+                skipClear: true,
+            });
+
+            const delivered = dispatchRes.status === 200 && dispatchRes.payload?.success === true;
+            const deliveredAt = delivered ? now : null;
+            subtaskSeats[planId] = {
+                seat: delivered ? seat : (seat || ''),
+                delivered,
+                delivered_at: deliveredAt,
+            };
+            if (firstDispatchedAt === null && delivered) {
+                firstDispatchedAt = now;
+            }
+            results.push({
+                planId,
+                seat: delivered ? seat : (seat || null),
+                delivered,
+                deliveredAt,
+                ...(delivered ? {} : { error: dispatchRes.payload?.error || 'Dispatch failed' }),
+            });
+        }
+
+        // Compute aggregate state.
+        const allDelivered = results.every(r => r.delivered);
+        const newState = allDelivered ? 'dispatched' : 'partial';
+
+        // Persist the updated subtask_seats, state, and dispatched_at.
+        // dispatched_at is stamped on the first successful dispatch and
+        // left untouched on re-dispatch (the round was already dispatched).
+        const updated = await db.updateCodingRoundAfterDispatch?.(
+            roundId,
+            JSON.stringify(subtaskSeats),
+            newState,
+            firstDispatchedAt
+        );
+        if (!updated) {
+            console.warn(`[LocalApiServer] round dispatch: failed to persist round state for round '${roundId}'`);
+        }
+
+        const success = allDelivered;
+        return {
+            success,
+            roundId,
+            featureId: round.featureId,
+            state: newState,
+            dispatchedAt: firstDispatchedAt,
+            subtasks: results,
+            ...(success ? {} : { error: 'One or more subtasks failed to deliver — see subtasks for details' }),
+        };
     }
 
     /**
@@ -4959,14 +5190,6 @@ export class LocalApiServer {
                 return;
             }
 
-            // Resolve the feature's subtasks.
-            let subtasks: any[] = [];
-            try {
-                if (typeof db.getSubtasksByFeatureId === 'function') {
-                    subtasks = (await db.getSubtasksByFeatureId(planId)) || [];
-                }
-            } catch { /* best effort */ }
-
             // Resolve the poster's team roster.
             let roster: string[] | null = null;
             if (this._options.resolveTeamMembers) {
@@ -4976,86 +5199,159 @@ export class LocalApiServer {
                 roster = [from];
             }
 
-            if (subtasks.length === 0) {
-                // No subtasks resolved — either the planId is not a feature or the
-                // feature is empty. Say so rather than clearing an entire roster and
-                // releasing the team on the strength of a planId nothing matched.
+            // Delegate to the shared feature-completion core (also used by
+            // round/complete to close out the last round — subtask 04).
+            const result = await this._completeFeatureCore({ db, workspaceRoot, from, featureId: planId, roster });
+            if (!result.success) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({
-                    success: false,
-                    completed: [],
-                    cleared: [],
-                    error: `No subtasks resolved for planId '${planId}' — this endpoint takes a FEATURE planId. Nothing was completed and no seat was cleared.`
-                }));
+                res.end(JSON.stringify(result));
                 return;
             }
-
-            const completed: Array<{ planId: string; seat: string }> = [];
-            const cleared: Array<{ name: string; cleared: boolean; reason?: string }> = [];
-
-            // Complete each outstanding subtask.
-            for (const sub of subtasks) {
-                const subPlanId = sub.planId || sub.sessionId;
-                if (!subPlanId || sub.completedAt) continue;
-                const seat = String(sub.dispatchedTerminal || '').trim();
-                const result = await this.completeCardInternal(db, subPlanId, from, {
-                    workspaceRoot,
-                    workflow: 'feature-complete',
-                });
-                if (result.success) {
-                    completed.push({ planId: subPlanId, seat });
-                }
-            }
-
-            // Clear every roster seat EXCEPT the caller.
-            //
-            // The caller is mid-turn by definition: it is awaiting this response
-            // and still has work after it — commit, report, advance the card.
-            // Clearing it as a SIDE EFFECT of a roster operation wipes the context
-            // of the agent that asked for the teardown, and when resolveTeamMembers
-            // returns nothing the roster falls back to `[from]`, so this endpoint
-            // would clear the caller and nobody else.
-            //
-            // completeCardInternal states the same invariant ("Never clear the lead
-            // in `from`") and team/release respects it by iterating coderSeats.
-            // This path was the only one that did not.
-            //
-            // This is NOT a ban on self-clear: queue/done deliberately stands a
-            // finishing non-team seat down, and the bulk clear route can target any
-            // named seat including the caller. What is removed is the side effect.
-            for (const name of roster) {
-                if (name === from) {
-                    cleared.push({ name, cleared: false, reason: `Caller '${from}' is never cleared — it is mid-turn` });
-                    continue;
-                }
-                if (this._options.clearTerminalContext) {
-                    try {
-                        const clr = await this._options.clearTerminalContext(workspaceRoot, name);
-                        cleared.push({ name, cleared: !!clr?.cleared, ...(clr?.error ? { reason: clr.error } : {}) });
-                    } catch (err: any) {
-                        cleared.push({ name, cleared: false, reason: err instanceof Error ? err.message : String(err) });
-                    }
-                } else {
-                    cleared.push({ name, cleared: false, reason: 'clearTerminalContext not available' });
-                }
-            }
-
-            // Release the team.
-            if (this._options.onTeamReleased) {
-                try {
-                    await this._options.onTeamReleased(workspaceRoot, roster);
-                } catch (releaseErr) {
-                    console.warn('[LocalApiServer] feature-complete onTeamReleased error:', releaseErr);
-                }
-            }
-
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: true, completed, cleared }));
+            res.end(JSON.stringify(result));
         } catch (err) {
             console.error('[LocalApiServer] kanbanFeatureComplete error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'kanbanFeatureComplete failed' }));
         }
+    }
+
+    /**
+     * Shared core for feature-scoped completion (Coding Rounds feature, and the
+     * `POST /kanban/feature/complete` endpoint). Completes the feature's
+     * outstanding subtasks, clears EVERY roster seat, and releases the team
+     * exactly once.
+     *
+     * Called by `_handleKanbanFeatureComplete` (the HTTP handler) and by
+     * `_handleKanbanRoundComplete` (subtask 04) when the closed round was the
+     * last registered round — delegating here avoids a second release path
+     * (the round handler skips its own `onTeamReleased` call on this path, so
+     * `onTeamReleased` fires exactly once).
+     *
+     * `clearLead` (default false): whether the caller (the lead, `from`) is
+     * cleared as part of the roster teardown.
+     *  - The `feature/complete` HTTP handler passes false (default): the lead
+     *    posted the request and is mid-turn — it is awaiting this response and
+     *    still has work after it (commit, report, advance the card). Clearing
+     *    it as a side effect wipes the context of the agent that asked for the
+     *    teardown, and when resolveTeamMembers returns nothing the roster
+     *    falls back to `[from]`, so the endpoint would clear the caller and
+     *    nobody else.
+     *  - The `round/complete` last-round delegation path passes true: the
+     *    feature is done, the lead is NOT mid-turn, and the acceptance clause
+     *    requires "every seat including the lead cleared". The round handler
+     *    has already completed its response work except the final write, so
+     *    clearing the lead is the intended teardown, not a side effect.
+     *
+     * Returns `{ success: false, error, completed: [], cleared: [] }` when the
+     * featureId resolves no subtasks (the planId is not a feature or the
+     * feature is empty) — the caller maps that to a 400. Nothing is completed
+     * and no seat is cleared in that case.
+     */
+    private async _completeFeatureCore(args: {
+        db: any;
+        workspaceRoot: string;
+        from: string;
+        featureId: string;
+        roster: string[];
+        clearLead?: boolean;
+    }): Promise<{
+        success: boolean;
+        completed: Array<{ planId: string; seat: string }>;
+        cleared: Array<{ name: string; cleared: boolean; reason?: string }>;
+        error?: string;
+    }> {
+        const { db, workspaceRoot, from, featureId, roster } = args;
+        const clearLead = args.clearLead === true;
+
+        // Resolve the feature's subtasks.
+        let subtasks: any[] = [];
+        try {
+            if (typeof db.getSubtasksByFeatureId === 'function') {
+                subtasks = (await db.getSubtasksByFeatureId(featureId)) || [];
+            }
+        } catch { /* best effort */ }
+
+        if (subtasks.length === 0) {
+            // No subtasks resolved — either the planId is not a feature or the
+            // feature is empty. Say so rather than clearing an entire roster and
+            // releasing the team on the strength of a planId nothing matched.
+            return {
+                success: false,
+                completed: [],
+                cleared: [],
+                error: `No subtasks resolved for planId '${featureId}' — this endpoint takes a FEATURE planId. Nothing was completed and no seat was cleared.`
+            };
+        }
+
+        const completed: Array<{ planId: string; seat: string }> = [];
+        const cleared: Array<{ name: string; cleared: boolean; reason?: string }> = [];
+
+        // Complete each outstanding subtask.
+        for (const sub of subtasks) {
+            const subPlanId = sub.planId || sub.sessionId;
+            if (!subPlanId || sub.completedAt) continue;
+            const seat = String(sub.dispatchedTerminal || '').trim();
+            const result = await this.completeCardInternal(db, subPlanId, from, {
+                workspaceRoot,
+                workflow: 'feature-complete',
+            });
+            if (result.success) {
+                completed.push({ planId: subPlanId, seat });
+            }
+        }
+
+        // Clear every roster seat. The caller (the lead, `from`) is cleared
+        // only when `clearLead` is set — see the option's doc above.
+        //
+        // Default (clearLead=false, the feature/complete HTTP handler): the
+        // caller is mid-turn by definition — it is awaiting this response and
+        // still has work after it (commit, report, advance the card). Clearing
+        // it as a SIDE EFFECT wipes the context of the agent that asked for
+        // the teardown, and when resolveTeamMembers returns nothing the roster
+        // falls back to `[from]`, so the endpoint would clear the caller and
+        // nobody else.
+        //
+        // completeCardInternal states the same invariant ("Never clear the
+        // lead in `from`") and team/release respects it by iterating
+        // coderSeats. The feature/complete HTTP path was the only one that did
+        // not — that is the default here.
+        //
+        // clearLead=true (the round/complete last-round delegation path): the
+        // feature is done, the lead is NOT mid-turn, and the acceptance clause
+        // requires "every seat including the lead cleared". This is NOT a ban
+        // on self-clear in general: queue/done deliberately stands a finishing
+        // non-team seat down, and the bulk clear route can target any named
+        // seat including the caller. What the default removes is the side
+        // effect on a mid-turn lead; the round/complete path opts back in
+        // because the lead's turn is over.
+        for (const name of roster) {
+            if (name === from && !clearLead) {
+                cleared.push({ name, cleared: false, reason: `Caller '${from}' is never cleared — it is mid-turn` });
+                continue;
+            }
+            if (this._options.clearTerminalContext) {
+                try {
+                    const clr = await this._options.clearTerminalContext(workspaceRoot, name);
+                    cleared.push({ name, cleared: !!clr?.cleared, ...(clr?.error ? { reason: clr.error } : {}) });
+                } catch (err: any) {
+                    cleared.push({ name, cleared: false, reason: err instanceof Error ? err.message : String(err) });
+                }
+            } else {
+                cleared.push({ name, cleared: false, reason: 'clearTerminalContext not available' });
+            }
+        }
+
+        // Release the team.
+        if (this._options.onTeamReleased) {
+            try {
+                await this._options.onTeamReleased(workspaceRoot, roster);
+            } catch (releaseErr) {
+                console.warn('[LocalApiServer] feature-complete onTeamReleased error:', releaseErr);
+            }
+        }
+
+        return { success: true, completed, cleared };
     }
 
     /**
