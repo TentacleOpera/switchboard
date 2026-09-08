@@ -6816,6 +6816,86 @@ export class KanbanDatabase {
     }
 
     /**
+     * Read a single coding_rounds row by round_id. Returns null when the row
+     * does not exist. The subtask_seats JSON is parsed back into an object.
+     * Used by the round/dispatch handler (subtask 03) to read the registered
+     * round before dispatching, and by the round/redeliver handler to read the
+     * recorded seat for a subtask before re-sending its prompt.
+     */
+    public async getCodingRound(roundId: string): Promise<CodingRoundRecord | null> {
+        if (!(await this.ensureReady()) || !this._db) return null;
+        const stmt = this._db.prepare(
+            `SELECT round_id, feature_id, team_id, workspace_id, ordinal, total_registered, state, subtask_seats, registered_at, dispatched_at, closed_at
+             FROM coding_rounds WHERE round_id = ?`,
+            [roundId]
+        );
+        try {
+            if (stmt.step()) {
+                const r = stmt.getAsObject();
+                let subtaskSeats: Record<string, { seat: string; delivered: boolean; delivered_at: string | null }> = {};
+                try {
+                    const parsed = JSON.parse(String(r.subtask_seats ?? '{}'));
+                    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                        subtaskSeats = parsed as any;
+                    }
+                } catch { /* corrupt JSON — treat as empty */ }
+                return {
+                    roundId: String(r.round_id ?? ''),
+                    featureId: String(r.feature_id ?? ''),
+                    teamId: String(r.team_id ?? ''),
+                    workspaceId: String(r.workspace_id ?? ''),
+                    ordinal: Number(r.ordinal ?? 0),
+                    totalRegistered: Number(r.total_registered ?? 0),
+                    state: String(r.state ?? 'registered'),
+                    subtaskSeats,
+                    registeredAt: String(r.registered_at ?? ''),
+                    dispatchedAt: r.dispatched_at ? String(r.dispatched_at) : null,
+                    closedAt: r.closed_at ? String(r.closed_at) : null,
+                };
+            }
+            return null;
+        } finally {
+            stmt.free();
+        }
+    }
+
+    /**
+     * Update a coding_rounds row's subtask_seats, state, and dispatched_at
+     * after a dispatch or re-delivery (subtask 03). The caller passes the full
+     * subtask_seats JSON (already updated with per-subtask { seat, delivered,
+     * delivered_at }) and the resolved round state ('dispatched' when every
+     * subtask recorded delivered:true, 'partial' when any recorded
+     * delivered:false). dispatched_at is stamped on the first successful
+     * dispatch and left untouched on re-delivery (the round was already
+     * dispatched). Returns true when a row was updated.
+     */
+    public async updateCodingRoundAfterDispatch(
+        roundId: string,
+        subtaskSeatsJson: string,
+        state: string,
+        dispatchedAt: string | null
+    ): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        try {
+            if (dispatchedAt !== null) {
+                this._db.run(
+                    `UPDATE coding_rounds SET subtask_seats = ?, state = ?, dispatched_at = ? WHERE round_id = ?`,
+                    [subtaskSeatsJson, state, dispatchedAt, roundId]
+                );
+            } else {
+                this._db.run(
+                    `UPDATE coding_rounds SET subtask_seats = ?, state = ? WHERE round_id = ?`,
+                    [subtaskSeatsJson, state, roundId]
+                );
+            }
+            return true;
+        } catch (e) {
+            console.warn(`[KanbanDatabase] updateCodingRoundAfterDispatch failed for round ${roundId}:`, e);
+            return false;
+        }
+    }
+
+    /**
      * Find active plans whose plan_file no longer exists on disk and tombstone them.
      * Only checks local-source plans (skips brain-source).
      * Missing files must still be absent after a short confirmation delay so

@@ -10686,6 +10686,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             bypassTriggerGate: !!msg?.bypassTriggerGate,
                             unattended: !!msg?.unattended,
                             originTerminal: msg?.originTerminal,
+                            skipClear: !!msg?.skipClear,
+                            clearBeforePrompt: typeof msg?.clearBeforePrompt === 'boolean' ? msg.clearBeforePrompt : undefined,
                         });
                         if (dispatched && plannerCursorLocationKey && tvp) {
                             await tvp.advancePlannerRotationCursor(plannerCursorLocationKey, 1);
@@ -10776,7 +10778,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         }
                         // Trailing arg is the per-surface fleet discriminator — see the
                         // custom-user branch above and ConfiguredKanbanDispatchOptions.
-                        const dispatched = await this._seams().commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', role, sessionId, instruction, workspaceRoot, targetTerminalOverride, undefined, !!msg?.bypassTriggerGate, !!msg?.unattended, msg?.originTerminal);
+                        const dispatched = await this._seams().commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', role, sessionId, instruction, workspaceRoot, targetTerminalOverride, undefined, !!msg?.bypassTriggerGate, !!msg?.unattended, msg?.originTerminal, !!msg?.skipClear, msg?.clearBeforePrompt);
                         if (dispatched && workspaceRoot) {
                             // Advance the rotation cursor AFTER successful dispatch so a failed dispatch
                             // doesn't skip a terminal (consistent with _distributePlannerDispatch).

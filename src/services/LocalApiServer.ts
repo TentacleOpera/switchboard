@@ -2865,7 +2865,7 @@ export class LocalApiServer {
         workspaceRoot: string,
         ref: string,
         rawColumn?: string,
-        dispatchOptions?: { unattended?: boolean; targetTerminalOverride?: string; originTerminal?: string; restrictToOriginTeam?: boolean }
+        dispatchOptions?: { unattended?: boolean; targetTerminalOverride?: string; originTerminal?: string; restrictToOriginTeam?: boolean; skipClear?: boolean; clearBeforePrompt?: boolean }
     ): Promise<{ status: number; payload: any }> {
         const fail = (status: number, error: string): { status: number; payload: any } =>
             ({ status, payload: { success: false, error } });
@@ -2880,7 +2880,7 @@ export class LocalApiServer {
             //    then dispatches (the known move↔dispatch coupling order).
             const dispatchedAtBefore = record.dispatchedAt ?? null;
             await db.clearCompletedAt?.(record.planId);
-            await kanbanVerb('triggerAction', { sessionId, targetColumn, workspaceRoot, bypassTriggerGate: true, unattended: !!dispatchOptions?.unattended, targetTerminalOverride: teamOverride, originTerminal: dispatchOptions?.originTerminal }, workspaceRoot);
+            await kanbanVerb('triggerAction', { sessionId, targetColumn, workspaceRoot, bypassTriggerGate: true, unattended: !!dispatchOptions?.unattended, targetTerminalOverride: teamOverride, originTerminal: dispatchOptions?.originTerminal, skipClear: !!dispatchOptions?.skipClear, clearBeforePrompt: dispatchOptions?.clearBeforePrompt }, workspaceRoot);
 
             // 5. Verify against the DB — report what happened, not what was requested.
             const after: any = await db.getPlanByPlanId(record.planId);
@@ -2940,7 +2940,7 @@ export class LocalApiServer {
         workspaceRoot: string,
         ref: string,
         rawColumn: string | undefined,
-        dispatchOptions: { unattended?: boolean; targetTerminalOverride?: string; originTerminal?: string; restrictToOriginTeam?: boolean } | undefined
+        dispatchOptions: { unattended?: boolean; targetTerminalOverride?: string; originTerminal?: string; restrictToOriginTeam?: boolean; skipClear?: boolean; clearBeforePrompt?: boolean } | undefined
     ): Promise<
         | { ok: true; ctx: {
             record: any; sessionId: string; targetColumn: string; gate: { role: string | null; cliTriggersEnabled: boolean; dragDropMode: string | null; source: string | null } | undefined;
@@ -3075,7 +3075,7 @@ export class LocalApiServer {
         workspaceRoot: string,
         ref: string,
         rawColumn?: string,
-        dispatchOptions?: { unattended?: boolean; targetTerminalOverride?: string; originTerminal?: string; restrictToOriginTeam?: boolean }
+        dispatchOptions?: { unattended?: boolean; targetTerminalOverride?: string; originTerminal?: string; restrictToOriginTeam?: boolean; skipClear?: boolean; clearBeforePrompt?: boolean }
     ): Promise<{ status: number; payload: any }> {
         const fail = (status: number, error: string): { status: number; payload: any } =>
             ({ status, payload: { success: false, error } });
@@ -3117,7 +3117,7 @@ export class LocalApiServer {
             // but do NOT await the paced paste. The move persists as the arm's
             // first action (a DB write, milliseconds); the prompt delivery is the
             // slow part this whole split exists to hide from the UI.
-            const delivery = kanbanVerb('triggerAction', { sessionId, targetColumn, workspaceRoot, bypassTriggerGate: true, unattended: !!dispatchOptions?.unattended, targetTerminalOverride: teamOverride, originTerminal: dispatchOptions?.originTerminal }, workspaceRoot);
+            const delivery = kanbanVerb('triggerAction', { sessionId, targetColumn, workspaceRoot, bypassTriggerGate: true, unattended: !!dispatchOptions?.unattended, targetTerminalOverride: teamOverride, originTerminal: dispatchOptions?.originTerminal, skipClear: !!dispatchOptions?.skipClear, clearBeforePrompt: dispatchOptions?.clearBeforePrompt }, workspaceRoot);
             // Retain the promise so a rejection is recorded, never unhandled. A
             // rejection (e.g. terminal closed mid-chunk) leaves dispatchedAt
             // unchanged, so the poll times out to `unknown` at the deadline — the
@@ -4544,6 +4544,376 @@ export class LocalApiServer {
             console.error('[LocalApiServer] kanbanRoundRegister error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'kanbanRoundRegister failed' }));
+        }
+    }
+
+    /**
+     * POST /kanban/round/dispatch — the system dispatches a registered round
+     * (Coding Rounds feature, subtask 03). Given a registered round_id, the
+     * system:
+     *
+     *  1. Resolves the round and its named subtask planIds.
+     *  2. Assigns each subtask to a seat (round-robin from the roster, excluding
+     *     the lead).
+     *  3. Clears only the seats receiving this round's subtasks (via the
+     *     destination clearBeforePrompt, NOT the roster barrier — skipClear is
+     *     true so the roster barrier is skipped).
+     *  4. Delivers each prompt through the existing dispatch machinery
+     *     (performKanbanDispatch).
+     *  5. Records per-subtask { seat, delivered, delivered_at } in
+     *     coding_rounds.subtask_seats.
+     *  6. Updates round state: 'dispatched' when every subtask delivered,
+     *     'partial' when any failed.
+     *
+     * Body: `{ from, roundId, workspaceRoot? }`.
+     * `from` is the lead's terminal name (used to resolve the team roster and
+     * exclude the lead from the seat pool).
+     *
+     * Re-dispatching an already-dispatched round is allowed: it re-attempts
+     * failed subtasks and recomputes the state. Already-delivered subtasks are
+     * NOT re-sent (idempotent).
+     */
+    private async _handleKanbanRoundDispatch(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const body = await this._parseJsonBody(req);
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const from = String(body?.from || '').trim();
+            const roundId = String(body?.roundId || '').trim();
+
+            if (!workspaceRoot) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Missing required field: workspaceRoot' }));
+                return;
+            }
+            if (!from) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: "Missing required field: from (the lead's terminal name)" }));
+                return;
+            }
+            if (!roundId) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Missing required field: roundId' }));
+                return;
+            }
+
+            const db = await this._options.getKanbanDatabase?.(workspaceRoot);
+            if (!db) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Kanban database not available' }));
+                return;
+            }
+
+            // Resolve the round.
+            const round = await db.getCodingRound?.(roundId);
+            if (!round) {
+                res.writeHead(404, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: `Round '${roundId}' not found` }));
+                return;
+            }
+            // Only registered or partial rounds can be dispatched. A closed
+            // round is immutable.
+            if (round.state === 'closed') {
+                res.writeHead(409, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: `Round '${roundId}' is closed — cannot re-dispatch a closed round` }));
+                return;
+            }
+
+            // Resolve the team roster.
+            let roster: string[] | null = null;
+            if (this._options.resolveTeamMembers) {
+                try {
+                    roster = await this._options.resolveTeamMembers(workspaceRoot, from);
+                } catch (err) {
+                    console.warn('[LocalApiServer] resolveTeamMembers failed in round/dispatch:', err);
+                }
+            }
+            if (!roster || roster.length === 0) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: `No team roster resolved for poster '${from}' — cannot dispatch without a team` }));
+                return;
+            }
+
+            // The lead is never a cleared/dispatched seat. Exclude the lead
+            // (the `from` terminal) from the seat pool.
+            const seats = roster.filter(s => s !== from);
+            if (seats.length === 0) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: `Team roster has no seats excluding the lead '${from}' — cannot dispatch` }));
+                return;
+            }
+
+            // The subtask planIds in round order.
+            const subtaskPlanIds = Object.keys(round.subtaskSeats);
+            if (subtaskPlanIds.length === 0) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: `Round '${roundId}' has no subtasks` }));
+                return;
+            }
+
+            // Assign seats round-robin. Skip subtasks already delivered
+            // (idempotent re-dispatch: do not re-send delivered subtasks).
+            const now = new Date().toISOString();
+            const subtaskSeats = { ...round.subtaskSeats };
+            const results: Array<{ planId: string; seat: string | null; delivered: boolean; deliveredAt: string | null; error?: string }> = [];
+            let seatCursor = 0;
+            let firstDispatchedAt = round.dispatchedAt || null;
+
+            for (const planId of subtaskPlanIds) {
+                const existing = subtaskSeats[planId];
+                // Idempotent: skip already-delivered subtasks.
+                if (existing && existing.delivered) {
+                    results.push({
+                        planId,
+                        seat: existing.seat || null,
+                        delivered: true,
+                        deliveredAt: existing.delivered_at || null,
+                    });
+                    continue;
+                }
+
+                // Assign the next seat (round-robin).
+                const seat = seats[seatCursor % seats.length];
+                seatCursor++;
+
+                // Dispatch through the existing machinery. skipClear: true
+                // skips the roster barrier (which would clear the ENTIRE
+                // roster). The destination clearBeforePrompt uses the config
+                // default (the seat IS cleared before the prompt — it is
+                // receiving new work).
+                const dispatchRes = await this.performKanbanDispatch(workspaceRoot, planId, undefined, {
+                    targetTerminalOverride: seat,
+                    originTerminal: from,
+                    skipClear: true,
+                });
+
+                const delivered = dispatchRes.status === 200 && dispatchRes.payload?.success === true;
+                const deliveredAt = delivered ? now : null;
+                subtaskSeats[planId] = {
+                    seat: delivered ? seat : (seat || ''),
+                    delivered,
+                    delivered_at: deliveredAt,
+                };
+                if (firstDispatchedAt === null && delivered) {
+                    firstDispatchedAt = now;
+                }
+                results.push({
+                    planId,
+                    seat: delivered ? seat : (seat || null),
+                    delivered,
+                    deliveredAt,
+                    ...(delivered ? {} : { error: dispatchRes.payload?.error || 'Dispatch failed' }),
+                });
+            }
+
+            // Compute aggregate state.
+            const allDelivered = results.every(r => r.delivered);
+            const newState = allDelivered ? 'dispatched' : 'partial';
+
+            // Persist the updated subtask_seats, state, and dispatched_at.
+            // dispatched_at is stamped on the first successful dispatch and
+            // left untouched on re-dispatch (the round was already
+            // dispatched).
+            const updated = await db.updateCodingRoundAfterDispatch?.(
+                roundId,
+                JSON.stringify(subtaskSeats),
+                newState,
+                firstDispatchedAt
+            );
+            if (!updated) {
+                console.warn(`[LocalApiServer] round/dispatch: failed to persist round state for round '${roundId}'`);
+            }
+
+            const success = allDelivered;
+            res.writeHead(success ? 200 : 207, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success,
+                roundId,
+                featureId: round.featureId,
+                state: newState,
+                dispatchedAt: firstDispatchedAt,
+                subtasks: results,
+                ...(success ? {} : { error: 'One or more subtasks failed to deliver — see subtasks for details' }),
+            }));
+        } catch (err) {
+            console.error('[LocalApiServer] kanbanRoundDispatch error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'kanbanRoundDispatch failed' }));
+        }
+    }
+
+    /**
+     * POST /kanban/round/redeliver — re-send a single subtask's prompt to its
+     * recorded seat (Coding Rounds feature, subtask 03). The seat is being
+     * repaired, not handed new work, so:
+     *
+     *  - skipClear: true (skip the roster barrier — do not clear the roster)
+     *  - clearBeforePrompt: false (do not clear the destination seat)
+     *
+     * The subtask's recorded seat is read from coding_rounds.subtask_seats. If
+     * the seat is empty (no seat was assigned), the redeliver fails — the
+     * subtask must be dispatched first via round/dispatch.
+     *
+     * On success, the subtask's entry is updated to { delivered: true,
+     * delivered_at: <now> } and the round state is recomputed (partial may
+     * become dispatched). Idempotent: re-sending a delivered subtask is a
+     * no-op that returns success.
+     *
+     * Body: `{ from, roundId, planId, workspaceRoot? }`.
+     */
+    private async _handleKanbanRoundRedeliver(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const body = await this._parseJsonBody(req);
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const from = String(body?.from || '').trim();
+            const roundId = String(body?.roundId || '').trim();
+            const planId = String(body?.planId || '').trim();
+
+            if (!workspaceRoot) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Missing required field: workspaceRoot' }));
+                return;
+            }
+            if (!from) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: "Missing required field: from (the lead's terminal name)" }));
+                return;
+            }
+            if (!roundId) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Missing required field: roundId' }));
+                return;
+            }
+            if (!planId) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Missing required field: planId' }));
+                return;
+            }
+
+            const db = await this._options.getKanbanDatabase?.(workspaceRoot);
+            if (!db) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Kanban database not available' }));
+                return;
+            }
+
+            // Resolve the round.
+            const round = await db.getCodingRound?.(roundId);
+            if (!round) {
+                res.writeHead(404, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: `Round '${roundId}' not found` }));
+                return;
+            }
+            if (round.state === 'closed') {
+                res.writeHead(409, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: `Round '${roundId}' is closed — cannot redeliver to a closed round` }));
+                return;
+            }
+
+            // Find the subtask's recorded seat.
+            const entry = round.subtaskSeats[planId];
+            if (!entry) {
+                res.writeHead(404, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: `Subtask '${planId}' is not part of round '${roundId}'` }));
+                return;
+            }
+
+            // Idempotent: already delivered — no-op success.
+            if (entry.delivered) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: true,
+                    roundId,
+                    planId,
+                    seat: entry.seat || null,
+                    delivered: true,
+                    deliveredAt: entry.delivered_at,
+                    message: 'Subtask already delivered — no-op',
+                }));
+                return;
+            }
+
+            // The recorded seat must be non-empty.
+            const seat = entry.seat;
+            if (!seat || seat.trim() === '') {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: `Subtask '${planId}' has no recorded seat — dispatch the round first via /kanban/round/dispatch` }));
+                return;
+            }
+
+            // Re-deliver through the existing machinery. skipClear: true
+            // (skip the roster barrier), clearBeforePrompt: false (do not
+            // clear the destination seat — it is being repaired, not handed
+            // new work).
+            const dispatchRes = await this.performKanbanDispatch(workspaceRoot, planId, undefined, {
+                targetTerminalOverride: seat,
+                originTerminal: from,
+                skipClear: true,
+                clearBeforePrompt: false,
+            });
+
+            const delivered = dispatchRes.status === 200 && dispatchRes.payload?.success === true;
+            const now = new Date().toISOString();
+            const deliveredAt = delivered ? now : null;
+
+            // Update the subtask's entry.
+            const subtaskSeats = { ...round.subtaskSeats };
+            subtaskSeats[planId] = {
+                seat,
+                delivered,
+                delivered_at: deliveredAt,
+            };
+
+            // Recompute round state.
+            const allDelivered = Object.values(subtaskSeats).every(s => s.delivered);
+            const newState = allDelivered ? 'dispatched' : 'partial';
+
+            // Persist. dispatched_at is NOT updated on re-delivery (the round
+            // was already dispatched).
+            const updated = await db.updateCodingRoundAfterDispatch?.(
+                roundId,
+                JSON.stringify(subtaskSeats),
+                newState,
+                null
+            );
+            if (!updated) {
+                console.warn(`[LocalApiServer] round/redeliver: failed to persist round state for round '${roundId}'`);
+            }
+
+            if (delivered) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: true,
+                    roundId,
+                    planId,
+                    seat,
+                    delivered: true,
+                    deliveredAt,
+                    roundState: newState,
+                }));
+            } else {
+                res.writeHead(502, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({
+                    success: false,
+                    roundId,
+                    planId,
+                    seat,
+                    delivered: false,
+                    roundState: newState,
+                    error: dispatchRes.payload?.error || 'Re-delivery failed',
+                }));
+            }
+        } catch (err) {
+            console.error('[LocalApiServer] kanbanRoundRedeliver error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'kanbanRoundRedeliver failed' }));
         }
     }
 
@@ -11428,6 +11798,10 @@ export class LocalApiServer {
                 await this._handleKanbanRoundComplete(req, res);
             } else if (pathname === '/kanban/round/register' && req.method === 'POST') {
                 await this._handleKanbanRoundRegister(req, res);
+            } else if (pathname === '/kanban/round/dispatch' && req.method === 'POST') {
+                await this._handleKanbanRoundDispatch(req, res);
+            } else if (pathname === '/kanban/round/redeliver' && req.method === 'POST') {
+                await this._handleKanbanRoundRedeliver(req, res);
             } else if (pathname === '/kanban/feature/complete' && req.method === 'POST') {
                 await this._handleKanbanFeatureComplete(req, res);
             } else if (pathname === '/kanban/team/release' && req.method === 'POST') {

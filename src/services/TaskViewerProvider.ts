@@ -312,6 +312,24 @@ type ConfiguredKanbanDispatchOptions = {
      * — is correct.
      */
     originTerminal?: string;
+    /**
+     * When true, skip the roster barrier clear AND the destination
+     * clearBeforePrompt. Used by re-delivery (Coding Rounds subtask 03): the
+     * seat is being repaired, not handed new work. Threaded into the
+     * ptySendPrompt payload as `skipClear` so the roster barrier handler
+     * can skip the clear, and into the delivery as `clearBeforePrompt:
+     * false` so the destination is not reset.
+     */
+    skipClear?: boolean;
+    /**
+     * Override the destination clearBeforePrompt for this dispatch. When
+     * undefined, the config default applies (the seat is cleared before
+     * the prompt). When false, the destination is NOT cleared — used by
+     * re-delivery (Coding Rounds subtask 03): the seat is being repaired,
+     * not handed new work. When true, the destination IS cleared regardless
+     * of the config setting.
+     */
+    clearBeforePrompt?: boolean;
 };
 
 type ClickUpSetupColumnState = {
@@ -477,6 +495,15 @@ type DirectPushDelivery = {
      * exclude it from the clear set. Absent on operator-driven paths.
      */
     originTerminal?: string;
+    /**
+     * When true, skip the roster barrier clear AND the destination clear.
+     * Used by re-delivery (Coding Rounds subtask 03): the seat is being
+     * repaired, not handed new work, so clearing it (or the roster) would
+     * destroy in-flight state. The `clearCompletedAt` call in
+     * `performKanbanDispatch` is NOT skipped — a re-dispatched card is not
+     * complete.
+     */
+    skipClear?: boolean;
 };
 
 /**
@@ -862,6 +889,21 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             }
 
             if (contextIdentity) {
+                // skipClear (Coding Rounds subtask 03): skip the roster barrier
+                // clear. The roster barrier clears the ENTIRE roster, which would
+                // kill another feature's in-flight seats on a team with two
+                // features. The destination clearBeforePrompt is NOT forced false
+                // here — the caller controls it via delivery.clearBeforePrompt.
+                // For initial dispatch, the destination IS cleared (the seat
+                // receives new work). For re-delivery, the caller passes
+                // clearBeforePrompt: false (the seat is being repaired).
+                // The clearCompletedAt call in performKanbanDispatch is NOT
+                // skipped (a re-dispatched card is not complete).
+                if (payload?.skipClear) {
+                    // Skip the roster barrier: do not run the work-context
+                    // lifecycle clear. The destination clear is controlled by
+                    // clearBeforePrompt on the payload, which the caller set.
+                } else {
                 // Atomic work context lifecycle:
                 // Resolve workContextKey = record.featureId || record.planId
                 const dispatchWsRoot = payload.workspaceRoot || this._apiServerWorkspaceRoot || this._getWorkspaceRoot() || '';
@@ -1074,6 +1116,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     }
                     this._lastWorkContextByTerminal.set(payload.name, workContextKey);
                 }
+                } // end skipClear else
             }
 
             const isOrientation = payload?.orientationOnly === true;
@@ -7804,6 +7847,8 @@ Each plan file must include:
             persistColumnOnError: true,
             unattended: options.unattended,
             originTerminal: options.originTerminal,
+            skipClear: options.skipClear,
+            clearBeforePrompt: options.clearBeforePrompt,
         };
 
         if (options.dragDropMode === 'prompt') {
@@ -22246,6 +22291,11 @@ Each plan file must include:
                             // barrier can exclude it from the clear set. Absent on
                             // operator-driven (board drag) paths.
                             ...(delivery?.originTerminal ? { origin: delivery.originTerminal } : {}),
+                            // skipClear (Coding Rounds subtask 03 re-delivery): thread
+                            // into the payload so the roster barrier handler can skip
+                            // the clear. The destination clearBeforePrompt is already
+                            // false via delivery.clearBeforePrompt above.
+                            ...(delivery?.skipClear ? { skipClear: true } : {}),
                         });
                         if (writeRes?.success) { return true; }
                         console.error(`[TaskViewerProvider] PTY prompt delivery to '${terminalName}' failed:`, writeRes?.error);
@@ -22933,7 +22983,18 @@ Each plan file must include:
                 // Thread the dispatch origin (the terminal that requested this
                 // send) into the ptySendPrompt payload so the roster barrier can
                 // exclude it. Absent on operator-driven (board drag) paths.
-                options?.originTerminal ? { originTerminal: options.originTerminal } : undefined,
+                // skipClear (Coding Rounds subtask 03): skip the roster barrier
+                // clear. The destination clearBeforePrompt is controlled by the
+                // caller via delivery.clearBeforePrompt — for re-delivery, the
+                // caller passes clearBeforePrompt: false; for initial dispatch,
+                // the default config setting applies (the seat is cleared).
+                (options?.originTerminal || options?.skipClear || typeof options?.clearBeforePrompt === 'boolean')
+                    ? {
+                        ...(options?.originTerminal ? { originTerminal: options.originTerminal } : {}),
+                        ...(options?.skipClear ? { skipClear: true } : {}),
+                        ...(typeof options?.clearBeforePrompt === 'boolean' ? { clearBeforePrompt: options.clearBeforePrompt } : {}),
+                    }
+                    : undefined,
                 true
             );
 
