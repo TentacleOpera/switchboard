@@ -46,6 +46,8 @@ import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExtern
 // them and persists the result. Importing them back would re-open the
 // four-site-convention hole the loader closed.
 import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, loadEffectiveStandingOrders, resolveTeamScopedRoleTerminal, resolveTeamMembersForHead, resolveTeamPacingForHead, resolveDefinitionForGroup, plausibleOriginTerminal, terminalsShareTeam, listTeamsInRoots, resolveTeamByIdInRoots, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, teamHeadName, type TerminalGroupsSettingsAccessor } from './teamWiring';
+import { isTmuxAvailable } from '../standalone/tmuxBackend';
+import { createTmuxHeadWithDelegates, updateTmuxRegistryState, resolveTmuxSeatFromRegistry, deliverToTmuxSeat, sendControlToTmuxSeat } from '../standalone/tmuxTeamSeating';
 import { installReviewerCallbackOrder, removeReviewerCallbackOrder } from './standingOrders';
 import { resolveWorkContext, resolveTeamGroupForTerminal, computeRosterClearTargets, dropDeferredClear, renameDeferredClear } from './workContextResolver';
 import { ORIENTATION_PREAMBLE, waitForSeatQuiescence } from './startupOrientation';
@@ -3976,6 +3978,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 // wire payload.
                 if (payload && payload.group) {
                     return { success: false, error: 'Team definition cannot be supplied over the wire' };
+                }
+                // The terminal backend is host-resolved from the scoped
+                // setting, never from the wire — same posture as the group
+                // definition guard above. A wire-supplied backend could
+                // route team seating to an unintended backend.
+                if (payload && payload.backend) {
+                    return { success: false, error: 'Terminal backend cannot be supplied over the wire' };
                 }
                 return this.startTeamForWorkspace({
                     teamId: payload?.teamId,
@@ -13805,9 +13814,6 @@ Each plan file must include:
         if (!resolvedRoot) {
             return { success: false, error: 'No workspace root resolved' };
         }
-        if (!this._hasFleet()) {
-            return { success: false, error: 'PTY host unavailable on this platform/installation' };
-        }
         const db = await this._getKanbanDb(resolvedRoot);
         if (!db || !(await db.ensureReady())) {
             return { success: false, error: 'Kanban DB not ready' };
@@ -13829,6 +13835,43 @@ Each plan file must include:
                 set: (k, v) => kp._updateScopedSetting(k, v),
             }
             : undefined;
+
+        // Backend selection at the createHeadWithDelegates seam. The setting
+        // is read through the same scoped-config path the rest of team
+        // settings use — NOT from the wire (the ptyStartTeam verb rejects a
+        // wire-supplied backend field). Default is 'fleet'; absent or
+        // unrecognized means fleet. No silent fleet fallback when tmux is
+        // selected but unavailable — the tmux callback returns a refusal.
+        const backend = kp?._getScopedSetting<string>('terminalBackend', 'fleet') || 'fleet';
+
+        if (backend === 'tmux') {
+            // tmux backend: create panes in a Switchboard-owned tmux session.
+            // The fleet availability check is skipped — tmux is an alternative
+            // backend, not a supplement to the fleet. The tmux callback does
+            // its own availability check and returns a refusal if tmux is
+            // absent.
+            return instantiateAgentGroupCore({
+                db: wiringDb,
+                settings,
+                group,
+                cwd: resolvedRoot,
+                liveDelegateCount: async () => {
+                    // tmux seats are not PTY delegates — return 0 so the cap
+                    // pre-flight does not refuse a tmux-seated team for a
+                    // fleet delegate count it does not contribute to.
+                    return 0;
+                },
+                createHeadWithDelegates: (spec) => createTmuxHeadWithDelegates(spec, { db: wiringDb }),
+                onCreated: () => { void this._updatePtyMirrorRegistry?.(db); },
+            });
+        }
+
+        // Fleet backend (default). The fleet availability check stays here,
+        // not above, so a tmux-selected workspace does not refuse with "PTY
+        // host unavailable" on a platform that has no fleet.
+        if (!this._hasFleet()) {
+            return { success: false, error: 'PTY host unavailable on this platform/installation' };
+        }
 
         return instantiateAgentGroupCore({
             db: wiringDb,
@@ -15847,6 +15890,41 @@ Each plan file must include:
                                     return { success: false, error: ptyError };
                                 }
                             }
+                        }
+
+                        // tmux delivery arm: check runtime.terminals for an
+                        // active tmux seat matching the name. The fleet-first
+                        // path above did not find it (tmux panes are not in
+                        // the pty host). Route to sendPromptToTmux (prompt
+                        // path) or sendControlToTmuxSeat (control string
+                        // path), mirroring the fleet arm's content-aware
+                        // branching. A name that matches both a fleet
+                        // terminal and a tmux pane — the fleet path wins (it
+                        // checks first). This is correct: the fleet path is
+                        // the default, and a name collision between backends
+                        // is an operator error.
+                        try {
+                            const tmuxDb = await this._getKanbanDb(this._apiServerWorkspaceRoot || this._getWorkspaceRoot() || '');
+                            if (tmuxDb) {
+                                const tmuxSeat = await resolveTmuxSeatFromRegistry(tmuxDb, name);
+                                if (tmuxSeat && tmuxSeat.status === 'active') {
+                                    let tmuxRes: any;
+                                    if (isControlString) {
+                                        tmuxRes = await sendControlToTmuxSeat(tmuxSeat.paneId, input);
+                                    } else {
+                                        tmuxRes = await deliverToTmuxSeat(tmuxSeat.paneId, name, input, undefined, { clearBeforePrompt: false });
+                                    }
+                                    if (tmuxRes?.success) {
+                                        console.log(`[TaskViewer] sendToTerminal: sent to '${name}' via tmux (len: ${input.length}, path: ${isControlString ? 'control' : 'prompt'})`);
+                                        return { success: true };
+                                    }
+                                    const tmuxError = tmuxRes?.error || 'tmux delivery failed';
+                                    console.error(`[TaskViewer] sendToTerminal: tmux delivery to '${name}' failed: ${tmuxError}`);
+                                    return { success: false, error: tmuxError };
+                                }
+                            }
+                        } catch (err) {
+                            console.warn(`[TaskViewer] sendToTerminal: tmux delivery arm error for '${name}':`, err);
                         }
 
                         // Resolve terminal: registered terminals first (exact → suffix-aware → case-insensitive),

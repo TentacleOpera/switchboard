@@ -15,6 +15,7 @@ import {
 } from '../services/hostSettings';
 import { DEFAULT_DISPLAY_HOSTNAME, isLoopbackHostname } from '../utils/loopbackHostname';
 import { detectTailnetAddress, resolveMagicDnsNames } from '../utils/tailnetDetect';
+import { detectWsl } from '../utils/wslDetect';
 import { isPortFree, resolvePreferredPort, PORT_BASE, PORT_SPAN } from '../utils/portResolver';
 import { BANNER_ART_TRUECOLOR, BANNER_ART_256, BANNER_ART_ASCII } from '../generated/bannerArt';
 import { getInotifyWatchCount, getOpenFdCount } from './planIngestionHost';
@@ -468,16 +469,70 @@ async function findRunningInstance(workspaceRoot: string): Promise<number | null
 
 async function openBrowser(url: string): Promise<void> {
     const platform = process.platform;
+    const wsl = detectWsl();
     let cmd: string;
     const args: string[] = [];
-    if (platform === 'darwin') { cmd = 'open'; args.push(url); }
+    if (wsl.wsl) {
+        // cmd.exe is on PATH via WSL interop; fall back to wslview, then print.
+        // The empty title arg keeps `start` from treating a URL-shaped first
+        // arg as a window title on some Windows shells.
+        cmd = 'cmd.exe'; args.push('/c', 'start', '', url);
+    } else if (platform === 'darwin') { cmd = 'open'; args.push(url); }
     else if (platform === 'win32') { cmd = 'cmd'; args.push('/c', 'start', '', url); }
     else { cmd = 'xdg-open'; args.push(url); }
-    try {
-        const p = spawn(cmd, args, { detached: true, stdio: 'ignore' });
-        p.unref();
-    } catch (err) {
-        console.error(`[switchboard] Failed to open browser: ${err}`);
+
+    // spawn() does NOT throw synchronously when the binary is missing — it
+    // emits an 'error' event asynchronously (ENOENT). A bare try/catch around
+    // spawn() therefore never enters the fallback on a missing cmd.exe, which
+    // is exactly the WSL interop-disabled case this function must handle. The
+    // promise resolves `false` on either a synchronous throw or an async
+    // 'error' event, so the fallback chain below actually fires.
+    //
+    // A short timeout guards against a hang on a Node build where neither
+    // 'spawn' nor 'error' fires promptly: openBrowser is awaited in the
+    // startup sequence, so an unresolving promise would block the board URL
+    // and the "Press Ctrl+C" line. On timeout we assume success — the original
+    // code was fire-and-forget, and the URL is printed in the startup log
+    // regardless, so a wrong "success" is no worse than the status quo.
+    const trySpawn = (spawnCmd: string, spawnArgs: string[]): Promise<boolean> => {
+        return new Promise(resolve => {
+            let settled = false;
+            const finish = (ok: boolean) => {
+                if (settled) { return; }
+                settled = true;
+                clearTimeout(timer);
+                resolve(ok);
+            };
+            const timer = setTimeout(() => finish(true), 500);
+            timer.unref();
+            try {
+                const p = spawn(spawnCmd, spawnArgs, { detached: true, stdio: 'ignore' });
+                p.on('error', () => finish(false));
+                p.unref();
+                // 'spawn' fires once the process is created successfully; if it
+                // fires, the binary was found and the launch is best-effort from
+                // here. Resolve true so the fallback chain stops.
+                p.on('spawn', () => finish(true));
+            } catch {
+                finish(false);
+            }
+        });
+    };
+
+    const ok = await trySpawn(cmd, args);
+    if (ok) { return; }
+
+    // WSL interop may be disabled via /etc/wsl.conf ([interop] enabled = false),
+    // in which case cmd.exe is not on PATH. Try wslview (from wslu), then
+    // fall back to printing the URL so the user can open it manually. A
+    // headless WSL install with no interop and no wslview gets the same
+    // behaviour as a headless server today — the URL is in the log.
+    if (wsl.wsl) {
+        const wslviewOk = await trySpawn('wslview', [url]);
+        if (wslviewOk) { return; }
+        console.log(`[switchboard] Open this URL in your Windows browser: ${url}`);
+    } else {
+        console.error(`[switchboard] Failed to open browser: ${url}`);
     }
 }
 

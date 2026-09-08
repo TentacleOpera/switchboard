@@ -157,6 +157,82 @@ export function readTeamPacing(group: any): 'head' | 'seat' {
     return group && group.pacing === 'seat' ? 'seat' : 'head';
 }
 
+// ─── tmux session name derivation ─────────────────────────────────────────
+// tmux session names cannot contain `.` or `:` and should be shell-safe.
+// Team names are free-form user strings, so sanitize to `[a-z0-9_-]` and
+// prefix with `sb-` to namespace Switchboard-owned sessions (distinguishes
+// from user sessions like `board`). All tmux invocations use execFile with
+// an argv array (Part 1's contract), so the session name is passed as a
+// single argv element to `-s` — never interpolated into a command string.
+export function deriveTmuxSessionName(teamName: string): string {
+    return 'sb-' + String(teamName || 'team')
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]/g, '-')
+        .replace(/-+/g, '-')
+        .slice(0, 50);
+}
+
+// ─── Shared seat-name derivation ──────────────────────────────────────────
+// Both the PTY fleet and the tmux seating callback must produce IDENTICAL
+// friendlyName values for the same team — dispatch attribution, completion
+// reports, and standing-order delivery all key on the name. The fleet's
+// `create()` applies a collision counter (`${role}-${n}` when the base name
+// is taken); the tmux path must use the same derivation. These helpers
+// extract the name-derivation logic so both backends call one function.
+//
+// The collision counter checks a `taken` set that the caller populates as
+// it allocates names. The fleet populates it from `this.terminals`; the
+// tmux path populates it from pane titles already in the session.
+
+/**
+ * Derive a seat name with collision counter, mirroring `PtyFleetService.create()`.
+ * If `baseName` is free, use it. If not, fall back to `${role}-${counter}`.
+ */
+export function deriveSeatName(baseName: string, role: string, taken: Set<string>): string {
+    let name = baseName || `${role}-1`;
+    if (!taken.has(name)) {
+        taken.add(name);
+        return name;
+    }
+    let counter = 1;
+    do {
+        counter++;
+        name = `${role}-${counter}`;
+    } while (taken.has(name));
+    taken.add(name);
+    return name;
+}
+
+/**
+ * Derive the base name for a per-team (parented) delegate, mirroring
+ * `spawnDelegates` at `ptyFleetService.ts:978-979`.
+ * `${parentName}-${label||role}${suffix}` where suffix is `-${i+1}` if count > 1.
+ */
+export function deriveDelegateBaseName(
+    parentName: string,
+    def: { label?: string; role: string; count?: number },
+    index: number
+): string {
+    const count = Math.max(1, def.count || 1);
+    const suffix = count > 1 ? `-${index + 1}` : '';
+    return `${parentName}-${def.label || def.role}${suffix}`;
+}
+
+/**
+ * Derive the name for a shared member, mirroring `spawnDelegates` at
+ * `ptyFleetService.ts:925-929`.
+ * `${teamName}-${label||role}${suffix}` where suffix is `-${i+1}` if count > 1.
+ */
+export function deriveSharedMemberName(
+    teamName: string,
+    def: { label?: string; role: string; count?: number },
+    index: number
+): string {
+    const count = Math.max(1, def.count || 1);
+    const suffix = count > 1 ? `-${index + 1}` : '';
+    return `${teamName}-${def.label || def.role}${suffix}`;
+}
+
 /**
  * Context-aware completion standing order installed on every seat of a spawned team.
  * Instructs the coder to inspect the dispatch source and route its completion:

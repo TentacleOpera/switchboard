@@ -122,6 +122,24 @@ import { __setStandaloneWorkspaceRoot, createStandaloneSecretStorage } from './v
 import { isLoopbackHostname, resolveDisplayHostname, isAllowedHostFor, isTailnetPolicy, LOOPBACK_ONLY_POLICY, type BindPolicy } from '../utils/loopbackHostname';
 import { setBundledCliPath, setGoClientPath, resolveGoClientPath } from '../utils/cliPathToken';
 import { PtyHostSupervisor } from '../services/ptyHostSupervisor';
+import {
+    isTmuxAvailable,
+    listTmuxPanes,
+    TmuxTerminalBackend,
+    TMUX_IDE_NAME,
+    type TmuxSocket,
+    type TmuxTerminalHandle,
+} from './tmuxBackend';
+import { sendPromptToTmux, clearTmuxPane } from './tmuxPromptDelivery';
+import { TmuxFleetService, BareShellError } from './tmuxFleetService';
+import {
+    createTmuxHeadWithDelegates,
+    updateTmuxRegistryState,
+    startTmuxReconcilePoll,
+    resolveTmuxSeatFromRegistry,
+    deliverToTmuxSeat,
+    sendControlToTmuxSeat,
+} from './tmuxTeamSeating';
 
 // One JSDOM window for the whole process, reused by every `markdown.api.render`
 // call below. Building a window per render is ~100x slower and the expensive
@@ -1199,6 +1217,16 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         log(opts, `[pty-host] terminals unavailable: ${ptyAvailability.reason ?? 'unknown reason'}`);
     }
 
+    // tmux bridge — declared here (before handlePtyVerb and the options object)
+    // so the closures below can reference it. Assigned near the purgePtyTerminals
+    // await, where the async probe + fleet construction + pre-server reconcile
+    // happen. `tmuxReady` is the gate every tmux verb checks, exactly as `ptyReady`
+    // gates the PTY verbs — an unguarded call from a page loaded before a restart
+    // must not surface as an unhandled spawn exception.
+    let tmuxReady = false;
+    let tmuxFleetService: TmuxFleetService | undefined;
+    let tmuxSocket: TmuxSocket | undefined;
+
     // The four Board flags added by standalone-capability-gating-honesty default
     // false in headlessPanelHtml, so a host that omits one hides that surface.
     // `worktrees` and `uat` were omitted here on expectation, not measurement —
@@ -1604,8 +1632,10 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         return true;
     });
     switchboardCommandRegistry.register('switchboard.triggerAgentFromKanban', async (role: string, sessionId: string, instruction?: string, targetRoot?: string, terminalName?: string) => {
-        if (!ptyReady) {
-            return { success: false, error: 'PTY terminals are unavailable: switchboard-pty-host artifact is missing or unsupported on this machine.' };
+        // Allow when EITHER fleet is live: triggerAction can resolve to a tmux
+        // pane when no PTY matches, so a tmux-only host must still dispatch.
+        if (!ptyReady && !tmuxReady) {
+            return { success: false, error: 'No terminal runtime available: PTY host is missing and tmux bridge is not enabled.' };
         }
         return await handlePtyVerb('triggerAction', { role, sessionId, instruction, terminalName }, targetRoot || workspaceRoot);
     });
@@ -1614,8 +1644,8 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // `analysisScope` at every KanbanProvider call site, with no compile error
     // (the command registry is untyped). Both hosts must keep or drop it together.
     switchboardCommandRegistry.register('switchboard.triggerBatchAgentFromKanban', async (role: string, sessionIds: string[], instruction?: string, targetRoot?: string, terminalName?: string, _apiOriginated?: boolean, analysisScope?: string | null) => {
-        if (!ptyReady) {
-            return { success: false, error: 'PTY terminals are unavailable: switchboard-pty-host artifact is missing or unsupported on this machine.' };
+        if (!ptyReady && !tmuxReady) {
+            return { success: false, error: 'No terminal runtime available: PTY host is missing and tmux bridge is not enabled.' };
         }
         return await handlePtyVerb('triggerAction', { role, sessionIds, instruction, terminalName, analysisScope }, targetRoot || workspaceRoot);
     });
@@ -1945,8 +1975,11 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // flags already hide these affordances, but a page loaded before a
                     // restart (or a direct API caller) can still reach the verb. Fail
                     // with a readable error instead of an unhandled spawn exception.
-                    if (!ptyReady) {
-                        return { success: false, error: 'PTY terminals are unavailable: switchboard-pty-host artifact is missing or unsupported on this machine.' };
+                    // Allow when EITHER fleet is live: both verbs can resolve to a
+                    // tmux pane when no PTY matches, so a tmux-only host must still
+                    // serve board dispatches.
+                    if (!ptyReady && !tmuxReady) {
+                        return { success: false, error: 'No terminal runtime available: PTY host is missing and tmux bridge is not enabled.' };
                     }
                     return await handlePtyVerb(verb, payload, root);
                 }
@@ -2080,6 +2113,12 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // the ptyCreateTerminal arm.
                     if (payload && payload.group) {
                         return { success: false, error: 'Team definition cannot be supplied over the wire' };
+                    }
+                    // The terminal backend is host-resolved from the scoped
+                    // setting, never from the wire — same posture as the
+                    // group definition guard above.
+                    if (payload && payload.backend) {
+                        return { success: false, error: 'Terminal backend cannot be supplied over the wire' };
                     }
                     const teamId = payload?.teamId;
                     if (!teamId) { return { success: false, error: 'Missing team id' }; }
@@ -2855,27 +2894,47 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     //    then ANY role already living in that worktree.
                     // 3. Else, create a new terminal.
                     const active = ptyFleetService.listActive();
+                    const tmuxActive = tmuxFleetService?.listActive() ?? [];
                     let terminal: any;
+                    // tmux handle resolved alongside the PTY terminal. PTY wins at every
+                    // rung; tmux is the fallback when no PTY matches. A tmux match never
+                    // auto-creates a pane unless switchboard.terminal.tmux.autoCreate is on
+                    // (default false) — creating windows in someone's tmux session unprompted
+                    // is surprising in a way creating a Switchboard-owned PTY is not.
+                    let tmuxTerminal: TmuxTerminalHandle | undefined;
+                    let tmuxPaneRecord: { friendlyName: string; paneId: string; role: string } | undefined;
                     // Field name fix: performKanbanDispatch sends targetTerminalOverride;
                     // switchboard.triggerAgentFromKanban sends terminalName. Accept both.
                     const overrideName: string | undefined = payload.targetTerminalOverride || payload.terminalName;
                     let plannerCursorLocationKey: string | undefined;
                     if (overrideName) {
                         terminal = active.find(t => t.friendlyName === overrideName);
-                        // An explicit target that names no live seat is a routing MISS,
-                        // not a hint. Falling through would round-robin or role-match the
-                        // card onto some other terminal and report success — a `--seat`
-                        // typo, or a seat that died since the board rendered, would land
-                        // the dispatch somewhere nobody asked for with no trace. Name the
-                        // seat and the live set instead.
                         if (!terminal) {
+                            // PTY miss → try tmux by name before declaring a routing MISS.
+                            // PTY precedence is preserved: a PTY match above already won.
+                            const tmuxHit = tmuxActive.find(t => t.friendlyName === overrideName);
+                            if (tmuxHit) {
+                                tmuxTerminal = tmuxFleetService?.get(tmuxHit.paneId);
+                                if (tmuxTerminal) {
+                                    tmuxPaneRecord = { friendlyName: tmuxHit.friendlyName, paneId: tmuxHit.paneId, role: tmuxHit.role };
+                                }
+                            }
+                        }
+                        // An explicit target that names no live seat in EITHER fleet is a
+                        // routing MISS, not a hint. Falling through would round-robin or
+                        // role-match the card onto some other terminal and report success.
+                        if (!terminal && !tmuxTerminal) {
+                            const liveNames = [
+                                ...active.map(t => t.friendlyName),
+                                ...tmuxActive.map(t => t.friendlyName),
+                            ];
                             return {
                                 success: false,
-                                error: `No live terminal named '${overrideName}'. Live seats: ${active.map(t => t.friendlyName).join(', ') || '(none)'}`,
+                                error: `No live terminal named '${overrideName}'. Live seats: ${liveNames.join(', ') || '(none)'}`,
                             };
                         }
                     }
-                    if (!terminal && targetRole === 'planner' && taskViewerProvider) {
+                    if (!terminal && !tmuxTerminal && targetRole === 'planner' && taskViewerProvider) {
                         // allowPtyFleet is REQUIRED here, not optional. Without it
                         // _getAliveAutobanTerminalRegistry runs a PTY row through the
                         // vscode.window liveness check: standalone's shim exports an empty
@@ -2894,15 +2953,53 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             }
                         }
                     }
-                    if (!terminal) {
-                        terminal = matchedWtPath
-                            ? active.find(t => t.worktreePath === matchedWtPath && t.role === targetRole)
-                                || active.find(t => t.worktreePath === matchedWtPath)
-                            : active.find(t => t.role === targetRole);
+                    if (!terminal && !tmuxTerminal) {
+                        // worktree+role → worktree → role, PTY first at each rung. A tmux
+                        // match by role is the fallback when no PTY fills the rung.
+                        if (matchedWtPath) {
+                            terminal = active.find(t => t.worktreePath === matchedWtPath && t.role === targetRole)
+                                || active.find(t => t.worktreePath === matchedWtPath);
+                        } else {
+                            terminal = active.find(t => t.role === targetRole);
+                        }
+                        if (!terminal) {
+                            // tmux role/worktree fallback. worktreePath for a tmux row is
+                            // pane_current_path — a directory the user cd'd to, NOT a
+                            // Switchboard-validated worktree. The containment check is
+                            // skipped here because matchWorktreePath already resolved
+                            // matchedWtPath from the record; a tmux pane whose
+                            // currentPath happens to equal it is a legitimate match.
+                            const tmuxByRole = tmuxActive.find(t => t.role === targetRole);
+                            if (tmuxByRole) {
+                                tmuxTerminal = tmuxFleetService?.get(tmuxByRole.paneId);
+                                if (tmuxTerminal) {
+                                    tmuxPaneRecord = { friendlyName: tmuxByRole.friendlyName, paneId: tmuxByRole.paneId, role: tmuxByRole.role };
+                                }
+                            }
+                        }
                     }
 
-                    if (!terminal) {
-                        terminal = await ptyFleetService.create(targetRole, overrideName, matchedWtPath || root, matchedWtPath);
+                    if (!terminal && !tmuxTerminal) {
+                        // Create-if-missing fallback: PTY-only by default. A tmux pane is
+                        // created only when switchboard.terminal.tmux.autoCreate is on AND
+                        // there is no PTY fleet to fall back to — creating windows in
+                        // someone's tmux session unprompted is surprising. When autoCreate
+                        // is on, the pane is created in a dedicated 'switchboard' session
+                        // (TmuxTerminalBackend.create) and adopted in one step.
+                        const tmuxAutoCreate = configProvider.getConfigBoolean('terminal.tmux.autoCreate', false);
+                        if (tmuxAutoCreate && tmuxFleetService && tmuxReady) {
+                            try {
+                                const backend = new TmuxTerminalBackend(tmuxSocket);
+                                const newHandle = await backend.create(overrideName || targetRole, undefined, matchedWtPath || root);
+                                await tmuxFleetService.adopt(newHandle.paneId, targetRole, overrideName, true);
+                                tmuxTerminal = newHandle;
+                                tmuxPaneRecord = { friendlyName: newHandle.name, paneId: newHandle.paneId, role: targetRole };
+                            } catch (err) {
+                                return { success: false, error: `Failed to create tmux pane: ${err instanceof Error ? err.message : String(err)}` };
+                            }
+                        } else {
+                            terminal = await ptyFleetService.create(targetRole, overrideName, matchedWtPath || root, matchedWtPath);
+                        }
                     }
 
                     // BATCH TO A TEAM HEAD — cap what MOVES, not only what the prompt names (Change 6c).
@@ -2963,6 +3060,61 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         };
                     }
                     if (!prompt) { return { success: false, error: 'Failed to build dispatch prompt' }; }
+
+                    // tmux delivery branch — when resolution landed on a tmux pane
+                    // (no PTY terminal), deliver via sendPromptToTmux and stamp
+                    // dispatchedIde: TMUX_IDE_NAME, then run the SAME card-move +
+                    // broadcast path as the PTY leg. The roster barrier is PTY-only
+                    // (it keys on PTY agentInstanceId); a tmux pane has no
+                    // agentInstanceId, so the barrier is correctly absent here —
+                    // a tmux pane is a single adopted target, not a pooled seat.
+                    if (tmuxTerminal && tmuxPaneRecord && !terminal) {
+                        const clearBeforePrompt = getPromptDeliveryOptions().clearBeforePrompt;
+                        const clearBeforePromptDelayMs = getPromptDeliveryOptions().clearBeforePromptDelayMs;
+                        try {
+                            await sendPromptToTmux(tmuxTerminal, prompt, { clearBeforePrompt, clearBeforePromptDelayMs });
+                        } catch (err) {
+                            // Pane killed between reconcile and dispatch → drop the
+                            // stale row so the next pre-flight is honest.
+                            tmuxFleetService?.dropStale(tmuxTerminal.paneId);
+                            return {
+                                success: false,
+                                error: `tmux pane '${tmuxPaneRecord.friendlyName}' not reachable: ${err instanceof Error ? err.message : String(err)}`,
+                                terminalName: tmuxPaneRecord.friendlyName,
+                            };
+                        }
+                        for (const rec of records) {
+                            if (!rec.planFile) { continue; }
+                            try {
+                                await db.updateDispatchInfoByPlanFile(rec.planFile, rec.workspaceId || workspaceId, {
+                                    routedTo: targetColumn || rec.kanbanColumn || '',
+                                    dispatchedAgent: targetRole,
+                                    dispatchedIde: TMUX_IDE_NAME,
+                                    dispatchedTerminal: tmuxPaneRecord.friendlyName,
+                                });
+                                if (rec.planId) {
+                                    await db.clearCompletedAt?.(rec.planId);
+                                }
+                            } catch (err) {
+                                console.warn('[bootstrap] Failed to update dispatch info (tmux):', err);
+                            }
+                        }
+                        const movedSessionIds = records.map((r: any) => r.sessionId || r.planId).filter(Boolean);
+                        if (targetColumn && movedSessionIds.length > 0) {
+                            const moveFrom = sourceColumn || records[0]?.kanbanColumn;
+                            if (moveFrom && moveFrom !== targetColumn) {
+                                await moveSessionsToColumn(movedSessionIds, targetColumn);
+                                server.broadcastWs('moveCards', { sessionIds: movedSessionIds, targetColumn }, SURFACES.kanban);
+                            }
+                        }
+                        server.broadcastWs('showStatusMessage', { message: `Dispatched ${records.length} plan(s) to ${tmuxPaneRecord.friendlyName} (tmux).`, isError: false }, SURFACES.common);
+                        return {
+                            success: true,
+                            targetColumn,
+                            terminalName: tmuxPaneRecord.friendlyName,
+                            transport: 'tmux',
+                        };
+                    }
 
                     // Route through ptySendPrompt so the roster barrier runs —
                     // a board drag must clear the roster the same way a lead
@@ -3069,38 +3221,106 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     if (typeof name !== 'string' || !name.trim()) {
                         return { success: false, error: 'invalid terminal name' };
                     }
-                    let handle = ptyFleetService.get(name);
-                    let created = false;
-                    if (!handle) {
-                        // Auto-create on missing name is the existing standalone contract.
-                        // Surface it via `created: true` so a driving agent can detect that
-                        // it is talking to a terminal it just spawned, not its coder.
-                        try {
-                            const role = payload.role || 'coder';
-                            handle = await ptyFleetService.create(role, name, root);
-                            created = true;
-                        } catch (err) {
-                            return { success: false, error: `Failed to create terminal '${name}': ${err instanceof Error ? err.message : String(err)}` };
+                    // Resolution precedence: PTY first, then tmux, then PTY
+                    // get-or-create. PTY-first mirrors the extension's reasoning
+                    // (TaskViewerProvider.ts:18492-18497): when two fleets
+                    // normalize to the same agent key, prefer the one the calling
+                    // surface can actually display — the browser panel renders
+                    // PTYs; tmux panes are invisible to it. A tmux match never
+                    // auto-creates (the create-if-missing fallback stays PTY-only
+                    // unless switchboard.terminal.tmux.autoCreate is on, which is
+                    // a triggerAction concern, not a sendToTerminal one).
+                    const ptyHandle = ptyFleetService.get(name);
+                    const tmuxHandle = tmuxFleetService?.get(name);
+                    if (ptyHandle) {
+                        let created = false;
+                        const handle = ptyHandle;
+                        // Content rule (mirrors the extension host): single-line leading-slash
+                        // stays a bare submit — the four shipped callers all send `/clear`.
+                        // Everything else goes through deliverPrompt with clearBeforePrompt
+                        // pinned false; sendToTerminal has never cleared, and getPromptDeliveryOptions()
+                        // would inject the config default of true, wiping the coder's context.
+                        if (!text.includes('\n') && text.trimStart().startsWith('/')) {
+                            // A bare `/clear` on this branch IS a context wipe: the
+                            // sidebar's per-terminal "clear" and broadcast "CLEAR
+                            // TERMINALS" buttons post sendToTerminal with
+                            // input '/clear' and never reach ptyClearTerminal. Drop
+                            // the seat's memo or the next prompt is suppressed into
+                            // a seat holding no git/subagent policy.
+                            if (text.trim() === '/clear' && handle.agentInstanceId) {
+                                seatBlockCache.delete(handle.agentInstanceId);
+                            }
+                            if (text.trim() === '/clear') {
+                                // Same reason as ptyClearTerminal: a seat cleared by hand
+                                // has nothing left to defer.
+                                dropDeferredClear(deferredClearsByTeam, handle.friendlyName);
+                            }
+                            await writeSlashCommand(handle, text);
+                        } else {
+                            await deliverPrompt(handle, text, { clearBeforePrompt: false }, payload.standingOrders !== false);
                         }
+                        return { success: true, ...(created ? { created: true, terminalName: handle.friendlyName } : {}) };
                     }
-                    // Content rule (mirrors the extension host): single-line leading-slash
-                    // stays a bare submit — the four shipped callers all send `/clear`.
-                    // Everything else goes through deliverPrompt with clearBeforePrompt
-                    // pinned false; sendToTerminal has never cleared, and getPromptDeliveryOptions()
-                    // would inject the config default of true, wiping the coder's context.
+                    if (tmuxHandle) {
+                        // tmux delivery path. A single-line leading-slash command
+                        // goes through the handle's sendText (send-keys -l + Enter);
+                        // everything else through sendPromptToTmux with
+                        // clearBeforePrompt pinned false — sendToTerminal has never
+                        // cleared, same contract as the PTY leg.
+                        try {
+                            if (!text.includes('\n') && text.trimStart().startsWith('/')) {
+                                tmuxHandle.sendText(text, true);
+                            } else {
+                                await sendPromptToTmux(tmuxHandle, text, { clearBeforePrompt: false });
+                            }
+                        } catch (err) {
+                            // A pane killed between reconcile and dispatch → resolution
+                            // fails at send-keys time. Surface as "terminal not found"
+                            // and drop the stale row so the next pre-flight is honest.
+                            tmuxFleetService?.dropStale(tmuxHandle.paneId);
+                            return { success: false, error: `tmux pane '${name}' not reachable: ${err instanceof Error ? err.message : String(err)}` };
+                        }
+                        return { success: true, terminalName: tmuxHandle.name, transport: 'tmux' };
+                    }
+                    // Team-seated tmux panes: registered in runtime.terminals
+                    // with ideName === TMUX_IDE_NAME by updateTmuxRegistryState,
+                    // but NOT in tmuxFleetService (which is Part 2's adoption
+                    // service — team seating creates panes, not adopts them).
+                    // Check the registry for an active tmux seat matching the
+                    // name before falling through to auto-create.
+                    try {
+                        const tmuxSeat = await resolveTmuxSeatFromRegistry(db, name);
+                        if (tmuxSeat && tmuxSeat.status === 'active') {
+                            const isControl = !text.includes('\n') && text.trimStart().startsWith('/');
+                            let tmuxRes: any;
+                            if (isControl) {
+                                tmuxRes = await sendControlToTmuxSeat(tmuxSeat.paneId, text);
+                            } else {
+                                tmuxRes = await deliverToTmuxSeat(tmuxSeat.paneId, name, text, undefined, { clearBeforePrompt: false });
+                            }
+                            if (tmuxRes?.success) {
+                                return { success: true, transport: 'tmux' };
+                            }
+                            return { success: false, error: tmuxRes?.error || 'tmux delivery failed' };
+                        }
+                    } catch { /* registry read failed — fall through to auto-create */ }
+                    // No PTY and no tmux match — auto-create a PTY (existing
+                    // standalone contract). Surface via `created: true` so a
+                    // driving agent can detect it spawned the terminal.
+                    let created = false;
+                    let handle: any;
+                    try {
+                        const role = payload.role || 'coder';
+                        handle = await ptyFleetService.create(role, name, root);
+                        created = true;
+                    } catch (err) {
+                        return { success: false, error: `Failed to create terminal '${name}': ${err instanceof Error ? err.message : String(err)}` };
+                    }
                     if (!text.includes('\n') && text.trimStart().startsWith('/')) {
-                        // A bare `/clear` on this branch IS a context wipe: the
-                        // sidebar's per-terminal "clear" and broadcast "CLEAR
-                        // TERMINALS" buttons post sendToTerminal with
-                        // input '/clear' and never reach ptyClearTerminal. Drop
-                        // the seat's memo or the next prompt is suppressed into
-                        // a seat holding no git/subagent policy.
                         if (text.trim() === '/clear' && handle.agentInstanceId) {
                             seatBlockCache.delete(handle.agentInstanceId);
                         }
                         if (text.trim() === '/clear') {
-                            // Same reason as ptyClearTerminal: a seat cleared by hand
-                            // has nothing left to defer.
                             dropDeferredClear(deferredClearsByTeam, handle.friendlyName);
                         }
                         await writeSlashCommand(handle, text);
@@ -3114,6 +3334,91 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     return ptyHostSupervisor.request('ptySetControllerSeat', payload);
                 case 'ptyRollLogSession':
                     return ptyHostSupervisor.request('ptyRollLogSession', payload);
+
+                // ─── tmux bridge verbs ──────────────────────────────────────
+                // Live on /terminals/verb/ ONLY (never /kanban/verb/), exactly as
+                // the PTY verbs are — the route-surface contract test pins both.
+                // All guarded on `tmuxReady` at the terminalVerb entry point
+                // (below), exactly as PTY verbs are guarded on `ptyReady`.
+                case 'tmuxListPanes': {
+                    if (!tmuxReady || !tmuxFleetService) {
+                        return { success: false, error: 'tmux bridge is not available' };
+                    }
+                    const adoptedByPaneId = new Map<string, string>();
+                    for (const ap of tmuxFleetService.listActive()) {
+                        adoptedByPaneId.set(ap.paneId, ap.role);
+                    }
+                    const panes = await listTmuxPanes(tmuxSocket);
+                    return {
+                        success: true,
+                        panes: panes.map(p => ({
+                            paneId: p.paneId,
+                            friendlyName: p.friendlyName,
+                            sessionName: p.sessionName,
+                            windowName: p.windowName,
+                            currentCommand: p.paneCurrentCommand,
+                            currentPath: p.paneCurrentPath,
+                            pid: p.panePid,
+                            adopted: adoptedByPaneId.has(p.paneId),
+                            role: adoptedByPaneId.get(p.paneId),
+                        })),
+                    };
+                }
+
+                case 'tmuxAdoptPane': {
+                    if (!tmuxReady || !tmuxFleetService) {
+                        return { success: false, error: 'tmux bridge is not available' };
+                    }
+                    const paneId = payload?.paneId;
+                    const role = payload?.role || 'coder';
+                    const alias = payload?.alias;
+                    const force = payload?.force === true;
+                    if (typeof paneId !== 'string' || !/^%\d+$/.test(paneId)) {
+                        return { success: false, error: 'invalid paneId: must match /^%\\d+$/' };
+                    }
+                    try {
+                        const adopted = await tmuxFleetService.adopt(paneId, role, alias, force);
+                        return { success: true, adopted };
+                    } catch (err) {
+                        if (err instanceof BareShellError) {
+                            return { success: false, error: err.message, bareShell: true, paneId: err.paneId, currentCommand: err.currentCommand };
+                        }
+                        return { success: false, error: err instanceof Error ? err.message : String(err) };
+                    }
+                }
+
+                case 'tmuxReleasePane': {
+                    if (!tmuxReady || !tmuxFleetService) {
+                        return { success: false, error: 'tmux bridge is not available' };
+                    }
+                    const paneId = payload?.paneId;
+                    if (typeof paneId !== 'string' || !/^%\d+$/.test(paneId)) {
+                        return { success: false, error: 'invalid paneId: must match /^%\\d+$/' };
+                    }
+                    await tmuxFleetService.release(paneId);
+                    return { success: true, released: true };
+                }
+
+                case 'tmuxClearPane': {
+                    if (!tmuxReady || !tmuxFleetService) {
+                        return { success: false, error: 'tmux bridge is not available' };
+                    }
+                    const name = payload?.name;
+                    if (typeof name !== 'string' || !name.trim()) {
+                        return { success: false, error: 'invalid terminal name' };
+                    }
+                    const handle = tmuxFleetService.get(name);
+                    if (!handle) {
+                        return { success: false, error: `No adopted tmux pane named '${name}'` };
+                    }
+                    try {
+                        await clearTmuxPane(handle);
+                    } catch (err) {
+                        tmuxFleetService.dropStale(handle.paneId);
+                        return { success: false, error: `tmux pane '${name}' not reachable: ${err instanceof Error ? err.message : String(err)}` };
+                    }
+                    return { success: true, cleared: true };
+                }
 
                 default:
                     return { success: false, error: `PTY verb '${verb}' not implemented in standalone mode` };
@@ -3539,13 +3844,42 @@ Each plan file must include:
     // guard in handlePtyVerb is untouched — it exists to stop the WIRE supplying a
     // launch command, and this is a definition the user authored in the Agents tab.
     kanbanProvider.setAgentGroupInstantiator(async (group: any, groupRoot: string) => {
-        if (!ptyReady) {
-            return { success: false, error: 'PTY terminals are unavailable: switchboard-pty-host artifact is missing or unsupported on this machine.' };
-        }
         const settings: TerminalGroupsSettingsAccessor | undefined = {
             get: (k, d) => kanbanProvider._getScopedSetting(k, d),
             set: (k, v) => kanbanProvider._updateScopedSetting(k, v),
         };
+
+        // Backend selection at the createHeadWithDelegates seam. The setting
+        // is read through the same scoped-config path the rest of team
+        // settings use — NOT from the wire (the ptyStartTeam verb rejects a
+        // wire-supplied backend field). Default is 'fleet'; absent or
+        // unrecognized means fleet.
+        const backend = kanbanProvider._getScopedSetting<string>('terminalBackend', 'fleet') || 'fleet';
+
+        if (backend === 'tmux') {
+            // tmux backend: create panes in a Switchboard-owned tmux session.
+            // The fleet availability check is skipped — tmux is an alternative
+            // backend. The tmux callback does its own availability check and
+            // returns a refusal if tmux is absent.
+            return instantiateAgentGroupCore({
+                db,
+                settings,
+                group,
+                cwd: groupRoot || workspaceRoot,
+                liveDelegateCount: async () => {
+                    // tmux seats are not PTY delegates.
+                    return 0;
+                },
+                createHeadWithDelegates: (spec) => createTmuxHeadWithDelegates(spec, { db }),
+                // The tmux callback writes the registry itself (updateTmuxRegistryState).
+                // No separate onCreated hook needed.
+            });
+        }
+
+        // Fleet backend (default).
+        if (!ptyReady) {
+            return { success: false, error: 'PTY terminals are unavailable: switchboard-pty-host artifact is missing or unsupported on this machine.' };
+        }
         const result = await instantiateAgentGroupCore({
             db,
             settings,
@@ -3621,6 +3955,47 @@ Each plan file must include:
     // no-live-terminal pre-flight and route work at a dead pid.
     await GoPtyFleetProjection.purgePtyTerminals(db);
 
+    // tmux bridge — probe + fleet construction + pre-server reconcile. The probe
+    // is async (`isTmuxAvailable` shells out to `tmux -V` + `list-sessions`), so
+    // it cannot run inside the synchronous `createHeadlessHostSeams` constructor;
+    // it happens here, where `ptyReady` is already awaited for the same reason.
+    // The reconcile MUST complete before `server.start()` below: a stale tmux
+    // row satisfies the dispatch pre-flight and produces a 409-free dispatch into
+    // nothing — the exact failure the PTY purge's await ordering exists to
+    // prevent. Gated behind the opt-in setting (default off); a disabled host
+    // never probes, never constructs a fleet, and has zero behaviour change.
+    const tmuxEnabled = configProvider.getConfigBoolean('terminal.tmux.enabled', false);
+    if (tmuxEnabled) {
+        tmuxSocket = (() => {
+            const socketPath = configProvider.getConfigString('terminal.tmux.socketPath');
+            if (socketPath) { return { path: socketPath }; }
+            const socketName = configProvider.getConfigString('terminal.tmux.socketName');
+            if (socketName) { return { name: socketName }; }
+            return undefined;
+        })();
+        tmuxReady = await isTmuxAvailable(tmuxSocket);
+        if (tmuxReady) {
+            const tmuxBackend = new TmuxTerminalBackend(tmuxSocket);
+            tmuxFleetService = new TmuxFleetService(workspaceRoot, db, tmuxBackend, tmuxSocket);
+            tmuxFleetService.setPaneTitlePattern(configProvider.getConfigString('terminal.tmux.paneTitlePattern'));
+            try {
+                const rec = await tmuxFleetService.reconcile();
+                if (rec.dropped > 0 || rec.autoAdopted > 0) {
+                    log(opts, `[tmux-bridge] reconcile: dropped ${rec.dropped} stale, kept ${rec.kept}, auto-adopted ${rec.autoAdopted}`);
+                }
+            } catch (err) {
+                log(opts, `[tmux-bridge] reconcile failed: ${err instanceof Error ? err.message : String(err)}`);
+                // A failed reconcile is a failed gate: do NOT advertise tmux
+                // targets if we could not confirm they are live. Fall back to
+                // no fleet rather than a fleet of ghosts.
+                tmuxReady = false;
+                tmuxFleetService = undefined;
+            }
+        } else {
+            log(opts, '[tmux-bridge] enabled but tmux is unavailable (binary missing or no server running)');
+        }
+    }
+
     // Sweep pasted-image temp files older than 1 hour every 10 minutes. The
     // ptyPasteImage verb writes screenshots to os.tmpdir()/switchboard-paste/;
     // without this, long sessions accumulate files unbounded. .unref() so the
@@ -3641,6 +4016,14 @@ Each plan file must include:
         } catch { /* dir may not exist yet */ }
     }, 10 * 60 * 1000).unref();
 
+    // tmux liveness reconcile poll: tmux has no event stream (the fleet uses
+    // ptyProcess.onExit), so pane death is detected by periodic
+    // listTmuxPanes() comparison against runtime.terminals entries with
+    // ideName === TMUX_IDE_NAME. Dead panes are marked status:'exited'.
+    // .unref() so the timer never holds the process open. Swallows all
+    // errors — a failed poll is a missed death detection, not a crash.
+    const tmuxReconcilePoll = startTmuxReconcilePoll(db, 5000);
+
     // The Go supervisor owns terminal WebSocket transport and session logs.
     // LocalApiServer must not construct a second in-process gateway.
 
@@ -3657,7 +4040,30 @@ Each plan file must include:
         getLinearService: () => linearService,
         getNotionService: () => notionService,
         getAuthToken: async () => resolvedToken,
-        getRegisteredTerminals: () => ptyFleetService.listActive().map(t => t.friendlyName),
+        getRegisteredTerminals: () => {
+            // Union of PTY and tmux friendly names, de-duplicated on the
+            // NORMALIZED name with PTY winning a collision. This is the single
+            // change that unblocks `POST /kanban/dispatch`'s 409 gate: a live
+            // adopted tmux pane is now a registered terminal even when no PTY
+            // is running. PTY-first precedence mirrors the extension's reasoning
+            // (TaskViewerProvider.ts:18492-18497): when two fleets normalize to
+            // the same agent key, prefer the one the calling surface can
+            // actually display — the browser panel renders PTYs; tmux panes are
+            // invisible to it.
+            const ptyNames = ptyFleetService.listActive().map(t => t.friendlyName);
+            const tmuxNames = tmuxFleetService?.listActive().map(t => t.friendlyName) ?? [];
+            const seen = new Set<string>();
+            const out: string[] = [];
+            for (const n of ptyNames) {
+                const key = normalizeAgentKey(n);
+                if (!seen.has(key)) { seen.add(key); out.push(n); }
+            }
+            for (const n of tmuxNames) {
+                const key = normalizeAgentKey(n);
+                if (!seen.has(key)) { seen.add(key); out.push(n); }
+            }
+            return out;
+        },
         getSelectedWorkspaceRoot: () => workspaceRoot,
         allRoots: [workspaceRoot],
         getKanbanDatabase: async () => db,
@@ -3811,8 +4217,22 @@ Each plan file must include:
         // before a restart (or a direct API caller) can still reach these verbs, and
         // an unguarded call would surface as an unhandled spawn exception.
         terminalVerb: async (verb: string, payload: any, workspaceRootArg?: string) => {
-            if (verb !== 'ptyVisibleRoles' && verb !== 'ptyListAgentGroups' && !ptyReady) {
+            // tmux verbs ride the same /terminals/verb/ rail as PTY verbs but are
+            // gated on `tmuxReady`, not `ptyReady`. A host with no PTY binary but
+            // a live tmux server must still serve tmuxListPanes etc. The tmux
+            // verbs themselves re-check `tmuxReady` inside handlePtyVerb, so an
+            // unguarded call from a page loaded before a restart surfaces a clean
+            // error rather than an unhandled spawn exception.
+            const isTmuxVerb = verb.startsWith('tmux');
+            // ptyStartTeam is allowed through regardless of ptyReady because
+            // the registered instantiator reads the terminalBackend setting
+            // and branches: a tmux-backend workspace does not need the PTY
+            // host. The instantiator's fleet arm checks ptyReady itself.
+            if (!isTmuxVerb && verb !== 'ptyVisibleRoles' && verb !== 'ptyListAgentGroups' && verb !== 'ptyStartTeam' && !ptyReady) {
                 return { success: false, error: 'PTY terminals are unavailable: switchboard-pty-host artifact is missing or unsupported on this machine.' };
+            }
+            if (isTmuxVerb && !tmuxReady) {
+                return { success: false, error: 'tmux bridge is not available: switchboard.terminal.tmux.enabled is off, tmux is not installed, or no tmux server is running.' };
             }
             return handlePtyVerb(verb, payload, workspaceRootArg || payload?.workspaceRoot || workspaceRoot);
         },
@@ -4392,6 +4812,7 @@ Each plan file must include:
         /** True when the session secret came from the stored `switchboard.apiToken`. */
         usingDurableToken,
         stop: async () => {
+            try { tmuxReconcilePoll.stop(); } catch { /* ignore */ }
             try { await ptyFleetService.disposeAll(); } catch { /* ignore */ }
             try { ingestionEngine.dispose(); } catch { /* ignore */ }
             try { (designProvider as any).dispose?.(); } catch { /* ignore */ }
