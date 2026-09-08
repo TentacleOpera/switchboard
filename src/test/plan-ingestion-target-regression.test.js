@@ -55,8 +55,8 @@ function run() {
     );
     assert.ok(
         providerSource.includes('this._configuredPlanWatcher = vscode.workspace.createFileSystemWatcher(configuredPattern);') &&
-        providerSource.includes('this._configuredPlanFsWatcher = fs.watch(configuredPlanFolder, { recursive: true }'),
-        'Expected configured-folder ingestion to use both VS Code and fs.watch watchers.'
+        providerSource.includes('this._configuredPlanFsWatcher = attachDirectoryWatcher(configuredPlanFolder,'),
+        'Expected configured-folder ingestion to use both VS Code and a manual per-directory fs.watch walker (not fs.watch({ recursive: true })).'
     );
     assert.ok(
         providerSource.includes('await this._refreshConfiguredPlanWatcher();'),

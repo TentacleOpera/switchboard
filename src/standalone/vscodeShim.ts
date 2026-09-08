@@ -29,6 +29,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { StandaloneHostSecrets } from './hostServices';
+import { attachDirectoryWatcher, type DirectoryWatcherHandle } from '../services/directoryWatcher';
 
 // ─── Minimal EventEmitter ───────────────────────────────────────────────────
 
@@ -356,6 +357,24 @@ export namespace workspace {
             }
         };
 
+        // Same as `emit` but takes an absolute path (the manual per-directory
+        // walker reports absolute paths, not filenames relative to folderPath).
+        const emitAbs = (eventType: string, fullPath: string) => {
+            const relativePath = path.relative(folderPath, fullPath).split(path.sep).join('/');
+            if (!matcher.test(relativePath) && !matcher.test(path.basename(fullPath))) return;
+            const uri = { fsPath: fullPath } as Uri;
+            if (!fs.existsSync(fullPath)) {
+                seen.delete(fullPath);
+                deleteHandlers.forEach(h => h(uri));
+            } else if (eventType === 'rename' && !seen.has(fullPath)) {
+                seen.add(fullPath);
+                createHandlers.forEach(h => h(uri));
+            } else {
+                seen.add(fullPath);
+                changeHandlers.forEach(h => h(uri));
+            }
+        };
+
         // Only recurse when the glob actually spans unbounded subdirectories (`**`).
         // Globs with single wildcard segment like `*/file.md` are depth-1: recursing
         // on parent walks whole tree (e.g. 17k descriptors on Antigravity brain).
@@ -365,6 +384,7 @@ export namespace workspace {
 
         const childWatchers = new Map<string, fs.FSWatcher>();
         let parentWatcher: fs.FSWatcher | undefined;
+        let recursiveHandle: DirectoryWatcherHandle | undefined;
 
         // Capping per preset/folder: read cap setting from configuration
         const cfg = workspace.getConfiguration('switchboard.planScanner');
@@ -375,6 +395,10 @@ export namespace workspace {
             if (parentWatcher) {
                 try { parentWatcher.close(); } catch {}
                 parentWatcher = undefined;
+            }
+            if (recursiveHandle) {
+                try { recursiveHandle.dispose(); } catch {}
+                recursiveHandle = undefined;
             }
             for (const [p, cw] of childWatchers.entries()) {
                 try { cw.close(); } catch {}
@@ -472,25 +496,38 @@ export namespace workspace {
                 closeAll();
                 return { onDidCreate: noop, onDidChange: noop, onDidDelete: noop, dispose() {} };
             }
+        } else if (isUnboundedRecursive) {
+            // Unbounded (`**`) glob. Previously this armed
+            // `fs.watch(folderPath, { recursive: true })`, which on Linux is a JS
+            // emulation that arms one inotify watch per file AND directory with no
+            // exclusion mechanism — the source of a 16,776-watch leak (55% of a 4 GB
+            // Pi's budget). The manual per-directory walk arms one watch per
+            // directory only, excludes `node_modules`/`.git`/…, and re-scans on
+            // new-subdirectory creation. `emitAbs` resolves the absolute path the
+            // walker reports against the glob matcher and the `seen` set, so
+            // consumers see the same file-path events as before.
+            recursiveHandle = attachDirectoryWatcher(folderPath, emitAbs, {
+                log: (line: string) => console.warn(`[vscodeShim watcher] ${line}`),
+                logTag: 'vscodeShim-watcher',
+            });
         } else {
-            const recursive = isUnboundedRecursive;
+            // Flat glob (bare filename, no `/` or `**`): a single non-recursive
+            // watch on the folder is exact and cheapest. Walking the tree here
+            // would change event semantics for `watchFile` consumers (same-named
+            // files in subdirs would start firing), so keep it flat.
             try {
-                parentWatcher = fs.watch(folderPath, { persistent: false, recursive }, emit);
-            } catch {
-                try {
-                    parentWatcher = fs.watch(folderPath, { persistent: false }, emit);
-                } catch (e) {
-                    console.warn(`[vscodeShim watcher] cannot watch ${folderPath}:`, e);
-                    return { onDidCreate: noop, onDidChange: noop, onDidDelete: noop, dispose() {} };
-                }
+                parentWatcher = fs.watch(folderPath, { persistent: false }, emit);
+                parentWatcher.on('error', err => console.warn(`[vscodeShim watcher] ${folderPath}:`, err));
+            } catch (e) {
+                console.warn(`[vscodeShim watcher] cannot watch ${folderPath}:`, e);
+                return { onDidCreate: noop, onDidChange: noop, onDidDelete: noop, dispose() {} };
             }
-            parentWatcher.on('error', err => console.warn(`[vscodeShim watcher] ${folderPath}:`, err));
         }
 
         return {
-            onDidCreate: (handler: (uri: Uri) => void) => { createHandlers.push(handler); return { dispose: () => {} }; },
-            onDidChange: (handler: (uri: Uri) => void) => { changeHandlers.push(handler); return { dispose: () => {} }; },
-            onDidDelete: (handler: (uri: Uri) => void) => { deleteHandlers.push(handler); return { dispose: () => {} }; },
+            onDidCreate: (handler: (uri: Uri) => void) => { createHandlers.push(handler); return { dispose: () => { const i = createHandlers.indexOf(handler); if (i !== -1) createHandlers.splice(i, 1); } }; },
+            onDidChange: (handler: (uri: Uri) => void) => { changeHandlers.push(handler); return { dispose: () => { const i = changeHandlers.indexOf(handler); if (i !== -1) changeHandlers.splice(i, 1); } }; },
+            onDidDelete: (handler: (uri: Uri) => void) => { deleteHandlers.push(handler); return { dispose: () => { const i = deleteHandlers.indexOf(handler); if (i !== -1) deleteHandlers.splice(i, 1); } }; },
             dispose: () => { closeAll(); }
         };
     }

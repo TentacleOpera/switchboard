@@ -35,6 +35,7 @@ import {
 import type { ClickUpSyncService } from './ClickUpSyncService';
 import type { LinearSyncService } from './LinearSyncService';
 import type { NotionFetchService } from './NotionFetchService';
+import { attachDirectoryWatcher } from './directoryWatcher';
 
 export class GlobalPlanWatcherService implements vscode.Disposable {
     private _engine: PlanIngestionEngine;
@@ -147,38 +148,43 @@ function createVsCodePlanIngestionHost(outputChannel?: vscode.OutputChannel): Pl
                 outputChannel?.appendLine(`[GlobalPlanWatcher] Folder ${folder} is not a VS Code workspace folder, relying on native fs.watch`);
             }
 
-            // Native fs.watch fallback (handles non-workspace folders and .gitignore issues)
+            // Native fs.watch fallback (handles non-workspace folders and .gitignore issues).
+            // Uses the shared manual per-directory walk (`attachDirectoryWatcher`) instead of
+            // `fs.watch({ recursive: true })`: on Linux, Node's recursive emulation arms one
+            // inotify watch per file AND directory with no exclusion mechanism, which is how a
+            // single board consumed 16,776 watches (55% of a 4 GB Pi's budget). The manual walk
+            // arms one watch per directory only and excludes `node_modules`/`.git`/….
             const plansDir = path.join(folder, '.switchboard', 'plans');
             const featuresDir = path.join(folder, '.switchboard', 'features');
-            const nativeWatchers: fs.FSWatcher[] = [];
+            const nativeDisposables: { dispose(): void }[] = [];
             const armed = new Set<string>();
             // A missing directory is NOT created here. `watchFolder` is called for
             // every mapped root, including PARENT folders that hold many repos and
             // are not Switchboard workspaces at all — creating `.switchboard/plans`
             // in each of those is scaffold litter. A `.switchboard` watch below
             // notices the real directory appearing and arms the watch then.
+            const plansResolved = path.resolve(plansDir);
+            const featuresResolved = path.resolve(featuresDir);
             const armDir = (dir: string): void => {
                 if (armed.has(dir) || !fs.existsSync(dir)) return;
-                try {
-                    const watcher = fs.watch(dir, { recursive: true }, (eventType, filename) => {
-                        if (!filename || !filename.endsWith('.md')) return;
-                        const fullPath = path.resolve(path.join(dir, filename));
-                        if (!fullPath.startsWith(path.resolve(plansDir)) && !fullPath.startsWith(path.resolve(featuresDir))) return;
-
-                        if (eventType === 'rename' || !fs.existsSync(fullPath)) {
-                            if (!fs.existsSync(fullPath)) {
-                                onEvent('delete', fullPath);
-                                return;
-                            }
+                const onWatcherEvent = (eventType: string, fullPath: string) => {
+                    if (!fullPath.endsWith('.md')) return;
+                    if (!fullPath.startsWith(plansResolved) && !fullPath.startsWith(featuresResolved)) return;
+                    if (eventType === 'rename' || !fs.existsSync(fullPath)) {
+                        if (!fs.existsSync(fullPath)) {
+                            onEvent('delete', fullPath);
+                            return;
                         }
-                        onEvent('change', fullPath);
-                    });
-                    nativeWatchers.push(watcher);
-                    armed.add(dir);
-                    outputChannel?.appendLine(`[GlobalPlanWatcher] Native watch active for: ${dir}`);
-                } catch (e) {
-                    outputChannel?.appendLine(`[GlobalPlanWatcher] Native watch failed for ${dir}: ${e}`);
-                }
+                    }
+                    onEvent('change', fullPath);
+                };
+                const handle = attachDirectoryWatcher(dir, onWatcherEvent, {
+                    log: (line: string) => outputChannel?.appendLine(`[GlobalPlanWatcher] ${line}`),
+                    logTag: 'GlobalPlanWatcher',
+                });
+                nativeDisposables.push(handle);
+                armed.add(dir);
+                outputChannel?.appendLine(`[GlobalPlanWatcher] Native watch active for: ${dir}`);
             };
 
             for (const dir of [plansDir, featuresDir]) { armDir(dir); }
@@ -192,14 +198,14 @@ function createVsCodePlanIngestionHost(outputChannel?: vscode.OutputChannel): Pl
                         if (name !== 'plans' && name !== 'features') return;
                         armDir(path.join(switchboardDir, name));
                     });
-                    nativeWatchers.push(dirWatcher);
+                    nativeDisposables.push({ dispose: () => { try { dirWatcher.close(); } catch {} } });
                 } catch { /* the engine's periodic scan is the backstop */ }
             }
 
             return {
                 dispose: () => {
                     for (const h of handles) { try { h.dispose(); } catch {} }
-                    for (const nw of nativeWatchers) { try { nw.close(); } catch {} }
+                    for (const d of nativeDisposables) { try { d.dispose(); } catch {} }
                 },
             };
         },

@@ -6,6 +6,7 @@ import type {
 } from '../services/hostSeams';
 import { switchboardCommandRegistry } from '../services/commandRegistry';
 import { readConfigValueSync, writeConfigValueSync } from '../services/configJsonBridge';
+import { attachDirectoryWatcher } from '../services/directoryWatcher';
 
 /**
  * Standalone implementations of the host seams A2a defined.
@@ -25,36 +26,30 @@ import { readConfigValueSync, writeConfigValueSync } from '../services/configJso
  * local ticket `.md` files never reached the browser sidebar even though the identical
  * provider code works in the editor host.
  *
- * fs.watch reports 'rename' | 'change'; the seam contract is 'create' | 'change' |
- * 'delete', so existence at delivery time decides which one this was. Recursive watching
- * is unavailable on some platforms — fall back to a flat watch, which covers the flat
- * ticket folders this seam is used for.
+ * Uses the shared `attachDirectoryWatcher` — a manual per-directory non-recursive tree-walk
+ * — instead of `fs.watch({ recursive: true })`. On Linux, Node's recursive emulation arms
+ * one inotify watch per file AND directory with no exclusion mechanism, which is how a
+ * single board consumed 16,776 watches (55% of a 4 GB Pi's budget). The manual walk arms one
+ * watch per directory only, excludes `node_modules`/`.git`/…, and is a measured ~9.4×
+ * reduction in kernel watches.
+ *
+ * fs.watch reports 'rename' | 'change'; the seam contract is 'create' | 'change' | 'delete',
+ * so existence at delivery time decides which one this reports.
  */
 export function createStandaloneFolderWatcher(
     folderPath: string,
     listener: (event: HostWatchEvent, filePath: string) => void
 ): HostWatchHandle {
-    const emit = (eventType: string, filename: string | Buffer | null) => {
-        if (!filename) { return; }
-        const fullPath = path.resolve(folderPath, filename.toString());
+    const onEvent = (eventType: string, fullPath: string) => {
         if (!fs.existsSync(fullPath)) { listener('delete', fullPath); return; }
         listener(eventType === 'rename' ? 'create' : 'change', fullPath);
     };
 
-    let watcher: fs.FSWatcher;
-    try {
-        watcher = fs.watch(folderPath, { persistent: false, recursive: true }, emit);
-    } catch {
-        console.warn(`[headless watcher] flat watch for ${folderPath}: recursive fs.watch failed (likely inotify exhaustion or an older Node runtime); asset changes under attachments/ will not refresh`);
-        try {
-            watcher = fs.watch(folderPath, { persistent: false }, emit);
-        } catch (e) {
-            console.warn(`[headless watcher] cannot watch ${folderPath}:`, e);
-            return { dispose: () => {} };
-        }
-    }
-    watcher.on('error', err => console.warn(`[headless watcher] ${folderPath}:`, err));
-    return { dispose: () => { try { watcher.close(); } catch {} } };
+    const handle = attachDirectoryWatcher(folderPath, onEvent, {
+        log: (line: string) => console.warn(`[headless watcher] ${line}`),
+        logTag: 'headless-watcher',
+    });
+    return { dispose: () => handle.dispose() };
 }
 
 // ─── Config provider ───────────────────────────────────────────────────────

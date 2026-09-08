@@ -103,9 +103,14 @@ test('the plan watcher watches plans/ and features/, never the whole .switchboar
     assert(!/const watchPath = fs\.existsSync\(switchboardDir\)/.test(host),
         'the watch root must not fall back to .switchboard (or the workspace) wholesale');
     assert(/armSubtree\(d\)/.test(host), 'plans/ and features/ must each be armed on their own');
+    // The exclusion list now lives in the shared manual per-directory walker that
+    // planIngestionHost consumes (attachDirectoryWatcher). The walker arms one watch
+    // per directory only — the exclusion is what keeps it out of logs/dbbackup/… .
+    const walker = readSource('src', 'services', 'directoryWatcher.ts');
+    assert(/attachDirectoryWatcher/.test(host), 'planIngestionHost must arm via the shared directory walker');
     for (const excluded of ['logs', 'dbbackup', 'mission-control']) {
-        assert(new RegExp(`EXCLUDED_DIR_NAMES[\\s\\S]{0,240}'${excluded}'`).test(host),
-            `EXCLUDED_DIR_NAMES must contain '${excluded}' so the fallback walk never descends into it`);
+        assert(new RegExp(`EXCLUDED_DIR_NAMES[\\s\\S]{0,240}'${excluded}'`).test(walker),
+            `EXCLUDED_DIR_NAMES (in directoryWatcher.ts) must contain '${excluded}' so the walk never descends into it`);
     }
 });
 

@@ -31,8 +31,9 @@ import type {
     PlanIngestionEnvironmentChange,
 } from '../services/PlanIngestionEngine';
 import type { StandaloneHostPathConfigProvider } from './hostServices';
-
-const EXCLUDED_DIR_NAMES = new Set(['.git', 'node_modules', 'dist', 'out', 'build', '.next', '.cache', 'logs', 'dbbackup', 'mission-control']);
+import { attachDirectoryWatcher, type DirectoryWatcherHandle } from '../services/directoryWatcher';
+import { getInotifyWatchCount } from '../services/inotifyWatchCount';
+export { getInotifyWatchCount };
 
 function isPlanOrFeatureFile(folder: string, fullPath: string): boolean {
     const plansDir = path.resolve(path.join(folder, '.switchboard', 'plans'));
@@ -57,26 +58,6 @@ class CompositeWatchHandle implements PlanIngestionWatchHandle {
     }
 }
 
-export function getInotifyWatchCount(targetPid = process.pid): number | undefined {
-    try {
-        if (process.platform !== 'linux') return undefined;
-        const fdDir = `/proc/${targetPid}/fd`;
-        if (!fs.existsSync(fdDir)) return undefined;
-        let count = 0;
-        for (const fd of fs.readdirSync(fdDir)) {
-            try {
-                if (fs.readlinkSync(path.join(fdDir, fd)) === 'anon_inode:inotify') {
-                    const fdinfo = fs.readFileSync(`/proc/${targetPid}/fdinfo/${fd}`, 'utf8');
-                    count += fdinfo.split('\n').filter(l => l.startsWith('inotify ')).length;
-                }
-            } catch {}
-        }
-        return count;
-    } catch {
-        return undefined;
-    }
-}
-
 export function getOpenFdCount(targetPid = process.pid): number | undefined {
     try {
         if (process.platform !== 'linux') return undefined;
@@ -89,10 +70,18 @@ export function getOpenFdCount(targetPid = process.pid): number | undefined {
 }
 
 /**
- * Attach recursive watchers to `.switchboard/plans` and `.switchboard/features` rooted at `folder`.
- * Tries `fs.watch({ recursive: true })` first; on `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`
- * (or any construction error) falls back to a per-subdirectory non-recursive tree-walk.
+ * Attach watchers to `.switchboard/plans` and `.switchboard/features` rooted at `folder`.
+ *
+ * Uses the shared `attachDirectoryWatcher` — a manual per-directory non-recursive
+ * tree-walk that arms one `fs.watch` per directory (excluding `node_modules`/`.git`/…)
+ * instead of `fs.watch({ recursive: true })`. On Linux, Node's recursive emulation arms
+ * one watch per file AND directory with no exclusion mechanism, which is how a single
+ * board consumed 16,776 inotify watches (55% of a 4 GB Pi's budget). The manual walk is
+ * a measured ~9.4× reduction and is the shape the fallback already implemented.
+ *
  * Emits create/change/delete events for `.md` files under `.switchboard/{plans,features}/`.
+ * A missing subtree is covered by a single non-recursive watch on `.switchboard` itself,
+ * which arms the real watch when the directory appears.
  */
 function attachFolderWatcher(
     folder: string,
@@ -100,7 +89,7 @@ function attachFolderWatcher(
     log: (line: string) => void,
 ): CompositeWatchHandle {
     const composite = new CompositeWatchHandle();
-    const subWatchers = new Map<string, fs.FSWatcher>();
+    const subtreeHandles = new Map<string, DirectoryWatcherHandle>();
 
     const switchboardDir = path.join(folder, '.switchboard');
     const plansDir = path.join(folder, '.switchboard', 'plans');
@@ -127,103 +116,17 @@ function attachFolderWatcher(
         onEvent('change', fullPath);
     };
 
-    const attachRecursive = (targetDir: string): boolean => {
-        if (!fs.existsSync(targetDir)) return false;
-        try {
-            const w = fs.watch(targetDir, { recursive: true, persistent: false }, (eventType, filename) => {
-                if (!filename) {
-                    // null filename under load → fall back to rescanning the watched root
-                    void rescanRoot();
-                    return;
-                }
-                const fullPath = path.resolve(path.join(targetDir, filename));
-                handleEvent(eventType, fullPath);
-            });
-            subWatchers.set(targetDir, w);
-            log(`[standalone-planIngestionHost] Native recursive watch active for: ${targetDir}`);
-            return true;
-        } catch (e: any) {
-            if (e?.code === 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM') {
-                log(`[standalone-planIngestionHost] Recursive fs.watch unsupported on this platform for ${targetDir}; falling back to per-subdir tree-walk.`);
-                return false;
-            }
-            log(`[standalone-planIngestionHost] Recursive fs.watch failed for ${targetDir}: ${e}; falling back to per-subdir tree-walk.`);
-            return false;
-        }
-    };
-
-    const attachNonRecursive = (dir: string): void => {
-        if (subWatchers.has(dir)) return;
-        try {
-            const w = fs.watch(dir, { persistent: false }, (eventType, filename) => {
-                if (!filename) { void rescanDir(dir); return; }
-                const fullPath = path.join(dir, filename);
-                try {
-                    const stat = fs.statSync(fullPath);
-                    if (stat.isDirectory()) {
-                        if (!EXCLUDED_DIR_NAMES.has(filename)) {
-                            attachNonRecursive(fullPath);
-                            void rescanDir(fullPath);
-                        }
-                        return;
-                    }
-                } catch { /* file may be transient */ }
-                handleEvent(eventType, fullPath);
-            });
-            subWatchers.set(dir, w);
-        } catch (e) {
-            log(`[standalone-planIngestionHost] Non-recursive fs.watch failed for ${dir}: ${e}`);
-        }
-    };
-
-    const walkAndAttach = (dir: string): void => {
-        attachNonRecursive(dir);
-        try {
-            const entries = fs.readdirSync(dir, { withFileTypes: true });
-            for (const entry of entries) {
-                if (!entry.isDirectory()) continue;
-                if (EXCLUDED_DIR_NAMES.has(entry.name)) continue;
-                walkAndAttach(path.join(dir, entry.name));
-            }
-        } catch (e) {
-            log(`[standalone-planIngestionHost] walkAndAttach readdir failed for ${dir}: ${e}`);
-        }
-    };
-
-    const rescanDir = async (dir: string): Promise<void> => {
-        try {
-            const entries = await fs.promises.readdir(dir, { withFileTypes: true });
-            for (const entry of entries) {
-                const entryPath = path.join(dir, entry.name);
-                if (entry.isDirectory()) {
-                    if (!EXCLUDED_DIR_NAMES.has(entry.name)) {
-                        if (!subWatchers.has(entryPath)) attachNonRecursive(entryPath);
-                    }
-                    continue;
-                }
-                if (entry.isFile() && shouldEmitForFolder(folder, entryPath)) {
-                    onEvent('change', entryPath);
-                }
-            }
-        } catch { /* dir may be transient */ }
-    };
-
-    const rescanRoot = async (): Promise<void> => {
-        for (const d of [plansDir, featuresDir]) {
-            if (fs.existsSync(d)) { await rescanDir(d); }
-        }
-    };
-
-    /** Arm the watch for one of the two subtrees, recursive first, tree-walk on fallback. */
+    /** Arm the manual per-directory walk for one of the two subtrees. */
     const armSubtree = (d: string): void => {
-        if (subWatchers.has(d)) return;
+        if (subtreeHandles.has(d)) return;
         if (!fs.existsSync(d)) return;
-        if (!attachRecursive(d)) {
-            // Fallback: per-subdirectory non-recursive tree-walk (this is the path
-            // EXCLUDED_DIR_NAMES guards, which is why `logs`, `dbbackup` and
-            // `mission-control` were added to it).
-            walkAndAttach(d);
-        }
+        const handle = attachDirectoryWatcher(d, handleEvent, {
+            log,
+            logTag: 'standalone-planIngestionHost',
+        });
+        subtreeHandles.set(d, handle);
+        composite.add(handle);
+        log(`[standalone-planIngestionHost] Per-directory watch active for: ${d}`);
     };
 
     for (const d of [plansDir, featuresDir]) { armSubtree(d); }
@@ -237,10 +140,13 @@ function attachFolderWatcher(
                 if (!filename) return;
                 const name = filename.toString();
                 if (name !== 'plans' && name !== 'features') return;
-                armSubtree(path.join(switchboardDir, name));
-                void rescanRoot();
+                const target = path.join(switchboardDir, name);
+                armSubtree(target);
+                // Surface pre-existing files in the freshly-appeared subtree so the
+                // engine ingests them without waiting for the periodic scan.
+                subtreeHandles.get(target)?.rescan();
             });
-            subWatchers.set(switchboardDir, w);
+            composite.add({ dispose: () => { try { w.close(); } catch {} } });
             w.on('error', () => { /* transient */ });
         } catch { /* .switchboard unwatchable — the engine's periodic scan is the backstop */ }
     }
@@ -250,12 +156,6 @@ function attachFolderWatcher(
         log(`[standalone-planIngestionHost] Armed inotify watch count: ${inotifyCount}`);
     }
 
-    composite.add({
-        dispose: () => {
-            for (const w of subWatchers.values()) { try { w.close(); } catch {} }
-            subWatchers.clear();
-        },
-    });
     return composite;
 }
 
