@@ -4022,7 +4022,18 @@ Each plan file must include:
     // ideName === TMUX_IDE_NAME. Dead panes are marked status:'exited'.
     // .unref() so the timer never holds the process open. Swallows all
     // errors — a failed poll is a missed death detection, not a crash.
-    const tmuxReconcilePoll = startTmuxReconcilePoll(db, 5000);
+    //
+    // Started ONLY when tmux is actually in play. Two reasons it is not
+    // unconditional: (1) "setting off = zero behaviour change" is an acceptance
+    // clause, and a 5-second config read on every standalone host forever is a
+    // change; (2) the poll must be handed `tmuxSocket` — on a non-default socket
+    // an unparameterised listTmuxPanes() inspects the DEFAULT socket, sees none
+    // of the real panes, and marks every live tmux seat 'exited'.
+    const tmuxTeamBackendSelected =
+        (kanbanProvider._getScopedSetting<string>('terminalBackend', 'fleet') || 'fleet') === 'tmux';
+    const tmuxReconcilePoll = (tmuxReady || tmuxTeamBackendSelected)
+        ? startTmuxReconcilePoll(db, 5000, tmuxSocket)
+        : { stop: () => { /* poll never started — tmux is not in play */ } };
 
     // The Go supervisor owns terminal WebSocket transport and session logs.
     // LocalApiServer must not construct a second in-process gateway.

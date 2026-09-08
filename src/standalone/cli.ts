@@ -4512,6 +4512,27 @@ async function main() {
         await openBrowser(boardUrl);
     }
 
+    // Discovery hint (Part 3, Phase 3). tmux does not exist on native Windows,
+    // so `isTmuxAvailable()` is permanently false there and the bridge is inert
+    // with nothing telling the user WHY. Running Switchboard inside WSL closes
+    // the gap — WSL is Linux, so the bridge works as designed with no
+    // special-casing. Fires only when the user has actually opted in
+    // (`terminal.tmux.enabled`); with the setting off (the default) there is
+    // nothing to hint at, so it stays silent.
+    if (process.platform === 'win32') {
+        try {
+            const { StandaloneHostPathConfigProvider } = require('./hostServices');
+            const cfg = new StandaloneHostPathConfigProvider(workspaceRoot);
+            if (cfg.getConfigBoolean('terminal.tmux.enabled', false)) {
+                const { isTmuxAvailable } = require('./tmuxBackend');
+                if (!(await isTmuxAvailable())) {
+                    console.log('[switchboard] tmux dispatch is unavailable on native Windows.');
+                    console.log('              Run Switchboard inside WSL to enable tmux pane dispatch — see docs/wsl-setup.md');
+                }
+            }
+        } catch { /* a hint is never worth failing startup over */ }
+    }
+
     const shutdown = async () => {
         console.log('\n[switchboard] Shutting down...');
         try { await instance.stop(); } catch { /* ignore */ }

@@ -375,6 +375,31 @@
           "default": true,
           "description": "Run Claude CLI seats in the normal screen buffer so the terminal pane's own scrollbar and jump-to-latest work. Turn off to keep Claude's in-app scrolling and mouse support. Applies to newly created terminals only — environment is fixed when a seat spawns, so restart a seat after changing this."
         },
+        "switchboard.terminal.tmux.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Master gate for the tmux bridge in the standalone host. Off = zero behaviour change: no tmux probe, no tmux verbs, no tmux dispatch targets. Opt-in because a tmux pane is a process the USER started, and dispatching a prompt into a bare shell executes it as shell commands."
+        },
+        "switchboard.terminal.tmux.socketName": {
+          "type": "string",
+          "default": "",
+          "description": "tmux socket name (-L <name>). Empty = the default socket. Ignored when socketPath is set."
+        },
+        "switchboard.terminal.tmux.socketPath": {
+          "type": "string",
+          "default": "",
+          "description": "tmux socket path (-S <path>). Takes precedence over socketName when set. Empty = use socketName or the default socket."
+        },
+        "switchboard.terminal.tmux.paneTitlePattern": {
+          "type": "string",
+          "default": "",
+          "description": "Auto-adopt panes whose pane_title matches this pattern. Empty = matches nothing — adoption is explicit only. A non-empty default would turn dispatch into arbitrary command execution in a shell the user was using for something else."
+        },
+        "switchboard.terminal.tmux.autoCreate": {
+          "type": "boolean",
+          "default": false,
+          "description": "Allow triggerAction to create a tmux pane (in a dedicated 'switchboard' session) when no adopted pane resolves. Off by default — creating windows in someone's tmux session unprompted is surprising in a way creating a Switchboard-owned PTY is not."
+        },
         "switchboard.jules.autoSync": {
           "type": "boolean",
           "default": false,
@@ -1008,6 +1033,8 @@
     "test:contract:host-settings": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/host-settings-contract.test.js",
     "test:contract:goal-invariant-verification": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/goal-invariant-verification.test.js",
     "test:contract:pty-route-surface": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-route-surface-contract.test.js",
+    "test:contract:tmux-backend": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/tmux-backend-contract.test.js",
+    "test:contract:wsl-detection": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/wsl-detection-contract.test.js",
     "test:contract:workspace-root-write-path": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/workspace-root-write-path-contract.test.js",
     "test:contract:pty-prompt-delivery-framing": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-prompt-delivery-framing.test.js",
     "test:contract:pty-dispatch-focus": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-dispatch-focus-contract.test.js",

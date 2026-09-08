@@ -78,11 +78,29 @@ function defaultRunImpl(args: string[], socket?: TmuxSocket, input?: string): Pr
             encoding: 'utf8',
             maxBuffer: 16 * 1024 * 1024,
         };
-        if (input !== undefined) { options.input = input; }
-        execFile('tmux', argv, options, (err, stdout) => {
+        const child = execFile('tmux', argv, options, (err, stdout) => {
             if (err) { reject(err); return; }
             resolve(stdout);
         });
+        // `execFile` has NO `input` option — that belongs to the *Sync* family
+        // (`execFileSync`/`spawnSync`). Setting `options.input` is silently
+        // ignored, and because execFile still opens a stdin pipe and never ends
+        // it, `tmux load-buffer -` blocks on a read that never sees EOF: the
+        // promise never settles and the per-pane delivery lock is held forever.
+        // On tmux >= 3.2 (`caps.stdinBuffer`) that is EVERY prompt delivery.
+        // Stdin must be written and closed explicitly.
+        if (input !== undefined) {
+            const stdin = child.stdin;
+            if (stdin) {
+                stdin.on('error', () => { /* child exited early — the callback reports it */ });
+                stdin.end(input);
+            } else {
+                // No stdin pipe (should not happen with the default stdio), so the
+                // payload cannot be delivered. Fail loudly rather than hang.
+                child.kill();
+                reject(new Error('tmux: stdin pipe unavailable for a command that requires input'));
+            }
+        }
     });
 }
 

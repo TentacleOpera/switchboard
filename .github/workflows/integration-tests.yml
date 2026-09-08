@@ -157,6 +157,21 @@ jobs:
       - name: PTY route surface contract (/terminals/verb only, nothing in the generated surface)
         run: npm run test:contract:pty-route-surface
 
+      # The tmux transport is the one dispatch path that shells out to an external
+      # binary with plan-derived text in its arguments. These pin the properties
+      # that make that safe and that no compile or lint can see: argv-only (no
+      # exec/execSync/shell:true), pane ids validated against /^%\d+$/ before any
+      # -t argument, dispose() never issuing kill-pane, temp buffers unlinked in a
+      # finally, and the confirm Enter staying unconditional.
+      - name: tmux backend contract (argv-only, pane-id validation, dispose != kill)
+        run: npm run test:contract:tmux-backend
+
+      # WSL detection decides which binary opens the board's browser. Getting it
+      # wrong on native Linux would call cmd.exe; getting it wrong inside WSL calls
+      # an xdg-open that minimal installs do not ship.
+      - name: WSL detection contract (WSL1/WSL2 classification, openBrowser dispatch)
+        run: npm run test:contract:wsl-detection
+
       # Unattended batch plan improvement is three subtasks whose failure modes are
       # all invisible: a fleet "hidden" only in the UI still joins the role pools six
       # dispatch call sites and autoban select from; a prompt directive whose skill

@@ -59,6 +59,7 @@ async function test(name, fn) {
         _resetTmuxCaps,
         _resetTmuxAvailability,
         TMUX_IDE_NAME,
+        run,
     } = backend;
     const { sendPromptToTmux, clearTmuxPane } = delivery;
 
@@ -449,6 +450,187 @@ async function test(name, fn) {
             assert.ok(/^%\d+$/.test(pane.paneId), `pane id must be %N: ${pane.paneId}`);
             assert.ok(typeof pane.friendlyName === 'string', 'friendlyName must be a string');
         }
+    });
+
+    // ─── Regression: execFile has no `input` option ──────────────────────
+    // Every other test in this file mocks `run()`, so the real invocation layer
+    // was never exercised: `options.input` was set and silently ignored, and
+    // because execFile still opens a stdin pipe and never ends it, `tmux
+    // load-buffer -` blocked on a read that never saw EOF. On tmux >= 3.2 that
+    // is the path EVERY prompt delivery takes, and the per-pane lock was held
+    // forever. Nothing about it is visible to tsc, lint, or a mocked run().
+    await test('defaultRunImpl writes stdin explicitly (execFile has no `input` option)', () => {
+        const src = fs.readFileSync(BACKEND_FILE, 'utf8');
+        const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+        assert.ok(
+            !/options\.input\s*=/.test(code),
+            'execFile ignores an `input` option — it belongs to execFileSync/spawnSync'
+        );
+        assert.ok(
+            /\.stdin/.test(code) && /stdin\.end\(/.test(code),
+            'a command taking stdin must write to child.stdin and END it, or tmux blocks on EOF forever'
+        );
+    });
+
+    await test('integration: load-buffer over stdin round-trips (skips if tmux absent)', async () => {
+        _resetTmuxCaps();
+        _resetTmuxAvailability();
+        restoreRun();
+        if (!(await isTmuxAvailable())) {
+            console.log('     (skipped — tmux not available)');
+            return;
+        }
+        const caps = await tmuxCaps();
+        if (!caps.stdinBuffer) {
+            console.log('     (skipped — tmux < 3.2, no stdin buffer route)');
+            return;
+        }
+        const bufName = `switchboard-test-${process.pid}`;
+        const payload = 'line one\nline two\n';
+        // This is the call that hung: run() with an `input` argument. A 10s
+        // guard turns a regression into a failure instead of a stalled suite.
+        const guard = new Promise((_, rej) => setTimeout(() => rej(new Error('load-buffer over stdin HUNG — stdin was never closed')), 10000).unref());
+        await Promise.race([run(['load-buffer', '-b', bufName, '-'], undefined, payload), guard]);
+        const back = await run(['show-buffer', '-b', bufName]);
+        assert.strictEqual(back, payload, 'the buffer must contain exactly what was written to stdin');
+        await run(['delete-buffer', '-b', bufName]);
+    });
+
+    // ─── Regression: reconcile is not a purge ────────────────────────────
+    // `reconcile()` walked only the in-memory map. At boot that map is empty, so
+    // the pass kept nothing, dropped nothing, and then WROTE a registry with no
+    // tmux rows at all — deleting every persisted adoption on every restart.
+    // Adoption is persisted precisely so a pane survives a restart.
+    const fleetMod = await import(path.join('file://', path.join(REPO_ROOT, 'src', 'standalone', 'tmuxFleetService.ts')));
+    const { TmuxFleetService, TMUX_OWNER_SEAT } = fleetMod;
+
+    function makeFakeDb(initial) {
+        const store = { 'runtime.terminals': initial };
+        return {
+            getConfigJsonSync: (k, d) => (k in store ? store[k] : d),
+            getConfigJson: async (k, d) => (k in store ? store[k] : d),
+            setConfigJson: async (k, v) => { store[k] = v; return true; },
+            _read: () => store['runtime.terminals'],
+        };
+    }
+
+    await test('reconcile() re-adopts persisted rows instead of purging them', async () => {
+        mockRun(args => {
+            if (args[0] === 'list-panes') {
+                // %1 is still alive; %2 died while Switchboard was down.
+                return ['%1', 'work', '1', 'win', '0', 'coder-1', 'claude', '/tmp/wt', '4242'].join('\x1f') + '\n';
+            }
+            return '';
+        });
+        try {
+            const db = makeFakeDb({
+                'coder-1': { friendlyName: 'coder-1', role: 'coder', status: 'active', paneId: '%1', ideName: TMUX_IDE_NAME, purpose: 'tmux', sessionName: 'work' },
+                'coder-2': { friendlyName: 'coder-2', role: 'coder', status: 'active', paneId: '%2', ideName: TMUX_IDE_NAME, purpose: 'tmux', sessionName: 'work' },
+                'pty-seat': { friendlyName: 'pty-seat', ideName: 'switchboard-pty', purpose: 'pty' },
+            });
+            const fleet = new TmuxFleetService('/tmp/ws', db, new TmuxTerminalBackend());
+            const res = await fleet.reconcile();
+            assert.strictEqual(res.kept, 1, 'the live persisted pane must be kept, not silently dropped');
+            assert.strictEqual(res.dropped, 1, 'the dead persisted pane must be dropped');
+            assert.deepStrictEqual(
+                fleet.listActive().map(p => p.paneId),
+                ['%1'],
+                'a restart must re-adopt a surviving pane without the operator re-adopting it'
+            );
+            const written = db._read();
+            assert.ok(written['coder-1'], 'the live adoption must survive the boot reconcile');
+            assert.ok(!written['coder-2'], 'the dead adoption must be dropped');
+            assert.ok(written['pty-seat'], 'non-tmux rows must never be touched');
+        } finally {
+            restoreRun();
+        }
+    });
+
+    await test('adopted rows persist sessionName — the field the liveness poll reads', async () => {
+        mockRun(args => {
+            if (args[0] === 'list-panes') {
+                return ['%7', 'mysession', '1', 'win', '0', 'coder-9', 'claude', '/tmp/wt', '99'].join('\x1f') + '\n';
+            }
+            return '';
+        });
+        try {
+            const db = makeFakeDb({});
+            const fleet = new TmuxFleetService('/tmp/ws', db, new TmuxTerminalBackend());
+            await fleet.adopt('%7', 'coder');
+            await new Promise(r => setImmediate(r));
+            const row = db._read()['coder-9'];
+            assert.ok(row, 'the adopted pane must be registered');
+            // startTmuxReconcilePoll marks a row dead when its sessionName is not
+            // in the live session set. `undefined` is never in that Set, so an
+            // omitted field marked every live adopted pane exited on tick one.
+            assert.strictEqual(row.sessionName, 'mysession', 'sessionName must be persisted, not just held in memory');
+        } finally {
+            restoreRun();
+        }
+    });
+
+    await test('the two tmux registry writers do not clobber each other', async () => {
+        // `ideName: 'switchboard-tmux'` is written by BOTH the adoption fleet and
+        // tmuxTeamSeating.updateTmuxRegistryState. Both merge as "replace my rows,
+        // preserve the rest", so without a second discriminator each write deleted
+        // the other's rows. `tmuxOwner` is that discriminator.
+        //
+        // The adoption half runs behaviourally. The seating half is asserted at the
+        // source: tmuxTeamSeating cannot be imported here (a transitive dependency
+        // uses a TS parameter property, unsupported by the strip-only loader).
+        mockRun(args => {
+            if (args[0] === 'list-panes') {
+                return ['%1', 'work', '1', 'win', '0', 'coder-1', 'claude', '/tmp/wt', '11'].join('\x1f') + '\n';
+            }
+            return '';
+        });
+        try {
+            const db = makeFakeDb({
+                // A row as the team-seating writer leaves it.
+                'lead-1': {
+                    friendlyName: 'lead-1', role: 'lead', status: 'active', paneId: '%50',
+                    sessionName: 'sb-team', ideName: TMUX_IDE_NAME, purpose: 'tmux',
+                    tmuxOwner: TMUX_OWNER_SEAT,
+                },
+                'pty-seat': { friendlyName: 'pty-seat', ideName: 'switchboard-pty', purpose: 'pty' },
+            });
+            const fleet = new TmuxFleetService('/tmp/ws', db, new TmuxTerminalBackend());
+            await fleet.adopt('%1', 'coder');
+            await new Promise(r => setImmediate(r));
+            const written = db._read();
+            assert.ok(written['lead-1'], 'an adoption write must not delete team-seated rows');
+            assert.ok(written['coder-1'], 'the adopted pane must be registered');
+            assert.ok(written['pty-seat'], 'non-tmux rows must never be touched');
+        } finally {
+            restoreRun();
+        }
+
+        const seatingSrc = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'tmuxTeamSeating.ts'), 'utf8');
+        const seatingCode = seatingSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+        assert.ok(
+            /tmuxOwner:\s*TMUX_OWNER_SEAT/.test(seatingCode),
+            'the seating writer must tag its rows tmuxOwner: seat'
+        );
+        assert.ok(
+            /e\.tmuxOwner\s*===\s*TMUX_OWNER_SEAT/.test(seatingCode),
+            'the seating writer must claim ONLY seat rows, or it deletes every adopted pane'
+        );
+    });
+
+    await test('delegate panes split on a pane id, never on <session>:0', () => {
+        const src = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'tmuxTeamSeating.ts'), 'utf8');
+        const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+        // `base-index` is a user setting and is commonly 1, so `<session>:0`
+        // resolves to nothing and every delegate split fails — which the
+        // partial-failure arm escalates into killing the whole session.
+        assert.ok(
+            !/split-window[\s\S]{0,200}\$\{sessionName\}:0/.test(code),
+            'split-window must target the head pane id, not a base-index-dependent window index'
+        );
+        assert.ok(
+            /'split-window',\s*'-t',\s*headPaneId/.test(code),
+            'split-window must target headPaneId'
+        );
     });
 
     if (failures > 0) {

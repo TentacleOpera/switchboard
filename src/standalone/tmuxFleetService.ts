@@ -90,6 +90,23 @@ function normalizeAgentKey(value: string): string {
         .trim();
 }
 
+// ─── Registry ownership sub-tag ──────────────────────────────────────────
+// `ideName: 'switchboard-tmux'` is written by TWO independent services: this
+// adoption fleet (Part 2) and `tmuxTeamSeating.updateTmuxRegistryState` (Part 4).
+// Both use the same "replace my rows, preserve everything else" merge, so
+// without a second discriminator each write silently deleted the other's rows.
+// A row with no `tmuxOwner` predates the tag and belongs to this fleet — the
+// seating writer is the one that must opt in explicitly.
+export const TMUX_OWNER_ADOPT = 'adopt';
+export const TMUX_OWNER_SEAT = 'seat';
+
+/** True when a registry entry is an adopted-pane row this fleet owns. */
+function isOwnedByAdoptFleet(entry: any): boolean {
+    if (!entry) { return false; }
+    if (entry.ideName !== TMUX_IDE_NAME && entry.purpose !== 'tmux') { return false; }
+    return entry.tmuxOwner !== TMUX_OWNER_SEAT;
+}
+
 /**
  * Fleet service for adopted tmux panes. Constructed by `bootstrap.ts` only
  * when `switchboard.terminal.tmux.enabled` is true AND `isTmuxAvailable()`
@@ -232,6 +249,14 @@ export class TmuxFleetService {
      * to prevent.
      */
     async reconcile(): Promise<{ dropped: number; kept: number; autoAdopted: number }> {
+        // Hydrate from the persisted registry BEFORE comparing against live panes.
+        // Without this the boot pass walks an empty in-memory map, keeps nothing,
+        // drops nothing, and then writes a registry containing zero tmux rows —
+        // a blanket purge wearing a reconcile's name, which is precisely the
+        // failure this method exists to avoid. Adoption is persisted so that a
+        // user's `coder-1` pane survives a Switchboard restart; that only works
+        // if the restart reads it back.
+        this._hydrateFromRegistry();
         const livePanes = await listTmuxPanes(this._socket);
         const liveByPaneId = new Map<string, TmuxPane>();
         for (const p of livePanes) { liveByPaneId.set(p.paneId, p); }
@@ -291,7 +316,12 @@ export class TmuxFleetService {
             // stable; name/path/command can change.
             const refreshed: AdoptedPane = {
                 ...adopted,
-                friendlyName: adopted.friendlyName,  // keep the alias the user set
+                // The friendly name is deliberately NOT refreshed from the live
+                // pane: it may be an alias the operator passed to `adopt()`, and
+                // re-deriving it from `pane_title` each pass would silently rename
+                // an adopted seat out from under every caller holding the name.
+                // `paneId` is the identity; the name is the operator's label.
+                friendlyName: adopted.friendlyName,
                 worktreePath: live.paneCurrentPath,
                 sessionName: live.sessionName,
                 windowName: live.windowName,
@@ -308,6 +338,42 @@ export class TmuxFleetService {
         }
         this._updateRegistry();
         return { dropped, kept, autoAdopted };
+    }
+
+    /**
+     * Load adopted-pane rows persisted by a previous process back into memory.
+     * Only rows this fleet owns are taken; team-seated rows (`tmuxOwner: 'seat'`)
+     * belong to `tmuxTeamSeating` and are left alone. Rows already in memory win,
+     * so a hydrate is safe to run more than once. Liveness is NOT assumed — the
+     * caller (`reconcile`) immediately re-confirms every hydrated row against
+     * `list-panes` and drops the ones whose pane is gone.
+     */
+    private _hydrateFromRegistry(): void {
+        let existing: Record<string, any>;
+        try {
+            existing = this._db.getConfigJsonSync<Record<string, any>>('runtime.terminals', {}) || {};
+        } catch {
+            return;   // an unreadable registry is an empty one for this purpose
+        }
+        for (const entry of Object.values(existing)) {
+            if (!isOwnedByAdoptFleet(entry)) { continue; }
+            const paneId = entry?.paneId;
+            if (typeof paneId !== 'string' || !/^%\d+$/.test(paneId)) { continue; }
+            if (this._panes.has(paneId)) { continue; }
+            this._panes.set(paneId, {
+                paneId,
+                friendlyName: entry.friendlyName || paneId,
+                role: entry.role || 'coder',
+                pid: entry.pid || '',
+                worktreePath: entry.worktreePath || '',
+                status: 'active',
+                sessionName: entry.sessionName || '',
+                windowName: entry.windowName || '',
+                currentCommand: entry.currentCommand || '',
+                currentPath: entry.worktreePath || '',
+                lastSeen: entry.lastSeen || new Date().toISOString(),
+            });
+        }
     }
 
     /**
@@ -345,8 +411,7 @@ export class TmuxFleetService {
             // is ours, keep the rest verbatim — including unknown/legacy keys
             // (CLAUDE.md: preserve unknown keys, never rebuild the map).
             for (const [name, entry] of Object.entries(existing)) {
-                if (entry && entry.purpose === 'tmux') { continue; }
-                if (entry && entry.ideName === TMUX_IDE_NAME) { continue; }
+                if (entry && isOwnedByAdoptFleet(entry)) { continue; }
                 terminalMap[name] = entry;
             }
             for (const pane of this._panes.values()) {
@@ -358,7 +423,18 @@ export class TmuxFleetService {
                     worktreePath: pane.worktreePath,
                     ideName: TMUX_IDE_NAME,
                     purpose: 'tmux',
+                    // Sub-tag: which tmux writer owns this row. Two writers share
+                    // `ideName: 'switchboard-tmux'` — this adoption fleet and
+                    // tmuxTeamSeating's `updateTmuxRegistryState`. Without a
+                    // discriminator each one's "replace my rows, preserve the rest"
+                    // merge deletes the other's rows on every write.
+                    tmuxOwner: TMUX_OWNER_ADOPT,
                     paneId: pane.paneId,
+                    // REQUIRED, not decorative: startTmuxReconcilePoll judges a row
+                    // dead when `!liveSessions.has(entry.sessionName)`. An undefined
+                    // sessionName is never in that Set, so omitting this field marks
+                    // every live adopted pane `status: 'exited'` on the first poll.
+                    sessionName: pane.sessionName,
                     lastSeen: pane.lastSeen,
                 };
             }

@@ -62,9 +62,26 @@ Part 1 must land before Part 2 — Part 2 consumes `TmuxTerminalBackend`, `isTmu
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [tmux Bridge Part 1: Transport Layer](../plans/tmux-bridge-1-transport-layer.md) — **PLAN REVIEWED** — ID: 8bc07323-3c00-4614-b48f-e5069c263f83
-- [ ] [tmux Bridge Part 2: Standalone Dispatch Integration](../plans/tmux-bridge-2-standalone-dispatch-integration.md) — **PLAN REVIEWED** — ID: f1965bc4-a221-4928-a64f-1c3165eaae2f
-- [ ] [WSL Standalone Support for tmux Bridge on Windows](../plans/wsl-standalone-support-for-tmux-bridge-on-windows.md) — **PLAN REVIEWED** — ID: b59e9fae-6409-480b-ba24-829db3891932
-- [ ] [A Team Can Be Seated Into A tmux Session Switchboard Owns](../plans/seat-a-team-into-a-switchboard-owned-tmux-session.md) — **PLAN REVIEWED** — ID: 05f70823-595e-42db-ae95-07cd01b0a860
+- [ ] [tmux Bridge Part 1: Transport Layer](../plans/tmux-bridge-1-transport-layer.md) — **CODE REVIEWED** — ID: 8bc07323-3c00-4614-b48f-e5069c263f83
+- [ ] [tmux Bridge Part 2: Standalone Dispatch Integration](../plans/tmux-bridge-2-standalone-dispatch-integration.md) — **CODE REVIEWED** — ID: f1965bc4-a221-4928-a64f-1c3165eaae2f
+- [ ] [WSL Standalone Support for tmux Bridge on Windows](../plans/wsl-standalone-support-for-tmux-bridge-on-windows.md) — **CODE REVIEWED** — ID: b59e9fae-6409-480b-ba24-829db3891932
+- [ ] [A Team Can Be Seated Into A tmux Session Switchboard Owns](../plans/seat-a-team-into-a-switchboard-owned-tmux-session.md) — **CODE REVIEWED** — ID: 05f70823-595e-42db-ae95-07cd01b0a860
 <!-- END SUBTASKS -->
 
+## Completion Summary
+
+All four subtasks implemented, reviewed against their acceptance clauses, and committed (90fa8450). Part 1 transport layer (tmuxBackend/tmuxPromptDelivery) ships argv-only execFile delivery with pane-id validation, unconditional double-confirm Enter, and 0600 temp files unlinked in finally — contract tests pass. Part 2 wires the transport into standalone dispatch behind switchboard.terminal.tmux.enabled (default off): PTY-first getRegisteredTerminals union, non-purge reconcile, shell-blacklist adoption guard, tmux verbs on /terminals/verb/ only. Part 3 (WSL) adds detectWsl() + cmd.exe openBrowser routing with wslview/print fallback and a setup guide; the native-Windows discovery hint is deferred pending Parts 1+2. Part 4 seats teams into Switchboard-owned sb-<teamname> tmux sessions with pane_title roster matching and reconnect, gated by a terminalBackend setting defaulting to fleet (zero behaviour change); both composition roots branch and both reject wire-supplied payload.backend. Compile clean (tsconfig.test.json); tmux-backend and wsl-detection contract tests pass.
+
+
+## Review Findings
+
+All four subtasks reviewed in one pass against `90fa8450`; four CRITICALs and five MAJORs found and fixed across `tmuxBackend.ts`, `tmuxFleetService.ts`, `tmuxTeamSeating.ts`, `bootstrap.ts`, `cli.ts`, plus `package.json` and `.github/workflows/integration-tests.yml`. The two that mattered most were invisible to every gate and are both proven, not argued: `execFile` silently ignores the `input` option the transport used for `load-buffer -`, so on tmux ≥ 3.2 every prompt delivery blocked on an EOF that never came and held the per-pane lock forever; and `split-window -t '<session>:0'` assumes `base-index 0`, which is false on this host, so tmux team seating killed its own session on the first delegate. Two more were quiet-wrong-answer defects in persisted state: the boot `reconcile()` was a purge that deleted every adoption on restart, and the liveness poll judged rows on a `sessionName` field the adoption writer never persisted, marking live panes dead five seconds after adoption. The two tmux registry writers also claimed each other's rows and now discriminate on `tmuxOwner`. Verification: `tsc` clean, `eslint` 0 errors, 22/22 tmux + 6/6 WSL contract checks (six cases new, each verified to fail against the unfixed code), `npm test` aggregate + `catalog:check` + `standalone-parity:check` green; `test:contract:pty-route-surface` fails identically on the committed HEAD version of its own test file (`Cannot find module 'vscode'` — its script omits the vscodeStub require) and is therefore pre-existing, not a regression from this work.
+
+## Deferred Findings
+
+See each subtask plan's `## Deferred Findings` section. The cross-cutting ones:
+
+- MAJOR — `src/test/tmux-route-surface-contract.test.js` (Part 2, Phase 6) was never written; four of its eight assertions are now covered elsewhere, four are not.
+- MAJOR — the `terminalBackend` setting (Part 4) has no contributed schema and no UI, so tmux team seating is reachable only by writing the board DB config row by hand.
+- MAJOR — `deriveSeatName`/`deriveDelegateBaseName`/`deriveSharedMemberName` duplicate `PtyFleetService`'s logic rather than sharing it. Part 4's Goal Invariant 3 requires sharing; Part 4's "Must not touch" forbids modifying `PtyFleetService`. The author needs to resolve the contradiction.
+- MAJOR — tmux dispatch bypasses `ptySendPrompt`, so tmux seats get no roster barrier, seat block or standing-orders composition. This is what the plan specified; the plan did not consider the barrier.

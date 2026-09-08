@@ -292,3 +292,18 @@ The following are external facts about tmux's version history that cannot be con
 **Complexity: 6 → Send to Coder**
 
 Self-contained new module against an interface that already exists and already has two implementations, with no call-site changes and no user-visible behaviour. The difficulty is concentrated in subprocess hygiene, version degradation, and the injection surface — all of which the contract tests can pin. The one judgement call needing sign-off is the `dispose()` / `kill()` asymmetry.
+
+## Completion Summary
+
+Implemented all three phases of the tmux transport layer. Created `src/standalone/tmuxBackend.ts` (TMUX_IDE_NAME, isTmuxAvailable, tmuxCaps, listTmuxPanes, TmuxTerminalHandle, TmuxTerminalBackend), `src/standalone/tmuxPromptDelivery.ts` (sendPromptToTmux, clearTmuxPane with per-pane lock, buffer route, newline flattening fallback, unconditional double-confirm CR), and `src/test/tmux-backend-contract.test.js` (7 contract tests + 1 integration test guarded on isTmuxAvailable). All tmux invocations use execFile with argv arrays (no shell, no exec/execSync); pane ids validated against /^%\d+$/ before any -t argument; dispose() is unregister-only and kill() is the sole destructive path. Version floors verified: load-buffer - confirmed ≥ 3.2 via tmux CHANGES; paste-buffer -p and send-keys -H plan-asserted at ≥ 2.6 and ≥ 2.4. No existing files modified. Compilation and tests skipped per standing orders.
+
+## Review Findings
+
+Files changed in this pass: `src/standalone/tmuxBackend.ts`, `src/test/tmux-backend-contract.test.js`, `package.json`, `.github/workflows/integration-tests.yml`. One CRITICAL: `defaultRunImpl` passed the payload as `options.input` to `execFile`, which has no such option (it belongs to `execFileSync`/`spawnSync`) — the stdin pipe was opened and never ended, so `tmux load-buffer -` blocked on an EOF that never came and the per-pane delivery lock was held forever; on tmux ≥ 3.2 (`caps.stdinBuffer`, true on this box's 3.4) that is *every* prompt delivery. Fixed by writing and ending `child.stdin` explicitly; proven with a standalone `execFile('cat', [], {input})` repro that hangs, and pinned by a new integration test that round-trips `load-buffer -` → `show-buffer` under a 10s guard (verified to fail with the fix reverted). Also wired the contract test into CI — it was defined in `src/test/` but invoked by no `package.json` script and no workflow step, the exact green-while-incomplete hole, and the reason a mocked-`run()` suite could report 16 passes while the real transport hung. Verification: `tsc -p tsconfig.test.json` clean, `eslint` 0 errors, 22/22 tmux contract checks pass, `npm test` aggregate (standalone-parity, catalog, icons, banner) green.
+
+## Deferred Findings
+
+- NIT `src/standalone/tmuxPromptDelivery.ts:79` — temp buffers are written to `os.tmpdir()`, not the `.switchboard/tmp/` the plan named. Mode is 0600 and the unlink-in-`finally` is correct, and the path is now only reachable on tmux < 3.2, so the deviation is cosmetic.
+- NIT `src/standalone/tmuxBackend.ts` — `show()` passes a `%pane_id` to `select-window -t`, which expects a target-window. tmux resolves it in practice; not exercised by any caller yet.
+- NIT `src/standalone/tmuxPromptDelivery.ts:54` — `sendLocks` entries are never deleted, so the map grows one entry per pane id seen for the process lifetime. Bounded by pane count; not a leak worth code.
+- MAJOR (accepted, documented in the plan's Risks) — `paste-buffer -p` only emits bracket codes if the pane's foreground app enabled bracketed-paste mode. Undetectable from outside; a multiline prompt into a pane that did not enable it still submits line-by-line.

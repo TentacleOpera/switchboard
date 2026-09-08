@@ -33,6 +33,7 @@ import {
     TmuxTerminalHandle,
 } from './tmuxBackend';
 import { sendPromptToTmux } from './tmuxPromptDelivery';
+import { TMUX_OWNER_SEAT } from './tmuxFleetService';
 import {
     deriveTmuxSessionName,
     deriveSeatName,
@@ -140,9 +141,17 @@ function deriveRoster(spec: TmuxSeatingSpec): {
 async function checkReconnect(
     sessionName: string,
     expectedHead: string,
-    expectedDelegateNames: string[],
+    headRole: string,
+    expectedDelegates: Array<{ friendlyName: string; role: string }>,
     socket?: TmuxSocket
 ): Promise<{ reattach: boolean; panes?: SeatedPane[]; reason?: string }> {
+    const expectedDelegateNames = expectedDelegates.map(d => d.friendlyName);
+    // Role by name, from the roster we just derived. A reattached seat MUST keep
+    // the role it was seated with: `triggerAction` resolves a dispatch target by
+    // role, so flattening every delegate to 'coder' on reattach silently routed
+    // reviewer/intern work to a coder seat after any Switchboard restart.
+    const roleByName = new Map<string, string>([[expectedHead, headRole]]);
+    for (const d of expectedDelegates) { roleByName.set(d.friendlyName, d.role); }
     const allPanes = await listTmuxPanes(socket);
     const sessionPanes = allPanes.filter(p => p.sessionName === sessionName);
     if (sessionPanes.length === 0) {
@@ -173,7 +182,7 @@ async function checkReconnect(
             panes.push({
                 friendlyName: p.paneTitle,
                 paneId: p.paneId,
-                role: p.paneTitle === expectedHead ? 'lead' : 'coder',
+                role: roleByName.get(p.paneTitle) || 'coder',
                 status: 'active',
                 cwd: p.paneCurrentPath,
             });
@@ -209,11 +218,16 @@ export async function createTmuxHeadWithDelegates(
     const teamName = spec.teamName || spec.name || 'team';
     const sessionName = deriveTmuxSessionName(teamName);
     const { headName, delegates: delegateSpecs } = deriveRoster(spec);
-    const delegateNames = delegateSpecs.map(d => d.friendlyName);
 
     // ── Reconnect check ────────────────────────────────────────────────
     if (await hasSession(sessionName, socket)) {
-        const reconnect = await checkReconnect(sessionName, headName, delegateNames, socket);
+        const reconnect = await checkReconnect(
+            sessionName,
+            headName,
+            spec.role,
+            delegateSpecs.map(d => ({ friendlyName: d.friendlyName, role: d.role })),
+            socket
+        );
         if (!reconnect.reattach) {
             return { success: false, error: reconnect.reason! };
         }
@@ -265,14 +279,23 @@ export async function createTmuxHeadWithDelegates(
     // Create delegate panes via split-window inside the head's window.
     for (const d of delegateSpecs) {
         try {
-            // split-window adds a pane to the head's window. Target the
-            // session:window (window 0 of the new session) explicitly.
-            const splitArgs = ['split-window', '-t', `${sessionName}:0`, '-d'];
+            // split-window adds a pane to the head's window. Target the head
+            // PANE ID, not `<session>:0` — `base-index` is a user setting and is
+            // commonly 1, in which case the new session's only window is index 1
+            // and `<session>:0` resolves to nothing. Every delegate split then
+            // failed, the partial-failure arm killed the session, and tmux team
+            // seating never succeeded on such a host. A `%id` is absolute.
+            const splitArgs = ['split-window', '-t', headPaneId, '-d'];
             if (spec.cwd) { splitArgs.push('-c', spec.cwd); }
             splitArgs.push('-P', '-F', '#{pane_id}');
             const delegatePaneId = (await run(splitArgs, socket)).trim();
             validatePaneId(delegatePaneId);
             await setPaneTitle(delegatePaneId, d.friendlyName, socket);
+            // Re-tile after each split. Without it tmux halves the target pane
+            // every time and refuses with "no space for new pane" at around the
+            // fourth delegate — a roster-size-dependent failure that the
+            // partial-failure arm then escalates into killing the whole session.
+            try { await run(['select-layout', '-t', headPaneId, 'tiled'], socket); } catch { /* layout is cosmetic */ }
             seatedPanes.push({
                 friendlyName: d.friendlyName,
                 paneId: delegatePaneId,
@@ -353,9 +376,15 @@ export async function updateTmuxRegistryState(
     try {
         const existing = await db.getConfigJson('runtime.terminals', {}) || {};
         const terminalMap: Record<string, any> = {};
-        // Preserve entries from other backends.
+        // Preserve entries from other backends AND from the OTHER tmux writer.
+        // `TmuxFleetService` (Part 2 pane adoption) also writes rows tagged
+        // `ideName: 'switchboard-tmux'`. Claiming every tmux row here deleted
+        // every adopted pane on each team seating (and the adoption fleet
+        // returned the favour on its next write). `tmuxOwner` is the
+        // discriminator: this writer owns 'seat' rows only.
         for (const [name, entry] of Object.entries(existing)) {
-            if (entry && (entry as any).ideName === TMUX_IDE_NAME) { continue; }
+            const e = entry as any;
+            if (e && e.ideName === TMUX_IDE_NAME && e.tmuxOwner === TMUX_OWNER_SEAT) { continue; }
             terminalMap[name] = entry;
         }
         // Add tmux entries.
@@ -368,6 +397,7 @@ export async function updateTmuxRegistryState(
                 sessionName,
                 ideName: TMUX_IDE_NAME,
                 purpose: 'tmux',
+                tmuxOwner: TMUX_OWNER_SEAT,
                 cwd: p.cwd,
             };
         }
@@ -416,9 +446,15 @@ export function startTmuxReconcilePoll(
                     continue;
                 }
                 const e = entry as any;
-                // If the session is gone, or the pane is gone, mark exited.
-                const sessionGone = !liveSessions.has(e.sessionName);
+                // Pane identity is the authority. The session check is only a
+                // second signal, and ONLY for rows that actually carry a
+                // sessionName — an undefined sessionName is never a member of
+                // `liveSessions`, so testing it unconditionally marked every row
+                // without that field dead on the first tick.
                 const paneGone = !livePaneIds.has(e.paneId);
+                const sessionGone = typeof e.sessionName === 'string' && e.sessionName.length > 0
+                    ? !liveSessions.has(e.sessionName)
+                    : false;
                 if ((sessionGone || paneGone) && e.status !== 'exited') {
                     terminalMap[name] = { ...e, status: 'exited' };
                     changed = true;
