@@ -3456,6 +3456,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
               <input type="checkbox" id="agent-groups-worktree-mode" style="margin:0; cursor:pointer;">
               <label for="agent-groups-worktree-mode" style="font-size:11px; cursor:pointer; margin:0;">Spawn in own worktree</label>
             </div>
+            <!-- §Pair-programming team scope: pair programming is a property of a
+                 team, on by default. The planner splits each plan by difficulty, so
+                 the lead takes what needs judgement and the coder takes the rest. -->
+            <label class="modal-label" for="agent-groups-pair-programming" style="margin-top:10px;">Pair programming</label>
+            <select id="agent-groups-pair-programming" class="modal-input" data-tooltip="The planner splits each plan by difficulty — the lead takes what needs judgement, the coder takes the rest. Off only when the team has no cheaper seat or you want the lead to do everything.">
+              <option value="on">On (default — lead + coder split)</option>
+              <option value="aggressive">Aggressive (coder takes more independently)</option>
+              <option value="off">Off (lead does everything)</option>
+            </select>
             <div style="font-size:11px; font-weight:600; margin-top:10px; margin-bottom:4px;">Team icon</div>
             <div id="agent-groups-icon-picker" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
               <button id="agent-groups-icon-preview" type="button" class="strip-btn" style="padding:4px; width:40px; height:40px; display:flex; align-items:center; justify-content:center;" title="Choose icon"></button>
@@ -3592,12 +3601,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                   <span>Project PRD Reference</span>
                   <span class="tooltip">Include project PRD as context for planning</span>
                 </label>
-                
-                <label class="checkbox-item" title="Aggressive pair programming mode">
-                  <input type="checkbox" id="plannerAddonAggressivePairProgramming">
-                  <span>Aggressive Pair Programming</span>
-                  <span class="tooltip">Assume Coder can handle more independently</span>
-                </label>
+
+                <!-- §Pair-programming team scope: the Aggressive Pair Programming
+                     checkbox is RETIRED. Pair programming is now a property of a
+                     team (off|on|aggressive) set on the team card; the board-wide
+                     non-team path keeps the #pairProgrammingModeSelect dropdown.
+                     The legacy roleConfig_planner.addons.aggressivePairProgramming
+                     key is preserved on read (KanbanProvider._getPromptsConfig) so
+                     existing installs keep their non-team behaviour. -->
 
                 <label class="checkbox-item" title="Permit worktrees & commits; block destructive undo (reset/checkout/clean) and unclean deletions">
                   <input type="checkbox" id="plannerAddonGitProhibition">
@@ -4143,7 +4154,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
                 document.getElementById('plannerAddonConstitution').checked = !!config.addons?.constitution;
                 document.getElementById('plannerAddonDesignSystemDoc').checked = !!config.addons?.designSystemDoc;
-                document.getElementById('plannerAddonAggressivePairProgramming').checked = !!config.addons?.aggressivePairProgramming;
+                // §Pair-programming team scope: the Aggressive Pair Programming
+                // checkbox is retired (pair programming is now a team property).
+                // The legacy key is preserved on read in KanbanProvider, so the
+                // non-team path keeps its behaviour; the UI control is gone.
                 document.getElementById('plannerAddonGitProhibition').checked = !!config.addons?.gitProhibition;
                 document.getElementById('plannerAddonClearAntigravityContext').checked = !!config.addons?.clearAntigravityContext;
                 document.getElementById('plannerAddonCavemanOutput').checked = !!config.addons?.cavemanOutput;
@@ -5640,6 +5654,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 name: type.name,
                 headRole: type.headRole,
                 members: (type.members || []).map(m => ({ ...m })),
+                // §Pair-programming team scope: pair programming is a property of a
+                // team, on by default. The team field is intensity-only
+                // (off|on|aggressive); host routing is implicit in the roster.
+                pairProgramming: 'on',
                 ...(type.prompt ? { prompt: type.prompt } : {}),
                 ...(type.headPrompt ? { headPrompt: type.headPrompt } : {})
             };
@@ -5678,7 +5696,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const detailDiv = document.createElement('div');
             detailDiv.className = 'agents-tab-custom-agent-item-command';
             detailDiv.style.flexBasis = '100%';
-            detailDiv.textContent = `head: ${group.headRole} · ${memberSummary}`;
+            // §Pair-programming team scope: show the team's intensity on the card.
+            // 'on' is the default; 'aggressive' biases the planner's classification;
+            // 'off' means the lead does everything (or a head-only team, resolved off).
+            const ppVal = group.pairProgramming;
+            const ppLabel = ppVal === 'aggressive' ? 'pair: aggressive'
+                : ppVal === 'off' ? 'pair: off'
+                : 'pair: on';
+            detailDiv.textContent = `head: ${group.headRole} · ${memberSummary} · ${ppLabel}`;
             // Unassigned team: not the auto-start default, but still startable
             // explicitly (START button in the terminals panel). Informational,
             // not a fault — muted text, not red.
@@ -5881,6 +5906,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             if (headPromptEl) { headPromptEl.value = group?.headPrompt || ''; }
             const wtModeCb = document.getElementById('agent-groups-worktree-mode');
             if (wtModeCb) { wtModeCb.checked = group?.worktreeMode === 'auto'; }
+            // §Pair-programming team scope: load the team's intensity. Default
+            // 'on' for a new team and for a legacy team without the field.
+            const ppSelect = document.getElementById('agent-groups-pair-programming');
+            if (ppSelect) {
+                const ppVal = group?.pairProgramming;
+                ppSelect.value = (ppVal === 'off' || ppVal === 'aggressive') ? ppVal : 'on';
+            }
             // Load the existing icon value (or clear for a new team) and render
             // the preview. The hidden input is the source of truth for save.
             teamsTabSetIconValue(group?.icon || '');
@@ -5895,6 +5927,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             document.getElementById('agent-groups-error').textContent = '';
             const wtModeCb = document.getElementById('agent-groups-worktree-mode');
             if (wtModeCb) { wtModeCb.checked = false; }
+            // Reset the pair-programming select to the default ('on') for the next
+            // team. teamsTabShowGroupForm re-loads the real value on edit.
+            const ppReset = document.getElementById('agent-groups-pair-programming');
+            if (ppReset) { ppReset.value = 'on'; }
             // Collapse the icon grid so a re-open starts clean.
             const grid = document.getElementById('agent-groups-icon-grid');
             if (grid) { grid.style.display = 'none'; }
@@ -6230,8 +6266,16 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const worktreeMode = worktreeModeEl
                 ? (worktreeModeEl.checked ? 'auto' : undefined)
                 : (prevGroup?.worktreeMode ? prevGroup.worktreeMode : undefined);
+            // §Pair-programming team scope: read the team's intensity from the
+            // form. Default 'on' (the select's first option) — a team is a lead
+            // plus cheaper seats, and the default should use them.
+            const ppSelectEl = document.getElementById('agent-groups-pair-programming');
+            const pairProgrammingVal = ppSelectEl
+                ? (ppSelectEl.value === 'off' || ppSelectEl.value === 'aggressive' ? ppSelectEl.value : 'on')
+                : (prevGroup?.pairProgramming || 'on');
             const group = {
                 id, name, headRole, members,
+                pairProgramming: pairProgrammingVal,
                 ...(promptText ? { prompt: promptText } : {}),
                 ...(headPromptText ? { headPrompt: headPromptText } : {}),
                 ...(iconValue ? { icon: iconValue } : {}),
@@ -7469,7 +7513,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
 
             // Planner specific add-on listeners
-            ['plannerAddonSwitchboardSafeguards', 'plannerAddonConstitution', 'plannerAddonDesignSystemDoc', 'plannerAddonAggressivePairProgramming', 'plannerAddonGitProhibition', 'plannerAddonClearAntigravityContext', 'plannerAddonCavemanOutput', 'plannerAddonSkipCompilation', 'plannerAddonSkipTests', 'plannerAddonAdviseResearch', 'plannerAddonWriteFeatureDescriptionIfEmpty'].forEach(id => {
+            // §Pair-programming team scope: 'plannerAddonAggressivePairProgramming'
+            // is retired from this list (the checkbox is gone). The remaining add-ons
+            // keep their per-change save listener.
+            ['plannerAddonSwitchboardSafeguards', 'plannerAddonConstitution', 'plannerAddonDesignSystemDoc', 'plannerAddonGitProhibition', 'plannerAddonClearAntigravityContext', 'plannerAddonCavemanOutput', 'plannerAddonSkipCompilation', 'plannerAddonSkipTests', 'plannerAddonAdviseResearch', 'plannerAddonWriteFeatureDescriptionIfEmpty'].forEach(id => {
                 const el = document.getElementById(id);
                 if (el) {
                     el.addEventListener('change', (e) => {
@@ -10755,6 +10802,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 if ((column === 'PLAN REVIEWED' || column === 'STAGING') && dynamicComplexityRoutingEnabled) {
                     const card = currentCards.find(c => (c.planId || c.sessionId) === sessionId);
                     const score = parseInt(card?.complexity, 10);
+                    // NON-TEAM-ONLY: this reads the board-wide #pairProgrammingModeSelect
+                    // to suppress the FE optimistic cross-stage move on the complexity-
+                    // routed (non-team) path. A team dispatch targets its head terminal
+                    // directly and is not complexity-routed, so the team's pairProgramming
+                    // field (a team property, not this dropdown) does not reach here; the
+                    // board enum is the non-team scope (Outstanding-Question decision).
                     const pairModeActive =
                         (document.getElementById('pairProgrammingModeSelect')?.value || 'off') !== 'off';
                     if (isNaN(score) || pairModeActive || score < 1 || score > 10) {

@@ -8597,6 +8597,10 @@ Each plan file must include:
                 instruction,
                 analysisScope: options?.analysisScope,
                 originTerminal: group.targetAgent,
+                // §Pair-programming team scope: pass the dispatch target so
+                // generateUnifiedPrompt auto-resolves the team's pairProgramming
+                // intensity when this dispatch targets a team head/member.
+                dispatchTargetTerminal: group.targetAgent,
                 ...delegateOptions,
                 ...reviewerDelegationOpts,
                 unattended: options?.unattended
@@ -8702,13 +8706,26 @@ Each plan file must include:
                 return false;
             }
 
-            // Pair Programming: if lead dispatch and pair programming enabled, also dispatch to coder
-            if (role === 'lead' && this._autobanState.pairProgrammingMode !== 'off') {
-                const coderUsesIde = this._autobanState.pairProgrammingMode === 'cli-ide'
-                    || this._autobanState.pairProgrammingMode === 'ide-ide';
+            // Pair Programming: if lead dispatch and pair programming enabled, also dispatch to coder.
+            // §Pair-programming team scope: a team dispatch resolves its intensity
+            // from the team's `pairProgramming` field (via the lead target
+            // terminal); the board-wide enum governs the non-team path. The team
+            // field is intensity-only — host routing (CLI vs IDE clipboard) is
+            // derived from the board enum for the non-team path and from the
+            // roster for a team (a team's coder seat is a terminal, so a team
+            // split dispatches to the coder terminal, never the IDE clipboard).
+            const teamPP = this._kanbanProvider
+                ? await this._kanbanProvider.resolveTeamPairProgrammingForTerminal(resolvedWorkspaceRoot, group.targetAgent)
+                : null;
+            const pairActive = teamPP ? teamPP.intensity !== 'off' : this._autobanState.pairProgrammingMode !== 'off';
+            if (role === 'lead' && pairActive) {
+                const coderUsesIde = !teamPP && (this._autobanState.pairProgrammingMode === 'cli-ide'
+                    || this._autobanState.pairProgrammingMode === 'ide-ide');
                 const coderPrompt = await this._kanbanProvider!.generateUnifiedPrompt('coder', group.plans, resolvedWorkspaceRoot, {
                     pairProgrammingEnabled: true,
-                    accurateCodingEnabled: coderUsesIde ? false : this._isAccurateCodingEnabled()
+                    accurateCodingEnabled: coderUsesIde ? false : this._isAccurateCodingEnabled(),
+                    // Team-scoped aggressive flag (board add-on for the non-team path).
+                    teamPairProgramming: teamPP ? teamPP.intensity : undefined
                 });
                 if (coderUsesIde) {
                     await this._seams().clipboard.writeText(coderPrompt);

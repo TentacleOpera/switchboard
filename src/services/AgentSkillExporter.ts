@@ -234,12 +234,12 @@ export class AgentSkillExporter {
         }
         if (addons.pairProgrammingEnabled) {
             lines.push('### Pair Programming');
-            lines.push('- Engage in pair programming mode: explain your reasoning step by step.');
+            lines.push('- Split dispatch: the planner splits each plan by difficulty, so the lead takes what needs judgement and the coder takes the rest. (Drives the separate coder-prompt dispatch; not a step-by-step explanation directive.)');
             lines.push('');
         }
         if (addons.aggressivePairProgramming) {
             lines.push('### Aggressive Pair Programming');
-            lines.push('- Be proactive and aggressive in suggesting changes and improvements.');
+            lines.push('- Planner biases the routine/complex classification so more of each plan routes to the coder (the cheaper seat), keeping only the genuinely hard parts with the lead. (A classification-intensity flag, not a suggestion to be proactive.)');
             lines.push('');
         }
         if (addons.advancedReviewerEnabled) {

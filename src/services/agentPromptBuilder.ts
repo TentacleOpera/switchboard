@@ -262,6 +262,33 @@ export interface PromptBuilderOptions {
     pairProgrammingEnabled?: boolean;
     /** When true, planner classifies more tasks as Routine, assuming a competent Coder. */
     aggressivePairProgramming?: boolean;
+    /**
+     * Team-scoped pair-programming intensity. When set, the dispatch context is a
+     * team and this value (`off | on | aggressive`) overrides the board-wide
+     * `pairProgrammingMode` enum and the global `aggressivePairProgramming` add-on
+     * for the planner and lead/coder branches of `generateUnifiedPrompt`. Absent
+     * → the dispatch is non-team and the board/global values govern (the board
+     * dropdown is kept as the non-team scope). See the plan "Pair Programming
+     * Belongs to the Team".
+     */
+    teamPairProgramming?: 'off' | 'on' | 'aggressive';
+    /**
+     * The terminal a dispatch is targeted at. When `teamPairProgramming` is not
+     * set explicitly, `generateUnifiedPrompt` auto-resolves the team-scoped
+     * intensity from this terminal (the team its spawned group heads or
+     * contains). Absent → no team auto-resolution; the board/global values
+     * govern. This is the threading seam that lets a dispatch pass its target
+     * terminal and get team-scoped pair programming without each call site
+     * resolving the team itself.
+     */
+    dispatchTargetTerminal?: string;
+    /**
+     * Provenance tag for the resolved pair-programming value, logged on
+     * resolution (not only on disagreement) so "which store answered" is
+     * answerable after the fact. `'team'` = a team's field won; `'board'` =
+     * the board-wide enum won (non-team path); `'default'` = both unset.
+     */
+    pairProgrammingSource?: 'team' | 'board' | 'default';
     /** Whether advanced regression analysis block is appended (reviewer role). */
     advancedReviewerEnabled?: boolean;
     /**

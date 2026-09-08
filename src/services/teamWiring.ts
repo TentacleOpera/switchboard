@@ -157,6 +157,89 @@ export function readTeamPacing(group: any): 'head' | 'seat' {
     return group && group.pacing === 'seat' ? 'seat' : 'head';
 }
 
+/**
+ * Pair-programming intensity carried on a team definition. The team field is
+ * INTENSITY ONLY (`off | on | aggressive`); the host-routing dimension that the
+ * board enum's `cli-cli`/`cli-ide`/`ide-cli`/`ide-ide` values carry is implicit
+ * in the team's roster (the lead and coder seats are the team's own terminals).
+ *
+ * Default `'on'` for a team that has not set one — a team is a lead plus
+ * cheaper seats, and the default should use them (see the plan "Pair
+ * Programming Belongs to the Team"). An invalid/absent value reads as `'on'`
+ * because teams are unreleased: there is no installed base whose prior choice
+ * this default could surprise, and the structural argument for on-by-default
+ * is the whole reason the field exists on the team at all.
+ */
+export type TeamPairProgrammingIntensity = 'off' | 'on' | 'aggressive';
+
+export function readTeamPairProgramming(group: any): TeamPairProgrammingIntensity {
+    const v = group && group.pairProgramming;
+    if (v === 'off') { return 'off'; }
+    if (v === 'aggressive') { return 'aggressive'; }
+    return 'on';
+}
+
+/**
+ * Resolve the team **definition** (`terminals.agentGroups` row) whose live
+ * spawned group the given terminal heads (or belongs to). This is the
+ * team-scoped entry point for the pair-programming field: a dispatch that
+ * targets a team's head terminal resolves its definition here, then reads
+ * `pairProgramming` via {@link readTeamPairProgramming}.
+ *
+ * Mirrors {@link resolveTeamMembersForHead}'s group lookup (same `team_<head>`
+ * id derivation, same bare-key merge, same "group the origin heads, else first
+ * group containing the origin" order) but returns the DEFINITION rather than
+ * the roster, via {@link resolveDefinitionForGroup}. Returns `null` when the
+ * terminal heads no team, the definition was deleted, or the role-match
+ * fallback is ambiguous — callers fall back to the board/global value.
+ */
+export async function resolveTeamDefinitionForHeadTerminal(opts: {
+    db?: any;
+    settings?: TerminalGroupsSettingsAccessor;
+    originName: string;
+}): Promise<any | null> {
+    const { db, settings, originName } = opts;
+    if ((!db && !settings) || !originName) { return null; }
+
+    let groups: any[] = [];
+    try {
+        if (settings) {
+            const raw = await settings.get(TERMINALS_GROUPS_KEY, []);
+            groups = Array.isArray(raw) ? [...raw] : [];
+        } else if (db) {
+            const raw = await db.getConfigJson(TERMINALS_GROUPS_KEY, []) as any[];
+            groups = Array.isArray(raw) ? [...raw] : [];
+        }
+        if (db) {
+            try {
+                const bare = await db.getConfigJson('terminals.groups', []) as any[];
+                if (Array.isArray(bare) && bare.length > 0) {
+                    const existingIds = new Set(groups.map((g: any) => g && g.id).filter(Boolean));
+                    for (const g of bare) {
+                        if (g && typeof g.id === 'string' && !existingIds.has(g.id)) {
+                            groups.push(g);
+                            existingIds.add(g.id);
+                        }
+                    }
+                }
+            } catch { /* best effort */ }
+        }
+    } catch { return null; }
+    if (!Array.isArray(groups) || groups.length === 0) { return null; }
+
+    // Preferred: the group the origin HEADS (same id derivation as
+    // resolveTeamMembersForHead and wireSpawnedTeam).
+    const headId = 'team_' + encodeURIComponent(originName).replace(/[^a-zA-Z0-9_]/g, '_');
+    let headGroup = groups.find(g => g && g.id === headId);
+    // Otherwise: first group (in stored order) that contains the origin.
+    if (!headGroup) {
+        headGroup = groups.find(g =>
+            g && Array.isArray(g.members) && g.members.includes(originName));
+    }
+    if (!headGroup) { return null; }
+    return resolveDefinitionForGroup(db, headGroup);
+}
+
 // ─── tmux session name derivation ─────────────────────────────────────────
 // tmux session names cannot contain `.` or `:` and should be shell-safe.
 // Team names are free-form user strings, so sanitize to `[a-z0-9_-]` and

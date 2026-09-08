@@ -1472,6 +1472,12 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // land on vscodeShim's no-op Event stubs here, exactly as they did when this
     // ran inside the constructor — but the config read is real and standalone
     // depends on it (aggressivePairProgramming feeds dispatched prompts).
+    // §Pair-programming team scope (composition-root diff): both hosts share the
+    // SAME KanbanProvider + TaskViewerProvider, so the team-scoped pairProgramming
+    // field is read identically on each — via resolveTeamDefinitionForHeadTerminal
+    // (DB config, no VS Code context needed) on the prompt-building path, and
+    // written from the shared kanban.html webview each host serves. No host-specific
+    // wiring is required for the team field.
     taskViewerProvider.suppressLocalApiServer = true;
     const ptyHostSupervisor = new PtyHostSupervisor({
         installRoot: repoRoot,

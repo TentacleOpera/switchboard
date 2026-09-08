@@ -37,7 +37,7 @@ import { SURFACES } from './wsHub';
 import { reviveWithRetention, injectInitialWebviewState } from '../utils/reviveWithRetention';
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent, resolveRoleWithDegradation } from './complexityScale';
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
-import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, DEFAULT_TEAM_DEFINITIONS, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor, readTeamPacing, mutateTerminalGroups, describeStandingOrderMigrations, resolveTeamMembersForHead, resolveTeamById } from './teamWiring';
+import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, DEFAULT_TEAM_DEFINITIONS, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor, readTeamPacing, readTeamPairProgramming, resolveTeamDefinitionForHeadTerminal, type TeamPairProgrammingIntensity, mutateTerminalGroups, describeStandingOrderMigrations, resolveTeamMembersForHead, resolveTeamById } from './teamWiring';
 import { mutateStandingOrders, mutateStandingOrderDefinitions, makeStandingOrder, makeStandingOrderDefinition, syncDefinitionToAssignments, validateInstruction, STANDING_ORDERS_CONFIG_KEY, STANDING_ORDER_DEFINITIONS_CONFIG_KEY, type StandingOrder, type StandingOrderDefinition, type StandingOrderScope } from './standingOrders';
 import { KanbanService, type KanbanServiceContext } from './kanbanService';
 import { KANBAN_VERBS } from '../generated/verbAllowlist';
@@ -1657,6 +1657,12 @@ export class KanbanProvider implements vscode.Disposable {
         }
 
         // Pair programming bypass: never route to intern when pair mode is active.
+        // NON-TEAM-ONLY: this is the score→role resolver for the complexity-routed
+        // (non-team) dispatch path. A team dispatch targets its head terminal
+        // directly and never reaches this resolver; the team's pairProgramming
+        // intensity governs the team path (see _dispatchWithPairProgrammingIfNeeded
+        // and generateUnifiedPrompt's team override). The board enum is the
+        // non-team scope (Outstanding-Question decision).
         const isPairMode = (this._autobanState?.pairProgrammingMode ?? 'off') !== 'off';
         if (isPairMode && role === 'intern') {
             console.log(`[KanbanProvider] Pair programming bypass: score=${score} intern → coder`);
@@ -6105,6 +6111,44 @@ If the user asks a question in a comment, post it as a comment on the issue. The
     }
 
     /**
+     * Resolve the team-scoped pair-programming intensity for a dispatch that
+     * targets `targetTerminal`. The team field is intensity-only
+     * (`off | on | aggressive`); host routing is implicit in the roster. When
+     * the target heads no team, returns `null` so the caller falls back to the
+     * board-wide enum / global add-on (the non-team scope the board dropdown
+     * still governs by the Outstanding-Question decision).
+     *
+     * Edge case (plan §2): a head-only team (no cheaper coder/intern seat) has
+     * nowhere to send the routine half of a split, so a non-`off` intensity is
+     * resolved to `'off'` with a stated reason rather than emitting a split
+     * directive with no recipient. The team's `members[]` carries `role` per
+     * seat; the head role itself is not a cheaper seat.
+     */
+    public async resolveTeamPairProgrammingForTerminal(
+        workspaceRoot: string,
+        targetTerminal?: string
+    ): Promise<{ intensity: TeamPairProgrammingIntensity; source: 'team'; reason?: string } | null> {
+        const originName = String(targetTerminal || '').trim();
+        if (!originName) { return null; }
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db) { return null; }
+        const def = await resolveTeamDefinitionForHeadTerminal({ db, originName });
+        if (!def) { return null; }
+        let intensity = readTeamPairProgramming(def);
+        let reason: string | undefined;
+        if (intensity !== 'off') {
+            const members = Array.isArray(def.members) ? def.members : [];
+            const hasCheaperSeat = members.some((m: any) =>
+                m && (m.role === 'coder' || m.role === 'intern'));
+            if (!hasCheaperSeat) {
+                intensity = 'off';
+                reason = 'head-only team — no coder/intern seat to route the routine half to';
+            }
+        }
+        return { intensity, source: 'team', reason };
+    }
+
+    /**
      * Resolve the columns whose Move All / Move Selected can dispatch a batch to a
      * team-headed lead — the SOURCE columns, never the lead column itself.
      *
@@ -6419,8 +6463,42 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             }
         }
 
+        // §Pair-programming team auto-resolution: when the dispatch context is a
+        // team (signalled by a target terminal that heads/belongs to one) and no
+        // explicit `teamPairProgramming` override was supplied, resolve the
+        // team's intensity here so the planner and lead/coder branches below
+        // read one team-scoped value. `null` → non-team dispatch; the board enum
+        // and global add-on govern (the board dropdown is kept as the non-team
+        // scope per the Outstanding-Question decision). The custom-agent branch
+        // above returns early and never reaches here.
+        let teamPairProgramming: 'off' | 'on' | 'aggressive' | undefined = overrides?.teamPairProgramming;
+        if (teamPairProgramming === undefined && overrides?.dispatchTargetTerminal) {
+            const resolved = await this.resolveTeamPairProgrammingForTerminal(workspaceRoot, overrides.dispatchTargetTerminal);
+            if (resolved) {
+                teamPairProgramming = resolved.intensity;
+                if (resolved.reason) {
+                    console.log(`[KanbanProvider] pair-programming team override: ${resolved.intensity} (${resolved.reason})`);
+                }
+            }
+        }
+
         if (role === 'planner') {
-            resolvedOptions.aggressivePairProgramming = promptsConfig.aggressivePairProgramming;
+            // §Pair-programming scope: a team-scoped value (teamPairProgramming
+            // override, set by the dispatch path when the dispatch context is a
+            // team) wins over the global planner add-on; otherwise the global
+            // add-on governs (the non-team path). The retired
+            // #plannerAddonAggressivePairProgramming checkbox no longer writes
+            // roleConfig_planner.addons.aggressivePairProgramming, so the global
+            // value here is the board-level default until a team overrides it.
+            // Source is logged on resolution, not only on disagreement.
+            if (teamPairProgramming !== undefined) {
+                resolvedOptions.aggressivePairProgramming = teamPairProgramming === 'aggressive';
+                resolvedOptions.pairProgrammingSource = 'team';
+            } else {
+                resolvedOptions.aggressivePairProgramming = promptsConfig.aggressivePairProgramming;
+                resolvedOptions.pairProgrammingSource = promptsConfig.aggressivePairProgramming ? 'board' : 'default';
+            }
+            console.log(`[KanbanProvider] pair-programming resolved (planner): intensity=${teamPairProgramming ?? 'global'} source=${resolvedOptions.pairProgrammingSource}`);
             resolvedOptions.adviseResearchIfUnsure = promptsConfig.adviseResearchIfUnsure;
             resolvedOptions.writeFeatureDescriptionIfEmpty = promptsConfig.writeFeatureDescriptionIfEmpty;
             resolvedOptions.plannerWorkflowPath = promptsConfig.plannerWorkflowPath;
@@ -6441,9 +6519,24 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             resolvedOptions.constitutionContent = constitutionContent;
         } else if (role === 'lead' || role === 'coder' || role === 'intern') {
             resolvedOptions.instruction = (role === 'coder' || role === 'intern') ? 'low-complexity' : undefined;
-            resolvedOptions.pairProgrammingEnabled = (this._autobanState?.pairProgrammingMode ?? 'off') !== 'off';
+            // §Pair-programming scope: a team-scoped value (teamPairProgramming
+            // override, set by the dispatch path when the dispatch context is a
+            // team) wins over the board-wide enum; otherwise the board enum
+            // governs (the non-team path the board dropdown still scopes). The
+            // team field is intensity-only; host routing is implicit in the
+            // roster. Source is logged on resolution, not only on disagreement.
+            if (teamPairProgramming !== undefined) {
+                resolvedOptions.pairProgrammingEnabled = teamPairProgramming !== 'off';
+                resolvedOptions.aggressivePairProgramming = teamPairProgramming === 'aggressive';
+                resolvedOptions.pairProgrammingSource = 'team';
+            } else {
+                resolvedOptions.pairProgrammingEnabled = (this._autobanState?.pairProgrammingMode ?? 'off') !== 'off';
+                resolvedOptions.aggressivePairProgramming = promptsConfig.aggressivePairProgramming;
+                const boardActive = resolvedOptions.pairProgrammingEnabled;
+                resolvedOptions.pairProgrammingSource = boardActive ? 'board' : 'default';
+            }
+            console.log(`[KanbanProvider] pair-programming resolved (${role}): enabled=${resolvedOptions.pairProgrammingEnabled} aggressive=${resolvedOptions.aggressivePairProgramming} source=${resolvedOptions.pairProgrammingSource}`);
             resolvedOptions.accurateCodingEnabled = promptsConfig.accurateCodingEnabledByRole?.[role] ?? false;
-            resolvedOptions.aggressivePairProgramming = promptsConfig.aggressivePairProgramming;
             if (role === 'lead') {
                 resolvedOptions.includeInlineChallenge = promptsConfig.leadChallengeEnabled ?? false;
             }
@@ -7244,18 +7337,32 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
     private async _dispatchWithPairProgrammingIfNeeded(
         cards: KanbanCard[],
-        workspaceRoot: string
+        workspaceRoot: string,
+        targetTerminal?: string
     ): Promise<void> {
+        // §Pair-programming team scope: a team dispatch resolves its intensity
+        // from the team's `pairProgramming` field (via the lead target
+        // terminal); the board-wide enum governs the non-team path. The team
+        // field is intensity-only — host routing (CLI vs IDE clipboard) is
+        // derived from the board enum for the non-team path; a team's coder
+        // seat is a terminal, so a team split dispatches to the coder
+        // terminal, never the IDE clipboard.
+        const teamPP = targetTerminal
+            ? await this.resolveTeamPairProgrammingForTerminal(workspaceRoot, targetTerminal)
+            : null;
         const mode = this._autobanState?.pairProgrammingMode ?? 'off';
-        if (mode === 'off') { return; }
+        const pairActive = teamPP ? teamPP.intensity !== 'off' : mode !== 'off';
+        if (!pairActive) { return; }
 
         const promptsConfig = await this._getPromptsConfig(workspaceRoot);
-        const coderUsesIde = mode === 'cli-ide' || mode === 'ide-ide';
+        const coderUsesIde = !teamPP && (mode === 'cli-ide' || mode === 'ide-ide');
         const accurateCodingEnabled = !coderUsesIde && (promptsConfig.accurateCodingEnabledByRole?.coder ?? false);
         const plans = await this._cardsToPromptPlans(cards, workspaceRoot);
         const coderPrompt = await this.generateUnifiedPrompt('coder', plans, workspaceRoot, {
             pairProgrammingEnabled: true,
-            accurateCodingEnabled
+            accurateCodingEnabled,
+            // Team-scoped aggressive flag (board add-on for the non-team path).
+            teamPairProgramming: teamPP ? teamPP.intensity : undefined
         });
         if (coderUsesIde) {
             const choice = await vscode.window.showInformationMessage(
@@ -9608,6 +9715,11 @@ This step is what moves the plan forward in the Switchboard pipeline.
         const liveRolesMap = this._taskViewerProvider?.getAliveCodingRolesWithTerminals();
         if (liveRolesMap && liveRolesMap.size > 0) {
             const available = new Set<'intern' | 'coder' | 'lead'>();
+            // NON-TEAM-ONLY: this is the auto-dispatch column resolver for the
+            // complexity-routed (non-team) path. A team dispatch targets its head
+            // terminal directly; the team's pairProgramming intensity governs the
+            // team path. The board enum is the non-team scope (Outstanding-Question
+            // decision).
             const isPairMode = (this._autobanState?.pairProgrammingMode ?? 'off') !== 'off';
             for (const r of liveRolesMap.keys()) {
                 if (visibleAgents && visibleAgents[r] === false) continue;
@@ -10667,6 +10779,11 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     }
                 }
                 if (dispatchSpec?.source === 'custom-user' && workspaceRoot && this._taskViewerProvider) {
+                    // NON-TEAM-ONLY: the board enum's cli-ide/ide-ide values select
+                    // IDE-clipboard (prompt) vs CLI dispatch for the NON-TEAM lead.
+                    // A team's lead is a terminal in its roster, so a team dispatch is
+                    // never IDE-clipboard; the team's pairProgramming intensity (not
+                    // this enum) governs the team path. Board enum = non-team scope.
                     const ppMode = this._autobanState?.pairProgrammingMode ?? 'off';
                     const leadUsesIde = ppMode === 'ide-cli' || ppMode === 'ide-ide';
                     const dispatchMode = role === 'lead' && leadUsesIde ? 'prompt' : dispatchSpec.dragDropMode;
@@ -10712,7 +10829,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         if (dispatched && role === 'lead') {
                             const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot);
                             if (card && !this._isLowComplexity(card) && card.complexity !== 'Unknown') {
-                                await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot);
+                                await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot, targetTerminalOverride);
                             }
                             // Auto-arm a feature watch for drive-mode feature
                             // dispatches. No-op for
@@ -10757,6 +10874,11 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     return { success: true, role, targetColumn };
                 }
                 if (canDispatch) {
+                    // NON-TEAM-ONLY: the board enum's ide-cli/ide-ide values select
+                    // IDE-clipboard (prompt) vs CLI dispatch for the NON-TEAM lead.
+                    // A team's lead is a terminal, so a team dispatch is never IDE-
+                    // clipboard; the team's pairProgramming intensity governs the
+                    // team path. Board enum = non-team scope.
                     const ppMode = this._autobanState?.pairProgrammingMode ?? 'off';
                     const leadUsesIde = ppMode === 'ide-cli' || ppMode === 'ide-ide';
 
@@ -10817,7 +10939,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             if (role === 'lead' && targetColumn === 'LEAD CODED') {
                                 const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot);
                                 if (card && !this._isLowComplexity(card) && card.complexity !== 'Unknown') {
-                                    await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot);
+                                    await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot, targetTerminalOverride);
                                 }
                             }
                             // Auto-arm a feature watch for drive-mode feature
