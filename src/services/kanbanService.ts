@@ -210,7 +210,12 @@ export class KanbanService {
         if (typeof key !== 'string') {
             return { success: false, error: 'Key is not a string' };
         }
-        const fullKey = `switchboard.prompts.${key}`;
+        // A key already carrying the `switchboard.` namespace is ABSOLUTE. These verbs
+        // hardcoded the `switchboard.prompts.` prefix, which made every contributed
+        // setting outside that namespace — switchboard.terminal.tmux.enabled among
+        // them — unreadable and unwritable from any UI, so a feature gated on one
+        // could never be turned on. Relative keys keep their previous meaning.
+        const fullKey = key.startsWith('switchboard.') ? key : `switchboard.prompts.${key}`;
 
         let value: any;
         if (key === 'selectedRole') {
@@ -236,7 +241,12 @@ export class KanbanService {
         if (typeof key !== 'string') {
             return { success: false, error: 'Key is not a string' };
         }
-        const fullKey = `switchboard.prompts.${key}`;
+        // A key already carrying the `switchboard.` namespace is ABSOLUTE. These verbs
+        // hardcoded the `switchboard.prompts.` prefix, which made every contributed
+        // setting outside that namespace — switchboard.terminal.tmux.enabled among
+        // them — unreadable and unwritable from any UI, so a feature gated on one
+        // could never be turned on. Relative keys keep their previous meaning.
+        const fullKey = key.startsWith('switchboard.') ? key : `switchboard.prompts.${key}`;
 
         if (key === 'selectedRole') {
             await this._ctx.workspaceStateUpdate(fullKey, value);

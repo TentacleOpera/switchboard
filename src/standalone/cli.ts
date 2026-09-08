@@ -4523,7 +4523,7 @@ async function main() {
         try {
             const { StandaloneHostPathConfigProvider } = require('./hostServices');
             const cfg = new StandaloneHostPathConfigProvider(workspaceRoot);
-            if (cfg.getConfigBoolean('terminal.tmux.enabled', false)) {
+            if (cfg.getConfigBoolean('terminal.tmux.enabled', true)) {
                 const { isTmuxAvailable } = require('./tmuxBackend');
                 if (!(await isTmuxAvailable())) {
                     console.log('[switchboard] tmux dispatch is unavailable on native Windows.');

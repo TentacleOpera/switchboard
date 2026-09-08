@@ -377,8 +377,8 @@
         },
         "switchboard.terminal.tmux.enabled": {
           "type": "boolean",
-          "default": false,
-          "description": "Master gate for the tmux bridge in the standalone host. Off = zero behaviour change: no tmux probe, no tmux verbs, no tmux dispatch targets. Opt-in because a tmux pane is a process the USER started, and dispatching a prompt into a bare shell executes it as shell commands."
+          "default": true,
+          "description": "Seat agent teams into tmux sessions Switchboard owns, so a seat survives a board restart and can be attached from any SSH client. On by default; set false to keep plain PTYs with no tmux involvement."
         },
         "switchboard.terminal.tmux.socketName": {
           "type": "string",

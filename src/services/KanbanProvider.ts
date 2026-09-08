@@ -13487,7 +13487,7 @@ ${FOCUS_DIRECTIVE}`;
                 }
                 const { key, value } = msg;
                 if (typeof key !== 'string') return { success: false, error: 'Key is not a string' };
-                const fullKey = `switchboard.prompts.${key}`;
+                const fullKey = key.startsWith('switchboard.') ? key : `switchboard.prompts.${key}`;
                 if (key === 'selectedRole') {
                     await this._context.workspaceState.update(fullKey, value);
                     return { success: true };
@@ -13530,7 +13530,7 @@ ${FOCUS_DIRECTIVE}`;
                 }
                 const { key } = msg;
                 if (typeof key !== 'string') return { success: false, error: 'Key is not a string' };
-                const fullKey = `switchboard.prompts.${key}`;
+                const fullKey = key.startsWith('switchboard.') ? key : `switchboard.prompts.${key}`;
                 let value: any;
                 if (key === 'selectedRole') {
                     value = this._context.workspaceState.get(fullKey);

@@ -2186,6 +2186,38 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // team's members.
                     payload = { ...payload, delegates: [] };
                     delete payload.startupCommand;
+
+                    // tmux seating for a SINGLE agent. The team path has had this branch
+                    // since Part 4 (`backend === 'tmux'` at the createHeadWithDelegates
+                    // seam); this arm never did, so an agent opened with `+` or FILL GRID
+                    // could never land in tmux no matter what the setting said. That is the
+                    // whole of the gap — dispatch (`triggerAction`) and delivery
+                    // (`sendToTerminal`) already resolve a tmux-backed seat by name, and
+                    // createTmuxHeadWithDelegates already reattaches by name on restart.
+                    //
+                    // A lone agent is a team of one: the delegate work in that function is a
+                    // loop over delegateSpecs, so an empty list creates the session with a
+                    // single named pane and stops.
+                    if (tmuxReady && tmuxFleetService
+                        && configProvider.getConfigBoolean('terminal.tmux.enabled', true)) {
+                        const seated = await createTmuxHeadWithDelegates({
+                            role: payload.role || 'coder',
+                            name: payload.name,
+                            cwd: targetCwd || workspaceRoot,
+                            delegates: [],
+                            // Session name. A seat opened into a saved panel group belongs to
+                            // that group's session; anything else gets the workspace session.
+                            teamName: payload.groupName || payload.teamName || undefined,
+                        }, { db });
+                        if (seated?.success) {
+                            return seated;
+                        }
+                        // Refusal (tmux vanished, bare-shell pane, name clash) is NOT fatal:
+                        // fall through to a PTY rather than failing the create. The toggle is
+                        // an intent, not a guarantee.
+                        log(opts, `[tmux] seat ${payload.name || payload.role} fell back to PTY: ${seated?.error || 'unknown'}`);
+                    }
+
                     const terminal = await ptyFleetService.create(payload.role || 'coder', payload.name, targetCwd, payload.worktreePath, payload.parentInstanceId, undefined, {
                         // HOST-resolved, never from the wire — see CreateOptions.
                         claudeInlineRendering: configProvider.getConfigBoolean('terminal.claudeInlineRendering', true),
@@ -4097,7 +4129,7 @@ Each plan file must include:
     // nothing — the exact failure the PTY purge's await ordering exists to
     // prevent. Gated behind the opt-in setting (default off); a disabled host
     // never probes, never constructs a fleet, and has zero behaviour change.
-    const tmuxEnabled = configProvider.getConfigBoolean('terminal.tmux.enabled', false);
+    const tmuxEnabled = configProvider.getConfigBoolean('terminal.tmux.enabled', true);
     if (tmuxEnabled) {
         tmuxSocket = (() => {
             const socketPath = configProvider.getConfigString('terminal.tmux.socketPath');

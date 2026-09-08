@@ -2222,6 +2222,18 @@
             flex-shrink: 0;
         }
 
+        .tmux-toggle {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            width: 100%;
+            padding: 4px 2px 6px;
+            font-size: 11px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            user-select: none;
+        }
+        .tmux-toggle input { margin: 0; cursor: pointer; }
         .fill-grid-form {
             display: flex; flex-direction: column; gap: 6px;
             padding: 8px; border-bottom: 1px solid var(--border-color);
@@ -2752,6 +2764,14 @@
              Clear All lived in the layout toolbar wearing .btn-layout, where it
              read as a seventh grid option. -->
         <div class="sidebar-ops">
+            <!-- tmux seating. On by default: a session Switchboard creates runs an
+                 agent CLI by construction, so there is no bare shell to dispatch into.
+                 Reads/writes switchboard.terminal.tmux.enabled — an absolute key, which
+                 getSetting/saveSetting only accept since the prefix lock was removed. -->
+            <label class="tmux-toggle" title="Seat agent teams into tmux sessions Switchboard owns, so seats survive a board restart and can be attached from any SSH client">
+                <input type="checkbox" id="tmux-enabled" checked />
+                Enable tmux
+            </label>
             <button type="button" id="btn-start-all-teams" class="secondary-btn is-teal w-full"
                     title="Start every defined team in the current workspace (skips teams already running)" hidden>START ALL TEAMS</button>
             <!-- The two are mutually exclusive, toggled by updateTeamStartButtons():

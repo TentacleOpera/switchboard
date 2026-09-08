@@ -618,6 +618,24 @@
         if (btnClearAll) {
             btnClearAll.addEventListener('click', () => withClearingFeedback(btnClearAll, clearAllTerminals));
         }
+        // tmux seating toggle. The key is ABSOLUTE (`switchboard.terminal.*`), not a
+        // `switchboard.prompts.*` panel setting — getSetting/saveSetting pass a key
+        // that already carries the namespace straight through. Default true: it must
+        // match the contributed default in package.json and the two host read sites
+        // (bootstrap.ts, cli.ts), or the checkbox lies about the state on first load.
+        const tmuxToggle = document.getElementById('tmux-enabled');
+        if (tmuxToggle) {
+            const TMUX_KEY = 'switchboard.terminal.tmux.enabled';
+            loadSetting(TMUX_KEY, true).then((v) => {
+                tmuxToggle.checked = (v !== false && String(v) !== 'false');
+            }).catch(() => { /* leave the default-checked state */ });
+            tmuxToggle.addEventListener('change', () => {
+                // Takes effect for teams started after this point: the fleet service is
+                // constructed at boot, so flipping it on does not retro-seat running PTYs.
+                saveSetting(TMUX_KEY, tmuxToggle.checked);
+            });
+        }
+
 
         const btnOpenAll = document.getElementById('btn-open-all');
         if (btnOpenAll) {

@@ -1,34 +1,37 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="-32 -28 64 64" width="64" height="64" shape-rendering="crispEdges">
-  <!-- Source: agent-fleet-air-combat-detailed.svg#afc-jet -->
-  <g fill="currentColor">
-    <rect x="-4" y="-16" width="8" height="8"/>
-    <rect x="-8" y="-8" width="16" height="4"/>
-    <rect x="-12" y="-8" width="4" height="4"/>
-    <rect x="8" y="-8" width="4" height="4"/>
-    <rect x="-8" y="-4" width="16" height="4"/>
-    <rect x="-16" y="-4" width="4" height="4"/>
-    <rect x="12" y="-4" width="4" height="4"/>
-    <rect x="-8" y="0" width="16" height="4"/>
-    <rect x="-20" y="0" width="4" height="4"/>
-    <rect x="16" y="0" width="4" height="4"/>
-    <rect x="-12" y="4" width="24" height="4"/>
-    <rect x="-24" y="4" width="4" height="4"/>
-    <rect x="20" y="4" width="4" height="4"/>
-    <rect x="-12" y="8" width="24" height="4"/>
-    <rect x="-28" y="8" width="4" height="4"/>
-    <rect x="24" y="8" width="4" height="4"/>
-    <rect x="-16" y="12" width="32" height="4"/>
-    <rect x="-24" y="12" width="4" height="4"/>
-    <rect x="20" y="12" width="4" height="4"/>
-    <rect x="-12" y="16" width="24" height="4"/>
-    <rect x="-16" y="16" width="4" height="4"/>
-    <rect x="12" y="16" width="4" height="4"/>
-    <rect x="-20" y="16" width="4" height="4"/>
-    <rect x="16" y="16" width="4" height="4"/>
-    <rect x="-8" y="20" width="16" height="4"/>
-    <rect x="-12" y="20" width="4" height="4"/>
-    <rect x="8" y="20" width="4" height="4"/>
-    <rect x="-16" y="20" width="4" height="4"/>
-    <rect x="12" y="20" width="4" height="4"/>
-  </g>
+  <title>Jet</title>
+  <!-- The afc-jet silhouette from agent-fleet-air-combat-detailed.svg, all three
+       shading layers flattened. Painted with an explicit opaque fill, NOT
+       currentColor: this file is consumed as a CSS mask-image (.strip-glyph sets
+       background-color and masks with it), and currentColor in a mask has no
+       context to resolve against, so it masked to nothing. -->
+  <rect x="-4" y="-16" width="8" height="4" fill="#000"/>
+  <rect x="-4" y="-12" width="8" height="4" fill="#000"/>
+  <rect x="-4" y="-8" width="8" height="4" fill="#000"/>
+  <rect x="-8" y="-4" width="4" height="4" fill="#000"/>
+  <rect x="-4" y="-4" width="8" height="4" fill="#000"/>
+  <rect x="4" y="-4" width="4" height="4" fill="#000"/>
+  <rect x="-12" y="0" width="4" height="4" fill="#000"/>
+  <rect x="-8" y="0" width="16" height="4" fill="#000"/>
+  <rect x="8" y="0" width="4" height="4" fill="#000"/>
+  <rect x="-16" y="4" width="4" height="4" fill="#000"/>
+  <rect x="-12" y="4" width="24" height="4" fill="#000"/>
+  <rect x="12" y="4" width="4" height="4" fill="#000"/>
+  <rect x="-20" y="8" width="4" height="4" fill="#000"/>
+  <rect x="-16" y="8" width="4" height="4" fill="#000"/>
+  <rect x="-12" y="8" width="8" height="4" fill="#000"/>
+  <rect x="-4" y="8" width="8" height="4" fill="#000"/>
+  <rect x="4" y="8" width="8" height="4" fill="#000"/>
+  <rect x="12" y="8" width="4" height="4" fill="#000"/>
+  <rect x="16" y="8" width="4" height="4" fill="#000"/>
+  <rect x="-28" y="12" width="8" height="4" fill="#000"/>
+  <rect x="-20" y="12" width="8" height="4" fill="#000"/>
+  <rect x="-4" y="12" width="8" height="4" fill="#000"/>
+  <rect x="12" y="12" width="8" height="4" fill="#000"/>
+  <rect x="20" y="12" width="8" height="4" fill="#000"/>
+  <rect x="-8" y="16" width="4" height="4" fill="#000"/>
+  <rect x="-4" y="16" width="8" height="4" fill="#000"/>
+  <rect x="4" y="16" width="4" height="4" fill="#000"/>
+  <rect x="-12" y="20" width="4" height="4" fill="#000"/>
+  <rect x="8" y="20" width="4" height="4" fill="#000"/>
 </svg>

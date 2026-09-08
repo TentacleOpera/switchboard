@@ -618,17 +618,19 @@
             // and keeps its own brand colours; the jet is masked and takes the
             // accent. The head's CLI brand mark is still NOT auto-used as a team
             // mark — a team only shows a brand when someone chose it.
-            if (team.iconUri) {
-                const icon = document.createElement('img');
-                icon.className = 'strip-term-icon strip-team-icon pixel-art';
-                icon.src = team.iconUri;
-                icon.alt = '';
-                btn.appendChild(icon);
-            } else {
-                const glyph = buildMaskedGlyph('/static/icons/nav-jet.svg');
-                glyph.classList.add('strip-team-glyph');
-                btn.appendChild(glyph);
-            }
+            // The jet is drawn as an <img>, NOT a CSS-masked glyph. A mask keeps only
+            // the alpha channel, which flattens the afc-jet's three shading layers into
+            // one silhouette — that is why the rail read as a blob rather than a plane.
+            // team-<headRole>.svg is the same aircraft from the fleet-command art, with
+            // its body/highlight/shadow intact and a colour per role.
+            const ROLE_JETS = ['lead', 'coder', 'planner', 'reviewer', 'intern'];
+            const icon = document.createElement('img');
+            icon.className = 'strip-term-icon strip-team-icon pixel-art';
+            const role = String(team.headRole || '').toLowerCase();
+            icon.src = team.iconUri
+                || '/static/icons/team-' + (ROLE_JETS.indexOf(role) >= 0 ? role : 'lead') + '.svg';
+            icon.alt = '';
+            btn.appendChild(icon);
 
             // Decorative: the button's aria-label already carries the full team
             // name, so a screen reader must not hear the letter twice.
