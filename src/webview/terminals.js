@@ -2778,6 +2778,7 @@
         trae: 'trae',
         opencode: 'opencode',
         zed: 'zed',
+        ollama: 'ollama',
     };
 
     function brandIconForCliLabel(cliLabel) {
@@ -2804,6 +2805,7 @@
         if (key.startsWith('trae')) { return 'trae'; }
         if (key.startsWith('opencode')) { return 'opencode'; }
         if (key.startsWith('zed')) { return 'zed'; }
+        if (key.startsWith('ollama')) { return 'ollama'; }
         return 'default';
     }
 
@@ -2827,6 +2829,7 @@
             trae: ds.brandIconTrae,
             opencode: ds.brandIconOpencode,
             zed: ds.brandIconZed,
+            ollama: ds.brandIconOllama,
             default: ds.brandIconDefault,
         };
         return map[key] || '';

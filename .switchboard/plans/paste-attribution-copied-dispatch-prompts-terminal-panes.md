@@ -1,5 +1,7 @@
 # Attribute Copied Dispatch Prompts to the Terminal Pane They Were Pasted Into
 
+kanbanColumn: CREATED
+
 ## Goal
 
 Make the Terminals panel's completion status work for the Copy Prompt path, not just direct-to-terminal dispatch, by identifying the pane a copied prompt landed in from the pasted text itself.

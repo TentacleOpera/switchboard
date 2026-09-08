@@ -371,16 +371,50 @@ function post(port, pathname, body) {
             /dataset\.ptyHostOrigin/.test(js),
             'PTY_HOST_ORIGIN must read the serve-time data-pty-host-origin body attribute.'
         );
-        // The standalone host injects nothing and must stay byte-identical, so the
-        // location fallback has to survive.
+        // The standalone host injects NOTHING and falls through to location.host,
+        // which is the board's own origin. That fallback is load-bearing, not a
+        // leftover: the board is the listener bound to the tailnet, so terminals
+        // must arrive on it or they are unreachable from any other machine.
         assert.ok(
             /__SB_PTY_HOST_ORIGIN__[\s\S]{0,160}location\.host/.test(js),
-            'the location.host fallback must remain so the standalone host is unchanged.'
+            'the location.host fallback must remain — it is how standalone reaches terminals over the tailnet.'
         );
+
+        // The extension may inject a direct origin because it is always local.
+        // This is an EXTENSION-ONLY affordance and explicitly not the pattern to
+        // copy: 127.0.0.1 is correct on the serving machine and wrong everywhere
+        // else. Standalone deliberately does not do this (asserted below).
         const src = fs.readFileSync(path.join(REPO_ROOT, 'src', 'services', 'TaskViewerProvider.ts'), 'utf8');
         assert.ok(
-            /data-pty-host-origin="ws:\/\/127\.0\.0\.1:\$\{this\._ptyHostPort\}"/.test(src),
-            'the extension host must inject data-pty-host-origin alongside data-terminal-token at serve time.'
+            /data-pty-host-origin="ws:\/\/127\.0\.0\.1:\$\{(?:this\._ptyHostPort|resolvedPtyHostPort)\}"/.test(src),
+            'the extension host injects data-pty-host-origin at serve time (extension-only; see the standalone assertions).'
+        );
+
+        // ── The rule the original three assertions did not encode ──────────────
+        // Regression guard for 2026-09-07: the fleet moved into the Go PTY host
+        // child, which binds loopback only. Standalone injected no origin (correct)
+        // but the board no longer served /ws/terminal either, so the fallback
+        // pointed at a path nothing answered and every pane sat on `connecting`
+        // forever, with nothing logged. Both halves are asserted here because
+        // either one alone reproduces the outage.
+        const api = fs.readFileSync(path.join(REPO_ROOT, 'src', 'services', 'LocalApiServer.ts'), 'utf8');
+        assert.ok(
+            /getPtyHostPort\?:\s*\(\)\s*=>\s*number/.test(api),
+            'LocalApiServer must expose a getPtyHostPort option so it can reach an out-of-process PTY host.'
+        );
+        assert.ok(
+            /'\/ws\/terminal'[\s\S]{0,400}_proxyTerminalUpgrade/.test(api),
+            'LocalApiServer must proxy /ws/terminal to the PTY host so terminals share the board origin (and its tailnet listener).'
+        );
+
+        const boot = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'bootstrap.ts'), 'utf8');
+        assert.ok(
+            /getPtyHostPort:\s*\(\)\s*=>/.test(boot),
+            'the standalone host must supply getPtyHostPort, or the board cannot proxy the terminal socket.'
+        );
+        assert.ok(
+            !/data-pty-host-origin/.test(boot),
+            'the standalone host must NOT inject data-pty-host-origin — a loopback address breaks every remote viewer. It uses the board proxy.'
         );
     });
 

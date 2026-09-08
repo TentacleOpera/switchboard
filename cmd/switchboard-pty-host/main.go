@@ -56,16 +56,16 @@ type outputEvent struct {
 }
 
 type fleet struct {
-	root      string
-	token     string
-	mu        sync.RWMutex
-	terminals map[string]*terminal
-	clients   map[string]map[*websocket.Conn]struct{}
-	rings     map[string][]outputEvent
-	nextSeq   map[string]uint64
-	logMu     sync.Mutex
-	logDir    string
-	logState  map[string]*sessionLog
+	root           string
+	token          string
+	mu             sync.RWMutex
+	terminals      map[string]*terminal
+	clients        map[string]map[*websocket.Conn]struct{}
+	rings          map[string][]outputEvent
+	nextSeq        map[string]uint64
+	logMu          sync.Mutex
+	logDir         string
+	logState       map[string]*sessionLog
 	controllerSeat map[string]any
 }
 
@@ -173,7 +173,7 @@ func (f *fleet) create(payload map[string]any) (map[string]any, error) {
 		startTime: now.UTC().Format(time.RFC3339Nano), lastDataAt: now.UnixMilli(),
 		hidden: boolField(payload, "hidden"), claudeInlineRendering: claudeInline,
 		isTeamMember: boolField(payload, "_isTeamMember"),
-		listeners: make(map[chan string]struct{}),
+		listeners:    make(map[chan string]struct{}),
 	}
 	f.terminals[name] = t
 	f.clients[name] = make(map[*websocket.Conn]struct{})
@@ -239,7 +239,11 @@ func (f *fleet) publish(name, data string) {
 	}
 	f.mu.Unlock()
 	for _, client := range clients {
-		if err := client.WriteJSON(map[string]any{"t": "output", "seq": event.Seq, "data": event.Data}); err != nil {
+		// Binary frames, matching terminalWsGateway.ts — see encodeOutputFrame and
+		// the note in ws.go. The client's binary branch is the one that tracks seq,
+		// handles the replay boundary and suppresses answerback; the JSON `out`
+		// path is a legacy fallback that does none of that.
+		if err := client.WriteMessage(websocket.BinaryMessage, encodeOutputFrame(event.Seq, event.Data)); err != nil {
 			_ = client.Close()
 			f.removeClient(name, client)
 		}

@@ -86,7 +86,14 @@ function heldCard(extra) {
     return Object.assign({
         planId: 'plan-1',
         planFile: '/tmp/plan-1.md',
-        dispatchedAt: '2026-09-07T03:00:00.000Z',
+        // T0 MINUS fifteen minutes. This used to be exactly T0 — the card was
+        // "dispatched" at the same instant the sweep ran, so every assertion
+        // below described a reminder fired at a seat that had held its card for
+        // zero seconds. That is the reported bug (8 seconds, in the live seat
+        // log) written into the fixture as the expected case. A card the seat has
+        // genuinely held is the only scenario in which "you have gone idle
+        // holding card X" is a true sentence.
+        dispatchedAt: new Date(1788750000000 - 900000).toISOString(),
         dispatchedTerminal: MEMBER,
         completedAt: null,
         kanbanColumn: 'CODER CODED',
@@ -112,6 +119,51 @@ const T0 = 1788750000000;
 const quiet = (name, ageMs) => ({ friendlyName: name, lastDataAt: T0 - ageMs, status: 'active' });
 
 // ── 1. The core delivery ────────────────────────────────────────────────
+
+// The reminder must describe POST-DISPATCH silence. Measured failure
+// (2026-09-08, seat log `Coding-coder-2`): a card dispatched at 00:10:03Z drew a
+// reminder at 00:10:11Z — eight seconds, 26k/200k context, before the coder had
+// done anything, because gate 5 compared a CACHED pre-dispatch `lastDataAt`
+// against the silence window and read "silent for hours".
+
+testAsync('a freshly dispatched seat is NOT reminded, however stale its lastDataAt', async () => {
+    // The seat sat idle for an hour waiting for work, then was handed a card one
+    // second ago. `lastDataAt` is an hour old and the cache has not refreshed.
+    const sent = await sweep(makeEngine(), {
+        folder: '/ws',
+        board: [heldCard({ dispatchedAt: new Date(T0 - 1000).toISOString() })],
+        groups: [teamGroup()],
+        liveness: [quiet(MEMBER, 3600000), quiet(HEAD, 1000)], nowMs: T0,
+    });
+    assert.strictEqual(sent.length, 0,
+        'a card held for one second cannot have gone idle — the silence predates the dispatch');
+});
+
+testAsync('a seat that has produced no output since dispatch is NOT reminded', async () => {
+    // Card held well past the silence window, but every byte this seat ever
+    // produced predates the dispatch: it is booting or dead, not idle-after-work.
+    // The dispatch-stall sweep owns that case.
+    const sent = await sweep(makeEngine(), {
+        folder: '/ws',
+        board: [heldCard({ dispatchedAt: new Date(T0 - (SILENCE_MS * 4)).toISOString() })],
+        groups: [teamGroup()],
+        liveness: [quiet(MEMBER, SILENCE_MS * 8), quiet(HEAD, 1000)], nowMs: T0,
+    });
+    assert.strictEqual(sent.length, 0,
+        'no output since dispatch is not evidence of a finished turn');
+});
+
+testAsync('a seat that worked and then went quiet IS reminded', async () => {
+    // The case the reminder exists for: dispatched long ago, produced output
+    // after the dispatch, and has now been silent for a full window.
+    const sent = await sweep(makeEngine(), {
+        folder: '/ws',
+        board: [heldCard({ dispatchedAt: new Date(T0 - (SILENCE_MS * 10)).toISOString() })],
+        groups: [teamGroup()],
+        liveness: [quiet(MEMBER, SILENCE_MS + 1000), quiet(HEAD, 1000)], nowMs: T0,
+    });
+    assert.strictEqual(sent.length, 1, 'post-dispatch output then silence is the real trigger');
+});
 
 testAsync('a member quiet past turnEndSilenceMs holding an uncompleted card is reminded', async () => {
     const sent = await sweep(makeEngine(), {
@@ -236,7 +288,10 @@ testAsync('a NEW dispatchedAt re-arms the budget — new work, the one signal a 
     assert.strictEqual(sends, 2, 'budget spent on the first card');
     // A second card dispatched to the same seat.
     const afterRedispatch = await sweep(engine, {
-        folder: '/ws', board: [heldCard({ planId: 'plan-2', dispatchedAt: '2026-09-07T09:00:00.000Z' })], groups,
+        // Relative to the advanced `now`, not a fixed future timestamp: the
+        // re-arm keys on the dispatchedAt STRING (so it only has to differ), but
+        // the post-dispatch-silence gate needs it to be genuinely in the past.
+        folder: '/ws', board: [heldCard({ planId: 'plan-2', dispatchedAt: new Date(now - 900000).toISOString() })], groups,
         liveness: [{ friendlyName: MEMBER, lastDataAt: now - SILENCE_MS - 1000, status: 'active' }],
         nowMs: now,
     });
@@ -295,15 +350,34 @@ testAsync('an external-headed member gets the report-file route, not the POST re
     assert.ok(!/done --from/.test(sent[0].body), 'an external-head member must not be given the POST recipe');
 });
 
-// ── 4. Both hosts honour bareDelivery ───────────────────────────────────
+// ── 4. Both hosts honour bareDelivery (SEAT BLOCK ONLY) ─────────────────
 
-test('both composition roots suppress the standing-orders block on bareDelivery', () => {
+/**
+ * REVISED. This gate used to assert that `bareDelivery` suppressed the
+ * STANDING-ORDERS block in both hosts. That assertion contradicted
+ * `seat-safeguards-fleet-prompt-path.test.js`'s "notifyTurnEnd must NOT pass
+ * standingOrders: false — the recipient acts on this notification and needs its
+ * standing orders", so one of the two was red at HEAD no matter what the code
+ * did. The orders rule settles it: standing orders ride EVERY prompt delivery
+ * and the only gate is the caller's explicit opt-out, so `bareDelivery` now
+ * suppresses the seat block and nothing else.
+ *
+ * What `bareDelivery` still buys the member reminder is the SHORT BODY — a
+ * pointer instead of the full recipe — which is asserted by the body-composition
+ * tests above, not here.
+ */
+test('both composition roots keep bareDelivery to the seat block, not the orders', () => {
     const tvp = fs.readFileSync(path.join(__dirname, '..', 'services', 'TaskViewerProvider.ts'), 'utf8');
     const boot = fs.readFileSync(path.join(__dirname, '..', 'standalone', 'bootstrap.ts'), 'utf8');
-    assert.ok(/info\.bareDelivery\s*\?\s*\{\s*standingOrders:\s*false/.test(tvp),
-        'TaskViewerProvider.notifyTurnEnd must set standingOrders: false when bareDelivery is set');
-    assert.ok(/deliverPrompt\([^)]*!info\.bareDelivery/.test(boot),
-        'bootstrap.handleTurnEndNotify must pass !info.bareDelivery as the standingOrders argument');
+    assert.ok(!/info\.bareDelivery\s*\?\s*\{\s*standingOrders:\s*false/.test(tvp),
+        'TaskViewerProvider.notifyTurnEnd must NOT map bareDelivery to an orders opt-out');
+    assert.ok(!/deliverPrompt\([^)]*!info\.bareDelivery/.test(boot),
+        'bootstrap.handleTurnEndNotify must NOT pass !info.bareDelivery as the standingOrders argument');
+    // The seat-block suppression is the part that survives, in both hosts.
+    assert.ok(/seatBlock: false/.test(tvp),
+        'TaskViewerProvider.notifyTurnEnd must still opt out of the seat block');
+    assert.ok(/deliverPrompt\(handle, message, \{ clearBeforePrompt: false \}, true, false\)/.test(boot),
+        'bootstrap turn-end must pass applyOrders=true, applySeatBlock=false');
 });
 
 test('every production wireSpawnedTeam call site passes workspaceRoot', () => {

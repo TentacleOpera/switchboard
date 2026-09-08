@@ -579,7 +579,31 @@ export class GoPtyFleetProjection {
                 socket.send(JSON.stringify({ t: 'resize', cols: pendingResize.cols, rows: pendingResize.rows }));
             }
         });
-        socket.on('message', (raw) => {
+        socket.on('message', (raw, isBinary) => {
+            // Terminal output arrives as a BINARY frame — 4-byte big-endian seq
+            // followed by UTF-8 (`encodeOutputFrame`, cmd/switchboard-pty-host/ws.go
+            // and main.go's publish). Only `hello` and `exit` are JSON.
+            //
+            // This handler used to parse EVERY frame as JSON and `return` on failure,
+            // so once the host moved output onto binary frames every chunk was
+            // silently discarded here. That froze `lastDataAt`, and the freeze is not
+            // inert: the Go host stamps `lastDataAt` at spawn, so the value stays
+            // POSITIVE while never advancing. Every nudge site guards with
+            // `lastDataAt <= 0 || now - lastDataAt < turnEndSilenceMs` — a frozen
+            // positive stamp defeats the `<= 0` fail-safe and reads as "silent for
+            // hours", the most confident possible wrong answer, so stall nudges fire
+            // into actively working seats. `recordLiveness` also records 0 forever,
+            // collapsing the activity-light basis to bare `dispatched_at` and blanking
+            // a working card at `timeoutMs`.
+            //
+            // Decode binary first; fall back to the JSON arms for control frames.
+            if (isBinary && Buffer.isBuffer(raw) && raw.length >= 4) {
+                handle.lastDataAt = Date.now();
+                handle.hasProducedOutput = true;
+                const chunk = raw.subarray(4).toString('utf8');
+                for (const cb of dataListeners) { cb(chunk); }
+                return;
+            }
             let message: { t?: string; data?: string; code?: number };
             try { message = JSON.parse(String(raw)); } catch { return; }
             if ((message.t === 'output' || message.t === 'replay') && typeof message.data === 'string') {

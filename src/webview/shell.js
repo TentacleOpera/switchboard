@@ -605,10 +605,19 @@
             btn.setAttribute('aria-label', team.name);
             btn.dataset.tooltip = team.name;
 
-            // Two-deep icon fallback: team icon → jet. The rail is the primary
-            // navigation surface and must never render an empty button. The
-            // head's CLI brand mark is NOT a valid fallback for a team button —
-            // it communicates the wrong identity.
+            // ONE mark for every team. At 22px, four different pictures read as
+            // noise rather than identity, so the rail uses the jet for all of
+            // them and distinguishes teams by a single-letter initial in the
+            // corner. The jet is a CSS-masked glyph painted with var(--accent),
+            // so it follows the theme for free — cyan (#00f0ff) by default,
+            // terracotta (#D97757) under theme-claudify.
+            //
+            // The jet is the DEFAULT, not the only option: the picker offers the
+            // jet plus the CLI brand icons and nothing else, so an explicit pick
+            // is always one of those two things. A brand icon renders as an <img>
+            // and keeps its own brand colours; the jet is masked and takes the
+            // accent. The head's CLI brand mark is still NOT auto-used as a team
+            // mark — a team only shows a brand when someone chose it.
             if (team.iconUri) {
                 const icon = document.createElement('img');
                 icon.className = 'strip-term-icon strip-team-icon pixel-art';
@@ -620,6 +629,14 @@
                 glyph.classList.add('strip-team-glyph');
                 btn.appendChild(glyph);
             }
+
+            // Decorative: the button's aria-label already carries the full team
+            // name, so a screen reader must not hear the letter twice.
+            const initial = document.createElement('span');
+            initial.className = 'strip-team-initial';
+            initial.textContent = String(team.name || '?').trim().charAt(0).toUpperCase();
+            initial.setAttribute('aria-hidden', 'true');
+            btn.appendChild(initial);
 
             btn.addEventListener('click', async () => {
                 if (team.running && !team.groupId && team.head) {

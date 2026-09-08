@@ -142,6 +142,38 @@ if (!hasDispatch) {
 
 - **Logic:** apply the same `[0-9a-fA-F-]{8,}` correction to `extractPastedDispatchIdentity` (function at `:7452`, regex at `:7463`). The paste path has been discarding real plan ids and surviving on the file fallback; this is a defect in shipped code, not collateral.
 
+### `LocalApiServer` — a discarded completion must not report success
+
+**Observed 2026-09-07, and this is what made the bug invisible for a day.** A coder on a live team ran its completion route and got back:
+
+```json
+{ "success": true, "status": 200, "exitCode": 0,
+  "result": { "success": true, "dispatched": null,
+              "reason": "duplicate", "cleared": false, "popped": false } }
+```
+
+The seat held no dispatch record — `ptyListTerminals` reported `planId=None` for all four seats and the database had **zero** rows with `dispatched_terminal LIKE 'Coding%'`. So `queue/done` found nothing to complete, classified the post as a duplicate, and returned **success with exit code 0**. Nothing popped, nothing cleared, and the relay to the head sits behind that short-circuit, so the lead was never told.
+
+From the coder's side the completion succeeded. It said so in its own words — *"per member orders step 1 applied — the completion binary was the exclusive route"* — and when the lead later nudged it, it answered conversationally, because from where it stood the work was already reported. The operator saw a team that had simply stopped talking to each other, with no error anywhere: not in the CLI, not in the server log, not on the board.
+
+**`duplicate` conflates two different states.** One is a genuine re-post of a completion already recorded — harmless, and correctly idempotent. The other is a completion for work the board never knew was dispatched, which means the registration this plan exists to fix did not happen. The first deserves `success`. The second is a failed completion wearing a success code, and it is precisely the fallback-indistinguishable-from-a-real-value failure this repository keeps re-learning.
+
+So: distinguish them.
+
+- **No dispatch record for the seat at all** → not a duplicate. Report failure, with a reason naming the seat and saying the work was never registered. A non-zero exit from the static client, so the agent sees it and can say so.
+- **A record exists and is already completed** → genuinely idempotent; keep today's success.
+
+**This is worth doing even though the rest of this plan removes the cause.** Registration will still fail — a renamed seat, a prompt the parser cannot read, a future delivery path nobody wired. When it does, the operator must find out from the failure rather than from a team that has quietly gone silent for an afternoon.
+
+### Retire the workarounds this bug grew, including any added while it was open
+
+Registration-by-chore leaves instructions behind, and they outlive their cause because nothing marks them as temporary.
+
+- **`.agents/skills/terminal-coder-dispatch/SKILL.md` §3.5** exists solely to tell an agent to register before sending. Once the delivery layer registers, that section is a chore with no reason, and every lead pays for it in prompt budget on every dispatch. Delete it with this change, not later.
+- **Check the live standing orders for a `"dispatch":{...}` clause before closing this card.** A stopgap may have been added to a team-head order while the bug was open — attaching `{"planId":"<id>","role":"coder"}` to the lead's `ptySendPrompt` call, which is the shape `KanbanProvider.ts:5836`/`:5900` already emit in their curl recipes. It is a correct workaround and a wrong permanent state: it is precisely the caller-must-remember contract this plan replaces. Remove it once the parser lands.
+
+**The pattern is why this matters.** The seats that exposed this bug are still running `LEGACY_CONTEXT_AWARE_COMPLETION_ORDER_BODY_V2` (`teamWiring.ts:244`) — a body the code marks superseded and expects to heal on the next prompt, months after it was replaced. An instruction added to work around a defect will do the same unless its removal is part of the fix.
+
 ### `src/test/terminal-plan-attribution-contract.test.js` — extend
 
 - **Logic:** add —
@@ -156,6 +188,11 @@ if (!hasDispatch) {
 ## Verification Plan
 
 ### Automated Tests
+
+- A `queue/done` from a seat with **no** dispatch record returns a **failure**, with a reason naming the seat, and the static client exits non-zero. Assert specifically that it does **not** return `reason: "duplicate"` with `success: true` — that exact response is the bug.
+- A second `queue/done` for a card already completed **does** return success and is a no-op. The two cases must not be collapsed back together.
+- Neither case relays to the head twice.
+- No live standing order contains a `"dispatch":{` clause, and `terminal-coder-dispatch/SKILL.md` has no §3.5 registration chore. Both are checks for leftovers, not for behaviour — assert the absence.
 
 1. `npm run lint`.
 2. The six new cases in `terminal-plan-attribution-contract.test.js`; all existing cases pass unchanged.

@@ -8,6 +8,10 @@
 
 Add a text generator to the Connections tab that produces a ready-to-paste description of this workspace's routes to Switchboard state. The user copies it and pastes it into their cloud interface's add-skill box. No file emission, no mirroring, no committed artefact.
 
+> **Superseded:** No file emission, no mirroring, no committed artefact.
+> **Reason:** The Proposed Changes section (correction to an earlier draft) established that the generator already exists as `SparkContextExporter.ts`, which writes to `.switchboard/switchboard-spark.md` via `fs.writeFileSync` (line 276). The file is in `.switchboard/` (gitignored), so it is not committed, but it IS a file emission — the user uploads the file to Gemini Spark or Claude Cowork. The Goal and Verification Plan still described the pre-correction clipboard-only design.
+> **Replaced with:** The output is a file in `.switchboard/switchboard-spark.md` (gitignored, not committed) that the user uploads to their cloud interface. The extension's involvement ends at the file; the user uploads it deliberately. Staleness is handled by the user regenerating and re-uploading, same as the existing Spark Context flow.
+
 ### Problem Analysis
 
 A cloud agent has no window into the local machine. It cannot read extension settings, cannot see which trackers are configured, and cannot know about channels the user built — a separate git plans repo, a wiki, a Linear or Notion workspace wired to this board. The user knows all of it and has no way to hand it over.
@@ -35,6 +39,10 @@ Channel configuration lives where agents cannot read it, and the only agent-faci
 ### Non-goals
 
 - Emitting a skill file, mirroring it, or committing it. An earlier draft of this plan proposed exactly that, reusing `AgentSkillExporter` and the mirror's dynamic `.agents/skills/` scan. It works, but it is unnecessary machinery for a clipboard problem and it reintroduces a silently-ageing artefact in the repo.
+
+> **Superseded:** "unnecessary machinery for a clipboard problem"
+> **Reason:** The Proposed Changes section corrected this: the generator already exists as `SparkContextExporter.ts`, which writes to `.switchboard/switchboard-spark.md`. The output is a file the user uploads, not a clipboard payload. The non-goal of not committing/mirroring still holds (the file is gitignored), but the "clipboard problem" framing is stale.
+> **Replaced with:** The output is a file in `.switchboard/` (gitignored, not committed, not mirrored to `.agents/skills/`). The non-goal of not committing or mirroring to the repo still holds.
 - Auto-detecting reachability. The extension cannot know whether a future cloud session will authenticate to Linear.
 - Resident text in `CLAUDE.md` / `AGENTS.md`.
 - Replacing per-skill preconditions. Shipped capabilities declare their own (see the paired plan); this covers only what Switchboard does not ship.
@@ -94,9 +102,13 @@ Yes — one decision.
 
 **"Generated text will go stale."** It will, and visibly: the user pasted it, so the user knows to regenerate. That is strictly better than a committed file whose age nobody notices, which is the failure mode this codebase has hit four times already.
 
+**Risk Summary:** Key risks: (1) the Goal's "no file emission" contradicted the extend-the-exporter approach — resolved by the Superseded callout; the output is a gitignored file the user uploads, not a clipboard payload; (2) the existing omit-list pattern names unavailable capabilities as "do not attempt" — a negative assertion, not a check-and-fallback; the read-state channels section must use the check-and-fallback shape, not replicate the omit-list's "don't try this" pattern; (3) line numbers in the plan are stale (~16-20 lines off) — coders must locate sections by heading, not line number. Mitigations: Superseded callout reconciles the Goal; the Complexity Audit already flags the check-and-fallback phrasing as the deliverable; the line-number note directs coders to headings.
+
 ## Proposed Changes
 
-**Correction to an earlier draft of this plan: the generator already exists.** This is an extension of `SparkContextExporter.ts` (268 lines), already wired to the **"Re-generate Spark Context Skill"** button in the Connections tab (`connections.html:507`), whose stated purpose is a single file the user uploads or pastes into Gemini Spark or Claude Cowork as persistent context (`:127-128`). An earlier draft proposed building a new Connections-tab generator modelled on `renderAgentApiModal` in `tickets.js`. That was wrong: it would have built a second generator beside a shipped one, in the same tab, for the same job.
+**Correction to an earlier draft of this plan: the generator already exists.** This is an extension of `SparkContextExporter.ts` (285 lines), already wired to the **"Re-generate Spark Context Skill"** button in the Connections tab (`connections.html:501`), whose stated purpose is a single file the user uploads or pastes into Gemini Spark or Claude Cowork as persistent context (`:127-128`). An earlier draft proposed building a new Connections-tab generator modelled on `renderAgentApiModal` in `tickets.js`. That was wrong: it would have built a second generator beside a shipped one, in the same tab, for the same job.
+
+> **Note on line numbers:** The line references in the Proposed Changes below (`:198-205`, `:210-215`, `:216-220`, `:221-228`, `:229`, `:135-151`) were accurate when the plan was written against a 268-line file. The file has since grown to 285 lines, shifting all references by approximately 16-20 lines. Treat line numbers as approximate; locate sections by their content headings ("Write-Back Convention & Plan File Conventions", "Scheduled Jobs & Instruction Inbox Protocol", "Exclusions & Overrides") rather than by line number.
 
 1. **Extend `SparkContextExporter`, do not add a surface.** The paste-into-a-cloud-interface mechanic is shipped; this plan adds a section to what it emits.
 2. **The one-directional gap is the whole finding.** Everything the exporter emits today is **write-back**: write a plan file (`:198-205`), write a claim marker to the instruction inbox (`:210-215`), write a standing job (`:216-220`), write a declared board-move file (`:221-228`), write a run log (`:229`). There is not one line telling a remote agent how to **read** current state. That is exactly the reported symptom — agents asking how plans come to exist on the board, or whether they must import them. The exporter taught them to write and never to read.
@@ -121,16 +133,16 @@ None.
 
 - The generated text contains no credential, token, or API key.
 - Every entry in the output contains a verification step and a fallback; no entry asserts availability.
-- Nothing is written to the repository — the feature's only output is a clipboard payload.
+- Nothing is written to the repository (`.agents/`, `.claude/`, or committed files) — the feature's only output is the existing `.switchboard/switchboard-spark.md` file (gitignored, not committed), extended with a read-state channels section.
 
 ### Automated Tests
 
 - **No secrets:** compose the text with a tracker configured and a token present; assert the output contains neither the token nor any `switchboard.apiToken` value.
 - **Check-shape:** assert every generated and user-supplied entry contains a verification clause and a fallback clause. A generator run that can produce a bare assertion fails.
-- **No repo writes:** assert the feature creates no file under `.agents/`, `.switchboard/`, or `.claude/`.
-- **Empty means empty:** with no tracker configured and no user entries, assert the section offers nothing to copy rather than an empty template.
+- **No repo writes:** assert the feature creates no file under `.agents/`, `.claude/`, or any committed path. The only file written is `.switchboard/switchboard-spark.md` (the existing exporter output, gitignored).
+- **Empty means empty:** with no tracker configured and no user entries, assert the read-state channels section offers nothing to copy rather than an empty template.
 - **No duplication:** assert the output names no capability that a shipped skill already declares a precondition for.
-- **Clipboard path:** assert the Copy button writes the composed text and gives feedback, matching the Agent API modal's behaviour.
+- **File generation path:** assert the "Re-generate Spark Context Skill" button produces the file with the read-state channels section included, matching the existing exporter's behaviour.
 - **Paste usability:** take a generated block into a bare clone with no extension and no tracker auth, and assert an agent following a failing check reaches the stated fallback rather than reporting a fault.
 
 ## Outstanding Questions

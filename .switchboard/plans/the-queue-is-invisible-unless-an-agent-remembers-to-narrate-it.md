@@ -11,10 +11,27 @@
 
 ## Goal
 
-Have Switchboard itself post dispatch and completion notifications as comments on the plan's
-synced card, mentioning the operator, so the queue is legible from a phone without any agent
-being asked to narrate it — and so a suspicious silence is visible as a silence rather than as
-an absence of information.
+Have Switchboard itself post dispatch and completion notifications as **flat top-level comments**
+on the plan's synced card, mentioning the operator on completion, so the queue is legible from a
+phone without any agent being asked to narrate it — and so a suspicious silence is visible as a
+silence rather than as an absence of information.
+
+**Scope: Linear for push, ClickUp for work-history comments only.** Notion is out of scope (its
+mobile push is presence-suppressed unconditionally — not a viable paging channel without a
+webhook-routed-own-channel that is larger than this plan). **No threading.** The use case is a
+single operator watching lifecycle events on their own cards; flat chronological comments are
+readable without a thread structure, and dropping threading eliminates the per-provider threading
+complexity entirely (Linear and ClickUp have incompatible threading mechanisms, and ClickUp's
+threading breaks notification).
+
+**Linear vs ClickUp split:** Linear has a real bot identity (`actor=app` OAuth, already built in
+`LinearSyncService.ts`) and exposes mobile notification settings via GraphQL — it gets the full
+push path (mention on completion, pre-flight the operator's settings). ClickUp has no bot concept
+in the codebase (one `apiToken` stored, no OAuth, no `actor` equivalent) and self-notification
+suppression means a comment authored with the operator's own token will likely never push. ClickUp
+therefore posts flat comments for **work-history value** (the comment lands on the card, readable
+in the tracker, reaches task followers) but the mention push is **not guaranteed** — no ClickUp
+bot infrastructure is built in this plan, and no second-account manual setup is required.
 
 ### Problem Analysis
 
@@ -56,8 +73,11 @@ operator input. `NotionFetchService` and `ClickUpSyncService` implement it behin
 documented fallback that retries as a flat comment if `parentId` is rejected (`:1400-1420`).
 `postManagedComment` calls it with neither. Mentions are what turn a comment into a **push
 notification on the operator's phone**, which is the difference between "the queue is visible if I
-go and look" and "I am told". Threading is the only thing that will keep a busy feature from
-burying the card.
+go and look" and "I am told".
+
+> **Superseded:** "Threading is the only thing that will keep a busy feature from burying the card."
+> **Reason:** Threading was a readability fix for a multi-collaborator problem — many people commenting on one card, top-level comments burying each other. The use case here is a single host posting lifecycle events to a single operator. Flat chronological comments on the card are perfectly readable — you scroll the history. Threading added per-provider complexity (Linear `parentId`, ClickUp a reply URL with no `parent` field, ClickUp threading *breaks* notification) that solves a problem this feature does not have. The noise concern is addressed by per-event toggles + mention-only-on-completion, not by threading.
+> **Replaced with:** flat top-level comments only. No `parentId`, no `discussion_id`, no reply URL. One comment per dispatch, one per completion, in chronological order.
 
 **The remaining gap is the reply direction.** An inbound comment routes to the card's **current
 column agent**. If the operator sees a silence and pings the card to wake the lead, the ping goes
@@ -86,10 +106,15 @@ whole time; nothing was listening at them on the operator's behalf.
 - **No behaviour change when no tracker is configured**, or when remote control is off for the
   board.
 
+### Limitation — silence is a pull, not a push
+
+This feature makes the queue **pullable** from a phone (open the tracker, read the thread) and **pushes** on completion (the mention). It does **not** push the queue's state to a phone that is not open. A suspicious silence — dispatch happened, completion never comes — is legible *only to an operator who opens the thread and notices the missing completion mention*. The "silence problem solves itself" formulation overclaims: the honest version is that the silence is *detectable by a looking operator* without a machine detector, because the positive events are reliable. The detector is still the human; this feature removes the dependence on an agent *narrating*, not the dependence on the operator *looking*. A push for the silent case (e.g. a scheduled "still in flight" nudge) was considered and rejected — it is the withdrawn stall event in another coat, and silence is ambiguous. This limitation is stated, not solved.
+
 ## Metadata
 
 **Complexity:** 4
 **Tags:** backend, feature, reliability, ux, devops
+**Project:** Browser Switchboard
 
 ## User Review Required
 
@@ -102,15 +127,23 @@ muted.
    off. Candidates: card dispatched, subtask completed, feature complete (all subtasks posted —
    `PlanIngestionEngine.ts:1139` already computes this). Deliberately excluded from the default:
    column moves, plan imports, and anything the poll already reflects as state.
-2. **Threading or flat?** Recommendation: **thread under one parent comment per card**, using
-   `addIssueComment`'s `parentId` with its existing flat-comment fallback. One collapsed thread
-   that grows beats forty top-level comments. Verify how the provider's mobile app renders a
-   threaded reply before committing — if a threaded reply does not raise a notification, the
-   mention has to carry it.
+2. **Threading or flat?** ~~Recommendation: thread under one parent comment per card, using
+   `addIssueComment`'s `parentId` with its existing flat-comment fallback.~~
+
+   > **Superseded:** "Thread under one parent comment per card, using `addIssueComment`'s `parentId` with its existing flat-comment fallback. One collapsed thread that grows beats forty top-level comments."
+   > **Reason:** Threading was a readability fix for a multi-collaborator problem (many people commenting, top-level comments burying each other). The use case here is a single host posting lifecycle events to a single operator — flat chronological comments are readable without a thread structure. Threading added per-provider complexity (Linear `parentId`, ClickUp a reply URL with no `parent` field, ClickUp threading *breaks* notification) that solves a problem this feature does not have. The noise concern is handled by per-event toggles + mention-only-on-completion.
+   > **Replaced with:** **flat top-level comments only. No threading.** One comment per dispatch, one per completion, in chronological order. Same design on Linear and ClickUp — no per-provider threading strategy.
 3. **Mention the operator on every event, or only some?** Recommendation: **mention on completion
    and on feature-complete; do not mention on dispatch.** A mention is a phone push. Being pushed
    every time a card starts is how this becomes noise; being pushed when something finishes is the
-   signal. The operator can still read dispatch events in the thread.
+   signal. The operator can still read dispatch events in the thread. **Research (8 Sep 2026)
+   validates and strengthens this:** the @-mention is the load-bearing notification mechanism on
+   all three providers — it is the category operators mute *last*. A bridge that mentions on every
+   mirrored comment turns the mention into background noise, and the predictable operator response
+   is to mute mentions on mobile — at which point Switchboard has broken the only reliable channel
+   on all three platforms, for itself and for every human colleague. Mention only when a comment
+   genuinely requires the operator's attention (completion, feature-complete); post dispatch
+   events silently into the thread. This is a **severity gate**, not just a frequency preference.
 
 ## Complexity Audit
 
@@ -130,7 +163,7 @@ muted.
   convention.
 - **Noise is the actual failure mode.** Not a crash: a card so busy the operator mutes it, at
   which point the feature is worse than nothing because they now believe they are covered. Hence
-  per-event toggles, threading, and no mention on the highest-frequency event.
+  per-event toggles and no mention on the highest-frequency event.
 - **Dispatch is not a single event on a feature.** Dispatching a feature cascades to every subtask.
   A naive hook posts one comment per subtask on one card, instantly. Feature dispatch needs to post
   **once**, summarising, not N times.
@@ -148,6 +181,31 @@ muted.
   publishes it to everyone with tracker project access, and it may contain paths or output the
   lead happened to include. Bound the length (well under the 64k truncation) and decide whether
   the body is summarised or verbatim.
+- **Per-provider threading strategy (research 8 Sep 2026).** ~~The three providers have three
+  different threading mechanisms (Linear `parentId`, Notion `discussion_id`, ClickUp a reply URL
+  with no `parent` field) and three different notification behaviours (Linear: thread freely;
+  Notion: push presence-suppressed, threading buys nothing; ClickUp: threading *breaks*
+  notification — replies reach thread participants only). A uniform `parentId` abstraction does
+  not fit; each `RemoteProvider` owns its strategy. This is the largest design refinement from the
+  research and it moves complexity into the provider layer.~~
+  **Eliminated by the flat-comments decision:** no threading means no per-provider threading
+  strategy. Linear and ClickUp both post flat top-level comments — same design, no provider-layer
+  branching for threading. The mention syntax still differs (Linear plain profile URL in markdown;
+  ClickUp a `type:"tag"` block in the rich `comment` array), but that is a mention-format concern,
+  not a threading concern, and it lives inside each provider's `postManagedComment` implementation
+  where it already belongs.
+- **Bot identity is mandatory for push — Linear has it, ClickUp does not.** Self-notification
+  suppression (undocumented, near-universal) means posting with the operator's own credentials
+  silently kills every push. Linear has `actor=app` OAuth (already built in `LinearSyncService.ts`)
+  — the push path uses it. ClickUp has no bot concept in the codebase (one `apiToken`, no OAuth, no
+  `actor` equivalent) — ClickUp posts for work-history value, the mention push is best-effort, and
+  no ClickUp bot infrastructure is built here. The operator's resolved mention identity is separate
+  from the authoring identity on Linear.
+- **Presence suppression is the dominant failure mode.** ClickUp (Smart Notifications: 5-min
+  activity window) suppresses mobile push while the operator is active on desktop; Linear routes
+  delivery to an active desktop session. An operator at their desk will not be buzzed by either.
+  The feature's "phone test" must be run with the desktop app closed, and the plan must record that
+  push is best-effort against presence, not a guaranteed page.
 
 ## Edge-Case & Dependency Audit
 
@@ -185,8 +243,9 @@ muted.
 - **Reuses** `postManagedComment`, `RemoteProvider`, and the per-board remote-control gate that
   `KanbanProvider.ts:3202`/`:6080` already applies to `REMOTE_MODE_DIRECTIVE`. Use the same gate,
   so "remote control on" means one thing.
-- **Requires** threading `parentId` and `mentions` through `postManagedComment`, which currently
-  drops both. That is a small, shared change other callers benefit from.
+- **Requires** threading `mentions` through `postManagedComment`, which currently drops both
+  `parentId` and `mentions`. Only `mentions` is needed (no threading); that is a small, shared
+  change other callers benefit from.
 - **Largely supersedes** `standing-orders-can-post-a-team-status-report-to-a-card.md`. That plan
   answers "how do I see status" with a periodic lead-authored report against a bound team card;
   this answers it with host-observed events on the plan's own card, needs no binding, and has no
@@ -208,11 +267,49 @@ per-event toggles, threading, and no mention on dispatch; summarise feature disp
 notification strictly best-effort and out of the critical path; a durable shared dedupe key; and
 verify mention delivery as an explicit test rather than assuming.
 
+## Research Findings — provider notification behaviour
+
+*Resolved by web research, 8 Sep 2026. Scope: Linear for push, ClickUp for work-history comments only (Notion out — push is presence-suppressed). Threading eliminated — flat top-level comments only. The findings that remain relevant are mention syntax, bot identity, and presence suppression.*
+
+**Linear — flat comment + mention; pre-flight the settings. The push provider.**
+A top-level comment with an @-mention produces an `issueCommentMention` event that pushes the operator's phone in real time. The mention syntax is a plain Linear profile URL in the markdown body (`https://linear.app/<workspace>/profiles/<user>`), not `@[Name](url)`. Uniquely, Linear exposes `UserSettings.notificationCategoryPreferences` (per category × channel booleans, including `mentions.mobile`) and `notificationDeliveryPreferences.mobile.schedule` (per-day `HH:MM` windows) over GraphQL — Switchboard can pre-flight both at setup and warn the operator if `mentions.mobile` is off or the current time is outside their mobile schedule. Residual risk: delivery may be routed to an active desktop session; a mobile "Apps and integrations" toggle can gate integration comments; the Priority inbox (3 Sep 2026) may deprioritise machine-authored comments. Use OAuth `actor=app` with `comments:create` scope (already built in `LinearSyncService.ts`); set `doNotSubscribeToIssue: true` as hygiene.
+
+**ClickUp — flat comment for work history. Push is not guaranteed.**
+A top-level task comment reaches task followers and is readable in the tracker — that is the work-history value this plan keeps. The mention is a typed block in the rich `comment` array (`{"type":"tag","user":{"id":<numeric>}}`), not an `@name` string; there is no plain-text mention form. `notify_all` is widely misread — it controls only whether the *comment's creator* is notified, not all watchers. **No bot identity exists in the codebase** (one `apiToken` stored, no OAuth, no `actor` equivalent), and ClickUp has no first-class bot concept like Linear's `actor=app`. Self-notification suppression means a comment authored with the operator's own token will likely never push. This plan does **not** build ClickUp bot infrastructure and does **not** require a second-account manual setup — ClickUp posts the comment for work history, and the mention push is best-effort (may or may not fire depending on the operator's token and notification settings).
+
+**Cross-cutting — the dominant failure mode is presence suppression.**
+ClickUp (Smart Notifications: no mobile push if active on web/desktop in the last 5 min) and Linear (delivery routed to an active desktop session) both suppress mobile push while the operator is at their desk. The @-mention is the load-bearing mechanism on both and is the category operators mute last — which is why the severity gate (User Review #3) matters: mentioning on every event exhausts the one reliable channel. Self-notification suppression (undocumented on both, near-universal) means a distinct bot identity is mandatory for push — which is why Linear (which has `actor=app`) is the push provider and ClickUp (which does not) is work-history only. No provider lets an integration verify delivery — build an acknowledgement loop, not a delivery assumption (Proposed Change #10).
+
 ## Proposed Changes
 
-1. **Thread `parentId` and `mentions` through `postManagedComment`**, preserving its host-side
-   marker stamping and truncation, and keeping the existing flat-comment fallback when `parentId`
-   is rejected.
+1. **Thread `mentions` through `postManagedComment`**, preserving its host-side marker stamping
+   and truncation. **No `parentId` — flat top-level comments only.** The `mentions` argument
+   (resolved operator identity) is uniform across providers; the mention *syntax* differs (Linear:
+   plain profile URL in markdown; ClickUp: `type:"tag"` block in the rich `comment` array) and is
+   handled inside each provider's `postManagedComment` implementation where it already belongs.
+   No threading, no per-provider threading strategy, no reply URLs.
+
+9. **Post as a distinct bot identity on Linear, never the operator's own credentials.** Research
+   (8 Sep 2026): self-notification suppression is near-universal — if Switchboard authenticates with
+   the operator's personal token, every comment is authored *by the operator* and will very likely
+   never notify them. Linear has `actor=app` OAuth (already built in `LinearSyncService.ts`) — use it
+   with `comments:create` scope. The operator's resolved mention identity (for the `mentions`
+   argument) is separate from the authoring identity. **ClickUp has no bot concept in the
+   codebase** (one `apiToken`, no OAuth, no `actor` equivalent) — ClickUp posts with whatever token
+   is stored, the comment lands for work history, and the mention push is best-effort. No ClickUp
+   bot infrastructure is built here; no second-account manual setup is required.
+
+10. **Build an acknowledgement loop, not a delivery assumption.** Research (8 Sep 2026): no provider
+    lets an integration verify that its notification was delivered (Linear partially exposes
+    settings, none expose delivery), and presence suppression means "comment posted, HTTP 200" is
+    not "operator paged." Treat the notification as sent-but-unverified, and treat an operator
+    reaction/reply/resolve on the card as the verifiable signal. This is a robustness measure, not
+    a new paging channel: if a completion notification goes unacknowledged past a threshold, the
+    system's existing evidence (the completion post is on record; the next dispatch hasn't been
+    pulled) is what the operator reads — not a delivery receipt. Do not build a watchdog or
+    silence detector (withdrawn, see below); build an *acknowledgement* affordance that makes the
+    operator's response the verifiable half of the loop. Scope this as a follow-up if it grows
+    beyond the notification hook itself.
 2. **A notification hook after a successful `POST /kanban/dispatch`** — one comment per dispatch,
    and exactly one (summarising) for a feature dispatch that cascades.
 3. **A notification hook after a successful `POST /kanban/task/complete`** — subtask completion,
@@ -223,7 +320,7 @@ verify mention delivery as an explicit test rather than assuming.
    per-board remote-control check as `REMOTE_MODE_DIRECTIVE`.
 6. **Best-effort delivery**: failures logged, never propagated into the dispatch or completion
    response.
-7. **A durable dedupe key per event**, safe across retries and across two instances.
+7. **A durable dedupe key per event**, safe across retries and across two instances. The key lives in the **same DB `config`-table seen-set mechanism the inbound poll uses** (`retire-comment-delta-dispatch.md` documents it: a capped seen-set in the DB `config` table, with `db.refreshFromDisk()` called before the dedupe check so two instances share state) — **not** a new in-process store, and **not** a wave at "use the existing machinery." A new outbound dedupe set under its own `config` key namespace (e.g. `outboundNotifySeen`) is acceptable if the inbound set's semantics do not fit; either way the store is on disk, shared, and refreshed-from-disk before the check. The key itself is `{planId, eventType, attemptFingerprint}` where `attemptFingerprint` identifies the originating transition (not the retry), so the 409-encouraged double-post produces one comment.
 8. **Operator mention identity** resolved from config, with a visible error when it cannot be
    resolved rather than a comment that mentions nobody.
 
@@ -231,6 +328,10 @@ verify mention delivery as an explicit test rather than assuming.
 
 Additive. No stored shape changes; unknown keys preserved on any extended config. Installs with no
 tracker, or with remote control off, behave exactly as they do today.
+
+## Resolved Assumptions
+
+- **Provider mobile-app notification behaviour** (Linear, ClickUp) — **resolved by web research, 8 Sep 2026.** Threading is eliminated (flat top-level comments — the use case is a single operator, not a multi-collaborator card). Notion is out of scope (push is presence-suppressed unconditionally; the reliable fallback is a webhook-routed-own-channel larger than this plan). The findings that shaped the plan: the @-mention is the load-bearing push mechanism on both Linear and ClickUp; self-notification suppression means a distinct bot identity is mandatory; presence suppression means push is best-effort while the operator is at their desk; Linear uniquely exposes mobile notification settings via GraphQL for pre-flight. Recorded in the "Research Findings" section below.
 
 ## Verification Plan
 
@@ -249,14 +350,33 @@ tracker, or with remote control off, behave exactly as they do today.
 6. **Retry produces one comment.** Post the same completion twice — the flow the 409 at `:1932`
    actively encourages — and assert a single notification.
 7. **Two instances, one comment.** Run two hosts against one board; assert no duplicates.
-8. **Mention actually notifies.** Verify a real push arrives on the operator's device, and that a
-   misconfigured mention id surfaces an error rather than posting silently to nobody.
-9. **Threading renders.** Confirm a threaded reply is readable and notifying in the provider's
-   mobile app; if not, confirm the mention carries it and record the finding.
+8. **Mention actually notifies — Linear, with the desktop closed.** Verify a real push
+   arrives on the operator's device **with the Linear desktop app/browser closed** (presence
+   suppression is the dominant failure mode — an open session captures or suppresses the push).
+   Confirm a misconfigured mention id surfaces an error rather than posting silently to nobody.
+   **Linear** — confirm a flat top-level comment with a mention pushes, and that pre-flighting
+   `notificationCategoryPreferences.mentions.mobile` + the mobile schedule warns correctly when
+   off/out-of-window. **ClickUp** — confirm the flat top-level comment lands on the card and is
+   readable in the tracker (work-history value). The mention push is best-effort; do not fail the
+   test if ClickUp does not push (no bot identity exists in the codebase).
+9. **Flat comments render.** Confirm flat top-level comments are readable in both providers'
+   mobile apps — chronological history on the card. No threading to verify.
 10. **Toggles are real.** With each event disabled, assert nothing is posted for it.
 11. **Off by default where it should be.** With remote control off, or no tracker mapped, assert
     zero comments and zero API calls.
-12. **All three providers** reached through `RemoteProvider`.
+12. **Both providers** (Linear, ClickUp) reached through `RemoteProvider`.
+
+### Goal Invariants
+
+- **Positive:** a successful `POST /kanban/dispatch` for a single plan posts exactly one flat top-level comment on the plan's synced card (and a feature dispatch posts exactly one summarising comment, not one per subtask).
+- **Positive:** a successful `POST /kanban/task/complete` posts exactly one flat top-level comment mentioning the operator, even when the completion is retried (the 409-encouraged double-post yields one comment).
+- **Positive:** every auto-posted comment is stamped with the self-marker and is filtered by the inbound poll — never routed to a column agent as input (the loop guard).
+- **Positive:** with remote control off, or no tracker mapped, zero comments and zero tracker API calls are made.
+- **Negative:** no role's rendered agent prompt changes — diff a rendered prompt before and after and assert it is identical (the feature adds nothing to any role's context).
+- **Negative:** a tracker failure (revoked token, network break, 429) does not fail dispatch or completion — the board continues and the failure is logged (notification is never in the critical path).
+- **Negative:** no notification is posted via a path that bypasses `postManagedComment` (grep-asserted) — the marker stamping is load-bearing and a bypass reintroduces the self-ingestion loop.
+- **Negative:** no notification is authored with the operator's own credentials on Linear — the Linear path uses `actor=app` OAuth (already built in `LinearSyncService.ts`), because self-notification suppression would silently kill every push. ClickUp posts with the stored `apiToken` (no bot concept in the codebase) — the comment lands for work history, the mention push is best-effort.
+- **Negative:** no notification uses threading — no `parentId`, no `discussion_id`, no reply URL. All comments are flat top-level (grep-asserted: no `parentId` argument passed on the notification path).
 
 ## Resolved — waking a quiet lead is its own plan
 

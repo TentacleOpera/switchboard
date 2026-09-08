@@ -150,9 +150,27 @@ test('SOURCE: machineOrigin and kind:"message" reach the same suppression, not t
     const m = /const isMessage =[\s\S]{0,400}?;/.exec(TVP);
     assert.ok(m && /machineOrigin === true/.test(m[0]),
         'the alias must fold into isMessage rather than getting its own branch');
+    // The SEAT BLOCK gates on the shared flag. This assertion used to require
+    // `applySO` to gate on it too, and that requirement was the bug: `isMessage`
+    // is true for any payload that cannot be PROVEN a dispatch, so standing
+    // orders defaulted to OFF and every delivery path had to opt in by tagging
+    // itself `kind:'dispatch'`. Whether a seat received its orders then depended
+    // on a field the SENDING agent typed — a lead prodding its coder, or
+    // re-dispatching without the `dispatch` object, silently stripped them.
+    // Standing orders now ride every prompt delivery; the only gate is the
+    // caller's explicit opt-out. Asserted positively below so the inverse cannot
+    // come back by accident.
     assert.ok(
-        /applySO\s*=[^;]*!isMessage/.test(TVP) && /applySeatBlock\s*=[^;]*!isMessage/.test(TVP),
-        'both appends must gate on the single isMessage flag'
+        /applySeatBlock\s*=[^;]*!isMessage/.test(TVP),
+        'the seat block must gate on the single isMessage flag'
+    );
+    assert.ok(
+        !/applySO\s*=[^;]*!isMessage/.test(TVP),
+        'applySO must NOT gate on isMessage — orders ride every prompt delivery, not only provable dispatches'
+    );
+    assert.ok(
+        /const applySO = payload\?\.standingOrders !== false;/.test(TVP),
+        'applySO must gate on the explicit opt-out ALONE'
     );
 });
 
@@ -289,6 +307,31 @@ test('PARITY: both composition roots wire clearTerminalContext and recordDeferre
         assert.ok(/recordDeferredClears:\s*\(/.test(src),
             `${label} must wire recordDeferredClears, or a deferred seat is never re-cleared`);
     }
+});
+
+test('PARITY: both composition roots register a standing-orders applier', () => {
+    // The gate for the hole this rail kept reopening. `sendRobustText` (VS Code
+    // terminals) and `sendPromptToTmux` (tmux panes) cannot reach the order
+    // store, so they apply orders through the `standingOrdersDelivery` seam. A
+    // root that does not register an applier delivers every prompt on those
+    // rails with NO orders — which is what the tmux rail did on all six of its
+    // call sites, undetected, because an unregistered seam and a seat with no
+    // orders produced the same delivered text.
+    for (const [label, src] of [['extension.ts', read('src/extension.ts')], ['bootstrap.ts', BOOT]]) {
+        assert.ok(
+            /setStandingOrdersApplier\(/.test(src),
+            `${label} must register a standing-orders applier — unwired, the VS Code and tmux rails deliver prompts with no orders`
+        );
+    }
+    // And the rails must read it from the LEAF module: importing `standingOrders`
+    // directly pulls agentPromptBuilder → KanbanDatabase into tmuxPromptDelivery,
+    // which cannot load under Node's strip-only TypeScript mode.
+    const tmuxDelivery = read('src/standalone/tmuxPromptDelivery.ts');
+    assert.ok(
+        /from '\.\.\/services\/standingOrdersDelivery'/.test(tmuxDelivery)
+        && !/from '\.\.\/services\/standingOrders'/.test(tmuxDelivery),
+        'tmuxPromptDelivery must import the leaf seam only, never standingOrders'
+    );
 });
 
 test('PARITY: the log session boundary rolls exactly once per clear', () => {

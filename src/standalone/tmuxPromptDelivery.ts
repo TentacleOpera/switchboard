@@ -2,6 +2,20 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import type { PromptDeliveryOptions } from './ptyPromptDelivery';
+// Leaf seam ONLY — never `./standingOrders`, whose graph reaches KanbanDatabase
+// and breaks this file's load under Node's strip-only TypeScript mode (see
+// tmux-backend-contract.test.js, which imports this module directly).
+import { applyStandingOrdersForDelivery } from '../services/standingOrdersDelivery';
+
+/**
+ * `PromptDeliveryOptions` plus the tmux rail's standing-orders opt-out. Kept as
+ * a tmux-local extension rather than a field on the shared type: the PTY path
+ * would ignore such a field, and an option that is silently dropped on one rail
+ * is exactly the "never wired looks like working" failure this change removes.
+ */
+export type TmuxPromptDeliveryOptions = PromptDeliveryOptions & {
+    standingOrders?: false;
+};
 import { run, tmuxCaps, validatePaneId, type TmuxSocket, type TmuxTerminalHandle } from './tmuxBackend';
 
 /**
@@ -142,12 +156,36 @@ async function sendClearLocked(handle: TmuxTerminalHandle, socket?: TmuxSocket):
 export async function sendPromptToTmux(
     handle: TmuxTerminalHandle,
     text: string,
-    opts?: PromptDeliveryOptions
+    opts?: TmuxPromptDeliveryOptions
 ): Promise<void> {
     return withTmuxLock(handle.paneId, async () => {
         validatePaneId(handle.paneId);
         const socket = handle.socket;
         const caps = await tmuxCaps(socket);
+
+        // Standing-orders chokepoint for the tmux rail. This is the funnel every
+        // tmux delivery passes through (`deliverToTmuxSeat`, the board's tmux
+        // dispatch leg, the sendToTerminal tmux arm), and until now NONE of them
+        // applied standing orders: `applyStandingOrders` was never called anywhere
+        // in the tmux files, so a tmux seat — the phone/ssh path — received every
+        // prompt with no orders at all, while the PTY seat beside it received them.
+        // Opt out with `standingOrders: false` for non-prompt sends (a startup
+        // shell command); control strings use `sendControlToTmuxSeat`, which does
+        // not come through here.
+        let payload = text;
+        if (opts?.standingOrders !== false) {
+            try {
+                const applied = await applyStandingOrdersForDelivery(handle.name, text);
+                if (applied.source !== 'applier') {
+                    // Missing, not empty. Loud, because the prompt goes out
+                    // without orders either way and nothing downstream can tell.
+                    console.warn(
+                        `[tmuxPromptDelivery] standing orders unresolved for "${handle.name}" (source: ${applied.source}) — prompt delivered without them`
+                    );
+                }
+                payload = applied.text;
+            } catch { /* a degraded prompt beats a lost dispatch */ }
+        }
 
         // Step 1: optional clear.
         if (opts?.clearBeforePrompt) {
@@ -163,9 +201,9 @@ export async function sendPromptToTmux(
 
         // Step 2: deliver the payload.
         if (caps.bracketedPaste) {
-            await deliverViaBuffer(handle, text, caps, socket);
+            await deliverViaBuffer(handle, payload, caps, socket);
         } else {
-            await deliverViaSendKeys(handle, text, socket);
+            await deliverViaSendKeys(handle, payload, socket);
         }
 
         // Step 3: submit Enter.

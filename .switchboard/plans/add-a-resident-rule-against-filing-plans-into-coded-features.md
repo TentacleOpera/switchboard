@@ -20,10 +20,37 @@ The failure is quiet by construction. Assignment succeeds, the board renders, ev
 
 - **Complexity:** 2
 - **Tags:** control-plane, agents, board-hygiene
+- **Project:** Browser Switchboard
 
 ## User Review Required
 
 None.
+
+## Complexity Audit
+
+* **Score:** 2 / 10
+
+### Routine
+
+* Appending one rule line to the `RESIDENT_PROTOCOL_BODY` constant in `ClaudeCodeMirrorService.ts` — the managed block is regenerated from the constant, so a single string edit propagates to both `CLAUDE.md` and `AGENTS.md` targets.
+* Keeping the rule under the 800-char `SIZE_GATE` (`claude-protocol-block-size-contract.test.js:38`); 146 chars of headroom are available.
+
+### Complex / Risky
+
+* **Standalone delivery is blocked by `eb2456e0`.** The managed-block refresh exists only in the extension host (`extension.ts:345`, `:4486`); `bootstrap.ts` has no reference. A rule added to the constant reaches extension users only until `eb2456e0` lands. This is a delivery prerequisite, not a code risk in this plan.
+* **The 146-char budget is tight.** The rule must fit without consuming the `DOCS_POINTER_RULE` reservation (127 chars). A rule that overflows forces a rewrite, not a gate raise — the block was deliberately cut from 14,826 chars.
+* **Sequencing against `6c25a1e1`** (mirror retirement). The helpers (`buildManagedInner`, `stripProtocolMarkers`) may move; the rule must target the resident body wherever it lives when coded, not a hardcoded path.
+
+## Dependencies
+
+- **`eb2456e0`** (starred, New) — *external to this feature*. Prerequisite for standalone-host delivery: until the managed-block refresh is wired into `bootstrap.ts`, a rule added to the constant changes nothing on a standalone install. The extension host is unaffected and can deliver the rule immediately.
+- **`6c25a1e1`** (Delete the Claude mirror generator) — *external to this feature*. May relocate `buildManagedInner` / `stripProtocolMarkers`. Target the resident body by symbol, not by hardcoded path; follow the helpers to their new home if this has landed.
+
+## Adversarial Synthesis
+
+**Risk Summary:** Key risks: (1) the rule reaches extension users only until `eb2456e0` wires the standalone refresh — a partial delivery that looks complete on the extension host; (2) the 146-char budget is tight and the rule must not consume the docs-pointer reservation; (3) the rule must not read as forbidding subtasks on a feature still being planned. Mitigations: state the `eb2456e0` prerequisite explicitly in the change so a coder does not assume standalone parity; fit the rule to the budget (shorten, do not raise the gate); phrase the rule around "already coded" subtasks, not column names, so it does not block live-feature subtask additions.
+
+---
 
 ## Proposed Changes
 
@@ -87,3 +114,9 @@ So: target the resident body wherever it lives when this is coded, not a hardcod
 3. A scaffold run does not remove or duplicate the rule.
 4. Neither markdown file was hand-edited to achieve this.
 5. The rule does not read as forbidding subtasks on a feature that is still being planned.
+
+### Goal Invariants
+
+- **Positive (resolvable):** the rule appears in the emitted `CLAUDE.md` managed block, sourced from `RESIDENT_PROTOCOL_BODY` (not hand-edited into the markdown).
+- **Negative (absent):** the rule does NOT forbid adding subtasks to a feature still in a planning column — its text names "already-coded" subtasks as the trigger, not column labels or feature membership generally.
+- **Budget:** `claude-protocol-block-size-contract.test.js` passes with the rule present and the `DOCS_POINTER_RULE` headroom intact (the gate is not raised).

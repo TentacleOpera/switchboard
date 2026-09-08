@@ -30,6 +30,16 @@ So: `purgeOrphanedPlans` is the right method, `runPurgeSweep` is the right call 
 
 ---
 
+## User Review Required
+
+None.
+
+## Dependencies
+
+None internal. `KanbanDatabase.purgeOrphanedPlans` already exists and is already tested; this plan wires an existing method into an existing call site. No `sess_` prerequisites.
+
+---
+
 ## Complexity Audit
 
 * **Score:** 3 / 10
@@ -73,11 +83,19 @@ So: `purgeOrphanedPlans` is the right method, `runPurgeSweep` is the right call 
 
 ---
 
+## Adversarial Synthesis
+
+**Risk Summary:** Key risks: (1) a `git pull` that removes-and-recreates files slower than the 350ms confirmation delay could tombstone a live card — mitigated by placing the call *inside* the existing `isGitOpActive` guard; (2) `purgeOrphanedPlans` tombstones directly to `status='deleted'`, bypassing the external-tracker archival that the `status='missing'` pipeline performs, so an orphaned card with a ClickUp/Linear/Notion link leaves a dangling external task — accepted as a documented follow-up, not a blocker, since the primary value is clearing the board. The 350ms blocking delay on the scan tick is acceptable; the scan already does comparable work and is gated by `_scanInProgress`. Mitigations: keep the call inside the git guard, wrap in try/catch so a failure in one folder does not abort the sweep, and log the orphan count for observability.
+
+---
+
 ## Proposed Changes
 
 ### `src/services/PlanIngestionEngine.ts`
 
 **Context:** `runPurgeSweep` (`:888-961`) iterates watched folders. For each folder, it skips if `isGitOpActive`, gets the DB and workspaceId, then purges `status='missing'` plans older than 24h. The new call goes after the missing-plan purge loop, still inside the per-folder loop and inside the git-operation guard.
+
+> **Clarification (line numbers):** The line offsets in this plan are from an earlier read; the current source has `runPurgeSweep` at `:911` and the per-folder loop body running through `:980`. Locate the insertion point **by symbol**, not by line number: immediately after the `for (const plan of missingPlans) { ... }` loop closes and before the per-folder `for (const folder of folders)` loop closes — i.e. the last statement inside the folder loop, still guarded by the `if (this.isGitOpActive(folder)) { continue; }` at the top of the loop. `purgeOrphanedPlans` is at `:6905` in the current source.
 
 **After line 956** (after the `for (const plan of missingPlans)` loop closes, before the per-folder loop closes at `:957`), add:
 
@@ -133,6 +151,13 @@ So: `purgeOrphanedPlans` is the right method, `runPurgeSweep` is the right call 
 4. Restart the extension.
 5. Within ~10 seconds (one scan tick), the card should disappear from the board.
 6. Check the DB: the plan's status should be `'deleted'`.
+
+### Goal Invariants
+
+- **Negative (absent):** after `runPurgeSweep()` runs on a populated DB, no row with `status='active'` whose `plan_file` does not exist on disk remains — `SELECT count(*) FROM plans WHERE status='active' AND plan_file IS NOT NULL AND plan_file != ''` equals the count of active plans whose files *do* exist.
+- **Positive (resolvable):** an `active` plan whose file *does* exist on disk is still `status='active'` after `runPurgeSweep()` (the reconciliation does not tombstone present files).
+- **Guard:** when `isGitOpActive(folder)` returns `true`, `purgeOrphanedPlans` is not invoked for that folder (the git-operation guard is not bypassed).
+- **Bypass:** a row tombstoned by this path carries `status='deleted'` (not `'missing'`), distinguishing it from the watcher-driven 24h grace path.
 
 ---
 

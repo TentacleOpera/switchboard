@@ -70,6 +70,14 @@
     const pendingMoves = new Map(); // cardId -> targetColumn
     const pendingStars = new Map(); // cardId -> boolean
 
+    // Agent control surface state (mobile) — mirrors the dock's control
+    // surface. Conversation history is kept client-side and sent with each
+    // request so the model has context across turns. No pty, no terminal.
+    let agentHistory = [];
+    let agentModelConfigured = false;
+    let agentSending = false;
+    let agentControlInitialized = false;
+
     // Elements
     const wsSelect = document.getElementById('workspace-project-select');
     const lockBanner = document.getElementById('mission-lock-banner');
@@ -94,6 +102,11 @@
         { name: 'move', cap: null },
         { name: 'mission', cap: 'automation' },
         { name: 'teams', cap: 'terminalFleet' },
+        // Agent control surface — API-backed, no pty, phone-safe. Always
+        // available (no capability gate): the controller reaches the same
+        // /agent/control endpoints the desktop dock uses. See plan:
+        // the-dock-agent-tab-is-a-control-surface-not-a-terminal.
+        { name: 'agent', cap: null },
     ];
 
     function capabilityEnabled(cap) {
@@ -621,6 +634,13 @@
             renderMissionView();
         } else if (activeView === 'teams') {
             renderTeamsView();
+        } else if (activeView === 'agent') {
+            // The agent control surface loads its config once on first render;
+            // it does not need a per-render refresh (no list to repopulate).
+            if (!agentControlInitialized) {
+                agentControlInitialized = true;
+                void loadAgentControlConfigMobile();
+            }
         }
     }
 
@@ -2034,6 +2054,191 @@
         } catch (err) {
             previewContent.textContent = 'Error loading plan document.';
         }
+    }
+
+    // ── Agent control surface (mobile) ──────────────────────────────────
+    // The Agent view is an API-backed control surface — no pty, no terminal
+    // emulator. It posts intents to /agent/control, which resolves phrases
+    // to plan ids and fires mechanical actions directly. The model is only
+    // consulted for fuzzy resolution when configured; mechanical actions
+    // always work. See plan:
+    // the-dock-agent-tab-is-a-control-surface-not-a-terminal.
+
+    const agentLogElMobile = document.getElementById('agent-control-log');
+    const agentInputElMobile = document.getElementById('agent-control-input');
+    const agentSendBtnMobile = document.getElementById('btn-agent-send');
+    const agentStatusChipMobile = document.getElementById('agent-status-chip');
+    const agentQuickActionsElMobile = document.getElementById('agent-quick-actions');
+
+    function setAgentStatusMobile(text, kind) {
+        if (!agentStatusChipMobile) { return; }
+        agentStatusChipMobile.textContent = text;
+        agentStatusChipMobile.classList.remove('hidden', 'unknown', 'success', 'error');
+        if (kind === 'error') { agentStatusChipMobile.classList.add('error'); }
+        else if (kind === 'success') { agentStatusChipMobile.classList.add('success'); }
+        else if (kind === 'model') { agentStatusChipMobile.classList.add('success'); }
+        else { agentStatusChipMobile.classList.add('unknown'); }
+    }
+
+    async function loadAgentControlConfigMobile() {
+        try {
+            const res = await fetch('/agent/control/config', { credentials: 'same-origin' });
+            if (!res.ok) {
+                setAgentStatusMobile('Control surface unavailable (' + res.status + ')', 'error');
+                return;
+            }
+            const data = await res.json();
+            const cfg = data.data || data;
+            agentModelConfigured = !!cfg.modelConfigured;
+            if (agentModelConfigured) {
+                setAgentStatusMobile('Model configured. Mechanical actions always available.', 'model');
+            } else {
+                setAgentStatusMobile('No model. Mechanical actions available; fuzzy resolution disabled.', 'unknown');
+            }
+            if (agentQuickActionsElMobile) {
+                agentQuickActionsElMobile.innerHTML = '';
+                const actions = Array.isArray(cfg.quickActions) ? cfg.quickActions : [];
+                for (const action of actions) {
+                    const btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = 'secondary-action-btn';
+                    btn.style.padding = '4px 10px';
+                    btn.style.fontSize = '11px';
+                    btn.textContent = action.label;
+                    btn.addEventListener('click', () => {
+                        if (agentInputElMobile) {
+                            agentInputElMobile.value = action.label;
+                            void sendAgentControlMobile();
+                        }
+                    });
+                    agentQuickActionsElMobile.appendChild(btn);
+                }
+            }
+        } catch (err) {
+            setAgentStatusMobile('Failed to load config: ' + (err?.message || err), 'error');
+        }
+    }
+
+    async function sendAgentControlMobile() {
+        if (agentSending) { return; }
+        const text = agentInputElMobile ? agentInputElMobile.value.trim() : '';
+        if (!text) { return; }
+        agentSending = true;
+        if (agentSendBtnMobile) { agentSendBtnMobile.disabled = true; }
+        agentInputElMobile.value = '';
+        renderAgentEntryMobile('user', text, null, null);
+        try {
+            const res = await fetch('/agent/control', {
+                method: 'POST', credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text, history: agentHistory }),
+            });
+            if (!res.ok) {
+                const errBody = await res.json().catch(() => ({}));
+                renderAgentEntryMobile('assistant', 'Error: ' + (errBody.error || res.status), null, null);
+                setAgentStatusMobile('Request failed: ' + (errBody.error || res.status), 'error');
+                return;
+            }
+            const data = await res.json();
+            const reply = data.reply || '(no reply)';
+            const resolved = Array.isArray(data.resolved) ? data.resolved : [];
+            const actions = Array.isArray(data.actions) ? data.actions : [];
+            renderAgentEntryMobile('assistant', reply, resolved, actions);
+            if (Array.isArray(data.history)) { agentHistory = data.history; }
+            if (data.usedModel) {
+                setAgentStatusMobile('Resolved via model. ' + resolved.length + ' card(s).', 'model');
+            } else if (resolved.length > 0) {
+                setAgentStatusMobile('Resolved ' + resolved.length + ' card(s) via keyword.', 'success');
+            } else {
+                setAgentStatusMobile('No cards resolved. Try a plan id, column, or "starred".', 'unknown');
+            }
+        } catch (err) {
+            renderAgentEntryMobile('assistant', 'Network error: ' + (err?.message || err), null, null);
+            setAgentStatusMobile('Network error: ' + (err?.message || err), 'error');
+        } finally {
+            agentSending = false;
+            if (agentSendBtnMobile) { agentSendBtnMobile.disabled = false; }
+        }
+    }
+
+    function renderAgentEntryMobile(role, text, resolved, actions) {
+        if (!agentLogElMobile) { return; }
+        const entry = document.createElement('div');
+        entry.style.marginBottom = '8px';
+        entry.style.padding = '6px 8px';
+        entry.style.background = 'var(--panel-bg2)';
+        entry.style.border = '1px solid var(--border-color)';
+        entry.style.borderRadius = '4px';
+        if (role === 'user') { entry.style.borderColor = 'var(--accent-primary)'; }
+        const roleEl = document.createElement('div');
+        roleEl.style.fontSize = '10px';
+        roleEl.style.color = 'var(--text-dim)';
+        roleEl.style.textTransform = 'uppercase';
+        roleEl.style.marginBottom = '3px';
+        roleEl.textContent = role === 'user' ? 'You' : 'Controller';
+        const textEl = document.createElement('div');
+        textEl.style.color = 'var(--text-primary)';
+        textEl.style.whiteSpace = 'pre-wrap';
+        textEl.style.wordBreak = 'break-word';
+        textEl.textContent = text;
+        entry.appendChild(roleEl);
+        entry.appendChild(textEl);
+        if (Array.isArray(resolved) && resolved.length > 0) {
+            const resEl = document.createElement('div');
+            resEl.style.marginTop = '4px';
+            resEl.style.paddingTop = '4px';
+            resEl.style.borderTop = '1px solid var(--border-color)';
+            resEl.style.fontSize = '11px';
+            resEl.style.color = 'var(--text-dim)';
+            resEl.textContent = 'Resolved: ';
+            for (const card of resolved) {
+                const chip = document.createElement('span');
+                chip.style.display = 'inline-block';
+                chip.style.margin = '2px';
+                chip.style.padding = '1px 6px';
+                chip.style.background = 'var(--panel-bg)';
+                chip.style.border = '1px solid var(--border-color)';
+                chip.style.borderRadius = '3px';
+                chip.style.fontSize = '10px';
+                const topic = card.topic || card.planId || '?';
+                const col = card.kanbanColumn || '';
+                chip.textContent = topic + (col ? ' [' + col + ']' : '') + (card.starred ? ' ★' : '');
+                resEl.appendChild(chip);
+            }
+            entry.appendChild(resEl);
+        }
+        if (Array.isArray(actions) && actions.length > 0) {
+            const actEl = document.createElement('div');
+            actEl.style.marginTop = '4px';
+            actEl.style.fontSize = '11px';
+            actEl.style.color = 'var(--accent-primary)';
+            for (const action of actions) {
+                const line = document.createElement('div');
+                if (action.error) {
+                    line.style.color = '#f85149';
+                    line.textContent = '✗ ' + action.type + ': ' + action.error;
+                } else {
+                    line.textContent = '✓ ' + action.type + ': ' + JSON.stringify(action.result || {});
+                }
+                actEl.appendChild(line);
+            }
+            entry.appendChild(actEl);
+        }
+        agentLogElMobile.appendChild(entry);
+        agentLogElMobile.scrollTop = agentLogElMobile.scrollHeight;
+    }
+
+    // Wire up the agent control surface event handlers.
+    if (agentSendBtnMobile) {
+        agentSendBtnMobile.addEventListener('click', () => void sendAgentControlMobile());
+    }
+    if (agentInputElMobile) {
+        agentInputElMobile.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                void sendAgentControlMobile();
+            }
+        });
     }
 
     // Bootstrap

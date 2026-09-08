@@ -618,15 +618,26 @@ test('the team icon fallback skips the head brand mark', () => {
     const iconBlock = block(fn, 'if (team.iconUri) {', "btn.addEventListener('click'");
     assert.ok(
         !/headTerm\.iconUri/.test(iconBlock),
-        'the head brand-mark fallback arm must not survive — a team with no icon shows the jet'
+        'the head brand-mark arm must not come back — it communicates the wrong identity'
     );
     assert.ok(
         /buildMaskedGlyph\('\/static\/icons\/nav-jet\.svg'\)/.test(iconBlock),
-        'the jet glyph must be the fallback when there is no team icon'
+        'every team button must render the shared jet glyph'
+    );
+    // The rail shows ONE mark for all teams. A per-team picture is the variation
+    // this surface is meant not to have, so `team.iconUri` must not be consulted
+    // when choosing the glyph — teams are told apart by the corner initial.
+    assert.ok(
+        /if\s*\(\s*team\.iconUri\s*\)/.test(iconBlock),
+        'an explicit team pick (jet or CLI brand) must be honoured by the rail'
     );
     assert.ok(
-        !/roleChar/.test(iconBlock),
-        'the role letter must not creep back into the team fallback'
+        /strip-team-initial/.test(iconBlock) && /team\.name[^;]*charAt\(0\)/.test(iconBlock),
+        'the team initial must be derived from the team name and rendered in the corner'
+    );
+    assert.ok(
+        /setAttribute\('aria-hidden', 'true'\)/.test(iconBlock),
+        'the initial is decorative — the aria-label already carries the full team name'
     );
 });
 

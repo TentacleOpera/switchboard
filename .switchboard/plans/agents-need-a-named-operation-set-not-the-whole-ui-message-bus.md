@@ -66,6 +66,30 @@ The CLI surface was defined by subtraction: ten commands were chosen deliberatel
 **Tags:** cli, agent-instructions, api, ux
 **Project:** Browser Switchboard
 
+## User Review Required
+
+Yes — two decisions, both about scope vs honesty, that determine whether the shipped surface is real or apparent.
+
+1. **Is the deliverable the full ~440 in-verbs, or the curated ~20 core plus the framework?** Recommendation: **ship the framework (command table, `usage()` refactor, docs generator, CI drift check, bridging-status refusal, `.agents/` curl rewrites) and the curated ~20 core in one plan; name the remaining ~420 incrementally, with the drift check enforcing completeness against the triage appendix's "in" dispositions as the ground-truth.** The framework is the hard part; the naming is mechanical once the table exists. The Goal promises *every* operation — the incremental path gets there without front-loading ~440 argument parsers in one card.
+2. **`settings-commands.md` — fold or kill?** Recommendation: **fold it into the same generator** (one source, one drift surface — the whole point of the command table). Removing the "generated from" claim leaves a second hand-maintained page that will drift by hand, which is the `375edd49` failure mode this plan exists to prevent. If folding proves infeasible, kill the claim — do not leave an "either/or" for the coder to relitigate.
+
+## Complexity Audit
+
+### Routine
+
+- Introduce the command table `{ name, usage, summary, args, area, bridging }` and derive `usage()`, per-command error strings, and the docs page from it.
+- Curate the ~20 core commands from the triage appendix's "in" dispositions; map each to its backing route/verb.
+- Apply the substitution rule (picker→arg, clipboard→stdout, confirm→`--yes`) per command.
+- Rewrite the four `.agents/` files that still demonstrate `curl -s -X POST` to the named commands.
+
+### Complex / Risky
+
+- **Scope vs verification gap.** The Goal promises *every* operation (~440 in-verbs); verification 6b proves a slice. The CI drift check (6f) guards rot, not completeness — there is no ground-truth list to diff against unless the triage appendix's "in" dispositions become that ground-truth. Without it, a generated page can be byte-identical to itself and still be missing `mission launch`.
+- **The `d63d77f9` dependency is a honesty gate.** Change #2 ("refuse rather than lie") is a hard gate on the bridging registry: "without it this plan can name operations but cannot promise they work." If `d63d77f9` slips, a named set that includes unbridged operations *lies* — exactly the failure the plan refuses. Needs a fallback: omit unbridged operations from the named set until the registry lands.
+- **`af65df25` is a structural gate.** `advance` is the primary verb and "would be a sixteenth open-coded copy" without the `_advanceCards` extraction. If `af65df25` slips, `advance` cannot ship honestly — `dispatch` stays primary temporarily, or `advance` waits.
+- **`settings-commands.md` is a second drift surface.** It claims to be generated with no generator (the plan's own finding, 3a). Leaving it as a hand-maintained page alongside a generated CLI page is the rot pattern this plan exists to prevent.
+- **The command table refactor touches `usage()` which is load-bearing.** `usage()` is one hardcoded template with 29 literal `npx switchboard …` lines and per-command usage duplicated inline in error paths (`:1332`, `:1398`). Migrating to the table is a behaviour-preserving refactor of the CLI's front door; a regression here breaks every command's help.
+
 ## Proposed Changes
 
 **0. The primary verb is `advance`, not `dispatch`.** Most of what an agent does to a card is *move it to the next column*; the column decides what happens. The primitive already exists — `KanbanProvider._advanceCards` — with a three-way `target` contract: `undefined` → compute the next pipeline stage; `'CODED_AUTO'` → complexity-route per card; a column id → move there unrouted. It owns filtering, routing, direction classification, the run-sheet write, cascade-id collection and the trigger gate.
@@ -109,7 +133,7 @@ Roughly twenty. Each maps to a route or verb that already exists; this is naming
 
 **The substitution rule, stated once so it is not re-decided per command:** a verb whose browser half is a *picker* takes a path or id argument; a verb whose browser half is the *clipboard* writes to stdout; a verb whose browser half is a *confirm dialog* takes `--yes` or refuses. The operation is kept; the affordance is translated.
 
-**2. Mark each operation's bridging status, and refuse rather than lie.** Every named operation declares whether it is bridged on the current host. An operation whose underlying command is inert must **fail loudly** — not return success. Depends on `d63d77f9`'s `INERT`/`BRIDGED` registry; without it this plan can name operations but cannot promise they work.
+**2. Mark each operation's bridging status, and refuse rather than lie.** Every named operation declares whether it is bridged on the current host. An operation whose underlying command is inert must **fail loudly** — not return success. Depends on `d63d77f9`'s `INERT`/`BRIDGED` registry; without it this plan can name operations but cannot promise they work. **Fallback if `d63d77f9` slips:** unbridged operations are **omitted** from the named set (not named-and-lying), and added when the registry lands — the named set never includes an operation whose bridging status is unknown. The omission is recorded in the docs page as "pending bridging registry" so the gap is visible, not hidden.
 
 **3. Discoverability lives on the docs site, not in the TUI.** `switchboard help` stays a short menu — no reorganisation, no tiers, no forty-line listing. The complete command reference is published at one URL on the public docs site, and the CLI links to it in three places: the `usage()` footer (`cli.ts:15`), the `about` banner beside the GitHub link (`:1042`, which today is the CLI's *only* URL), and every "unknown command" error. Anyone — agent or human — who lands in the CLI is one link from everything it can do.
 
@@ -190,6 +214,31 @@ Bucketed by name prefix and reviewed. This is the justification for what the nam
 
 **Triage of `other` is a prerequisite.** 122 unclassified entries is too many to wave through, and it is where the remaining agent operations will be found — `appendToPlannerPrompt` and `airlock_sendToCoder` are both plainly agent-facing. That triage is the first task of this plan, not a follow-up.
 
+## Edge-Case & Dependency Audit
+
+**Race conditions**
+- None intrinsic — the command table is build-time data; the docs page is generated, not served live. The drift check runs in CI against a frozen regeneration.
+
+**Security**
+- `switchboard api` (the escape hatch) attaches `Authorization: Bearer` (`cli.ts:561`); the named commands route through the same authenticated transport. No new credential surface. The four `.agents/` files rewritten off `curl` removes the unauthenticated-`curl` pattern agents were copying.
+
+**Side effects**
+- `usage()` and every inline per-command usage string change shape (derived from the table). Any external consumer scraping `switchboard help` output breaks — acceptable, since the help text is not a contract, but worth a release note.
+- The docs site gains a new page (`/docs/reference/cli.md`) and nav entry; `settings-commands.md` is either folded into the same generator or has its "generated from" claim removed (User Review decision #2).
+- `verb` and `api` remain as escape hatches — no behaviour change, only documentation framing.
+
+**Dependencies & conflicts**
+- `4c134bdb` (one docs URL) — the CLI must not introduce a third docs base.
+- `af65df25` (`_advanceCards` extraction) — `advance` is built on it or not at all; fallback if it slips: `dispatch` stays primary temporarily.
+- `d63d77f9` (bridging registry) — change #2's honesty gate; fallback if it slips: omit unbridged operations (above).
+- `8aa2e928` (`switchboard api`) — **landed** in `96fb16df`; no longer a blocker.
+- **Shares `cli.ts` with the *json-output* subtask.** That subtask's `exitFlushed`/`emitJson` discipline must be inherited by the command table's generated exit paths — land *json-output* before or alongside this plan, or grep-assert the generated per-command `--json` exit paths use `exitFlushed`.
+- **Shares `AGENTS.md` with the *switchboard-next* subtask.** This plan rewrites `.agents/` curl patterns; that plan corrects the "ONLY four commands" line at `AGENTS.md:23`. Neighbouring text — land together or coordinate.
+
+## Adversarial Synthesis
+
+Key risks: (1) the Goal promises *every* operation (~440) but verification 6b proves a slice, and the drift check guards rot not completeness — mitigated by making the triage appendix's "in" dispositions the ground-truth the drift check diffs against, and by staging the framework first with incremental naming; (2) the `d63d77f9` bridging registry is a honesty gate that, if it slips, turns "refuse rather than lie" into "name and lie" — mitigated by omitting unbridged operations from the named set until the registry lands; (3) `settings-commands.md` is a second hand-maintained drift surface — mitigated by folding it into the same generator or killing its claim (decided, not deferred); (4) the `usage()` table refactor is a behaviour-preserving change to the CLI's front door — mitigated by deriving all three consumers from one table and grep-asserting no literal `npx switchboard <cmd>` string survives outside it. The plan is large but coherent: the table enables the docs, the docs enable the drift check, the named set is the table's content, and the curl rewrites depend on the named set — splitting would sever the coupling that makes the drift check enforceable.
+
 ## Verification Plan
 
 1. Every named operation has help text, argument validation, and a non-zero exit code on failure.
@@ -204,3 +253,14 @@ Bucketed by name prefix and reviewed. This is the justification for what the nam
 6f. The docs page regenerates byte-identical in CI; editing a command's `summary` without regenerating fails the gate. `settings-commands.md` is either put on the same generator or its 'generated from' claim is removed.
 6c. Every `copy*Prompt` verb has a `prompt` subcommand that writes the same text to stdout; every `browse*` verb has a command taking the path as an argument.
 7. The named set is enumerable from one command, and no entry in it is a UI affordance.
+8. **Completeness ground-truth:** the generated docs page's command list is diffable against the triage appendix's "in" dispositions — the drift check fails not only on edit-without-regenerate but on a missing operation that the triage says should be named.
+9. **No named operation lies about bridging:** every operation in the named set has a known `BRIDGED`/`INERT` status from `d63d77f9`'s registry; if the registry is absent, unbridged operations are absent from the set (grep-asserted: no named operation has `bridging: 'unknown'`).
+
+### Goal Invariants
+
+- **Positive:** `usage()`, every inline per-command usage string, and the docs page are all rendered from one command table — grep-asserted that no literal `npx switchboard <cmd>` string exists outside the table.
+- **Positive:** the docs page regenerates byte-identical in CI; editing a command's `summary` without regenerating fails the gate.
+- **Positive:** every `copy*Prompt` verb has a `prompt` subcommand writing the same text to stdout; every `browse*` verb has a command taking the path as an argument.
+- **Negative:** no file under `.agents/protocols/` or `.agents/skills/` contains `curl -s -X POST` — grep-asserted in CI.
+- **Negative:** no operation in the named set has an unknown bridging status — an operation whose underlying command is inert is either failed-loudly at runtime (registry present) or omitted from the set (registry absent), never named-and-silent.
+- **Negative:** `switchboard help` is no longer than it is today — the command table does not turn help into a forty-line listing.

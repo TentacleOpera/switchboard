@@ -22,10 +22,37 @@ Reviewer findings are worth keeping. The 2026-09-04 drain of `.switchboard/memo.
 
 - **Complexity:** 3
 - **Tags:** reviewer, prompts, plans, board-hygiene
+- **Project:** Browser Switchboard
 
 ## User Review Required
 
 None.
+
+## Complexity Audit
+
+* **Score:** 3 / 10
+
+### Routine
+
+* Rewriting one prompt constant (`REVIEWER_RISKS_TO_MEMO_DIRECTIVE`) and its three emitters (`agentPromptBuilder.ts:2179`, `buildCustomAgentPrompt` `:2836`, `AgentSkillExporter.ts:270`) so reviewers write plan files instead of appending to a memo.
+* Retiring the `reviewerRisksToMemo` toggle (no producer left).
+* The landing-column mechanism (`planMetadataUtils.ts:84` parser + `PlanIngestionEngine.ts:2010` honours `kanbanColumn`) already exists and already routes a `BACKLOG`-tagged file to Backlog.
+
+### Complex / Risky
+
+* **The worktree hazard across three emitters.** Two of the three emitters send no absolute path line (`buildCustomAgentPrompt` `:2836`, `AgentSkillExporter.ts:270`); on those paths the reviewer resolves the directory itself, which is exactly the case the "never write to a worktree-local `.switchboard/`" warning exists for. A finding filed into a worktree copy vanishes on cleanup — silently, with no memo left to inspect.
+* **Filename collisions.** Two reviewers filing in the same minute must not overwrite each other; the slug+short-id scheme must be collision-resistant.
+* **The column line must be the first `kanbanColumn` match in the file.** The parser takes the first occurrence; a finding that quotes the field in prose below the title would mis-route if the declaration is not placed directly under the title.
+
+## Dependencies
+
+None blocking. The `kanbanColumn` parser and the `PlanIngestionEngine` landing-column honour already exist; this plan reuses them. The `memo-to-plans` daily job and `/switchboard-memo` capture mode are unchanged and not depended upon.
+
+## Adversarial Synthesis
+
+**Risk Summary:** Key risks: (1) the worktree hazard — two emitters send no path line, so a finding filed from a worktree can vanish on cleanup silently, which is *worse* than the memo (no file left to inspect); (2) filename collisions between concurrent reviewers; (3) a finding whose body quotes `kanbanColumn` in prose mis-routes if the declaration is not the first match. Mitigations: each emitter must verify the directory it lands in survives cleanup (the two no-path emitters resolve the directory themselves — the exact case the warning targets); slugify the title + short id for collisions; place the `kanbanColumn: BACKLOG` line directly under the title, above all prose. The memo, `/switchboard-memo`, and `memo-to-plans` job stay untouched — only the automatic reviewer traffic is removed.
+
+---
 
 ## Proposed Changes
 
@@ -106,3 +133,10 @@ No cap on the job, either. A cap would only ever have been protection against th
 6. `reviewerRisksToMemo` has no producer, and no reviewer path writes `.switchboard/memo.md`.
 7. `/switchboard-memo` capture still appends, and `memo-to-plans` still processes what it finds — both unchanged.
 8. The eight directive tests at `agentPromptBuilder.test.ts:196-264` are rewritten against the new behaviour, not deleted — the role-scoping ones are still real invariants. Run them by hand; that suite does not gate CI.
+
+### Goal Invariants
+
+- **Negative (absent):** after a review ends, no reviewer path appends to `.switchboard/memo.md` — `reviewerRisksToMemo` has no producer and no reviewer prompt contains the memo-append directive.
+- **Positive (resolvable):** a reviewer finishing a review with N remaining risks produces N plan files in `.switchboard/plans/`, each landing in `BACKLOG` (the `kanbanColumn: BACKLOG` line directly under the title is the first match the parser sees).
+- **Survival:** a finding filed from a worktree lands in the main checkout and survives worktree cleanup — verified on all three emitters, including the two that send no path line.
+- **Reference:** each finding carries a bare-filename link to the reviewed plan and its plan id, so the reference survives a rename.

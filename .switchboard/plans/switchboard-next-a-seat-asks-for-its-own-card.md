@@ -43,10 +43,43 @@ flag grammar that would need extending for every phrasing.
 
 - **Complexity:** 4
 - **Tags:** cli, skills, dispatch, tmux, both-hosts
+- **Project:** Browser Switchboard
 
 ## User Review Required
 
 None.
+
+### Goal Invariants — present-operator safety model
+
+The whole safety mechanism is **"echo the interpretation before acting, then proceed."** That is a guard that works **only while a human is watching the terminal**. The headline use case is a tmux pane over ssh from a phone — the operator who typed the command and may have looked away. An unattended wrong reading advances the wrong cards with no rollback and no second chance. This is an explicit, accepted assumption of the design, not a gap to close with a confirmation gate (a gate is rejected below for the attended case, and misrouted cards are recoverable by re-advancing). State it, proceed, and let the echo do its work for the operator who is present.
+
+## Complexity Audit
+
+### Routine
+
+- Read `GET /kanban/plans` (already returns `priorityStarred`, `priority`, `complexity`, `columnOrder`, `columnEnteredAt`, `isFeature`, `featureId`, `recommendedRole`).
+- Filter and order client-side with `compareByPrecedence` semantics pinned to priority mode.
+- One `promptSelected` call per source column (plural `sessionIds` already supported).
+- Echo the interpretation; cap the count; report each leg.
+
+### Complex / Risky
+
+- **Free-text interpretation is non-deterministic.** Two agents reading "code 3 low complexity plans" can resolve it differently, and the only audit trail is the echoed text. The echo is the safety mechanism — and it is operator-present-dependent (see the safety-model note above).
+- **The `Unknown`-complexity exclusion is a silent judgement.** A "code everything" reading that the operator intended to include unscored cards in will exclude them by band logic; the exclusion count is reported, but whether the operator *wanted* them is not. The echo is the only place this is catchable.
+- **No seat identity, by design.** Under tmux, panes inherit the tmux server's environment, so an inherited seat name would be a plausible wrong answer — real cards delivered to the wrong agent. The guidance is the identity; reintroducing inference would be a regression. This is a correctness constraint, not a convenience gap.
+- **`targetColumn` is the discriminator, not `success`.** A card in the final stage returns `{ success: true, prompt, advanced: 0 }` with no `targetColumn`; reporting that as progress is a false success on a no-op.
+
+## Dependencies
+
+- **Reuses** `GET /kanban/plans`, `promptSelected` (plural `sessionIds`), `compareByPrecedence` (`kanbanOrdering.ts:75`), and the dependency-gate that `queue/next` already applies. No new endpoint, no new primitive.
+- **Depends on machine-parseable `--json`** if the skill reads via the CLI (`switchboard plans --json`) rather than `switchboard api GET /kanban/plans`. Either works; if the CLI path is used, the *json-output* subtask's guarantees (one parseable document, no truncation) are a prerequisite. The skill should pick one read path and state it.
+- **`AGENTS.md` registry correction** — `AGENTS.md:23` currently says "These four are the ONLY user-typeable workflow commands." Adding `/switchboard-next` makes that false and must be corrected in the same change.
+- **`MIRROR_MANIFEST`** in `ClaudeCodeMirrorService.ts:50` — Claude Code discovers skills through the mirror; an entry in `.agents/` alone exists for one host only. The new skill must be registered in both places.
+- **Ordering within feature:** independent of the other three subtasks at the code level, but its `AGENTS.md` edit and the *agents-need-a-named-operation-set* subtask's `.agents/` rewrites touch neighbouring text — land together or coordinate to avoid clobbering the registry.
+
+## Adversarial Synthesis
+
+Key risks: (1) the echo-then-act safety model is operator-present-dependent and the phone-over-ssh marquee case is the absent-operator case — mitigated by stating the assumption explicitly and relying on card-re-advance for recovery, not by adding a gate; (2) free-text interpretation is non-deterministic with only the echo as audit trail — mitigated by echoing role, source column, count, filters, ordering, and the selected titles before acting; (3) `Unknown`-complexity exclusion is a silent judgement — mitigated by reporting the unscored-exclusion count in the echo; (4) inheriting a seat name from the tmux environment would deliver real cards to the wrong agent — mitigated by making the guidance the identity and refusing to reintroduce inference. A deterministic flag form (`--complexity/--count/--role`) is deliberately not built for the primary surface to avoid a second grammar kept in step with prose; it remains a reasonable future *script* surface, separate from rather than parallel to the prose.
 
 ## Proposed Changes
 
@@ -167,3 +200,12 @@ rule, the complexity-band definition. This one is *not* thin: the interpretation
 12. `switchboard next --from <seat>` still pops the staged queue, unchanged.
 13. The skill resolves on both hosts, and `AGENTS.md` no longer claims four commands are the only
     user-typeable ones.
+
+### Goal Invariants
+
+- **Positive:** `/switchboard-next <guidance>` produces exactly one prompt covering the selected cards and advances them, via `promptSelected` with plural `sessionIds` (one call per source column) — never one prompt per card.
+- **Positive:** the interpretation is echoed before acting, naming role, source column, count, filters, ordering, and the selected titles.
+- **Positive:** ordering is pinned to `compareByPrecedence` priority mode (starred first, then priority 1-4, null last) and is unchanged when the board's order-by mode is switched.
+- **Negative:** no seat identity is read from the environment, process ancestry, or the fleet — the guidance is the only identity input (grep-asserted: no `process.env` seat lookup, no terminal-fleet query on this path).
+- **Negative:** a card with `complexity: "Unknown"` is never included in a complexity-banded batch — it is excluded and counted in the unscored-exclusion report.
+- **Negative:** `switchboard next --from <seat>` (the existing staged-queue pop) is unchanged in behaviour and exit code.

@@ -328,7 +328,10 @@ export async function createTmuxHeadWithDelegates(
             if (pane) {
                 try {
                     const handle = new TmuxTerminalHandle(d.friendlyName, pane.paneId, socket);
-                    await sendPromptToTmux(handle, startupCommand, { clearBeforePrompt: false });
+                    // standingOrders: false — a startup SHELL COMMAND, not a
+                    // prompt to an agent. Orders ride prompts; appending a block
+                    // to a shell command would execute as arguments.
+                    await sendPromptToTmux(handle, startupCommand, { clearBeforePrompt: false, standingOrders: false });
                 } catch {
                     // Startup command failure is non-fatal — the pane exists
                     // and is registered. The operator can send the command

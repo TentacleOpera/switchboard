@@ -1209,6 +1209,20 @@ export class PlanIngestionEngine {
                 continue;
             }
 
+            // (3b) And the silence must POSTDATE the arming. `armedAt` was
+            // recorded and then only ever used to detect a changed record —
+            // never as a gate — so the first nudge could fire on the tick after
+            // `watchFeature`, off a `lastDataAt` from before the head armed
+            // anything. `getFleetLiveness()` is a cached snapshot refreshed
+            // opportunistically, which makes a just-armed head look
+            // hours-silent. One silence window since arming is the floor: below
+            // it there is no post-arming evidence to read, only the cache's
+            // memory of a head that had not started yet.
+            if (nowMs - watch.armedAt < turnEndSilenceMs) {
+                kept.push(watch);
+                continue;
+            }
+
             // Team-liveness: if any team member is actively producing output, the
             // head is waiting for a coder, not stalled. Suppress the nudge. The
             // feature head is a team head, so the roster is resolved the same way
@@ -1614,6 +1628,15 @@ export class PlanIngestionEngine {
                     continue;
                 }
 
+                // (7b) And the silence must POSTDATE the arming — the twin of the
+                // feature sweep's gate (3b). `armedAt` is on the record and was
+                // never gated on, so the first nudge could fire off a cached
+                // `lastDataAt` from before the queue was armed.
+                if (nowMs - watch.armedAt < turnEndSilenceMs) {
+                    kept.push(watch);
+                    continue;
+                }
+
                 // Pacing floor: at most one nudge per watch per `nudgeSilenceMs`
                 // window. `nudgeSilenceMs` (default 10 min) is deliberately
                 // separate from `turnEndSilenceMs` (90s) — the nudge is a
@@ -1960,6 +1983,11 @@ export class PlanIngestionEngine {
      *  5. The seat is live but quiet — `lastDataAt` older than
      *     `turnEndSilenceMs`. Delivering a prompt to a terminal whose agent is
      *     actively working injects text into a running turn (plan edge-case 2).
+     *  5b. And the quiet is POST-DISPATCH quiet: the card has been held for at
+     *     least one silence window, and the seat has produced output since
+     *     `dispatchedAt`. Without both, gate 5 reads a cached pre-dispatch
+     *     `lastDataAt` as "silent for hours" and fires seconds after dispatch —
+     *     see the measurement in the gate itself.
      *  6. Not already notified this tick (shared `notifiedSeatsThisTick` set).
      *  7. Dedupe: a bounded budget per dispatch of the card, re-armed only by
      *     a new `dispatchedAt`, with a `nudgeSilenceMs` floor between reminders
@@ -2099,6 +2127,36 @@ export class PlanIngestionEngine {
             // Delivering a prompt to a terminal whose agent is actively working
             // injects text into a running turn (plan edge-case 2).
             if (live.lastDataAt <= 0 || nowMs - live.lastDataAt < turnEndSilenceMs) { continue; }
+
+            // (5b) The silence must be POST-DISPATCH silence. Gate (5) alone
+            // measures the seat's idleness against `lastDataAt`, which for a
+            // seat that was sitting idle waiting for work is arbitrarily old —
+            // and dispatching a card does not touch it. `getFleetLiveness()` is
+            // also a CACHED snapshot, refreshed opportunistically off whatever
+            // happens to forward `ptyListTerminals`, so right after a dispatch it
+            // still holds the pre-dispatch value.
+            //
+            // Consequence, measured on a live team (2026-09-08, seat log
+            // `Coding-coder-2`): a card dispatched at 00:10:03Z drew this
+            // reminder at 00:10:11Z — EIGHT SECONDS later, at 26k/200k context,
+            // before the coder had done anything, telling it to re-read orders it
+            // had just received inline. Twice per dispatch, by the budget below.
+            // "You have gone idle holding card X" was describing the seat's
+            // idleness from BEFORE it was given the card.
+            //
+            // Two conditions make the sentence true:
+            //   - the card has been held for at least one silence window, so
+            //     there has been time to go quiet since receiving it; and
+            //   - the seat has produced output SINCE the dispatch, so the
+            //     silence being measured is its own, not the cache's memory of
+            //     an idle seat.
+            // A seat that produced nothing at all since dispatch is either still
+            // booting or dead; the dispatch-stall sweep owns that case, and
+            // re-sending orders to it helps nobody.
+            const dispatchedAtMs = Date.parse(String(card.dispatchedAt));
+            if (!dispatchedAtMs || Number.isNaN(dispatchedAtMs)) { continue; } // unreadable stamp is no evidence
+            if (nowMs - dispatchedAtMs < turnEndSilenceMs) { continue; }
+            if (live.lastDataAt <= dispatchedAtMs) { continue; }
 
             // (7) Dedupe: a bounded budget per dispatch of this card.
             const stateKey = `${folder}:${seatName}`;

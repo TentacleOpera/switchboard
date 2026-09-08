@@ -17,12 +17,16 @@ export interface IconPaletteEntry {
     name: string;
     src: string;
     mtime: number;
-    kind: 'agent' | 'team' | 'other';
+    kind: 'jet' | 'brand';
     /** Present only when an `agent-*`/`team-*` PNG is not 32x32. */
     sizeWarning?: string;
 }
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.ico', '.avif']);
+
+/** The default team mark. Sorts first in the palette so it reads as the default,
+ *  not as one option among many. Same file the shell rail masks for every team. */
+export const JET_ICON = 'nav-jet.svg';
 
 /**
  * Read a PNG's pixel dimensions from its IHDR chunk (bytes 16–23, big-endian
@@ -95,16 +99,27 @@ export async function listIconPalette(roots: string[]): Promise<IconPaletteEntry
             if (!st.isFile()) { continue; }
             const ext = path.extname(name).toLowerCase();
             if (!IMAGE_EXTS.has(ext)) { continue; }
-            const kind: IconPaletteEntry['kind'] = name.startsWith('agent-') ? 'agent'
-                : name.startsWith('team-') ? 'team'
-                : 'other';
+            // The palette is deliberately two things and nothing else: the jet
+            // (the default team mark) and the CLI brand icons. Everything else in
+            // icons/ — the 172-file sci-fi stand-in pack, the nav glyphs, the UI
+            // icon set — is not a team identity and must not be offered as one.
+            // A picker that lists every file on disk is how ~240 options became
+            // the choice for a decision with two sensible answers.
+            let kind: IconPaletteEntry['kind'];
+            if (name === JET_ICON) {
+                kind = 'jet';
+            } else if (name.startsWith('brand-') && name !== 'brand-cli-default.svg') {
+                kind = 'brand';
+            } else {
+                continue;
+            }
             const entry: IconPaletteEntry = {
                 name,
                 src: '/static/icons/' + encodeURIComponent(name),
                 mtime: Math.floor(st.mtimeMs / 1000),
                 kind,
             };
-            if ((kind === 'agent' || kind === 'team') && ext === '.png') {
+            if (ext === '.png') {
                 const dims = readPngDimensions(full);
                 if (dims && (dims.width !== 32 || dims.height !== 32)) {
                     entry.sizeWarning = `expected 32x32, got ${dims.width}x${dims.height}`;
@@ -113,7 +128,10 @@ export async function listIconPalette(roots: string[]): Promise<IconPaletteEntry
             icons.push(entry);
         }
     }
-    icons.sort((a, b) => a.name.localeCompare(b.name));
+    icons.sort((a, b) => {
+        if (a.kind !== b.kind) { return a.kind === 'jet' ? -1 : 1; }
+        return a.name.localeCompare(b.name);
+    });
     return icons;
 }
 

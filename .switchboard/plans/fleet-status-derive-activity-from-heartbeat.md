@@ -84,3 +84,76 @@ No changes to `ptyFleetService.ts`, `bootstrap.ts`, `ptyHost.ts`, or `LocalApiSe
 4. **Manual test — exited state**: Close a terminal seat. Run `switchboard fleet`. Verify the STATUS column shows `exited`.
 5. **JSON test**: Run `switchboard fleet --json`. Verify each terminal object includes `activityState` and `secondsSinceLastData` fields, and that raw `status` is still present.
 6. **Backward compatibility**: If feasible, test against an older server response lacking `lastDataAt` — verify the table falls back to raw `status` display without errors.
+
+---
+
+## Review notes appended 2026-09-08 (measured, not reasoned)
+
+Three corrections. The plan's idea — a three-state STATUS derived from the heartbeat — is right and
+cheap. Its **source attribution is wrong**, and that changes Step 4 and the verification.
+
+### 1. The cited file is not the class that runs. Step 4 is false as written.
+
+The plan cites `src/standalone/ptyFleetService.ts` (`:461`, `:478`) as where `lastDataAt` is set, and
+concludes *"No changes to `ptyFleetService.ts` … are needed."* At runtime, `ptyFleetService` **is** a
+different class:
+
+```ts
+const ptyFleetService = new GoPtyFleetProjection(ptyHostSupervisor, workspaceRoot, db, resolvedToken);
+// src/standalone/bootstrap.ts:3587
+```
+
+Output reaches `GoPtyFleetProjection` over a websocket from the Go PTY host, and until 2026-09-08 its
+`socket.on('message')` parsed **every** frame as JSON and `return`ed on failure — while the host
+publishes output as a **binary** frame (`main.go:246`, `encodeOutputFrame`). Every chunk was
+discarded, so `lastDataAt` never advanced. Measured on the live board: a seat the operator was
+watching work reported **531 minutes** since last data, and the liveness sweep logged `recorded=0` for
+the entire session.
+
+Built against that, this plan ships a STATUS column that prints `idle` for every working seat — the
+same misleading-display defect it exists to fix, with the opposite wrong answer. The projection is
+fixed but **the fix needs a rebuild**; do not run this plan's manual tests against a host without it.
+Manual test 2 ("verify STATUS shows working") fails today for reasons that have nothing to do with the
+CLI.
+
+### 2. The `lastDataAt === 0` guard is unreachable, so a stale heartbeat renders as a confident `idle`.
+
+Edge case 2 treats `lastDataAt === 0` as `working` — "no heartbeat data yet means no evidence of rest".
+Correct intent, unreachable branch: the Go host stamps `lastDataAt` at spawn (`main.go:173`), so the
+value is never `0`. It is **positive and frozen**, which sails past the zero-check and lands in
+`now - lastDataAt >= LIVENESS_WINDOW_MS` → `idle`.
+
+This is the same defeat the nudge sweeps suffer — every one guards with
+`lastDataAt <= 0 || now - lastDataAt < turnEndSilenceMs` and fails open for the identical reason. Two
+independent consumers, one defect shape: **the fail-safe tests for a *missing* value, and the value is
+not missing — it is stale.** A default that behaves exactly like a real reading turns a loud failure
+into a quiet wrong answer.
+
+**Required change:** staleness needs its own state, distinct from `idle`. Derive `unknown` (or
+`stale`) when the heartbeat is implausibly old — e.g. older than the seat's own start time by more
+than some multiple of the window, or beyond a ceiling no genuine mid-turn quiet stretch could reach.
+`idle` must mean "measured, and at rest", never "the clock stopped". Apply the same to
+`secondsSinceLastData` in the `--json` branch: emit the derived state so a consumer cannot re-derive
+`idle` from a frozen number.
+
+### 3. `LIVENESS_WINDOW_MS = 90000` is a third hardcoded copy of a number nobody measured.
+
+Edge case 4 already concedes the CLI copy can diverge from a server-side override. The deeper problem
+is upstream: the 90s default was never measured. From
+`feature_plan_20260808083000_pty-turn-end-from-output-silence.md`:
+
+> "The 90s default is inherited from a neighbouring knob, not measured. If any CLI routinely exceeds
+> it, raise the default rather than accepting false completions."
+
+That plan's Verification step 2 — measure the real mid-turn quiet ceiling per CLI — is still
+outstanding. It also warned at line 96 against reusing `livenessWindowMs` for a different question:
+*"One number carrying two decisions is precisely how a heuristic degrades invisibly."* There are now
+copies in `livenessWindowMs`, `turnEndSilenceMs`, `LocalApiServer.ts:4671` (hardcoded), and this plan
+would add a fourth. Prefer reading the server's value (the plan's own "future enhancement" — expose it
+via `/health`) over hardcoding, so the eventual measurement lands in one place.
+
+### Verification additions
+
+- Confirm the host is running the `GoPtyFleetProjection` binary-frame fix **before** any manual test.
+- A seat with a frozen heartbeat renders as `unknown`/`stale`, never `idle`.
+- A genuinely quiet-but-live seat renders `idle`; a seat producing output renders `working`.

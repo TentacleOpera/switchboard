@@ -301,6 +301,21 @@
             color: var(--accent);
             fill: var(--accent);
         }
+        /* Team initial: bottom-right, because is-dispatched::after owns the
+           top-right corner. The text-shadow keeps it legible where it overlaps
+           the jet's wingtip. */
+        .strip-team-initial {
+            position: absolute;
+            bottom: 1px;
+            right: 3px;
+            font-size: 9px;
+            line-height: 1;
+            font-weight: 700;
+            letter-spacing: 0;
+            color: var(--accent);
+            pointer-events: none;
+            text-shadow: 0 0 3px var(--bg), 0 0 2px var(--bg);
+        }
         .strip-team-btn.is-dispatched::after {
             content: '';
             position: absolute;

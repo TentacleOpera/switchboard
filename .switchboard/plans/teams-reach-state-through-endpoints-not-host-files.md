@@ -12,6 +12,10 @@ Two separate instruction sets send team agents to fetch state the host had alrea
 
 So the correct pattern was chosen deliberately for per-dispatch prompts, and the standing orders never followed. They are durable text appended at delivery, so they cannot be fixed per-dispatch — the wording itself has to change.
 
+> **Superseded:** `teamWiring.ts` contains 15 references to `.switchboard/api-server-port.txt` and every queue order body says "against the port in `.switchboard/api-server-port.txt`".
+> **Reason:** A fragment sweep already landed. `agentPromptBuilder.ts:895-896` states: *"the fragment sweep removed every `.switchboard/api-server-port.txt` reference, so those instructions name 'the API base in your SWITCHBOARD STATUS line' and resolve here."* The active completion fragment (`buildMemberCompletionFragment` in `standingOrderFragments.ts:62`) says `"against the API base named in your SWITCHBOARD STATUS line"`. `agentGroupInstantiation.ts:292-293` already says `"Do not read .switchboard/api-server-port.txt."` `KanbanProvider.ts:5800-5834` already has the conditional: when port resolved → `"against $BASE"` + `"Do NOT read .switchboard/api-server-port.txt (the port is above)."` The 3 remaining references in `teamWiring.ts` (lines 98-99, 213-214, 248-249) are all in **legacy recogniser constants** (`PRE_REWRITE_CALLBACK_INSTRUCTION`, `LEGACY_CONTEXT_AWARE_COMPLETION_ORDER_BODY`, `LEGACY_CONTEXT_AWARE_COMPLETION_ORDER_BODY_V2`) — intentionally byte-identical to old shipped text so `migrateCodingTeamOrders` can match and rewrite installed orders. Changing them would break migration recognition. The 1 reference in `terminals.js:10689` is a mirror of the same legacy recogniser.
+> **Replaced with:** The sweep is done. The remaining work is: (1) verify the port line reaches every role (the `SWITCHBOARD LIVENESS_DIRECTIVE` is the mechanism now), (2) a grep gate with a proper allowlist for legacy recognisers + host-side code + the degenerate fallback, (3) state the contract in one place, (4) the `query-kanban` DB access remains another plan's scope.
+
 **2. The database.** `.gitignore:52` ignores `.switchboard/*`, so `kanban.db` is host-only by design — one DB, one owner. But the `query-kanban` skill instructs agents to resolve `$SB_ROOT/.switchboard/kanban.db` and query it with `sqlite3`, and it is `invocation: 'no-user'` — model-loadable, so a team member can pick it up unprompted.
 
 **Neither is needed, because the read endpoints exist:** `GET /kanban/board`, `/kanban/columns`, `/kanban/features`, `/kanban/plan`, `/kanban/plans`. Agents already use them — the head order itself calls `GET /kanban/plans?featureId=<id>` (`teamWiring.ts:754-757`).
@@ -26,7 +30,7 @@ Each instruction was written where its author's cwd was the main workspace root,
 
 ## Metadata
 
-**Complexity:** 3
+**Complexity:** 2
 **Tags:** reliability, refactor, docs, api
 
 ## User Review Required
@@ -38,8 +42,13 @@ Each instruction was written where its author's cwd was the main workspace root,
 
 ### Routine
 
-- Rewording the 15 port-file references in `teamWiring.ts` to use the port supplied in the prompt.
-- Adding grep gates for both classes.
+- **Verifying the port line (`SWITCHBOARD LIVENESS_DIRECTIVE`) reaches every role** that receives a queue order — the mechanism that replaced the port-file references.
+- **Adding a grep gate** with an explicit allowlist (legacy recogniser constants, `KanbanProvider` degenerate fallback, host-side port-file readers in `cli.ts`/`bootstrap.ts`/`TaskViewerProvider.ts`).
+- **Stating the access contract** in one place — team agents use endpoints; the port comes from the `SWITCHBOARD STATUS` line; the DB is host-owned; `GET /catalog` is the endpoint reference.
+
+> **Superseded:** Rewording the 15 port-file references in `teamWiring.ts` to use the port supplied in the prompt.
+> **Reason:** The fragment sweep already reworded all active instructions. The remaining references are legacy recogniser constants that must not be changed.
+> **Replaced with:** Verify the `SWITCHBOARD LIVENESS_DIRECTIVE` reaches every role, and add a grep gate with an allowlist for the legacy recognisers and host-side code.
 
 ### Complex / Risky
 
@@ -74,14 +83,18 @@ Each instruction was written where its author's cwd was the main workspace root,
 
 **"A written contract will not stop the next order re-adding a path."** On its own, no — which is why the deliverable is a grep gate as much as a sentence. The gate is what makes the contract enforceable.
 
+**Risk Summary:** Key risks: (1) the grep gate could pass while the `KanbanProvider` degenerate fallback still names the file — the allowlist must be explicit and the invariant scoped to *active* instructions; (2) a role whose prompt lacks the `SWITCHBOARD LIVENESS_DIRECTIVE` would be stranded by instructions that reference it — the port-line-per-role check catches this and must run first. Mitigations: allowlist documents every legitimate reference; the port-line check is the first verification step.
+
 ## Proposed Changes
 
-1. **Verify the port line reaches every role receiving a queue order**, before rewording anything.
-2. **Reword the 15 port-file references** in `teamWiring.ts` to use the port supplied in the prompt.
-3. **Rewrite installed orders** carrying the old text, per `rewriteStandingOrdersForRename`'s pattern.
-4. **State the access contract** in one place — team agents use endpoints; the port comes from the prompt; the DB is host-owned and not a team capability; `GET /catalog` is the endpoint reference. Not in the injected block, which is being emptied.
-5. **Grep gates**: no agent-facing instruction names `api-server-port.txt` or `kanban.db`.
-6. **Leave non-team guidance alone** — that is the preconditions plan's scope.
+1. **Verify the `SWITCHBOARD LIVENESS_DIRECTIVE` reaches every role receiving a queue order.** The active instructions already say "against the API base named in your SWITCHBOARD STATUS line" — if a role's prompt lacks that line, the instruction strands that role. This is the one check that could surface a real gap, and it runs first.
+2. **State the access contract** in one place — team agents use endpoints; the port comes from the `SWITCHBOARD STATUS` line; the DB is host-owned and not a team capability; `GET /catalog` is the endpoint reference. Not in the injected block, which is being emptied.
+3. **Grep gate with allowlist**: no *active* agent-facing instruction names `api-server-port.txt` or `kanban.db`. The allowlist must cover: (a) legacy recogniser constants in `teamWiring.ts` and `terminals.js` (`PRE_REWRITE_CALLBACK_INSTRUCTION`, `LEGACY_CONTEXT_AWARE_COMPLETION_ORDER_BODY`, `LEGACY_CONTEXT_AWARE_COMPLETION_ORDER_BODY_V2`) — these must keep the old text for migration matching; (b) the `KanbanProvider._resolveRosterAndPort` degenerate fallback (fires only when port = 0 AND port file missing — the server is down); (c) host-side code that legitimately reads the port file (`cli.ts` port discovery, `bootstrap.ts` port file writer, `TaskViewerProvider.ts` port file management).
+4. **Leave non-team guidance alone** — that is the preconditions plan's scope.
+
+> **Superseded:** Steps 2–3 from the original plan: "Reword the 15 port-file references in `teamWiring.ts`" and "Rewrite installed orders carrying the old text, per `rewriteStandingOrdersForRename`'s pattern."
+> **Reason:** The fragment sweep already reworded all active instructions. The `migrateCodingTeamOrders` function already rewrites installed orders carrying legacy text on read. The rewording and migration are done.
+> **Replaced with:** Verify the `SWITCHBOARD LIVENESS_DIRECTIVE` reaches every role, and add a grep gate with an allowlist. The migration mechanism already exists and heals stale installs on their next prompt.
 
 ### Migration
 
@@ -91,17 +104,15 @@ Installed orders rewritten in place; a constant-only change reaches nobody.
 
 ### Goal Invariants
 
-- No standing order or prompt directed at a team agent names `.switchboard/api-server-port.txt` or `kanban.db`.
-- Every role that receives a queue order also receives the port in its prompt.
-- Installed orders carrying the old wording are rewritten.
+- No *active* standing order or prompt directed at a team agent names `.switchboard/api-server-port.txt` or `kanban.db` — excluding the explicit allowlist (legacy recogniser constants, `KanbanProvider` degenerate fallback, host-side port-file readers).
+- Every role that receives a queue order also receives the `SWITCHBOARD LIVENESS_DIRECTIVE` (port line) in its prompt.
 - Every board read a team performs goes through an endpoint.
 
 ### Automated Tests
 
 - **Port line present per role:** for every role that can receive a queue order, assert the composed prompt carries a literal port. This runs *first* — rewording the order while a member's prompt lacks the port would strand that member, and it is the only way this plan breaks something.
-- **No host-path instructions:** assert no agent-facing instruction in `teamWiring.ts` or the prompt builder contains `api-server-port.txt` or `kanban.db`, with an explicit allowlist for host-side code that legitimately reads them (the drive prefix does, correctly, and must keep doing so).
-- **Installed orders rewritten:** seed old bodies, migrate, assert they are updated — the assertion that distinguishes a shipped fix from an edited constant.
-- **Reinstall does not resurrect:** run the installers after migration; assert the old wording does not return via the deterministic-id skip.
+- **No host-path instructions:** assert no *active* agent-facing instruction in `teamWiring.ts`, `standingOrderFragments.ts`, `agentPromptBuilder.ts`, or `agentGroupInstantiation.ts` contains `api-server-port.txt` or `kanban.db`, with an explicit allowlist for: (a) legacy recogniser constants (`PRE_REWRITE_CALLBACK_INSTRUCTION`, `LEGACY_CONTEXT_AWARE_COMPLETION_ORDER_BODY`, `LEGACY_CONTEXT_AWARE_COMPLETION_ORDER_BODY_V2`) in `teamWiring.ts` and their mirror in `terminals.js`; (b) the `KanbanProvider._resolveRosterAndPort` degenerate fallback; (c) host-side port-file readers in `cli.ts`, `bootstrap.ts`, `TaskViewerProvider.ts`.
+- **Installed orders rewritten:** the `migrateCodingTeamOrders` function already rewrites stale installed orders on read. Assert that seeding old bodies and running the migration updates them — verifying the existing mechanism still covers the legacy text.
 - **Endpoints cover the orders' needs:** assert every board read named in an order body corresponds to a real endpoint. Catches an order asking for something the API cannot serve, which would otherwise become the next reason someone reaches for SQL.
 
 ## Outstanding Questions

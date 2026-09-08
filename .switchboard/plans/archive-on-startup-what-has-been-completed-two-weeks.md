@@ -37,10 +37,38 @@ It cannot advance a card, it acts only on an explicit human decision, and it doe
 
 - **Complexity:** 4
 - **Tags:** archive, watcher, both-hosts, bugfix
+- **Project:** Browser Switchboard
 
 ## User Review Required
 
 None.
+
+## Complexity Audit
+
+* **Score:** 4 / 10
+
+### Routine
+
+* A single startup pass over `COMPLETED` rows whose `column_entered_at` is ≥ 2 weeks old, moving them to the cold store. `column_entered_at` is already populated on all 2,567 COMPLETED rows with no nulls, and is rewritten on every column transition (verified across all four transition UPDATEs in `KanbanDatabase`).
+* Deleting the dwell-triggered auto-completion sweep (the 2-hour dwell that force-moves cards *into* COMPLETED).
+
+### Complex / Risky
+
+* **Composition-root parity.** `startAutoArchiveForAll()` is called only from `extension.ts` (`:1275`, `:1279`, `:1285`); `bootstrap.ts` has no reference. The new startup archive must be wired into **both** hosts or the standalone host archives nothing — the exact "never wired vs. working" trap `CLAUDE.md` opens by describing.
+* **The plan file may not move.** `ArchiveManager` contains no `unlink`/`rename`/`copyFile`; archival today is a status change only. If the file stays in `.switchboard/plans/`, the scanner's directory listing and recognition set keep growing and the archive has not solved what it appears to solve. This is an open decision (see Outstanding Questions).
+* **485 cards archive on the first run** — a large single-pass change to a live board. It must report what it did rather than acting silently.
+* **Features and subtasks must archive together** or not at all; a feature in the cold store with live subtasks on the board is worse than either.
+* **Establishing why the extension archived nothing for months** before building — if a second defect exists, the new rule inherits it.
+
+## Dependencies
+
+None internal to this feature. The `column_entered_at` field (V61 migration) is already populated. `ArchiveManager` and `startAutoArchiveForAll()` already exist (extension-wired only). No `sess_` prerequisites.
+
+## Adversarial Synthesis
+
+**Risk Summary:** Key risks: (1) composition-root divergence — the standalone host never starts the archive unless `bootstrap.ts` is wired, and no gate catches "never wired"; (2) the plan file does not move on archive today, so the plans directory keeps growing and the archive is cosmetic unless the file-move decision is made; (3) 485 cards archive on the first run, a large silent change if it does not report; (4) a second defect may explain why the extension archived nothing for months, and the new rule would inherit it. Mitigations: wire both composition roots; decide the file-move explicitly (see Outstanding Questions); report the archived count on first run; establish the extension's no-archive cause before building.
+
+---
 
 ## Proposed Changes
 
@@ -86,3 +114,16 @@ Find that cause before building — if it is a second defect, the new rule inher
 7. A card returned from COMPLETED to an active column is not archived.
 8. A feature and its subtasks archive together.
 9. The first run reports the count rather than archiving silently.
+
+### Goal Invariants
+
+- **Negative (absent):** no card is ever moved *into* COMPLETED by this mechanism — the dwell-triggered auto-completion is gone, not reconfigured. `grep` for the dwell timer / 2-hour threshold in the archive path returns nothing.
+- **Negative (absent):** no periodic archive sweep runs — archival is startup-only.
+- **Positive (resolvable):** on startup, a `COMPLETED` card with `column_entered_at` ≥ 2 weeks old is moved to the cold store; a younger one is not.
+- **Round-trip:** a card moved to COMPLETED by hand and moved back out is not archived (a stale `column_entered_at` does not trigger it) — `column_entered_at` is rewritten on every column change.
+- **Status:** an archived row carries `status = 'completed'` (not `'archived'`).
+- **Parity:** both hosts archive identically (extension and standalone).
+
+## Outstanding Questions
+
+- **[user]** Does archival move the plan **file** out of `.switchboard/plans/` (so the directory and the scanner's recognition set stop growing), or is it a status change only? — proceeding on the assumption that the file SHOULD move (otherwise the archive is cosmetic and the plans directory keeps growing), but the move is reversible and the operator should confirm because it changes the on-disk footprint and the git-tracked surface. `ArchiveManager` currently has no `unlink`/`rename`/`copyFile`, so a file move is net-new code.
