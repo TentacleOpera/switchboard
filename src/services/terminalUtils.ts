@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { applyStandingOrders, StandingOrder, TerminalGroup } from './standingOrders';
+import { applyStandingOrdersForDelivery } from './standingOrdersDelivery';
 
 // Clipboard mutex: serialize paste operations to prevent user clipboard data loss
 let _clipboardLock: Promise<void> = Promise.resolve();
@@ -168,10 +169,18 @@ export function getAntigravityHash(rawPath: string): string {
  *
  * The `standingOrders` option is the VS Code terminal delivery chokepoint.
  * The PTY host chokepoints (`_ptyHostVerb` / `deliverPrompt`) do not cover VS
- * Code terminals, which are sent through this path. The caller resolves orders
- * + live names + groups from the DB and passes them in; this hook applies them
- * before delivery. Pass `false` to explicitly opt out (machine-origin
- * notifications); omit the option for sends that are not agent dispatches.
+ * Code terminals, which are sent through this path.
+ *
+ * Orders ride EVERY send unless the caller passes `false`. Omitting the option
+ * no longer means "no orders" — it means "resolve them for me", via the
+ * host-wired `resolveStandingOrdersSnapshot` seam. It used to mean the former,
+ * which made a forgotten option indistinguishable from a target with no orders:
+ * the plan-comment relay (`extension.ts`) omitted it and delivered prompts to
+ * agent terminals with no orders for as long as it has existed.
+ *
+ * Pass an explicit snapshot when you have already resolved one (saves the
+ * round-trip), or `false` to opt out — control strings like `/clear`, where a
+ * pasted orders block would be delivered as terminal input.
  */
 export async function sendRobustText(
     terminal: vscode.Terminal,
@@ -181,7 +190,7 @@ export async function sendRobustText(
     options?: {
         acquireFocus?: boolean;
         background?: boolean;
-        standingOrders?: false | { orders: StandingOrder[]; liveNames: Set<string>; groups: TerminalGroup[] };
+        standingOrders?: false | { orders: StandingOrder[]; liveNames: Set<string>; groups: TerminalGroup[]; hasRegisteredRounds?: boolean };
     }
 ): Promise<void> {
     // VS Code terminal delivery chokepoint: apply standing orders before
@@ -189,19 +198,34 @@ export async function sendRobustText(
     // skipped orders before — VS Code terminal agents now receive their
     // standing-orders block like PTY fleet agents do.
     let deliverText = text;
-    // `!== undefined` first, then `!== false`: a bare truthiness test makes the
-    // second comparison type-invalid (the union is already narrowed to the
-    // object), which is a compile error, and dropping the `!== false` loses the
-    // explicit opt-out the other two chokepoints are contract-tested for.
-    if (options?.standingOrders !== undefined && options.standingOrders !== false) {
+    if (options?.standingOrders !== false) {
         try {
-            deliverText = applyStandingOrders(
-                text,
-                terminal.name,
-                options.standingOrders.orders,
-                options.standingOrders.liveNames,
-                options.standingOrders.groups
-            );
+            // An explicit snapshot wins (the caller already paid for the read);
+            // an omitted option goes through the host-registered applier seam.
+            // `!== undefined` before `!== false` because a bare truthiness test
+            // leaves the union narrowed to the object and makes the second
+            // comparison a compile error.
+            if (options?.standingOrders !== undefined) {
+                deliverText = applyStandingOrders(
+                    text,
+                    terminal.name,
+                    options.standingOrders.orders,
+                    options.standingOrders.liveNames,
+                    options.standingOrders.groups,
+                    undefined,
+                    { hasRegisteredRounds: options.standingOrders.hasRegisteredRounds === true }
+                );
+            } else {
+                const applied = await applyStandingOrdersForDelivery(terminal.name, text);
+                if (applied.source !== 'applier') {
+                    // Missing, not empty. Loud, because the prompt goes out
+                    // without orders either way and nothing downstream can tell.
+                    console.warn(
+                        `[terminalUtils] standing orders unresolved for "${terminal.name}" (source: ${applied.source}) — prompt delivered without them`
+                    );
+                }
+                deliverText = applied.text;
+            }
         } catch { /* a degraded prompt beats a lost dispatch */ }
     }
 

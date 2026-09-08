@@ -1022,6 +1022,17 @@
             color: #7c3aed;
             font-weight: 700;
         }
+        /* Coding Rounds (subtask 05): round indicator on feature cards. Reads
+         * directly from coding_rounds (never inferred from card counts). A
+         * 'partial' round (some subtask seats undelivered) is amber so it is
+         * visibly distinct from a healthy 'dispatched' round. */
+        .round-indicator {
+            color: var(--vscode-textLink-foreground, #3794ff);
+            font-weight: 600;
+        }
+        .round-indicator.partial {
+            color: #d29922;
+        }
 
         /* During drag, prevent child elements from interfering with drop targets */
         .column-body.drag-over .kanban-card,
@@ -5996,13 +6007,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // Group by kind so the picker can show Agents / Teams / Stand-in
             // as separate sections — the stand-in pack drops as one group
             // once real art lands.
-            const groups = { agent: [], team: [], other: [] };
+            const groups = { jet: [], brand: [] };
             for (const ic of icons) {
-                (groups[ic.kind] || groups.other).push(ic);
+                if (groups[ic.kind]) { groups[ic.kind].push(ic); }
             }
-            const groupLabels = { agent: 'Agents', team: 'Teams', other: 'Stand-in' };
+            const groupLabels = { jet: 'Default', brand: 'CLI brand' };
             const currentValue = teamsTabIconValue();
-            for (const kind of ['agent', 'team', 'other']) {
+            for (const kind of ['jet', 'brand']) {
                 const arr = groups[kind];
                 if (!arr || arr.length === 0) { continue; }
                 const header = document.createElement('div');
@@ -6030,12 +6041,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         badge.title = ic.sizeWarning;
                         cell.appendChild(badge);
                     }
-                    // Store as pack:<name> (the stand-in form); real art uses
-                    // art:<name> but the picker offers whatever is on disk.
-                    // The filename IS the id — store the raw filename.
-                    const storeValue = ic.kind === 'agent' || ic.kind === 'team'
-                        ? 'art:' + ic.name.replace(/\.png$/i, '')
-                        : 'pack:' + ic.name;
+                    // One storage form for the whole palette: the exact filename
+                    // under `pack:`, which both resolvers already expand verbatim
+                    // (`/static/icons/<encoded file>`). The `art:` form is NOT usable
+                    // here — it hardcodes a `.png` extension and every icon the
+                    // palette now offers is an SVG.
+                    const storeValue = 'pack:' + ic.name;
                     cell.addEventListener('click', () => {
                         teamsTabSetIconValue(storeValue);
                         teamsTabCloseIconGrid();
@@ -6580,6 +6591,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         }
         let allCards = [];
         let currentMissions = [];
+        // Coding Rounds (subtask 05): per-feature round records read DIRECTLY
+        // from the coding_rounds table via the board poll. Empty array → no
+        // feature shows a round indicator (no fabrication from card counts).
+        // Keyed by featureId for O(1) lookup in the card renderer.
+        let currentCodingRounds = [];
         // Per-column render cap (plan change 1): only the first N rows of every
         // column are built into the DOM at first paint; the rest page in on
         // demand via the "Load more" control. No column is special — the same N
@@ -9975,6 +9991,33 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             `;
         }
 
+        // Coding Rounds (subtask 05): render the round indicator for a feature
+        // card. Reads DIRECTLY from currentCodingRounds (populated by the board
+        // poll from the coding_rounds table) — never inferred from card counts.
+        // Returns '' (no indicator) when the feature has zero round rows, so a
+        // team with no registered rounds shows no round indicator. A 'partial'
+        // round (some subtask seats undelivered) is rendered with a distinct
+        // class so it is visibly different from a healthy 'dispatched' round.
+        // The indicator shows the current round ordinal and the total
+        // registered rounds: "Round 2 of 3". The "current" round is the first
+        // non-closed row (state 'registered', 'dispatched', or 'partial'); if
+        // all rows are closed, the feature is done and no indicator renders.
+        function renderRoundIndicator(featurePlanId) {
+            if (!featurePlanId) { return ''; }
+            const rounds = currentCodingRounds.filter(r => r.featureId === featurePlanId);
+            if (rounds.length === 0) { return ''; }
+            // Find the current (first non-closed) round. Rows are ordered by
+            // ordinal ASC by the backend, so the first non-closed is current.
+            const current = rounds.find(r => r.state !== 'closed');
+            if (!current) { return ''; }
+            const total = rounds.length;
+            const ordinal = current.ordinal;
+            const isPartial = current.state === 'partial';
+            const cls = isPartial ? 'round-indicator partial' : 'round-indicator';
+            const label = `Round ${ordinal} of ${total}${isPartial ? ' (partial)' : ''}`;
+            return ` · <span class="${cls}" data-tooltip="${escapeAttr(label)}">${escapeHtml(label)}</span>`;
+        }
+
         function createCardHtml(card) {
             const shortTopic = card.topic.length > 50 ? card.topic.substring(0, 47) + '...' : card.topic;
             const complexityValue = card.complexity || 'Unknown';
@@ -10059,8 +10102,18 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const workingClass = isWorking ? ' is-working' : '';
             const stateTitle = isWorking ? ' title="Agent working…"' : '';
 
+            // Coding Rounds (subtask 05): round indicator reads DIRECTLY from
+            // the coding_rounds table (currentCodingRounds, populated by the
+            // board poll). Never inferred from card counts — a team with three
+            // dispatched cards and no registered rounds shows NO indicator.
+            // Zero rows for this feature → no indicator. A 'partial' round
+            // (some subtask seats undelivered) is visibly distinct from a
+            // healthy 'dispatched' round.
+            const roundIndicator = card.isFeature
+                ? renderRoundIndicator(card.planId)
+                : '';
             const cardMetaContent = card.isFeature
-                ? `<span class="feature-subtask-label">FEATURE: ${card.subtaskCount || 0} SUBTASK${(card.subtaskCount || 0) !== 1 ? 'S' : ''}</span> · <span class="complexity-indicator ${complexityClass}">${category}</span>`
+                ? `<span class="feature-subtask-label">FEATURE: ${card.subtaskCount || 0} SUBTASK${(card.subtaskCount || 0) !== 1 ? 'S' : ''}</span> · <span class="complexity-indicator ${complexityClass}">${category}</span>${roundIndicator}`
                 : `Complexity: <span class="complexity-indicator ${complexityClass}">${category}</span>`;
             const completeOrDoneBtn = isCompleted
                 ? `<span class="card-done-badge">✓ Done</span>`
@@ -11594,6 +11647,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     }
                     allCards = applyPendingOptimisticMoves(rawCards);
                     currentMissions = Array.isArray(msg.missions) ? msg.missions : [];
+                    // Coding Rounds (subtask 05): store the per-feature round
+                    // records read directly from coding_rounds. Empty/absent
+                    // → no feature shows a round indicator (no fabrication).
+                    currentCodingRounds = Array.isArray(msg.codingRounds) ? msg.codingRounds : [];
                     if (msg.orderByMode) {
                         currentOrderByMode = msg.orderByMode;
                         const orderSel = document.getElementById('orderByModeSelect');

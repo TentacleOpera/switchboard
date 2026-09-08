@@ -6964,6 +6964,55 @@ export class KanbanDatabase {
     }
 
     /**
+     * Read all coding_rounds rows for a workspace, ordered by feature_id then
+     * ordinal ASC. Used by the board poll (Coding Rounds feature, subtask 05)
+     * to render the round indicator per feature — the board READS the
+     * `coding_rounds` table directly rather than inferring the round from
+     * dispatched-card counts (a team with three dispatched cards and no
+     * registered rounds must NOT show "round 1 of 1" — that is a fabrication).
+     * A workspace with zero rows yields an empty array, and the board renders
+     * no round indicator for any feature. The subtask_seats JSON is parsed
+     * back into an object (same shape as getCodingRoundsByTeam).
+     */
+    public async getCodingRoundsByWorkspace(workspaceId: string): Promise<CodingRoundRecord[]> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        const stmt = this._db.prepare(
+            `SELECT round_id, feature_id, team_id, workspace_id, ordinal, total_registered, state, subtask_seats, registered_at, dispatched_at, closed_at
+             FROM coding_rounds WHERE workspace_id = ? ORDER BY feature_id ASC, ordinal ASC`,
+            [workspaceId]
+        );
+        const rows: CodingRoundRecord[] = [];
+        try {
+            while (stmt.step()) {
+                const r = stmt.getAsObject();
+                let subtaskSeats: Record<string, { seat: string; delivered: boolean; delivered_at: string | null }> = {};
+                try {
+                    const parsed = JSON.parse(String(r.subtask_seats ?? '{}'));
+                    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                        subtaskSeats = parsed as any;
+                    }
+                } catch { /* corrupt JSON — treat as empty */ }
+                rows.push({
+                    roundId: String(r.round_id ?? ''),
+                    featureId: String(r.feature_id ?? ''),
+                    teamId: String(r.team_id ?? ''),
+                    workspaceId: String(r.workspace_id ?? ''),
+                    ordinal: Number(r.ordinal ?? 0),
+                    totalRegistered: Number(r.total_registered ?? 0),
+                    state: String(r.state ?? 'registered'),
+                    subtaskSeats,
+                    registeredAt: String(r.registered_at ?? ''),
+                    dispatchedAt: r.dispatched_at ? String(r.dispatched_at) : null,
+                    closedAt: r.closed_at ? String(r.closed_at) : null,
+                });
+            }
+        } finally {
+            stmt.free();
+        }
+        return rows;
+    }
+
+    /**
      * Find active plans whose plan_file no longer exists on disk and tombstone them.
      * Only checks local-source plans (skips brain-source).
      * Missing files must still be absent after a short confirmation delay so

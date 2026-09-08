@@ -82,12 +82,14 @@ import {
     rewriteStandingOrdersForRename,
     resolveTeamStanding,
     removeReviewerCallbackOrder,
+    resolveHasRegisteredRoundsForSeat,
 } from '../services/standingOrders';
 import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExternalTeamTemplate } from '../services/agentGroupInstantiation';
 // The pure migrators are deliberately NOT imported here — see the note at the
 // matching import in TaskViewerProvider.ts. `loadEffectiveStandingOrders` is the
 // only server-side reader of `terminals.standingOrders` in either host.
 import { wireSpawnedTeam, loadEffectiveStandingOrders, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, type TerminalGroupsSettingsAccessor } from '../services/teamWiring';
+import { setStandingOrdersApplier } from '../services/standingOrdersDelivery';
 import { ORIENTATION_PREAMBLE, waitForSeatQuiescence } from '../services/startupOrientation';
 import { resolveWorkContext, resolveTeamGroupForTerminal, computeRosterClearTargets, dropDeferredClear, renameDeferredClear } from '../services/workContextResolver';
 
@@ -439,18 +441,18 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         orientationOnly = false
     ): Promise<PromptDeliveryReceipt | undefined> => {
         // A machine-origin delivery (a queue/done relay, a coder's fallback
-        // report) carries NONE of the three appends — not standing orders, not
-        // the seat directive block, not the dispatch-protocol directive. All
-        // three exist to equip a seat for work it is about to do; a seat being
-        // told that someone else finished is not about to do that work. Folded
-        // into the two flags here rather than into the branch conditions below
-        // so this host reads the same shape as TaskViewerProvider's twin (which
-        // ANDs `!payload?.machineOrigin` into its `applySO` / `applySeatBlock`
-        // consts) — the source-text gates in
-        // seat-safeguards-fleet-prompt-path.test.js anchor on the literal
-        // `if (applySeatBlock) {`.
+        // report) carries no seat directive block and no dispatch-protocol
+        // directive: both exist to equip a seat for work it is about to do, and
+        // a seat being told that someone else finished is not about to do that
+        // work. It DOES carry standing orders — those ride every prompt
+        // delivery, whoever sent it, and the relay to a head is one of the few
+        // paths that reaches a head mid-run. Suppression is the caller's
+        // explicit `standingOrders: false`, never a payload shape. Folded into
+        // the flag here rather than into the branch conditions below so this
+        // host reads the same shape as TaskViewerProvider's twin — the
+        // source-text gates in seat-safeguards-fleet-prompt-path.test.js anchor
+        // on the literal `if (applySeatBlock) {`.
         if (machineOrigin) {
-            applyOrders = false;
             applySeatBlock = false;
         }
         // Prune cache against live active fleet
@@ -604,6 +606,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                     out = applyStandingOrders(out, handle.friendlyName, effectiveOrders, live, groups || [], roleMap, {
                         subagentPolicy: seatOpts?.subagentPolicy,
                         customSubagentName: seatOpts?.customSubagentName,
+                        hasRegisteredRounds: await resolveHasRegisteredRoundsForSeat(db, handle.friendlyName, effectiveOrders, groups || []).catch(() => false),
                     });
                     soBlockAdded = out !== beforeSO;
                 }
@@ -1631,13 +1634,23 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         }
         return true;
     });
-    switchboardCommandRegistry.register('switchboard.triggerAgentFromKanban', async (role: string, sessionId: string, instruction?: string, targetRoot?: string, terminalName?: string) => {
+    switchboardCommandRegistry.register('switchboard.triggerAgentFromKanban', async (role: string, sessionId: string, instruction?: string, targetRoot?: string, terminalName?: string, _apiOriginated?: boolean, bypassTriggerGate?: boolean, unattended?: boolean, originTerminal?: string, skipClear?: boolean, clearBeforePrompt?: boolean) => {
         // Allow when EITHER fleet is live: triggerAction can resolve to a tmux
         // pane when no PTY matches, so a tmux-only host must still dispatch.
         if (!ptyReady && !tmuxReady) {
             return { success: false, error: 'No terminal runtime available: PTY host is missing and tmux bridge is not enabled.' };
         }
-        return await handlePtyVerb('triggerAction', { role, sessionId, instruction, terminalName }, targetRoot || workspaceRoot);
+        return await handlePtyVerb('triggerAction', {
+            role,
+            sessionId,
+            instruction,
+            terminalName,
+            bypassTriggerGate: !!bypassTriggerGate,
+            unattended: !!unattended,
+            originTerminal,
+            skipClear: !!skipClear,
+            clearBeforePrompt,
+        }, targetRoot || workspaceRoot);
     });
     // `_apiOriginated` is a DEAD SLOT held on purpose, mirroring extension.ts: the
     // surface flag is gone, but closing the slot up would land a boolean in
@@ -2537,6 +2550,18 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     }
 
                     if (contextIdentity) {
+                        // skipClear (Coding Rounds subtask 03): skip the roster
+                        // barrier clear. The roster barrier clears the ENTIRE
+                        // roster, which would kill another feature's in-flight
+                        // seats on a team with two features. The destination
+                        // clearBeforePrompt is NOT forced false here — the
+                        // caller controls it. For initial dispatch, the
+                        // destination IS cleared. For re-delivery, the caller
+                        // passes clearBeforePrompt: false. The clearCompletedAt
+                        // call in performKanbanDispatch is NOT skipped.
+                        if (payload?.skipClear) {
+                            // Skip the roster barrier.
+                        } else {
                         // Atomic work context lifecycle:
                         const dispatchDb = db;
                         const workCtx = await resolveWorkContext(dispatchDb, contextIdentity);
@@ -2721,6 +2746,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             }
                             lastWorkContextByTerminal.set(payload.name, workContextKey);
                         }
+                        } // end skipClear else
                     }
                     const bootPhase = handle.promptCount === 0;
                     try {
@@ -2728,9 +2754,15 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         const resolvedClear = typeof payload.clearBeforePrompt === 'boolean'
                             ? payload.clearBeforePrompt
                             : (payload.clearBeforePromptFromConfig === true ? deliveryDefaults.clearBeforePrompt : false);
-                        const isMessage = payload.kind === 'message'
+                        // `!isOrientation` first, matching TaskViewerProvider's twin
+                        // (:1123). Without it an orientation relay — a send whose ONLY
+                        // purpose is to carry the standing-orders block — classified as
+                        // a message here, and this host diverged from the extension's
+                        // behaviour with no gate catching it.
+                        const isOrientation = payload.orientationOnly === true;
+                        const isMessage = !isOrientation && (payload.kind === 'message'
                             || payload.machineOrigin === true
-                            || (payload.kind !== 'dispatch' && !payload.dispatch && !extractDispatchIdentity(payload.data || ''));
+                            || (payload.kind !== 'dispatch' && !payload.dispatch && !extractDispatchIdentity(payload.data || '')));
                         // A prompt generateUnifiedPrompt already composed carries the
                         // git policy / skip / caveman directives and the dispatch-protocol
                         // bundle in its body. Re-appending the seat block delivers them
@@ -2747,10 +2779,18 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                 clearReadinessMode: payload.clearReadinessMode || deliveryDefaults.clearReadinessMode,
                                 operationId: payload.operationId,
                             },
-                            payload.standingOrders !== false && !isMessage,
+                            // applyOrders: the caller's explicit opt-out ONLY — see
+                            // deliverPrompt's docblock and TaskViewerProvider's twin.
+                            payload.standingOrders !== false,
                             !isMessage && !hostComposed,
                             payload.dispatch,
-                            isMessage
+                            // machineOrigin — this slot was being handed `isMessage`,
+                            // which widened machine-origin to every unclassified prompt
+                            // and stripped the seat block from all of them.
+                            payload.machineOrigin === true,
+                            // orientationOnly — never passed before, so the carrier-line
+                            // early return at :615 was dead in this host.
+                            isOrientation
                         );
                         // A CLI that exits during boot aborts delivery — the prompt
                         // was never written. Report an error so the caller knows.
@@ -3086,7 +3126,9 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // agentInstanceId, so the barrier is correctly absent here —
                     // a tmux pane is a single adopted target, not a pooled seat.
                     if (tmuxTerminal && tmuxPaneRecord && !terminal) {
-                        const clearBeforePrompt = getPromptDeliveryOptions().clearBeforePrompt;
+                        const clearBeforePrompt = typeof payload.clearBeforePrompt === 'boolean'
+                            ? payload.clearBeforePrompt
+                            : getPromptDeliveryOptions().clearBeforePrompt;
                         const clearBeforePromptDelayMs = getPromptDeliveryOptions().clearBeforePromptDelayMs;
                         try {
                             await sendPromptToTmux(tmuxTerminal, prompt, { clearBeforePrompt, clearBeforePromptDelayMs });
@@ -3140,9 +3182,19 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     const sendPayload: any = {
                         name: terminal.friendlyName,
                         data: prompt,
-                        clearBeforePrompt: false,
+                        // When skipClear is set, the roster barrier is skipped, so
+                        // this value is the final clearBeforePrompt. For initial
+                        // dispatch, the caller passes clearBeforePrompt: true (or
+                        // undefined to use the config default). For re-delivery,
+                        // the caller passes clearBeforePrompt: false. When skipClear
+                        // is NOT set, the roster barrier overrides this value.
+                        clearBeforePrompt: typeof payload.clearBeforePrompt === 'boolean' ? payload.clearBeforePrompt : false,
                         standingOrders: true,
                         origin: payload.originTerminal || payload.origin,
+                        // skipClear (Coding Rounds subtask 03 re-delivery): thread
+                        // into the ptySendPrompt payload so the roster barrier
+                        // handler can skip the clear.
+                        ...(payload.skipClear ? { skipClear: true } : {}),
                     };
                     if (records[0]?.planId) {
                         sendPayload.dispatch = { planId: records[0].planId, role: targetRole };
@@ -3602,6 +3654,28 @@ Each plan file must include:
     // lie on this host. The token reaches the shell as SWITCHBOARD_API_TOKEN
     // (an env var, never prompt text) so it never enters the agent's scrollback.
     const ptyFleetService = new GoPtyFleetProjection(ptyHostSupervisor, workspaceRoot, db, resolvedToken);
+    // Standing-orders snapshot seam — the twin of extension.ts's registration.
+    // `sendPromptToTmux` is this host's tmux delivery funnel and has no database
+    // of its own; unwired, every tmux seat receives prompts with no orders and
+    // logs `source: 'unwired'`. Resolved live (not latched) so an order added
+    // mid-run reaches the next prompt, and built from the SAME inputs
+    // `deliverPrompt` uses for the PTY rail so the two rails cannot disagree
+    // about a seat's orders.
+    setStandingOrdersApplier(async (targetName: string, text: string) => {
+        // Throwing is reported as `source: 'error'` by the seam and logged by the
+        // caller — never silently answered as "this seat has no orders".
+        const orders = await loadEffectiveStandingOrders(db);
+        if (!orders || orders.length === 0) { return text; }
+        const liveNames = new Set(ptyFleetService.listActive().map(t => t.friendlyName));
+        const groups = kanbanProvider
+            ? kanbanProvider._getScopedSetting<TerminalGroup[]>(TERMINALS_GROUPS_KEY, [])
+            : await db.getConfigJson<TerminalGroup[]>(TERMINALS_GROUPS_KEY, []);
+        // Coding Rounds: resolve whether the target's team has registered
+        // rounds so the lead-head fragments switch to the register/mark-done
+        // loop. Reads coding_rounds DIRECTLY; false is the safe default.
+        const hasRegisteredRounds = await resolveHasRegisteredRoundsForSeat(db, targetName, orders, groups || []).catch(() => false);
+        return applyStandingOrders(text, targetName, orders, liveNames, groups || [], undefined, { hasRegisteredRounds });
+    });
     // Default for every create() path that passes no explicit claudeInlineRendering.
     // The two ptyCreateTerminal / ptyCreateBatch arms below resolve it themselves, but
     // this host also creates seats from board dispatch, send-by-name, memo→planner and
@@ -3795,11 +3869,10 @@ Each plan file must include:
                 // standingOrders (4th arg) true — the recipient acts on this notification.
                 // applySeatBlock (5th arg) false — a machine notice has no task to
                 // constrain; the seat block is noise here.
-                // `bareDelivery` suppresses the standing-orders block — the member
-                // completion reminder sends a short pointer to the member orders
-                // file, not the full block (plan change 3). Re-delivering the whole
-                // block on a relay path makes the context-exhaustion problem worse.
-                await deliverPrompt(handle, message, { clearBeforePrompt: false }, !info.bareDelivery, false);
+                // `bareDelivery` suppresses the seat block and nothing else — the
+                // twin of TaskViewerProvider's notifyTurnEnd. Orders ride every
+                // prompt delivery, so applyOrders is an unconditional true.
+                await deliverPrompt(handle, message, { clearBeforePrompt: false }, true, false);
             } catch (err) {
                 log(opts, `turn-end delivery to '${recipientName}' failed: ${err}`);
             }

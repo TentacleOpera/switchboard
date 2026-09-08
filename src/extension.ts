@@ -18,6 +18,8 @@ import { SetupPanelProvider } from './services/SetupPanelProvider';
 import { ConnectionsPanelProvider } from './services/ConnectionsPanelProvider';
 import { ReviewCommentRequest, ReviewCommentResult } from './services/reviewTypes';
 import { sendRobustText, clearTerminalInputLine } from './services/terminalUtils';
+import { applyStandingOrders } from './services/standingOrders';
+import { setStandingOrdersApplier } from './services/standingOrdersDelivery';
 import { importPlanFiles } from './services/PlanFileImporter';
 import { ClickUpSyncService } from './services/ClickUpSyncService';
 import { LinearSyncService } from './services/LinearSyncService';
@@ -1031,6 +1033,20 @@ export async function activate(context: vscode.ExtensionContext) {
     // forward) so the cross-process sweep loop never blocks on an HTTP call. Empty
     // when the fleet is unavailable → the sweep degrades to today's blind timeout.
     globalPlanWatcher.getEngine().setTerminalLivenessProvider(() => taskViewerProvider.getFleetLiveness());
+    // Standing-orders applier seam. The two rails that cannot reach the order
+    // store themselves — `sendRobustText` (VS Code terminals) and
+    // `sendPromptToTmux` (tmux panes) — apply orders through this instead of
+    // taking them as an optional argument each call site had to remember.
+    // Unwired, those rails log `source: 'unwired'` and deliver without orders,
+    // so this line is load-bearing and its twin in `standalone/bootstrap.ts`
+    // must stay in step.
+    setStandingOrdersApplier(async (targetName: string, text: string) => {
+        const snapshot = await taskViewerProvider.resolveStandingOrdersSnapshotForDelivery(targetName);
+        if (snapshot === false) { return text; }
+        return applyStandingOrders(text, targetName, snapshot.orders, snapshot.liveNames, snapshot.groups, undefined, {
+            hasRegisteredRounds: snapshot.hasRegisteredRounds,
+        });
+    });
     // Queue-head resolver seam (subtask 3 fix): the queue nudge sweep calls
     // this to resolve the live coding head (lead first, then coder) when a
     // watch's headTerminal is null — the "staged with no head" state. Reads
@@ -1836,8 +1852,8 @@ export async function activate(context: vscode.ExtensionContext) {
     // parameter without removing the argument at all ~16 KanbanProvider call sites
     // in the same edit silently slides `bypassTriggerGate` into slot 6 and compiles
     // clean. Keep the slot, or convert BOTH commands to a trailing options object.
-    const triggerFromKanbanDisposable = registerSwitchboardCommand('switchboard.triggerAgentFromKanban', async (role: string, sessionId: string, instruction?: string, workspaceRoot?: string, targetTerminalOverride?: string, _apiOriginated?: boolean, bypassTriggerGate?: boolean, unattended?: boolean, originTerminal?: string) => {
-        return await taskViewerProvider.handleKanbanTrigger(role, sessionId, instruction, workspaceRoot, { targetTerminalOverride, persistColumnOnError: true, bypassTriggerGate: !!bypassTriggerGate, unattended: !!unattended, originTerminal } as any);
+    const triggerFromKanbanDisposable = registerSwitchboardCommand('switchboard.triggerAgentFromKanban', async (role: string, sessionId: string, instruction?: string, workspaceRoot?: string, targetTerminalOverride?: string, _apiOriginated?: boolean, bypassTriggerGate?: boolean, unattended?: boolean, originTerminal?: string, skipClear?: boolean, clearBeforePrompt?: boolean) => {
+        return await taskViewerProvider.handleKanbanTrigger(role, sessionId, instruction, workspaceRoot, { targetTerminalOverride, persistColumnOnError: true, bypassTriggerGate: !!bypassTriggerGate, unattended: !!unattended, originTerminal, skipClear: !!skipClear, clearBeforePrompt } as any);
     });
     context.subscriptions.push(triggerFromKanbanDisposable);
 
@@ -3129,7 +3145,10 @@ export async function activate(context: vscode.ExtensionContext) {
         for (const [, terminal] of registeredTerminals.entries()) {
             if (terminal.exitStatus === undefined) {
                 clearPromises.push(
-                    clearTerminalInputLine(terminal).then(() => sendRobustText(terminal, '/clear', false))
+                    // standingOrders: false — a control string, not a prompt. With
+                    // orders now applied unless opted out, omitting this would paste
+                    // an orders block into the terminal as input after `/clear`.
+                    clearTerminalInputLine(terminal).then(() => sendRobustText(terminal, '/clear', false, undefined, { standingOrders: false }))
                 );
             }
         }

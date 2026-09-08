@@ -1412,6 +1412,14 @@ export class KanbanProvider implements vscode.Disposable {
             // this whole array is board state, so nothing here is `common`.
             const boardMissions = typeof db.getMissions === 'function' ? await db.getMissions(wsId) : [];
             const orderByMode = typeof db.getOrderByMode === 'function' ? await db.getOrderByMode(wsId) : 'manual';
+            // Coding Rounds (subtask 05): the board READS the coding_rounds table
+            // directly so the round indicator is never inferred from dispatched-card
+            // counts. Empty array → no feature shows a round indicator (no
+            // fabrication). Guarded on the resolver's existence so an older DB
+            // without the table/Method stays on the legacy board.
+            const codingRounds = typeof db.getCodingRoundsByWorkspace === 'function'
+                ? await db.getCodingRoundsByWorkspace(wsId)
+                : [];
             const snapshot: Record<string, any>[] = [
                 { type: 'updateColumns', columns: filteredColumns, surface: SURFACES.kanban },
                 {
@@ -1432,7 +1440,7 @@ export class KanbanProvider implements vscode.Disposable {
                     projectContextEnabled,
                 },
                 { type: 'cliTriggersState', enabled: cliEnabled, surface: SURFACES.kanban },
-                { type: 'updateBoard', cards, missions: boardMissions, orderByMode, dbUnavailable: false, showingBacklog: this._showingBacklog, dispatchAnalyzeAvailable: true, coderTerminalCount, codingHeadLive, anyCodingTerminalLive, routingConfig, featureWorktrees, teamHeadColumns, teamBatchPlanCap: TEAM_BATCH_PLAN_CAP, surface: SURFACES.kanban },
+                { type: 'updateBoard', cards, missions: boardMissions, orderByMode, dbUnavailable: false, showingBacklog: this._showingBacklog, dispatchAnalyzeAvailable: true, coderTerminalCount, codingHeadLive, anyCodingTerminalLive, routingConfig, featureWorktrees, teamHeadColumns, teamBatchPlanCap: TEAM_BATCH_PLAN_CAP, codingRounds, surface: SURFACES.kanban },
                 // Automation tab state rides the connect-time resync too, so the tab is
                 // populated even before its on-open getAutobanConfig verb returns.
                 // Omitted entirely when the sidebar hasn't relayed a state yet — pushing
@@ -4178,6 +4186,14 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const anyCodingTerminalLive = codingHeadLive || (this._taskViewerProvider?.getAliveCodingTerminalNames().length ?? 0) > 0;
             const teamHeadColumns = await this.resolveTeamHeadColumns(resolvedWorkspaceRoot, filteredColumns);
             const orderByMode = (dbReady && typeof db.getOrderByMode === 'function' && workspaceId) ? await db.getOrderByMode(workspaceId) : 'manual';
+            // Coding Rounds (subtask 05): the board READS the coding_rounds table
+            // directly so the round indicator is never inferred from dispatched-card
+            // counts. Empty array → no feature shows a round indicator (no
+            // fabrication). Guarded on the resolver's existence so an older DB
+            // without the table/Method stays on the legacy board.
+            const codingRounds = (dbReady && typeof db.getCodingRoundsByWorkspace === 'function' && workspaceId)
+                ? await db.getCodingRoundsByWorkspace(workspaceId)
+                : [];
             this.postMessage((scope: string | null | undefined) => ({
                 type: 'updateBoard',
                 cards,
@@ -4192,7 +4208,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 routingConfig: this._routingMapForScope(scope),
                 featureWorktrees,
                 teamHeadColumns,
-                teamBatchPlanCap: TEAM_BATCH_PLAN_CAP
+                teamBatchPlanCap: TEAM_BATCH_PLAN_CAP,
+                codingRounds
             }));
             this.postMessage((scope: string | null | undefined) => ({
                 type: 'cliTriggersState',

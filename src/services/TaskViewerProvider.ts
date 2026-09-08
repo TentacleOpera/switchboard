@@ -15,6 +15,7 @@ import {
     makeStandingOrder,
     resolveTeamStanding,
     renderStandaloneOrdersBlock,
+    resolveHasRegisteredRoundsForSeat,
 } from './standingOrders';
 import { writeMissionControlReport, writeInstruction, bootstrapInstructionsDirectory, ingestJobActivity, migrateLegacyOrchestratorDir } from './ScheduledJobsService';
 import * as vscode from 'vscode';
@@ -1123,7 +1124,20 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             const isMessage = !isOrientation && (payload?.kind === 'message'
                 || payload?.machineOrigin === true
                 || (payload?.kind !== 'dispatch' && !payload?.dispatch && !extractDispatchIdentity(payload?.data || '')));
-            const applySO = payload?.standingOrders !== false && !payload?.machineOrigin && !isMessage;
+            // Standing orders ride EVERY prompt delivery. The only gate is the
+            // caller's explicit opt-out (`standingOrders: false`) — never the
+            // payload's shape. This previously ANDed `!machineOrigin && !isMessage`,
+            // which inverted the rule: `isMessage` is true for any payload that
+            // cannot be PROVEN a dispatch (no `kind:'dispatch'`, no `dispatch`
+            // object, no parseable dispatch identity), so the default was "no
+            // orders" and every delivery path had to opt in by tagging itself.
+            // That made delivery depend on a field the SENDING agent types — a
+            // lead prodding its coder, or re-dispatching without the `dispatch`
+            // object, silently stripped the orders from the receiving seat, and
+            // the omission was indistinguishable from working. Suppression is
+            // now a positive act: `standingOrders: false` (the member completion
+            // reminder's `bareDelivery`, the `/clear` control path).
+            const applySO = payload?.standingOrders !== false;
             const applySeatBlock = payload?.addonsComposed !== true && payload?.seatBlock !== false && !payload?.machineOrigin && !isMessage;
             if (applySO || applySeatBlock) {
                 try {
@@ -1323,10 +1337,22 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                     roleMap.set(row.friendlyName, row.role);
                                 }
                             }
+                            // Coding Rounds: resolve whether the target's team
+                            // has registered rounds so the lead-head fragments
+                            // switch from the hand-dispatch loop to the
+                            // register/mark-done loop. Reads coding_rounds
+                            // DIRECTLY (never inferred from card counts). False
+                            // is the safe default — an unresolved team keeps the
+                            // legacy dispatch + done --from pop instructions.
+                            let hasRegisteredRounds = false;
+                            try {
+                                hasRegisteredRounds = await resolveHasRegisteredRoundsForSeat(db, payload.name, effectiveOrders, groups || []);
+                            } catch { /* safe default — keep legacy instructions */ }
                             const beforeSO = data;
                             data = applyStandingOrders(data, payload.name, effectiveOrders, live, groups || [], roleMap, {
                                 subagentPolicy: seatOpts?.subagentPolicy,
                                 customSubagentName: seatOpts?.customSubagentName,
+                                hasRegisteredRounds,
                             });
                             soBlockAdded = data !== beforeSO;
                         }
@@ -1583,7 +1609,22 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * Returns `false` when there are no orders (so the caller can skip the
      * option entirely), or the resolved data object.
      */
-    private async _resolveStandingOrdersForVsCode(): Promise<false | { orders: StandingOrder[]; liveNames: Set<string>; groups: TerminalGroup[] }> {
+    /**
+     * Public wrapper over {@link _resolveStandingOrdersForVsCode} so the
+     * composition root can register it as the `standingOrders` snapshot
+     * resolver for the two rails that have no database of their own
+     * (`sendRobustText`, `sendPromptToTmux`). The `targetName` argument
+     * resolves the Coding Rounds `hasRegisteredRounds` flag for the target's
+     * team (the per-target selection itself is still `applyStandingOrders`'s
+     * job); the orders/liveNames/groups are per-workspace.
+     */
+    public resolveStandingOrdersSnapshotForDelivery(
+        targetName: string
+    ): Promise<false | { orders: StandingOrder[]; liveNames: Set<string>; groups: TerminalGroup[]; hasRegisteredRounds: boolean }> {
+        return this._resolveStandingOrdersForVsCode(targetName);
+    }
+
+    private async _resolveStandingOrdersForVsCode(targetName = ''): Promise<false | { orders: StandingOrder[]; liveNames: Set<string>; groups: TerminalGroup[]; hasRegisteredRounds: boolean }> {
         try {
             const db = await this._getKanbanDb(this._apiServerWorkspaceRoot || this._getWorkspaceRoot() || '');
             if (!db) { return false; }
@@ -1611,7 +1652,17 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             const groups = this._kanbanProvider
                 ? this._kanbanProvider._getScopedSetting<TerminalGroup[]>(TERMINALS_GROUPS_KEY, [])
                 : await db.getConfigJson<TerminalGroup[]>(TERMINALS_GROUPS_KEY, []);
-            return { orders: effectiveOrders, liveNames: live, groups: groups || [] };
+            // Coding Rounds: resolve whether the target's team has registered
+            // rounds so the applier (sendRobustText / sendPromptToTmux rails)
+            // switches the lead-head fragments to the register/mark-done loop.
+            // Reads coding_rounds DIRECTLY; false is the safe default.
+            let hasRegisteredRounds = false;
+            if (targetName) {
+                try {
+                    hasRegisteredRounds = await resolveHasRegisteredRoundsForSeat(db, targetName, effectiveOrders, groups || []);
+                } catch { /* safe default — keep legacy instructions */ }
+            }
+            return { orders: effectiveOrders, liveNames: live, groups: groups || [], hasRegisteredRounds };
         } catch {
             return false;
         }
@@ -2529,12 +2580,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     // HTTP boundary; an HTTP caller cannot set this.
                     seatBlock: false,
                     kind: 'dispatch',
-                    // `bareDelivery` suppresses the standing-orders block — the
-                    // member completion reminder sends a short pointer to the
-                    // member orders file, not the full block (plan change 3).
-                    // Re-delivering the whole block on a relay path makes the
-                    // context-exhaustion problem worse.
-                    ...(info.bareDelivery ? { standingOrders: false as const } : {}),
+                    // No standing-orders opt-out is passed here, deliberately, and
+                    // seat-safeguards asserts its ABSENCE by source-text match — so
+                    // do not name the opt-out field in this comment either.
+                    // `bareDelivery` suppresses the SEAT BLOCK (above) and nothing
+                    // else: a turn-end notice is a prompt the recipient acts on, and
+                    // orders ride every prompt delivery. The previous mapping from
+                    // `bareDelivery` to an orders opt-out is why that gate was red —
+                    // the contract shipped, the code never met it.
                 });
                 if (sendRes?.success === false) {
                     console.warn(`[TaskViewerProvider] turn-end delivery to '${recipientName}' failed: ${sendRes.error || 'unknown error'} (seat '${seatName}', ${info.outcome} on ${planFile}).`);
@@ -2726,9 +2779,21 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 } catch { /* a degraded block beats a lost policy */ }
             }
 
+            // Coding Rounds: resolve whether this seat's team has registered
+            // rounds so the establish/clear block switches the lead-head
+            // fragments to the register/mark-done loop. Reads coding_rounds
+            // DIRECTLY (never inferred from card counts). False is the safe
+            // default — an unresolved team keeps the legacy dispatch + done
+            // --from pop instructions on its establish/clear delivery.
+            let hasRegisteredRounds = false;
+            try {
+                hasRegisteredRounds = await resolveHasRegisteredRoundsForSeat(db, terminalName, orders, groups || []);
+            } catch { /* safe default — keep legacy instructions */ }
+
             const block = renderStandaloneOrdersBlock(orders, terminalName, live, groups || [], roleMap, {
                 subagentPolicy,
                 customSubagentName,
+                hasRegisteredRounds,
             });
             if (block === null) { return; }
 

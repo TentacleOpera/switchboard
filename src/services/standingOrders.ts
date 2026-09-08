@@ -336,6 +336,53 @@ export function resolveTeamStanding(
 }
 
 /**
+ * Resolve whether a team has registered rounds — the gate that switches a lead
+ * head's standing orders from the hand-dispatch loop to the register/mark-done
+ * loop (Coding Rounds feature). Reads the `coding_rounds` table DIRECTLY via
+ * `db.getCodingRoundsByTeam(teamId)` — never inferred from dispatched-card
+ * counts (a team with three dispatched cards and no registered rounds must
+ * NOT behave as if it had rounds). Returns `false` on any missing input (no
+ * db, no teamId, no resolver, a thrown read) — the safe default that keeps
+ * the legacy dispatch + `done --from` pop instructions, so an unresolved team
+ * is indistinguishable from a team that never registered rounds rather than
+ * silently losing its dispatch instructions.
+ */
+export async function resolveHasRegisteredRounds(
+    db: any,
+    teamId: string | undefined | null
+): Promise<boolean> {
+    if (!db || !teamId) { return false; }
+    try {
+        const rounds = typeof db.getCodingRoundsByTeam === 'function'
+            ? await db.getCodingRoundsByTeam(teamId)
+            : undefined;
+        return Array.isArray(rounds) && rounds.length > 0;
+    } catch (err) {
+        console.warn('[standingOrders] resolveHasRegisteredRounds failed:', err);
+        return false;
+    }
+}
+
+/**
+ * Resolve whether the team `targetName` heads has registered rounds. Composes
+ * {@link resolveTeamStanding} (same predicate `selectOrders` uses, so the
+ * gate and the delivery layer cannot disagree on who is a head) with
+ * {@link resolveHasRegisteredRounds}. Returns `false` when the target is not a
+ * team head — the flag is only meaningful for lead heads, and a non-head
+ * resolving `false` keeps its fragments untouched.
+ */
+export async function resolveHasRegisteredRoundsForSeat(
+    db: any,
+    targetName: string,
+    orders: StandingOrder[],
+    groups: TerminalGroup[]
+): Promise<boolean> {
+    const standing = resolveTeamStanding(targetName, orders, groups);
+    if (!standing.inTeam || !standing.isHead || !standing.teamId) { return false; }
+    return resolveHasRegisteredRounds(db, standing.teamId);
+}
+
+/**
  * Select the orders that apply to `targetName` given the registered groups and
  * the live terminal set.
  *
@@ -427,6 +474,17 @@ export interface StandingOrderRenderOptions {
      */
     subagentPolicy?: 'noSubagents' | 'useSubagents' | 'customSubagent' | 'default';
     customSubagentName?: string;
+    /**
+     * True when the target's team has at least one row in `coding_rounds`.
+     * Resolved live by the composition-root delivery seams (the prompt-append
+     * paths and the standing-orders applier in BOTH hosts) via
+     * {@link resolveHasRegisteredRounds} — never inferred from card counts.
+     * Absent → false (the safe default: a team whose rounds could not be
+     * resolved keeps the legacy dispatch + `done --from` pop instructions
+     * rather than silently dropping them). Only the lead-head fragments
+     * consult it.
+     */
+    hasRegisteredRounds?: boolean;
 }
 
 function compositionContext(
@@ -455,6 +513,7 @@ function compositionContext(
         externalHead: group?.externalHead === true,
         subagentPolicy: options.subagentPolicy,
         customSubagentName: options.customSubagentName,
+        hasRegisteredRounds: options.hasRegisteredRounds === true,
     };
 }
 
@@ -726,3 +785,4 @@ export async function removeReviewerCallbackOrder(
         return next.length === orders.length ? orders : next;
     });
 }
+
