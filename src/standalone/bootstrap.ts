@@ -2187,43 +2187,6 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     payload = { ...payload, delegates: [] };
                     delete payload.startupCommand;
 
-                    // tmux seating for a SINGLE agent. The team path has had this branch
-                    // since Part 4 (`backend === 'tmux'` at the createHeadWithDelegates
-                    // seam); this arm never did, so an agent opened with `+` or FILL GRID
-                    // could never land in tmux no matter what the setting said. That is the
-                    // whole of the gap — dispatch (`triggerAction`) and delivery
-                    // (`sendToTerminal`) already resolve a tmux-backed seat by name, and
-                    // createTmuxHeadWithDelegates already reattaches by name on restart.
-                    //
-                    // A lone agent is a team of one: the delegate work in that function is a
-                    // loop over delegateSpecs, so an empty list creates the session with a
-                    // single named pane and stops.
-                    // The dock is NOT part of the terminals-pane fleet. It sets `hidden`
-                    // precisely because that seat belongs to the dock alone — it is not in
-                    // the pane grid, not in a group, and not something you attach to from
-                    // an SSH client. Seating it in tmux put an `sb-dock-cli` session next to
-                    // the real ones and coupled two surfaces that are meant to be separate.
-                    if (tmuxReady && tmuxFleetService
-                        && payload.hidden !== true
-                        && configProvider.getConfigBoolean('terminal.tmux.enabled', true)) {
-                        const seated = await createTmuxHeadWithDelegates({
-                            role: payload.role || 'coder',
-                            name: payload.name,
-                            cwd: targetCwd || workspaceRoot,
-                            delegates: [],
-                            // Session name. A seat opened into a saved panel group belongs to
-                            // that group's session; anything else gets the workspace session.
-                            teamName: payload.groupName || payload.teamName || undefined,
-                        }, { db });
-                        if (seated?.success) {
-                            return seated;
-                        }
-                        // Refusal (tmux vanished, bare-shell pane, name clash) is NOT fatal:
-                        // fall through to a PTY rather than failing the create. The toggle is
-                        // an intent, not a guarantee.
-                        log(opts, `[tmux] seat ${payload.name || payload.role} fell back to PTY: ${seated?.error || 'unknown'}`);
-                    }
-
                     const terminal = await ptyFleetService.create(payload.role || 'coder', payload.name, targetCwd, payload.worktreePath, payload.parentInstanceId, undefined, {
                         // HOST-resolved, never from the wire — see CreateOptions.
                         claudeInlineRendering: configProvider.getConfigBoolean('terminal.claudeInlineRendering', true),
@@ -3714,6 +3677,9 @@ Each plan file must include:
     // lie on this host. The token reaches the shell as SWITCHBOARD_API_TOKEN
     // (an env var, never prompt text) so it never enters the agent's scrollback.
     const ptyFleetService = new GoPtyFleetProjection(ptyHostSupervisor, workspaceRoot, db, resolvedToken);
+    // tmux seating is a property of the PTY's command, not a different fleet.
+    ptyFleetService.setTmuxSeatingResolver(() =>
+        configProvider.getConfigBoolean('terminal.tmux.enabled', true));
     // Standing-orders snapshot seam — the twin of extension.ts's registration.
     // `sendPromptToTmux` is this host's tmux delivery funnel and has no database
     // of its own; unwired, every tmux seat receives prompts with no orders and
@@ -4031,9 +3997,10 @@ Each plan file must include:
         // and left every TEAM on plain PTYs, with nothing in the UI explaining why.
         // `terminalBackend` is still honoured when explicitly set, so an install that
         // chose it keeps working; absent, the master gate decides.
-        const explicitBackend = kanbanProvider._getScopedSetting<string>('terminalBackend', '') || '';
-        const backend = explicitBackend
-            || (configProvider.getConfigBoolean('terminal.tmux.enabled', true) ? 'tmux' : 'fleet');
+        // 'tmux' here means the OLD alternative-backend path, which removes seats from
+        // the fleet and empties the terminals pane. It stays opt-in and explicit only;
+        // tmux seating for everyone else is the command wrapper in the fleet's create().
+        const backend = kanbanProvider._getScopedSetting<string>('terminalBackend', 'fleet') || 'fleet';
 
         if (backend === 'tmux') {
             // tmux backend: create panes in a Switchboard-owned tmux session.
@@ -4068,11 +4035,17 @@ Each plan file must include:
                 ptyFleetService.listActive().filter(t => t.parentInstanceId).length,
             createHeadWithDelegates: async (spec) => {
                 try {
+                    // Head and members share ONE tmux session, named `<team>-team`, with
+                    // a window each — so `tmux attach -t lc-coding-team` shows the whole
+                    // team and `prefix n` cycles its seats. Without this every seat named
+                    // its own session and a team fragmented into four.
+                    const teamSession = group?.name ? `${group.name}-team` : undefined;
                     const head = await ptyFleetService.create(
-                        spec.role, spec.name, spec.cwd, undefined, undefined, undefined, {}
+                        spec.role, spec.name, spec.cwd, undefined, undefined, undefined,
+                        { tmuxSession: teamSession }
                     );
                     const spawned = spec.delegates.length > 0
-                        ? await ptyFleetService.spawnDelegates(head, spec.delegates, { teamName: group?.name })
+                        ? await ptyFleetService.spawnDelegates(head, spec.delegates, { teamName: group?.name, tmuxSession: teamSession })
                         : { children: [], createdNames: [], error: undefined as string | undefined };
                     return {
                         success: true,

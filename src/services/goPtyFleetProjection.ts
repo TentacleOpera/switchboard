@@ -3,6 +3,7 @@ import { EventEmitter } from 'events';
 import { WebSocket } from 'ws';
 import type { DelegateDefinition } from './agentConfig';
 import { deriveCliFamily, type CliFamily } from './cliIdentity';
+import { deriveTmuxSessionName } from './teamWiring';
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import type { KanbanDatabase } from './KanbanDatabase';
 import { MAX_DELEGATES_PER_PARENT, MAX_LIVE_DELEGATE_PTYS } from './ptyLimits';
@@ -83,6 +84,14 @@ export class GoPtyFleetProjection {
                 }
             }
         });
+    }
+
+    /** Host-supplied: is tmux seating on and usable? Set by the composition root. */
+    private _tmuxEnabledResolver?: () => boolean;
+    public setTmuxSeatingResolver(fn: () => boolean): void { this._tmuxEnabledResolver = fn; }
+    private _tmuxSeatingEnabled(): boolean {
+        try { return this._tmuxEnabledResolver ? this._tmuxEnabledResolver() : false; }
+        catch { return false; }
     }
 
     public setClaudeInlineRenderingResolver(resolver: () => boolean): void {
@@ -206,6 +215,34 @@ export class GoPtyFleetProjection {
             }
         }
 
+        // ── tmux as a SUPPLEMENT to the fleet, not a replacement ────────────────
+        // The seat stays a Go-host PTY; that PTY runs a tmux client. The board keeps
+        // rendering the pane through the socket it always used, and the same terminal
+        // is reachable with `tmux attach`.
+        //
+        // The original design made tmux an "alternative backend" — seats left the fleet
+        // entirely, so turning tmux on emptied the terminals pane. Wrong trade: the
+        // board is the primary surface and tmux is a second way in, never a substitute.
+        //
+        // `-A` is attach-or-create, which is what makes a restart cheap: the restart
+        // kills the PTY, the tmux session and the agent inside it survive, and the next
+        // spawn of the same name reattaches to the still-running agent.
+        if (effectiveStartupCommand && this._tmuxSeatingEnabled()) {
+            const session = deriveTmuxSessionName(opts?.tmuxSession || name || role);
+            const win = String(name || role).replace(/[^A-Za-z0-9_.-]/g, '-');
+            const inner = JSON.stringify(effectiveStartupCommand);
+            // `new-session -A` ATTACHES when the session exists and ignores -n, so a
+            // second seat joining a team session would land on the first seat's window
+            // instead of getting its own. Branch explicitly: create the session with
+            // this seat's window, or add a window to the session already there. Then
+            // attach to OUR window by name, never to the session's current one.
+            effectiveStartupCommand =
+                `tmux has-session -t ${session} 2>/dev/null `
+                + `&& tmux new-window -d -t ${session} -n ${win} ${inner} `
+                + `|| tmux new-session -d -s ${session} -n ${win} ${inner}; `
+                + `exec tmux attach -t ${session}:${win}`;
+        }
+
         const result = await this.supervisor.request('ptyCreateTerminal', {
             role,
             name,
@@ -253,7 +290,7 @@ export class GoPtyFleetProjection {
     public async spawnDelegates(
         parent: ExtendedTerminalHandle,
         definitions: DelegateDefinition[],
-        opts?: { teamName?: string },
+        opts?: { teamName?: string; tmuxSession?: string },
     ): Promise<{ children: ExtendedTerminalHandle[]; createdNames: string[]; error?: string }> {
         const perTeamRequested = definitions
             .filter(d => d.scope !== 'shared')
@@ -285,6 +322,7 @@ export class GoPtyFleetProjection {
                             return this.create(d.role, sharedName, parent.cwd, parent.worktreePath, undefined, d.startupCommand, {
                                 _isTeamMember: true,
                                 claudeInlineRendering: parent.claudeInlineRendering,
+                                tmuxSession: opts?.tmuxSession,
                             });
                         });
                         children.push(existing);
@@ -301,7 +339,7 @@ export class GoPtyFleetProjection {
                 try {
                     const child = await this.create(
                         d.role, baseName, parent.cwd, parent.worktreePath, parent.agentInstanceId, d.startupCommand,
-                        { _isTeamMember: true, claudeInlineRendering: parent.claudeInlineRendering },
+                        { _isTeamMember: true, claudeInlineRendering: parent.claudeInlineRendering, tmuxSession: opts?.tmuxSession },
                     );
                     children.push(child);
                     createdNames.push(child.friendlyName);

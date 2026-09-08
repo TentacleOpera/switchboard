@@ -42,6 +42,7 @@ import {
 } from '../services/teamWiring';
 import type { AgentGroupCreateResult } from '../services/agentGroupInstantiation';
 import { MAX_DELEGATES_PER_PARENT } from '../services/ptyLimits';
+import { GlobalIntegrationConfigService } from '../services/GlobalIntegrationConfigService';
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -277,6 +278,8 @@ export async function createTmuxHeadWithDelegates(
         headPaneId = (await run(newSessionArgs, socket)).trim();
         validatePaneId(headPaneId);
         await setPaneTitle(headPaneId, headName, socket);
+        // The head's own CLI. Without this the pane is a bare shell.
+        await launchSeatCommand(headPaneId, spec.role, (spec as any).startupCommand, socket);
     } catch (err) {
         return { success: false, error: `Failed to create tmux session '${sessionName}': ${err instanceof Error ? err.message : String(err)}` };
     }
@@ -301,6 +304,9 @@ export async function createTmuxHeadWithDelegates(
             const delegatePaneId = (await run(splitArgs, socket)).trim();
             validatePaneId(delegatePaneId);
             await setPaneTitle(delegatePaneId, d.friendlyName, socket);
+            // The member's own CLI. A team member may carry its own startupCommand
+            // (authored in the TEAMS tab); otherwise the role map decides.
+            await launchSeatCommand(delegatePaneId, d.role, d?.def?.startupCommand, socket);
             // Re-tile after each split. Without it tmux halves the target pane
             // every time and refuses with "no space for new pane" at around the
             // fourth delegate — a roster-size-dependent failure that the
@@ -535,6 +541,45 @@ export async function deliverToTmuxSeat(
     } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : String(err) };
     }
+}
+
+/**
+ * Launch a seat's agent CLI inside its pane.
+ *
+ * tmux `new-session` / `split-window` create a pane running the user's SHELL and
+ * nothing else — no command argument was ever passed, so every tmux-seated agent
+ * came up as a bare `bash` and the registry recorded it `status: 'exited'`. The
+ * session and the pane titles were right; there was simply no agent in them. This
+ * is the half of "seat the agents" that was missing.
+ *
+ * Resolution mirrors GoPtyFleetProjection.create exactly — an explicit command
+ * (team definition) first, then the global per-role map — so the two backends
+ * cannot drift on which CLI a role runs.
+ *
+ * Sent with send-keys rather than passed as new-session's command argument on
+ * purpose: a command argument makes the pane die with the process, so an agent
+ * that fails to start leaves nothing to read. A shell that then runs the command
+ * keeps the pane, and its error, on screen.
+ */
+async function launchSeatCommand(
+    paneId: string,
+    role: string,
+    explicitCommand: string | undefined,
+    socket?: TmuxSocket
+): Promise<void> {
+    let command = explicitCommand;
+    if (!command) {
+        try {
+            const commands = (await GlobalIntegrationConfigService.getAgentStartupCommands()) || {};
+            command = commands[role];
+        } catch { /* no map configured — a bare shell is the honest result */ }
+    }
+    if (!command) { return; }
+    try {
+        validatePaneId(paneId);
+        await run(['send-keys', '-t', paneId, '-l', command], socket);
+        await run(['send-keys', '-t', paneId, 'Enter'], socket);
+    } catch { /* best-effort: the pane exists either way */ }
 }
 
 /**

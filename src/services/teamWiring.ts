@@ -160,12 +160,15 @@ export function readTeamPacing(group: any): 'head' | 'seat' {
 // ─── tmux session name derivation ─────────────────────────────────────────
 // tmux session names cannot contain `.` or `:` and should be shell-safe.
 // Team names are free-form user strings, so sanitize to `[a-z0-9_-]` and
-// prefix with `sb-` to namespace Switchboard-owned sessions (distinguishes
+// prefix with `lc-` to namespace LABCOM-owned sessions (distinguishes
 // from user sessions like `board`). All tmux invocations use execFile with
 // an argv array (Part 1's contract), so the session name is passed as a
 // single argv element to `-s` — never interpolated into a command string.
 export function deriveTmuxSessionName(teamName: string): string {
-    return 'sb-' + String(teamName || 'team')
+    // `lc-` for LABCOM. The prefix is load-bearing, not decoration: it separates the
+    // board's sessions from the operator's own in `tmux ls`, and lets cleanup match
+    // `^lc-` without touching theirs. It was `sb-`, the old product name.
+    return 'lc-' + String(teamName || 'team')
         .toLowerCase()
         .replace(/[^a-z0-9_-]/g, '-')
         .replace(/-+/g, '-')

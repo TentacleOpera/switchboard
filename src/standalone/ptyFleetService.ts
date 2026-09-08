@@ -222,6 +222,13 @@ export interface CreateOptions {
      */
     _isTeamMember?: boolean;
     /**
+     * tmux session this seat should join, when tmux seating is on. The seat stays a
+     * normal PTY owned by the Go host — the PTY simply runs a tmux client attached to
+     * this session, so the board renders the pane as it always has AND
+     * `tmux attach -t <name>` reaches the same terminal.
+     */
+    tmuxSession?: string;
+    /**
      * Render Claude CLI inline in the normal screen buffer instead of the alternate
      * one, so the terminal PANE's own scrollbar and jump-to-latest pill work.
      *

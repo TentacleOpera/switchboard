@@ -14057,9 +14057,9 @@ Each plan file must include:
         // and left every TEAM on plain PTYs, with nothing in the UI explaining why.
         // `terminalBackend` is still honoured when explicitly set, so an install that
         // chose it keeps working; absent, the master gate decides.
-        const explicitBackend = kp?._getScopedSetting<string>('terminalBackend', '') || '';
-        const backend = explicitBackend
-            || (vscode.workspace.getConfiguration('switchboard.terminal.tmux').get<boolean>('enabled', true) ? 'tmux' : 'fleet');
+        // See bootstrap.ts: 'tmux' is the old alternative-backend path that removes
+        // seats from the fleet. Explicit opt-in only.
+        const backend = kp?._getScopedSetting<string>('terminalBackend', 'fleet') || 'fleet';
 
         if (backend === 'tmux') {
             // tmux backend: create panes in a Switchboard-owned tmux session.
