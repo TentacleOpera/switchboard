@@ -105,6 +105,23 @@
     let terminalGroups = []; // [{ id, name, source, value?, layout, members, order }]
     let lastReadGroupIds = []; // ids of terminal groups as last read from backend
     let activeGroupId = null; // which group is currently locked, or null for "composing"
+
+    /**
+     * The tmux session a newly created seat should join: the locked group's name, or
+     * undefined for the host's default session.
+     *
+     * Stamped onto EVERY ptyCreateTerminal payload. Without it a bare `+` sends no name,
+     * the host falls back to `deriveTmuxSessionName`'s default, and every ungrouped seat
+     * piles into one shared `sb-team` session instead of one session per group.
+     *
+     * Returns undefined under a team scope: a team already names its own session through
+     * createHeadWithDelegates, and overriding it here would split a team across two.
+     */
+    function activeGroupName() {
+        if (teamScopeId || !activeGroupId) { return undefined; }
+        const g = terminalGroups.find(x => x && x.id === activeGroupId);
+        return (g && g.name) || undefined;
+    }
     let activeGroupPage = 0; // transient: which page of the active group is showing
     let selectedTerminalNames = new Set(); // multi-select in the sidebar
     let restoredLockOnLoad = false; // one-shot: re-seat the locked group after first fleet fetch
@@ -8814,6 +8831,7 @@
                     payload.worktreePath = targetSpec.worktreePath;
                 }
             }
+            payload.groupName = activeGroupName();
             const res = await fetch('/terminals/verb/ptyCreateTerminal', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -9186,7 +9204,7 @@
                 const res = await fetch('/terminals/verb/ptyCreateTerminal', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ role })
+                    body: JSON.stringify({ role, groupName: activeGroupName() })
                 });
                 if (res.ok) {
                     const data = await res.json();
@@ -9822,6 +9840,7 @@
             if (targetSpec && targetSpec.parentRoot) {
                 payload.parentRoot = targetSpec.parentRoot;
             }
+            payload.groupName = activeGroupName();
             const res = await fetch('/terminals/verb/ptyCreateTerminal', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },

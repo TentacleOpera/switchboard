@@ -66,6 +66,25 @@ That is the honest cost of this plan, and it is why the contract test is a prere
 nicety: **the way to make this boundary safe is to assert it, not to avoid it.** The alternative —
 leaving tmux in TypeScript — keeps a second fleet forever and pays for it at every consumer instead.
 
+---
+
+> **Superseded (2026-09-08, by shipped code — commit `e60e3982`):** the framing that the two-fleet
+> split is what blocks tmux for individual agents and panel groups, and that this plan is the
+> prerequisite for them.
+> **Reason:** It was not the blocker. A single missing branch in `ptyCreateTerminal` was, and it is
+> fixed — an individually-created agent now lands in a Switchboard-owned tmux session. The consumers I
+> assumed would each need teaching already resolve tmux seats: `triggerAction` (6 lookups),
+> `sendToTerminal` (3), plus the dedicated `tmuxAdoptPane` / `tmuxReleasePane` / `tmuxListPanes` /
+> `tmuxClearPane` verbs.
+> **What remains true, and why this card is still worth doing:** ~1,500 lines of TypeScript
+> (`tmuxBackend` 499, `tmuxFleetService` 446, `tmuxTeamSeating` 550) implement a fleet the Go host
+> could own; two settings still exist because two fleets do (`terminal.tmux.enabled` and the scoped
+> `terminalBackend`); every seat resolver still has to span both; and tmux still shells out from Node
+> via `execFile` while the Go host spawns every other process.
+> **Reprice it.** This is consolidation, not enablement — nothing is blocked on it, so the complexity-8
+> justification no longer includes "unblocks groups". Judge it on the cost of carrying two fleets
+> against the cost of adding another TypeScript↔Go boundary.
+
 ## Metadata
 
 **Complexity:** 8

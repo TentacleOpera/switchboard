@@ -67,6 +67,23 @@ Landed while diagnosing, because the feature was unreachable at all:
   checkbox could have existed before: the key was not addressable. Keys already carrying the
   `switchboard.` namespace are now treated as absolute; relative keys are unchanged.
 
+---
+
+> **Superseded (2026-09-08, by shipped code — commit `e60e3982`):** "no setting can put a group in
+> tmux… with one create path the group case stops being a design problem."
+> **Reason:** The design change was not needed. `ptyCreateTerminal` (`bootstrap.ts:2159`) simply had no
+> tmux branch, while the team path has had one at the `createHeadWithDelegates` seam since Part 4.
+> Adding that branch was contained: dispatch (`triggerAction`, 6 tmux lookups) and delivery
+> (`sendToTerminal`, 3) already resolve a tmux-backed seat by name, `createTmuxHeadWithDelegates`
+> already reattaches by name on restart, and its delegate work is a loop over `delegateSpecs` — so a
+> lone agent is a team of one. Verified live: `POST /terminals/verb/ptyCreateTerminal {"role":"coder"}`
+> returned `{success:true, paneId:"%13", sessionName:"sb-team"}` and `tmux ls` went 1 → 2.
+> **What remains of this plan:** ONE thing — the session is named `sb-team`, not for the group. The
+> branch passes `payload.groupName || payload.teamName`, and a bare `+` create sends neither, so every
+> ungrouped seat piles into one default session. The panel must send the group name on create. That is
+> requirement 2 of the operator's spec and is all that is left here; changes 1, 3, 4 and 5 below are
+> done or moot.
+
 ## Metadata
 
 **Complexity:** 6
