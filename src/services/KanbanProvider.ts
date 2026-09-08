@@ -375,9 +375,11 @@ export class KanbanProvider implements vscode.Disposable {
      *
      * The worktree exists on disk and its `worktrees` row is written before this
      * runs, so a terminal failure must not invert an already-succeeded create.
-     * In the standalone host it always fails: `_createAutobanTerminal` calls
-     * `vscode.window.createTerminal` (`TaskViewerProvider.ts:11397`), which the
-     * headless shim throws on by design (`standalone/vscodeShim.ts:184`). Before
+     * It no longer always fails on the standalone host. That claim was true when
+     * `_createAutobanTerminal` called `vscode.window.createTerminal`, which the
+     * headless shim throws on by design (`standalone/vscodeShim.ts`); it has since
+     * been converted to `_ptyHostVerb('ptyCreateTerminal')` and succeeds on both
+     * hosts. Do not read this arm as standalone-dead. Before
      * this helper the rejection propagated out of the three create arms' own
      * try/catch and was reported as `Failed to create worktree: ...` for a
      * worktree that had in fact been created AND recorded — the board then showed

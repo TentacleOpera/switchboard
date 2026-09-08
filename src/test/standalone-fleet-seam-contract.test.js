@@ -256,6 +256,94 @@ function run() {
             'terminals.js must still consume the terminalsChanged push');
     });
 
+    // 6. Projection reconcile — the _ptyHostVerb bypass.
+    //
+    // `_ptyHostVerb` prefers `_ptyHostSupervisor` over `_fleetVerb`, and standalone
+    // wires both, so its creates reach the Go child without touching
+    // GoPtyFleetProjection. Standalone answers ptyListTerminals from that cache, so
+    // a bypassed seat was invisible to the sidebar, to getLiveness() and to
+    // listActive(). The extension host cannot drift the same way — its arm returns
+    // the Go child's own roster — so the reconcile is standalone-only BY DESIGN and
+    // the asymmetry is asserted, not left as an unexplained gap.
+
+    test('standalone reconciles the projection before answering ptyListTerminals', () => {
+        const arm = bootstrapSource.slice(bootstrapSource.indexOf("case 'ptyListTerminals': {"));
+        const head = arm.slice(0, arm.indexOf('const all = ptyFleetService.list()') + 40);
+        assert.match(head, /await ptyFleetService\.reconcile\(\)/,
+            'the ptyListTerminals arm must await ptyFleetService.reconcile() before list()');
+        assert.ok(head.indexOf('await ptyFleetService.reconcile()') < head.indexOf('ptyFleetService.list()'),
+            'the reconcile must precede the list read, not follow it');
+    });
+
+    test('the extension host documents why it wires no reconciler', () => {
+        // "Never wired" and "nothing to wire" must not be the same value. The
+        // extension arm has no projection to reconcile; that has to be stated where
+        // a parity audit will read it.
+        const body = extractMethodBody(taskViewerSource, '_ptyHostVerb');
+        assert.match(body, /NO reconcile seam here, deliberately/,
+            "_ptyHostVerb must record that the missing reconciler is an asymmetry, not an omission");
+        // Strip comment lines first: the docblock above NAMES the standalone
+        // reconcile call in order to explain the asymmetry, and a bare substring
+        // test would read that mention as a wiring. A mention is not a call.
+        const code = taskViewerSource.split('\n')
+            .filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+        assert.ok(!/ptyFleetService\.reconcile|setFleetReconciler|_fleetReconciler/.test(code),
+            'the extension host must not wire a reconciler — it has no projection');
+    });
+
+    test('reconcile is single-flighted', () => {
+        const body = extractMethodBody(projectionSource, 'reconcile');
+        assert.match(body, /_reconcileInFlight/,
+            'reconcile must share one in-flight round-trip between concurrent readers');
+        assert.match(body, /\.finally\(/,
+            'the in-flight promise must be cleared in finally, or one rejection wedges every later reconcile');
+        assert.match(projectionSource, /private _reconcileInFlight: Promise<void> \| null = null;/,
+            'the in-flight handle must be a nullable promise field');
+    });
+
+    test('refresh merges in place and never rebuilds the cache map', () => {
+        // Two bugs pinned at once. (1) Lost update: rebuilding from a snapshot taken
+        // before the round-trip drops a handle a concurrent create() added while the
+        // request was in flight, and orphans its live socket. (2) Order: the Go host
+        // lists from a Go map, whose iteration order is randomized by design, so a
+        // rebuild reshuffles the sidebar on every refresh — which reconciling on
+        // every list would have made visible on every push.
+        const body = extractMethodBody(projectionSource, 'refresh');
+        assert.ok(!/this\.cache = /.test(body),
+            'refresh must not reassign this.cache — merge in place (lost update + randomized Go map order)');
+        assert.match(body, /const before = new Set\(this\.cache\.keys\(\)\)[\s\S]{0,400}await this\.supervisor\.request/,
+            'the eviction set must be snapshotted BEFORE the round-trip, so a concurrent create survives');
+        assert.match(body, /for \(const name of before\)[\s\S]{0,600}this\.cache\.delete\(name\)/,
+            'eviction must iterate the pre-round-trip names, not the current cache');
+        assert.match(body, /_live\?\.close\?\.\(\)/,
+            'an evicted handle must have its live socket closed, as kill() does');
+    });
+
+    test('refresh matches a renamed seat by instance id instead of duplicating it', () => {
+        // rename() fires its host request without awaiting, so a reconcile can see
+        // the OLD name from the host while the cache already holds the NEW one.
+        // Matching only on friendlyName materializes a second handle, and a second
+        // socket, for a terminal that is already cached.
+        const body = extractMethodBody(projectionSource, 'refresh');
+        assert.match(body, /getByAgentInstanceId\(row\.agentInstanceId\)/,
+            'refresh must fall back to the instance id when the listed name is not cached');
+        assert.match(body, /seen\.add\(existing\.friendlyName\)/,
+            "a handle matched under a different key must be marked seen under ITS key, or eviction drops it");
+    });
+
+    test('the Go host actually emits agentInstanceId on every listed row', () => {
+        // Inbound field-existence check: the TS type has it optional and materialize()
+        // falls back to a fresh uuid, so neither proves the field arrives. Only the
+        // emitted map literal does. If this ever stops being true, the rename match
+        // above degrades to "never matches" — silently.
+        const goHost = fs.readFileSync(
+            path.join(REPO_ROOT, 'cmd', 'switchboard-pty-host', 'main.go'), 'utf8');
+        const project = goHost.slice(goHost.indexOf('func (f *fleet) project('));
+        const literal = project.slice(0, project.indexOf('\n}'));
+        assert.match(literal, /"agentInstanceId":\s*t\.agentInstanceId/,
+            'fleet.project must emit agentInstanceId — the rename match in refresh() reads it');
+    });
+
     console.log(`\nResults: ${passed} passed, ${failed} failed\n`);
     if (failed > 0) {
         process.exit(1);

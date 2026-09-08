@@ -2256,6 +2256,23 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 }
 
                 case 'ptyListTerminals': {
+                    // Reconcile before reading. This host answers the fleet list
+                    // from the projection's cache, and `_ptyHostVerb` creates
+                    // (Planning/sidebar dispatch to a seat-less role via
+                    // createFleetTerminalAndDeliver; worktree create via
+                    // ensureWorktreeTerminals -> _createAutobanTerminal) go straight
+                    // to the Go child and never enter that cache. Without this the
+                    // seat exists, holds a PTY and takes prompts, and is invisible to
+                    // the sidebar, to getLiveness() (so the activity-light sweep has
+                    // no evidence and the card falls through to the blind timer) and
+                    // to listActive() turn-end recipient resolution.
+                    //
+                    // Affordable HERE and only here: reconcile() is single-flighted,
+                    // and this route is no longer polled — the terminalsChanged push
+                    // replaced the 5s fleet poll, so a list is an event, not a
+                    // heartbeat. Under the poll this would have been one supervisor
+                    // round-trip every 5s per open panel.
+                    await ptyFleetService.reconcile();
                     const all = ptyFleetService.list();
                     const projectTerminals = (terminals: any[]) => terminals.map(t => ({
                         friendlyName: t.friendlyName,

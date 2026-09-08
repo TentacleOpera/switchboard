@@ -1347,6 +1347,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             } else {
                 return { success: false, error: 'PTY host unavailable on this platform/installation' };
             }
+            // NO reconcile seam here, deliberately — and this is an asymmetry, not
+            // an omission. The standalone host answers ptyListTerminals from
+            // GoPtyFleetProjection's cache and must reconcile it first
+            // (bootstrap.ts's ptyListTerminals arm calls ptyFleetService.reconcile()),
+            // because `_ptyHostVerb` creates bypass that projection. This host has no
+            // projection: `result` above IS the Go child's own roster, so it cannot
+            // drift from it. A reconciler wired here would have nothing to reconcile.
             if (verb === 'ptyListTerminals' && result?.success && Array.isArray(result.terminals)) {
                 this._ptyTerminalNames = result.terminals
                     .filter((t: any) => t.status === 'active')

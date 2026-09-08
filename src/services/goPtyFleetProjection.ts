@@ -59,6 +59,7 @@ export class GoPtyFleetProjection {
     private static readonly RECENTLY_CLOSED_CAP = 64;
     private db?: KanbanDatabase;
     private _registryWrite: Promise<void> = Promise.resolve();
+    private _reconcileInFlight: Promise<void> | null = null;
     private _claudeInlineRenderingResolver?: () => boolean;
     private _controllerSeatResolver?: () => { terminalName?: string } | null | undefined;
     private _sharedMemberChains = new Map<string, Promise<unknown>>();
@@ -458,23 +459,94 @@ export class GoPtyFleetProjection {
         }
     }
 
+    /**
+     * Reconcile the cache against the Go host's authoritative roster, for READ
+     * paths.
+     *
+     * Why a read path needs this at all: `_ptyHostVerb` prefers
+     * `_ptyHostSupervisor` over `_fleetVerb` (TaskViewerProvider.ts), and the
+     * standalone host wires BOTH, so every `_ptyHostVerb` create goes straight to
+     * the Go child and never touches this projection. Two such paths are
+     * reachable under standalone — `createFleetTerminalAndDeliver` (Planning /
+     * sidebar dispatch to a role with no seat yet) and `ensureWorktreeTerminals`
+     * -> `_createAutobanTerminal` (worktree create). Standalone's
+     * `ptyListTerminals` answers from `list()`, i.e. this cache, so a seat created
+     * that way was absent from the sidebar, from `getLiveness()` (the activity-
+     * light sweep then had no evidence for it and its card fell through to the
+     * blind timer), and from `listActive()` turn-end recipient resolution — and it
+     * had no live stream, so the natural-exit emit never fired for it either. The
+     * extension host is unaffected because its `ptyListTerminals` arm returns the
+     * Go child's own reply.
+     *
+     * Single-flighted: concurrent readers share one round-trip. `create()` calls
+     * `refresh()` directly instead, because its name-collision loop needs a
+     * snapshot taken after its own call rather than one a coalesced caller started
+     * earlier.
+     */
+    public reconcile(): Promise<void> {
+        if (!this._reconcileInFlight) {
+            this._reconcileInFlight = this.refresh().finally(() => { this._reconcileInFlight = null; });
+        }
+        return this._reconcileInFlight;
+    }
+
     private async refresh(): Promise<void> {
+        // Names present BEFORE the round-trip. Eviction is scoped to these so a
+        // handle added by a concurrent create() while the request was in flight
+        // survives. The previous implementation replaced `this.cache` wholesale
+        // with a map built from a snapshot that predated the new seat, which
+        // dropped the handle and orphaned its live socket — a lost update that was
+        // rare while `create()` was the only caller and is reachable on every list
+        // now that read paths reconcile.
+        const before = new Set(this.cache.keys());
         const listed = await this.supervisor.request('ptyListTerminals', {});
         const rows: ProjectedTerminal[] = Array.isArray(listed?.terminals) ? listed.terminals : [];
-        const next = new Map<string, ExtendedTerminalHandle>();
+        // MERGE IN PLACE, never rebuild. The Go host lists from a Go map
+        // (`for _, t := range f.terminals`), whose iteration order is randomized
+        // by design, so rebuilding the cache from `rows` reshuffled it on every
+        // refresh — a sidebar that reorders itself on every push, and a random
+        // pick for `reportSingletonDuplicates`'s keeper. Merging preserves
+        // creation order.
+        //
+        // The loop below is await-free, so it runs to completion as a single task:
+        // a second concurrent refresh cannot interleave and materialize the same
+        // row twice, which would open two sockets for one terminal and leak one.
+        const seen = new Set<string>();
         for (const row of rows) {
-            const existing = this.cache.get(row.friendlyName);
+            seen.add(row.friendlyName);
+            // `rename()` fires its host request without awaiting, so a reconcile
+            // can arrive while the host still reports the OLD name and the cache
+            // already holds the NEW one. Fall back to the instance id, which
+            // survives a rename and which the Go host stamps on every row
+            // (`fleet.project`, cmd/switchboard-pty-host/main.go) — verified in the
+            // emitted map literal, not in the optional TS field. Without this the
+            // row materializes a duplicate handle, and a second socket, for a
+            // terminal that is already cached.
+            const existing = this.cache.get(row.friendlyName)
+                ?? (row.agentInstanceId ? this.getByAgentInstanceId(row.agentInstanceId) : undefined);
             if (existing) {
                 existing.status = row.status === 'exited' ? 'exited' : 'active';
                 existing.lastDataAt = row.lastDataAt ?? existing.lastDataAt;
                 existing.promptCount = row.promptCount ?? existing.promptCount;
                 if (row.pid) { existing.pty = { ...existing.pty, pid: row.pid }; }
-                next.set(row.friendlyName, existing);
-            } else {
-                next.set(row.friendlyName, this.materialize(row));
+                // Its own key, which may differ from `row.friendlyName` on the
+                // rename path above — otherwise the eviction pass below would drop
+                // the handle it just matched.
+                seen.add(existing.friendlyName);
+                continue;
             }
+            this.cache.set(row.friendlyName, this.materialize(row));
         }
-        this.cache = next;
+        for (const name of before) {
+            if (seen.has(name)) { continue; }
+            // Close the live socket on eviction, as `kill()` does before its own
+            // delete. The wholesale replace this rewrites leaked one socket per
+            // evicted handle; that cost little while eviction was rare and costs
+            // more now that every list reconciles.
+            const stale = this.cache.get(name);
+            (stale as any)?._live?.close?.();
+            this.cache.delete(name);
+        }
     }
 
     private attachLiveStream(
