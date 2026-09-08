@@ -2198,7 +2198,13 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // A lone agent is a team of one: the delegate work in that function is a
                     // loop over delegateSpecs, so an empty list creates the session with a
                     // single named pane and stops.
+                    // The dock is NOT part of the terminals-pane fleet. It sets `hidden`
+                    // precisely because that seat belongs to the dock alone — it is not in
+                    // the pane grid, not in a group, and not something you attach to from
+                    // an SSH client. Seating it in tmux put an `sb-dock-cli` session next to
+                    // the real ones and coupled two surfaces that are meant to be separate.
                     if (tmuxReady && tmuxFleetService
+                        && payload.hidden !== true
                         && configProvider.getConfigBoolean('terminal.tmux.enabled', true)) {
                         const seated = await createTmuxHeadWithDelegates({
                             role: payload.role || 'coder',
@@ -4019,7 +4025,15 @@ Each plan file must include:
         // settings use — NOT from the wire (the ptyStartTeam verb rejects a
         // wire-supplied backend field). Default is 'fleet'; absent or
         // unrecognized means fleet.
-        const backend = kanbanProvider._getScopedSetting<string>('terminalBackend', 'fleet') || 'fleet';
+        // ONE switch decides tmux. This used to read a second, scoped `terminalBackend`
+        // setting (default 'fleet') while the checkbox and every other read site use
+        // `terminal.tmux.enabled` — so turning tmux on seated individual agents in tmux
+        // and left every TEAM on plain PTYs, with nothing in the UI explaining why.
+        // `terminalBackend` is still honoured when explicitly set, so an install that
+        // chose it keeps working; absent, the master gate decides.
+        const explicitBackend = kanbanProvider._getScopedSetting<string>('terminalBackend', '') || '';
+        const backend = explicitBackend
+            || (configProvider.getConfigBoolean('terminal.tmux.enabled', true) ? 'tmux' : 'fleet');
 
         if (backend === 'tmux') {
             // tmux backend: create panes in a Switchboard-owned tmux session.

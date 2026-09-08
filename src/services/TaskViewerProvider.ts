@@ -14051,7 +14051,15 @@ Each plan file must include:
         // wire-supplied backend field). Default is 'fleet'; absent or
         // unrecognized means fleet. No silent fleet fallback when tmux is
         // selected but unavailable — the tmux callback returns a refusal.
-        const backend = kp?._getScopedSetting<string>('terminalBackend', 'fleet') || 'fleet';
+        // ONE switch decides tmux. This used to read a second, scoped `terminalBackend`
+        // setting (default 'fleet') while the checkbox and every other read site use
+        // `terminal.tmux.enabled` — so turning tmux on seated individual agents in tmux
+        // and left every TEAM on plain PTYs, with nothing in the UI explaining why.
+        // `terminalBackend` is still honoured when explicitly set, so an install that
+        // chose it keeps working; absent, the master gate decides.
+        const explicitBackend = kp?._getScopedSetting<string>('terminalBackend', '') || '';
+        const backend = explicitBackend
+            || (vscode.workspace.getConfiguration('switchboard.terminal.tmux').get<boolean>('enabled', true) ? 'tmux' : 'fleet');
 
         if (backend === 'tmux') {
             // tmux backend: create panes in a Switchboard-owned tmux session.
