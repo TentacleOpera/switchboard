@@ -215,9 +215,19 @@ export async function createTmuxHeadWithDelegates(
         };
     }
 
-    const teamName = spec.teamName || spec.name || 'team';
-    const sessionName = deriveTmuxSessionName(teamName);
+    // Roster first: headName is the fallback session name, so it has to exist before
+    // the session is named.
     const { headName, delegates: delegateSpecs } = deriveRoster(spec);
+    // Session name, in order of specificity: the team, the group, the seat's own name,
+    // and finally the derived seat name (`coder-1`).
+    //
+    // The old last resort was the literal 'team', which put every unnamed seat into a
+    // shared `sb-team` session — a name a REAL team called "Team" would also derive.
+    // One such seat outliving a restart left `sb-team` existing-but-empty, and the next
+    // genuine team start was refused by checkReconnect with "exists but has no panes".
+    // An unnamed seat now gets its own session instead of squatting a plausible one.
+    const teamName = spec.teamName || spec.name || headName;
+    const sessionName = deriveTmuxSessionName(teamName);
 
     // ── Reconnect check ────────────────────────────────────────────────
     if (await hasSession(sessionName, socket)) {
