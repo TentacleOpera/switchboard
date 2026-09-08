@@ -389,6 +389,18 @@ interface ClientState {
     primary: boolean;
 }
 
+/**
+ * @deprecated RETIRED — do not construct in production. The fleet moved into
+ * the Go PTY host child (cmd/switchboard-pty-host), and the standalone host
+ * now uses `GoPtyFleetProjection` (src/services/goPtyFleetProjection.ts) whose
+ * `onDidChange` emitter drives the `terminalsChanged` broadcast wired in
+ * `bootstrap.ts`. Nothing in `src/standalone/bootstrap.ts` or
+ * `src/standalone/ptyHost.ts` constructs this class. Kept here because
+ * `terminal-content-free-collapse-contract.test.js` exercises its ring-buffer
+ * / backpressure / content-free-collapse logic behaviourally; deleting the
+ * class would delete tested contract coverage. When that coverage is migrated
+ * to the Go host's equivalent, this file can be removed.
+ */
 export class TerminalWsGateway {
     // permessage-deflate. Terminal output is the largest and most repetitive
     // traffic Switchboard produces (box borders, status lines, repainted rows),

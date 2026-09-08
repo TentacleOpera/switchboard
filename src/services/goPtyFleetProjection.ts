@@ -518,6 +518,19 @@ export class GoPtyFleetProjection {
                 handle.status = 'exited';
                 handle.exitCode = message.code;
                 for (const cb of exitListeners) { cb(message.code); }
+                // Emit a fleet change so onDidChange subscribers (the
+                // terminalsChanged push in bootstrap.ts) learn about natural
+                // CLI exit. kill() emits {type:'closed'} itself, but a CLI
+                // that exits on its own only reaches this arm — without this
+                // emit the push never fires and the sidebar shows the seat
+                // active until the next poll (now deleted). The extra emit
+                // when kill() already removed the handle is harmless: the
+                // client coalesces, and a second push for an already-closed
+                // seat is a no-op refetch. Do NOT guard with
+                // `if (this.cache.has(name))` — kill() deletes from cache
+                // before the WebSocket closes, so that guard would suppress
+                // the exit push for a seat killed while still running.
+                this.emitter.emit('change', { type: 'closed', name });
             }
         });
         return { sendResize, close };

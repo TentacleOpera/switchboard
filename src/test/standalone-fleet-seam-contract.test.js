@@ -19,8 +19,11 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const TASKVIEWER_PATH = path.join(REPO_ROOT, 'src', 'services', 'TaskViewerProvider.ts');
 const BOOTSTRAP_PATH = path.join(REPO_ROOT, 'src', 'standalone', 'bootstrap.ts');
 
+const PROJECTION_PATH = path.join(REPO_ROOT, 'src', 'services', 'goPtyFleetProjection.ts');
+
 const taskViewerSource = fs.readFileSync(TASKVIEWER_PATH, 'utf8');
 const bootstrapSource = fs.readFileSync(BOOTSTRAP_PATH, 'utf8');
+const projectionSource = fs.readFileSync(PROJECTION_PATH, 'utf8');
 
 let passed = 0;
 let failed = 0;
@@ -171,6 +174,86 @@ function run() {
         const body = extractMethodBody(taskViewerSource, 'instantiateAgentGroup');
         assert.match(body, /if\s*\(!this\._hasFleet\(\)\)\s*\{/,
             'instantiateAgentGroup must refuse when no fleet is reachable');
+    });
+
+    // 5. The terminalsChanged push seam — BOTH hosts.
+    //
+    // The fleet moved into the Go PTY host child and its notifications did not
+    // come with it: the only broadcaster was the retired terminalWsGateway.ts,
+    // which nothing constructs, so no production path pushed terminalsChanged in
+    // either host. The 5s terminals.js fleet poll stood in for it, which is why a
+    // completely dead push presented as sluggishness rather than a break. That
+    // poll is now deleted, so these seams are load-bearing.
+    //
+    // STATIC WIRING ONLY. These assert the emitter, the subscription, the
+    // broadcast and the surface tag exist and are joined up. They cannot prove a
+    // push ARRIVES at a subscribed client — that needs a live hub subscription.
+
+    test('bootstrap.ts subscribes to the fleet projection and broadcasts terminalsChanged', () => {
+        assert.match(bootstrapSource, /ptyFleetService\.onDidChange\(/,
+            'bootstrap.ts must subscribe to GoPtyFleetProjection.onDidChange');
+        assert.equal((bootstrapSource.match(/ptyFleetService\.onDidChange\(/g) || []).length, 1,
+            'exactly one onDidChange subscription — a second would double-push every fleet change');
+        const sub = bootstrapSource.slice(bootstrapSource.indexOf('ptyFleetService.onDidChange('));
+        const body = sub.slice(0, sub.indexOf('\n    });') + 8);
+        assert.match(body, /broadcastWs\('terminalsChanged',\s*\{\}?,?\s*[^)]*SURFACES\.terminals\)/,
+            'the subscription must broadcast terminalsChanged tagged SURFACES.terminals, not to every surface');
+        assert.match(body, /setTimeout\(/,
+            'the broadcast must be debounced — a team start fires several creates in ~200ms');
+        assert.match(body, /clearTimeout\(/,
+            'the debounce must be trailing-edge (clear-and-reset), so the LAST change still pushes');
+    });
+
+    test('the fleet projection emits a change on natural CLI exit, not only on kill()', () => {
+        // kill() emits {type:'closed'} itself; a CLI that exits on its own only
+        // reaches the {"t":"exit"} arm of attachLiveStream. Without an emit there,
+        // the seat reads active until something else refetches — and with the poll
+        // gone, nothing does.
+        const exitArm = projectionSource.slice(projectionSource.indexOf("message.t === 'exit'"));
+        const arm = exitArm.slice(0, 2000);
+        assert.match(arm, /this\.emitter\.emit\('change',\s*\{\s*type:\s*'closed'/,
+            "the {\"t\":\"exit\"} handler must emit a 'closed' fleet change");
+        assert.ok(!/if\s*\(\s*this\.cache\.has\(name\)\s*\)[^\n]*\n?[^\n]*emitter\.emit/.test(arm),
+            'the exit emit must NOT be guarded on cache membership — kill() deletes from cache before the socket closes');
+    });
+
+    test('the extension host pushes terminalsChanged at _ptyHostVerb, not only at the verb wrapper', () => {
+        // handlePtyVerb is the HTTP/webview wrapper, and half the extension host's
+        // fleet mutations never reach it: ptyStartTeam returns from
+        // startTeamForWorkspace before it, and the autoban create, the team
+        // head/delegate creates and the dispatch-time create all call _ptyHostVerb
+        // directly. _ptyHostVerb is the ONE chokepoint (its own docblock: "the
+        // ONLY way the extension reaches the fleet"), so the push belongs there.
+        const body = extractMethodBody(taskViewerSource, '_ptyHostVerb');
+        assert.match(body, /TERMINAL_MUTATION_VERBS\.has\(verb\)/,
+            '_ptyHostVerb must gate the push on the roster-mutating verb set');
+        assert.match(body, /_scheduleTerminalsChangedPush\(\)/,
+            '_ptyHostVerb must schedule the terminalsChanged push');
+        assert.match(body, /result\.success !== false/,
+            'the push must be gated on a non-failing result — a rejected verb changed nothing');
+        for (const verb of ['ptyCreateTerminal', 'ptyCreateBatch', 'ptyCloseTerminal', 'ptyRenameTerminal']) {
+            assert.ok(new RegExp(`'${verb}'`).test(taskViewerSource.slice(
+                taskViewerSource.indexOf('const TERMINAL_MUTATION_VERBS'),
+                taskViewerSource.indexOf('const TERMINALS_CHANGED_PUSH_DEBOUNCE_MS'))),
+                `${verb} must be in TERMINAL_MUTATION_VERBS`);
+        }
+        const push = extractMethodBody(taskViewerSource, '_scheduleTerminalsChangedPush');
+        assert.match(push, /clearTimeout\(this\._terminalsChangedPushTimer\)/,
+            'the push must be trailing-edge debounced (clear-and-reset)');
+        assert.match(push, /push\(\{\s*type:\s*'terminalsChanged'\s*\},\s*SURFACES\.terminals\)/,
+            'the push must be tagged SURFACES.terminals, not broadcast to every surface');
+    });
+
+    test('the 5s fleet poll is gone from terminals.js', () => {
+        // The poll is what let a dead push read as slowness. Pinned as an absence
+        // in both this suite and shell-agent-dock.test.js: reintroducing it
+        // restores the camouflage for the next notification someone forgets to wire.
+        const terminalsJs = fs.readFileSync(
+            path.join(REPO_ROOT, 'src', 'webview', 'terminals.js'), 'utf8');
+        assert.ok(!/startFleetPoll|stopFleetPoll|fleetPollTimer/.test(terminalsJs),
+            'terminals.js must have no fleet poll — the terminalsChanged push replaced it');
+        assert.match(terminalsJs, /message\.type === 'terminalsChanged'/,
+            'terminals.js must still consume the terminalsChanged push');
     });
 
     console.log(`\nResults: ${passed} passed, ${failed} failed\n`);

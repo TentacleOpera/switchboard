@@ -224,38 +224,27 @@ test('the trailing loop skips unmaterialized entries (entry.term null)', () => {
         'the entry.term guard must run BEFORE the suspend/resume branch — an unmaterialized entry must not be suspended');
 });
 
-test('no new argument on new TerminalWsGateway at either composition root', () => {
-    // The predicate is client-side only (it reads paneAssignments, paneModes,
-    // the container box — all webview state). The gateway constructor must not
-    // gain an argument or a setter for it. Both composition roots construct
-    // with exactly two args today; this pins that.
+test('neither composition root constructs the retired TerminalWsGateway', () => {
+    // The fleet moved into the Go PTY host child; the standalone host now uses
+    // GoPtyFleetProjection whose onDidChange emitter drives the terminalsChanged
+    // broadcast wired in bootstrap.ts. TerminalWsGateway is retired dead code
+    // (kept only for the ring-buffer/backpressure contract tests in
+    // terminal-content-free-collapse-contract.test.js). Neither composition root
+    // may reconstruct it — doing so would revive the dead push path and diverge
+    // from the GoPtyFleetProjection-based broadcast.
     const bootstrap = fs.readFileSync(path.join(repoRoot, 'src', 'standalone', 'bootstrap.ts'), 'utf8');
     const ptyHost = fs.readFileSync(path.join(repoRoot, 'src', 'standalone', 'ptyHost.ts'), 'utf8');
-    // Each root has exactly one `new TerminalWsGateway(...)` call with two args.
     const bsCalls = bootstrap.match(/new TerminalWsGateway\(/g) || [];
     const phCalls = ptyHost.match(/new TerminalWsGateway\(/g) || [];
-    assert.equal(bsCalls.length, 1, 'bootstrap.ts must have exactly one TerminalWsGateway construction');
-    assert.equal(phCalls.length, 1, 'ptyHost.ts must have exactly one TerminalWsGateway construction');
-    // No third argument: the call ends after the second arg's closing paren.
-    // A third arg would appear as a comma between the token function and the
-    // closing paren. Match the two-arg form exactly.
-    assert.match(bootstrap, /new TerminalWsGateway\(ptyFleetService, async \(\) => terminalSessionToken\)/,
-        'bootstrap.ts must construct TerminalWsGateway with exactly two args — no predicate arg');
-    assert.match(ptyHost, /new TerminalWsGateway\(fleet, async \(\) => token\);/,
-        'ptyHost.ts must construct TerminalWsGateway with exactly two args — no predicate arg');
-    // Negative: no three-arg form (a comma after the second arg's closing paren
-    // would indicate a third argument was added).
-    assert.ok(!/new TerminalWsGateway\([^)]*,[^)]*,/.test(bootstrap),
-        'bootstrap.ts must not add a third argument to TerminalWsGateway');
-    assert.ok(!/new TerminalWsGateway\([^)]*,[^)]*,/.test(ptyHost),
-        'ptyHost.ts must not add a third argument to TerminalWsGateway');
-    // No new setter for the predicate anywhere in the standalone layer.
-    assert.ok(!/setRenderedSlotPredicate|setIsTerminalRendered/.test(bootstrap),
-        'no new setter for the predicate in bootstrap.ts');
-    assert.ok(!/setRenderedSlotPredicate|setIsTerminalRendered/.test(ptyHost),
-        'no new setter for the predicate in ptyHost.ts');
-    // And the predicate did not leak into the gateway file itself.
+    assert.equal(bsCalls.length, 0,
+        'bootstrap.ts must NOT construct TerminalWsGateway — it is retired; the fleet broadcast is wired via GoPtyFleetProjection.onDidChange');
+    assert.equal(phCalls.length, 0,
+        'ptyHost.ts must NOT construct TerminalWsGateway — it is a 7-line retired stub that throws');
+    // The gateway class itself must carry a deprecation header so a future
+    // reader does not mistake it for live code.
     const gateway = fs.readFileSync(path.join(repoRoot, 'src', 'standalone', 'terminalWsGateway.ts'), 'utf8');
+    assert.ok(/@deprecated/.test(gateway),
+        'terminalWsGateway.ts must carry an @deprecated header recording its retirement');
     assert.ok(!/isTerminalRendered/.test(gateway),
         'isTerminalRendered must not appear in terminalWsGateway.ts — the predicate is client-side only');
 });

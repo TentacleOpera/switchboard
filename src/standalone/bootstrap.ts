@@ -3613,6 +3613,27 @@ Each plan file must include:
     ptyFleetService.setControllerSeatResolver(
         () => (taskViewerProvider as any)?._autobanState?.missionControlSeat
     );
+    // Fleet-change → terminalsChanged push seam. The Go PTY host owns the fleet
+    // and GoPtyFleetProjection.onDidChange fires on every create/kill/rename
+    // (and on natural CLI exit — see goPtyFleetProjection.attachLiveStream). No
+    // production path broadcast terminalsChanged before this: the retired
+    // terminalWsGateway.ts used to, but nothing constructs it. The 5s
+    // terminals.js poll stood in for the dead push and is deleted in change 5.
+    // `server` is declared (`let server` at :843) but assigned further down
+    // (:4691); the closure uses optional chaining so a change event before
+    // assignment is a no-op rather than a crash. Trailing-edge debounce only:
+    // a team start fires 6+ creates in ~200ms, and the LAST push is the one
+    // that matters (the client coalesces by refetching on any push). A
+    // leading-edge debounce would drop the first create's push — the one the
+    // operator is waiting for.
+    let terminalsChangedPushTimer: NodeJS.Timeout | null = null;
+    ptyFleetService.onDidChange(() => {
+        if (terminalsChangedPushTimer) { clearTimeout(terminalsChangedPushTimer); }
+        terminalsChangedPushTimer = setTimeout(() => {
+            terminalsChangedPushTimer = null;
+            try { server?.broadcastWs('terminalsChanged', {}, SURFACES.terminals); } catch { /* broadcast failure must not crash the fleet */ }
+        }, 75);
+    });
     // Activity-light liveness seam, wired HERE rather than beside the engine's
     // other seams: the sweep calls this synchronous getter on a 10 s timer to
     // partition the fleet into live (spare) / exited (force-clear) / silent (fall

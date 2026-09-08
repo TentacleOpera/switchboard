@@ -87,7 +87,6 @@
     // structure replaces this wholesale when it lands (never merged).
     let roleOrderMap = {};
     let kanbanPollTimer = null;
-    let fleetPollTimer = null;
     // Timestamp of the last getKanbanStructure fetch. Column structure changes
     // rarely, so it is refreshed on a 30s cadence rather than every 5s poll tick.
     let kanbanStructureTimer = 0;
@@ -168,9 +167,9 @@
      *   null                                            — closed
      *
      * State, not DOM: renderSidebarList() does `listEl.innerHTML = ''` on every
-     * fleet poll (5s), every terminalsChanged push and every collapse toggle, so a
-     * picker inserted imperatively on click would be destroyed mid-choice. The
-     * renderer rebuilds it from this.
+     * terminalsChanged push and every collapse toggle, so a picker inserted
+     * imperatively on click would be destroyed mid-choice. The renderer
+     * rebuilds it from this.
      */
     let pickerState = null;
     /**
@@ -1240,17 +1239,18 @@
         // fetch inside an earlier listener body reads as an earlier first fetch and
         // breaks a contract that is otherwise still true.
         //
-        // Why it is needed at all: startFleetPoll skips its tick on
-        // `visibilityState === 'hidden'`, and Chromium reports a FULLY OCCLUDED popup
-        // as hidden — not just a background tab. A popped-out panel sitting behind the
-        // main browser window therefore stops polling entirely and is frozen rather
-        // than 5s-stale. Catch up on the way back rather than removing the skip:
-        // polling a covered window is still wasted work.
+        // Why it is needed at all: the fleet poll was deleted (the terminalsChanged
+        // push now reaches the UI immediately on every fleet change), but a popped-
+        // out panel reported by Chromium as FULLY OCCLUDED (hidden, not just a
+        // background tab) can still miss pushes while covered. Catch up on regain
+        // so a panel brought to the front reconciles against any change it missed.
+        // This is also the fallback for the extension-host exit gap: a CLI that dies
+        // shows active until the operator interacts with the panel, and a visibility
+        // regain refetches and discovers the exit the push could not cover.
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible') { fetchTerminalList(); }
         });
 
-        startFleetPoll();
         updateTeamStartButtons();
         // "Working, no output" signal sweep — see updateWorkingSilence. Started
         // once here; the interval self-guards against double-start.
@@ -1271,7 +1271,7 @@
             } else if (terminalBadges.has(t.friendlyName)) {
                 light = 'done';
                 // Monotonic per completion. The shell rebuilds every rail button on
-                // every push (5s poll + terminalsChanged), so `light === 'done'` twice
+                // every terminalsChanged push, so `light === 'done'` twice
                 // running cannot tell a fresh completion from a stale one. The stamp
                 // can — and it also distinguishes a SECOND completion of a terminal
                 // whose badge never cleared, which a plain edge detector would miss.
@@ -2239,8 +2239,8 @@
         }, CURTAIN_NO_OUTPUT_MS);
         startupCurtains.set(name, state);
 
-        // Paint NOW rather than waiting for the next pane render. The gateway
-        // broadcasts terminalsChanged from inside fleetService.create() — and for any
+        // Paint NOW rather than waiting for the next pane render. terminalsChanged
+        // is broadcast from inside the fleet's create() — and for any
         // role with a startup command the create response is then withheld for
         // SHELL_READINESS_DELAY_MS (750ms) — so a terminal can already be seated and
         // rendered by the time this runs. Without this, its curtain is armed into a
@@ -7966,25 +7966,6 @@
         if (kanbanPollTimer) { clearInterval(kanbanPollTimer); kanbanPollTimer = null; }
     }
 
-    function startFleetPoll() {
-        if (fleetPollTimer || isKanbanDock) { return; }
-        fleetPollTimer = setInterval(() => {
-            // Skip when the tab is hidden — the WebSocket push will catch up on
-            // regain, and a background tab hammering ptyListTerminals wastes a
-            // server slot per hidden panel. The poll is a fallback for when the
-            // WebSocket is dead, not a replacement for it.
-            if (document.visibilityState === 'hidden') { return; }
-            fetchTerminalList();
-        }, 5000);
-    }
-
-    function stopFleetPoll() {
-        if (fleetPollTimer) {
-            clearInterval(fleetPollTimer);
-            fleetPollTimer = null;
-        }
-    }
-
     /** Fetch the Kanban column structure and rebuild the role order map. Shared by
      *  the kanban pane poll, the terminal list refresh, panel init, and the window
      *  focus hook. A `force` arg bypasses the 30s throttle so reordering in Setup
@@ -9230,8 +9211,8 @@
 
         // Disarm the seed-on-first-load branch in sanitizePaneAssignments() before the
         // first create. That branch exists for page load, where the fleet is fetched in
-        // one shot; here it is actively harmful. The gateway broadcasts terminalsChanged
-        // from inside fleetService.create() — 750ms before the create response resolves
+        // one shot; here it is actively harmful. terminalsChanged is broadcast
+        // from inside the fleet's create() — 750ms before the create response resolves
         // for any role with a startup command (SHELL_READINESS_DELAY_MS) — so the branch
         // fires on the refetch and seats terminal 1 through a completely different path
         // from terminals 2..N, at a completely different time. That is root cause A

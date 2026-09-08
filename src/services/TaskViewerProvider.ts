@@ -157,6 +157,23 @@ import {
     MissionControlSeat
 } from './autobanState';
 import { parseComplexityScore, scoreToRoutingRole, getFallbackRole, scoreToCategory, resolveRoleWithDegradation } from './complexityScale';
+
+/**
+ * PTY verbs that change the fleet ROSTER (a seat appears, disappears or is
+ * renamed) and therefore need a `terminalsChanged` push. Clear/write/prompt
+ * verbs are deliberately absent: they change a seat's contents, which the
+ * panel already learns from the terminal socket itself.
+ */
+const TERMINAL_MUTATION_VERBS = new Set([
+    'ptyCreateTerminal',
+    'ptyCreateBatch',
+    'ptyCloseTerminal',
+    'ptyRenameTerminal',
+]);
+
+/** Trailing-edge debounce for the `terminalsChanged` push. Long enough to
+ *  collapse a team start's burst of creates, short enough to stay imperceptible. */
+const TERMINALS_CHANGED_PUSH_DEBOUNCE_MS = 75;
 const { syncMirrorToBrain } = require('./mirrorSync') as {
     syncMirrorToBrain: (options: {
         mirrorPath: string;
@@ -1405,7 +1422,57 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 this.postMessage(finishMsg, SURFACES.terminals);
                 this._broadcaster?.push(finishMsg, SURFACES.terminals);
             }
+            // Fleet-change -> terminalsChanged push, at the extension host's ONE
+            // fleet chokepoint. Wired HERE and not in `handlePtyVerb` (the HTTP /
+            // webview verb wrapper) because half the extension host's fleet
+            // mutations never reach that wrapper: `ptyStartTeam` returns from
+            // `startTeamForWorkspace` before it, and the autoban seat create, the
+            // team head/delegate creates (`createHeadWithDelegates`,
+            // `createDelegatesOnly`) and the dispatch-time seat create all call
+            // `_ptyHostVerb` directly, by design (the wrapper rewrites their
+            // payloads). Pushing from the wrapper would leave Start Team — the
+            // reported symptom — with no push at all once the 5s poll is gone.
+            // This method's own docblock states the invariant that makes it the
+            // right seam: it is the ONLY way the extension reaches the fleet.
+            //
+            // In the `finally` so every return path is covered, and gated on a
+            // non-failing result so a rejected verb does not trigger a refetch.
+            //
+            // Trailing-edge debounce: a team start fires several creates in quick
+            // succession and the LAST push is the one that matters (the client
+            // coalesces by refetching on any push). Leading-edge would drop the
+            // first create's push — the one the operator is waiting for.
+            //
+            // Distinct from the `terminalsGroupsChanged` push in `handlePtyVerb`:
+            // that one reloads group rosters, this one reloads the fleet list.
+            //
+            // KNOWN LIMITATION: the extension host has no Node-side exit
+            // detection. The Go child sends {"t":"exit"} straight to the browser
+            // over its own WebSocket, bypassing Node, and the supervisor protocol
+            // is request-response only. A CLI that dies on its own shows active
+            // until the operator interacts with the panel (visibilitychange fires
+            // fetchTerminalList in terminals.js). Closing that needs a Go->Node
+            // notification channel. The standalone host does NOT have this gap —
+            // GoPtyFleetProjection.attachLiveStream emits on exit.
+            if (TERMINAL_MUTATION_VERBS.has(verb) && result && result.success !== false) {
+                this._scheduleTerminalsChangedPush();
+            }
         }
+    }
+
+    /**
+     * Trailing-edge-debounced `terminalsChanged` broadcast. One timer for the
+     * whole provider: a burst of creates collapses to a single push, and the
+     * client refetches the fleet once instead of once per seat.
+     */
+    private _scheduleTerminalsChangedPush(): void {
+        if (this._terminalsChangedPushTimer) { clearTimeout(this._terminalsChangedPushTimer); }
+        this._terminalsChangedPushTimer = setTimeout(() => {
+            this._terminalsChangedPushTimer = undefined;
+            try {
+                this._broadcaster?.push({ type: 'terminalsChanged' }, SURFACES.terminals);
+            } catch { /* a lost push costs a stale panel, never the verb */ }
+        }, TERMINALS_CHANGED_PUSH_DEBOUNCE_MS);
     }
 
     /**
@@ -1671,6 +1738,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _fsSessionWatcher?: FSWatcher;
     private _sessionSyncTimer?: NodeJS.Timeout;
     private _refreshTimeout?: NodeJS.Timeout;
+    private _terminalsChangedPushTimer?: NodeJS.Timeout;  // trailing debounce for the terminalsChanged push fired from _ptyHostVerb
     private _julesStatusPollTimer?: NodeJS.Timeout;
     private _isRefreshingJules: boolean = false;
     private _julesCliUnavailable: boolean = false; // set on `spawn jules ENOENT`; stops the 30s poll until a new Jules dispatch resets it
@@ -25075,6 +25143,10 @@ Each plan file must include:
         if (this._postAutobanStateDebounceTimer) {
             clearTimeout(this._postAutobanStateDebounceTimer);
             this._postAutobanStateDebounceTimer = null;
+        }
+        if (this._terminalsChangedPushTimer) {
+            clearTimeout(this._terminalsChangedPushTimer);
+            this._terminalsChangedPushTimer = undefined;
         }
         this._stateWatcher?.dispose();
         this._planWatcher?.dispose();

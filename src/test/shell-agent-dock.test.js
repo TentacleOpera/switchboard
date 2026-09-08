@@ -694,8 +694,14 @@ test('kanban dock mode is handled in terminals.js and CSS in terminals.html', ()
         'terminals.html\'s body-top mode script must parse the kanban query param');
     assert.ok(terminalsJs.includes('isKanbanDock = publishedMode.kanban === true'),
         'terminals.js must derive isKanbanDock from the published mode');
-    assert.ok(/startFleetPoll\(\)\s*\{[^}]*isKanbanDock/.test(terminalsJs),
-        'startFleetPoll must be suppressed in kanban mode');
+    // The 5s fleet poll is GONE from terminals.js — the terminalsChanged push
+    // (GoPtyFleetProjection.onDidChange in bootstrap.ts, _ptyHostVerb in
+    // TaskViewerProvider.ts) now delivers every fleet change immediately, so
+    // there is no poll left to suppress in kanban mode. Pinned as an absence:
+    // a reintroduced poll would restore the camouflage that let a completely
+    // dead push present as five-second sluggishness.
+    assert.ok(!/startFleetPoll|stopFleetPoll|fleetPollTimer/.test(terminalsJs),
+        'terminals.js must have no fleet poll — the terminalsChanged push replaced it');
     assert.ok(/refreshAgentGroupsForShell\(\)\s*\{[^}]*isKanbanDock/.test(terminalsJs),
         'refreshAgentGroupsForShell must be suppressed in kanban mode');
     assert.ok(/refreshTeamQueueDepths\(\)\s*\{[^}]*isKanbanDock/.test(terminalsJs),
