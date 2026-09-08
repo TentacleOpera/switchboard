@@ -4039,7 +4039,12 @@ Each plan file must include:
                     // a window each — so `tmux attach -t lc-coding-team` shows the whole
                     // team and `prefix n` cycles its seats. Without this every seat named
                     // its own session and a team fragmented into four.
-                    const teamSession = group?.name ? `${group.name}-team` : undefined;
+                    // `-team` marks a shared team session apart from an individual seat's
+                    // `lc-<terminal>`. Only append it when the name does not already end in
+                    // "team" — a team called "Lead team" was becoming lc-lead-team-team.
+                    const teamSession = group?.name
+                        ? (/team\s*$/i.test(group.name) ? group.name : `${group.name}-team`)
+                        : undefined;
                     const head = await ptyFleetService.create(
                         spec.role, spec.name, spec.cwd, undefined, undefined, undefined,
                         { tmuxSession: teamSession }
