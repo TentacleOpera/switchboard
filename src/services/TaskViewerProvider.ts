@@ -901,9 +901,32 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 // The clearCompletedAt call in performKanbanDispatch is NOT
                 // skipped (a re-dispatched card is not complete).
                 if (payload?.skipClear) {
-                    // Skip the roster barrier: do not run the work-context
-                    // lifecycle clear. The destination clear is controlled by
-                    // clearBeforePrompt on the payload, which the caller set.
+                    // Skip the roster barrier's CLEAR — but NOT its bookkeeping.
+                    // The two work-context maps are the barrier's own inputs:
+                    // `_lastWorkContextByTerminal` is what the already-clean
+                    // filter (:1010) reads to mean "dispatched to since its last
+                    // clear", and `_lastWorkContextByTeam` is what decides
+                    // whether a later dispatch is a new work context at all.
+                    // Skipping the writes leaves a round-dispatched seat with no
+                    // entry and the team pinned to the PREVIOUS feature's key, so
+                    // the next ordinary dispatch either clears nobody or fires a
+                    // full roster barrier through a round that is still running —
+                    // both of them the failures this feature exists to remove.
+                    try {
+                        const skipWsRoot = payload.workspaceRoot || this._apiServerWorkspaceRoot || this._getWorkspaceRoot() || '';
+                        const skipDb = await this._getKanbanDb(skipWsRoot);
+                        const skipCtx = await resolveWorkContext(skipDb, contextIdentity);
+                        const skipKey = skipCtx ? skipCtx.workContextKey : (contextIdentity.planId || '');
+                        if (skipKey && typeof payload?.name === 'string' && payload.name) {
+                            const skipTeam = await resolveTeamGroupForTerminal(skipDb, payload.name);
+                            if (skipTeam && skipTeam.id) {
+                                this._lastWorkContextByTeam.set(skipTeam.id, skipKey);
+                            }
+                            this._lastWorkContextByTerminal.set(payload.name, skipKey);
+                        }
+                    } catch (skipErr) {
+                        console.warn('[TaskViewerProvider] skipClear work-context bookkeeping failed:', skipErr);
+                    }
                 } else {
                 // Atomic work context lifecycle:
                 // Resolve workContextKey = record.featureId || record.planId

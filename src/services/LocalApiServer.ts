@@ -1000,6 +1000,31 @@ function composeAcceptanceInstruction(
         + 'cannot be handed the next subtask.';
 }
 
+/**
+ * A `coding_rounds` row as `KanbanDatabase` hands it back (Coding Rounds
+ * feature). Declared locally rather than imported from `KanbanDatabase` because
+ * this module deliberately holds no import edge to it — the db handle here is
+ * `any` (see `LocalApiServerOptions.getKanbanDatabase`). It exists so the round
+ * handlers annotate their reads: without it every `.filter(r => ...)` over a
+ * round list is an implicit-`any` parameter, which `tsc -p tsconfig.test.json`
+ * (the `compile-tests` CI step) rejects under `noImplicitAny`.
+ *
+ * Keep in step with `CodingRoundRecord` in `KanbanDatabase.ts`.
+ */
+type CodingRoundRow = {
+    roundId: string;
+    featureId: string;
+    teamId: string;
+    workspaceId: string;
+    ordinal: number;
+    totalRegistered: number;
+    state: string;
+    subtaskSeats: Record<string, { seat: string; delivered: boolean; delivered_at: string | null }>;
+    registeredAt: string;
+    dispatchedAt: string | null;
+    closedAt: string | null;
+};
+
 export class LocalApiServer {
     private _server: http.Server | null = null;
     /**
@@ -4511,6 +4536,11 @@ export class LocalApiServer {
      * (state='registered') ones, leave dispatched/closed ones alone, and report
      * the diff (added/dropped/kept). A null roster is a 400 (the poster has no
      * team), NOT a 200 no-op like round/complete.
+     *
+     * Registration STARTS round 1 (reported as `dispatched` in the response)
+     * when the feature has no round in flight. That is the only trigger the
+     * feature has: the lead's rounds-variant orders forbid it from dispatching
+     * seats, and round/complete only advances a round that is already running.
      */
     private async _handleKanbanRoundRegister(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
@@ -4604,7 +4634,7 @@ export class LocalApiServer {
             }
 
             // Build the set of valid subtask planIds for this feature.
-            const subtasks = await db.getSubtasksByFeatureId(featureId);
+            const subtasks: Array<{ planId: string }> = await db.getSubtasksByFeatureId(featureId);
             const validSubtaskIds = new Set(subtasks.map(s => s.planId));
 
             // Validate every planId in the rounds is a subtask of this feature.
@@ -4644,7 +4674,7 @@ export class LocalApiServer {
             const now = new Date().toISOString();
 
             // Read existing rounds to compute the re-registration diff.
-            const existingRounds = await db.getCodingRoundsByFeature(featureId);
+            const existingRounds: CodingRoundRow[] = await db.getCodingRoundsByFeature(featureId);
             const keptRounds = existingRounds.filter(r => r.state !== 'registered');
             const oldRegisteredRounds = existingRounds.filter(r => r.state === 'registered');
 
@@ -4715,6 +4745,42 @@ export class LocalApiServer {
                 })),
             };
 
+            // Start the first round. Registration is the ONLY trigger the lead
+            // has: its rounds-variant standing orders say "the system dispatches
+            // each round's subtasks to your seats — you do not dispatch subtasks
+            // to seats yourself", and round/complete only advances a round that
+            // is already in flight. Without this, registering rounds left the
+            // team inert — the lead was told not to dispatch and nothing else
+            // ever did (POST /kanban/round/dispatch exists but is named in no
+            // prompt, CLI or automation, so no agent reaches it).
+            //
+            // Gated on nothing being in flight: a re-registration mid-feature
+            // replaces PENDING rounds only, and the round already running keeps
+            // running — round/complete advances it. Only a feature with no
+            // dispatched/partial round starts one here.
+            let dispatchedNow: {
+                roundId: string; ordinal: number; state: string; dispatched: boolean; error?: string;
+            } | null = null;
+            const inFlight = keptRounds.some(r => r.state === 'dispatched' || r.state === 'partial');
+            if (!inFlight && insertedRounds.length > 0) {
+                const afterInsert: CodingRoundRow[] = await db.getCodingRoundsByFeature(featureId);
+                const first = afterInsert
+                    .filter(r => r.state === 'registered')
+                    .sort((a, b) => a.ordinal - b.ordinal)[0];
+                if (first) {
+                    const dispatchResult = await this._dispatchRoundCore({
+                        db, workspaceRoot, from, round: first, roster,
+                    });
+                    dispatchedNow = {
+                        roundId: first.roundId,
+                        ordinal: first.ordinal,
+                        state: dispatchResult.state,
+                        dispatched: dispatchResult.success,
+                        ...(dispatchResult.success ? {} : { error: dispatchResult.error }),
+                    };
+                }
+            }
+
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
                 success: true,
@@ -4723,6 +4789,9 @@ export class LocalApiServer {
                 rounds: insertedRounds.map(r => ({ roundId: r.roundId, ordinal: r.ordinal, subtasks: r.subtasks, state: 'registered' })),
                 unrouted,
                 diff,
+                // null when a round was already in flight (the running round is
+                // not disturbed by a re-registration).
+                dispatched: dispatchedNow,
             }));
         } catch (err) {
             console.error('[LocalApiServer] kanbanRoundRegister error:', err);
@@ -4891,6 +4960,43 @@ export class LocalApiServer {
         // The lead is never a dispatched seat. Exclude the lead from the pool.
         const seats = roster.filter(s => s !== from);
         const subtaskPlanIds = Object.keys(round.subtaskSeats || {});
+
+        // An empty seat pool (a roster that is the lead alone) is a real state on
+        // the auto-advance path: round/complete validates the ROSTER, not the
+        // pool, before calling here. Without this guard `seats[cursor % 0]` is
+        // `seats[NaN]` — `undefined` — and every subtask dispatches with no
+        // targetTerminalOverride, which routes the round's work to whatever seat
+        // the default resolution picks. Record the honest state instead: every
+        // subtask `seat: null, delivered: false`, round `partial`, which is also
+        // the recovery input subtask 03 specifies for a subtask with no seat.
+        if (seats.length === 0) {
+            const noSeatResults = subtaskPlanIds.map(planId => ({
+                planId,
+                seat: null,
+                delivered: false,
+                deliveredAt: null,
+                error: `No seat available — the team roster is the lead '${from}' alone`,
+            }));
+            const noSeatSeats: CodingRoundRow['subtaskSeats'] = { ...(round.subtaskSeats || {}) };
+            for (const planId of subtaskPlanIds) {
+                noSeatSeats[planId] = { seat: '', delivered: false, delivered_at: null };
+            }
+            await db.updateCodingRoundAfterDispatch?.(
+                roundId,
+                JSON.stringify(noSeatSeats),
+                'partial',
+                round.dispatchedAt || null
+            );
+            return {
+                success: false,
+                roundId,
+                featureId: round.featureId,
+                state: 'partial',
+                dispatchedAt: round.dispatchedAt || null,
+                subtasks: noSeatResults,
+                error: `Team roster has no seats excluding the lead '${from}' — nothing was dispatched`,
+            };
+        }
 
         // Assign seats round-robin. Skip subtasks already delivered
         // (idempotent re-dispatch: do not re-send delivered subtasks).
@@ -5095,7 +5201,7 @@ export class LocalApiServer {
             const deliveredAt = delivered ? now : null;
 
             // Update the subtask's entry.
-            const subtaskSeats = { ...round.subtaskSeats };
+            const subtaskSeats: CodingRoundRow['subtaskSeats'] = { ...round.subtaskSeats };
             subtaskSeats[planId] = {
                 seat,
                 delivered,

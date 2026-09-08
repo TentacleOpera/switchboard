@@ -2560,7 +2560,29 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         // passes clearBeforePrompt: false. The clearCompletedAt
                         // call in performKanbanDispatch is NOT skipped.
                         if (payload?.skipClear) {
-                            // Skip the roster barrier.
+                            // Skip the roster barrier's CLEAR — but NOT its
+                            // bookkeeping. The two work-context maps are the
+                            // barrier's own inputs: lastWorkContextByTerminal is
+                            // what the already-clean filter reads to mean
+                            // "dispatched to since its last clear", and
+                            // lastWorkContextByTeam is what decides whether a
+                            // later dispatch is a new work context at all.
+                            // Skipping the writes leaves a round-dispatched seat
+                            // with no entry and the team pinned to the PREVIOUS
+                            // feature's key. Twin of the TaskViewerProvider arm.
+                            try {
+                                const skipCtx = await resolveWorkContext(db, contextIdentity);
+                                const skipKey = skipCtx ? skipCtx.workContextKey : (contextIdentity.planId || '');
+                                if (skipKey && typeof payload?.name === 'string' && payload.name) {
+                                    const skipTeam = await resolveTeamGroupForTerminal(db, payload.name);
+                                    if (skipTeam && skipTeam.id) {
+                                        lastWorkContextByTeam.set(skipTeam.id, skipKey);
+                                    }
+                                    lastWorkContextByTerminal.set(payload.name, skipKey);
+                                }
+                            } catch (skipErr) {
+                                console.warn('[bootstrap] skipClear work-context bookkeeping failed:', skipErr);
+                            }
                         } else {
                         // Atomic work context lifecycle:
                         const dispatchDb = db;
