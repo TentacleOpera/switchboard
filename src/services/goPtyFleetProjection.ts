@@ -236,11 +236,40 @@ export class GoPtyFleetProjection {
             // instead of getting its own. Branch explicitly: create the session with
             // this seat's window, or add a window to the session already there. Then
             // attach to OUR window by name, never to the session's current one.
+            // A tmux SESSION has one current window, shared by every client attached to
+            // it. Attaching each seat to `session:window` therefore made all four panes
+            // render whichever window was selected last — the grid said lead/coder/
+            // coder/intern and showed the same terminal four times.
+            //
+            // A session GROUP is the fix: grouped sessions share their window list but
+            // each keeps its OWN current window. So the team is one set of windows
+            // (`tmux attach -t lc-coding-team` shows the whole team, prefix-n cycles it)
+            // while every seat gets a private view pinned to its own window.
+            // The view's suffix must not repeat the team name. A member's friendlyName
+            // is already `<team>-<role>` (Coding-coder-1), so `${session}-${win}` gave
+            // lc-coding-team-Coding-coder-1 — "coding" twice. Strip the team's slug off
+            // the front of the window slug; the head, whose window IS the team name,
+            // strips to nothing and falls back to its role.
+            const winSlug = win.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/-+/g, '-');
+            const teamSlug = session.replace(/^lc-/, '').replace(/-team$/, '');
+            const suffix = winSlug.replace(new RegExp(`^${teamSlug}-?`), '') || role.toLowerCase();
+            const view = `${session}-${suffix}`;
             effectiveStartupCommand =
                 `tmux has-session -t ${session} 2>/dev/null `
                 + `&& tmux new-window -d -t ${session} -n ${win} ${inner} `
                 + `|| tmux new-session -d -s ${session} -n ${win} ${inner}; `
-                + `exec tmux attach -t ${session}:${win}`;
+                + `tmux new-session -A -d -t ${session} -s ${view} 2>/dev/null; `
+                + `tmux select-window -t ${view}:${win}; `
+                // Grouped sessions share their window list, so with aggressive-resize
+                // OFF a window is sized against every client in the session — the four
+                // browser panes at 221x40 and an SSH client at 183x53 fought over it,
+                // and `window-size latest` handed the size to whichever acted last.
+                // The losing panes repeated their bottom line forever. ON sizes each
+                // window by the clients actually VIEWING it, which is what we want.
+                // Per-window, never `-g`: this is the board's window, not the operator's
+                // tmux config, and a `-g` here silently rewrites their global.
+                + `tmux set-window-option -t ${view}:${win} aggressive-resize on 2>/dev/null; `
+                + `exec tmux attach -t ${view}`;
         }
 
         const result = await this.supervisor.request('ptyCreateTerminal', {
