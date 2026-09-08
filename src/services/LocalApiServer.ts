@@ -4308,6 +4308,246 @@ export class LocalApiServer {
     }
 
     /**
+     * POST /kanban/round/register — the lead registers its round plan for a
+     * feature (Coding Rounds feature, subtask 02). The lead posts the feature
+     * and an ordered list of rounds, each naming its subtask planIds. The
+     * system writes the rows into `coding_rounds` (subtask 01) and returns what
+     * it registered. It does NOT evaluate the plan — the lead decided, the
+     * system records.
+     *
+     * Body: `{ from, featureId, rounds: [["planId","planId"], ["planId"]] }`.
+     *
+     * Validation is identity-only (never judgment):
+     *  - each planId must be a subtask of that feature
+     *  - no cross-round duplicate planId
+     *  - no within-round duplicate planId
+     *  - no empty round
+     *
+     * Re-registration: if the feature already has rounds, replace the pending
+     * (state='registered') ones, leave dispatched/closed ones alone, and report
+     * the diff (added/dropped/kept). A null roster is a 400 (the poster has no
+     * team), NOT a 200 no-op like round/complete.
+     */
+    private async _handleKanbanRoundRegister(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const body = await this._parseJsonBody(req);
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const from = String(body?.from || '').trim();
+            const featureId = String(body?.featureId || '').trim();
+            const roundsRaw = body?.rounds;
+
+            if (!workspaceRoot) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Missing required field: workspaceRoot' }));
+                return;
+            }
+            if (!from) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: "Missing required field: from (the lead's terminal name)" }));
+                return;
+            }
+            if (!featureId) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Missing required field: featureId' }));
+                return;
+            }
+            if (!Array.isArray(roundsRaw) || roundsRaw.length === 0) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Missing or empty required field: rounds (ordered array of subtask arrays)' }));
+                return;
+            }
+
+            // Validate rounds shape: each entry must be a non-empty array of strings.
+            for (let i = 0; i < roundsRaw.length; i++) {
+                const r = roundsRaw[i];
+                if (!Array.isArray(r) || r.length === 0) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: `Round ${i + 1} is empty or not an array — every round must name at least one subtask` }));
+                    return;
+                }
+                for (const pid of r) {
+                    if (typeof pid !== 'string' || pid.trim() === '') {
+                        res.writeHead(400, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ success: false, error: `Round ${i + 1} contains a non-string or empty planId` }));
+                        return;
+                    }
+                }
+            }
+
+            const db = await this._options.getKanbanDatabase?.(workspaceRoot);
+            if (!db) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Kanban database not available' }));
+                return;
+            }
+
+            // Resolve the poster's team roster. Null roster is a 400 for register
+            // (not a 200 no-op like round/complete) — the poster has no team, so
+            // the post is malformed, not empty.
+            let roster: string[] | null = null;
+            if (this._options.resolveTeamMembers) {
+                try {
+                    roster = await this._options.resolveTeamMembers(workspaceRoot, from);
+                } catch (err) {
+                    console.warn('[LocalApiServer] resolveTeamMembers failed in round/register:', err);
+                }
+            }
+            if (!roster || roster.length === 0) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: `No team roster resolved for poster '${from}' — cannot register rounds without a team` }));
+                return;
+            }
+
+            // The poster must be the team's own lead. resolveTeamMembers derives
+            // the team from the poster (the head), so if `from` is not in the
+            // roster, the poster is not the head of this team.
+            if (!roster.includes(from)) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: `Poster '${from}' is not a member of the team it heads — cannot register rounds for another team` }));
+                return;
+            }
+
+            // Verify the feature exists and is a feature.
+            const feature = await db.getPlanByPlanId(featureId);
+            if (!feature || !feature.isFeature) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: `featureId '${featureId}' is not a feature` }));
+                return;
+            }
+
+            // Build the set of valid subtask planIds for this feature.
+            const subtasks = await db.getSubtasksByFeatureId(featureId);
+            const validSubtaskIds = new Set(subtasks.map(s => s.planId));
+
+            // Validate every planId in the rounds is a subtask of this feature.
+            // Also check within-round and cross-round duplicates.
+            const allPlanIds = new Set<string>();
+            for (let i = 0; i < roundsRaw.length; i++) {
+                const round = roundsRaw[i] as string[];
+                const seenInThisRound = new Set<string>();
+                for (const rawPid of round) {
+                    const pid = String(rawPid).trim();
+                    // Within-round duplicate.
+                    if (seenInThisRound.has(pid)) {
+                        res.writeHead(400, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ success: false, error: `Subtask '${pid}' appears twice in round ${i + 1} — within-round duplicates are not allowed` }));
+                        return;
+                    }
+                    seenInThisRound.add(pid);
+                    // Cross-round duplicate.
+                    if (allPlanIds.has(pid)) {
+                        res.writeHead(400, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ success: false, error: `Subtask '${pid}' appears in multiple rounds — cross-round duplicates are not allowed` }));
+                        return;
+                    }
+                    allPlanIds.add(pid);
+                    // Must be a subtask of this feature.
+                    if (!validSubtaskIds.has(pid)) {
+                        res.writeHead(400, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ success: false, error: `PlanId '${pid}' is not a subtask of feature '${featureId}'` }));
+                        return;
+                    }
+                }
+            }
+
+            // Derive team_id from the poster (same derivation as resolveTeamMembersForHead).
+            const teamId = 'team_' + encodeURIComponent(from).replace(/[^a-zA-Z0-9_]/g, '_');
+            const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || feature.workspaceId || '';
+            const now = new Date().toISOString();
+
+            // Read existing rounds to compute the re-registration diff.
+            const existingRounds = await db.getCodingRoundsByFeature(featureId);
+            const keptRounds = existingRounds.filter(r => r.state !== 'registered');
+            const oldRegisteredRounds = existingRounds.filter(r => r.state === 'registered');
+
+            // Delete pending (registered) rounds before inserting the new plan.
+            // Dispatched/closed rounds are left untouched.
+            if (oldRegisteredRounds.length > 0) {
+                await db.deleteCodingRoundsByFeatureInStates(featureId, ['registered']);
+            }
+
+            // New rounds get ordinals continuing after the highest kept ordinal.
+            const maxKeptOrdinal = keptRounds.length > 0
+                ? Math.max(...keptRounds.map(r => r.ordinal))
+                : 0;
+
+            const insertedRounds: Array<{ roundId: string; ordinal: number; subtasks: string[] }> = [];
+            const totalRegistered = keptRounds.length + roundsRaw.length;
+            for (let i = 0; i < roundsRaw.length; i++) {
+                const round = (roundsRaw[i] as string[]).map(p => String(p).trim());
+                const ordinal = maxKeptOrdinal + i + 1;
+                const roundId = crypto.randomUUID();
+                const ok = await db.insertCodingRound({
+                    roundId,
+                    featureId,
+                    teamId,
+                    workspaceId: wsId,
+                    ordinal,
+                    totalRegistered,
+                    subtaskPlanIds: round,
+                    registeredAt: now,
+                });
+                if (!ok) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: false, error: `Failed to insert round ${ordinal} for feature '${featureId}'` }));
+                    return;
+                }
+                insertedRounds.push({ roundId, ordinal, subtasks: round });
+            }
+
+            // Compute unrouted subtasks (subtasks of the feature not in any round).
+            const routedPlanIds = new Set<string>();
+            for (const r of insertedRounds) {
+                for (const pid of r.subtasks) {
+                    routedPlanIds.add(pid);
+                }
+            }
+            // Include subtasks already routed in kept (dispatched/closed) rounds.
+            for (const r of keptRounds) {
+                for (const pid of Object.keys(r.subtaskSeats)) {
+                    routedPlanIds.add(pid);
+                }
+            }
+            const unrouted = subtasks
+                .map(s => s.planId)
+                .filter(pid => !routedPlanIds.has(pid));
+
+            // Build the diff.
+            const diff = {
+                added: insertedRounds.map(r => ({ ordinal: r.ordinal, subtasks: r.subtasks })),
+                dropped: oldRegisteredRounds.map(r => ({
+                    ordinal: r.ordinal,
+                    subtasks: Object.keys(r.subtaskSeats),
+                })),
+                kept: keptRounds.map(r => ({
+                    roundId: r.roundId,
+                    ordinal: r.ordinal,
+                    state: r.state,
+                    subtasks: Object.keys(r.subtaskSeats),
+                })),
+            };
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: true,
+                featureId,
+                teamId,
+                rounds: insertedRounds.map(r => ({ roundId: r.roundId, ordinal: r.ordinal, subtasks: r.subtasks, state: 'registered' })),
+                unrouted,
+                diff,
+            }));
+        } catch (err) {
+            console.error('[LocalApiServer] kanbanRoundRegister error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'kanbanRoundRegister failed' }));
+        }
+    }
+
+    /**
      * POST /kanban/feature/complete — feature-scoped completion.
      * Completes the feature's outstanding subtasks, clears EVERY roster seat
      * including the lead, and releases the team.
@@ -11186,6 +11426,8 @@ export class LocalApiServer {
                 await this._handleKanbanTaskComplete(req, res);
             } else if (pathname === '/kanban/round/complete' && req.method === 'POST') {
                 await this._handleKanbanRoundComplete(req, res);
+            } else if (pathname === '/kanban/round/register' && req.method === 'POST') {
+                await this._handleKanbanRoundRegister(req, res);
             } else if (pathname === '/kanban/feature/complete' && req.method === 'POST') {
                 await this._handleKanbanFeatureComplete(req, res);
             } else if (pathname === '/kanban/team/release' && req.method === 'POST') {

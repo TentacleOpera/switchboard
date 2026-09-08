@@ -243,6 +243,27 @@ export interface DatabaseStorageStats {
     };
 }
 
+/**
+ * A coding round row, as read back from the `coding_rounds` table (Coding
+ * Rounds feature, subtask 01). The `subtaskSeats` JSON column is parsed into
+ * an object keyed by planId, each holding `{ seat, delivered, delivered_at }`.
+ * This is RECORD-KEEPING state — the operational `dispatched_at` lives on the
+ * plans row (see the schema comment in SCHEMA_TABLES_SQL).
+ */
+export interface CodingRoundRecord {
+    roundId: string;
+    featureId: string;
+    teamId: string;
+    workspaceId: string;
+    ordinal: number;
+    totalRegistered: number;
+    state: 'registered' | 'dispatched' | 'closed' | string;
+    subtaskSeats: Record<string, { seat: string; delivered: boolean; delivered_at: string | null }>;
+    registeredAt: string;
+    dispatchedAt: string | null;
+    closedAt: string | null;
+}
+
 type SqlJsDatabase = ISqliteDriver;
 
 // Table DDL only. Indexes live in SCHEMA_INDEX_STATEMENTS and are applied
@@ -6674,6 +6695,122 @@ export class KanbanDatabase {
             return changed;
         } catch (e) {
             console.warn(`[KanbanDatabase] deleteCodingRoundsByFeature failed for feature ${featureId}:`, e);
+            return 0;
+        }
+    }
+
+    /**
+     * Insert a single coding_rounds row. Called by the round/register handler
+     * (subtask 02) for each round in the lead's posted plan. The subtask_seats
+     * JSON is keyed by planId, holding { seat, delivered, delivered_at } per
+     * subtask — initialised here with seat='' (unassigned) and delivered=false
+     * so the dispatch step (subtask 03) can fill the seat, and the close step
+     * (subtask 04) can flip delivered. This is RECORD-KEEPING state; the
+     * operational dispatched_at lives on the plans row (see the schema comment
+     * in SCHEMA_TABLES_SQL).
+     */
+    public async insertCodingRound(params: {
+        roundId: string;
+        featureId: string;
+        teamId: string;
+        workspaceId: string;
+        ordinal: number;
+        totalRegistered: number;
+        subtaskPlanIds: string[];
+        registeredAt: string;
+    }): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        const subtaskSeats: Record<string, { seat: string; delivered: boolean; delivered_at: string | null }> = {};
+        for (const pid of params.subtaskPlanIds) {
+            subtaskSeats[pid] = { seat: '', delivered: false, delivered_at: null };
+        }
+        try {
+            this._db.run(
+                `INSERT INTO coding_rounds
+                    (round_id, feature_id, team_id, workspace_id, ordinal, total_registered, state, subtask_seats, registered_at, dispatched_at, closed_at)
+                 VALUES (?, ?, ?, ?, ?, ?, 'registered', ?, ?, NULL, NULL)`,
+                [
+                    params.roundId,
+                    params.featureId,
+                    params.teamId,
+                    params.workspaceId,
+                    params.ordinal,
+                    params.totalRegistered,
+                    JSON.stringify(subtaskSeats),
+                    params.registeredAt,
+                ]
+            );
+            return true;
+        } catch (e) {
+            console.warn(`[KanbanDatabase] insertCodingRound failed for feature ${params.featureId} ordinal ${params.ordinal}:`, e);
+            return false;
+        }
+    }
+
+    /**
+     * Read all coding_rounds rows for a feature, ordered by ordinal ASC.
+     * Returns the subtask_seats JSON parsed back into an object. Used by the
+     * round/register handler to compute the re-registration diff and by
+     * subtasks 03/04 to read round state.
+     */
+    public async getCodingRoundsByFeature(featureId: string): Promise<CodingRoundRecord[]> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        const stmt = this._db.prepare(
+            `SELECT round_id, feature_id, team_id, workspace_id, ordinal, total_registered, state, subtask_seats, registered_at, dispatched_at, closed_at
+             FROM coding_rounds WHERE feature_id = ? ORDER BY ordinal ASC`,
+            [featureId]
+        );
+        const rows: CodingRoundRecord[] = [];
+        try {
+            while (stmt.step()) {
+                const r = stmt.getAsObject();
+                let subtaskSeats: Record<string, { seat: string; delivered: boolean; delivered_at: string | null }> = {};
+                try {
+                    const parsed = JSON.parse(String(r.subtask_seats ?? '{}'));
+                    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                        subtaskSeats = parsed as any;
+                    }
+                } catch { /* corrupt JSON — treat as empty */ }
+                rows.push({
+                    roundId: String(r.round_id ?? ''),
+                    featureId: String(r.feature_id ?? ''),
+                    teamId: String(r.team_id ?? ''),
+                    workspaceId: String(r.workspace_id ?? ''),
+                    ordinal: Number(r.ordinal ?? 0),
+                    totalRegistered: Number(r.total_registered ?? 0),
+                    state: String(r.state ?? 'registered'),
+                    subtaskSeats,
+                    registeredAt: String(r.registered_at ?? ''),
+                    dispatchedAt: r.dispatched_at ? String(r.dispatched_at) : null,
+                    closedAt: r.closed_at ? String(r.closed_at) : null,
+                });
+            }
+        } finally {
+            stmt.free();
+        }
+        return rows;
+    }
+
+    /**
+     * Delete coding_rounds rows for a feature that are in one of the given
+     * states. Used by re-registration (subtask 02) to clear pending
+     * (state='registered') rounds before inserting the new plan, without
+     * touching dispatched or closed rounds. Returns the deleted row count.
+     */
+    public async deleteCodingRoundsByFeatureInStates(
+        featureId: string,
+        states: string[]
+    ): Promise<number> {
+        if (!(await this.ensureReady()) || !this._db || states.length === 0) return 0;
+        try {
+            const placeholders = states.map(() => '?').join(', ');
+            const result = this._db.run(
+                `DELETE FROM coding_rounds WHERE feature_id = ? AND state IN (${placeholders})`,
+                [featureId, ...states]
+            );
+            return Number(result?.changes ?? 0);
+        } catch (e) {
+            console.warn(`[KanbanDatabase] deleteCodingRoundsByFeatureInStates failed for feature ${featureId}:`, e);
             return 0;
         }
     }
