@@ -6707,7 +6707,7 @@
                     && activeGroupId
                     && paneModes[index] !== 'kanban') {
                 e.stopPropagation();
-                onNewTerminalClicked(undefined, 'group:' + activeGroupId);
+                onNewTerminalClicked(undefined, 'group:' + activeGroupId, index);
                 return;
             }
             if (!target.classList.contains('pane-mode-toggle')) { return; }
@@ -8977,7 +8977,7 @@
         return Object.keys(data.visibleAgents).filter(k => data.visibleAgents[k] !== false);
     }
 
-    async function onNewTerminalClicked(targetSpec, key) {
+    async function onNewTerminalClicked(targetSpec, key, slotIndex) {
         const groupKey = key || '__default__';
         // Toggle closed: an open picker on this group, OR one whose roles fetch is
         // still in flight for this group.
@@ -8995,7 +8995,10 @@
         if (pickerOpening !== groupKey) { return; }
         pickerOpening = null;
         rolePickerData = data;
-        pickerState = { key: groupKey, targetSpec };
+        // slotIndex rides pickerState, not a module-level variable: a later click
+        // supersedes this open (:6382), and a shared variable would leak the
+        // discarded open's slot into the winning one.
+        pickerState = { key: groupKey, targetSpec, slotIndex };
         pickerNeedsScroll = true;
         renderSidebarList();
     }
@@ -9022,6 +9025,21 @@
     function buildRolePicker(targetSpec) {
         const picker = document.createElement('div');
         picker.className = 'role-picker is-inline';
+
+        // Read the scope ONCE, here, and close over it. buildRolePicker runs during a
+        // render while pickerState is the current open, so the closure freezes the
+        // scope at build time — a group switch or a superseded picker between now and
+        // the role click cannot retarget the spawn.
+        //
+        // Deliberately NOT threaded through mountRolePicker: it has three call sites
+        // (:3201, :3480, :3557), two of which are worktree/parent-root pickers with no
+        // slot in mind, and adding a parameter to all three only creates three places
+        // for the value to desync from pickerState.
+        const slotIndex = pickerState ? pickerState.slotIndex : undefined;
+        const pickerKey = pickerState ? String(pickerState.key || '') : '';
+        const scopeGroupId = pickerKey.startsWith('group:')
+            ? (pickerKey.slice('group:'.length) === '__all__' ? null : pickerKey.slice('group:'.length))
+            : null;
 
         const title = document.createElement('div');
         title.className = 'role-picker-title';
@@ -9062,6 +9080,17 @@
             btn.title = hasCommand[role]
                 ? `Open ${label} terminal`
                 : `${label} — no agent CLI configured (plain shell)`;
+            // Annotate roles that head an auto-start team, so picking a role
+            // never silently produces a fleet. The pane-originated open
+            // (slotIndex !== undefined) gets an extra clause about the group
+            // switch, so the surprise is pre-empted at the point of choice.
+            const autoTeam = (_agentGroupsCache || []).find(t => t && t.headRole === role);
+            if (autoTeam) {
+                btn.title = `${btn.title} — starts ${autoTeam.name || autoTeam.id} · ${teamSpawnSummary(autoTeam)}`;
+                if (slotIndex !== undefined) {
+                    btn.title = `${btn.title} — starts as a group, so the grid will switch to that group`;
+                }
+            }
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 // Close NOW, not whenever the next render happens to run. The static
@@ -9073,7 +9102,7 @@
                 // holds it until the 5s fleet poll.
                 pickerState = null;
                 renderSidebarList();
-                createTerminal(role, targetSpec, hasCommand[role] === true);
+                createTerminal(role, targetSpec, hasCommand[role] === true, { slotIndex, groupId: scopeGroupId });
             });
             optionsEl.appendChild(btn);
         }
@@ -9090,7 +9119,7 @@
             // Close synchronously — same reasoning as the role buttons above.
             pickerState = null;
             renderSidebarList();
-            createTerminal(NO_ROLE, targetSpec, false);
+            createTerminal(NO_ROLE, targetSpec, false, { slotIndex, groupId: scopeGroupId });
         });
         optionsEl.appendChild(noRoleBtn);
         picker.appendChild(optionsEl);
@@ -9133,7 +9162,7 @@
         return el;
     }
 
-    async function createTerminal(role, targetSpec, hasStartupCommand) {
+    async function createTerminal(role, targetSpec, hasStartupCommand, seatOpts) {
         try {
             const payload = { role };
             if (typeof targetSpec === 'string') {
@@ -9183,7 +9212,7 @@
 
                     let seatFallbackReason = null;
                     if (delegates.length === 0) {
-                        assignToFocusedPane(data.terminal.friendlyName);
+                        seatFallbackReason = seatIntoRequestedSlot(data.terminal.friendlyName, seatOpts);
                     } else if (data.teamGroupId && await switchToTeamGroup(data.teamGroupId, data.terminal.friendlyName)) {
                         // Seated by the group lock — sized by the group's stored layout
                         // and paged by seatActiveGroupPage. Deliberately INSTEAD OF
@@ -9208,6 +9237,59 @@
     }
 
     /**
+     * Seat a freshly-created single terminal into the slot the operator aimed at,
+     * keeping the group lock. Returns null on success, or a reason string for
+     * reportTeamStart to surface.
+     *
+     * Replaces a bare assignToFocusedPane(name), which (a) dropped the group lock
+     * unconditionally (:3668), (b) targeted focusedPaneIndex — "where the caret
+     * happens to be", explicitly documented as too volatile for durable seating
+     * (:3699) — and (c) never called addTerminalToActiveGroup, so the new terminal
+     * was evicted by the next seatActiveGroupPage reconcile.
+     *
+     * Mirrors handleLockedTerminalClick's free-slot branch (:2867-2889): add
+     * membership, PROVE a free slot, then seat with keepLock. assignToFocusedPane's
+     * keepLock contract requires the caller to guarantee the free slot, because its
+     * displacement fallbacks end in "displace the focused pane" — under a lock that
+     * evicts a member to seat a non-member.
+     */
+    function seatIntoRequestedSlot(name, opts) {
+        const rendered = Math.max(1, getSlotCount(effectiveLayout));
+
+        // Membership FIRST, and unconditionally on a group-scoped picker — the
+        // docstring on addTerminalToActiveGroup is explicit that a later reconcile
+        // evicts an addition made after the fact. Written even when no slot is free:
+        // the create succeeded, so the terminal IS a member with nowhere to sit, and
+        // the group's page affordance is how the operator reaches it. Scoped to the
+        // group the PICKER was opened against, not whatever is locked now — a switch
+        // in the interim means no write rather than a write to the wrong group.
+        if (opts && opts.groupId && opts.groupId === activeGroupId) {
+            addTerminalToActiveGroup(name);
+        }
+
+        // Re-validate at RESPONSE time. createTerminal awaited a fetch and a
+        // fetchTerminalList; the 5s poll, a drag-drop or a group reseat can have
+        // filled the captured slot in between. isSlotFree is the shared predicate —
+        // it already encodes "unassigned", "not a kanban pane" and "not pinned
+        // (unless the grid is down to one pane)".
+        let target = isSlotFree(opts && opts.slotIndex, rendered) ? opts.slotIndex : -1;
+        if (target === -1) {
+            for (let i = 0; i < rendered; i++) { if (isSlotFree(i, rendered)) { target = i; break; } }
+        }
+        if (target === -1) {
+            // No free slot. Do NOT displace: the operator asked to FILL an empty
+            // pane. The terminal is live, is a group member, and is reachable from
+            // the sidebar and from the group's next page.
+            return 'no free slot was left in the grid';
+        }
+
+        focusedPaneIndex = target;
+        assignToFocusedPane(name, { keepLock: true });
+        focusSeatedTerminal(name);
+        return null;
+    }
+
+    /**
      * Pull the backend-registered team group into memory, then lock onto it.
      * Returns false when the group did not arrive, so the caller can seat the
      * team by hand instead.
@@ -9225,7 +9307,16 @@
     async function switchToTeamGroup(groupId, headName) {
         await reloadTerminalGroups();
         if (!terminalGroups.some(g => g && g.id === groupId)) { return false; }
+        const previousLayout = currentLayout;
         switchToGroup(groupId);
+        // switchToGroup runs setLayoutMode(layoutForGroupSwitch(group)) and then
+        // saveLayoutSettings(), so a role that happens to head an auto-start team
+        // silently relocated the operator to another group AT ANOTHER GRID SIZE —
+        // and persisted it. The switch itself is correct (a team is N terminals and
+        // one slot cannot hold it); doing it without saying so is not.
+        if (currentLayout !== previousLayout) {
+            showPaneToast(`Started a team — switched to its group and resized the grid to ${currentLayout}.`);
+        }
         focusSeatedTerminal(headName);
         return true;
     }
@@ -9321,7 +9412,10 @@
             return;
         }
         if (seatFallbackReason) {
-            showPaneToast(`Team seated without its group — ${seatFallbackReason}.`);
+            showPaneToast(delegates.length > 0
+                ? `Team seated without its group — ${seatFallbackReason}.`
+                : `Terminal started but not seated — ${seatFallbackReason}. Find it in the sidebar.`);
+            return;
         }
     }
 
