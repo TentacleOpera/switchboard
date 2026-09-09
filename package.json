@@ -1034,6 +1034,7 @@
     "test:contract:goal-invariant-verification": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/goal-invariant-verification.test.js",
     "test:contract:pty-route-surface": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-route-surface-contract.test.js",
     "test:contract:tmux-backend": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/tmux-backend-contract.test.js",
+    "test:contract:tmux-view-chrome": "node src/test/tmux-view-session-chrome-contract.test.js",
     "test:contract:wsl-detection": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/wsl-detection-contract.test.js",
     "test:contract:workspace-root-write-path": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/workspace-root-write-path-contract.test.js",
     "test:contract:pty-prompt-delivery-framing": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/pty-prompt-delivery-framing.test.js",

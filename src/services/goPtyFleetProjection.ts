@@ -259,6 +259,15 @@ export class GoPtyFleetProjection {
                 + `&& tmux new-window -d -t ${session} -n ${win} ${inner} `
                 + `|| tmux new-session -d -s ${session} -n ${win} ${inner}; `
                 + `tmux new-session -A -d -t ${session} -s ${view} 2>/dev/null; `
+                // A view session is rendered inside a board pane that already has the
+                // panel's own chrome, so tmux's status line is duplicate navigation —
+                // it lists the same four seats the sidebar does, overlaps it, and costs
+                // a row of every pane. Off on the VIEW only: the base session keeps its
+                // strip, because that is the one an operator attaches to over SSH and
+                // there the window list is the only way to see the team.
+                // Per-session, never `-g`: `-g` would strip the status line from the
+                // operator's own tmux, which this has no business touching.
+                + `tmux set-option -t ${view} status off 2>/dev/null; `
                 + `tmux select-window -t ${view}:${win}; `
                 // Grouped sessions share their window list, so with aggressive-resize
                 // OFF a window is sized against every client in the session — the four
