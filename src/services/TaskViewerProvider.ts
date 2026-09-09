@@ -26857,12 +26857,13 @@ Each plan file must include:
                 for (const fname of entries) {
                     if (!fname.endsWith('.md') || !fname.startsWith(filePrefix)) { continue; }
                     const fullPath = path.join(targetDir, fname);
-                    // Progressive import embeds subtasks in the parent file; a separate
-                    // file with parentId is not a sidebar entry and must not be nominated.
-                    try {
-                        const head = fs.readFileSync(fullPath, 'utf8').slice(0, 2048);
-                        if (/^parentId:\s*\S+/m.test(head)) { continue; }
-                    } catch { /* ignore unreadable files */ }
+                    // Subtask files (carrying parentId:) ARE nominated for the
+                    // deletion sweep — a remotely-deleted subtask's local file must
+                    // be probed and unlinked, not preserved indefinitely. The
+                    // remoteIds.has(remoteId) guard in add() spares a subtask
+                    // present in the remote payload; a remotely-deleted subtask is
+                    // nominated, probed via its own endpoint, and unlinked only on
+                    // a positive 'deleted' verdict from _confirmRemotelyDeleted.
                     // Filename shape: <provider>_<id>_<slug>.md → extract <id>.
                     const remoteId = fname.slice(filePrefix.length, -3).split('_')[0];
                     add(remoteId, fullPath, null);
@@ -27425,13 +27426,17 @@ Each plan file must include:
                         const taskId = rest.split('_')[0];
                         if (!taskId || keepIds.has(taskId)) { continue; }
                         const fullPath = path.join(targetDir, fname);
-                        // Preserve locally-modified files.
+                        // Preserve locally-modified files ONLY on non-authoritative
+                        // fetches. An explicit Refetch (authoritative === true) is
+                        // the "remote wins" action — purge stale files even if
+                        // locally modified, matching the write-side conflict guard
+                        // which overwrites modified files on the same flag.
                         const slugPrefix = `${provider}_${taskId}`;
                         const dbEntry = dbBySlug.get(slugPrefix);
-                        if (dbEntry && dbEntry.lastSyncedAt) {
+                        if (!authoritative && dbEntry && dbEntry.lastSyncedAt) {
                             try {
                                 if (fs.statSync(fullPath).mtimeMs > new Date(dbEntry.lastSyncedAt).getTime() + 1000) {
-                                    continue; // modified — keep it
+                                    continue; // modified — keep it (Refetch overrides this)
                                 }
                             } catch { /* fall through to delete */ }
                         }
