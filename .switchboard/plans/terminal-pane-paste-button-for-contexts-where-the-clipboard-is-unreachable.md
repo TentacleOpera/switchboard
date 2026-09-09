@@ -351,3 +351,8 @@ The user was advised to run web research to confirm them before implementation.
     regardless. Exercise the paste control in an installed VSIX and in `npx switchboard`.
 12. **No secrets logged.** Grep the console and server logs after pasting a known sentinel
     string; it must appear nowhere.
+
+## Implementation Summary
+
+Added an explicit Paste button (`paste`) to every active terminal pane's action bar in `.pane-actions` (`src/webview/terminals.js` and `src/webview/terminals.html`). Clicking the paste button opens a visible, editable textarea overlay directly above the terminal canvas, allowing native OS paste operations (iOS long-press Paste callout, Ctrl+V, middle-click) across secure and insecure contexts alike. Text is delivered exclusively through `term.paste(text)` to preserve DEC mode 2004 bracketed paste and session attribution, with focus safely restored to the terminal. Single-open modal semantics and clean dismissal on Escape, Cancel, or pane assignment change are enforced. A programmatic bridge (`window.sbOpenTerminalPaste(paneId)` and `sb:open-paste` event listener) is exposed for sibling keyboard shortcut integrations. Added contract test in `src/test/terminal-pane-paste-contract.test.js` validating visible textarea DOM properties and throwing loud failures on any `navigator.clipboard` access attempt.
+

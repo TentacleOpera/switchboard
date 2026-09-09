@@ -27,9 +27,9 @@ Three interactions work on a desktop Mac and nowhere else: moving a card, copyin
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Reaching the board from a tablet is documented; driving it is not, and the control surface that works is the one nobody points at](../plans/ipad-board-control-undocumented-project-panel-is-the-touch-surface.md) — **PLAN REVIEWED** — ID: 702a3573-a0d5-4116-bf6d-6e88a0d53d1d
-- [ ] [Browser terminals have no paste affordance, so paste works only where the browser and OS happen to cooperate — and on Linux and touch they do not](../plans/terminal-pane-paste-button-for-contexts-where-the-clipboard-is-unreachable.md) — **PLAN REVIEWED** — ID: 19f827f5-ce5b-4226-a6c3-eba4ae51944e
-- [ ] [Nothing tells xterm what Ctrl+Shift+C and Ctrl+Shift+V mean, so copying out of a pty terminal is impossible on the one platform with no free modifier](../plans/terminal-clipboard-keys-unbound-on-linux-where-no-free-modifier-exists.md) — **PLAN REVIEWED** — ID: 6b5ca80a-6d90-4657-b0d2-6fefadf1658e
+- [ ] [Reaching the board from a tablet is documented; driving it is not, and the control surface that works is the one nobody points at](../plans/ipad-board-control-undocumented-project-panel-is-the-touch-surface.md) — **LEAD CODED** — ID: 702a3573-a0d5-4116-bf6d-6e88a0d53d1d
+- [ ] [Browser terminals have no paste affordance, so paste works only where the browser and OS happen to cooperate — and on Linux and touch they do not](../plans/terminal-pane-paste-button-for-contexts-where-the-clipboard-is-unreachable.md) — **LEAD CODED** — ID: 19f827f5-ce5b-4226-a6c3-eba4ae51944e
+- [ ] [Nothing tells xterm what Ctrl+Shift+C and Ctrl+Shift+V mean, so copying out of a pty terminal is impossible on the one platform with no free modifier](../plans/terminal-clipboard-keys-unbound-on-linux-where-no-free-modifier-exists.md) — **LEAD CODED** — ID: 6b5ca80a-6d90-4657-b0d2-6fefadf1658e
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

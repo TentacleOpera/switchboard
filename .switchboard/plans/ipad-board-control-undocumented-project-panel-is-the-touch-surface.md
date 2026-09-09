@@ -252,3 +252,8 @@ The user was advised to run web research to confirm them before implementation.
    card backward on a tablet using only this document. Where they hesitate, the document is
    wrong.
 7. **No source diff.** `git diff --stat` touches only `docs/`.
+
+## Implementation Summary
+
+Created `docs/TOUCH_ACCESS.md` detailing touch-specific operations, controls, and platform limitations on iPadOS/iOS. Specifically documented HTML5 drag-and-drop inertia on touch glass, forward card progression via column header buttons with CLI trigger warnings, and backwards/arbitrary column transitions using the Project panel's column badge dropdown. The three verb asymmetry differences (`moveKanbanPlanColumn` vs board drag) were explicitly captured along with terminal canvas text selection limitations. Finally, added a cross-link pointer to `docs/TOUCH_ACCESS.md` in `docs/REMOTE_ACCESS.md` under the Tailscale section.
+

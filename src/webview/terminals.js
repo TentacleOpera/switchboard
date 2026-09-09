@@ -1225,6 +1225,13 @@
             paneGridEl.addEventListener('focusout', flagPaneForResync);
         }
 
+        window.addEventListener('sb:open-paste', (e) => {
+            const paneIdentifier = e.detail?.paneId !== undefined ? e.detail.paneId : e.detail?.paneIndex;
+            if (typeof window.sbOpenTerminalPaste === 'function') {
+                window.sbOpenTerminalPaste(paneIdentifier);
+            }
+        });
+
         fetchKanbanColumnStructure(true);
 
         if (soloTerminalName) {
@@ -2222,6 +2229,262 @@
      *  would restore stops being live (see sanitizePaneAssignments). */
     let undoSnapshot = null; // { slots: [...paneAssignments], pins: [...pinnedPanes], name, displaced, paneIndex }
     let toastTimer = null;
+
+    /**
+     * Module-level active paste control.
+     * Enforces single-open paste dialog across all panes.
+     * { paneIndex, paneId, terminalName, overlayEl, textareaEl, cleanup }
+     */
+    let activePasteControl = null;
+
+    function closeActivePasteControl() {
+        if (!activePasteControl) { return; }
+        const ctrl = activePasteControl;
+        activePasteControl = null;
+        if (ctrl.cleanup) {
+            try { ctrl.cleanup(); } catch { /* ignore */ }
+        }
+        if (ctrl.overlayEl && ctrl.overlayEl.parentNode) {
+            ctrl.overlayEl.remove();
+        }
+    }
+
+    /**
+     * Programmatic and button-driven entry point to open the paste dialog for a pane.
+     * Captures pane identity at call time.
+     * Sized and placed with a visible, editable textarea so iOS offers its Paste callout.
+     */
+    function openTerminalPasteDialog(targetPaneIndex) {
+        if (typeof targetPaneIndex !== 'number' || targetPaneIndex < 0) { return; }
+        const terminalName = paneAssignments[targetPaneIndex];
+        if (!terminalName) {
+            showPaneToast('Target pane has no terminal');
+            return;
+        }
+        const entry = terminalsMap.get(terminalName);
+        if (!entry || !entry.term || entry.disposed) {
+            showPaneToast('Terminal not found');
+            return;
+        }
+        if (entry.exited) {
+            showPaneToast('Terminal has exited');
+            return;
+        }
+
+        // Close any currently open paste control first (single-open enforcement)
+        closeActivePasteControl();
+
+        const paneEl = paneGridEl.querySelector(`.terminal-pane[data-pane-index="${targetPaneIndex}"]`);
+        if (!paneEl) { return; }
+        const contentEl = paneEl.querySelector('.pane-content');
+        if (!contentEl) { return; }
+
+        const overlayEl = document.createElement('div');
+        overlayEl.className = 'pane-paste-overlay';
+        overlayEl.dataset.terminal = terminalName;
+        overlayEl.dataset.paneIndex = String(targetPaneIndex);
+
+        const cardEl = document.createElement('div');
+        cardEl.className = 'pane-paste-content';
+
+        const headerEl = document.createElement('div');
+        headerEl.className = 'pane-paste-header';
+
+        const titleEl = document.createElement('span');
+        titleEl.className = 'pane-paste-title';
+        titleEl.textContent = `Paste into ${terminalName}`;
+
+        const closeBtn = document.createElement('button');
+        closeBtn.type = 'button';
+        closeBtn.className = 'btn-unassign-pane';
+        closeBtn.textContent = '✕';
+        closeBtn.title = 'Close';
+
+        headerEl.appendChild(titleEl);
+        headerEl.appendChild(closeBtn);
+
+        const textareaEl = document.createElement('textarea');
+        textareaEl.className = 'pane-paste-textarea';
+        textareaEl.placeholder = 'Paste text here (long-press or Ctrl+V), then click SEND';
+        textareaEl.setAttribute('aria-label', `Paste text into ${terminalName}`);
+
+        const footerEl = document.createElement('div');
+        footerEl.className = 'pane-paste-footer';
+
+        const statusEl = document.createElement('span');
+        statusEl.className = 'pane-paste-status';
+        statusEl.textContent = 'Waiting for input…';
+
+        const actionsEl = document.createElement('div');
+        actionsEl.className = 'pane-paste-actions';
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'secondary-btn';
+        cancelBtn.textContent = 'CANCEL';
+
+        const sendBtn = document.createElement('button');
+        sendBtn.type = 'button';
+        sendBtn.className = 'secondary-btn is-teal';
+        sendBtn.textContent = 'SEND';
+        sendBtn.disabled = true;
+
+        actionsEl.appendChild(cancelBtn);
+        actionsEl.appendChild(sendBtn);
+
+        footerEl.appendChild(statusEl);
+        footerEl.appendChild(actionsEl);
+
+        cardEl.appendChild(headerEl);
+        cardEl.appendChild(textareaEl);
+        cardEl.appendChild(footerEl);
+        overlayEl.appendChild(cardEl);
+
+        function updateSendButton() {
+            const hasText = textareaEl.value.length > 0;
+            sendBtn.disabled = !hasText;
+            if (hasText) {
+                const lineCount = textareaEl.value.split('\n').length;
+                const charCount = textareaEl.value.length;
+                statusEl.textContent = `${charCount} character${charCount === 1 ? '' : 's'}, ${lineCount} line${lineCount === 1 ? '' : 's'}`;
+                statusEl.classList.remove('is-error');
+            } else {
+                statusEl.textContent = 'Waiting for input…';
+                statusEl.classList.remove('is-error');
+            }
+        }
+
+        // Listen for OS paste event delivering clipboard data
+        textareaEl.addEventListener('paste', (e) => {
+            const text = (e.clipboardData || window.clipboardData)?.getData('text/plain');
+            if (typeof text === 'string') {
+                if (text.length === 0) {
+                    statusEl.textContent = 'Clipboard was empty';
+                    statusEl.classList.add('is-error');
+                } else {
+                    statusEl.classList.remove('is-error');
+                }
+            }
+            // Let the native paste insert text into textarea, then sync state on next tick
+            setTimeout(updateSendButton, 0);
+        });
+
+        textareaEl.addEventListener('input', updateSendButton);
+
+        function restoreFocusToTerminal() {
+            try {
+                if (entry.term && !entry.disposed) {
+                    entry.term.focus();
+                    if (entry.term.textarea) {
+                        entry.term.textarea.focus();
+                    }
+                }
+            } catch { /* ignore */ }
+        }
+
+        function deliverPaste() {
+            const text = textareaEl.value;
+            if (!text) {
+                statusEl.textContent = 'Nothing to send';
+                statusEl.classList.add('is-error');
+                return;
+            }
+            // Check terminal readiness at delivery time
+            const currentEntry = terminalsMap.get(terminalName);
+            if (!currentEntry || !currentEntry.term || currentEntry.disposed || currentEntry.exited) {
+                statusEl.textContent = 'Terminal exited or disconnected';
+                statusEl.classList.add('is-error');
+                showPaneToast(`Could not paste: ${terminalName} exited or disconnected`);
+                return;
+            }
+
+            // Deliver solely via term.paste(text) for DEC mode 2004 bracketed paste and attribution
+            try {
+                currentEntry.term.paste(text);
+            } catch (err) {
+                statusEl.textContent = `Paste failed: ${err?.message || String(err)}`;
+                statusEl.classList.add('is-error');
+                return;
+            }
+
+            closeActivePasteControl();
+            restoreFocusToTerminal();
+        }
+
+        sendBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            deliverPaste();
+        });
+
+        function handleDismiss(e) {
+            if (e) { e.stopPropagation(); }
+            closeActivePasteControl();
+            restoreFocusToTerminal();
+        }
+
+        closeBtn.addEventListener('click', handleDismiss);
+        cancelBtn.addEventListener('click', handleDismiss);
+
+        overlayEl.addEventListener('click', (e) => {
+            // Dismiss if clicked on overlay backdrop (outside cardEl)
+            if (e.target === overlayEl) {
+                handleDismiss(e);
+            }
+        });
+
+        function onKeyDown(e) {
+            if (e.key === 'Escape') {
+                e.stopPropagation();
+                e.preventDefault();
+                handleDismiss(e);
+            } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                e.stopPropagation();
+                e.preventDefault();
+                deliverPaste();
+            }
+        }
+
+        textareaEl.addEventListener('keydown', onKeyDown);
+
+        contentEl.appendChild(overlayEl);
+
+        activePasteControl = {
+            paneIndex: targetPaneIndex,
+            paneId: targetPaneIndex,
+            terminalName,
+            overlayEl,
+            textareaEl,
+            cleanup: () => {
+                textareaEl.removeEventListener('keydown', onKeyDown);
+            }
+        };
+
+        // Focus the visible textarea so iOS offers paste callout and user can type/paste immediately
+        setTimeout(() => {
+            try {
+                textareaEl.focus();
+            } catch { /* ignore */ }
+        }, 50);
+    }
+
+    // Expose programmatic entry point for sibling plans or extensions
+    window.sbOpenTerminalPaste = function(paneIdentifier) {
+        let targetIndex = -1;
+        if (typeof paneIdentifier === 'number') {
+            targetIndex = paneIdentifier;
+        } else if (typeof paneIdentifier === 'string') {
+            // Check if it matches a terminal name or pane index string
+            const parsed = parseInt(paneIdentifier, 10);
+            if (!isNaN(parsed) && paneAssignments[parsed] !== undefined) {
+                targetIndex = parsed;
+            } else {
+                targetIndex = paneAssignments.indexOf(paneIdentifier);
+            }
+        }
+        if (targetIndex >= 0 && targetIndex < getSlotCount(effectiveLayout)) {
+            openTerminalPasteDialog(targetIndex);
+        }
+    };
 
     function showPaneToast(text, onUndo) {
         const toastEl = document.getElementById('pane-toast');
@@ -6361,6 +6624,16 @@
             renderPaneGrid();
         });
 
+        // Paste button: opens the visible paste dialog for touch and insecure contexts
+        const pasteBtn = document.createElement('button');
+        pasteBtn.className = 'btn-unassign-pane btn-paste-pane';
+        pasteBtn.textContent = 'paste';
+        pasteBtn.title = 'Paste text into this terminal';
+        pasteBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openTerminalPasteDialog(index);
+        });
+
         actionsEl.appendChild(pinBtn);
         actionsEl.appendChild(peekDismissBtn);
         actionsEl.appendChild(popoutBtn);
@@ -6375,6 +6648,7 @@
         // survives an insert.
         actionsEl.appendChild(outputBtn);
         actionsEl.appendChild(soloOutputBtn);
+        actionsEl.appendChild(pasteBtn);
         headerEl.appendChild(titleEl);
         headerEl.appendChild(actionsEl);
         paneEl.appendChild(headerEl);
@@ -6679,7 +6953,7 @@
         // children[] is the honest read.
         // children[0] = pin, [1] = peek dismiss, [2] = pop out, [3] = clear,
         // [4] = model, [5] = hide, [6] = mode, [7] = log, [8] = output toggle,
-        // [9] = solo output (order set in createPaneElement).
+        // [9] = solo output, [10] = paste (order set in createPaneElement).
         const pinBtn = actionsEl.children[0];
         const peekDismissBtn = actionsEl.children[1];
         const popoutBtn = actionsEl.children[2];
@@ -6690,10 +6964,15 @@
         const logBtn = actionsEl.children[7];
         const outputBtn = actionsEl.children[8];
         const soloOutputBtn = actionsEl.children[9];
+        const pasteBtn = actionsEl.children[10];
         clearBtn.textContent = 'clear';
         modelBtn.textContent = 'model';
         hideBtn.textContent = 'hide';
         logBtn.textContent = 'log';
+        if (pasteBtn) {
+            pasteBtn.textContent = 'paste';
+            pasteBtn.style.display = (assignedName && paneModes[index] !== 'kanban') ? '' : 'none';
+        }
 
         // Restored explicitly, not left to the container's display. renderKanbanPane
         // hides these three INDIVIDUALLY, and panes are reused rather than rebuilt —
@@ -6828,6 +7107,15 @@
             // curtain survives every reconcile.
             contentEl.querySelectorAll('.startup-curtain').forEach(el => {
                 if (el.dataset.terminal !== assignedName) { el.remove(); }
+            });
+            contentEl.querySelectorAll('.pane-paste-overlay').forEach(el => {
+                if (el.dataset.terminal !== assignedName) {
+                    if (activePasteControl && activePasteControl.overlayEl === el) {
+                        closeActivePasteControl();
+                    } else {
+                        el.remove();
+                    }
+                }
             });
 
             // Curtain LAST, so it is the final child of .pane-content regardless of which

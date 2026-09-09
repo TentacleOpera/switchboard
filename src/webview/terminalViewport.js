@@ -1135,6 +1135,81 @@
             });
         }
 
+        // Keyboard clipboard bindings (Ctrl+Shift+C/V, Ctrl+Insert/Shift+Insert) for
+        // platforms with no free modifier (Linux, Windows). macOS uses Cmd+C / Cmd+V
+        // natively via the browser and must NEVER be intercepted (metaKey chords
+        // return true untouched). Ctrl+C strictly sends SIGINT and is never intercepted here.
+        if (typeof term.attachCustomKeyEventHandler === 'function') {
+            term.attachCustomKeyEventHandler((ev) => {
+                // macOS keeps working natively through Cmd+C / Cmd+V: never intercept metaKey.
+                if (ev.metaKey) { return true; }
+
+                const isCopy = (ev.ctrlKey && ev.shiftKey && ev.code === 'KeyC') ||
+                    (ev.ctrlKey && !ev.shiftKey && !ev.altKey && (ev.code === 'Insert' || ev.key === 'Insert'));
+
+                const isPaste = (ev.ctrlKey && ev.shiftKey && ev.code === 'KeyV') ||
+                    (!ev.ctrlKey && ev.shiftKey && !ev.altKey && (ev.code === 'Insert' || ev.key === 'Insert'));
+
+                if (!isCopy && !isPaste) {
+                    return true;
+                }
+
+                // Handle on keydown only to avoid double-firing with keyup/keypress.
+                if (ev.type === 'keydown') {
+                    if (isCopy) {
+                        const selection = term.getSelection();
+                        // Guard against destroying existing clipboard content with an empty selection.
+                        if (selection && selection.length > 0) {
+                            if (typeof window !== 'undefined' && typeof window.sbCopyToClipboard === 'function') {
+                                window.sbCopyToClipboard(selection);
+                            } else if (navigator.clipboard && navigator.clipboard.writeText) {
+                                navigator.clipboard.writeText(selection).catch(() => {});
+                            }
+                            if (deps.showPaneToast) {
+                                deps.showPaneToast('Copied to clipboard');
+                            }
+                        }
+                    } else if (isPaste) {
+                        // Context-dependent paste: instant paste in secure contexts via Clipboard API,
+                        // or open the visible paste control in insecure contexts (where script cannot read clipboard).
+                        if (navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
+                            navigator.clipboard.readText().then((text) => {
+                                if (text && !entry.disposed && entry.term) {
+                                    entry.term.paste(text);
+                                }
+                            }).catch(() => {
+                                delegateToPasteControl();
+                            });
+                        } else {
+                            delegateToPasteControl();
+                        }
+                    }
+                }
+
+                function delegateToPasteControl() {
+                    const paneIndex = deps.getPaneAssignments ? deps.getPaneAssignments().indexOf(entry.name) : -1;
+                    if (typeof window !== 'undefined' && typeof window.sbOpenTerminalPaste === 'function' && paneIndex !== -1) {
+                        window.sbOpenTerminalPaste(paneIndex);
+                    } else if (typeof window !== 'undefined') {
+                        window.dispatchEvent(new CustomEvent('sb:open-paste', {
+                            detail: { paneId: paneIndex !== -1 ? paneIndex : entry.name, paneIndex }
+                        }));
+                    } else {
+                        // Fallback status message in buffer if paste control is unreachable
+                        try {
+                            entry.term.write('\r\n[Paste: use the Paste button — clipboard API unavailable]\r\n');
+                        } catch { /* ignore */ }
+                    }
+                }
+
+                // Suppress browser and xterm default handling for the intercepted chord.
+                if (typeof ev.preventDefault === 'function') {
+                    ev.preventDefault();
+                }
+                return false;
+            });
+        }
+
         let resizeTimer = null;
         const resizeObserver = new ResizeObserver(() => {
             if (resizeTimer) clearTimeout(resizeTimer);

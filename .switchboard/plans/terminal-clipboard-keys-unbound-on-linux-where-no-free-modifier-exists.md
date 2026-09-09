@@ -261,3 +261,9 @@ The external browser/platform behaviors were researched and confirmed:
     prove nothing.
 13. **No confirm gate, no secrets logged.** Grep the diff for `confirm(` and assert none;
     paste a sentinel string and confirm it appears in no console or server log.
+
+## Implementation Summary
+
+Installed explicit keyboard clipboard handlers via `attachCustomKeyEventHandler` on the xterm instance in `src/webview/terminalViewport.js`. Bound `Ctrl+Shift+C` and `Ctrl+Insert` to copy the terminal's active selection to clipboard via `window.sbCopyToClipboard` (or `navigator.clipboard.writeText`), with an empty-selection guard to avoid destroying existing clipboard content and transient toast feedback. Bound `Ctrl+Shift+V` and `Shift+Insert` to paste via `navigator.clipboard.readText()` in secure contexts, delegating seamlessly to `window.sbOpenTerminalPaste(paneIndex)` / `sb:open-paste` event in insecure contexts or when reading is disallowed. macOS `metaKey` chords (Cmd+C/Cmd+V) and standard `Ctrl+C` SIGINT process interrupts remain completely untouched and unintercepted.
+
+Wired `clipboardFallback.js` via the canonical `<!-- SHARED_DEFAULTS_SCRIPT -->` injection hook present in `terminals.html`. In the VS Code extension host, `TaskViewerProvider.ts:25165` replaces `<!-- SHARED_DEFAULTS_SCRIPT -->` with `sharedDefaults.js` and `clipboardFallback.js`. In the standalone host, `headlessPanelHtml.ts:injectTransportShim` replaces `<!-- SHARED_DEFAULTS_SCRIPT -->` with `sharedDefaults.js`, `clipboardFallback.js`, and `transport.js`. Verified by hand that neither host double-loads or leaves broken un-substituted `{{...}}` placeholders, and `window.sbCopyToClipboard` is loaded and functional in insecure contexts across both hosts.
