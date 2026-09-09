@@ -185,6 +185,12 @@
     let _refetchStale = false;
     let _cmDraftBackup = '';
     let _cmMentionContext = null; // { textarea, mode, commentId, startPos, query, activeIndex }
+    // Per-ticket comment cache for proactive prefetch. Populated unconditionally
+    // in ticketCommentsLoaded so prefetched threads are available for instant
+    // modal rendering later. Gated by _COMMENT_PREFETCH_TTL_MS on the selection
+    // path so rapid re-selection of the same ticket does not refetch.
+    const ticketCommentsCache = new Map(); // id -> { threads, fetchedAt }
+    const _COMMENT_PREFETCH_TTL_MS = 15000;
     let clickUpProjectStatus = 'idle';
     let clickUpProjectMessage = '';
     let clickUpAvailableSpaces = [];
@@ -2350,9 +2356,17 @@
             manager.style.display = 'flex';
         }
         const threadsDiv = document.getElementById('tickets-comment-threads');
-        if (threadsDiv) {
+        // Render cached threads instantly if present, then let loadCommentThreads
+        // reconcile with remote. A prefetched ticket's threads land here without
+        // the "Loading comments..." flash.
+        const cached = ticketCommentsCache.get(id);
+        if (cached && cached.threads) {
+            _cmThreads = cached.threads;
+            renderCommentManager(_cmThreads, _cmMembers);
+        } else if (threadsDiv) {
             threadsDiv.innerHTML = '<div class="cm-loading">Loading comments...</div>';
         }
+        // Still call loadCommentThreads to reconcile with remote.
         loadCommentThreads(provider, id);
     }
 
@@ -3376,6 +3390,16 @@
         if (previewMetaBar) {
             previewMetaBar.style.display = 'flex';
             _toggleSubtaskMetaButtons();
+            // Proactively preload comments in background (fire-and-forget).
+            // Gated by cache freshness so re-selecting the same ticket doesn't refetch.
+            {
+                const _id = selectedLinearIssue?.issue?.id;
+                if (_id) {
+                    const cached = ticketCommentsCache.get(_id);
+                    const fresh = cached && (Date.now() - cached.fetchedAt < _COMMENT_PREFETCH_TTL_MS);
+                    if (!fresh) { loadCommentThreads('linear', _id); }
+                }
+            }
             const { btnViewAttachments, btnDiagramPrompt } = getTicketsTabElements();
             if (btnViewAttachments) {
                 const hasAttachments = selectedLinearIssue.attachments && selectedLinearIssue.attachments.length > 0;
@@ -3486,6 +3510,16 @@
         if (previewMetaBar) {
             previewMetaBar.style.display = 'flex';
             _toggleSubtaskMetaButtons();
+            // Proactively preload comments in background (fire-and-forget).
+            // Gated by cache freshness so re-selecting the same ticket doesn't refetch.
+            {
+                const _id = selectedClickUpIssue?.task?.id;
+                if (_id) {
+                    const cached = ticketCommentsCache.get(_id);
+                    const fresh = cached && (Date.now() - cached.fetchedAt < _COMMENT_PREFETCH_TTL_MS);
+                    if (!fresh) { loadCommentThreads('clickup', _id); }
+                }
+            }
             const { btnViewAttachments, btnDiagramPrompt } = getTicketsTabElements();
             if (btnViewAttachments) {
                 const hasAttachments = selectedClickUpIssue.attachments && selectedClickUpIssue.attachments.length > 0;
@@ -8101,6 +8135,13 @@ Instructions:
                 setTicketsLoadingState(false);
                 if (message.success) {
                     const newThreads = message.threads || [];
+                    // Cache threads for this ticket regardless of modal state, so a
+                    // later openCommentManager() can render instantly. Prefetched
+                    // threads for a superseded selection are simply overwritten when
+                    // the now-selected ticket's response arrives.
+                    if (message.id) {
+                        ticketCommentsCache.set(message.id, { threads: newThreads, fetchedAt: Date.now() });
+                    }
                     // Preserve optimistic replies that haven't been confirmed by the API yet.
                     // Match by body+author+timestamp proximity to replace optimistic with real.
                     _cmThreads = mergeOptimisticReplies(_cmThreads, newThreads);
@@ -8219,6 +8260,18 @@ Instructions:
                 // Re-render sidebar from local files so newly imported tickets appear.
                 loadLocalTicketFiles();
                 _requestTicketSyncStatuses();
+                // Refresh comments for the selected ticket on a USER-initiated sync only.
+                // autoSync fires every ~45s in the background — refetching comments on
+                // each tick would drip a rate-limited comment endpoint for whichever
+                // ticket is selected. Skip on auto-sync; the user's next manual Refresh
+                // re-warms it.
+                if (!message.autoSync) {
+                    const activeId = _cmActiveTicketId
+                        || (lastIntegrationProvider === 'linear' ? selectedLinearIssue?.issue?.id : selectedClickUpIssue?.task?.id);
+                    if (activeId) {
+                        loadCommentThreads(lastIntegrationProvider, activeId);
+                    }
+                }
                 break;
             case 'syncAllTicketsResult': {
                 const syncAllBtn = document.getElementById('tickets-sync-all');
