@@ -48,6 +48,10 @@
         const healthSection = document.getElementById('linear-health-section');
         if (healthSection) healthSection.style.display = remoteControlActive ? 'block' : 'none';
         if (remoteControlActive && !_remoteHealthTimer) {
+            // KEEP THIS POLL — it watches a third-party API's reachability, state
+            // that changes outside the application and has no event source. No push
+            // can say "Linear is still reachable"; reachability is exactly the
+            // state that changes without telling you. Correct as written.
             _remoteHealthTimer = setInterval(requestRemoteHealth, 15000);
             requestRemoteHealth();
         } else if (!remoteControlActive && _remoteHealthTimer) {

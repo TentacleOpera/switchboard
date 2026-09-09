@@ -4892,8 +4892,6 @@ Each plan file must include:
             console.warn('[standalone] databaseRestored broadcast failed:', e);
         }
     });
-    backupService.startScheduledBackups();
-
     const retentionService = RetentionService.getInstance({ workspaceRoot });
     retentionService.startScheduledRotation();
 

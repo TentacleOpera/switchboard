@@ -135,3 +135,9 @@ Add one line at each site recording that, so a future sweep that deletes polls o
 4. With the network blocked to the tracker, the health indicator still degrades within one 15-second interval — the kept polls still work.
 5. With a kanban-mode pane open and idle, assert a background card move (advance a plan from another surface) still updates the pane within one 5-second tick — confirming the retained poll is doing its job and the panes are not frozen.
 6. With the dock's fleet tab open, assert the hop-state display (seatCards, hop checkboxes, readiness reasons) still refreshes within 60 s with no operator action — confirming the retained fleet-tab poll is doing its job.
+
+---
+
+## Completion Summary
+
+Deleted the dead `_startTicketsFilePoll`/`_stopTicketsFilePoll`/`_ticketsFilePollTimer` and their two teardown listeners from `planning.js` (the copy the panel extraction missed; `tickets.js`'s was already gone). Widened the contract test to glob every `src/webview/*.js` for `function _startTicketsFilePoll(` (additive — the existing `ticketsJs`-specific assertions are untouched) and added a paired positive that `ensureTicketsWatcherArmed` survives. Added keep-comments at the four retained polls: the fleet-tab poll (now in `dock.js`, not `shell.js` — the poll moved when the dock split off), the kanban-pane poll in `terminals.js`, and the two third-party reachability health polls in `connections.js` and `linear.js`. No polls were retired that depend on a missing event; both kept polls earn their place and the code now says why. Compilation and automated tests were skipped per the dispatch directive.

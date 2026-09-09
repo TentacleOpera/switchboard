@@ -8282,6 +8282,19 @@
         fetchBoardCardsForPane(targetIndex);
     }
 
+    // KEEP THIS POLL — it is the only refresh path for board CARDS in the
+    // cockpit kanban panes. pollKanbanPanes fetches getBoardCards per pane;
+    // the kanbanStructure / moveCards broadcasts carry structure / moves but
+    // terminate at the `kanban` surface (kanban.html / setup.html) and are NOT
+    // handled by this webview — its message listener has no kanban type at all.
+    // With this poll gone, a background card move (agent completes, plan
+    // advances columns, a git pull lands a plan) would never appear in a
+    // cockpit kanban pane until the operator manually toggles the column — the
+    // pane would look frozen relative to the live board. Retiring this poll
+    // requires first wiring a cards/structure broadcast to the `terminals`
+    // surface. The structure fetch inside the poll is already 30s-throttled and
+    // is not redundant here either, since the structure broadcast does not
+    // reach terminals.js. Do not delete this on principle.
     function startKanbanPoll() {
         if (kanbanPollTimer) { return; }
         kanbanPollTimer = setInterval(pollKanbanPanes, 5000);
@@ -8464,6 +8477,22 @@
         getFleetList: () => fleetList,
         getPaneAssignments: () => paneAssignments,
         getFocusedPaneIndex: () => focusedPaneIndex,
+        // #1 (re-box must not release): true when the terminal is ASSIGNED to a
+        // rendered, non-status slot — regardless of whether its container
+        // currently has a box. This is the "is it supposed to be visible" check,
+        // as distinct from isTerminalRendered's "is its container currently
+        // painted." A transient 0x0 during grid reflow makes isTerminalRendered
+        // false but isTerminalSeated true, and that distinction is what keeps
+        // the renderer alive across a re-box (see suspendTerminalStream /
+        // the ResizeObserver's unrendered branch in terminalViewport.js).
+        isTerminalSeated: (name) => {
+            if (!name) { return false; }
+            const slotCount = getSlotCount(effectiveLayout);
+            const slot = paneAssignments.slice(0, slotCount).indexOf(name);
+            if (slot < 0) { return false; }
+            if (paneModes[slot] === 'status') { return false; }
+            return true;
+        },
         isDockFrame: false,
         ptyHostOrigin: PTY_HOST_ORIGIN,
         resyncPaneRenderer,

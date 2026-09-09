@@ -87,6 +87,27 @@ function testTicketsAutoRefreshOnFileChange() {
         'the dead _startTicketsFilePoll must not be reintroduced — two refresh mechanisms would race on the same state'
     );
 
+    // ── Fault 1 (cross-webview): the rule must hold across every webview, not just tickets.js ──
+    // The original guard read tickets.js by name, so it certified a deletion that had happened in
+    // one file of two — the panel extraction deleted the copy in tickets.js and missed the copy
+    // in planning.js, and this test stayed green the whole time. The dead poll must be absent from
+    // every src/webview/*.js file, not just the one this test happened to read. Scoped to webview
+    // JS only so the tickets.js:3569 comment that records the deletion is not a false positive.
+    const webviewDir = path.join(__dirname, '..', 'webview');
+    for (const file of fs.readdirSync(webviewDir)) {
+        if (!file.endsWith('.js')) continue;
+        const src = fs.readFileSync(path.join(webviewDir, file), 'utf8');
+        assert.ok(
+            !/function _startTicketsFilePoll\s*\(/.test(src),
+            `the dead _startTicketsFilePoll must not be reintroduced in any webview — found in ${file}`
+        );
+    }
+    // Paired positive: the live mechanism that replaces the poll must still be present.
+    assert.ok(
+        /function ensureTicketsWatcherArmed\(/.test(ticketsJs),
+        'ensureTicketsWatcherArmed must remain in tickets.js — it is the live watcher that made the 4s poll redundant'
+    );
+
     // ── Side effect the plan called in-scope: a refresh must not lose the user's place ──
     for (const renderer of ['renderTicketsLinearList', 'renderTicketsClickUpList']) {
         const idx = ticketsJs.indexOf(`function ${renderer}()`);

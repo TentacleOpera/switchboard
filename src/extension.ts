@@ -780,13 +780,6 @@ export async function activate(context: vscode.ExtensionContext) {
             console.warn('[Switchboard] databaseRestored broadcast failed:', e);
         }
     });
-    backupService.startScheduledBackups();
-    context.subscriptions.push({
-        dispose: () => {
-            backupService.stopScheduledBackups();
-        }
-    });
-
     const retentionService = RetentionService.getInstance({ workspaceRoot: firstWsFolder });
     retentionService.startScheduledRotation();
     context.subscriptions.push({

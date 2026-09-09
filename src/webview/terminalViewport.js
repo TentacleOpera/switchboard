@@ -28,6 +28,8 @@
      *   {function} getFleetList       — () => fleetList (reassigned by the panel)
      *   {function} getPaneAssignments — () => paneAssignments (reassigned by the panel)
      *   {function} getFocusedPaneIndex — () => focusedPaneIndex (reassigned by the panel)
+     *   {function} isTerminalSeated    — (name) => bool: assigned to a rendered,
+     *                                    non-status slot (box-independent; see #1)
      *   {boolean} isDockFrame         — whether this document is a dock iframe
      *   {string}  ptyHostOrigin       — WebSocket origin for the pty host
      *   {function} resyncPaneRenderer — (entry, verdict, options) => void
@@ -61,6 +63,93 @@
     // contexts per renderer process, shared across every same-origin document in it.
     const MAX_WEBGL_CONTEXTS = 12;
     let liveWebglContexts = 0;
+
+    // ─── Dev-only WebGL churn probe (Proposed Change #4) ───────────────────
+    //
+    // The plan's root-cause mechanism for the 9/9 acquire/release churn is
+    // SUPERSEDED — see the plan's "Why it happens" callout. Before implementing
+    // Proposed Change #1 (a re-box must not release the renderer) or sizing
+    // Proposed Change #3 (coalesce per-switch reflow), the plan requires
+    // re-running the instrumentation against current HEAD and, for #3,
+    // re-measuring the ResizeObserver count with a PER-ENTRY filter (the 33
+    // figure was taken with a global ResizeObserver patch that also captured
+    // sidebar/kanban/shell observers).
+    //
+    // This probe is that instrumentation, landed as a repeatable dev-only check
+    // so a regression shows up as a number rather than as "feels laggy". It is
+    // OFF by default and changes NO behaviour when disabled: the counters are
+    // touched only behind the `churnProbe` guard at the acquire/release sites
+    // and the per-entry ResizeObserver callback. Filtered to terminal entries
+    // by construction — it counts our own liveWebglContexts acquire/release
+    // and our own per-entry observer, never the global ResizeObserver.
+    let churnProbe = null;
+    function recordChurnAcquire(entry) {
+        if (!churnProbe) { return; }
+        churnProbe.acquires++;
+        bumpChurnEntry(entry).acquires++;
+    }
+    function recordChurnRelease(entry) {
+        if (!churnProbe) { return; }
+        churnProbe.releases++;
+        bumpChurnEntry(entry).releases++;
+    }
+    function recordChurnResize(entry) {
+        if (!churnProbe) { return; }
+        churnProbe.resizeCallbacks++;
+        bumpChurnEntry(entry).resizeCallbacks++;
+    }
+    function bumpChurnEntry(entry) {
+        const name = (entry && entry.name) || '<unknown>';
+        let per = churnProbe.perEntry.get(name);
+        if (!per) { per = { acquires: 0, releases: 0, resizeCallbacks: 0 }; churnProbe.perEntry.set(name, per); }
+        return per;
+    }
+
+    // The dev console surface. Enable from devtools:
+    //   __sbWebglChurnProbe.enable();   // begin counting
+    //   <drive layout switches>
+    //   __sbWebglChurnProbe.report();   // { acquires, releases, resizeCallbacks, perEntry }
+    //   __sbWebglChurnProbe.reset();    // zero counters without disabling
+    //   __sbWebglChurnProbe.disable();  // stop counting
+    // A layout switch that re-boxes a seated terminal WITHOUT it leaving the fleet
+    // should report ZERO acquires and ZERO releases for that terminal (the goal
+    // invariant in the plan's Verification Plan). The perEntry map is keyed by
+    // terminal name, so the count is the per-entry filter the plan's Outstanding
+    // Questions ask for — not the global ResizeObserver patch that inflated the
+    // original 33-callback figure with sidebar/kanban/shell observers.
+    if (typeof window !== 'undefined') {
+        window.__sbWebglChurnProbe = {
+            enable() {
+                if (!churnProbe) {
+                    churnProbe = { acquires: 0, releases: 0, resizeCallbacks: 0, perEntry: new Map() };
+                }
+                return churnProbe;
+            },
+            disable() { churnProbe = null; },
+            reset() {
+                if (!churnProbe) { this.enable(); }
+                churnProbe.acquires = 0;
+                churnProbe.releases = 0;
+                churnProbe.resizeCallbacks = 0;
+                churnProbe.perEntry.clear();
+            },
+            report() {
+                if (!churnProbe) { return { enabled: false, acquires: 0, releases: 0, resizeCallbacks: 0, perEntry: {} }; }
+                const perEntry = {};
+                for (const [name, per] of churnProbe.perEntry.entries()) {
+                    perEntry[name] = { ...per };
+                }
+                return {
+                    enabled: true,
+                    liveWebglContexts,
+                    acquires: churnProbe.acquires,
+                    releases: churnProbe.releases,
+                    resizeCallbacks: churnProbe.resizeCallbacks,
+                    perEntry
+                };
+            }
+        };
+    }
 
     function createTerminalViewport(deps) {
 
@@ -341,7 +430,16 @@
         // it counts THIS document's contexts, and the pop-out is a second document in
         // the same process with its own counter starting at zero.
         const hasBox = entry ? isRendered(entry.container) : true;
-        if (webglAvailable() && hasBox && liveWebglContexts < MAX_WEBGL_CONTEXTS) {
+
+        // The single WebGL acquire site, factored out so the budget-exhausted
+        // eviction path below can re-enter it WITHOUT a second increment of the
+        // live counter. Two increment sites is exactly the hand-paired accounting
+        // this design replaced (see terminal-renderer-lifecycle-contract: "exactly
+        // one increment site"); the contract test pins that count at one, so the
+        // re-entry MUST go through this closure rather than duplicating the body.
+        // Returns true on a successful WebGL attach, false on a constructor throw
+        // (in which case the canvas fallback is already loaded into the holder).
+        function acquireWebgl() {
             try {
                 const webgl = new window.WebglAddon.WebglAddon();
                 // EXACTLY ONE decrement per acquisition, from any path, in any order.
@@ -359,6 +457,7 @@
                     // release is what makes it impossible for the counter to say
                     // "freed" while the process still holds the context.
                     forceReleaseWebglContext(webgl);
+                    if (churnProbe) { recordChurnRelease(entry); }
                 };
                 webgl.onContextLoss(() => {
                     // A release WE initiated. forceReleaseWebglContext calls
@@ -386,9 +485,18 @@
                 });
                 term.loadAddon(webgl);
                 holder.current = webgl;
-                if (entry) { entry.isWebgl = true; entry.rendererDeferred = false; }
+                if (entry) {
+                    entry.isWebgl = true;
+                    entry.rendererDeferred = false;
+                    // LRU basis: a pane acquiring WebGL against a real box is visible
+                    // now. Stamped here too (not only in reconcile) so the very first
+                    // acquire — which goes through materializeTerminalView, not
+                    // reconcile — still seeds the ordering.
+                    entry.lastVisibleAt = Date.now();
+                }
                 liveWebglContexts++;
-                return holder;
+                if (churnProbe) { recordChurnAcquire(entry); }
+                return true;
             } catch (err) {
                 console.warn('[Terminals] WebGL renderer unavailable, falling back:', err);
                 // No debt recorded. A constructor that threw will throw again on the
@@ -397,11 +505,35 @@
                 // of the page; every other pane is unaffected.
                 if (entry) { entry.rendererDeferred = false; }
                 holder.current = attachCanvasRenderer(term);
-                return holder;
+                return false;
             }
         }
-        // Boxless, budget-exhausted, or no addon at all — one expression covers all
-        // three: a debt is owed exactly when WebGL is possible but not held.
+
+        if (webglAvailable() && hasBox && liveWebglContexts < MAX_WEBGL_CONTEXTS) {
+            acquireWebgl();
+            return holder;
+        }
+        // Budget exhausted but this pane HAS a box and WebGL is possible: reclaim
+        // the least-recently-visible HIDDEN pane's context rather than leaving this
+        // visible pane on canvas. The skip-on-ceiling this replaces was
+        // order-determined — which panes got WebGL depended on creation order, not
+        // on what the operator was looking at. NEVER evicts a pane that is currently
+        // rendered: evicting the watched pane is the regression the skip-on-ceiling
+        // did not have, and the candidate scan refuses any isRendered entry. The
+        // eviction is page-global by necessity — liveWebglContexts is script-scoped
+        // so the dock's two viewports share one budget (see the note at :51), and a
+        // per-viewport policy would re-introduce the per-instance over-allocation
+        // fixed in 36e42cb9. swapRenderer(candidate, false) routes the drop through
+        // the same holder.release the genuine-leave path uses, so the accounting and
+        // the forceReleaseWebglContext guarantee are unchanged.
+        if (webglAvailable() && hasBox && evictLeastRecentlyVisibleHiddenWebgl(entry)
+            && liveWebglContexts < MAX_WEBGL_CONTEXTS) {
+            acquireWebgl();
+            return holder;
+        }
+        // Boxless, budget-exhausted (with no evictable candidate), or no addon at
+        // all — one expression covers all three: a debt is owed exactly when WebGL
+        // is possible but not held.
         if (entry) { entry.rendererDeferred = webglAvailable(); }
         holder.current = attachCanvasRenderer(term);
         return holder;
@@ -446,6 +578,12 @@
         const hasBox = isRendered(entry.container);
 
         if (hasBox) {
+            // LRU basis: a pane that currently has a box is the most-recently-visible.
+            // Stamped here (the single authority for isRendered re-reads) so a hidden
+            // pane's stamp freezes at the moment it left, and the eviction policy
+            // orders hidden panes by how long they have been hidden — not by creation
+            // order, which is the order-determined skip-on-ceiling this replaces.
+            entry.lastVisibleAt = Date.now();
             // Budget still exhausted -> keep the debt and return; the next tick retries,
             // and a released context (a closed terminal, another pane hidden) is what
             // lets it through.
@@ -499,6 +637,65 @@
         // would self-heal on its next fit ladder, but there is no reason to break it in
         // the first place.
         if (isRendered(entry.container)) { deps.resyncPaneRenderer(entry, 'stale-canvas'); }
+    }
+
+    /**
+     * Reclaim one WebGL context from a HIDDEN pane so a visible pane can acquire
+     * one under the per-document ceiling. The skip-on-ceiling this replaces left
+     * the visible pane on canvas whenever the budget was full — so which panes
+     * got WebGL depended on creation order, not on what the operator was looking
+     * at. This makes the choice instead on visibility history.
+     *
+     * Contract guarantees:
+     *  - NEVER evicts a pane that is currently rendered (isRendered). Evicting
+     *    the watched pane is the regression the skip-on-ceiling did not have; the
+     *    candidate scan refuses any isRendered entry, so a visible pane is safe
+     *    even when it is the oldest by stamp.
+     *  - Page-global. liveWebglContexts is script-scoped (the dock's two viewports
+     *    share it), so the scan walks deps.terminalsMap — every entry in this
+     *    document — not a per-viewport subset. A per-viewport policy would
+     *    re-introduce the per-instance over-allocation fixed in 36e42cb9.
+     *  - Routes through swapRenderer(candidate, false), which routes through the
+     *    one-shot holder.release — the same path the genuine-leave teardown uses —
+     *    so the liveWebglContexts decrement and the forceReleaseWebglContext
+     *    guarantee are unchanged. The evicted pane keeps a rendererDeferred debt,
+     *    so reconcileRendererForVisibility retries it the next time it becomes
+     *    visible AND budget has freed (the existing retry at :452).
+     *  - Never evicts the requesting entry, a disposed entry, or an entry not
+     *    actually holding WebGL (isWebgl). A pane already on canvas owes a debt,
+     *    not a context.
+     *
+     * Returns true when a context was reclaimed, false when no evictable candidate
+     * exists (in which case attachRenderer falls through to the canvas path, the
+     * same behaviour as before this function existed).
+     */
+    function evictLeastRecentlyVisibleHiddenWebgl(requestingEntry) {
+        let candidate = null;
+        let candidateStamp = Infinity;
+        for (const e of deps.terminalsMap.values()) {
+            if (e === requestingEntry || !e || e.disposed) { continue; }
+            // Only a pane actually holding a WebGL context is worth evicting. A
+            // canvas pane (isWebgl false) owes a debt, not a context — swapping it
+            // to canvas again frees nothing.
+            if (!e.isWebgl || !e.rendererAddon) { continue; }
+            // The load-bearing guard: a pane that is currently visible is never a
+            // candidate. isRendered is the same authority reconcileRendererForVisibility
+            // re-reads, so this cannot drift from the visibility the rest of the
+            // module already agrees on.
+            if (isRendered(e.container)) { continue; }
+            const stamp = e.lastVisibleAt || 0;
+            if (stamp < candidateStamp) {
+                candidate = e;
+                candidateStamp = stamp;
+            }
+        }
+        if (!candidate) { return false; }
+        // wantWebgl false: releases the GL context (through the holder), disposes
+        // the addon, attaches canvas. The candidate is hidden, so the
+        // `if (isRendered(...))` resync guard in swapRenderer skips the repaint —
+        // no wasted work against a surface nobody can see.
+        swapRenderer(candidate, /* wantWebgl */ false);
+        return true;
     }
 
     function cancelRendererRelease(entry) {
@@ -941,7 +1138,17 @@
             // until a live frame has established the pane is actually streaming.
             lastPrintableAt: 0,
             lastFrameAt: 0,
-            firstFrameAt: 0
+            firstFrameAt: 0,
+            // LRU basis for the WebGL budget eviction (see evictLeastRecentlyVisibleHiddenWebgl).
+            // Stamped on every observed hasBox transition in reconcileRendererForVisibility
+            // and on a successful acquire in attachRenderer; a pane that is currently
+            // visible is NEVER an eviction candidate, so this only orders HIDDEN panes.
+            lastVisibleAt: 0,
+            // #3 (do not reflow panes nobody can see): the fitLadderGen value this
+            // entry's ResizeObserver last saw. When batchFitVisiblePanes bumps the
+            // gen (per switch), the observer skips its own startFitLadder call —
+            // the switch already started one.
+            lastObservedFitGen: 0
         };
         deps.terminalsMap.set(name, entry);
         whenRendered(entry, () => materializeTerminalView(entry));
@@ -1212,6 +1419,13 @@
 
         let resizeTimer = null;
         const resizeObserver = new ResizeObserver(() => {
+            // Per-entry churn probe (Proposed Change #4): counts ONLY this
+            // terminal's observer, never the global ResizeObserver the plan's
+            // original 33-callback figure was taken with. The 100 ms debounce
+            // collapses a burst into one callback, so this counts SETTLED
+            // reflow decisions, not raw ResizeObserver firings — which is the
+            // unit the plan's coalescing (Proposed Change #3) should be sized to.
+            recordChurnResize(entry);
             if (resizeTimer) clearTimeout(resizeTimer);
             resizeTimer = setTimeout(() => {
                 // The box collapsed — Peek hiding a sibling pane, or the pane losing
@@ -1219,7 +1433,20 @@
                 // clamping the shared pty to a viewport nobody can see.
                 if (!isRendered(entry.container)) {
                     releaseSizeVote(entry);
-                    armRendererRelease(entry);
+                    // #1 (re-box must not release): a terminal still SEATED
+                    // (assigned to a rendered, non-status slot) whose container
+                    // transiently measures 0x0 during a grid reflow must NOT arm
+                    // a renderer release. The box will return; arming here races
+                    // the next switch and is the 9/9 churn this plan stops. The
+                    // panelVisibility hide path (terminals.js) arms releases for
+                    // ALL terminals regardless of seating — that is the genuine-
+                    // hide path and is unaffected by this guard, which only
+                    // short-circuits the per-pane observer's transient-0x0 arm.
+                    // A terminal that genuinely left the fleet (unassigned, or
+                    // assigned to a status pane) is NOT seated, so the arm fires
+                    // as before.
+                    const seated = deps.isTerminalSeated ? deps.isTerminalSeated(entry.name) : false;
+                    if (!seated) { armRendererRelease(entry); }
                     return;
                 }
                 // Re-cast BEFORE the ladder: a pane restored at its previous size
@@ -1230,11 +1457,22 @@
                 // readRenderedGrid, and running it across a renderer swap would have
                 // it measure a surface that is about to be replaced.
                 reconcileRendererForVisibility(entry);
-                // `active` is pane ASSIGNMENT, not visibility — a hidden panel's panes
-                // are still "active". inspectPaneFit/fitAndReportSize gate on actually
-                // having a box.
-                if (entry.container.classList.contains('active')) {
-                    deps.startFitLadder(entry.name);
+                // #3 (do not reflow panes nobody can see): coalesce per switch.
+                // batchFitVisiblePanes (called after every renderPaneGrid) already
+                // started a fit ladder for this terminal, bumping fitLadderGen.
+                // If the gen changed since this observer last fired, the switch
+                // already handled the reflow and this observer's ladder is
+                // redundant — skip it. This extends the existing fitLadderGen
+                // guard (which collapses rapid minimize/restore cycles per
+                // terminal) to also collapse the per-switch burst across panes,
+                // rather than adding a second mechanism. The reconcile and size
+                // vote above still run — only the ladder is skipped.
+                const fitGen = deps.fitLadderGen ? (deps.fitLadderGen.get(entry.name) || 0) : 0;
+                if (fitGen !== entry.lastObservedFitGen) {
+                    entry.lastObservedFitGen = fitGen;
+                    if (entry.container.classList.contains('active')) {
+                        deps.startFitLadder(entry.name);
+                    }
                 }
             }, 100);
         });
@@ -1483,15 +1721,36 @@
         // Release the renderer — a status pane paints no terminal pixels, and a
         // WebGL context held by an invisible surface is one the visible panes
         // cannot get. entry.term is NOT disposed; its buffer survives.
+        //
+        // #1 (re-box must not release): SKIP the renderer release when the
+        // terminal is still SEATED (assigned to a rendered, non-status slot).
+        // The reconcile trailing loop calls suspend when isTerminalRendered is
+        // false, and during a grid reflow a container can transiently measure
+        // 0x0 — making isTerminalRendered false even though the terminal has
+        // not left the fleet. Releasing the renderer on that transient 0x0 and
+        // re-acquiring it when the box returns is the 9/9 acquire/release churn
+        // this plan exists to stop. The stream still suspends (socket closes,
+        // size vote withdrawn) — the gateway should not clamp the shared pty to
+        // a 0x0 viewport — but the renderer is kept alive; resumeTerminalStream's
+        // `!entry.rendererAddon?.current` guard skips the re-attach when the
+        // renderer survived, so no acquire fires on the way back either.
+        // A terminal that genuinely left the fleet (unassigned, or assigned to
+        // a status pane) is NOT seated, so the release fires as before.
         cancelRendererRelease(entry);
-        if (entry.rendererAddon) {
+        const seated = deps.isTerminalSeated ? deps.isTerminalSeated(entry.name) : false;
+        if (seated) {
+            // Keep the renderer; only the stream suspends. The box will return
+            // (it is a re-box, not a leave), and resumeTerminalStream will skip
+            // the re-attach. rendererDeferred stays as-is: a seated pane that
+            // already holds WebGL keeps it; one on canvas keeps its debt.
+        } else if (entry.rendererAddon) {
             entry.rendererAddon.release();
             try {
                 if (entry.rendererAddon.current) { entry.rendererAddon.current.dispose(); }
             } catch { /* ignore */ }
             entry.rendererAddon.current = null;
+            entry.rendererDeferred = false;
         }
-        entry.rendererDeferred = false;
         deps.refreshInputState(entry.name);
     }
 

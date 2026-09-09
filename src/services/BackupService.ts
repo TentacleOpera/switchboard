@@ -7,7 +7,7 @@ import { BetterSqliteDriver } from './sqliteDriver';
 import { resolveBoardDbPath } from './globalStore';
 import { resolveCanonicalWorkspaceIdSync } from './WorkspaceIdentityService';
 import { tryAcquireStoreLock } from './storeLock';
-import { readScheduleState, writeLastRun, writeLastSkip, LastRunRecord } from './scheduleState';
+import { writeLastRun, writeLastSkip } from './scheduleState';
 
 export interface BackupPlanEntry {
     relativePath: string;
@@ -60,7 +60,6 @@ export class BackupService {
     private static _instance: BackupService | null = null;
     private _workspaceRoot: string;
     private _backupDir: string;
-    private _hourlyTimer: NodeJS.Timeout | null = null;
     private _maxHourly: number;
     private _maxDaily: number;
     private _onDatabaseRestored?: (info: { restoredBackupId: string; workspaceRoot: string }) => void;
@@ -132,71 +131,6 @@ export class BackupService {
         return { ok: true };
     }
 
-    /**
-     * Start scheduled hourly backups.
-     *
-     * The timer is per-process; the schedule is per-machine. On each tick the
-     * service acquires the store lock (skip-rather-than-queue) and checks the
-     * last-run timestamp persisted in the store. If another host already ran a
-     * backup within the interval, this tick records a schedule-skip and does
-     * nothing — so N windows produce one backup per interval, not N.
-     */
-    public startScheduledBackups(intervalMs: number = 3600000): void {
-        if (this._hourlyTimer) return;
-        this._scheduledIntervalMs = intervalMs;
-        this._hourlyTimer = setInterval(() => {
-            void this._runScheduledBackup(intervalMs).catch((err) => {
-                console.error('[BackupService] Scheduled backup error:', err);
-            });
-        }, intervalMs);
-        // Don't keep event loop alive for timer
-        this._hourlyTimer.unref();
-    }
-
-    private _scheduledIntervalMs: number = 3600000;
-
-    /**
-     * One scheduled tick. Acquires the store lock, honours the per-machine
-     * schedule from persisted last-run state, and records every skip with a
-     * reason on the skip surface.
-     */
-    private async _runScheduledBackup(intervalMs: number): Promise<void> {
-        const storePath = this._resolveStorePath();
-        const acquire = await tryAcquireStoreLock({ storePath });
-        if (!acquire.acquired) {
-            const db = this._openDbForState();
-            await writeLastSkip(db, 'backup', { atMs: Date.now(), reason: acquire.skip.reason });
-            console.log(`[BackupService] Scheduled backup skipped: ${acquire.skip.reason}`);
-            return;
-        }
-        try {
-            const db = this._openDbForState();
-            const state = await readScheduleState(db, 'backup');
-            const lastRunAt = state.lastRun?.atMs ?? 0;
-            // Honour the per-machine interval: if another host ran a backup
-            // recently, this tick is a schedule-skip, not a new backup.
-            if (lastRunAt && Date.now() - lastRunAt < intervalMs * 0.9) {
-                await writeLastSkip(db, 'backup', {
-                    atMs: Date.now(),
-                    reason: `another host ran backup at ${new Date(lastRunAt).toISOString()} (within ${intervalMs}ms interval)`,
-                });
-                console.log(`[BackupService] Scheduled backup skipped: recent last-run at ${new Date(lastRunAt).toISOString()}`);
-                return;
-            }
-            try {
-                const info = await this._executeCreateBackup({ type: 'scheduled', reason: 'hourly' });
-                const record: LastRunRecord = { atMs: Date.now(), ok: true, detail: info.id };
-                await writeLastRun(db, 'backup', record);
-            } catch (err: any) {
-                const record: LastRunRecord = { atMs: Date.now(), ok: false, detail: err?.message || String(err) };
-                await writeLastRun(db, 'backup', record);
-                throw err;
-            }
-        } finally {
-            await acquire.release();
-        }
-    }
-
     private _resolveStorePath(): string {
         try {
             const wsId = resolveCanonicalWorkspaceIdSync(this._workspaceRoot).value;
@@ -214,15 +148,7 @@ export class BackupService {
         }
     }
 
-    public stopScheduledBackups(): void {
-        if (this._hourlyTimer) {
-            clearInterval(this._hourlyTimer);
-            this._hourlyTimer = null;
-        }
-    }
-
     public async shutdown(): Promise<void> {
-        this.stopScheduledBackups();
         try {
             await this.createBackup({ type: 'shutdown', reason: 'shutdown' });
         } catch (err) {

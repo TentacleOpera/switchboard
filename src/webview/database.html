@@ -593,14 +593,14 @@
 
             <div class="card">
                 <div class="card-header">
-                    <div class="card-title">Automatic Rolling Backups</div>
+                    <div class="card-title">Backups</div>
                     <div style="display: flex; align-items: center; gap: 8px;">
                         <button id="btn-backup-now" class="btn" style="padding: 2px 8px; font-size: 10px;">BACKUP NOW</button>
                         <span id="backup-count-badge" class="badge neutral">0 backups</span>
                     </div>
                 </div>
                 <div style="font-size: 11px; color: var(--text-secondary); line-height: 1.4; margin-bottom: 8px;">
-                    Switchboard maintains point-in-time backup sets (database, markdown plans, verified manifest) with automated retention pruning.
+                    Switchboard writes point-in-time backup sets (database, markdown plans, verified manifest) on demand — manual "Backup Now", shutdown, and pre-restore — with count-based retention pruning. Scheduled hourly copies were retired: a same-disk hourly copy protects against nothing the event-driven paths and the off-machine board snapshot do not already cover.
                 </div>
                 <div id="backups-container" class="backup-list">
                     <div style="padding: 12px; text-align: center; color: var(--text-secondary); font-size: 11px;">No backups found</div>
@@ -614,13 +614,13 @@
                     <span id="schedule-owner-badge" class="badge neutral">Checking…</span>
                 </div>
                 <div style="font-size: 11px; color: var(--text-secondary); line-height: 1.4; margin-bottom: 8px;">
-                    One owner per machine for backup and rotation (store lock). A scheduled run that lost the lock is recorded here with its reason, so a missing backup is never indistinguishable from one that never ran.
+                    One owner per machine for rotation (store lock). A scheduled rotation run that lost the lock is recorded here with its reason, so a missing rotation is never indistinguishable from one that never ran. Backup is no longer scheduled; the fields below retain their last values as history (manual/shutdown/pre-restore backups still update "Backup Last Run").
                 </div>
                 <div class="prop-grid">
-                    <div class="prop-label">Backup Last Run:</div>
+                    <div class="prop-label">Backup Last Run (manual/shutdown):</div>
                     <div id="schedule-backup-last-run" class="prop-value">—</div>
 
-                    <div class="prop-label">Backup Last Skip:</div>
+                    <div class="prop-label">Backup Last Skip (history):</div>
                     <div id="schedule-backup-last-skip" class="prop-value">—</div>
 
                     <div class="prop-label">Rotation Last Run:</div>

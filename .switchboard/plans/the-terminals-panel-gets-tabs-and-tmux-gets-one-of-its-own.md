@@ -6,6 +6,10 @@ Split the Terminals panel into tabs — **Agents** (everything it does today) an
 tmux tab the settings, the live session list, and the copyable commands that currently exist only as
 knowledge in the operator's head.
 
+One row per team, not one per session. A four-seat team is five tmux sessions — a base plus one view
+per seat — and listing all five reads as a leak. The tab shows the team, its seat count, and the one
+attach command that is safe to hand a human.
+
 ### Problem analysis
 
 tmux seating now works: a team is one session with a window per seat, each seat rendered in its own
@@ -99,12 +103,26 @@ None.
 - **Edge cases:** tmux absent, or the setting off — say so plainly rather than rendering an empty list
   that looks like "no sessions".
 
-### 4. Copyable commands, with the naming scheme stated
+### 4. Copyable commands — the TEAM command only
 
-- **Logic:** Copy buttons for: attach to a team, attach to one seat, the grid recipe above, kill a
-  session. Each rendered with the real names of what is running, not placeholders — the operator
-  should never have to derive `lc-<team>-team-<role>` themselves.
-- **Rationale:** The scheme is the thing nobody can guess. Showing real commands documents it.
+- **Logic:** Copy buttons for: attach to a team, the grid recipe above, kill a session. Rendered with
+  the real names of what is running, not placeholders.
+- **Do NOT offer a per-seat attach command.** A seat's view session is the session a board pane is
+  attached to, and `status` is a session option with no per-client override. Two consequences follow,
+  and both argue for hiding the views:
+  - Attaching to a view shares its current-window pointer with that pane, so paging the window list
+    changes what the board pane displays until you page back.
+  - The view sessions are created with `status off` (`goPtyFleetProjection.ts`), precisely so the
+    board panes carry no duplicate navigation. A human attaching to one gets no window list at all,
+    which is the worst of both.
+
+  The base session — the one whose `session_name` equals its `session_group` — has no board pane on
+  it and keeps its strip. That is the only attach point a human should be handed.
+- **Rationale:** the naming scheme is unguessable, but publishing all of it invites the operator into
+  the two sessions that misbehave when they arrive. Publish the team, keep the views internal.
+- **Identifying the base:** group the rows by `#{session_group}` and mark the member whose name equals
+  the group. Do not pattern-match `-lead` / `-coder-1` suffixes; the suffix is derived from a window
+  slug and a role fallback, so it is not a reliable key.
 
 ### 5. A grid button
 

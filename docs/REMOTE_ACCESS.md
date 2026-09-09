@@ -116,6 +116,11 @@ with no address bar or Safari toolbar).
   with square icon assets and safe-area inset adaptation for device notches and
   home indicators.
 
+**Operating the board from a touch device (iPad / iPhone).**
+
+Once connected, touch interactions behave differently than a mouse-and-keyboard desktop. Specifically, HTML5 card drag-and-drop is inert on iOS/iPadOS, and backward card moves use the Project panel column dropdown. If you are operating the board from a tablet or phone, see [`docs/TOUCH_ACCESS.md`](TOUCH_ACCESS.md) for the complete touch operating guide.
+
+
 ### SSH tunnel (loopback-only, no Tailscale)
 
 If you do not use Tailscale, forward a local port on your client machine to the

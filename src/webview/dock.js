@@ -110,6 +110,8 @@
             getFleetList: () => [],
             getPaneAssignments: () => ({}),
             getFocusedPaneIndex: () => 0,
+            // The dock has one terminal; it is always "seated" (see #1 guard).
+            isTerminalSeated: () => true,
             isDockFrame: true,
             ptyHostOrigin: PTY_HOST_ORIGIN,
             resyncPaneRenderer: () => {},
@@ -478,6 +480,17 @@
     }
 
     // ── Fleet tab ────────────────────────────────────────────────────────
+    // KEEP THIS POLL — it is the only source of hop state for the fleet tab.
+    // `terminalsChanged` (restored by sibling card 198dba7a) covers terminal
+    // *existence* via fetchTerminalList → terminalFleetState → renderTerminalSection
+    // (the rail), but it carries only terminals + teams — never hop readiness.
+    // refreshFleetTab additionally fetches getHopState and renders seatCards,
+    // hop checkboxes, readiness reasons and the Start/Stop button. No push
+    // carries hop state and no handler relays it (getHopState is a verb only,
+    // never broadcastWs'd). Deleting this poll freezes the fleet tab's hop
+    // display; retiring it requires first wiring a hop-state push relayed
+    // through terminals.js to the shell (mirroring terminalFleetState). Do not
+    // delete this on principle — the event that would replace it does not exist.
     function startFleetPoll() {
         stopFleetPoll();
         void refreshFleetTab();

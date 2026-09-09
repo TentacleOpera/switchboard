@@ -1569,17 +1569,6 @@
         return document.querySelector('.shared-tab-btn.active')?.dataset.tab === 'tickets';
     }
 
-    let _ticketsFilePollTimer = null;
-    function _startTicketsFilePoll() {
-        _stopTicketsFilePoll();
-        _ticketsFilePollTimer = setInterval(() => {
-            if (!isTicketsTabActive()) { _stopTicketsFilePoll(); return; }
-            _refreshSelectedTicketFromFile();
-        }, 4000);
-    }
-    function _stopTicketsFilePoll() {
-        if (_ticketsFilePollTimer) { clearInterval(_ticketsFilePollTimer); _ticketsFilePollTimer = null; }
-    }
     function _refreshSelectedTicketFromFile() {
         if (ticketsEditMode) return; // never clobber an active edit
         if (lastIntegrationProvider === 'linear' && selectedLinearIssue?.issue?.id) {
@@ -9261,7 +9250,4 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
     vscode.postMessage({ type: 'fetchRoots' });
     vscode.postMessage({ type: 'refreshSource', sourceId: 'local-folder' });
-
-    window.addEventListener('pagehide', _stopTicketsFilePoll);
-    window.addEventListener('beforeunload', _stopTicketsFilePoll);
 })();

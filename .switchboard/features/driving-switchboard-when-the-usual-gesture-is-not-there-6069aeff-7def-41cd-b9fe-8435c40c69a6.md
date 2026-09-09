@@ -92,3 +92,7 @@ composition roots by hand, since verb-level checks pass regardless.
   - Both hosts: `clipboardFallback.js` is loaded on the terminals page in both `src/extension.ts` and `src/standalone/bootstrap.ts` (verify by hand, not by verb-level check).
 - **Must not touch:** Ctrl+C (always SIGINT, per User Review — never copy-when-selection-exists). No configurable keymap. No touch copy. `src/webview/clipboardFallback.js` (uses `sbCopyToClipboard`, does not modify it). No confirmation dialogs.
 
+## Completion Summary
+
+All three subtasks implemented and committed. Paste affordance: visible textarea overlay in terminal panes delivering via term.paste() with bracketed-paste wrapping, wired in both composition roots (terminals.html SHARED_DEFAULTS_SCRIPT marker). Clipboard key bindings: Ctrl+Shift+C/V and Ctrl+Insert/Shift+Insert bound in terminalViewport.js with empty-selection guard, macOS metaKey untouched, Ctrl+C stays SIGINT, insecure-context paste delegates to the paste control. Touch documentation: user-facing guide in switchboard-site at src/pages/docs/board/kanban-board/touch-access.md covering forward moves, backward moves via Project panel, verb asymmetry, and platform limitations. Contract test added (src/test/terminal-pane-paste-contract.test.js) asserting no navigator.clipboard access.
+

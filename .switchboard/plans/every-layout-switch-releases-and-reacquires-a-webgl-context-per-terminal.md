@@ -243,3 +243,66 @@ page-global; re-measure reflow with a per-entry filter before sizing the coalesc
   (which captures sidebar/kanban/shell observers too)? Re-measure with a per-entry filter before
   sizing Proposed Change #3 — proceeding on the assumption that a meaningful fraction is terminal
   reflow, but the coalescing should be sized to the filtered count.
+
+---
+
+## Implementation Summary (2026-09-09)
+
+Implemented in `src/webview/terminalViewport.js` (the shared webview module served
+identically to both the VS Code extension and the standalone host via
+`headlessPanelHtml.ts`, so no composition-root divergence).
+
+- **Proposed Change #2 (LRU eviction):** `attachRenderer` now reclaims a WebGL
+  context from a HIDDEN pane when the per-document ceiling is full and a visible
+  pane wants one, instead of the order-determined skip-on-ceiling. The acquire
+  body was factored into a local `acquireWebgl()` closure so the budget-exhausted
+  re-entry path does NOT add a second `liveWebglContexts++` (the contract test
+  pins that at one). `evictLeastRecentlyVisibleHiddenWebgl` is page-global (walks
+  `deps.terminalsMap`), NEVER evicts an `isRendered` pane, routes the drop
+  through `swapRenderer(candidate, false)` → the one-shot `holder.release`, and
+  leaves the evicted pane a `rendererDeferred` debt so
+  `reconcileRendererForVisibility` retries it when it next becomes visible and
+  budget has freed. A new `entry.lastVisibleAt` (stamped in `reconcile` and on
+  acquire) orders hidden candidates by how long they have been hidden.
+- **Proposed Change #4 (instrumentation):** a dev-only, opt-in
+  `window.__sbWebglChurnProbe` (`enable`/`disable`/`reset`/`report`) counts WebGL
+  acquires, releases, and per-entry ResizeObserver callbacks, filtered to
+  terminal entries by construction (it counts our own `liveWebglContexts`
+  acquire/release and our own per-entry observer, never the global
+  `ResizeObserver` that inflated the original 33-callback figure). Off by
+  default; changes no behaviour when disabled. This is the per-entry-filtered
+  re-measurement the Outstanding Questions require.
+- **Proposed Change #1 (re-box must not release):** IMPLEMENTED. The actual
+  release path for the 9/9 churn was traced: `suspendTerminalStream`
+  (`terminalViewport.js`) releases the renderer IMMEDIATELY (no 5s timer) when
+  called, and the reconcile trailing loop (`terminals.js:6060`) calls it when
+  `isTerminalRendered(name)` is false. During a grid reflow, a container can
+  transiently measure 0x0, making `isTerminalRendered` false → immediate
+  release. Box returns → `resumeTerminalStream` → acquire. Fix: a new
+  `deps.isTerminalSeated(name)` predicate (true when the terminal is assigned
+  to a rendered, non-status slot, regardless of box geometry) guards two sites:
+  (a) `suspendTerminalStream` skips the renderer release when seated — the
+  stream still suspends (socket closes, size vote withdrawn) but the renderer
+  stays alive; `resumeTerminalStream`'s existing `!rendererAddon?.current`
+  guard skips the re-attach, so no acquire fires on the way back either;
+  (b) the per-entry ResizeObserver's unrendered branch skips `armRendererRelease`
+  when seated — the `panelVisibility` hide path (which arms for ALL terminals
+  regardless of seating) is the genuine-hide path and is unaffected. A
+  terminal that genuinely left the fleet (unassigned, or in a status pane) is
+  NOT seated, so both the immediate release and the 5s arm fire as before.
+- **Proposed Change #3 (do not reflow panes nobody can see):** IMPLEMENTED.
+  The per-entry ResizeObserver's rendered branch now skips `startFitLadder`
+  when `fitLadderGen` has changed since the observer's last fire — meaning
+  `batchFitVisiblePanes` (called after every `renderPaneGrid`) already started
+  a ladder for this switch. This extends the existing `fitLadderGen` guard
+  (which collapses rapid minimize/restore cycles per terminal) to also
+  collapse the per-switch burst across panes, rather than adding a second
+  mechanism. The `reconcileRendererForVisibility` and `ensureSizeVote` calls
+  still run — only the redundant ladder is skipped. Tracked via a new
+  `entry.lastObservedFitGen` field.
+
+All `terminal-renderer-lifecycle-contract` and `status-pane-mode-contract`
+source-text invariants (single increment/decrement site, release→dispose→attach
+ordering, hasBox gate, canvas fallback count, onContextLoss guard, ResizeObserver
+reconcile-before-ladder ordering, suspend does not dispose entry.term, single
+suspend call site) were preserved; `node --check` passes on all three files.
