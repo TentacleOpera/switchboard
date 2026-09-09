@@ -88,6 +88,24 @@ export const EXTERNAL_HEAD_CALLBACK_INSTRUCTION =
     + 'Do not wait to be asked.';
 
 /**
+ * Standing-order template for an agent running in any local terminal that
+ * Switchboard cannot push into (plain shell, iTerm, tmux pane, editor chat
+ * pane). The agent registers itself, heartbeats, polls for work, and reports
+ * done — all via HTTP endpoints, never via host files. The heartbeat interval
+ * is ≤60s to stay within the dispatch-routing liveness threshold
+ * (`_getAliveAutobanTerminalRegistry` uses 60_000ms). See plan
+ * `register-an-agent-in-any-local-terminal.md`.
+ */
+export const EXTERNAL_AGENT_PULL_INSTRUCTION =
+    'You are running in a terminal Switchboard cannot push into. To receive work, pull it:\n'
+    + '1. REGISTER: POST http://127.0.0.1:<port>/agents/register with {"seat":"<your name>","role":"<role>","workspaceRoot":"<root>","cwd":"<cwd>"}. '
+    + 'Save the returned token — you need it for every subsequent call.\n'
+    + '2. HEARTBEAT: POST http://127.0.0.1:<port>/agents/heartbeat with {"seat":"<your name>","token":"<token>"} every 50 seconds (≤60s).\n'
+    + '3. POLL: GET http://127.0.0.1:<port>/agents/inbox?seat=<your name>&token=<token> — returns pending dispatch items. Poll every 5-10 seconds.\n'
+    + '4. DONE: When you finish a dispatched item, report completion via the mechanism the dispatch item specifies (POST /kanban/queue/done, POST /kanban/task/complete, etc.).\n'
+    + 'The port comes from your SWITCHBOARD STATUS line. Use http://127.0.0.1:<port> for all calls.';
+
+/**
  * The PRE-rewrite callback text — byte-identical to the shipped constant before
  * this change. Existing installs have per-member pair rows whose `instruction`
  * field carries this exact string. The migration recogniser matches against it

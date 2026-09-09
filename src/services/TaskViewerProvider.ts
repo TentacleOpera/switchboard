@@ -4555,6 +4555,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 }
                 return names;
             },
+            // Pull-registration: external agents in any local terminal.
+            // Wired in the extension host — the standalone host wires its own
+            // twin in bootstrap.ts. Per the project rule, both roots must not
+            // diverge.
+            registerExternalAgent: async (seat: string, role: string, wsRoot?: string, cwd?: string) => this.registerExternalAgent(seat, role, wsRoot, cwd),
+            heartbeatExternalAgent: async (seat: string, token: string) => this.heartbeatExternalAgent(seat, token),
+            getExternalAgentInbox: async (seat: string, token: string) => this.getExternalAgentInbox(seat, token),
             getSelectedWorkspaceRoot: () => this._kanbanProvider?.getCurrentWorkspaceRoot() ?? null,
             resolveKanbanDispatch: async (wsRoot, targetColumn) => {
                 if (!this._kanbanProvider) {
@@ -11571,6 +11578,106 @@ Each plan file must include:
     }
 
     /**
+     * An external terminal — one registered via pull-registration
+     * (`POST /agents/register`) — carries `purpose: 'external'` with no
+     * `ideName`. It is NOT fleet (no pty, no PTY_IDE_NAME) and NOT a VS Code
+     * terminal. `_pickTerminalCandidate` ranks it below live-vscode, above
+     * dead-fleet — see plan `register-an-agent-in-any-local-terminal.md`.
+     */
+    private _isExternalTerminalInfo(info: any): boolean {
+        return info?.purpose === 'external';
+    }
+
+    // ── Pull-registration: external agents in any local terminal ──────────
+    //
+    // In-memory per-seat tokens and pending inbox items. The token is the
+    // security boundary — _checkAuth short-circuits to loopback trust when
+    // getAuthToken() is empty (always on the extension host), so these routes
+    // enforce a per-seat token route-side, not inherited from the rail.
+    private _externalAgentTokens: Map<string, string> = new Map();
+    private _externalAgentInbox: Map<string, any[]> = new Map();
+
+    /**
+     * Register an external agent. Writes a `state.terminals` row with
+     * `purpose: 'external'`, no `ideName`, `lastSeen` now. Mints a per-seat
+     * token. Rejects a name that already resolves in the VS Code registry or
+     * the fleet — never merges into an existing row.
+     */
+    public async registerExternalAgent(seat: string, role: string, workspaceRoot?: string, cwd?: string): Promise<{ success: boolean; token?: string; error?: string }> {
+        const crypto = require('crypto');
+        const token = crypto.randomBytes(32).toString('hex');
+        const now = Date.now();
+
+        let refused = false;
+        let refuseReason = '';
+        await this.updateState(async (state: any) => {
+            if (!state.terminals) { state.terminals = {}; }
+            // Reject if the name already resolves — never merge into an existing row.
+            if (state.terminals[seat]) {
+                refused = true;
+                refuseReason = `Seat name '${seat}' already exists in the terminal registry`;
+                return;
+            }
+            // Also check VS Code's live terminal list for name collisions.
+            const liveTerminals = this._registeredTerminals ? Array.from(this._registeredTerminals.keys()) : [];
+            if (liveTerminals.includes(seat)) {
+                refused = true;
+                refuseReason = `Seat name '${seat}' matches a live VS Code terminal`;
+                return;
+            }
+            state.terminals[seat] = {
+                purpose: 'external',
+                role,
+                lastSeen: now,
+                ...(workspaceRoot ? { workspaceRoot } : {}),
+                ...(cwd ? { cwd } : {}),
+            };
+        });
+        if (refused) {
+            return { success: false, error: refuseReason };
+        }
+        this._externalAgentTokens.set(seat, token);
+        this._externalAgentInbox.set(seat, []);
+        return { success: true, token };
+    }
+
+    /**
+     * Refresh `lastSeen` for an external seat. The per-seat token is enforced
+     * here — a missing or wrong token is rejected regardless of loopback trust.
+     */
+    public async heartbeatExternalAgent(seat: string, token: string): Promise<{ success: boolean; error?: string }> {
+        const expected = this._externalAgentTokens.get(seat);
+        if (!expected || expected !== token) {
+            return { success: false, error: 'Invalid or missing per-seat token' };
+        }
+        await this.updateState(async (state: any) => {
+            if (state.terminals && state.terminals[seat]) {
+                state.terminals[seat].lastSeen = Date.now();
+            }
+        });
+        return { success: true };
+    }
+
+    /**
+     * Return and dequeue pending dispatch items for an external seat. Records
+     * `lastPolled` on each call. The per-seat token is enforced here.
+     */
+    public async getExternalAgentInbox(seat: string, token: string): Promise<{ items: any[]; error?: string }> {
+        const expected = this._externalAgentTokens.get(seat);
+        if (!expected || expected !== token) {
+            return { items: [], error: 'Invalid or missing per-seat token' };
+        }
+        const items = this._externalAgentInbox.get(seat) ?? [];
+        this._externalAgentInbox.set(seat, []);
+        await this.updateState(async (state: any) => {
+            if (state.terminals && state.terminals[seat]) {
+                state.terminals[seat].lastPolled = Date.now();
+            }
+        });
+        return { items };
+    }
+
+    /**
      * The ONE precedence rule for terminal-name candidates: **live-first,
      * fleet-wins-among-equals**.
      *
@@ -11585,13 +11692,17 @@ Each plan file must include:
      * common shape and keeps the shipped install base byte-compatible: only a genuine
      * collision (same role, both sets) can now resolve differently than at HEAD.
      */
-    private _pickTerminalCandidate(candidates: Array<{ name: string; isFleet: boolean }>): string | undefined {
+    private _pickTerminalCandidate(candidates: Array<{ name: string; isFleet: boolean; isExternal?: boolean }>): string | undefined {
         if (candidates.length === 0) { return undefined; }
         if (candidates.length === 1) { return candidates[0].name; }
         const liveFleet = candidates.find(c => c.isFleet && this._isTerminalLive(c.name));
         if (liveFleet) { return liveFleet.name; }
-        const liveVscode = candidates.find(c => !c.isFleet && this._isTerminalLive(c.name));
+        const liveVscode = candidates.find(c => !c.isFleet && !c.isExternal && this._isTerminalLive(c.name));
         if (liveVscode) { return liveVscode.name; }
+        // External seats rank below live-vscode, above dead-fleet — they are
+        // pull-only (no push path), so a live VS Code terminal wins ties.
+        const liveExternal = candidates.find(c => c.isExternal && this._isTerminalLive(c.name));
+        if (liveExternal) { return liveExternal.name; }
         const deadFleet = candidates.find(c => c.isFleet);
         if (deadFleet) { return deadFleet.name; }
         return candidates[0].name;
@@ -11599,7 +11710,7 @@ Each plan file must include:
 
     private async _getAgentNameForRoleGlobal(role: string, skipStatePath?: string | null): Promise<string | undefined> {
         const allRoots = this._filterMappedRoots(this._getWorkspaceRoots());
-        const candidates: Array<{ name: string; isFleet: boolean }> = [];
+        const candidates: Array<{ name: string; isFleet: boolean; isExternal?: boolean }> = [];
 
         for (const root of allRoots) {
             const statePath = this._resolveStateFilePath(root);
@@ -11618,7 +11729,7 @@ Each plan file must include:
                     // _pickTerminalCandidate ever sees the collision.
                     for (const [name, info] of Object.entries(state.terminals) as [string, any][]) {
                         if (info.role === role) {
-                            candidates.push({ name, isFleet: this._isFleetTerminalInfo(info) });
+                            candidates.push({ name, isFleet: this._isFleetTerminalInfo(info), isExternal: this._isExternalTerminalInfo(info) });
                             foundInRoot = true;
                         }
                     }
@@ -11654,10 +11765,10 @@ Each plan file must include:
                         // Same collision as the global path: collect all role matches
                         // and let the one precedence rule choose, instead of taking
                         // whichever key the state file happens to list first.
-                        const localCandidates: Array<{ name: string; isFleet: boolean }> = [];
+                        const localCandidates: Array<{ name: string; isFleet: boolean; isExternal?: boolean }> = [];
                         for (const [name, info] of Object.entries(state.terminals) as [string, any][]) {
                             if (info.role === role) {
-                                localCandidates.push({ name, isFleet: this._isFleetTerminalInfo(info) });
+                                localCandidates.push({ name, isFleet: this._isFleetTerminalInfo(info), isExternal: this._isExternalTerminalInfo(info) });
                             }
                         }
                         localMatch = this._pickTerminalCandidate(localCandidates);
@@ -12055,11 +12166,11 @@ Each plan file must include:
                     // each pass the shared precedence rule breaks the fleet/vscode tie.
                     // Collecting before resolving is what makes that possible — the
                     // previous first-match-wins loops resolved by JSON key order.
-                    const roleMatches: Array<{ name: string; isFleet: boolean }> = [];
-                    const pathMatches: Array<{ name: string; isFleet: boolean }> = [];
+                    const roleMatches: Array<{ name: string; isFleet: boolean; isExternal?: boolean }> = [];
+                    const pathMatches: Array<{ name: string; isFleet: boolean; isExternal?: boolean }> = [];
                     for (const [name, info] of Object.entries(state.terminals) as [string, any][]) {
                         if (!info.worktreePath || path.resolve(info.worktreePath) !== resolvedTarget) { continue; }
-                        const entry = { name, isFleet: this._isFleetTerminalInfo(info) };
+                        const entry = { name, isFleet: this._isFleetTerminalInfo(info), isExternal: this._isExternalTerminalInfo(info) };
                         pathMatches.push(entry);
                         if (this._normalizeAgentKey(info.role) === normalizedRole) { roleMatches.push(entry); }
                     }

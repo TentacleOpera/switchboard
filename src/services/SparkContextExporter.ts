@@ -9,6 +9,39 @@ export interface SparkContextResult {
     skippedSections: string[];
 }
 
+/**
+ * A user-declared read-state channel. Each entry is a three-field shape
+ * (channel, how to verify, fallback) so the output stays check-shaped rather
+ * than becoming claims. See the plan
+ * `user-declared-state-channels-as-a-skill.md` — the check-and-fallback
+ * phrasing is the deliverable.
+ */
+export interface ReadStateChannel {
+    channel: string;
+    verify: string;
+    fallback: string;
+}
+
+/**
+ * Read user-supplied read-state channels from `.switchboard/read-state-channels.json`.
+ * The file is an array of {@link ReadStateChannel} objects. If the file does
+ * not exist or is unparseable, returns an empty array — zero configured
+ * channels is a useful emission, not an empty one.
+ */
+function readUserStateChannels(sbDir: string): ReadStateChannel[] {
+    const channelsPath = path.join(sbDir, 'read-state-channels.json');
+    if (!fs.existsSync(channelsPath)) return [];
+    try {
+        const raw = fs.readFileSync(channelsPath, 'utf8').trim();
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return [];
+        return parsed.filter((e: any) =>
+            e && typeof e.channel === 'string' && typeof e.verify === 'string' && typeof e.fallback === 'string'
+        );
+    } catch { return []; }
+}
+
 interface ResolvedSource {
     content: string;
     resolved: string;
@@ -272,6 +305,28 @@ export function generateSparkContext(workspaceRoot: string, extensionVersion: st
     content += `### Anti-confabulation rule\n`;
     content += `If you do not know a fact, do not invent it. You may not invent a project pin, a plan ID, a column name, a board state, a research result, a file path, or a claim that you ran a command. Every factual assertion in your output must be traceable to (1) the user's prompt, (2) the skill instructions above, or (3) the output of a sub-agent you actually dispatched. The only external effect allowed is writing a plan file to \`.switchboard/plans/intake/\`. If you are uncertain, record the uncertainty in \`## Uncertain Assumptions\`.\n\n`;
     sections.push('exclusions-overrides');
+
+    // 6. Read-State Channels — how a remote agent reads current board state.
+    //
+    // Everything above is write-back (write a plan file, write a claim marker,
+    // write a board-move file). This section is the one-directional gap: it
+    // tells a remote agent how to READ state. Each entry uses check-and-fallback
+    // phrasing — a verification step and a fallback — never a bare assertion of
+    // availability. Zero configured channels is a useful emission: "the plan
+    // file is the only channel" is more informative than silence.
+    const userChannels = readUserStateChannels(sbDir);
+    content += `## Read-State Channels\n\n`;
+    content += `> This section describes how to read current Switchboard state from a remote session. Each entry names a channel, how to verify it, and what to do when it is absent. No entry asserts availability — verify before relying on any channel.\n\n`;
+    if (userChannels.length === 0) {
+        content += `No user-declared read-state channels are configured for this workspace. The plan file in \`.switchboard/plans/intake/\` is the only channel for reaching Switchboard state from here. Verify by listing files in that directory; if it is empty or unavailable, there is no fallback — request the board state from the user directly.\n\n`;
+    } else {
+        for (const ch of userChannels) {
+            content += `- **${ch.channel}** — Verify: ${ch.verify}. If unavailable: ${ch.fallback}.\n`;
+        }
+        content += `\n`;
+        content += `If none of the above channels are reachable, the plan file in \`.switchboard/plans/intake/\` is the fallback channel. Verify by listing files in that directory; if it is empty or unavailable, request the board state from the user directly.\n\n`;
+    }
+    sections.push('read-state-channels');
 
     fs.writeFileSync(outputPath, content, 'utf8');
     const stats = fs.statSync(outputPath);

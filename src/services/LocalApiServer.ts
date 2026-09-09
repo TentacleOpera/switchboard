@@ -103,6 +103,19 @@ export function enqueueOnQueueChain<T>(fn: () => Promise<T>): Promise<T> {
 /**
  * Shared in-flight predicate: true when card is held by a team member with no completion post.
  * (completed_at is NULL).
+ *
+ * After the dispatch-timeout card (`a-dispatch-has-a-timeout-and-a-failure-can-be-retried`):
+ * a `timed out` card has its seat RELEASED — `releaseDispatchHolder` nulls
+ * `dispatched_terminal` (and `dispatched_at`) together — so it correctly leaves this
+ * in-flight predicate even though `completed_at` stays NULL. A timeout is an
+ * abandonment, not a completion (consistent with the note at `bootstrap.ts:1113`),
+ * so `completed_at` is deliberately NOT written on the timeout path; the
+ * `dispatched_terminal` null is what takes the card out of flight. The dispatch
+ * timeout is the sole writer that nulls `dispatched_at` for a live-but-silent seat
+ * now that the activity-light sweep (`clearStaleWorkingState`) no longer does —
+ * the conflation fix that lets the dispatch-stall nudge and the dispatch timeout
+ * see silent seats. This predicate does not read `dispatched_at`, so the longer-
+ * lived stamp the conflation fix produces does not change `heldByTeam`'s result.
  */
 export function heldByTeam(p: any, teamSet: Set<string>): boolean {
     return !!p
@@ -392,6 +405,27 @@ interface LocalApiServerOptions {
      * absent in headless/test harnesses (/health then omits the field).
      */
     getRegisteredTerminals?: () => string[];
+    /**
+     * Register an external agent — one running in any local terminal that
+     * Switchboard cannot push into (plain shell, iTerm, tmux pane, editor chat
+     * pane). Writes a `state.terminals` row with `purpose: 'external'`, no
+     * `ideName`, `lastSeen` now. Returns a per-seat token the agent must
+     * present on every subsequent heartbeat and inbox call. Rejects a name
+     * that already resolves in the VS Code registry or the fleet — never
+     * merges into an existing row. See plan
+     * `register-an-agent-in-any-local-terminal.md`.
+     */
+    registerExternalAgent?: (seat: string, role: string, workspaceRoot?: string, cwd?: string) => Promise<{ success: boolean; token?: string; error?: string }>;
+    /**
+     * Refresh `lastSeen` for an external seat. The per-seat token is enforced
+     * route-side, not inherited from loopback trust.
+     */
+    heartbeatExternalAgent?: (seat: string, token: string) => Promise<{ success: boolean; error?: string }>;
+    /**
+     * Return and dequeue pending dispatch items for an external seat. Records
+     * `lastPolled` on each call. The per-seat token is enforced route-side.
+     */
+    getExternalAgentInbox?: (seat: string, token: string) => Promise<{ items: any[]; error?: string }>;
     terminalWsGateway?: any;
     /**
      * Port of the out-of-process Go PTY host, if one owns the fleet.
@@ -12504,6 +12538,105 @@ export class LocalApiServer {
                 await this._handleServeManifest(req, res);
             } else if (pathname.startsWith('/static/') && req.method === 'GET') {
                 await this._handleServeStatic(req, res);
+            } else if (pathname === '/agents/register' && req.method === 'POST') {
+                // Pull-registration: an agent running in any local terminal
+                // registers itself. Switchboard cannot push into it, so it
+                // pulls work via /agents/inbox. Per-seat token is minted here
+                // and enforced on every subsequent call — NOT inherited from
+                // loopback trust, which is always open on the extension host.
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                if (!this._options.registerExternalAgent) {
+                    res.writeHead(501, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'External agent registration not available', reason: 'host did not wire registerExternalAgent' }));
+                    return;
+                }
+                let body: any;
+                try { body = await this._parseJsonBody(req); } catch {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Invalid JSON body' }));
+                    return;
+                }
+                if (!body || typeof body.seat !== 'string' || !body.seat.trim()) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Missing required field: seat' }));
+                    return;
+                }
+                const role = typeof body.role === 'string' ? body.role : 'coder';
+                const workspaceRoot = typeof body.workspaceRoot === 'string' ? body.workspaceRoot : undefined;
+                const cwd = typeof body.cwd === 'string' ? body.cwd : undefined;
+                try {
+                    const result = await this._options.registerExternalAgent(body.seat, role, workspaceRoot, cwd);
+                    if (!result.success) {
+                        res.writeHead(409, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ error: result.error || 'Registration refused' }));
+                        return;
+                    }
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: true, seat: body.seat, token: result.token }));
+                } catch (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Registration failed', reason: err instanceof Error ? err.message : String(err) }));
+                }
+            } else if (pathname === '/agents/heartbeat' && req.method === 'POST') {
+                // Refresh lastSeen for an external seat. Per-seat token
+                // enforced route-side — not inherited from loopback trust.
+                let body: any;
+                try { body = await this._parseJsonBody(req); } catch {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Invalid JSON body' }));
+                    return;
+                }
+                if (!body || typeof body.seat !== 'string' || typeof body.token !== 'string') {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Missing required fields: seat, token' }));
+                    return;
+                }
+                if (!this._options.heartbeatExternalAgent) {
+                    res.writeHead(501, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'External agent heartbeat not available' }));
+                    return;
+                }
+                try {
+                    const result = await this._options.heartbeatExternalAgent(body.seat, body.token);
+                    if (!result.success) {
+                        res.writeHead(401, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ error: result.error || 'Heartbeat rejected' }));
+                        return;
+                    }
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ success: true }));
+                } catch (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Heartbeat failed', reason: err instanceof Error ? err.message : String(err) }));
+                }
+            } else if (pathname === '/agents/inbox' && req.method === 'GET') {
+                // Return and dequeue pending dispatch items for an external
+                // seat. Per-seat token enforced route-side. Records lastPolled.
+                const seat = url.searchParams.get('seat');
+                const token = url.searchParams.get('token') || req.headers['authorization']?.replace(/^Bearer\s+/i, '');
+                if (!seat || !token) {
+                    res.writeHead(400, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Missing required parameters: seat, token' }));
+                    return;
+                }
+                if (!this._options.getExternalAgentInbox) {
+                    res.writeHead(501, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'External agent inbox not available' }));
+                    return;
+                }
+                try {
+                    const result = await this._options.getExternalAgentInbox(seat, token);
+                    if (result.error) {
+                        res.writeHead(401, { 'Content-Type': 'application/json' });
+                        res.end(JSON.stringify({ error: result.error }));
+                        return;
+                    }
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ items: result.items }));
+                } catch (err) {
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({ error: 'Inbox read failed', reason: err instanceof Error ? err.message : String(err) }));
+                }
             } else {
                 res.writeHead(404, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: 'Not found' }));

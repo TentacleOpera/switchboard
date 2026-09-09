@@ -4238,6 +4238,13 @@ Each plan file must include:
             }
             return out;
         },
+        // Pull-registration: external agents in any local terminal.
+        // Wired in the standalone host — the extension host wires its own
+        // twin in TaskViewerProvider._startLocalApiServer. Per the project
+        // rule, both roots must not diverge.
+        registerExternalAgent: async (seat: string, role: string, wsRoot?: string, cwd?: string) => taskViewerProvider?.registerExternalAgent(seat, role, wsRoot, cwd) ?? { success: false, error: 'TaskViewerProvider not available' },
+        heartbeatExternalAgent: async (seat: string, token: string) => taskViewerProvider?.heartbeatExternalAgent(seat, token) ?? { success: false, error: 'TaskViewerProvider not available' },
+        getExternalAgentInbox: async (seat: string, token: string) => taskViewerProvider?.getExternalAgentInbox(seat, token) ?? { items: [], error: 'TaskViewerProvider not available' },
         getSelectedWorkspaceRoot: () => workspaceRoot,
         allRoots: [workspaceRoot],
         getKanbanDatabase: async () => db,
