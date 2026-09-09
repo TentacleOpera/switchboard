@@ -670,6 +670,14 @@
           "description": "How long (ms) a dispatched card may be out with no completion posted before the dispatch-stall nudge fires once for its lead. Default 30 min. Independent of the queue, of seat activity, and of the card's column — the only inputs are dispatched_at, completed_at and a clock. A legitimately long task will trip it; that is acceptable and what the threshold is for. Re-arms on evidence of progress (plan-file mtime advancing or the seat producing output after the nudge), so a card that stalls twice is nudged twice.",
           "scope": "resource"
         },
+        "switchboard.activityLight.dispatchTimeoutMs": {
+          "type": "integer",
+          "default": 14400000,
+          "minimum": 3600000,
+          "maximum": 604800000,
+          "description": "How long (ms) a dispatched card may be out with no completion posted before the dispatch-timeout sweep ends the attempt in a `timed out` state and releases the seat. Default 4 hours — well past the 30-min dispatch-stall nudge (dispatchStallMs), so a human has a long window to act between the nudge and the abandonment. Invariant: dispatchStallMs < dispatchTimeoutMs (the nudge fires before the timeout). The timeout does NOT write completed_at (an abandonment is not a completion) and does NOT retry — a re-dispatch is a human decision. The sole abandonment path that nulls dispatched_at for a live-but-silent seat now that the activity-light sweep (timeoutMs) no longer does.",
+          "scope": "resource"
+        },
         "switchboard.boardStateExport": {
           "type": "string",
           "enum": [
@@ -1170,6 +1178,9 @@
     "uuid": "^9.0.1",
     "ws": "8.21.0",
     "zod": "^3.23.8"
+  },
+  "optionalDependencies": {
+    "libsql": "0.5.29"
   },
   "peerDependenciesMeta": {
     "@mermaid-js/mermaid-cli": {

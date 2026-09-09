@@ -4,6 +4,7 @@ import { createRequire } from 'module';
 import * as os from 'os';
 import * as path from 'path';
 import { ISqliteDriver, ISqliteStatement, BetterSqliteDriver } from './sqliteDriver';
+import { openDriver, resolveStoreTarget, checkLibSqlAvailability } from './storeTarget';
 import { resolveBoardDbPath, resolveArchiveDbPath, getGlobalStoreDir } from './globalStore';
 import { relocateBoardDatabase } from './dbMerge';
 import { resolveCanonicalWorkspaceIdSync } from './WorkspaceIdentityService';
@@ -2057,8 +2058,10 @@ export class KanbanDatabase {
             // Create parent directory
             await fs.promises.mkdir(path.resolve(path.dirname(this._dbPath)), { recursive: true });
 
-            // Initialize SQLite driver with fileMustExist: false to create empty database
-            this._db = new BetterSqliteDriver(this._dbPath, { fileMustExist: false });
+            // Initialize SQLite driver with fileMustExist: false to create empty database.
+            // Uses openDriver for per-target binding resolution: better-sqlite3 for
+            // local-file (default), libsql for configured libSQL targets.
+            this._db = openDriver(this._dbPath, { fileMustExist: false });
             this._db.onMutation(() => {
                 this._dataVersion++;
             });
@@ -7679,7 +7682,7 @@ export class KanbanDatabase {
                 }
                 await fs.promises.mkdir(parentDir, { recursive: true });
 
-                this._db = new BetterSqliteDriver(this._dbPath, { fileMustExist: true });
+                this._db = openDriver(this._dbPath, { fileMustExist: true });
                 this._db.onMutation(() => {
                     this._dataVersion++;
                 });
