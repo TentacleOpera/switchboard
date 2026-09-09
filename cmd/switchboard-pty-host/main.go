@@ -385,7 +385,14 @@ func (f *fleet) handleVerb(verb string, payload map[string]any) (any, error) {
 			rows = append(rows, f.project(t))
 			liveness = append(liveness, map[string]any{"friendlyName": t.name, "lastDataAt": t.lastDataAt, "status": t.status, "role": t.role})
 		}
-		return map[string]any{"success": true, "terminals": rows, "liveness": liveness}, nil
+		return map[string]any{
+			"success":         true,
+			"terminals":       rows,
+			"liveness":        liveness,
+			"workspaceRoot":   f.root,
+			"protocolVersion": ptyhost.ProtocolVersion,
+			"pid":             os.Getpid(),
+		}, nil
 	case "ptyCloseTerminal":
 		name, _ := payload["name"].(string)
 		return map[string]any{"success": f.close(name)}, nil
@@ -493,9 +500,13 @@ func (f *fleet) handleVerb(verb string, payload map[string]any) (any, error) {
 
 func main() {
 	root := "."
-	for i := 1; i+1 < len(os.Args); i++ {
-		if os.Args[i] == "--workspace" {
+	surviveParent := false
+	for i := 1; i < len(os.Args); i++ {
+		if os.Args[i] == "--workspace" && i+1 < len(os.Args) {
 			root = os.Args[i+1]
+			i++
+		} else if os.Args[i] == "--survive-parent" {
+			surviveParent = true
 		}
 	}
 	root, _ = filepath.Abs(root)
@@ -583,30 +594,62 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("%s\n", mustJSON(ptyhost.Ready{T: "ready", Version: ptyhost.ProtocolVersion, Port: listener.Addr().(*net.TCPAddr).Port, Token: f.token}))
+	listenPort := listener.Addr().(*net.TCPAddr).Port
+	startedAt := time.Now().UnixMilli()
+	pid := os.Getpid()
+
+	stateFilePath := filepath.Join(f.root, ".switchboard", "pty-host-state.json")
+	stateFilePayload := map[string]any{
+		"port":            listenPort,
+		"token":           f.token,
+		"protocolVersion": ptyhost.ProtocolVersion,
+		"workspaceRoot":   f.root,
+		"pid":             pid,
+		"startedAt":       startedAt,
+	}
+	if stateBytes, err := json.Marshal(stateFilePayload); err == nil {
+		_ = os.MkdirAll(filepath.Dir(stateFilePath), 0o755)
+		_ = os.WriteFile(stateFilePath, stateBytes, 0o600)
+	}
+
+	cleanStateFile := func() {
+		_ = os.Remove(stateFilePath)
+	}
+
+	fmt.Printf("%s\n", mustJSON(ptyhost.Ready{T: "ready", Version: ptyhost.ProtocolVersion, Port: listenPort, Token: f.token}))
 	_ = os.Stdout.Sync()
 	term := make(chan os.Signal, 1)
 	signal.Notify(term, os.Interrupt, syscall.SIGTERM)
-	go func() { <-term; f.dispose(); _ = server.Close() }()
 	go func() {
-		_, _ = io.Copy(io.Discard, os.Stdin)
+		<-term
+		cleanStateFile()
 		f.dispose()
 		_ = server.Close()
 	}()
-	if runtime.GOOS != "windows" {
-		initialParent := os.Getppid()
+	if !surviveParent {
 		go func() {
-			for {
-				time.Sleep(200 * time.Millisecond)
-				if os.Getppid() != initialParent {
-					f.dispose()
-					_ = server.Close()
-					return
-				}
-			}
+			_, _ = io.Copy(io.Discard, os.Stdin)
+			cleanStateFile()
+			f.dispose()
+			_ = server.Close()
 		}()
+		if runtime.GOOS != "windows" {
+			initialParent := os.Getppid()
+			go func() {
+				for {
+					time.Sleep(200 * time.Millisecond)
+					if os.Getppid() != initialParent {
+						cleanStateFile()
+						f.dispose()
+						_ = server.Close()
+						return
+					}
+				}
+			}()
+		}
 	}
 	if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
+		cleanStateFile()
 		log.Fatal(err)
 	}
 }

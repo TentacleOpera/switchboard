@@ -34,7 +34,7 @@ function usage(): string {
        npx switchboard verb <verbName> [jsonPayload] [--json]
        npx switchboard api <METHOD> <path> [jsonBody] [--json] [--data @<file>] [--timeout <ms>]
        npx switchboard setup [init|scaffold|control-plane] [options]
-       npx switchboard stop
+       npx switchboard stop [--fleet]
        npx switchboard status [--json]
        npx switchboard logs [-f|--follow]
        npx switchboard init [--target <agents|claude|both>] [--workspace <path>]
@@ -1725,8 +1725,15 @@ async function cmdFleet(workspaceRoot: string, argv: string[]): Promise<void> {
             pid: health.pid,
             terminalCount: health.terminalCount ?? 0,
             terminals,
+            ptyHost: (health as any).ptyHost,
         });
         exitFlushed(0);
+    }
+
+    if ((health as any).ptyHost) {
+        const h = (health as any).ptyHost;
+        const statusStr = h.isAdopted ? 'adopted' : 'spawned';
+        console.log(`PTY Host: PID ${h.pid ?? 'unknown'}, port ${h.port ?? 'unknown'} (${statusStr}, surviveBoard=${h.surviveBoard ?? false})`);
     }
 
     if (terminals.length === 0) {
@@ -3792,6 +3799,38 @@ async function main() {
 
     // ── stop ───────────────────────────────────────────────────────
     if (process.argv[2] === 'stop') {
+        const fleetFlag = process.argv.slice(3).includes('--fleet');
+        if (fleetFlag) {
+            const stateFile = path.join(switchboardDir, 'pty-host-state.json');
+            if (!fs.existsSync(stateFile)) {
+                console.log('[switchboard] No PTY host state file found (PTY host is not running or not detached).');
+                process.exit(0);
+            }
+            try {
+                const raw = fs.readFileSync(stateFile, 'utf8');
+                const state = JSON.parse(raw);
+                const ptyPid = state.pid;
+                if (typeof ptyPid === 'number' && ptyPid > 0) {
+                    try {
+                        process.kill(ptyPid, 'SIGTERM');
+                        console.log(`[switchboard] Sent SIGTERM to PTY host (PID ${ptyPid}).`);
+                    } catch (err: any) {
+                        if (err.code !== 'ESRCH') {
+                            console.error(`[switchboard] Failed to signal PTY host PID ${ptyPid}: ${err.message}`);
+                        } else {
+                            console.log(`[switchboard] PTY host PID ${ptyPid} was already dead.`);
+                        }
+                    }
+                }
+                try { fs.unlinkSync(stateFile); } catch { /* ignore */ }
+                console.log('[switchboard] PTY host fleet stopped.');
+                process.exit(0);
+            } catch (err: any) {
+                console.error(`[switchboard] Error stopping fleet from state file: ${err.message}`);
+                process.exit(1);
+            }
+        }
+
         const port = await findRunningInstance(workspaceRoot);
         if (port === null) {
             console.error('[switchboard] No running Switchboard instance found for this workspace.');
@@ -3819,6 +3858,28 @@ async function main() {
         // that predate host identity keep the legacy PID-signalling fallback
         // (explicitly approved for that version range only); the source is
         // reported so the operator can see which path answered.
+        // PID-recycle guard and liveness helpers used by both /shutdown and legacy fallback.
+        const processStartTime = (p: number): string | undefined => {
+            if (process.platform !== 'linux') { return undefined; }
+            try {
+                const stat = fs.readFileSync(`/proc/${p}/stat`, 'utf8');
+                // `comm` (field 2) is parenthesised and may itself contain spaces,
+                // so split only what follows the LAST ')'. That slice starts at
+                // field 3, putting starttime (field 22) at index 19.
+                const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
+                return fields[19];
+            } catch { return undefined; }
+        };
+
+        const isProcessAlive = (p: number): boolean => {
+            try {
+                process.kill(p, 0);
+                return true;
+            } catch (e: any) {
+                return e?.code === 'EPERM';
+            }
+        };
+
         const hostKind = health.host?.kind;
         const shutdownEnabled = health.capabilities?.shutdown?.enabled === true;
         if (hostKind === 'extension') {
@@ -3841,13 +3902,29 @@ async function main() {
                 process.exit(1);
             }
             if (res.status === 200) {
-                // The host scheduled teardown after flushing; give it a moment to
-                // close the listener and unlink the discovery files. The route's
-                // own instance.stop() sequence owns the cleanup; this wait is
-                // only so the CLI does not report success before the port frees.
-                await new Promise(r => setTimeout(r, 500));
-                console.log('[switchboard] Server stopped (source: /shutdown route, host kind standalone).');
-                process.exit(0);
+                const pid = health.pid;
+                const startTimeAtSignal = processStartTime(pid);
+                const deadline = Date.now() + 5000;
+                let stopped = false;
+                while (Date.now() < deadline) {
+                    if (!isProcessAlive(pid)) {
+                        stopped = true;
+                        break;
+                    }
+                    if (startTimeAtSignal !== undefined && processStartTime(pid) !== startTimeAtSignal) {
+                        stopped = true;
+                        break;
+                    }
+                    await new Promise(r => setTimeout(r, 200));
+                }
+                if (stopped || !isProcessAlive(pid) || (startTimeAtSignal !== undefined && processStartTime(pid) !== startTimeAtSignal)) {
+                    console.log('[switchboard] Server stopped (source: /shutdown route, host kind standalone).');
+                    process.exit(0);
+                } else {
+                    console.error(`[switchboard] Server (PID ${pid}, port ${port}) did not exit within 5s after /shutdown.`);
+                    console.error(`[switchboard] The process is still alive. Run \`kill -9 ${pid}\` to force exit.`);
+                    process.exit(1);
+                }
             }
             // 403 / 500: the host refused. Surface the reason verbatim — the
             // route returns structured { error, reason } for every refusal.
@@ -3871,44 +3948,12 @@ async function main() {
         const pid = health.pid;
         console.log(`[switchboard] Stopping server (PID ${pid}, port ${port}) — legacy PID fallback (host reported no identity; source: pid-signal)…`);
 
-        // PID-recycle guard. Liveness (`process.kill(pid, 0)`) tells us a process
-        // with that number exists — NOT that it is still OUR process. The old
-        // code re-probed /health before SIGKILL for exactly this reason; /health
-        // can no longer answer that question, because the listener closes long
-        // before the process dies (that is the bug this command exists to fix).
-        // Linux's `starttime` (field 22 of /proc/<pid>/stat) is the cheap
-        // substitute: it is fixed for the life of a process and changes the
-        // instant the number is reused. Undefined off Linux — there the SIGKILL
-        // escalation keeps its previous, unguarded behaviour.
-        const processStartTime = (p: number): string | undefined => {
-            if (process.platform !== 'linux') { return undefined; }
-            try {
-                const stat = fs.readFileSync(`/proc/${p}/stat`, 'utf8');
-                // `comm` (field 2) is parenthesised and may itself contain spaces,
-                // so split only what follows the LAST ')'. That slice starts at
-                // field 3, putting starttime (field 22) at index 19.
-                const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
-                return fields[19];
-            } catch { return undefined; }
-        };
         const startTimeAtSignal = processStartTime(pid);
 
         try { process.kill(pid, 'SIGTERM'); } catch (err) {
             console.error(`[switchboard] Failed to send SIGTERM to PID ${pid}: ${err instanceof Error ? err.message : String(err)}`);
             process.exit(1);
         }
-
-        // Grace period: the debounced kanban.db persist (300 ms trailing) plus
-        // the export/atomic-rename must complete before a SIGKILL would abandon it.
-        // 5 seconds is conservative — 300 ms debounce + ~50 ms rename + margin.
-        const isProcessAlive = (p: number): boolean => {
-            try {
-                process.kill(p, 0);
-                return true;
-            } catch (e: any) {
-                return e?.code === 'EPERM';
-            }
-        };
 
         const GRACE_MS = 5000;
         const start = Date.now();
@@ -4068,6 +4113,7 @@ async function main() {
             roots: health.roots,
             terminalCount: health.terminalCount ?? 0,
             terminals: health.terminals ?? [],
+            ptyHost: (health as any).ptyHost,
         };
 
         if (jsonFlag) {
@@ -4077,6 +4123,11 @@ async function main() {
             console.log(`  URL:       ${payload.url}`);
             console.log(`  Workspace: ${payload.workspaceRoot}`);
             console.log(`  Terminals: ${payload.terminalCount}`);
+            if (payload.ptyHost) {
+                const h = payload.ptyHost;
+                const statusStr = h.isAdopted ? 'adopted' : 'spawned';
+                console.log(`  PTY Host:  PID ${h.pid ?? 'unknown'}, port ${h.port ?? 'unknown'} (${statusStr}, surviveBoard=${h.surviveBoard ?? false})`);
+            }
         }
         exitFlushed(0);
     }

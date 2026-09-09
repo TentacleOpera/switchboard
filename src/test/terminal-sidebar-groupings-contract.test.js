@@ -618,7 +618,7 @@ test('deleteGroup handles every source and re-seats when the deleted group was l
 });
 
 test('clearGroupLock re-seats the grid instead of only repainting the sidebar', () => {
-    const fn = block(terminalsJs, 'function clearGroupLock() {', 'function saveSelectionAsGroup(');
+    const fn = block(terminalsJs, 'function clearGroupLock() {', 'function toggleTerminalSelection(');
     assert.ok(
         !/if \(!activeGroupId\) \{ return; \}/.test(fn),
         'the early return must be gone — "All" from an already-unlocked state is a legitimate reset-my-composition gesture'
@@ -754,29 +754,17 @@ test('the picker mounts into the owning group container, not a shared node', () 
     assert.ok(/wtDiv\.appendChild\(mountRolePicker/.test(render), 'worktree rows mount their own picker');
 });
 
-// ---------------------------------------------------------------- save / selection
+// ---------------------------------------------------------------- save / selection retired (groups ephemeral via fill grid)
 
-test('saveCurrentAsGroup creates a manual group from current pane members', () => {
-    const fn = block(terminalsJs, 'function saveCurrentAsGroup(', 'function deleteGroup(');
-    assert.ok(
-        fn.includes("source: 'manual'"),
-        'saveCurrentAsGroup must create manual groups'
-    );
-    assert.ok(
-        fn.includes('members: visible'),
-        'saveCurrentAsGroup must store pane members'
-    );
-});
-
-test('multi-select and group-selected affordances exist', () => {
+test('multi-select affordance exists without saveSelectionAsGroup', () => {
     const row = block(terminalsJs, 'function renderSidebarList() {', 'function syncLayoutPickerUI()');
     assert.ok(
         row.includes('selectedTerminalNames.size > 0'),
         'renderSidebarList must detect an active selection'
     );
     assert.ok(
-        row.includes('saveSelectionAsGroup'),
-        'the selection UI must offer saveSelectionAsGroup'
+        !row.includes('saveSelectionAsGroup'),
+        'the selection UI must NOT offer saveSelectionAsGroup (retired)'
     );
 });
 
@@ -808,14 +796,14 @@ test('applyLayoutFloor shows a group-aware shortfall banner', () => {
 
 // ---------------------------------------------------------------- html contracts
 
-test('terminals.html includes the SAVE AS GROUP button', () => {
+test('terminals.html does not include the retired SAVE AS GROUP button', () => {
     assert.ok(
-        terminalsHtml.includes('id="btn-save-group"'),
-        'terminals.html must include the SAVE AS GROUP button'
+        !terminalsHtml.includes('id="btn-save-group"'),
+        'terminals.html must NOT include the SAVE AS GROUP button'
     );
     assert.ok(
-        terminalsHtml.includes('SAVE AS GROUP'),
-        'SAVE AS GROUP button must have visible text'
+        !terminalsHtml.includes('SAVE AS GROUP'),
+        'SAVE AS GROUP button text must be removed'
     );
 });
 

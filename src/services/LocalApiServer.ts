@@ -437,6 +437,20 @@ interface LocalApiServerOptions {
      */
     getPtyHostPort?: () => number | undefined;
     /**
+     * Identity and lifecycle state of the out-of-process PTY host.
+     * Surfaced on GET /health as `ptyHost`. Distinguishes adopted from spawned,
+     * reports pty host pid, uptime, and surviveBoard setting.
+     */
+    getPtyHostIdentity?: () => {
+        adopted: boolean;
+        pid?: number;
+        port?: number;
+        startedAt?: number;
+        uptime?: number;
+        surviveBoard?: boolean;
+        seatCount?: number;
+    } | undefined;
+    /**
      * Authorise a terminal upgrade against the out-of-process PTY host.
      *
      * Given the token the PAGE supplied, return the child's port and the child's
@@ -11848,6 +11862,10 @@ export class LocalApiServer {
                 try {
                     memory = process.memoryUsage();
                 } catch { /* ignore */ }
+                let ptyHost: ReturnType<NonNullable<LocalApiServerOptions['getPtyHostIdentity']>> | undefined;
+                try {
+                    ptyHost = this._options.getPtyHostIdentity?.();
+                } catch { /* health must never fail on a callback error */ }
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({
                     service: 'switchboard',
@@ -11858,6 +11876,7 @@ export class LocalApiServer {
                     ...(terminals !== undefined ? { terminals, terminalCount: terminals.length } : {}),
                     ...(selectedWorkspaceRoot !== undefined ? { selectedWorkspaceRoot } : {}),
                     ...(memory !== undefined ? { memory } : {}),
+                    ...(ptyHost !== undefined ? { ptyHost } : {}),
                     // Host identity + capabilities (plan: go-launcher-static-binary).
                     // Optional — omitted when the composition root did not wire
                     // `hostIdentity`. A launcher that sees neither field MUST

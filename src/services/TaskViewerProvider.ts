@@ -40,6 +40,7 @@ import * as os from 'os';
 import * as crypto from 'crypto';
 import * as https from 'https';
 import { PTY_IDE_NAME, PtyHostSupervisor } from './ptyHostSupervisor';
+import { ManualGroupStore } from './ManualGroupStore';
 import { DEVIN_DEFAULT_TIMEOUT_MS, CLAUDE_DEFAULT_TIMEOUT_MS, ANTIGRAVITY_DEFAULT_TIMEOUT_MS } from '../standalone/clearReadiness';
 import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExternalTeamTemplate, InstantiateAgentGroupResult } from './agentGroupInstantiation';
 // The pure migrators are deliberately NOT imported here: every standing-orders
@@ -47,7 +48,7 @@ import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExtern
 // them and persists the result. Importing them back would re-open the
 // four-site-convention hole the loader closed.
 import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, loadEffectiveStandingOrders, resolveTeamScopedRoleTerminal, resolveTeamMembersForHead, resolveTeamPacingForHead, resolveDefinitionForGroup, plausibleOriginTerminal, terminalsShareTeam, listTeamsInRoots, resolveTeamByIdInRoots, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, teamHeadName, type TerminalGroupsSettingsAccessor } from './teamWiring';
-import { isTmuxAvailable } from '../standalone/tmuxBackend';
+import { isTmuxAvailable, listTmuxSessions, buildTmuxGrid, validateTmuxSessionName } from '../standalone/tmuxBackend';
 import { installReviewerCallbackOrder, removeReviewerCallbackOrder } from './standingOrders';
 import { resolveWorkContext, resolveTeamGroupForTerminal, computeRosterClearTargets, dropDeferredClear, renameDeferredClear } from './workContextResolver';
 import { ORIENTATION_PREAMBLE, waitForSeatQuiescence } from './startupOrientation';
@@ -1772,6 +1773,17 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         this._ptyHostSupervisor = supervisor;
     }
 
+    public getPtyHostSupervisor(): PtyHostSupervisor | undefined {
+        return this._ptyHostSupervisor;
+    }
+
+    public async stopFleet(): Promise<{ stopped: boolean; pid?: number; message?: string }> {
+        if (!this._ptyHostSupervisor) {
+            return { stopped: false, message: 'no fleet supervisor' };
+        }
+        return await this._ptyHostSupervisor.stopFleet();
+    }
+
     public async handleTerminalVerb(verb: string, payload: any, root?: string, signal?: AbortSignal): Promise<any> {
         if (this._handlePtyVerb) {
             return this._handlePtyVerb(verb, payload, root, signal);
@@ -1780,6 +1792,55 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             return this._fleetVerb(verb, payload, signal);
         }
         return this._ptyHostVerb(verb, payload, signal);
+    }
+
+    /**
+     * tmux verbs for the extension host. Shells out to the local `tmux` binary
+     * directly — NOT through the Go PTY host (which has no listing verb; routing
+     * through it would break the standalone/extension parity rule). Mirrors the
+     * standalone arms in bootstrap.ts (tmuxListSessions / tmuxBuildGrid) using the
+     * shared pure functions in tmuxBackend.ts. tmux-derived, registry-free.
+     */
+    private async _handleTmuxVerb(verb: string, payload: any): Promise<any> {
+        try {
+            const available = await isTmuxAvailable();
+            if (!available) {
+                return { success: false, tmuxMissing: true, error: 'tmux is not installed or no tmux server is running' };
+            }
+        } catch {
+            return { success: false, tmuxMissing: true, error: 'tmux is not installed or no tmux server is running' };
+        }
+        if (verb === 'tmuxListSessions') {
+            const teams = await listTmuxSessions();
+            return {
+                success: true,
+                teams: teams.map(t => ({
+                    group: t.group,
+                    baseSession: t.baseSession,
+                    windows: t.windows,
+                    windowCount: t.windows.length,
+                    members: t.members,
+                })),
+            };
+        }
+        if (verb === 'tmuxBuildGrid') {
+            const team = payload?.team;
+            if (typeof team !== 'string' || !team.trim()) {
+                return { success: false, error: 'invalid team: must be a non-empty string' };
+            }
+            try {
+                validateTmuxSessionName(team);
+            } catch (err) {
+                return { success: false, error: err instanceof Error ? err.message : String(err) };
+            }
+            try {
+                const attachCommand = await buildTmuxGrid(team, undefined);
+                return { success: true, attachCommand };
+            } catch (err) {
+                return { success: false, error: err instanceof Error ? err.message : String(err) };
+            }
+        }
+        return { success: false, error: `tmux verb '${verb}' not implemented in extension host` };
     }
 
     /** Real listening port in BOTH hosts. Never a placeholder — it is interpolated
@@ -4169,6 +4230,40 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 const state = await this.getHopFullState(root || effectiveRoot);
                 return { success: true, ...state };
             }
+            if (verb === 'ptyCreateGroup') {
+                const created = await ManualGroupStore.getInstance().create(payload || {});
+                return { success: true, group: created };
+            }
+            if (verb === 'ptyListGroups') {
+                const groups = ManualGroupStore.getInstance().list();
+                return { success: true, groups };
+            }
+            if (verb === 'ptyDeleteGroup') {
+                const ok = await ManualGroupStore.getInstance().delete(payload?.id);
+                return { success: ok };
+            }
+            if (verb === 'ptyAddGroupMember') {
+                const ok = await ManualGroupStore.getInstance().addMember(payload?.groupId, payload?.memberName);
+                return { success: ok };
+            }
+            if (verb === 'ptyRemoveGroupMember') {
+                const res = await ManualGroupStore.getInstance().removeMember(payload?.groupId, payload?.memberName);
+                return { success: res.ok, groupDeleted: res.groupDeleted };
+            }
+            if (verb === 'ptyStopFleet') {
+                return await this.stopFleet();
+            }
+            // ─── tmux verbs (extension host) ──────────────────────────────
+            // The extension host runs tmux locally (the Go PTY host shells out
+            // to tmux via the seat startup command, goPtyFleetProjection.ts:258-
+            // 261), so these verbs shell out to the local `tmux` binary directly
+            // — they do NOT route through the Go PTY host (which has no listing
+            // verb and would create the asymmetry the parity rule forbids).
+            // Wired before the ptyHostReady() guard so a host with no PTY binary
+            // but a live tmux server still serves them, matching standalone.
+            if (verb === 'tmuxListSessions' || verb === 'tmuxBuildGrid') {
+                return await this._handleTmuxVerb(verb, payload);
+            }
             if (!ptyHostReady()) {
                 return { success: false, error: 'PTY host unavailable on this platform/installation' };
             }
@@ -4335,6 +4430,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             }
             let result: any = null;
             result = await this._ptyHostVerb(verb, payload, signal);
+            if (verb === 'ptyCloseTerminal' && payload?.name) {
+                void ManualGroupStore.getInstance().onTerminalExit(payload.name).catch(() => {});
+            }
             if (['ptyCreateTerminal', 'ptyCreateBatch', 'ptyCloseTerminal', 'ptyRenameTerminal'].includes(verb)) {
                 const db = await this._getKanbanDb(root || effectiveRoot);
                 void updateMirrorRegistry(db);
@@ -4538,6 +4636,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return handlePtyVerb(verb, payload, wsRoot, signal);
             },
             allRoots: allRoots,
+            getPtyHostPort: () => this._ptyHostPort ?? this._ptyHostSupervisor?.getReady()?.port,
+            getPtyHostIdentity: () => {
+                if (!this._ptyHostSupervisor) return undefined;
+                const ident = this._ptyHostSupervisor.getIdentity();
+                return {
+                    ...ident,
+                    seatCount: this._ptyTerminalNames?.length,
+                };
+            },
             getRegisteredTerminals: () => {
                 // Live dispatch targets only — a disposed terminal lingers in the
                 // map with exitStatus set and must not count as "registered".

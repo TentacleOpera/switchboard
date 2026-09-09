@@ -96,6 +96,7 @@
             color: var(--text-primary);
             font-family: var(--font-family);
             display: flex;
+            flex-direction: column;
             height: 100vh;
             overflow: hidden;
         }
@@ -2371,7 +2372,6 @@
         body.is-team-scoped #btn-start-team,
         body.is-team-scoped #start-team-form,
         body.is-team-scoped #btn-clear-all,
-        body.is-team-scoped #btn-save-group,
         body.is-team-scoped #btn-link-up {
             display: none !important;
         }
@@ -2388,7 +2388,6 @@
         body.is-controller-scoped #btn-start-team,
         body.is-controller-scoped #start-team-form,
         body.is-controller-scoped #btn-clear-all,
-        body.is-controller-scoped #btn-save-group,
         body.is-controller-scoped #btn-link-up,
         body.is-controller-scoped #btn-team-orders,
         body.is-controller-scoped #btn-team-automations,
@@ -2797,6 +2796,180 @@
             gap: 6px;
             flex-shrink: 0;
         }
+
+        /* ── Panel tabs ─────────────────────────────────────────────────────
+           Inlined per repo convention (tickets.html:30-33 documents the dead
+           shared-tabs.css attempt — every panel inlines its own tab styles).
+           Copied from connections.html:82-121. The Agents tab content is a
+           flex ROW (sidebar + main), so .shared-tab-content.active is overridden
+           to flex-row for the agents pane below; the default block display from
+           the sibling idiom is kept for the tmux pane. */
+        .shared-tab-bar {
+            display: flex;
+            background: #181818;
+            border-bottom: 1px solid var(--border-color);
+            padding: 0 8px;
+            gap: 4px;
+            flex: 0 0 auto;
+        }
+        .shared-tab-btn {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            padding: 8px 12px;
+            font-family: var(--font-family);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+        }
+        .shared-tab-btn:hover:not(.active) { color: var(--text-primary); }
+        .shared-tab-btn.active {
+            color: var(--accent-teal);
+            border-bottom-color: var(--accent-teal);
+        }
+        .shared-tab-content {
+            display: none;
+            flex: 1 1 auto;
+            min-height: 0;
+        }
+        .shared-tab-content.active { display: block; }
+        /* Agents tab holds the existing sidebar + main side by side, so it must
+           be a flex row that fills the remaining height — not the block default. */
+        .shared-tab-content.active[data-tab-content="agents"] {
+            display: flex;
+            flex-direction: row;
+        }
+
+        /* ── tmux tab ────────────────────────────────────────────────────── */
+        .tmux-tab {
+            padding: 16px;
+            overflow-y: auto;
+            color: var(--text-secondary);
+            font-size: 12px;
+            line-height: 1.6;
+            max-width: 760px;
+        }
+        .tmux-tab h2 {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-primary);
+            margin: 0 0 8px;
+            font-weight: 700;
+        }
+        .tmux-section {
+            margin-bottom: 20px;
+            padding: 14px 16px;
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+        }
+        .tmux-toggle-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 4px;
+        }
+        .tmux-toggle-row label { cursor: pointer; color: var(--text-primary); }
+        .tmux-hint {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 6px;
+        }
+        .tmux-empty {
+            color: var(--text-secondary);
+            font-size: 12px;
+            padding: 8px 0;
+        }
+        .tmux-team-row {
+            border: 1px solid var(--border-color);
+            border-left: 3px solid var(--accent-teal);
+            border-radius: 4px;
+            padding: 10px 12px;
+            margin-bottom: 10px;
+            background: var(--panel-bg);
+        }
+        .tmux-team-name {
+            color: var(--text-primary);
+            font-weight: 600;
+            font-size: 12px;
+            margin-bottom: 4px;
+        }
+        .tmux-team-meta {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+        }
+        .tmux-cmd-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 6px;
+        }
+        .tmux-cmd {
+            flex: 1;
+            min-width: 0;
+            font-family: var(--font-code);
+            font-size: 11px;
+            color: var(--accent-teal);
+            background: #111;
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            padding: 6px 8px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .tmux-copy-btn {
+            background: #0e639c;
+            color: #fff;
+            border: none;
+            padding: 6px 10px;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            border-radius: 2px;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        .tmux-copy-btn:hover { background: #1177bb; }
+        .tmux-grid-btn {
+            background: var(--panel-bg2);
+            border: 1px solid var(--accent-teal);
+            color: var(--accent-teal);
+            padding: 6px 10px;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            border-radius: 2px;
+            cursor: pointer;
+            margin-top: 6px;
+        }
+        .tmux-grid-btn:hover { background: color-mix(in srgb, var(--accent-teal) 12%, transparent); }
+        .tmux-grid-btn:disabled { opacity: 0.45; cursor: default; }
+        .tmux-refresh-btn {
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            padding: 4px 10px;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            border-radius: 2px;
+            cursor: pointer;
+        }
+        .tmux-refresh-btn:hover { color: var(--text-primary); border-color: var(--border-bright); }
+        .tmux-note {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 8px;
+            padding: 8px 10px;
+            background: #111;
+            border-left: 2px solid var(--accent-teal);
+            border-radius: 0 3px 3px 0;
+        }
     </style>
 </head>
 <body>
@@ -2834,6 +3007,19 @@
             else if (mode.team) { document.body.classList.add('is-team-scoped'); }
         })();
     </script>
+    <!-- Panel tabs. Inlined idiom (connections.html:308-317). Agents is the
+         default so an operator who never opens the tmux tab sees no change.
+         The bar is hidden in solo/kanban/team-scoped modes (those embed the
+         panel for one terminal, not the full cockpit) — see .is-solo etc. in
+         terminals.js setTerminalsTabBarVisible(). -->
+    <div class="shared-tab-bar" id="terminals-tab-bar" role="tablist">
+        <button class="shared-tab-btn active" data-tab="agents" role="tab" aria-selected="true">Agents</button>
+        <button class="shared-tab-btn" data-tab="tmux" role="tab" aria-selected="false">tmux</button>
+        <button class="shared-tab-btn" data-tab="config" role="tab" aria-selected="false">Config</button>
+    </div>
+    <!-- AGENTS TAB: the existing sidebar + main, unchanged. Wrapped so the
+         tab switch can hide the whole cockpit rather than two halves. -->
+    <div class="shared-tab-content active" data-tab-content="agents" id="agents-tab-content">
     <div class="terminals-sidebar">
         <div class="sidebar-header">
             <span class="sidebar-title">Agents</span>
@@ -2849,14 +3035,8 @@
              Clear All lived in the layout toolbar wearing .btn-layout, where it
              read as a seventh grid option. -->
         <div class="sidebar-ops">
-            <!-- tmux seating. On by default: a session Switchboard creates runs an
-                 agent CLI by construction, so there is no bare shell to dispatch into.
-                 Reads/writes switchboard.terminal.tmux.enabled — an absolute key, which
-                 getSetting/saveSetting only accept since the prefix lock was removed. -->
-            <label class="tmux-toggle" title="Seat agent teams into tmux sessions Switchboard owns, so seats survive a board restart and can be attached from any SSH client">
-                <input type="checkbox" id="tmux-enabled" checked />
-                Enable tmux
-            </label>
+            <!-- tmux seating toggle moved to the tmux tab (one place, not two).
+                 START ALL TEAMS is now the first control here. -->
             <button type="button" id="btn-start-all-teams" class="secondary-btn is-teal w-full"
                     title="Start every defined team in the current workspace (skips teams already running)" hidden>START ALL TEAMS</button>
             <!-- The two are mutually exclusive, toggled by updateTeamStartButtons():
@@ -2890,8 +3070,6 @@
             </form>
             <button type="button" id="btn-clear-all" class="secondary-btn w-full"
                     title="Send /clear to every active terminal">CLEAR ALL TERMINALS</button>
-            <button type="button" id="btn-save-group" class="secondary-btn w-full"
-                    title="Save the current pane arrangement as a named group">SAVE AS GROUP</button>
             <button type="button" id="btn-link-up" class="secondary-btn w-full"
                     title="Instruct one agent terminal to send a message to another">LINK UP</button>
             <button type="button" id="btn-team-orders" class="secondary-btn w-full"
@@ -2963,6 +3141,93 @@
         </div>
         <div id="solo-status" class="solo-status-container" style="display: none;"></div>
         <div id="toast-container" class="toast-container"></div>
+    </div>
+    </div><!-- /agents-tab-content -->
+
+    <!-- TMUX TAB: settings, the live session list, and the copyable commands.
+         Populated by terminals.js (renderTmuxSessions). One row per team, not
+         one per session — a four-seat team is five tmux sessions (a base plus
+         one view per seat) and listing all five reads as a leak. -->
+    <div class="shared-tab-content" data-tab-content="tmux" id="tmux-tab-content">
+        <div class="tmux-tab" id="tmux-tab-body">
+            <div class="tmux-section">
+                <h2>tmux seating</h2>
+                <div class="tmux-toggle-row">
+                    <label class="tmux-toggle" title="Seat agent teams into tmux sessions Switchboard owns, so seats survive a board restart and can be attached from any SSH client">
+                        <input type="checkbox" id="tmux-enabled" checked />
+                        Enable tmux
+                    </label>
+                </div>
+                <div class="tmux-hint">
+                    On by default. Takes effect for teams started after this point — the fleet is constructed at boot, so flipping it does not retro-seat running PTYs.
+                </div>
+            </div>
+
+            <div class="tmux-section">
+                <h2 style="display:flex; align-items:center; justify-content:space-between;">
+                    <span>Running sessions</span>
+                    <button type="button" id="tmux-refresh" class="tmux-refresh-btn" title="Re-read tmux now">Refresh</button>
+                </h2>
+                <div id="tmux-sessions-list">
+                    <div class="tmux-empty">Loading…</div>
+                </div>
+            </div>
+
+            <div class="tmux-section">
+                <h2>Attaching over SSH</h2>
+                <div class="tmux-hint">
+                    A team is one tmux session with a window per seat. Attach to the team (the base session) and cycle windows with <code>prefix n</code>. Per-seat views are created with <code>status off</code> and share their current-window pointer with a board pane, so attaching to one is not offered here.
+                </div>
+            </div>
+
+            <div class="tmux-section">
+                <h2>The 4-up grid</h2>
+                <div class="tmux-hint">
+                    A plain SSH client shows one seat because the team is four <em>windows</em>, not four panes. The grid button builds a separate <code>grid</code> window whose panes nest-attach to each per-seat view, then hands you the attach command.
+                </div>
+                <div class="tmux-note">
+                    Two caveats: nested tmux means two prefixes (<code>Ctrl-b</code> reaches the outer session, <code>Ctrl-b Ctrl-b</code> the inner), and closing the grid window detaches those views without killing the seats.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- CONFIG TAB: Fleet configuration & PTY host persistence controls -->
+    <div class="shared-tab-content" data-tab-content="config" id="config-tab-content">
+        <div class="tmux-tab" id="config-tab-body">
+            <div class="tmux-section">
+                <h2>PTY Fleet Persistence</h2>
+                <div class="tmux-toggle-row">
+                    <label class="tmux-toggle" title="When enabled, the PTY host survives board shutdowns and restarts, keeping seats and CLI processes running. The successor board adopts the live host.">
+                        <input type="checkbox" id="fleet-survive-board" />
+                        PTY host survives board restart
+                    </label>
+                </div>
+                <div class="tmux-hint">
+                    When enabled, closing or restarting the board leaves the background PTY host and all agent seats running. When you restart the board, it automatically reconnects to the existing seats.
+                </div>
+            </div>
+
+            <div class="tmux-section">
+                <h2 style="display:flex; align-items:center; justify-content:space-between;">
+                    <span>PTY Host Status</span>
+                    <button type="button" id="config-refresh" class="tmux-refresh-btn" title="Refresh status">Refresh</button>
+                </h2>
+                <div id="fleet-status-readout" class="tmux-hint" style="margin-top: 8px; font-family: var(--font-code); background: var(--panel-bg); padding: 12px; border: 1px solid var(--border-color); border-radius: 4px; white-space: pre-wrap;">
+                    Checking status...
+                </div>
+            </div>
+
+            <div class="tmux-section">
+                <h2>Stop Fleet</h2>
+                <div class="tmux-hint">
+                    Terminates the PTY host process and all running seats immediately.
+                </div>
+                <div style="margin-top: 10px;">
+                    <button type="button" id="btn-stop-fleet" class="secondary-btn" style="color: var(--state-readonly); border-color: var(--state-readonly);">STOP FLEET</button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Link-up modal. The panel's FIRST modal; shape ported from design.html's

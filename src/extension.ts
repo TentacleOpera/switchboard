@@ -998,9 +998,11 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // 1. REGISTER SIDEBAR (Task Viewer)
     const taskViewerProvider = new TaskViewerProvider(context.extensionUri, context);
+    const surviveBoard = vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.fleet.surviveBoard', false);
     taskViewerProvider.setPtyHostSupervisor(new PtyHostSupervisor({
         installRoot: context.extensionPath,
         workspaceRoot: '',
+        surviveBoard,
         onDiagnostic: message => outputChannel?.appendLine(message),
     }));
     // Editor-event subscriptions + the pairProgramming config read. Used to run at
@@ -1193,10 +1195,14 @@ export async function activate(context: vscode.ExtensionContext) {
     const disposeAllGridTerminalsDisposable = vscode.commands.registerCommand('switchboard.disposeAllGridTerminals', async () => {
         await disposeAllGridTerminals();
     });
+    const stopFleetDisposable = vscode.commands.registerCommand('switchboard.stopFleet', async () => {
+        await taskViewerProvider.stopFleet();
+    });
     context.subscriptions.push(createAgentGridDisposable);
     context.subscriptions.push(createAgentGridEditorDisposable);
     context.subscriptions.push(openTerminalGridDisposable);
     context.subscriptions.push(disposeAllGridTerminalsDisposable);
+    context.subscriptions.push(stopFleetDisposable);
 
     // Kanban Board
     const setupPanelProvider = new SetupPanelProvider(context.extensionUri);

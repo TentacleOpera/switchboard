@@ -124,9 +124,13 @@ import { __setStandaloneWorkspaceRoot, createStandaloneSecretStorage } from './v
 import { isLoopbackHostname, resolveDisplayHostname, isAllowedHostFor, isTailnetPolicy, LOOPBACK_ONLY_POLICY, type BindPolicy } from '../utils/loopbackHostname';
 import { setBundledCliPath, setGoClientPath, resolveGoClientPath } from '../utils/cliPathToken';
 import { PtyHostSupervisor } from '../services/ptyHostSupervisor';
+import { ManualGroupStore } from '../services/ManualGroupStore';
 import {
     isTmuxAvailable,
     listTmuxPanes,
+    listTmuxSessions,
+    buildTmuxGrid,
+    validateTmuxSessionName,
     TmuxTerminalBackend,
     TMUX_IDE_NAME,
     type TmuxSocket,
@@ -204,6 +208,57 @@ export interface HeadlessSwitchboardInstance {
      */
     usingDurableToken: boolean;
     stop: () => Promise<void>;
+}
+
+let teardownStarted = false;
+
+async function teardownAndExit(
+    opts: HeadlessSwitchboardOptions | undefined,
+    instance: { stop: () => Promise<void> },
+    reason: string,
+): Promise<void> {
+    if (teardownStarted) { return; }
+    teardownStarted = true;
+
+    log(opts, `Shutdown initiated (${reason}), beginning cleanup...`);
+    if (reason === '/shutdown' && opts?.workspaceRoot) {
+        try {
+            await ManualGroupStore.getInstance().saveSidecar(opts.workspaceRoot);
+            log(opts, 'Manual groups sidecar saved.');
+        } catch (e) {
+            log(opts, `Failed to save manual groups sidecar: ${e}`);
+        }
+    }
+    const BOUNDED_EXIT_MS = 5000;
+    const forceExitTimer = setTimeout(() => {
+        log(opts, `Shutdown timed out after ${BOUNDED_EXIT_MS}ms — forcing exit.`);
+        try {
+            const getResources = (process as any).getActiveResourcesInfo;
+            if (typeof getResources === 'function') {
+                const res = getResources.call(process);
+                log(opts, `Surviving handles at forced exit (${res.length}): ${JSON.stringify(res)}`);
+            }
+        } catch { /* ignore */ }
+        process.exit(0);
+    }, BOUNDED_EXIT_MS);
+    forceExitTimer.unref();
+
+    try {
+        await instance.stop();
+    } catch (e) {
+        log(opts, `instance.stop() threw: ${e}`);
+    }
+
+    try {
+        const getResources = (process as any).getActiveResourcesInfo;
+        if (typeof getResources === 'function') {
+            const res = getResources.call(process);
+            log(opts, `Surviving handles after graceful stop (${res.length}): ${JSON.stringify(res)}`);
+        }
+    } catch { /* ignore */ }
+
+    clearTimeout(forceExitTimer);
+    process.exit(0);
 }
 
 function log(opts: HeadlessSwitchboardOptions | undefined, ...args: any[]) {
@@ -1471,9 +1526,11 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // written from the shared kanban.html webview each host serves. No host-specific
     // wiring is required for the team field.
     taskViewerProvider.suppressLocalApiServer = true;
+    const surviveBoard = configProvider.getConfigBoolean('terminal.fleet.surviveBoard', false);
     const ptyHostSupervisor = new PtyHostSupervisor({
         installRoot: repoRoot,
         workspaceRoot,
+        surviveBoard,
         onDiagnostic: message => log(opts, message),
     });
     taskViewerProvider.setPtyHostSupervisor(ptyHostSupervisor);
@@ -2267,7 +2324,37 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // outlive it and hand a phantom clear to the next seat that takes
                     // the name.
                     dropDeferredClear(deferredClearsByTeam, payload.name);
+                    void ManualGroupStore.getInstance().onTerminalExit(payload.name).catch(() => {});
                     return { success: ok };
+                }
+
+                case 'ptyCreateGroup': {
+                    const created = await ManualGroupStore.getInstance().create(payload || {});
+                    return { success: true, group: created };
+                }
+
+                case 'ptyListGroups': {
+                    const groups = ManualGroupStore.getInstance().list();
+                    return { success: true, groups };
+                }
+
+                case 'ptyDeleteGroup': {
+                    const ok = await ManualGroupStore.getInstance().delete(payload.id);
+                    return { success: ok };
+                }
+
+                case 'ptyAddGroupMember': {
+                    const ok = await ManualGroupStore.getInstance().addMember(payload.groupId, payload.memberName);
+                    return { success: ok };
+                }
+
+                case 'ptyRemoveGroupMember': {
+                    const res = await ManualGroupStore.getInstance().removeMember(payload.groupId, payload.memberName);
+                    return { success: res.ok, groupDeleted: res.groupDeleted };
+                }
+
+                case 'ptyStopFleet': {
+                    return await ptyHostSupervisor.stopFleet();
                 }
 
                 case 'ptyListTerminals': {
@@ -3522,6 +3609,58 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     return { success: true, cleared: true };
                 }
 
+                case 'tmuxListSessions': {
+                    // tmux-derived, registry-free. The registry records what the
+                    // board believes; this list shows what is true. Gated on
+                    // tmuxReady at the terminalVerb entry point (above).
+                    if (!tmuxReady) {
+                        return { success: false, error: 'tmux bridge is not available' };
+                    }
+                    try {
+                        const available = await isTmuxAvailable(tmuxSocket);
+                        if (!available) {
+                            return { success: false, tmuxMissing: true, error: 'tmux is not installed or no tmux server is running' };
+                        }
+                    } catch {
+                        return { success: false, tmuxMissing: true, error: 'tmux is not installed or no tmux server is running' };
+                    }
+                    const teams = await listTmuxSessions(tmuxSocket);
+                    return {
+                        success: true,
+                        teams: teams.map(t => ({
+                            group: t.group,
+                            baseSession: t.baseSession,
+                            windows: t.windows,
+                            windowCount: t.windows.length,
+                            members: t.members,
+                        })),
+                    };
+                }
+
+                case 'tmuxBuildGrid': {
+                    // Builds the 4-up grid window on a team session. The team
+                    // name reaches tmux argv, so it is validated against the
+                    // deriveTmuxSessionName charset before any interpolation.
+                    if (!tmuxReady) {
+                        return { success: false, error: 'tmux bridge is not available' };
+                    }
+                    const team = payload?.team;
+                    if (typeof team !== 'string' || !team.trim()) {
+                        return { success: false, error: 'invalid team: must be a non-empty string' };
+                    }
+                    try {
+                        validateTmuxSessionName(team);
+                    } catch (err) {
+                        return { success: false, error: err instanceof Error ? err.message : String(err) };
+                    }
+                    try {
+                        const attachCommand = await buildTmuxGrid(team, undefined, tmuxSocket);
+                        return { success: true, attachCommand };
+                    } catch (err) {
+                        return { success: false, error: err instanceof Error ? err.message : String(err) };
+                    }
+                }
+
                 default:
                     return { success: false, error: `PTY verb '${verb}' not implemented in standalone mode` };
         }
@@ -3754,7 +3893,10 @@ Each plan file must include:
     // leading-edge debounce would drop the first create's push — the one the
     // operator is waiting for.
     let terminalsChangedPushTimer: NodeJS.Timeout | null = null;
-    ptyFleetService.onDidChange(() => {
+    ptyFleetService.onDidChange((e: any) => {
+        if (e && e.type === 'closed' && e.name) {
+            void ManualGroupStore.getInstance().onTerminalExit(e.name).catch(() => {});
+        }
         if (terminalsChangedPushTimer) { clearTimeout(terminalsChangedPushTimer); }
         terminalsChangedPushTimer = setTimeout(() => {
             terminalsChangedPushTimer = null;
@@ -4817,6 +4959,14 @@ Each plan file must include:
         // board's origin — and therefore its tailnet listener. Resolved per call,
         // not captured: the child restarts on its own and takes a new port with it.
         getPtyHostPort: () => ptyHostSupervisor?.getReady()?.port,
+        getPtyHostIdentity: () => {
+            if (!ptyHostSupervisor) return undefined;
+            const ident = ptyHostSupervisor.getIdentity();
+            return {
+                ...ident,
+                seatCount: ptyFleetService?.listActive()?.length,
+            };
+        },
         // Validate the page's token, hand back the CHILD's. The Go host mints its
         // own credential at boot (PtyHostReady.terminalToken) which is not the one
         // the page carries, so forwarding the page's token verbatim 401s forever.
@@ -4986,6 +5136,18 @@ Each plan file must include:
         log(opts, `remote reconcile on startup failed: ${e}`);
     }
 
+    // Restore manual groups from sidecar intersected with live adopted fleet.
+    // Ordering: after ptyFleetService is up and reconciled so adoption probe has completed.
+    try {
+        const liveNames = ptyFleetService.listActive().map(t => t.friendlyName);
+        const restoredGroups = await ManualGroupStore.getInstance().restoreSidecar(workspaceRoot, liveNames);
+        if (restoredGroups.length > 0) {
+            log(opts, `Restored ${restoredGroups.length} manual group(s) from sidecar.`);
+        }
+    } catch (e) {
+        log(opts, `Manual groups sidecar restore failed: ${e}`);
+    }
+
     // Restore Mission Control state and re-arm the survivor scheduler timer — the
     // one recurring dispatcher, and the engine behind both sanctioned scheduling
     // surfaces (team automations, Mission Control Schedules). Deliberately AFTER
@@ -5023,7 +5185,9 @@ Each plan file must include:
         usingDurableToken,
         stop: async () => {
             try { tmuxReconcilePoll.stop(); } catch { /* ignore */ }
-            try { await ptyFleetService.disposeAll(); } catch { /* ignore */ }
+            if (!surviveBoard) {
+                try { await ptyFleetService.disposeAll(); } catch { /* ignore */ }
+            }
             try { ingestionEngine.dispose(); } catch { /* ignore */ }
             try { (designProvider as any).dispose?.(); } catch { /* ignore */ }
             try { (setupProvider as any).dispose?.(); } catch { /* ignore */ }
@@ -5039,46 +5203,18 @@ Each plan file must include:
     // Wire the shutdown holder NOW that `instance` exists. The LocalApiServer
     // options object captured `instanceStopRef` by reference at construction
     // time; this assignment is what makes the loopback `/shutdown` route's
-    // callback actually run teardown. Without it the callback's truthiness
+    // callback actually run teardown and exit. Without it the callback's truthiness
     // guard fires and the after-the-fact error log traces the wiring bug.
-    instanceStopRef = instance.stop;
+    instanceStopRef = async () => {
+        await teardownAndExit(opts, instance, '/shutdown');
+    };
 
     const syncUnlinkPortFile = () => {
         try { if (fs.existsSync(portFile)) fs.unlinkSync(portFile); } catch { /* ignore */ }
         try { if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile); } catch { /* ignore */ }
     };
     const signalCleanup = async () => {
-        log(opts, 'Shutdown signal received, beginning cleanup...');
-        const BOUNDED_EXIT_MS = 5000;
-        const forceExitTimer = setTimeout(() => {
-            log(opts, `Shutdown timed out after ${BOUNDED_EXIT_MS}ms — forcing exit.`);
-            try {
-                const getResources = (process as any).getActiveResourcesInfo;
-                if (typeof getResources === 'function') {
-                    const res = getResources.call(process);
-                    log(opts, `Surviving handles at forced exit (${res.length}): ${JSON.stringify(res)}`);
-                }
-            } catch { /* ignore */ }
-            process.exit(0);
-        }, BOUNDED_EXIT_MS);
-        forceExitTimer.unref();
-
-        try {
-            await instance.stop();
-        } catch (e) {
-            log(opts, `instance.stop() threw: ${e}`);
-        }
-
-        try {
-            const getResources = (process as any).getActiveResourcesInfo;
-            if (typeof getResources === 'function') {
-                const res = getResources.call(process);
-                log(opts, `Surviving handles after graceful stop (${res.length}): ${JSON.stringify(res)}`);
-            }
-        } catch { /* ignore */ }
-
-        clearTimeout(forceExitTimer);
-        process.exit(0);
+        await teardownAndExit(opts, instance, 'signal');
     };
     process.once('SIGINT', signalCleanup);
     process.once('SIGTERM', signalCleanup);

@@ -626,8 +626,8 @@ const TERMINALS_GROUPS_BARE_IMPORTED_KEY = 'switchboard.prompts.terminals.groups
 /**
  * Flag existing team groups in the terminals.groups array with `teamGroup: true`.
  * Team groups have IDs starting with 'team_' (from wireSpawnedTeam's groupId
- * derivation). Manual groups use 'grp_' prefix (hardcoded, not user-editable),
- * so prefix collision is impossible.
+ * derivation). Manual groups (`grp_`) are ephemeral in-memory session state
+ * and do not live in this durable store.
  *
  * Returns `null` when nothing changed (already fully flagged), so the caller
  * does not write. Returns the converted array otherwise.
@@ -707,8 +707,14 @@ export async function mutateTerminalGroups(
             current = migrated;
         }
 
+        // Migration: manual groups (`grp_`) are ephemeral in-memory session state,
+        // never stored in the durable config DB alongside teams. Filter out any
+        // legacy `grp_` rows on read.
+        current = current.filter((g: any) => !g?.id || typeof g.id !== 'string' || !g.id.startsWith('grp_'));
+
         const next = await transform(current);
-        const validated = Array.isArray(next) ? next : [];
+        const validated = (Array.isArray(next) ? next : [])
+            .filter((g: any) => !g?.id || typeof g.id !== 'string' || !g.id.startsWith('grp_'));
 
         if (settings) {
             await settings.set(TERMINALS_GROUPS_KEY, validated);
@@ -771,48 +777,37 @@ const AGENT_GROUPS_CONFIG_KEY = 'terminals.agentGroups';
 /**
  * The three default team definitions.
  * Rail order is array order: Planning team, Coding team (Lead team), Review team.
- * All three are member-less: starting a team without members starts only its head.
+ * Each team ships with the members its head actually hands out: a planner pool,
+ * a coder pool, and a reviewer pool. A team is a head *and its seats*.
  */
 export const DEFAULT_TEAM_DEFINITIONS: any[] = [
     {
         id: 'planning-team',
         name: 'Planning team',
         headRole: 'planner',
-        members: [],
+        members: [
+            { role: 'planner', count: 2, label: '', startupCommand: '' },
+        ],
     },
     {
         id: 'feature-implementation',
         name: 'Lead team',
         headRole: 'lead',
-        members: [],
+        members: [
+            { role: 'coder', count: 3, label: '', startupCommand: '' },
+        ],
     },
     {
         id: 'review-team',
         name: 'Review team',
         headRole: 'reviewer',
-        members: [],
+        members: [
+            { role: 'reviewer', count: 2, label: '', startupCommand: '' },
+        ],
     },
 ];
 
 export const SEEDED_AGENT_GROUP: any = DEFAULT_TEAM_DEFINITIONS[1];
-
-/**
- * The OLD seed value, preserved verbatim for the migration comparison.
- *
- * Every install that opened the AGENTS tab before this change has this
- * exact row persisted on disk. After auto-start, that row would spawn
- * three unrequested coder agent CLIs per lead — the release gate this
- * migration exists to close. The converter identifies an untouched old
- * seed by exact-value comparison against this constant (no marker, no
- * new state) and neutralises it by clearing its members. A group that
- * differs by any field is the operator's and is left alone.
- */
-const OLD_SEEDED_AGENT_GROUP: any = {
-    id: 'feature-implementation',
-    name: 'Feature Implementation',
-    headRole: 'lead',
-    members: [{ role: 'coder', count: 3, label: '', startupCommand: '' }],
-};
 
 /**
  * Durable commit instruction appended to every team-head standing order.
@@ -917,16 +912,12 @@ export const NEW_REVIEW_TEAM_HEAD_PROMPT =
  * path that can trigger auto-start, so it is impossible for the
  * auto-start trigger to observe un-migrated data.
  *
- * Three steps, one pass:
- *  1. Neutralise an untouched old seed (exact-value match against
- *     OLD_SEEDED_AGENT_GROUP) by clearing its members. This is the
- *     release gate: without it, the old three-coder seed would spawn
- *     three unrequested agent CLIs per lead on every upgraded install.
- *  2. Add `scope: 'per-team'` and `relationship: 'reports-to-head'`
- *     defaults to every member that lacks them — the final member shape
- *     from the previous subtask. Preserves `label`, `startupCommand`
- *     and any unknown keys on each member.
- *  3. Resolve head-role collisions: the first group by stored order
+ * Two steps, one pass:
+ *  1. Add `scope: 'per-team'` and `relationship: 'reports-to-head'`
+ *     defaults to every member that lacks them — the final member shape.
+ *     Preserves `label`, `startupCommand` and any unknown keys on each
+ *     member.
+ *  2. Resolve head-role collisions: the first group by stored order
  *     keeps its head role and becomes active; subsequent groups with
  *     the same head role are marked `unassigned: true` with a note
  *     naming the claimer. Non-destructive — nothing is deleted.
@@ -940,10 +931,9 @@ export const NEW_REVIEW_TEAM_HEAD_PROMPT =
  */
 export function migrateAgentGroups(groups: any[]): any[] | null {
     let changed = false;
-    const oldSeed = OLD_SEEDED_AGENT_GROUP;
     const next: any[] = [];
 
-    // ── Step 1+2: neutralise old seed, convert member shape ──────────
+    // ── Step 1: convert member shape ─────────────────────────────────
     for (const group of groups) {
         if (!group || typeof group !== 'object') {
             // Defensive: skip non-object entries rather than dropping them.
@@ -953,22 +943,6 @@ export function migrateAgentGroups(groups: any[]): any[] | null {
 
         let g = { ...group };
 
-        // Step 1: exact-value comparison against the old seed.
-        if (isUntouchedOldSeed(g, oldSeed)) {
-            // Neutralise: clear members, update name to the new seed's name.
-            g = {
-                ...g,
-                name: SEEDED_AGENT_GROUP.name,
-                members: [],
-            };
-            changed = true;
-            console.log(
-                `[teamWiring] Migration: neutralised untouched old seed `
-                + `'${g.id}' (was 3× coder, now member-less Lead team).`
-            );
-        }
-
-        // Step 2: convert member shape — add scope/relationship defaults.
         // A missing or non-array `members` is a REPAIR, so flag it here: the
         // `.map` below always produces a new array, which means a later
         // `!Array.isArray(g.members)` test can never fire (it was dead code)
@@ -999,7 +973,7 @@ export function migrateAgentGroups(groups: any[]): any[] | null {
         next.push(g);
     }
 
-    // ── Step 3: resolve head-role collisions ─────────────────────────
+    // ── Step 2: resolve head-role collisions ────────────────────────
     // The first group by stored order keeps its head role and becomes the
     // auto-start default; subsequent groups with the same head role are
     // marked unassigned. Non-destructive: nothing is deleted. An unassigned
@@ -1128,40 +1102,6 @@ export function importDelegatesIntoTeams(
 }
 
 /**
- * Exact-value comparison against the old shipped seed. A group that
- * matches every field has demonstrably never been edited by the operator.
- * A group that differs by any field — a renamed group, a different count,
- * an added member, an edited startupCommand — is the operator's and must
- * be left alone.
- */
-function isUntouchedOldSeed(group: any, oldSeed: any): boolean {
-    if (group.id !== oldSeed.id) { return false; }
-    if (group.name !== oldSeed.name) { return false; }
-    if (group.headRole !== oldSeed.headRole) { return false; }
-    const members = group.members;
-    if (!Array.isArray(members) || members.length !== oldSeed.members.length) { return false; }
-    for (let i = 0; i < members.length; i++) {
-        const m = members[i];
-        const om = oldSeed.members[i];
-        if (!m || m.role !== om.role || m.count !== om.count) { return false; }
-        // label and startupCommand must be empty string (the shipped defaults).
-        if ((m.label || '') !== (om.label || '')) { return false; }
-        if ((m.startupCommand || '') !== (om.startupCommand || '')) { return false; }
-        // Any extra keys on the member mean it was edited.
-        const mKeys = Object.keys(m).sort().join(',');
-        const omKeys = Object.keys(om).sort().join(',');
-        if (mKeys !== omKeys) { return false; }
-    }
-    // Check for extra keys on the group itself (e.g. scope, relationship
-    // already added by a prior partial migration — those mean it was
-    // touched, even if the member matched).
-    const gKeys = Object.keys(group).filter(k => k !== 'members').sort().join(',');
-    const osKeys = Object.keys(oldSeed).filter(k => k !== 'members').sort().join(',');
-    if (gKeys !== osKeys) { return false; }
-    return true;
-}
-
-/**
  * Look up a team definition whose `headRole` matches the given role.
  *
  * Returns the first match or null. One team per head role is the constraint
@@ -1181,13 +1121,13 @@ export async function findTeamForHeadRole(db: any, headRole: string): Promise<an
     try {
         const groups = await db.getConfigJson(AGENT_GROUPS_CONFIG_KEY, []) as any[];
         if (!Array.isArray(groups)) { return null; }
-        // Run the converter in-memory before matching. This is the fix
-        // for the release-gate defect: without it, an install that upgrades
-        // and starts a lead without opening the TEAMS tab first would match
-        // the un-migrated three-coder old seed and spawn three unrequested
-        // agent CLIs. The converter is idempotent and returns null when
-        // nothing changed, so the steady-state cost is one comparison per
-        // lookup and no write.
+        // Run the converter in-memory before matching so the auto-start
+        // trigger never observes un-migrated data — even on an install that
+        // has never opened the TEAMS tab in the current session. The
+        // converter adds member-shape defaults (scope/relationship) and
+        // resolves head-role collisions; it is idempotent and returns null
+        // when nothing changed, so the steady-state cost is one comparison
+        // per lookup and no write.
         const converted = migrateAgentGroups(groups) ?? groups;
         // Skip unassigned teams — a head-role collision is resolved by the
         // migration marking the loser `unassigned: true`. An unassigned team
@@ -1209,11 +1149,14 @@ export async function findTeamForHeadRole(db: any, headRole: string): Promise<an
  * a silent cross-workspace spawn is a worse failure than no spawn at all.
  *
  * NOTE for the caller: a member-less claim is a REAL outcome, not an
- * almost-miss. `_loadAgentGroups` seeds `SEEDED_AGENT_GROUP` — `headRole:
- * 'lead'`, `members: []` — into any workspace whose TEAMS tab is opened, so a
- * `{ team, root }` with zero members is common and must be reported
- * distinctly from `null`. Collapsing the two is the bug that made the original
- * failure invisible.
+ * almost-miss. An operator can build a custom team with a head and no
+ * seats (deliberately opting out of the pool), so a `{ team, root }` with
+ * zero members is a legitimate answer and must be reported distinctly
+ * from `null`. Collapsing the two is the bug that made the original
+ * failure invisible. The shipped presets are NOT member-less — they
+ * carry their pools — so a zero-member result on a preset is unexpected
+ * and worth investigating, but the predicate must still distinguish it
+ * from `null`.
  *
  * Returns the match and the root it came from, so the caller can log WHICH
  * workspace answered. Never throws: a root whose DB is unavailable is skipped.
@@ -1365,18 +1308,36 @@ export async function resolveDefinitionForGroup(db: any, g: any): Promise<any | 
 
 /**
  * True when a group is byte-for-byte the shipped starter (`SEEDED_AGENT_GROUP`)
- * — id, name, headRole, an empty members array, and no extra keys. Exact-value,
- * never heuristic: an operator-authored member-less team differs by at least one
- * field and must NOT match. Same construction as isUntouchedOldSeed above.
+ * — id, name, headRole, the seeded member array (3 × coder), and no extra keys.
+ * Exact-value, never heuristic: an operator-authored team differs by at least
+ * one field (a renamed group, a different count, an added/edited member, an
+ * extra key) and must NOT match. A group that matches every field has
+ * demonstrably never been edited by the operator.
  */
 export function isUntouchedSeed(group: any): boolean {
     if (!group || typeof group !== 'object') { return false; }
     if (group.id !== SEEDED_AGENT_GROUP.id) { return false; }
     if (group.name !== SEEDED_AGENT_GROUP.name) { return false; }
     if (group.headRole !== SEEDED_AGENT_GROUP.headRole) { return false; }
-    if (!Array.isArray(group.members) || group.members.length !== 0) { return false; }
-    const gKeys = Object.keys(group).sort().join(',');
-    const sKeys = Object.keys(SEEDED_AGENT_GROUP).sort().join(',');
+    const members = group.members;
+    const seedMembers = SEEDED_AGENT_GROUP.members;
+    if (!Array.isArray(members) || members.length !== seedMembers.length) { return false; }
+    for (let i = 0; i < members.length; i++) {
+        const m = members[i];
+        const sm = seedMembers[i];
+        if (!m || m.role !== sm.role || m.count !== sm.count) { return false; }
+        if ((m.label || '') !== (sm.label || '')) { return false; }
+        if ((m.startupCommand || '') !== (sm.startupCommand || '')) { return false; }
+        // Any extra keys on the member mean it was edited.
+        const mKeys = Object.keys(m).sort().join(',');
+        const smKeys = Object.keys(sm).sort().join(',');
+        if (mKeys !== smKeys) { return false; }
+    }
+    // Check for extra keys on the group itself (e.g. scope, relationship
+    // already added by a prior partial migration — those mean it was
+    // touched, even if the members matched).
+    const gKeys = Object.keys(group).filter(k => k !== 'members').sort().join(',');
+    const sKeys = Object.keys(SEEDED_AGENT_GROUP).filter(k => k !== 'members').sort().join(',');
     return gKeys === sKeys;
 }
 

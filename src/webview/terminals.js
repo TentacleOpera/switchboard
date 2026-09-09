@@ -102,7 +102,24 @@
     // derived groups (role / worktree) compute membership live from fleetList. A group
     // carries an optional desired layout and a member order used to choose what renders
     // when the pane-size floor leaves fewer slots than members.
-    let terminalGroups = []; // [{ id, name, source, value?, layout, members, order }]
+    let terminalGroups = []; // [{ id, name, source, value?, layout, members, order }] durable teams
+    let manualGroups = [];   // [{ id, name, source: 'manual', layout, members, order }] ephemeral host in-memory groups
+
+    async function fetchManualGroups() {
+        try {
+            const res = await fetch('/terminals/verb/ptyListGroups', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            });
+            if (res.ok) {
+                const data = await res.json();
+                if (data && Array.isArray(data.groups)) {
+                    manualGroups = data.groups;
+                }
+            }
+        } catch { /* ignore */ }
+    }
     let lastReadGroupIds = []; // ids of terminal groups as last read from backend
     let activeGroupId = null; // which group is currently locked, or null for "composing"
 
@@ -119,7 +136,7 @@
      */
     function activeGroupName() {
         if (teamScopeId || !activeGroupId) { return undefined; }
-        const g = terminalGroups.find(x => x && x.id === activeGroupId);
+        const g = terminalGroups.find(x => x && x.id === activeGroupId) || manualGroups.find(x => x && x.id === activeGroupId);
         return (g && g.name) || undefined;
     }
     let activeGroupPage = 0; // transient: which page of the active group is showing
@@ -473,6 +490,188 @@
     }
 
 
+    // ── tmux tab ──────────────────────────────────────────────────────────
+    // Fetched from `tmuxListSessions` (a tmux-derived, registry-free read —
+    // the registry records what the board believes; the point is what is true).
+    // One row per team (grouped by session_group), with the base session flagged
+    // as the only safe attach point. Per-seat views are hidden (status off +
+    // shared current-window pointer — see plan §4).
+    let _tmuxSessionsCache = null;
+
+    async function fetchTmuxSessions() {
+        try {
+            const res = await fetch('/terminals/verb/tmuxListSessions', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            });
+            if (!res.ok) { return { success: false, error: `HTTP ${res.status}` }; }
+            return await res.json();
+        } catch (err) {
+            return { success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+    }
+
+    function escapeHtml(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '\u0026amp;')
+            .replace(/</g, '\u0026lt;')
+            .replace(/>/g, '\u0026gt;')
+            .replace(/"/g, '\u0026quot;')
+            .replace(/'/g, '\u0026#39;');
+    }
+
+    function copyToClipboard(text) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).catch(() => {});
+        } else {
+            // Fallback for the standalone browser host where the async clipboard
+            // API may be unavailable over plain HTTP.
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            try { document.execCommand('copy'); } catch { /* ignore */ }
+            document.body.removeChild(ta);
+        }
+    }
+
+    function renderTmuxSessions(data) {
+        const list = document.getElementById('tmux-sessions-list');
+        if (!list) { return; }
+        if (!data || data.success === false) {
+            const toggle = document.getElementById('tmux-enabled');
+            const enabled = toggle ? toggle.checked : true;
+            if (!enabled) {
+                list.innerHTML = '<div class="tmux-empty">tmux seating is off. Turn it on above to seat agent teams into tmux sessions Switchboard owns.</div>';
+            } else if (data && data.tmuxMissing) {
+                list.innerHTML = '<div class="tmux-empty">tmux is not installed (or no tmux server is running). Install tmux and start a team to see sessions here.</div>';
+            } else {
+                list.innerHTML = '<div class="tmux-empty">Could not read tmux sessions' + (data && data.error ? ': ' + escapeHtml(data.error) : '') + '.</div>';
+            }
+            return;
+        }
+        const teams = Array.isArray(data.teams) ? data.teams : [];
+        if (teams.length === 0) {
+            list.innerHTML = '<div class="tmux-empty">No board-owned tmux sessions running. Start a team from the Agents tab to seat one.</div>';
+            return;
+        }
+        const rows = teams.map(team => {
+            const base = team.baseSession || team.group;
+            const hasBase = !!base;
+            const attachCmd = hasBase ? `tmux attach -t ${base}` : '';
+            const killCmd = hasBase ? `tmux kill-session -t ${base}` : '';
+            const seatCount = typeof team.windowCount === 'number' ? team.windowCount : (Array.isArray(team.windows) ? team.windows.length : 0);
+            const baseNote = !hasBase
+                ? '<div class="tmux-hint">Base session could not be identified (session predates grouping). Attach by team name at your own judgement.</div>'
+                : '';
+            const attachRow = hasBase ? `
+                <div class="tmux-cmd-row">
+                    <code class="tmux-cmd" title="${escapeHtml(attachCmd)}">${escapeHtml(attachCmd)}</code>
+                    <button type="button" class="tmux-copy-btn" data-copy="${escapeHtml(attachCmd)}">Copy</button>
+                </div>` : '';
+            const killRow = hasBase ? `
+                <div class="tmux-cmd-row">
+                    <code class="tmux-cmd" title="${escapeHtml(killCmd)}">${escapeHtml(killCmd)}</code>
+                    <button type="button" class="tmux-copy-btn" data-copy="${escapeHtml(killCmd)}">Copy</button>
+                </div>` : '';
+            return `
+            <div class="tmux-team-row">
+                <div class="tmux-team-name">${escapeHtml(team.group)}</div>
+                <div class="tmux-team-meta">${seatCount} window${seatCount === 1 ? '' : 's'}${hasBase ? '' : ' · no base session'}</div>
+                ${baseNote}
+                ${attachRow}
+                ${killRow}
+                <button type="button" class="tmux-grid-btn" data-grid-team="${escapeHtml(team.group)}" data-grid-base="${escapeHtml(base || '')}" ${hasBase ? '' : 'disabled'}>Build 4-up grid</button>
+            </div>`;
+        });
+        list.innerHTML = rows.join('');
+        // Wire copy + grid buttons.
+        list.querySelectorAll('.tmux-copy-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const text = btn.getAttribute('data-copy') || '';
+                copyToClipboard(text);
+                const orig = btn.textContent;
+                btn.textContent = 'Copied';
+                setTimeout(() => { btn.textContent = orig; }, 900);
+            });
+        });
+        list.querySelectorAll('.tmux-grid-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                if (btn.disabled) { return; }
+                const team = btn.getAttribute('data-grid-team') || '';
+                const base = btn.getAttribute('data-grid-base') || '';
+                if (!base) { return; }
+                btn.disabled = true;
+                const orig = btn.textContent;
+                btn.textContent = 'Building…';
+                try {
+                    const res = await fetch('/terminals/verb/tmuxBuildGrid', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ team: base })
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (data && data.success && data.attachCommand) {
+                        copyToClipboard(data.attachCommand);
+                        btn.textContent = 'Copied attach cmd';
+                        showPaneToast('Grid built — attach command copied.');
+                    } else {
+                        showPaneToast('Grid build failed: ' + (data && data.error ? data.error : 'unknown'));
+                        btn.disabled = false;
+                    }
+                } catch (err) {
+                    showPaneToast('Grid build failed: ' + (err instanceof Error ? err.message : String(err)));
+                    btn.disabled = false;
+                } finally {
+                    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 1200);
+                }
+            });
+        });
+    }
+
+    async function refreshTmuxTab() {
+        // No-op when the tmux tab is not the active tab AND this is a focus
+        // refresh — but the toggle-change and refresh-button callers always
+        // want a fresh read, so fetch unconditionally.
+        const data = await fetchTmuxSessions();
+        _tmuxSessionsCache = data;
+        renderTmuxSessions(data);
+    }
+
+    async function refreshConfigTab() {
+        const readout = document.getElementById('fleet-status-readout');
+        if (!readout) return;
+        try {
+            const res = await fetch('/health');
+            if (!res.ok) {
+                readout.textContent = `Server health check failed (HTTP ${res.status})`;
+                return;
+            }
+            const health = await res.json();
+            const ptyHost = health.ptyHost;
+            if (!ptyHost) {
+                readout.textContent = 'PTY host status: not available (running in embedded or legacy mode)';
+                return;
+            }
+            const lines = [
+                `Status:         ${ptyHost.isAdopted ? 'Adopted existing host' : 'Spawned by board'}`,
+                `PID:            ${ptyHost.pid ?? 'unknown'}`,
+                `Port:           ${ptyHost.port ?? 'unknown'}`,
+                `surviveBoard:   ${ptyHost.surviveBoard ?? false}`,
+                `Active Seats:   ${ptyHost.seatCount ?? 0}`,
+            ];
+            if (ptyHost.startedAt) {
+                lines.push(`Started At:     ${ptyHost.startedAt}`);
+            }
+            readout.textContent = lines.join('\n');
+        } catch (err) {
+            readout.textContent = `Failed to fetch PTY host status: ${err instanceof Error ? err.message : String(err)}`;
+        }
+    }
+
     function init() {
         if (soloTerminalName) {
             // Mode class already applied at document scope (Defect 2 fix).
@@ -650,6 +849,110 @@
                 // Takes effect for teams started after this point: the fleet service is
                 // constructed at boot, so flipping it on does not retro-seat running PTYs.
                 saveSetting(TMUX_KEY, tmuxToggle.checked);
+                // Re-render the session list so the empty-state copy matches the
+                // new toggle state (off → "tmux seating is off", not "no sessions").
+                refreshTmuxTab();
+            });
+        }
+
+        // ── Panel tab switching ───────────────────────────────────────────
+        // Inlined idiom (connections.js:12-32). Persisted via loadSetting/
+        // saveSetting on `terminals.activeTab`, the same store the layout keys
+        // use. Agents is the default so an operator who never opens the tmux
+        // tab sees no change. The bar is hidden in solo/kanban/team-scoped
+        // modes — those embed the panel for one terminal, not the cockpit.
+        const TAB_KEY = 'terminals.activeTab';
+        let activeTerminalTab = 'agents';
+
+        function setTerminalsTabBarVisible(visible) {
+            const bar = document.getElementById('terminals-tab-bar');
+            if (bar) { bar.style.display = visible ? '' : 'none'; }
+        }
+        // Solo / kanban-dock / team-scoped embed the panel for one terminal —
+        // no cockpit, so no tab bar. The body class is set in init() above.
+        setTerminalsTabBarVisible(!soloTerminalName && !isKanbanDock && !teamScopeId);
+
+        function setActiveTerminalTab(tab) {
+            if (tab !== 'agents' && tab !== 'tmux' && tab !== 'config') { tab = 'agents'; }
+            activeTerminalTab = tab;
+            document.querySelectorAll('.shared-tab-btn').forEach(b => {
+                const on = b.getAttribute('data-tab') === tab;
+                b.classList.toggle('active', on);
+                b.setAttribute('aria-selected', String(on));
+            });
+            document.querySelectorAll('.shared-tab-content').forEach(c => {
+                c.classList.toggle('active', c.getAttribute('data-tab-content') === tab);
+            });
+            if (!soloTerminalName && !isKanbanDock) {
+                saveSetting(TAB_KEY, tab);
+            }
+            if (tab === 'tmux') { refreshTmuxTab(); }
+            if (tab === 'config') { refreshConfigTab(); }
+        }
+
+        document.querySelectorAll('.shared-tab-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                setActiveTerminalTab(btn.getAttribute('data-tab'));
+            });
+        });
+
+        // Restore the persisted tab. Agents is the default; a never-opened
+        // tmux/config tab means no change for the operator.
+        loadSetting(TAB_KEY, 'agents').then((saved) => {
+            if (saved === 'tmux' || saved === 'agents' || saved === 'config') {
+                if (saved !== activeTerminalTab) { setActiveTerminalTab(saved); }
+            }
+        }).catch(() => { /* leave the default agents tab */ });
+
+        const tmuxRefreshBtn = document.getElementById('tmux-refresh');
+        if (tmuxRefreshBtn) {
+            tmuxRefreshBtn.addEventListener('click', () => { refreshTmuxTab(); });
+        }
+
+        // ── Fleet config controls ──
+        const configRefreshBtn = document.getElementById('config-refresh');
+        if (configRefreshBtn) {
+            configRefreshBtn.addEventListener('click', () => { refreshConfigTab(); });
+        }
+
+        const fleetSurviveToggle = document.getElementById('fleet-survive-board');
+        if (fleetSurviveToggle) {
+            const FLEET_SURVIVE_KEY = 'switchboard.terminal.fleet.surviveBoard';
+            loadSetting(FLEET_SURVIVE_KEY, false).then((v) => {
+                fleetSurviveToggle.checked = (v === true || String(v) === 'true');
+            }).catch(() => { /* leave default */ });
+            fleetSurviveToggle.addEventListener('change', () => {
+                saveSetting(FLEET_SURVIVE_KEY, fleetSurviveToggle.checked);
+                refreshConfigTab();
+            });
+        }
+
+        const btnStopFleet = document.getElementById('btn-stop-fleet');
+        if (btnStopFleet) {
+            btnStopFleet.addEventListener('click', async () => {
+                // Per CLAUDE.md: Never intercept a click with a confirmation dialog.
+                btnStopFleet.disabled = true;
+                const orig = btnStopFleet.textContent;
+                btnStopFleet.textContent = 'STOPPING…';
+                try {
+                    const res = await fetch('/terminals/verb/ptyStopFleet', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({})
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (data && data.success) {
+                        showPaneToast('PTY fleet stopped');
+                    } else {
+                        showPaneToast('Failed to stop fleet: ' + (data?.error || 'unknown error'));
+                    }
+                } catch (err) {
+                    showPaneToast('Failed to stop fleet: ' + (err instanceof Error ? err.message : String(err)));
+                } finally {
+                    btnStopFleet.disabled = false;
+                    btnStopFleet.textContent = orig;
+                    refreshConfigTab();
+                }
             });
         }
 
@@ -876,38 +1179,6 @@
                     startTeamForm.hidden = true;
                     btnStartTeam.hidden = false;
                 }
-            });
-        }
-
-        const btnSaveGroup = document.getElementById('btn-save-group');
-        if (btnSaveGroup) {
-            btnSaveGroup.addEventListener('click', () => {
-                const input = document.createElement('input');
-                input.className = 'item-name-input';
-                input.placeholder = 'Group name';
-                input.style.width = '100%';
-                input.style.marginTop = '8px';
-                btnSaveGroup.replaceWith(input);
-                input.focus();
-
-                // One-shot: Enter fires finish AND then blurs the (now detached) input,
-                // which would run finish a second time and save a duplicate group.
-                let done = false;
-                const finish = (save) => {
-                    if (done) { return; }
-                    done = true;
-                    const name = input.value.trim();
-                    input.replaceWith(btnSaveGroup);
-                    if (save && name) {
-                        saveCurrentAsGroup(name);
-                    }
-                };
-
-                input.addEventListener('keydown', (e) => {
-                    if (e.key === 'Enter') { finish(true); }
-                    if (e.key === 'Escape') { finish(false); }
-                });
-                input.addEventListener('blur', () => finish(true));
             });
         }
 
@@ -1474,19 +1745,25 @@
             id: 'planning-team',
             name: 'Planning team',
             headRole: 'planner',
-            members: [],
+            members: [
+                { role: 'planner', count: 2, label: '', startupCommand: '' },
+            ],
         },
         {
             id: 'feature-implementation',
             name: 'Lead team',
             headRole: 'lead',
-            members: [],
+            members: [
+                { role: 'coder', count: 3, label: '', startupCommand: '' },
+            ],
         },
         {
             id: 'review-team',
             name: 'Review team',
             headRole: 'reviewer',
-            members: [],
+            members: [
+                { role: 'reviewer', count: 2, label: '', startupCommand: '' },
+            ],
         },
     ];
 
@@ -1543,14 +1820,16 @@
                     : (members.length > 0 ? members[0] : '');
                 running = activeCount > 0;
             } else {
-                // All three default definitions are member-less, and a member-less
-                // team registers NO `terminals.groups` row: wireSpawnedTeam returns
-                // early when `children` is empty, so the group lookup above can never
-                // find it. The head is the whole team, and the only evidence it is
-                // running is a live, unparented terminal on the head role — the exact
-                // predicate startTeamById's double-start guard uses. Without this arm
-                // the three fixed slots render dormant forever and clicking a running
-                // one re-attempts a start the server refuses.
+                // A team with no live `terminals.groups` row — either a
+                // member-less custom team, or a preset whose seats are not
+                // live yet — registers NO `terminals.groups` row:
+                // wireSpawnedTeam returns early when `children` is empty, so
+                // the group lookup above can never find it. The head is the
+                // whole team, and the only evidence it is running is a live,
+                // unparented terminal on the head role — the exact predicate
+                // startTeamById's double-start guard uses. Without this arm
+                // the three fixed slots render dormant forever and clicking a
+                // running one re-attempts a start the server refuses.
                 const headOnly = fleetList.find(t => t
                     && t.status === 'active'
                     && !t.parentInstanceId
@@ -1844,8 +2123,11 @@
                 }
                 return g;
             });
+            // Migration & invariant: drop legacy grp_ rows from durable teams store
+            terminalGroups = terminalGroups.filter(g => !g.id.startsWith('grp_'));
             lastReadGroupIds = terminalGroups.map(g => g.id);
         }
+        await fetchManualGroups();
         const savedActive = await loadSetting('terminals.activeGroupId', null);
         activeGroupId = (typeof savedActive === 'string' || savedActive === null) ? savedActive : null;
 
@@ -1996,7 +2278,7 @@
         saveSetting('terminals.kanbanPaneColumn', kanbanPaneColumn);
         saveSetting('terminals.kanbanPaneWorkspace', kanbanPaneWorkspace);
         saveSetting('terminals.kanbanPaneProject', kanbanPaneProject);
-        saveSetting('terminals.groups', terminalGroups);
+        saveSetting('terminals.groups', terminalGroups.filter(g => !g.id.startsWith('grp_')));
         saveSetting('terminals.activeGroupId', activeGroupId);
         saveSetting('terminals.groupPrefs', groupPrefs);
     }
@@ -2076,7 +2358,9 @@
                     }
                 }
             }
-            lastReadGroupIds = validated.map(g => g.id);
+            lastReadGroupIds = validated.filter(g => !g.id.startsWith('grp_')).map(g => g.id);
+            terminalGroups = terminalGroups.filter(g => !g.id.startsWith('grp_'));
+            await fetchManualGroups();
             if (changed) {
                 renderSidebarList();
                 // Fleet mode only. renderSidebarList() renders the strip
@@ -2095,6 +2379,7 @@
 
     async function fetchTerminalList() {
         await fetchKanbanColumnStructure();
+        await fetchManualGroups();
         try {
             const res = await fetch('/terminals/verb/ptyListTerminals', {
                 method: 'POST',
@@ -3443,21 +3728,7 @@
         return itemDiv;
     }
 
-    function saveCurrentAsGroup(name) {
-        const id = 'grp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
-        const visible = paneAssignments.slice(0, getSlotCount(effectiveLayout)).filter(Boolean);
-        const group = {
-            id,
-            name: (name || '').trim() || `Group ${terminalGroups.length + 1}`,
-            source: 'manual',
-            layout: currentLayout,
-            members: visible,
-            order: visible
-        };
-        terminalGroups.push(group);
-        saveLayoutSettings();
-        switchToGroup(id);
-    }
+
 
     /**
      * Delete a group, whatever its source. One verb, one meaning from the
@@ -3481,7 +3752,16 @@
         const wasLocked = activeGroupId === id;
 
         if (group && group.source === 'manual') {
-            terminalGroups = terminalGroups.filter(g => g.id !== id);
+            if (group.id.startsWith('grp_')) {
+                fetch('/terminals/verb/ptyDeleteGroup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id })
+                }).catch(() => {});
+                manualGroups = manualGroups.filter(g => g.id !== id);
+            } else {
+                terminalGroups = terminalGroups.filter(g => g.id !== id);
+            }
             // Prune dead state for a manual group: its ordering and pin are
             // meaningless once the record is gone.
             if (groupPrefs.orders && groupPrefs.orders[id]) {
@@ -3585,22 +3865,7 @@
         renderSidebarList();
     }
 
-    function saveSelectionAsGroup(name) {
-        const id = 'grp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
-        const members = Array.from(selectedTerminalNames);
-        const group = {
-            id,
-            name: (name || '').trim() || `Group ${terminalGroups.length + 1}`,
-            source: 'manual',
-            layout: layoutForFleetCount(members.length),
-            members,
-            order: members
-        };
-        terminalGroups.push(group);
-        selectedTerminalNames.clear();
-        saveLayoutSettings();
-        renderSidebarList();
-    }
+
 
     function toggleTerminalSelection(name) {
         if (selectedTerminalNames.has(name)) {
@@ -3808,7 +4073,7 @@
         // removing it from findGroupForTerminalName produced a dead click for
         // every ungrouped terminal under a lock. Ungrouped terminals now render
         // as ordinary rows under their workspace, not gathered into a bucket.
-        return sortGroups([...terminalGroups, ...getDerivedGroups()]);
+        return sortGroups([...terminalGroups, ...manualGroups, ...getDerivedGroups()]);
     }
 
     /** Whether the given group id names a spawned team. Routes through
@@ -3939,6 +4204,9 @@
         for (const g of terminalGroups) {
             if (getGroupMembers(g).includes(name)) { return g; }
         }
+        for (const g of manualGroups) {
+            if (getGroupMembers(g).includes(name)) { return g; }
+        }
         for (const g of getDerivedGroups()) {
             if (getGroupMembers(g).includes(name)) { return g; }
         }
@@ -3977,6 +4245,13 @@
             if (!group.members) { group.members = []; }
             if (!group.members.includes(name)) { group.members.push(name); }
             if (Array.isArray(group.order) && !group.order.includes(name)) { group.order.push(name); }
+            if (group.id.startsWith('grp_')) {
+                fetch('/terminals/verb/ptyAddGroupMember', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: group.id, name })
+                }).catch(() => {});
+            }
         } else {
             if (!groupPrefs.extras) { groupPrefs.extras = {}; }
             if (!Array.isArray(groupPrefs.extras[activeGroupId])) { groupPrefs.extras[activeGroupId] = []; }
@@ -4586,8 +4861,9 @@
         const groups = getAllGroups();
         for (const g of groups) {
             const isActive = g.id === activeGroupId;
+            const isManual = g.source === 'manual' && !isSpawnedTeamGroup(g);
             const tab = document.createElement('div');
-            tab.className = 'group-tab' + (isActive ? ' active' : '');
+            tab.className = 'group-tab' + (isActive ? ' active' : '') + (isManual ? ' is-manual-group' : '');
             tab.title = g.name;
             tab.dataset.groupId = g.id;
 
@@ -5128,40 +5404,6 @@
             const selTitle = document.createElement('span');
             selTitle.className = 'worktree-name';
             selTitle.textContent = `${selectedTerminalNames.size} selected`;
-            const groupBtn = document.createElement('button');
-            groupBtn.className = 'group-tier-btn';
-            groupBtn.textContent = 'group';
-            groupBtn.title = 'Save selection as a manual group';
-            groupBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const input = document.createElement('input');
-                input.className = 'item-name-input';
-                input.placeholder = 'Group name';
-                input.style.width = '100%';
-                input.style.marginTop = '8px';
-                selRow.replaceWith(input);
-                input.focus();
-                // One-shot for the same Enter-then-blur double-commit reason as the
-                // SAVE AS GROUP input above.
-                let done = false;
-                const finish = (save) => {
-                    if (done) { return; }
-                    done = true;
-                    const name = input.value.trim();
-                    input.replaceWith(selRow);
-                    if (save && name) {
-                        saveSelectionAsGroup(name);
-                    } else {
-                        selectedTerminalNames.clear();
-                        renderSidebarList();
-                    }
-                };
-                input.addEventListener('keydown', (ev) => {
-                    if (ev.key === 'Enter') { finish(true); }
-                    if (ev.key === 'Escape') { finish(false); }
-                });
-                input.addEventListener('blur', () => finish(true));
-            });
             const clearBtn = document.createElement('button');
             clearBtn.className = 'group-tier-btn';
             clearBtn.textContent = 'clear';
@@ -5173,7 +5415,6 @@
             });
             const actions = document.createElement('div');
             actions.className = 'group-tier-actions';
-            actions.appendChild(groupBtn);
             actions.appendChild(clearBtn);
             selRow.appendChild(selTitle);
             selRow.appendChild(actions);
@@ -8889,8 +9130,8 @@
      * wireSpawnedTeam (teamWiring.ts:1039: `const groupMembers = [headName, ...childNames]`).
      *
      * Team-spawned groups are identified by their `team_` ID prefix (teamWiring.ts,
-     * `const groupId = opts.teamId || ('team_' + ...)`); operator-saved groups use
-     * `grp_` (saveCurrentAsGroup / saveSelectionAsGroup) and must NOT trigger a crown
+     * `const groupId = opts.teamId || ('team_' + ...)`); manual groups use
+     * `grp_` (ephemeral host store) and must NOT trigger a crown
      * — both carry source: 'manual', so the ID prefix is the only discriminator.
      *
      * `externalHead` groups are excluded: for those, wireSpawnedTeam deliberately
@@ -9765,6 +10006,36 @@
         const unseated = fillEmptyPanes();
         if (unseated > 0) {
             showPaneToast(`${unseated} terminal${unseated === 1 ? '' : 's'} could not be seated — choose a larger grid.`);
+        }
+
+        // FILL GRID creates a host-held in-memory manual group for the grid
+        const liveRoleMembers = fleetList
+            .filter(t => t.status !== 'exited' && t.role === role)
+            .map(t => t.friendlyName)
+            .slice(0, slots);
+
+        if (liveRoleMembers.length > 0) {
+            try {
+                const groupName = `${role} Grid`;
+                const createRes = await fetch('/terminals/verb/ptyCreateGroup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: groupName,
+                        layout: mode,
+                        members: liveRoleMembers
+                    })
+                });
+                if (createRes.ok) {
+                    const groupData = await createRes.json();
+                    if (groupData && groupData.group && groupData.group.id) {
+                        await fetchManualGroups();
+                        switchToGroup(groupData.group.id);
+                    }
+                }
+            } catch (err) {
+                console.warn('[Terminals] Failed to create manual group for grid:', err);
+            }
         }
     }
 

@@ -783,7 +783,7 @@ test('the team header is a context bar — the exit affordance lives in the tab 
 });
 
 test('team-scoped CSS hides general-purpose sidebar buttons', () => {
-    for (const id of ['#btn-start-all-teams', '#btn-open-all', '#btn-fill-grid', '#fill-grid-form', '#btn-start-team', '#start-team-form', '#btn-clear-all', '#btn-save-group', '#btn-link-up']) {
+    for (const id of ['#btn-start-all-teams', '#btn-open-all', '#btn-fill-grid', '#fill-grid-form', '#btn-start-team', '#start-team-form', '#btn-clear-all', '#btn-link-up']) {
         assert.ok(
             new RegExp(`body\\.is-team-scoped\\s+${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(terminalsHtml),
             `team-scoped CSS must hide ${id}`
@@ -1275,8 +1275,9 @@ test('three fixed team slots in the rail and showStripToast kept alive', () => {
     assert.ok(fn.includes('DEFAULT_TEAM_DEFINITIONS'), 'buildTeamsForShell must iterate DEFAULT_TEAM_DEFINITIONS');
     assert.ok(/\n\s*running,/.test(fn) || fn.includes('running:'),
         'buildTeamsForShell must emit a running boolean on every slot');
-    // A member-less default team registers no terminals.groups row, so the slot's
-    // running state cannot come from the group lookup alone.
+    // A default team whose head is live but whose seats are not (e.g. seats
+    // exited, or a member-less custom team) registers no terminals.groups row,
+    // so the slot's running state cannot come from the group lookup alone.
     assert.ok(/t\.role === headRole/.test(fn),
         'buildTeamsForShell must detect a running member-less team by its live head role');
 
