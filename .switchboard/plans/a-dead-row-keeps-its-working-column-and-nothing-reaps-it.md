@@ -58,6 +58,30 @@ intact — `1e5da4ea` (recovered from a stash) and `209ce349` (present on the Pi
 was a database fault. A fileless row is currently indistinguishable from a lost plan, so every one of
 them invites the same investigation.
 
+### This was fixed once, in 2026, and the fix did not hold
+
+`Fix: Archived Plans Leave Ghost kanban_column — Invisible in UI, Visible in DB Queries` (`9ed3690e`,
+**COMPLETED**) is this defect. Its goal statement names the same mechanism — status set, column left
+behind — and it explicitly scoped the repair wider than archiving:
+
+> A one-time migration repairs existing ghosts (**including `deleted` plans, which suffer the same
+> defect**).
+
+Yet 43 ghosts stand today, 30 of them `deleted`. Two readings, and the fix differs by which is true:
+
+1. **The migration was one-time and nothing guards the write path.** It repaired the rows that existed
+   and every subsequent delete or completion created a new ghost. Then the remedy is not another
+   migration — it is clearing `kanban_column` at the point of death, which that plan proposed for the
+   archive path only.
+2. **Only the `archived` path was ever wired.** `status='archived'` is now **0 rows** — the V10
+   migration rewrites archived to `completed` — so a fix scoped to `archived` would today have nothing
+   to act on and would look green while `deleted` and `completed` accrue freely.
+
+**Establish which before writing code.** `git log -S` on the archive-status writer and on
+`updateStatusByPlanFile` (`KanbanDatabase.ts:1857`, named in that plan as the one-dimensional updater)
+will say whether the column-clearing landed on all three paths or only one. A second one-time
+migration that leaves the write path unguarded reproduces this card in another month.
+
 ## Metadata
 
 **Complexity:** 3
