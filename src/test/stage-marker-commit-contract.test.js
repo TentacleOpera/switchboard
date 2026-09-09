@@ -414,13 +414,6 @@ const oldSeedGroup = () => ({
     members: [{ role: 'coder', count: 3, label: '', startupCommand: '' }]
 });
 
-test('migrateAgentGroups neutralises the old 3-coder seed and preserves unknown keys', () => {
-    const out = migrateAgentGroups([oldSeedGroup()]);
-    assert.ok(out, 'converter returned null on a group that needed converting');
-    const g = out[0];
-    assert.strictEqual(g.members.length, 0);
-});
-
 test('migrateAgentGroups is idempotent — second pass returns null', () => {
     const once = migrateAgentGroups([oldSeedGroup()]);
     assert.strictEqual(migrateAgentGroups(once), null, 'a converted group must not be re-flagged as changed');

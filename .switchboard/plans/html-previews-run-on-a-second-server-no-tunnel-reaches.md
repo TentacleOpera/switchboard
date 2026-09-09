@@ -7,6 +7,21 @@ browser — under an SSH tunnel, under VS Code Remote-SSH, and behind any proxy 
 previews from the board's own port on a distinct origin, instead of from a per-folder ephemeral
 server whose port is unknowable in advance.
 
+> **Re-scope note (2026-09-09): this is now a SINGLE-host change.** The VS Code extension is being
+> deprecated, so the dual-host shape this plan inherits from `standalone-remote-access-story.md` is
+> dead scope. Do not implement a host-aware `_buildLocalhostUrl` with two branches. Serve previews
+> from the board's own port on a distinct origin, origin-relative, always — and delete the VS Code
+> webview path rather than preserving it. Everything below that reasons about "absolute loopback for
+> the VS Code webview" versus "origin-relative for the standalone browser" collapses to the latter,
+> including the parts of the Complexity Audit and Edge-Case Audit that exist only to weigh the two
+> hosts against each other.
+>
+> Also note what this plan is **not**: it is not a performance fix. The cost of the second server is
+> one idle `http.Server` per source folder behind a reaper — a socket, an fd and a timer. Measured on
+> the Pi with an 8-seat fleet, no preview servers were even alive, and an idle one is noise beside a
+> ~250 MB agent seat. The reason to do this is that previews are simply broken anywhere the browser
+> is not the host machine, which on a headless box driven from a tablet is every time.
+
 ### Problem Analysis
 
 **Previews are served by a second HTTP server, not by `LocalApiServer`.**

@@ -4975,8 +4975,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         if (!db || !(await db.ensureReady())) { return []; }
         // Key absent → seed the built-in once, then persist it so a delete
         // (which writes `[]`) is not overwritten on the next load.
-        // Key present → run the migration converter (neutralise old seed,
-        // add scope/relationship defaults, resolve head-role collisions).
+        // Key present → run the migration converter (add scope/relationship
+        // defaults, resolve head-role collisions).
         // Both happen inside the mutator so they are serialised against
         // concurrent saves and a second window's converter.
         //
@@ -5002,7 +5002,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             // process-wide corruption of the seed.
             const seedCopy = (def: any) => ({ ...def, members: Array.isArray(def.members) ? [...def.members] : [] });
             if (working === null) {
-                // Key absent — seed the default member-less team definitions.
+                // Key absent — seed the default team definitions.
                 working = DEFAULT_TEAM_DEFINITIONS.map(seedCopy);
                 changed = true;
             } else {
@@ -5035,9 +5035,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             }
             const imported = importDelegatesIntoTeams(working, roleConfigs);
             if (imported !== null) { working = imported; changed = true; }
-            // Run the migration converter (neutralise old seed, add
-            // scope/relationship defaults, resolve head-role collisions).
-            // Returns null when nothing changed.
+            // Run the migration converter (add scope/relationship defaults,
+            // resolve head-role collisions). Returns null when nothing changed.
             const migrated = migrateAgentGroups(working);
             if (migrated !== null) { working = migrated; changed = true; }
             // Return null (no write) when nothing changed and the key was

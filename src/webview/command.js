@@ -1214,7 +1214,7 @@
         return '/static/icons/nav-jet.svg';
     }
 
-    // The three DEFAULT_TEAM_DEFINITIONS ids that ship as member-less seeds.
+    // The three DEFAULT_TEAM_DEFINITIONS ids that ship as starter seeds.
     // Used to hide unstarted seeds from the roster — never to delete them.
     const SEED_TEAM_IDS = new Set(['planning-team', 'feature-implementation', 'review-team']);
 

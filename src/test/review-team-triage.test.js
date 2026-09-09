@@ -23,7 +23,6 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const {
-    SEEDED_AGENT_GROUP,
     CONTEXT_AWARE_COMPLETION_ORDER_BODY,
     NEW_REVIEW_TEAM_HEAD_PROMPT,
     migrateAgentGroups,
@@ -96,15 +95,7 @@ async function runTests() {
         assert.ok(prompt.includes('p1') && prompt.includes('p2'), 'both plans present in the batch');
     });
 
-    // 4. The release gate the old Coding-team migration exists to hold.
-    test('SEEDED_AGENT_GROUP has no members, so no unrequested CLI spawns', () => {
-        assert.strictEqual(SEEDED_AGENT_GROUP.headRole, 'lead');
-        assert.ok(Array.isArray(SEEDED_AGENT_GROUP.members));
-        assert.strictEqual(SEEDED_AGENT_GROUP.members.length, 0,
-            'the seed must have 0 members so no unrequested CLIs spawn');
-    });
-
-    // 5. Structural repair survives; prompt-text migration is gone.
+    // 4. Structural repair survives; prompt-text migration is gone.
     // The frozen snapshots and their recognisers were deleted — spawned teams
     // have never shipped, so a persisted stale prompt is a clean break, not a
     // migration target. The member-shape repair must still fire.

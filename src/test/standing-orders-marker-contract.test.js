@@ -516,10 +516,6 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
 
     // ── structural seed & flag migrations survive ───────────────────
     assert.ok(
-        TEAM_WIRING_SRC.includes('function isUntouchedOldSeed('),
-        'isUntouchedOldSeed must survive to neutralise the old 3-coder seed'
-    );
-    assert.ok(
         TEAM_WIRING_SRC.includes('export function isUntouchedSeed('),
         'isUntouchedSeed must survive for gallery comparison'
     );

@@ -400,6 +400,11 @@
           "default": false,
           "description": "Allow triggerAction to create a tmux pane (in a dedicated 'switchboard' session) when no adopted pane resolves. Off by default — creating windows in someone's tmux session unprompted is surprising in a way creating a Switchboard-owned PTY is not."
         },
+        "switchboard.terminal.fleet.surviveBoard": {
+          "type": "boolean",
+          "default": false,
+          "description": "When enabled, the PTY host survives board shutdowns and restarts, keeping seats and CLI processes running. The successor board adopts the live host."
+        },
         "switchboard.jules.autoSync": {
           "type": "boolean",
           "default": false,

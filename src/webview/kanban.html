@@ -11030,11 +11030,17 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
 
                 // Send one message with target: 'CODED_AUTO' — the server
                 // resolves per-card complexity routing, classifies direction,
-                // moves + dispatches. _advanceCards handles the CLI-triggers
-                // gate internally (moves always, dispatches only when enabled).
-                // The server's moveCards pushes (one per resolved target column)
-                // will update the model and DOM to the real columns; the
-                // optimistic DOM move above is a visual placeholder only.
+                // moves + dispatches. Invariant (both hosts, both verbs):
+                // _advanceCards handles the CLI-triggers gate internally —
+                // moves always, dispatches only when enabled. The extension's
+                // triggerAction/triggerBatchAction arms and the standalone's
+                // triggerBatchAction arm already routed CODED_AUTO through
+                // _advanceCards before their gates; the standalone's
+                // triggerAction arm now does the same, so a one-card drop no
+                // longer refuses when triggers are off. The server's moveCards
+                // pushes (one per resolved target column) will update the model
+                // and DOM to the real columns; the optimistic DOM move above
+                // is a visual placeholder only.
                 const dropIds = sessionIds.filter(id => {
                     const card = currentCards.find(c => (c.planId || c.sessionId) === id);
                     return card && !CODED_IDS.includes(card.column);

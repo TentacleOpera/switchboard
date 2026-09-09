@@ -119,3 +119,7 @@ Installed orders rewritten in place; a constant-only change reaches nobody.
 
 - Is there any board read a team legitimately needs that no endpoint serves? If so it is an API gap and should be recorded as one rather than met with SQL.
 - Does the standalone host inject the port the same way? The drive prefix is in `KanbanProvider`; if the standalone path composes prompts differently, the port-line assertion needs to cover both hosts.
+
+## Implementation Summary
+Verified and enforced the team state access contract ensuring all team agents access board state exclusively through LocalApiServer endpoints rather than inspecting host files directly. Confirmed that `SWITCHBOARD_LIVENESS_DIRECTIVE` reliably injects the active port line into dispatch prefixes across all 10 agent roles whenever `apiPort > 0`. All active standing orders and queue instruction fragments reference the API base from the status line and avoid naming `.switchboard/api-server-port.txt` or `kanban.db` outside legacy healing recognisers. Created a dedicated contract test (`src/test/team-state-endpoint-access-contract.test.js`) verifying prompt injection, order text hygiene, grep gate constraints, legacy database migration, and required endpoint coverage.
+

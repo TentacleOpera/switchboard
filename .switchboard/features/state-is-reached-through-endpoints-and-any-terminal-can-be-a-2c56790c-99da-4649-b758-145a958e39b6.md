@@ -14,9 +14,9 @@ Establish one access contract - agents reach state through the LocalApiServer's 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Teams reach state through endpoints, never through host files](../plans/teams-reach-state-through-endpoints-not-host-files.md) — **PLAN REVIEWED** — ID: 71f78982-cf02-46cf-9308-d8926addd993
-- [ ] [Generate channel-declaration text in the Connections tab for the user to paste into a cloud agent](../plans/user-declared-state-channels-as-a-skill.md) — **PLAN REVIEWED** — ID: b62b2e5d-45ed-4290-a6c8-1f13681d5e6d
-- [ ] [Register an Agent Running in Any Local Terminal, by Letting It Pull Instead of Being Pushed](../plans/register-an-agent-in-any-local-terminal.md) — **PLAN REVIEWED** — ID: 6df5200a-3e42-46b3-b64b-17c770c47670
+- [ ] [Teams reach state through endpoints, never through host files](../plans/teams-reach-state-through-endpoints-not-host-files.md) — **COMPLETED** — ID: 71f78982-cf02-46cf-9308-d8926addd993
+- [ ] [Generate channel-declaration text in the Connections tab for the user to paste into a cloud agent](../plans/user-declared-state-channels-as-a-skill.md) — **COMPLETED** — ID: b62b2e5d-45ed-4290-a6c8-1f13681d5e6d
+- [ ] [Register an Agent Running in Any Local Terminal, by Letting It Pull Instead of Being Pushed](../plans/register-an-agent-in-any-local-terminal.md) — **COMPLETED** — ID: 6df5200a-3e42-46b3-b64b-17c770c47670
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

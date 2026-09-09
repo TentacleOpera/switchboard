@@ -179,6 +179,24 @@ export interface PlanIngestionHost {
 
 // ─── Engine ─────────────────────────────────────────────────────────────────
 
+/**
+ * Format a millisecond duration as a compact, human-readable string for the
+ * dispatch-timeout sweep's `last_action` record (e.g. "4h 2m", "90m", "47s").
+ * Used so the recorded `timed out` state names how long the attempt was silent
+ * without dragging in a date library. Whole units only — sub-second precision is
+ * meaningless for a hours-scale abandonment.
+ */
+function _formatElapsedMs(ms: number): string {
+    if (!Number.isFinite(ms) || ms < 0) return 'unknown';
+    const totalSec = Math.floor(ms / 1000);
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const s = totalSec % 60;
+    if (h > 0) return `${h}h ${m}m`;
+    if (m > 0) return `${m}m`;
+    return `${s}s`;
+}
+
 export class PlanIngestionEngine {
     private _watchers = new Map<string, PlanIngestionWatchHandle>();
     private _gitWatchers = new Map<string, PlanIngestionWatchHandle>();
@@ -576,6 +594,17 @@ export class PlanIngestionEngine {
                 // dispatched_at, completed_at and a clock. See
                 // `_runDispatchStallSweep`.
                 const dispatchStallMs = activityCfg.getNumber('dispatchStallMs', 1800000);
+                // Dispatch-timeout threshold: how long a dispatched card may be out
+                // with no completion posted before the dispatch-timeout sweep ends
+                // the attempt in a `timed out` state and releases the seat. Default
+                // 4 hours — well past the 30-min dispatch-stall nudge, so a human has
+                // a long window to act between the nudge and the abandonment. The
+                // sole abandonment path that nulls `dispatched_at` for a live-but-
+                // silent seat now that the activity-light sweep no longer does (the
+                // conflation fix in `clearStaleWorkingState`). See
+                // `_runDispatchTimeoutSweep`. Invariant: dispatchStallMs <
+                // dispatchTimeoutMs (the nudge fires before the timeout).
+                const dispatchTimeoutMs = activityCfg.getNumber('dispatchTimeoutMs', 4 * 60 * 60 * 1000);
                 // Partition the fleet ONCE per tick (not per folder) — the fleet
                 // is process-global and the snapshot is cheap. A miss on the
                 // provider (fleet-less host) yields empty arrays and the sweep
@@ -711,6 +740,22 @@ export class PlanIngestionEngine {
                             });
                         } catch (dispatchStallErr) {
                             this._host.logger.appendLine(`[GlobalPlanWatcher] dispatch-stall sweep failed for ${folder}: ${dispatchStallErr}`);
+                        }
+                        // ── Dispatch timeout ─────────────────────────────────────
+                        // The bounded end state for a dispatched card that never
+                        // reports. Runs on the same tick as the other sweeps, AFTER
+                        // clearStaleWorkingState (which no longer nulls the stamp —
+                        // the conflation fix — so silent seats stay visible here)
+                        // and alongside the dispatch-stall nudge. The nudge (30 min)
+                        // tells a human; this (hours) records that nobody did and
+                        // releases the seat. No retry — see the plan's "Why this
+                        // card does not retry" section.
+                        try {
+                            await this._runDispatchTimeoutSweep({
+                                db, folder, nowMs, dispatchTimeoutMs,
+                            });
+                        } catch (dispatchTimeoutErr) {
+                            this._host.logger.appendLine(`[GlobalPlanWatcher] dispatch-timeout sweep failed for ${folder}: ${dispatchTimeoutErr}`);
                         }
                         await this._retryPendingFeatureLinks(db, folder);
                     } catch (sweepErr) {
@@ -2618,6 +2663,112 @@ export class PlanIngestionEngine {
             if (!stillStalled.has(key.slice(prefix.length))) {
                 this._dispatchStallState.delete(key);
             }
+        }
+    }
+
+    /**
+     * Dispatch-timeout sweep — the bounded end state for a dispatched card that
+     * never reports. The dispatch-stall nudge (`_runDispatchStallSweep`) tells a
+     * human a card has been quiet; this sweep records that nobody did and ends
+     * the attempt. The two share `dispatched_at` and must stay ordered: the nudge
+     * (default 30 min) fires first, this (default 4 h) fires hours later — kept
+     * apart by config, not by luck (invariant `dispatchStallMs < dispatchTimeoutMs`).
+     *
+     * Runs on the same tick as the other sweeps, AFTER `clearStaleWorkingState`.
+     * The conflation fix in `clearStaleWorkingState` (it no longer nulls
+     * `dispatched_at` for silent seats) is what makes this sweep able to see
+     * silent seats at all — before the fix the 10-min activity-light sweep nulled
+     * the stamp and dropped the card out of this predicate.
+     *
+     * Predicate (exactly the plan's rule):
+     *   dispatched_at set  AND  completed_at NULL  AND  now - dispatched_at > dispatchTimeoutMs
+     *
+     * On match, per card:
+     *  1. Write a `timed out` end state into `last_action`, recording the seat and
+     *     the elapsed time. `timed out` is not `failed`, not `complete`, and not
+     *     silence — it means the attempt was abandoned because nothing was heard.
+     *     `last_action` is part of `PLAN_COLUMNS`, so the state survives into
+     *     everything that reads the card.
+     *  2. Release the seat via `releaseDispatchHolder` (nulls `dispatched_at` AND
+     *     `dispatched_terminal` together — atomic, so the card never passes through
+     *     the orphan state `bf23c37f` is about).
+     *  3. Do NOT write `completed_at`. A timed-out card is neither done nor proven
+     *     undone — the coder may have finished and failed to report. Completion
+     *     remains the explicit POST (consistent with `bootstrap.ts:1113`).
+     *
+     * No retry. A re-dispatch clears the seat and re-runs the prompt, which is the
+     * destructive action `ba068390` exists to replace — and until `ba068390` lands,
+     * retry remains the only lever and remains destructive. See the plan's "Why
+     * this card does not retry" section.
+     *
+     * Idempotent across ticks: once the seat is released, `dispatched_at` is NULL
+     * and the card leaves the predicate, so the sweep does not act on it again. One
+     * record per card. The nudge already owns telling people; this sweep does not
+     * notify.
+     */
+    private async _runDispatchTimeoutSweep(args: {
+        db: KanbanDatabase;
+        folder: string;
+        nowMs: number;
+        dispatchTimeoutMs: number;
+    }): Promise<void> {
+        const { db, folder, nowMs, dispatchTimeoutMs } = args;
+
+        // Read the board; filter to cards matching the predicate. Same
+        // `getWorkspaceId || getDominantWorkspaceId` fallback the other sweeps use.
+        let board: KanbanPlanRecord[] = [];
+        try {
+            const wsId = (await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '';
+            board = await db.getBoard(wsId) || [];
+        } catch { return; } // unreadable board is no evidence — try next tick.
+        if (board.length === 0) return;
+
+        let acted = 0;
+        for (const card of board) {
+            if (!card || !card.dispatchedAt || card.completedAt) continue;
+            const dispatchedAtMs = new Date(card.dispatchedAt).getTime();
+            if (!dispatchedAtMs || Number.isNaN(dispatchedAtMs)) continue; // unreadable stamp is no evidence
+            const elapsed = nowMs - dispatchedAtMs;
+            if (elapsed <= dispatchTimeoutMs) continue; // below threshold — not abandoned yet.
+
+            const seat = (card.dispatchedTerminal || '').trim();
+            const elapsedHuman = _formatElapsedMs(elapsed);
+            const lastAction = seat
+                ? `timed out (seat=${seat}, elapsed=${elapsedHuman})`
+                : `timed out (elapsed=${elapsedHuman})`;
+
+            // (1) Record the `timed out` end state. Written BEFORE the release so
+            // the stamp the message names is still on the row while we compose it;
+            // releaseDispatchHolder nulls dispatched_at but not last_action.
+            try {
+                await db.updateLastActionByPlanFile(card.planFile, card.workspaceId, lastAction);
+            } catch (recErr) {
+                this._host.logger.appendLine(
+                    `[GlobalPlanWatcher] dispatch timeout: failed to record state for card '${card.planId}' in ${folder}: ${recErr}`
+                );
+            }
+
+            // (2) Release the seat atomically (nulls dispatched_at AND
+            // dispatched_terminal together — no orphan state). Do NOT write
+            // completed_at (step 3).
+            try {
+                const released = await db.releaseDispatchHolder(card.planFile, card.workspaceId);
+                if (released) {
+                    acted++;
+                    this._host.logger.appendLine(
+                        `[GlobalPlanWatcher] Dispatch timeout: released seat ${seat ? `'${seat}'` : '(unattributed)'} for card '${card.planId}' in ${folder} after ${elapsedHuman} of silence (state: timed out)`
+                    );
+                }
+            } catch (relErr) {
+                this._host.logger.appendLine(
+                    `[GlobalPlanWatcher] dispatch timeout: failed to release seat for card '${card.planId}' in ${folder}: ${relErr}`
+                );
+            }
+        }
+
+        if (acted > 0) {
+            // Refresh the board so the released seats / recorded state render.
+            this._firePlanDiscovered(folder);
         }
     }
 

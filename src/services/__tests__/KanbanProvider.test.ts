@@ -693,5 +693,94 @@ Manual verification steps:
             assert.strictEqual((provider as any)._currentWorkspaceRoot, '/workspace1');
         });
     });
+
+    // Regression coverage for the plan "A Drag onto the Collapsed Coder Column
+    // Is Refused in the Browser, and the Card Bounces Back". The bug was a
+    // standalone-only gate placement, but the move-vs-dispatch invariant lives
+    // in the shared _advanceCards CODED_AUTO path both hosts delegate to. These
+    // tests pin that invariant: a CODED_AUTO drag MOVES the card regardless of
+    // the CLI-triggers setting, and DISPATCHES only when enabled (or bypassed).
+    // A backward drag (CODE REVIEWED → coder column) moves but never dispatches.
+    suite('_advanceCards CODED_AUTO gate placement (plan: collapsed-coder drag)', () => {
+        const workspaceRoot = '/test/workspace';
+        const sessionId = 'session-1';
+
+        // Wire the minimum surface _advanceCards touches for a CODED_AUTO move.
+        // Returns the executeCommand spy so each test can assert dispatch calls.
+        const wireAdvance = (cardColumn: string) => {
+            (provider as any)._lastCards = [{
+                planId: 'plan-1',
+                sessionId,
+                topic: 'Test',
+                planFile: 'plan_1.md',
+                column: cardColumn,
+                lastActivity: new Date().toISOString(),
+                createdAt: new Date().toISOString(),
+                complexity: '5',
+                workspaceRoot
+            }];
+            sandbox.stub(provider as any, '_filterUnknownComplexitySessions').callsFake((ids: string[]) => ({ filtered: ids, skippedCount: 0 }));
+            const groups = new Map<'lead' | 'coder' | 'intern', string[]>([['lead', []], ['coder', [sessionId]], ['intern', []]]);
+            sandbox.stub(provider as any, '_partitionByComplexityRoute').resolves(groups);
+            sandbox.stub(provider as any, '_getVisibleAgents').resolves({ lead: true, coder: true, intern: true });
+            sandbox.stub(provider as any, 'moveCardToColumnWithReason').resolves({ ok: true, detail: '' });
+            sandbox.stub(provider as any, '_collectAllMovedSessionIds').resolves([sessionId]);
+            sandbox.stub(provider as any, 'postMessage');
+            sandbox.stub(provider as any, '_notifySkippedUnknownComplexity');
+            (provider as any)._taskViewerProvider = { recordRunSheetForColumnMove: sandbox.stub().resolves() };
+            const execStub = sandbox.stub();
+            sandbox.stub(provider as any, '_seams').returns({
+                commands: { executeCommand: execStub },
+                ui: { showErrorMessage: sandbox.stub(), showWarningMessage: sandbox.stub(), showInformationMessage: sandbox.stub() }
+            });
+            return execStub;
+        };
+
+        test('cliTriggersEnabled=false: CODED_AUTO moves the card and does NOT dispatch', async () => {
+            wireAdvance('CREATED');
+            (provider as any)._cliTriggersEnabled = false;
+
+            const result = await (provider as any)._advanceCards(workspaceRoot, [sessionId], { target: 'CODED_AUTO' });
+
+            assert.strictEqual(result.success, true, 'should succeed (move half)');
+            assert.strictEqual(result.moved.length, 1, 'card should be moved');
+            assert.strictEqual(result.dispatched, false, 'must not dispatch with triggers off');
+            assert.ok(result.moved[0].targetColumn !== 'CODED_AUTO', 'persisted column must be a real coder column, not the synthetic CODED_AUTO string');
+        });
+
+        test('cliTriggersEnabled=true: CODED_AUTO moves the card AND dispatches', async () => {
+            const execStub = wireAdvance('CREATED');
+            (provider as any)._cliTriggersEnabled = true;
+
+            const result = await (provider as any)._advanceCards(workspaceRoot, [sessionId], { target: 'CODED_AUTO' });
+
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(result.moved.length, 1);
+            assert.strictEqual(result.dispatched, true, 'forward card must dispatch with triggers on');
+            assert.ok(execStub.calledWith('switchboard.triggerAgentFromKanban'), 'dispatch should go through triggerAgentFromKanban');
+        });
+
+        test('bypassTriggerGate=true dispatches even when cliTriggersEnabled=false', async () => {
+            const execStub = wireAdvance('CREATED');
+            (provider as any)._cliTriggersEnabled = false;
+
+            const result = await (provider as any)._advanceCards(workspaceRoot, [sessionId], { target: 'CODED_AUTO', bypassTriggerGate: true });
+
+            assert.strictEqual(result.dispatched, true, 'explicit manager command must dispatch regardless of the toggle');
+            assert.ok(execStub.calledWith('switchboard.triggerAgentFromKanban'));
+        });
+
+        test('backward CODE REVIEWED → coder column moves but does NOT dispatch (triggers on)', async () => {
+            const execStub = wireAdvance('CODE REVIEWED');
+            (provider as any)._cliTriggersEnabled = true;
+
+            const result = await (provider as any)._advanceCards(workspaceRoot, [sessionId], { target: 'CODED_AUTO' });
+
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(result.moved.length, 1, 'backward drag must still move');
+            assert.strictEqual(result.dispatched, false, 'a backward move must never dispatch');
+            assert.strictEqual(execStub.callCount, 0, 'no dispatch command should fire for a backward move');
+        });
+    });
 });
 

@@ -39,6 +39,10 @@ export interface TmuxPane {
     paneCurrentCommand: string;
     paneCurrentPath: string;
     panePid: string;
+    /** tmux session group — empty for an ungrouped session. Added so the
+     *  session list can identify the base session (the member whose name
+     *  equals its group) without pattern-matching name suffixes. */
+    sessionGroup: string;
     /** Derived friendly name — see `deriveFriendlyName`. */
     friendlyName: string;
 }
@@ -226,7 +230,7 @@ export function _resetTmuxAvailability(): void {
 const PANE_FORMAT = [
     '#{pane_id}', '#{session_name}', '#{window_index}', '#{window_name}',
     '#{pane_index}', '#{pane_title}', '#{pane_current_command}',
-    '#{pane_current_path}', '#{pane_pid}',
+    '#{pane_current_path}', '#{pane_pid}', '#{session_group}',
 ].join('\x1f');
 
 /**
@@ -270,11 +274,150 @@ export async function listTmuxPanes(socket?: TmuxSocket): Promise<TmuxPane[]> {
             paneCurrentCommand: fields[6],
             paneCurrentPath: fields[7],
             panePid: fields[8],
+            sessionGroup: fields[9] || '',
         };
         panes.push({ ...base, friendlyName: deriveFriendlyName(base) });
     }
     return panes;
 }
+
+// ─── Session list (tmux-derived, registry-free) ──────────────────────────
+// One row per team (grouped by `#{session_group}`), with the base session
+// flagged as the only safe attach point. The base is the member whose
+// `session_name` equals its `session_group` — the session with no board pane
+// on it, which keeps its status strip. Per-seat views (`lc-<team>-team-<role>`)
+// are created with `status off` and share a current-window pointer with a
+// board pane, so they are NOT offered as attach targets (see plan §4).
+//
+// Board-owned sessions are namespaced `lc-` (deriveTmuxSessionName, teamWiring).
+// Only `lc-` groups are listed — the operator's own tmux sessions are not the
+// board's to publish.
+
+export interface TmuxTeamSession {
+    /** The session group — `lc-<team>-team`. */
+    group: string;
+    /** The base session name (equals the group), or '' if no member matched. */
+    baseSession: string;
+    /** Distinct window names in the base session (the seats). */
+    windows: string[];
+    /** Member session names in the group (base + per-seat views). */
+    members: string[];
+}
+
+/**
+ * List the board's tmux teams, grouped by `#{session_group}`. Returns an
+ * empty array if no server is running (swallows the error — callers should
+ * gate on `isTmuxAvailable` first). tmux-derived only: no registry merge.
+ */
+export async function listTmuxSessions(socket?: TmuxSocket): Promise<TmuxTeamSession[]> {
+    const panes = await listTmuxPanes(socket);
+    if (panes.length === 0) { return []; }
+
+    // Group panes by sessionGroup. Panes with no group (ungrouped sessions)
+    // are keyed by their own sessionName so a lone `lc-` session still lists.
+    const groupMembers = new Map<string, Set<string>>();
+    const groupBaseWindows = new Map<string, Set<string>>();
+    for (const p of panes) {
+        const group = p.sessionGroup || p.sessionName;
+        if (!group.startsWith('lc-')) { continue; }
+        let members = groupMembers.get(group);
+        if (!members) { members = new Set(); groupMembers.set(group, members); }
+        members.add(p.sessionName);
+        // The base session's windows are the seats. A view session shares the
+        // window list but its panes belong to a different sessionName, so only
+        // count windows whose sessionName === group (the base).
+        if (p.sessionName === group) {
+            let wins = groupBaseWindows.get(group);
+            if (!wins) { wins = new Set(); groupBaseWindows.set(group, wins); }
+            wins.add(p.windowName);
+        }
+    }
+
+    const teams: TmuxTeamSession[] = [];
+    for (const [group, members] of groupMembers) {
+        const hasBase = members.has(group);
+        const windows = hasBase ? Array.from(groupBaseWindows.get(group) || []) : [];
+        teams.push({
+            group,
+            baseSession: hasBase ? group : '',
+            windows,
+            members: Array.from(members),
+        });
+    }
+    // Stable order by group name.
+    teams.sort((a, b) => a.group.localeCompare(b.group));
+    return teams;
+}
+
+// ─── Grid window builder ─────────────────────────────────────────────────
+// Builds the 4-up dashboard window from the verified recipe (plan §"The grid
+// recipe, verified"). Idempotent: a `grid` window that already exists is
+// killed and rebuilt (tmux permits duplicate window names, so a naive re-run
+// would make two). The board cannot `tmux attach` — the attach string is
+// returned for the human's SSH client.
+//
+// SECURITY: the team name reaches tmux command argv. It is validated against
+// the `deriveTmuxSessionName` charset (`^lc-[a-z0-9_-]+$`, ≤ 53 chars) before
+// any interpolation, so a request body cannot inject flags or targets.
+
+const TMUX_SESSION_NAME_RE = /^lc-[a-z0-9_-]+$/;
+const TMUX_SESSION_NAME_MAX = 53;  // 'lc-' + 50 (deriveTmuxSessionName cap)
+
+export function validateTmuxSessionName(name: string): void {
+    if (typeof name !== 'string' || !TMUX_SESSION_NAME_RE.test(name) || name.length > TMUX_SESSION_NAME_MAX) {
+        throw new Error(`invalid tmux session name: ${JSON.stringify(name)}`);
+    }
+}
+
+/**
+ * Build the `grid` window on a team session. Returns the attach command the
+ * human runs in their SSH client. Idempotent: an existing `grid` window is
+ * killed first. Throws if the team name is invalid or tmux fails.
+ *
+ * `viewSessions` are the per-seat view session names (the group's members
+ * minus the base) — the panes nest-attach to each by full name. If omitted,
+ * they are resolved from `listTmuxSessions` (members minus the base). The
+ * view names are NOT derived from window names here: the suffix derivation
+ * (goPtyFleetProjection.ts:248-256) strips the team slug with a fallback to
+ * the role, so `$G-<windowName>` would be wrong. The group's actual member
+ * session names are the source of truth.
+ */
+export async function buildTmuxGrid(team: string, viewSessions: string[], socket?: TmuxSocket): Promise<string> {
+    validateTmuxSessionName(team);
+    // Idempotency guard: kill an existing `grid` window before rebuilding.
+    // `tmux has-session -t <team>:grid` would also work, but list-windows is
+    // the same guard pattern goPtyFleetProjection.ts:258 uses for seats.
+    try {
+        const wins = await run(['list-windows', '-t', team, '-F', '#{window_name}'], socket);
+        const names = wins.split('\n').map(w => w.trim()).filter(Boolean);
+        if (names.includes('grid')) {
+            await run(['kill-window', '-t', `${team}:grid`], socket);
+        }
+    } catch { /* no such session/window — nothing to kill */ }
+
+    // Resolve the view sessions if not supplied: the group's members minus the
+    // base session. Each is a per-seat view the grid pane nest-attaches to.
+    let views = viewSessions;
+    if (!Array.isArray(views) || views.length === 0) {
+        const teams = await listTmuxSessions(socket);
+        const t = teams.find(x => x.group === team || x.baseSession === team);
+        views = t ? t.members.filter(m => m !== t.baseSession) : [];
+    }
+    if (!views || views.length === 0) {
+        throw new Error(`no per-seat view sessions found for team '${team}'`);
+    }
+
+    // First pane: nest-attach to the first view. `TMUX=` is load-bearing —
+    // tmux refuses to attach from inside itself unless the variable is cleared.
+    const [first, ...rest] = views;
+    await run(['new-window', '-d', '-t', team, '-n', 'grid', `TMUX= tmux attach -t ${first}`], socket);
+    for (const view of rest) {
+        await run(['split-window', '-d', '-t', `${team}:grid`, `TMUX= tmux attach -t ${view}`], socket);
+    }
+    await run(['select-layout', '-t', `${team}:grid`, 'tiled'], socket);
+    return `tmux attach -t ${team}:grid`;
+}
+
 
 // ─── Name normalization ──────────────────────────────────────────────────
 // Mirrors `normalizeAgentKey` (TaskViewerProvider.ts:497): lowercase, collapse
