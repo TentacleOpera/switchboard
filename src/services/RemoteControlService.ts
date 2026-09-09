@@ -39,7 +39,7 @@ import * as crypto from 'crypto';
  *    on the next poll (delayed, not lost).
  */
 
-export type RemoteProviderKind = 'linear' | 'notion' | 'clickup';
+export type RemoteProviderKind = 'linear' | 'notion' | 'clickup' | 'store';
 
 export interface RemoteConfig {
     /** Which remote backend drives the board. One active at a time (no hot-swap). */

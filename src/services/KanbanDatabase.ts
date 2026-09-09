@@ -10744,6 +10744,60 @@ FROM plans
             console.error('[KanbanDatabase] releaseSyncLease failed:', e);
         }
     }
+
+    // ── Raw SQL execution for the store-backed remote provider ───────────
+    // The StoreRemoteProvider reads/writes the plan_inbox queue table directly
+    // via these thin pass-through methods. They exist because the provider's
+    // fetch is a SQL read of a queue table rather than an HTTP call — the one
+    // provider kind whose transport is the same store the board already uses.
+
+    /**
+     * Execute raw SQL (DDL or mutation). Used by StoreRemoteProvider to
+     * create the plan_inbox table and mark rows as materialised.
+     */
+    public execSql(sql: string): void {
+        if (!this._db) { return; }
+        try {
+            this._db.exec(sql);
+        } catch (e) {
+            console.error('[KanbanDatabase] execSql failed:', e);
+        }
+    }
+
+    /**
+     * Run a parameterised SQL mutation. Returns void.
+     */
+    public runSql(sql: string, params: unknown[]): void {
+        if (!this._db) { return; }
+        try {
+            this._db.run(sql, params);
+        } catch (e) {
+            console.error('[KanbanDatabase] runSql failed:', e);
+        }
+    }
+
+    /**
+     * Query rows via parameterised SQL. Returns an array of row objects.
+     * Used by StoreRemoteProvider to read pending queue rows.
+     */
+    public querySql(sql: string, params: unknown[]): Record<string, unknown>[] {
+        if (!this._db) { return []; }
+        try {
+            const stmt = this._db.prepare(sql, params);
+            try {
+                const rows: Record<string, unknown>[] = [];
+                while (stmt.step()) {
+                    rows.push(stmt.getAsObject());
+                }
+                return rows;
+            } finally {
+                stmt.free();
+            }
+        } catch (e) {
+            console.error('[KanbanDatabase] querySql failed:', e);
+            return [];
+        }
+    }
     private _localMirrorDebounce: NodeJS.Timeout | null = null;
     /**
      * Set by dispose(). Without it a debounced mirror write fires AFTER dispose,
