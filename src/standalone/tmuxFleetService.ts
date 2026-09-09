@@ -91,12 +91,15 @@ function normalizeAgentKey(value: string): string {
 }
 
 // ─── Registry ownership sub-tag ──────────────────────────────────────────
-// `ideName: 'switchboard-tmux'` is written by TWO independent services: this
-// adoption fleet (Part 2) and `tmuxTeamSeating.updateTmuxRegistryState` (Part 4).
-// Both use the same "replace my rows, preserve everything else" merge, so
+// `ideName: 'switchboard-tmux'` was written by TWO independent services: this
+// adoption fleet (Part 2) and the (now-deleted) tmuxTeamSeating seating writer.
+// Both used the same "replace my rows, preserve everything else" merge, so
 // without a second discriminator each write silently deleted the other's rows.
-// A row with no `tmuxOwner` predates the tag and belongs to this fleet — the
-// seating writer is the one that must opt in explicitly.
+// The seating writer is gone (see the plan "tmux Belongs in the Go Host"), but
+// the discriminator stays: a pre-upgrade install may still carry `tmuxOwner:
+// 'seat'` rows in its registry, and the adoption fleet must keep claiming only
+// its own rows or it would clobber them. A row with no `tmuxOwner` predates the
+// tag and belongs to this fleet.
 export const TMUX_OWNER_ADOPT = 'adopt';
 export const TMUX_OWNER_SEAT = 'seat';
 
@@ -342,11 +345,12 @@ export class TmuxFleetService {
 
     /**
      * Load adopted-pane rows persisted by a previous process back into memory.
-     * Only rows this fleet owns are taken; team-seated rows (`tmuxOwner: 'seat'`)
-     * belong to `tmuxTeamSeating` and are left alone. Rows already in memory win,
-     * so a hydrate is safe to run more than once. Liveness is NOT assumed — the
-     * caller (`reconcile`) immediately re-confirms every hydrated row against
-     * `list-panes` and drops the ones whose pane is gone.
+     * Only rows this fleet owns are taken; legacy team-seated rows
+     * (`tmuxOwner: 'seat'`, written by the now-deleted seating writer) are left
+     * alone. Rows already in memory win, so a hydrate is safe to run more than
+     * once. Liveness is NOT assumed — the caller (`reconcile`) immediately
+     * re-confirms every hydrated row against `list-panes` and drops the ones
+     * whose pane is gone.
      */
     private _hydrateFromRegistry(): void {
         let existing: Record<string, any>;
@@ -423,11 +427,13 @@ export class TmuxFleetService {
                     worktreePath: pane.worktreePath,
                     ideName: TMUX_IDE_NAME,
                     purpose: 'tmux',
-                    // Sub-tag: which tmux writer owns this row. Two writers share
-                    // `ideName: 'switchboard-tmux'` — this adoption fleet and
-                    // tmuxTeamSeating's `updateTmuxRegistryState`. Without a
-                    // discriminator each one's "replace my rows, preserve the rest"
-                    // merge deletes the other's rows on every write.
+                    // Sub-tag: which tmux writer owns this row. Two writers used to
+                    // share `ideName: 'switchboard-tmux'` — this adoption fleet and
+                    // the (now-deleted) seating writer's `updateTmuxRegistryState`.
+                    // Without a discriminator each one's "replace my rows, preserve
+                    // the rest" merge deletes the other's rows on every write. The
+                    // seating writer is gone, but the tag stays so a pre-upgrade
+                    // install's seat rows are not clobbered.
                     tmuxOwner: TMUX_OWNER_ADOPT,
                     paneId: pane.paneId,
                     // REQUIRED, not decorative: startTmuxReconcilePoll judges a row
@@ -443,4 +449,81 @@ export class TmuxFleetService {
             console.warn('[TmuxFleetService] Failed to update terminal registry state:', err);
         });
     }
+}
+
+// ─── Liveness reconcile poll ──────────────────────────────────────────────
+
+/**
+ * Start a periodic reconcile poll that detects tmux pane death by comparing
+ * `listTmuxPanes()` against `runtime.terminals` entries with
+ * `ideName === TMUX_IDE_NAME`. Dead panes are marked `status: 'exited'`.
+ *
+ * tmux has no event stream — the fleet uses `ptyProcess.onExit`, but tmux
+ * pane death must be detected by polling. The poll is `.unref()`'d so it
+ * doesn't hold the process open, and swallows all errors (a failed poll is
+ * a missed death detection, not a crash).
+ *
+ * This poll covers BOTH tmux writers' rows — adoption (`tmuxOwner: 'adopt'`)
+ * and any legacy seating rows (`tmuxOwner: 'seat'`) left in the registry by
+ * a prior install. The seating writer was deleted (see the plan "tmux Belongs
+ * in the Go Host"); its rows persist until this poll reaps them, so the poll
+ * must keep scanning every `ideName === TMUX_IDE_NAME` row, not just adopt
+ * rows, or a stale seat row would satisfy a dispatch pre-flight forever.
+ */
+export function startTmuxReconcilePoll(
+    db: any,
+    intervalMs: number = 5000,
+    socket?: TmuxSocket
+): { stop: () => void } {
+    const timer = setInterval(async () => {
+        try {
+            const existing = await db?.getConfigJson?.('runtime.terminals', {}) || {};
+            if (!existing || typeof existing !== 'object') { return; }
+
+            // Collect tmux entries grouped by session.
+            const tmuxEntries: Array<[string, any]> = Object.entries(existing)
+                .filter(([, e]: [string, any]) => e && e.ideName === TMUX_IDE_NAME);
+            if (tmuxEntries.length === 0) { return; }
+
+            const livePanes = await listTmuxPanes(socket);
+            const livePaneIds = new Set(livePanes.map(p => p.paneId));
+            const liveSessions = new Set(livePanes.map(p => p.sessionName));
+
+            let changed = false;
+            const terminalMap: Record<string, any> = {};
+            for (const [name, entry] of Object.entries(existing)) {
+                if (!(entry as any) || (entry as any).ideName !== TMUX_IDE_NAME) {
+                    terminalMap[name] = entry;
+                    continue;
+                }
+                const e = entry as any;
+                // Pane identity is the authority. The session check is only a
+                // second signal, and ONLY for rows that actually carry a
+                // sessionName — an undefined sessionName is never a member of
+                // `liveSessions`, so testing it unconditionally marked every row
+                // without that field dead on the first tick.
+                const paneGone = !livePaneIds.has(e.paneId);
+                const sessionGone = typeof e.sessionName === 'string' && e.sessionName.length > 0
+                    ? !liveSessions.has(e.sessionName)
+                    : false;
+                if ((sessionGone || paneGone) && e.status !== 'exited') {
+                    terminalMap[name] = { ...e, status: 'exited' };
+                    changed = true;
+                } else {
+                    terminalMap[name] = e;
+                }
+            }
+
+            if (changed) {
+                await db.setConfigJson('runtime.terminals', terminalMap);
+            }
+        } catch {
+            // Swallow — a failed poll is a missed death detection, not a crash.
+        }
+    }, intervalMs);
+    timer.unref();
+
+    return {
+        stop: () => { try { timer.unref(); clearInterval(timer); } catch { /* already stopped */ } },
+    };
 }

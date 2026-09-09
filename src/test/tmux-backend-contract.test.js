@@ -570,14 +570,15 @@ async function test(name, fn) {
     });
 
     await test('the two tmux registry writers do not clobber each other', async () => {
-        // `ideName: 'switchboard-tmux'` is written by BOTH the adoption fleet and
-        // tmuxTeamSeating.updateTmuxRegistryState. Both merge as "replace my rows,
-        // preserve the rest", so without a second discriminator each write deleted
-        // the other's rows. `tmuxOwner` is that discriminator.
+        // `ideName: 'switchboard-tmux'` was written by BOTH the adoption fleet and
+        // the (now-deleted) tmuxTeamSeating.updateTmuxRegistryState. Both merged as
+        // "replace my rows, preserve the rest", so without a second discriminator
+        // each write deleted the other's rows. `tmuxOwner` is that discriminator.
         //
-        // The adoption half runs behaviourally. The seating half is asserted at the
-        // source: tmuxTeamSeating cannot be imported here (a transitive dependency
-        // uses a TS parameter property, unsupported by the strip-only loader).
+        // The seating writer is gone (see the plan "tmux Belongs in the Go Host"),
+        // but the adoption fleet still carries the discriminator and must not
+        // clobber a seat-tagged row left in the registry by a pre-upgrade install.
+        // The adoption half runs behaviourally; the seat row is pre-seeded here.
         mockRun(args => {
             if (args[0] === 'list-panes') {
                 return ['%1', 'work', '1', 'win', '0', 'coder-1', 'claude', '/tmp/wt', '11'].join('\x1f') + '\n';
@@ -604,33 +605,6 @@ async function test(name, fn) {
         } finally {
             restoreRun();
         }
-
-        const seatingSrc = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'tmuxTeamSeating.ts'), 'utf8');
-        const seatingCode = seatingSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
-        assert.ok(
-            /tmuxOwner:\s*TMUX_OWNER_SEAT/.test(seatingCode),
-            'the seating writer must tag its rows tmuxOwner: seat'
-        );
-        assert.ok(
-            /e\.tmuxOwner\s*===\s*TMUX_OWNER_SEAT/.test(seatingCode),
-            'the seating writer must claim ONLY seat rows, or it deletes every adopted pane'
-        );
-    });
-
-    await test('delegate panes split on a pane id, never on <session>:0', () => {
-        const src = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'tmuxTeamSeating.ts'), 'utf8');
-        const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
-        // `base-index` is a user setting and is commonly 1, so `<session>:0`
-        // resolves to nothing and every delegate split fails — which the
-        // partial-failure arm escalates into killing the whole session.
-        assert.ok(
-            !/split-window[\s\S]{0,200}\$\{sessionName\}:0/.test(code),
-            'split-window must target the head pane id, not a base-index-dependent window index'
-        );
-        assert.ok(
-            /'split-window',\s*'-t',\s*headPaneId/.test(code),
-            'split-window must target headPaneId'
-        );
     });
 
     if (failures > 0) {

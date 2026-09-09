@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import type {
-    HostSeams, HostPathConfigProvider, HostSecrets, HostWatchEvent, HostWatchHandle, TerminalBackend
+    HostSeams, HostPathConfigProvider, HostSecrets, HostWatchEvent, HostWatchHandle
 } from '../services/hostSeams';
 import { switchboardCommandRegistry } from '../services/commandRegistry';
 import { readConfigValueSync, writeConfigValueSync } from '../services/configJsonBridge';
@@ -337,8 +337,7 @@ export class StandaloneHostState implements HostMemento {
  * argument and its ui/terminal/editor seams differ — so do it deliberately, with tests.
  */
 export function createHeadlessHostSeams(
-    workspaceRoot: string,
-    opts?: { terminalBackend?: TerminalBackend }
+    workspaceRoot: string
 ): HostSeams {
     const pathConfig = new StandaloneHostPathConfigProvider(workspaceRoot);
     // Factory, not `new` — StandaloneHostSecrets moved to encryptedSecretsStore and now
@@ -354,21 +353,16 @@ export function createHeadlessHostSeams(
         // `vscode.env.appName` is simply absent from vscodeShim.
         appName: '',
         pathConfig,
-        // The optional `terminalBackend` lets a future caller (or the tmux bridge)
-        // inject a real backend. The inert no-op stub below stays the fallback for
-        // the disabled/unavailable case — it is still the correct answer when there
-        // is no tmux, and it matches the structural `TerminalBackend` interface so
-        // an omission is a compile error at this literal, not at the call site.
+        // No-op terminal handle. The real standalone terminals live in the PTY
+        // fleet (ptyBackend/ptyFleetService); this seam stays inert so any
+        // host-agnostic caller that reaches for `terminal.create()` here gets a
+        // safe object rather than a crash. New TerminalHandle members must be
+        // stubbed here too — the interface is structural, so an omission is a
+        // compile error at this literal, not at the call site.
         // NOTE: this seam is NOT currently wired by bootstrap.ts (it injects
         // `createVscodeHostSeams`); the tmux bridge reaches the fleet service
-        // directly. This option is the forward-looking seam the plan names.
-        terminal: opts?.terminalBackend ?? {
-            // No-op terminal handle. The real standalone terminals live in the PTY
-            // fleet (ptyBackend/ptyFleetService); this seam stays inert so any
-            // host-agnostic caller that reaches for `terminal.create()` here gets a
-            // safe object rather than a crash. New TerminalHandle members must be
-            // stubbed here too — the interface is structural, so an omission is a
-            // compile error at this literal, not at the call site.
+        // directly.
+        terminal: {
             create: (name: string) => ({
                 name,
                 sendText: () => {},

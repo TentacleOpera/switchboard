@@ -164,14 +164,15 @@ export async function sendPromptToTmux(
         const caps = await tmuxCaps(socket);
 
         // Standing-orders chokepoint for the tmux rail. This is the funnel every
-        // tmux delivery passes through (`deliverToTmuxSeat`, the board's tmux
-        // dispatch leg, the sendToTerminal tmux arm), and until now NONE of them
-        // applied standing orders: `applyStandingOrders` was never called anywhere
-        // in the tmux files, so a tmux seat — the phone/ssh path — received every
-        // prompt with no orders at all, while the PTY seat beside it received them.
-        // Opt out with `standingOrders: false` for non-prompt sends (a startup
-        // shell command); control strings use `sendControlToTmuxSeat`, which does
-        // not come through here.
+        // tmux delivery passes through (the board's tmux dispatch leg, the
+        // sendToTerminal tmux arm, and the adoption fleet's prompt delivery),
+        // and until now NONE of them applied standing orders:
+        // `applyStandingOrders` was never called anywhere in the tmux files, so a
+        // tmux seat — the phone/ssh path — received every prompt with no orders
+        // at all, while the PTY seat beside it received them. Opt out with
+        // `standingOrders: false` for non-prompt sends (a startup shell command);
+        // control strings use the adoption handle's `sendText`, which does not
+        // come through here.
         let payload = text;
         if (opts?.standingOrders !== false) {
             try {

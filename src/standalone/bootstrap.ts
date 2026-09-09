@@ -133,15 +133,7 @@ import {
     type TmuxTerminalHandle,
 } from './tmuxBackend';
 import { sendPromptToTmux, clearTmuxPane } from './tmuxPromptDelivery';
-import { TmuxFleetService, BareShellError } from './tmuxFleetService';
-import {
-    createTmuxHeadWithDelegates,
-    updateTmuxRegistryState,
-    startTmuxReconcilePoll,
-    resolveTmuxSeatFromRegistry,
-    deliverToTmuxSeat,
-    sendControlToTmuxSeat,
-} from './tmuxTeamSeating';
+import { TmuxFleetService, BareShellError, startTmuxReconcilePoll } from './tmuxFleetService';
 
 // One JSDOM window for the whole process, reused by every `markdown.api.render`
 // call below. Building a window per render is ~100x slower and the expensive
@@ -2133,9 +2125,12 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     if (payload && payload.group) {
                         return { success: false, error: 'Team definition cannot be supplied over the wire' };
                     }
-                    // The terminal backend is host-resolved from the scoped
-                    // setting, never from the wire — same posture as the
-                    // group definition guard above.
+                    // There is one create path now (the fleet); a wire-supplied
+                    // `backend` field is rejected as an unexpected wire field —
+                    // same posture as the group definition guard above. (The
+                    // legacy scoped `terminalBackend` setting that selected an
+                    // alternative tmux backend is gone; tmux seating is a
+                    // property of the fleet's create(), not a backend choice.)
                     if (payload && payload.backend) {
                         return { success: false, error: 'Terminal backend cannot be supplied over the wire' };
                     }
@@ -2913,6 +2908,37 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 }
 
                 case 'triggerAction': {
+                    // CODED_AUTO early-branch — mirrors KanbanProvider.ts:10727.
+                    // The collapsed coder bucket sends 'CODED_AUTO' as intent, not
+                    // a pre-resolved column. This hand-written arm treats
+                    // targetColumn as a LITERAL column (:2958 below), so persisting
+                    // 'CODED_AUTO' would write a synthetic string into kanban_column
+                    // and vanish the card. Delegate to the provider's triggerAction
+                    // arm, whose CODED_AUTO branch routes through _advanceCards for
+                    // per-card complexity routing to a REAL coder column — and
+                    // applies the CLI-triggers gate to the DISPATCH only, so a drag
+                    // with triggers off still moves the card (the documented
+                    // "advance moves without dispatching" behaviour). Checked BEFORE
+                    // the gate below for the same reason the extension does: gating
+                    // here made a one-card CODED_AUTO drop refuse outright while a
+                    // two-card drop of the same gesture moved (triggerBatchAction
+                    // already routes through the provider). Re-entrancy is safe:
+                    // _advanceCards dispatches via switchboard.triggerAgentFromKanban
+                    // with no targetColumn field, so explicitTarget is undefined on
+                    // re-entry and this branch is not taken again.
+                    if (payload?.targetColumn === 'CODED_AUTO') {
+                        const result = await kanbanProvider.handleServiceVerb('triggerAction', {
+                            initiatorProject: kanbanProvider.getProjectFilter(),
+                            ...payload,
+                            workspaceRoot: root,
+                        });
+                        // Match the kanbanVerb `default:` arm: a non-read-only verb
+                        // pushes the full state to browser clients (additive to the
+                        // provider's own _scheduleBoardRefresh / moveCards pushes).
+                        schedulePushFullState();
+                        return result;
+                    }
+
                     // CLI-triggers gate — mirrors KanbanProvider.ts:8153. An
                     // API-originated dispatch (POST /kanban/dispatch) passes
                     // bypassTriggerGate: true; a board drag-drop respects the
@@ -3380,28 +3406,6 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         }
                         return { success: true, terminalName: tmuxHandle.name, transport: 'tmux' };
                     }
-                    // Team-seated tmux panes: registered in runtime.terminals
-                    // with ideName === TMUX_IDE_NAME by updateTmuxRegistryState,
-                    // but NOT in tmuxFleetService (which is Part 2's adoption
-                    // service — team seating creates panes, not adopts them).
-                    // Check the registry for an active tmux seat matching the
-                    // name before falling through to auto-create.
-                    try {
-                        const tmuxSeat = await resolveTmuxSeatFromRegistry(db, name);
-                        if (tmuxSeat && tmuxSeat.status === 'active') {
-                            const isControl = !text.includes('\n') && text.trimStart().startsWith('/');
-                            let tmuxRes: any;
-                            if (isControl) {
-                                tmuxRes = await sendControlToTmuxSeat(tmuxSeat.paneId, text);
-                            } else {
-                                tmuxRes = await deliverToTmuxSeat(tmuxSeat.paneId, name, text, undefined, { clearBeforePrompt: false });
-                            }
-                            if (tmuxRes?.success) {
-                                return { success: true, transport: 'tmux' };
-                            }
-                            return { success: false, error: tmuxRes?.error || 'tmux delivery failed' };
-                        }
-                    } catch { /* registry read failed — fall through to auto-create */ }
                     // No PTY and no tmux match — auto-create a PTY (existing
                     // standalone contract). Surface via `created: true` so a
                     // driving agent can detect it spawned the terminal.
@@ -3992,43 +3996,17 @@ Each plan file must include:
             set: (k, v) => kanbanProvider._updateScopedSetting(k, v),
         };
 
-        // Backend selection at the createHeadWithDelegates seam. The setting
-        // is read through the same scoped-config path the rest of team
-        // settings use — NOT from the wire (the ptyStartTeam verb rejects a
-        // wire-supplied backend field). Default is 'fleet'; absent or
-        // unrecognized means fleet.
-        // ONE switch decides tmux. This used to read a second, scoped `terminalBackend`
-        // setting (default 'fleet') while the checkbox and every other read site use
-        // `terminal.tmux.enabled` — so turning tmux on seated individual agents in tmux
-        // and left every TEAM on plain PTYs, with nothing in the UI explaining why.
-        // `terminalBackend` is still honoured when explicitly set, so an install that
-        // chose it keeps working; absent, the master gate decides.
-        // 'tmux' here means the OLD alternative-backend path, which removes seats from
-        // the fleet and empties the terminals pane. It stays opt-in and explicit only;
-        // tmux seating for everyone else is the command wrapper in the fleet's create().
-        const backend = kanbanProvider._getScopedSetting<string>('terminalBackend', 'fleet') || 'fleet';
-
-        if (backend === 'tmux') {
-            // tmux backend: create panes in a Switchboard-owned tmux session.
-            // The fleet availability check is skipped — tmux is an alternative
-            // backend. The tmux callback does its own availability check and
-            // returns a refusal if tmux is absent.
-            return instantiateAgentGroupCore({
-                db,
-                settings,
-                group,
-                cwd: groupRoot || workspaceRoot,
-                liveDelegateCount: async () => {
-                    // tmux seats are not PTY delegates.
-                    return 0;
-                },
-                createHeadWithDelegates: (spec) => createTmuxHeadWithDelegates(spec, { db }),
-                // The tmux callback writes the registry itself (updateTmuxRegistryState).
-                // No separate onCreated hook needed.
-            });
-        }
-
-        // Fleet backend (default).
+        // ONE create path: the fleet. The legacy scoped `terminalBackend`
+        // setting (which selected an alternative tmux seating backend that
+        // removed seats from the fleet) is gone — its branch and the
+        // `tmuxTeamSeating` module it gated were deleted (see the plan "tmux
+        // Belongs in the Go Host"). tmux seating is now a property of the
+        // seat: the fleet's create() wraps the startup command in
+        // `tmux attach` when `terminal.tmux.enabled` is on, so a tmux session
+        // is a Go-host PTY the board renders through the same socket as every
+        // other seat. One switch (`terminal.tmux.enabled`) decides it; a
+        // stored legacy `terminalBackend: 'tmux'` is migrated to that switch
+        // below before this instantiator runs.
         if (!ptyReady) {
             return { success: false, error: 'PTY terminals are unavailable: switchboard-pty-host artifact is missing or unsupported on this machine.' };
         }
@@ -4118,6 +4096,52 @@ Each plan file must include:
     // no-live-terminal pre-flight and route work at a dead pid.
     await GoPtyFleetProjection.purgePtyTerminals(db);
 
+    // ── Legacy `terminalBackend` setting migration ─────────────────────────
+    // The scoped `terminalBackend` setting (default 'fleet') selected the old
+    // alternative tmux seating backend — a second fleet whose branch and module
+    // (`tmuxTeamSeating.ts`) were deleted (see the plan "tmux Belongs in the Go
+    // Host"). With that branch gone, `terminalBackend` is a no-op read: nothing
+    // branches on it. But an install that stored `terminalBackend: 'tmux'` did so
+    // to seat teams in tmux, and that intent must survive the upgrade — the
+    // single remaining switch is `terminal.tmux.enabled`, which the fleet's
+    // create() honours by wrapping the startup command in `tmux attach`.
+    //
+    // Migration: if `terminalBackend === 'tmux'` is still explicitly stored,
+    // promote it to `terminal.tmux.enabled = true` UNLESS the operator
+    // explicitly set that switch to false (a contradictory config — tmux backend
+    // selected but the master gate off — honours the explicit off). Then drop
+    // the scoped `terminalBackend` key so it stops masking the (absent) branch.
+    // Idempotent: after the drop the scoped read returns the 'fleet' default, so
+    // the `=== 'tmux'` guard never re-fires.
+    try {
+        const legacyBackend = kanbanProvider._getScopedSetting<string>('terminalBackend', 'fleet');
+        if (legacyBackend === 'tmux') {
+            // Detect an EXPLICIT `terminal.tmux.enabled: false`. configProvider's
+            // getConfigBoolean returns the default (true) for an absent key, so it
+            // cannot distinguish "unset" from "explicitly true" — read the raw
+            // config-table value directly. Both storage shapes the bridge writes
+            // (`config.switchboard.<key>` and `config.<key>`) are checked.
+            const rawTmuxEnabled = db.getConfigJsonSync<boolean | undefined>('config.switchboard.terminal.tmux.enabled', undefined)
+                ?? db.getConfigJsonSync<boolean | undefined>('config.terminal.tmux.enabled', undefined);
+            const explicitlyOff = rawTmuxEnabled === false
+                || (typeof rawTmuxEnabled === 'string' && rawTmuxEnabled.toLowerCase() === 'false');
+            if (!explicitlyOff) {
+                await configProvider.updateConfigGlobal('terminal.tmux.enabled', true);
+                log(opts, '[tmux-bridge] migrated legacy terminalBackend:tmux → terminal.tmux.enabled:true');
+            } else {
+                log(opts, '[tmux-bridge] legacy terminalBackend:tmux found but terminal.tmux.enabled is explicitly false — respecting the master gate');
+            }
+            // Drop the scoped key at whatever tier holds it. Setting it to the
+            // default 'fleet' neutralizes the override; the read above then
+            // returns 'fleet' and the migration never re-fires.
+            await kanbanProvider._updateScopedSetting('terminalBackend', 'fleet');
+        }
+    } catch (err) {
+        // A failed migration must not block startup — the worst case is a
+        // no-op `terminalBackend` key that nothing reads anyway.
+        log(opts, `[tmux-bridge] terminalBackend migration failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
+    }
+
     // tmux bridge — probe + fleet construction + pre-server reconcile. The probe
     // is async (`isTmuxAvailable` shells out to `tmux -V` + `list-sessions`), so
     // it cannot run inside the synchronous `createHeadlessHostSeams` constructor;
@@ -4125,8 +4149,9 @@ Each plan file must include:
     // The reconcile MUST complete before `server.start()` below: a stale tmux
     // row satisfies the dispatch pre-flight and produces a 409-free dispatch into
     // nothing — the exact failure the PTY purge's await ordering exists to
-    // prevent. Gated behind the opt-in setting (default off); a disabled host
-    // never probes, never constructs a fleet, and has zero behaviour change.
+    // prevent. Gated behind `terminal.tmux.enabled` (default on); a host with
+    // the switch off never probes, never constructs a fleet, and has zero
+    // behaviour change.
     const tmuxEnabled = configProvider.getConfigBoolean('terminal.tmux.enabled', true);
     if (tmuxEnabled) {
         tmuxSocket = (() => {
@@ -4186,15 +4211,20 @@ Each plan file must include:
     // .unref() so the timer never holds the process open. Swallows all
     // errors — a failed poll is a missed death detection, not a crash.
     //
-    // Started ONLY when tmux is actually in play. Two reasons it is not
-    // unconditional: (1) "setting off = zero behaviour change" is an acceptance
-    // clause, and a 5-second config read on every standalone host forever is a
-    // change; (2) the poll must be handed `tmuxSocket` — on a non-default socket
-    // an unparameterised listTmuxPanes() inspects the DEFAULT socket, sees none
-    // of the real panes, and marks every live tmux seat 'exited'.
-    const tmuxTeamBackendSelected =
-        (kanbanProvider._getScopedSetting<string>('terminalBackend', 'fleet') || 'fleet') === 'tmux';
-    const tmuxReconcilePoll = (tmuxReady || tmuxTeamBackendSelected)
+    // Started ONLY when tmux is actually in play (the adoption fleet is live).
+    // Two reasons it is not unconditional: (1) "setting off = zero behaviour
+    // change" is an acceptance clause, and a 5-second config read on every
+    // standalone host forever is a change; (2) the poll must be handed
+    // `tmuxSocket` — on a non-default socket an unparameterised
+    // listTmuxPanes() inspects the DEFAULT socket, sees none of the real
+    // panes, and marks every live tmux seat 'exited'.
+    //
+    // The legacy `terminalBackend: 'tmux'` seating path used to start this poll
+    // too (it seated teams outside the fleet). That path is deleted; the poll
+    // now runs only for the adoption fleet, but it still scans EVERY
+    // `ideName === TMUX_IDE_NAME` row so stale seating rows from a pre-upgrade
+    // install are reaped rather than left satisfying a dispatch pre-flight.
+    const tmuxReconcilePoll = tmuxReady
         ? startTmuxReconcilePoll(db, 5000, tmuxSocket)
         : { stop: () => { /* poll never started — tmux is not in play */ } };
 
@@ -4406,9 +4436,10 @@ Each plan file must include:
             // error rather than an unhandled spawn exception.
             const isTmuxVerb = verb.startsWith('tmux');
             // ptyStartTeam is allowed through regardless of ptyReady because
-            // the registered instantiator reads the terminalBackend setting
-            // and branches: a tmux-backend workspace does not need the PTY
-            // host. The instantiator's fleet arm checks ptyReady itself.
+            // the registered instantiator's fleet arm checks ptyReady itself
+            // and returns a clean refusal if the PTY host is unavailable. (The
+            // legacy `terminalBackend: 'tmux'` branch that bypassed the fleet is
+            // gone — tmux seating is now a property of the fleet's create().)
             if (!isTmuxVerb && verb !== 'ptyVisibleRoles' && verb !== 'ptyListAgentGroups' && verb !== 'ptyStartTeam' && !ptyReady) {
                 return { success: false, error: 'PTY terminals are unavailable: switchboard-pty-host artifact is missing or unsupported on this machine.' };
             }
