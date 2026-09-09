@@ -2566,6 +2566,13 @@ async function cmdSetup(workspaceRoot: string, argv: string[]): Promise<void> {
  * path); the online `[1]` calls `cmdBoardConsole` in-process, matching the
  * previous CLI Mode handoff. Non-TTY invocations exit 0 with usage so a
  * piped/cron bare call never hangs.
+ *
+ * Restructured to a fixed GUI/CLI bifurcation (plan 759c05b5): the top-level
+ * menu shape is identical whether a server is online or offline. [1] GUI Mode
+ * opens a state-aware sub-menu (online: show URL; offline: start local/tailnet).
+ * [2] CLI Mode re-spawns `__board-console` as a child so the parent can loop
+ * back to the main menu (Back) without refactoring cmdBoardConsole's exit
+ * semantics. [s] Setup and [a] About re-spawn their subcommands.
  */
 async function cmdMainMenu(workspaceRoot: string): Promise<void> {
     // Non-TTY guard: a piped/cron bare invocation has no menu to show.
@@ -2591,109 +2598,141 @@ async function cmdMainMenu(workspaceRoot: string): Promise<void> {
         console.log(`  Workspace:        ${workspaceRoot}`);
         console.log(`  Server Status:    ${online ? `Online: http://127.0.0.1:${port}` : 'Offline (No active Switchboard instance detected)'}`);
         console.log('');
-        console.log('OPTIONS:');
-        if (online) {
-            console.log('  [1] Open Board Console (CLI navigator — browse columns, search, dispatch)');
-            console.log('  [2] Setup & Scaffolding Wizard (init, multi-repo scaffold, secrets)');
-            console.log('  [3] Help & Command Documentation (view CLI command manual)');
-            console.log('  [4] Server Status & Diagnostics (inspect ports, tokens, logs)');
-            console.log('  [q] Exit (or Enter)');
-            console.log('');
-        } else {
-            console.log('  [1] Start Local Board (127.0.0.1 loopback — this machine only)');
-            console.log('  [2] Start Remote Tailnet Board (Tailscale mesh — iPad/phone/remote access)');
-            console.log('  [3] Setup & Scaffolding Wizard (init, multi-repo scaffold, secrets)');
-            console.log('  [4] Help & Command Documentation (view CLI command manual)');
-            console.log('  [5] Server Status & Diagnostics (inspect ports, tokens, logs)');
-            console.log('  [q] Exit (or Enter)');
-            console.log('');
-        }
+        console.log('MAIN MENU:');
+        console.log('  [1] GUI Mode  — Start Local or Remote Browser Board');
+        console.log('  [2] CLI Mode  — Interactive Terminal Board Navigator');
+        console.log('  [s] Setup     — Workspace & Multi-Repo Scaffolding Wizard');
+        console.log('  [a] About     — System Info & Version');
+        console.log('  [q] Exit (or Enter)');
+        console.log('');
 
         const prompter = openPrompter();
         try {
             const onSigInt = (): void => { prompter.close(); exitFlushed(0); };
             process.once('SIGINT', onSigInt);
-            const answer = await prompter.ask(online ? 'Select an option [1-4/q]: ' : 'Select an option [1-5/q]: ');
+            const answer = await prompter.ask('Select mode [1/2/s/a] (or Enter / q to exit): ');
             process.removeListener('SIGINT', onSigInt);
 
             if (answer === null || answer === '' || answer === 'q') {
                 exitFlushed(0);
             }
 
-            // ── Online branch ────────────────────────────────────────────
-            if (online) {
-                if (answer === '1') {
-                    // Hand off to the board console in-process — matches the
-                    // previous CLI Mode handoff. cmdBoardConsole re-probes
-                    // findRunningInstance and exits 1 with the offline guidance
-                    // if the server died between render and selection.
+            // ── [1] GUI sub-menu — state-aware ────────────────────────────
+            if (answer === '1') {
+                if (online) {
+                    // Online: show the running server URL, do NOT offer to
+                    // start a second server (existing-instance guard exits 1).
+                    console.log('');
+                    console.log(`  Server already running at http://127.0.0.1:${port}`);
+                    console.log('');
+                    const guiPrompter = openPrompter();
+                    try {
+                        const guiAnswer = await promptWithSigInt(guiPrompter, '[1] Open in Browser  [b] Back: ');
+                        if (guiAnswer === '1') {
+                            guiPrompter.close();
+                            // Attempt to open the browser. Best-effort — the
+                            // existing serve path's browser-open logic is not
+                            // reusable here (it runs after server bind), so use
+                            // the platform open command directly.
+                            const url = `http://127.0.0.1:${port}`;
+                            try {
+                                const openCmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
+                                spawn(openCmd, [url], { stdio: 'ignore', detached: true }).unref();
+                            } catch { /* best-effort */ }
+                            console.log(`[switchboard] Browser opened to ${url}`);
+                            await promptWithSigInt(openPrompter(), '\nPress Enter to continue: ');
+                        }
+                    } finally {
+                        guiPrompter.close();
+                    }
                     prompter.close();
-                    await cmdBoardConsole(workspaceRoot);
                     continue;
                 }
-                if (answer === '2' || answer === '3' || answer === '4') {
-                    const sub = answer === '2' ? 'setup' : answer === '3' ? 'help' : 'status';
-                    prompter.close();
-                    const child = spawn(process.execPath, [__filename, sub], { stdio: 'inherit' });
-                    const code: number = await new Promise((resolve) => {
-                        child.on('exit', (c) => resolve(c ?? 0));
-                        child.on('error', (err) => {
-                            console.error(`[switchboard] Failed to launch ${sub}: ${err instanceof Error ? err.message : String(err)}`);
-                            resolve(1);
+                // Offline: offer Start Local / Start Remote / Back.
+                console.log('');
+                console.log('  GUI MODE (offline):');
+                console.log('    [1] Start Local Board (127.0.0.1 loopback — this machine only)');
+                console.log('    [2] Start Remote Server Board (Tailscale mesh — iPad/phone/remote access)');
+                console.log('    [b] Back');
+                console.log('');
+                const guiPrompter = openPrompter();
+                try {
+                    const guiAnswer = await promptWithSigInt(guiPrompter, 'Select [1/2/b]: ');
+                    if (guiAnswer === '1' || guiAnswer === '2') {
+                        const serveSub = guiAnswer === '1' ? 'local' : 'tailnet';
+                        guiPrompter.close();
+                        prompter.close();
+                        // Close readline BEFORE the child inherits stdin.
+                        const child = spawn(process.execPath, [__filename, serveSub], { stdio: 'inherit' });
+                        const code: number = await new Promise((resolve) => {
+                            child.on('exit', (c) => resolve(c ?? 0));
+                            child.on('error', (err) => {
+                                console.error(`[switchboard] Failed to start server: ${err instanceof Error ? err.message : String(err)}`);
+                                resolve(1);
+                            });
                         });
-                    });
-                    exitFlushed(code);
+                        exitFlushed(code);
+                    }
+                    // 'b' or invalid — back to top-level menu.
+                } finally {
+                    guiPrompter.close();
                 }
-                // Invalid input — re-prompt (loop continues).
                 prompter.close();
                 continue;
             }
 
-            // ── Offline branch ───────────────────────────────────────────
-            if (answer === '1' || answer === '2') {
-                const serveSub = answer === '1' ? 'local' : 'tailnet';
-                // Close our readline BEFORE the child inherits stdin. The
-                // child may run firstRunDatabaseMenu on the same TTY, and two
-                // readline interfaces reading one tty split the operator's
-                // keystrokes between them.
+            // ── [2] CLI Mode — re-spawn board console as a child ──────────
+            // cmdBoardConsole and every board command it delegates to call
+            // exitFlushed() and never return. An in-process call cannot yield
+            // control back for a Back action — the process dies inside. Re-
+            // spawning as a child (stdio: 'inherit') lets the child run the
+            // full board console and exit; the parent loops back to the main
+            // menu. This enables Back without refactoring exit semantics.
+            if (answer === '2') {
                 prompter.close();
-                // Re-spawn the process with the serve subcommand. The child
-                // inherits the TTY and runs the full existing serve path
-                // (first-run DB menu, port fallback, browser open). The menu
-                // process is replaced.
-                const child = spawn(process.execPath, [__filename, serveSub], { stdio: 'inherit' });
+                const child = spawn(process.execPath, [__filename, '__board-console'], { stdio: 'inherit' });
                 const code: number = await new Promise((resolve) => {
                     child.on('exit', (c) => resolve(c ?? 0));
                     child.on('error', (err) => {
-                        console.error(`[switchboard] Failed to start server: ${err instanceof Error ? err.message : String(err)}`);
+                        console.error(`[switchboard] Failed to launch board console: ${err instanceof Error ? err.message : String(err)}`);
+                        resolve(1);
+                    });
+                });
+                // Child exited — loop back to main menu (Back behavior).
+                // The child's exit code is NOT propagated: a board-console
+                // exit 1 (offline guidance) returns to the menu, not to shell.
+                void code;
+                continue;
+            }
+
+            // ── [s] Setup — re-spawn `switchboard setup` ─────────────────
+            if (answer === 's') {
+                prompter.close();
+                const child = spawn(process.execPath, [__filename, 'setup'], { stdio: 'inherit' });
+                const code: number = await new Promise((resolve) => {
+                    child.on('exit', (c) => resolve(c ?? 0));
+                    child.on('error', (err) => {
+                        console.error(`[switchboard] Failed to launch setup: ${err instanceof Error ? err.message : String(err)}`);
                         resolve(1);
                     });
                 });
                 exitFlushed(code);
             }
-            if (answer === '3' || answer === '4' || answer === '5') {
-                const sub = answer === '3' ? 'setup' : answer === '4' ? 'help' : 'status';
+
+            // ── [a] About — re-spawn `switchboard about` ──────────────────
+            if (answer === 'a') {
                 prompter.close();
-                // Re-spawn with the subcommand rather than calling it
-                // in-process. cmdSetup, for instance, does NOT run the wizard's
-                // choice itself: it rewrites process.argv ('setup' -> 'init' /
-                // 'scaffold' / 'control-plane') and returns, relying on main()
-                // to fall through to those handlers. From the bare front door
-                // that fallthrough is impossible twice over — argv carries no
-                // 'setup' token to rewrite, and the init/scaffold/control-plane
-                // handlers sit ABOVE this routing point in main(). Calling it
-                // in-process makes every wizard choice a no-op that then falls
-                // through to the serve path and silently starts a board.
-                const child = spawn(process.execPath, [__filename, sub], { stdio: 'inherit' });
+                const child = spawn(process.execPath, [__filename, 'about'], { stdio: 'inherit' });
                 const code: number = await new Promise((resolve) => {
                     child.on('exit', (c) => resolve(c ?? 0));
                     child.on('error', (err) => {
-                        console.error(`[switchboard] Failed to launch ${sub}: ${err instanceof Error ? err.message : String(err)}`);
+                        console.error(`[switchboard] Failed to launch about: ${err instanceof Error ? err.message : String(err)}`);
                         resolve(1);
                     });
                 });
                 exitFlushed(code);
             }
+
             // Invalid input — re-prompt (loop continues).
             prompter.close();
         } finally {
@@ -3110,11 +3149,10 @@ async function cmdBoardConsole(workspaceRoot: string): Promise<void> {
             console.log('  [2] Search Plans & Features (keyword, title, or UUID prefix)');
             console.log('  [3] Filter by Project');
             console.log('  [4] Inspect Fleet Status');
-            console.log('  [5] Setup & Scaffolding Wizard');
             console.log('  [b] Back / Exit (or Enter)');
             console.log('');
 
-            const answer = await promptWithSigInt(prompter, 'Select an option [1-5] (or enter plan ID / prefix to dispatch, \'b\' to go back): ');
+            const answer = await promptWithSigInt(prompter, 'Select an option [1-4] (or enter plan ID / prefix to dispatch, \'b\' to go back): ');
 
             if (answer === null || answer === '' || answer === 'q' || answer === 'b') {
                 return;
@@ -3134,16 +3172,6 @@ async function cmdBoardConsole(workspaceRoot: string): Promise<void> {
             }
             if (answer === '4') {
                 await consoleInspectFleet(port, workspaceRoot, prompter);
-                continue;
-            }
-            if (answer === '5') {
-                console.log('\n[switchboard] Setup & Scaffolding Wizard:');
-                console.log('  Run `switchboard setup` to access the interactive wizard,');
-                console.log('  or use a direct subcommand:');
-                console.log('    switchboard setup init [--target <agents|claude|both>]');
-                console.log('    switchboard setup scaffold --parent-dir <dir> --workspace-name <name> --repo <url>');
-                console.log('    switchboard setup control-plane <detect|preview|migrate>');
-                await promptWithSigInt(prompter, '\nPress Enter or \'b\' to return to menu: ');
                 continue;
             }
 
@@ -3185,6 +3213,10 @@ async function main() {
         'control-plane', 'secrets', 'token', 'export', 'import',
         'plans', 'ready', 'dispatch', 'done', 'next', 'clear', 'fleet', 'probe', 'verb', 'api',
         'help', 'about', 'version', 'setup', 'launcher-state', 'service',
+        // Internal routing token — re-spawned by cmdMainMenu's CLI Mode to
+        // enable Back without refactoring cmdBoardConsole's exit semantics.
+        // NOT documented in usage(); not a user-facing subcommand.
+        '__board-console',
     ]);
     const firstArg = process.argv[2];
     const isFlag = firstArg && firstArg.startsWith('-');
@@ -4156,6 +4188,16 @@ async function main() {
     // ── api ───────────────────────────────────────────────────────
     if (process.argv[2] === 'api') {
         await cmdApi(workspaceRoot, process.argv.slice(3));
+    }
+
+    // ── Internal routing token: board console (re-spawned by cmdMainMenu) ──
+    // cmdMainMenu's CLI Mode re-spawns this process with `__board-console` to
+    // run the board console as a child, enabling Back without refactoring
+    // cmdBoardConsole's exitFlushed semantics. Routed here, before the bare-
+    // switchboard check, so it never falls through to the serve path.
+    if (firstArg === '__board-console') {
+        await cmdBoardConsole(workspaceRoot);
+        exitFlushed(0);
     }
 
     // ── Bare `switchboard`: interactive front-door menu ───────────
