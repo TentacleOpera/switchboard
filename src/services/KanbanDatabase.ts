@@ -21,7 +21,7 @@ import {
     CustomKanbanColumnConfig
 } from './agentConfig';
 import { deriveAgentDisplayName } from './cliIdentity';
-import { BoardSnapshotPublisher, BOARD_SNAPSHOT_MODE } from './BoardSnapshotPublisher';
+import { BoardSnapshotPublisher, BOARD_SNAPSHOT_MODE, BOARD_SNAPSHOT_MODE_BIDIRECTIONAL } from './BoardSnapshotPublisher';
 import type { HostPathConfigProvider } from './hostSeams';
 import type { SortMode } from './kanbanOrdering';
 
@@ -642,7 +642,10 @@ const MIGRATION_V46_SQL: string[] = [];
 
 // V51: Agent activity light — add dispatched_at timestamp. NULL = not working; a non-NULL
 // ISO UTC timestamp means "agent dispatched, light ON" (subject to the 20-min age check).
-// Cleared by clearWorkingState (Stage Complete marker) or clearStaleWorkingState (timeout).
+// Cleared by clearWorkingState (Stage Complete marker) or releaseDispatchHolder (seat
+// release — incl. the dispatch-timeout sweep and the exited-terminal arm of
+// clearStaleWorkingState). The age-based arm of clearStaleWorkingState no longer nulls
+// the stamp (conflation fix — see clearStaleWorkingState's docblock).
 // No backfill — legacy rows correctly start as NULL (not working). Idempotent: gated on
 // the column not already existing, so a fresh DB (which ships the column in CREATE TABLE)
 // is a no-op.
@@ -2595,7 +2598,16 @@ export class KanbanDatabase {
         // inspected — _persistedUpdate never checks it, so a zero-row UPDATE would
         // return true and _fireColumnChanged would fire for a no-op write.
         let affected = 0;
+        let oldColumn = '';
         try {
+            // Capture the old column BEFORE the UPDATE for intent recording.
+            if (this._db) {
+                try {
+                    const stmt = this._db.prepare('SELECT kanban_column FROM plans WHERE plan_file = ? AND workspace_id = ?', [normalized, workspaceId]);
+                    if (stmt.step()) { oldColumn = String(stmt.getAsObject().kanban_column || ''); }
+                    stmt.free();
+                } catch { /* best-effort */ }
+            }
             const now = new Date().toISOString();
             this._db.run(
                 'UPDATE plans SET kanban_column = ?, updated_at = ?, column_entered_at = ?, dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL WHERE plan_file = ? AND workspace_id = ?',
@@ -2607,6 +2619,17 @@ export class KanbanDatabase {
         } catch (error) {
             console.error('[KanbanDatabase] updateColumnByPlanFile failed:', error);
             return { ok: false, reason: 'error', detail: error instanceof Error ? error.message : String(error) };
+        }
+        // Record intent for CAS replay (bidirectional mode only, no-op otherwise).
+        if (affected > 0 && oldColumn && oldColumn !== newColumn) {
+            try {
+                const stmt = this._db?.prepare('SELECT plan_id FROM plans WHERE plan_file = ? AND workspace_id = ?', [normalized, workspaceId]);
+                if (stmt?.step()) {
+                    const planId = String(stmt.getAsObject().plan_id || '');
+                    if (planId) { this._recordBoardSnapshotIntent(planId, oldColumn, newColumn); }
+                }
+                stmt?.free();
+            } catch { /* best-effort */ }
         }
         if (affected === 0) {
             // The VERIFY block below already logged NOT FOUND — the returned reason
@@ -10538,15 +10561,56 @@ FROM plans
     }
 
     private _isBoardSnapshotEnabled(): boolean {
+        const mode = this._getBoardExportMode();
+        return mode === BOARD_SNAPSHOT_MODE || mode === BOARD_SNAPSHOT_MODE_BIDIRECTIONAL;
+    }
+
+    private _getBoardExportMode(): string {
         if (KanbanDatabase._pathConfigProvider) {
-            return KanbanDatabase._pathConfigProvider.getConfigString('boardStateExport') === BOARD_SNAPSHOT_MODE;
+            return KanbanDatabase._pathConfigProvider.getConfigString('boardStateExport') || 'none';
         }
         try {
             const vscode = require('vscode');
             const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
-            return String(config.get('boardStateExport', 'none')) === BOARD_SNAPSHOT_MODE;
+            return String(config.get('boardStateExport', 'none'));
         } catch { /* outside extension host */ }
-        return false;
+        return 'none';
+    }
+
+    /**
+     * Apply a single card's column from an inbound board snapshot. This is
+     * the board-apply path — the ONE path allowed to move cards between
+     * columns from an external input. The file-import path is explicitly
+     * forbidden from doing so (see the schema comment at KanbanDatabase.ts:874).
+     *
+     * Called by BoardSnapshotPublisher.ingest() for each card in the fetched
+     * remote snapshot. Does NOT record an intent (the change came from the
+     * remote, not from this machine).
+     */
+    public async applyBoardSnapshotCard(workspaceId: string, planId: string, column: string): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) { return false; }
+        try {
+            const now = new Date().toISOString();
+            this._db.run(
+                'UPDATE plans SET kanban_column = ?, updated_at = ?, column_entered_at = ? WHERE plan_id = ? AND workspace_id = ?',
+                [column, now, now, planId, workspaceId]
+            );
+            await this._persist();
+            return true;
+        } catch (e) {
+            console.error('[KanbanDatabase] applyBoardSnapshotCard failed:', e);
+            return false;
+        }
+    }
+
+    /**
+     * Record a board snapshot intent for CAS replay. Called from card-move
+     * paths when the bidirectional board snapshot mode is active.
+     */
+    private _recordBoardSnapshotIntent(planId: string, fromColumn: string, toColumn: string): void {
+        if (this._boardSnapshotPublisher && this._isBoardSnapshotEnabled()) {
+            this._boardSnapshotPublisher.recordIntent(planId, fromColumn, toColumn);
+        }
     }
     private _localMirrorDebounce: NodeJS.Timeout | null = null;
     /**
@@ -11695,9 +11759,15 @@ FROM plans
         dispatchedTerminal?: string;
     }): Promise<boolean> {
         const normalized = this._ensureRelativePlanFile(planFile);
-        // dispatched_at = now marks the card as "agent working" (the activity-light source).
-        // Re-dispatch overwrites it (resets the 20-min clock). Cleared by clearWorkingState
-        // (marker parse) or clearStaleWorkingState (timeout sweep) — both NULL it.
+        // dispatched_at = now is the dispatch-identity stamp (and the activity-light
+        // SOURCE — the visible light is the read-time derive `isWorkingState`, not
+        // this field's NULLness). Re-dispatch overwrites it (resets the clock). It is
+        // cleared by clearWorkingState (marker parse), releaseDispatchHolder (seat
+        // release, incl. the dispatch-timeout sweep and the exited-terminal arm of
+        // clearStaleWorkingState) — all of which null dispatched_at AND
+        // dispatched_terminal together. clearStaleWorkingState's age-based arm no
+        // longer nulls the stamp (conflation fix — the stamp survives silence so the
+        // dispatch-stall nudge and the dispatch-timeout sweep can see silent seats).
         // NOTE: For feature cards, the working flag is derived from subtasks' dispatched_at
         // values, but we still write/clear the feature row's own dispatched_at for dispatch-identity.
         const terminalName = info.dispatchedTerminal || '';
@@ -12279,22 +12349,40 @@ FROM plans
      * `MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at))`: a row clears
      * when its basis is older than `cutoff`.
      *
+     * **Conflation fix (this card).** This sweep used to null `dispatched_at` (and
+     * `last_liveness_at`) for silent seats every tick — serving the activity light.
+     * But the read-time derive `isWorkingState` (`KanbanProvider.ts:180`) already
+     * turns the light off at `maxAgeMs` from `MAX(dispatched_at, last_liveness_at)`
+     * *without* nulling the stamp, so the null was redundant for the light and
+     * destructive for dispatch identity: it dropped the card out of the dispatch-
+     * stall nudge (`0417d620`) and the dispatch-timeout sweep, and orphaned the seat
+     * (`bf23c37f` — `dispatched_at` NULL while `dispatched_terminal` stayed set). The
+     * age-based arm now nulls ONLY `blocked_at` (a transient flag, not a dispatch-
+     * identity stamp); the stamp survives silence so the nudge and the dispatch
+     * timeout can see silent seats. The dispatch-timeout sweep
+     * (`_runDispatchTimeoutSweep` in `PlanIngestionEngine`) is the sole abandonment
+     * path that nulls `dispatched_at` for a live-but-silent seat.
+     *
      * There is deliberately NO hard cap on `dispatched_at` — see the comment on the
      * UPDATE. A long turn is not an abandoned one, and this row is what
      * `POST /kanban/queue/done` matches on, so retiring it under a live agent threw
      * that agent's completion report away.
      *
      * `opts.forceTerminals` — names of terminals the fleet reports as exited —
-     * triggers a second UPDATE that clears rows whose `dispatched_terminal` is in
-     * the set regardless of age (the dead-agent fast-clear). This is the one case
-     * where liveness shortens rather than extends the window.
+     * triggers a release of rows whose `dispatched_terminal` is in the set
+     * regardless of age (the dead-agent fast-clear). This is the one case where
+     * liveness shortens rather than extends the window. Routed through
+     * `releaseDispatchHolder` so `dispatched_at` AND `dispatched_terminal` null
+     * TOGETHER (atomic) — the half-clear that left `dispatched_terminal` set while
+     * nulling `dispatched_at` produced the orphan state `bf23c37f` is about.
      *
      * With `opts` omitted and `last_liveness_at` NULL everywhere,
-     * `MAX(dispatched_at, COALESCE(NULL, dispatched_at))` is `dispatched_at` and the
-     * statement is semantically identical to today's — the fleet-less compatibility
-     * contract. Also nulls `last_liveness_at` wherever `dispatched_at` is nulled so
-     * a re-dispatch starts from a clean basis. Returns the count of rows cleared so
-     * the caller can gate a board refresh on `> 0`.
+     * `MAX(dispatched_at, COALESCE(NULL, dispatched_at))` is `dispatched_at`. The
+     * age-based arm now only touches `blocked_at`, so the fleet-less compatibility
+     * contract is "no observable change to dispatch identity on a silent seat" —
+     * the read-time derive owns the visible light. Returns the count of rows the
+     * sweep acted on (age-based touches + exited-terminal releases) so the caller
+     * can gate a board refresh on `> 0`.
      */
     public async clearStaleWorkingState(
         workspaceId: string,
@@ -12304,30 +12392,61 @@ FROM plans
         if (!(await this.ensureReady()) || !this._db) return 0;
         const cutoff = new Date(Date.now() - maxAgeMs).toISOString();
         const forceTerminals = opts?.forceTerminals?.filter(n => !!n) ?? [];
+        // Plan files held by exited terminals, collected inside the transaction and
+        // released AFTER commit so releaseDispatchHolder (which does its own persist)
+        // never runs inside an open transaction.
+        let exitedPlanFiles: string[] = [];
         try {
             this._db.run('BEGIN');
+            // Age-based arm: null ONLY blocked_at. The stamp (dispatched_at) and the
+            // heartbeat (last_liveness_at) survive silence — the read-time derive
+            // owns the activity light, and the surviving stamp is what the dispatch-
+            // stall nudge and the dispatch-timeout sweep key on. blocked_at is a
+            // transient flag (dead writer — see KanbanPlanRecord.blockedAt) and the
+            // only field this arm still clears.
             this._db.run(
-                'UPDATE plans SET dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL ' +
+                'UPDATE plans SET blocked_at = NULL ' +
                 'WHERE workspace_id = ? AND dispatched_at IS NOT NULL ' +
                 '  AND MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at)) < ?',
                 [workspaceId, cutoff]
             );
             let modified = this._db.getRowsModified();
-            // Exited-terminal force-clear: dead agents clear immediately rather than
-            // waiting out the window. Only rows still carrying dispatched_at are in
-            // scope (a row already cleared above is not double-counted).
+            // Exited-terminal force-clear: dead agents release immediately rather
+            // than waiting out the window. Collect the plan_files held by exited
+            // terminals here, then release each through releaseDispatchHolder after
+            // commit so dispatched_at AND dispatched_terminal null together (no
+            // orphan state). Only rows still carrying dispatched_at are in scope.
             if (forceTerminals.length > 0) {
                 const placeholders = forceTerminals.map(() => '?').join(', ');
-                this._db.run(
-                    `UPDATE plans SET dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL ` +
-                    `WHERE workspace_id = ? AND dispatched_at IS NOT NULL ` +
+                const stmt = this._db.prepare(
+                    `SELECT plan_file FROM plans WHERE workspace_id = ? AND dispatched_at IS NOT NULL ` +
                     `AND dispatched_terminal IN (${placeholders})`,
                     [workspaceId, ...forceTerminals]
                 );
-                modified += this._db.getRowsModified();
+                try {
+                    while (stmt.step()) {
+                        const pf = String(stmt.getAsObject().plan_file || '');
+                        if (pf) { exitedPlanFiles.push(pf); }
+                    }
+                } finally {
+                    stmt.free();
+                }
+                modified += exitedPlanFiles.length;
             }
             this._db.run('COMMIT');
             await this._persist();
+            // Release exited-terminal holders OUTSIDE the transaction. Each call
+            // nulls dispatched_terminal, dispatched_at, last_liveness_at and
+            // blocked_at atomically (releaseDispatchHolder's single UPDATE) and
+            // persists — the operation bf23c37f is about, done without passing
+            // through the orphan state.
+            for (const pf of exitedPlanFiles) {
+                try {
+                    await this.releaseDispatchHolder(pf, workspaceId);
+                } catch (relErr) {
+                    console.error('[KanbanDatabase] clearStaleWorkingState: releaseDispatchHolder failed for', pf, relErr);
+                }
+            }
             return modified;
         } catch (e) {
             try { this._db.run('ROLLBACK'); } catch { /* ignore */ }
