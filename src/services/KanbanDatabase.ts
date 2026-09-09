@@ -10615,6 +10615,135 @@ FROM plans
             this._boardSnapshotPublisher.recordIntent(planId, fromColumn, toColumn);
         }
     }
+
+    // ── Sync ownership lease (shared-store path) ─────────────────────────
+    // The sync_lease table lives in the shared store so all candidate machines
+    // can see it. For local-file stores, the lease is a no-op (single writer).
+    // See `.switchboard/plans/sync-owner-lease-and-write-attribution.md`.
+
+    /**
+     * Ensure the sync_lease table exists in the shared store. Called by
+     * SyncOwnershipLease before acquiring the lease.
+     */
+    public async ensureSharedLeaseTable(): Promise<void> {
+        if (!(await this.ensureReady()) || !this._db) { return; }
+        try {
+            this._db.exec(`
+                CREATE TABLE IF NOT EXISTS sync_lease (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    owner_id TEXT NOT NULL,
+                    owner_label TEXT DEFAULT '',
+                    acquired_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    ttl_seconds INTEGER NOT NULL
+                )
+            `);
+        } catch (e) {
+            console.error('[KanbanDatabase] ensureSharedLeaseTable failed:', e);
+        }
+    }
+
+    /**
+     * Get the current lease row. Returns null if no lease exists.
+     */
+    public async getSharedLeaseRow(): Promise<{ owner_id: string; owner_label: string; acquired_at: string; expires_at: string; ttl_seconds: number } | null> {
+        if (!(await this.ensureReady()) || !this._db) { return null; }
+        try {
+            const stmt = this._db.prepare('SELECT owner_id, owner_label, acquired_at, expires_at, ttl_seconds FROM sync_lease WHERE id = 1');
+            try {
+                if (stmt.step()) {
+                    return stmt.getAsObject() as any;
+                }
+                return null;
+            } finally {
+                stmt.free();
+            }
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * Acquire the sync lease using a compare-and-swap: if no row exists or
+     * the existing row has expired, this machine takes ownership. If this
+     * machine already owns it, the lease is renewed. Returns true if this
+     * machine now owns the lease.
+     */
+    public async acquireSyncLease(
+        machineId: string,
+        machineLabel: string,
+        now: string,
+        expiresAt: string,
+        ttlSeconds: number
+    ): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) { return false; }
+        try {
+            // Use a transaction for the CAS: read the current row, then
+            // either acquire (no row / expired) or renew (we own it).
+            this._db.exec('BEGIN IMMEDIATE');
+            try {
+                let acquired = false;
+                const stmt = this._db.prepare('SELECT owner_id, expires_at FROM sync_lease WHERE id = 1');
+                let row: any = null;
+                try {
+                    if (stmt.step()) {
+                        row = stmt.getAsObject();
+                    }
+                } finally {
+                    stmt.free();
+                }
+
+                if (!row) {
+                    // No lease — acquire it.
+                    this._db.run(
+                        'INSERT INTO sync_lease (id, owner_id, owner_label, acquired_at, expires_at, ttl_seconds) VALUES (1, ?, ?, ?, ?, ?)',
+                        [machineId, machineLabel, now, expiresAt, ttlSeconds]
+                    );
+                    acquired = true;
+                } else if (row.owner_id === machineId) {
+                    // We own it — renew.
+                    this._db.run(
+                        'UPDATE sync_lease SET owner_label = ?, acquired_at = ?, expires_at = ?, ttl_seconds = ? WHERE id = 1',
+                        [machineLabel, now, expiresAt, ttlSeconds]
+                    );
+                    acquired = true;
+                } else {
+                    // Another machine owns it — check if their lease expired.
+                    const existingExpiresAt = new Date(row.expires_at).getTime();
+                    if (Date.now() >= existingExpiresAt) {
+                        // Their lease expired — take over.
+                        this._db.run(
+                            'UPDATE sync_lease SET owner_id = ?, owner_label = ?, acquired_at = ?, expires_at = ?, ttl_seconds = ? WHERE id = 1',
+                            [machineId, machineLabel, now, expiresAt, ttlSeconds]
+                        );
+                        acquired = true;
+                    }
+                    // else: their lease is still valid — we don't acquire.
+                }
+
+                this._db.exec('COMMIT');
+                return acquired;
+            } catch (e) {
+                this._db.exec('ROLLBACK');
+                throw e;
+            }
+        } catch (e) {
+            console.error('[KanbanDatabase] acquireSyncLease failed:', e);
+            return false;
+        }
+    }
+
+    /**
+     * Release the sync lease (delete this machine's lease row).
+     */
+    public async releaseSyncLease(machineId: string): Promise<void> {
+        if (!(await this.ensureReady()) || !this._db) { return; }
+        try {
+            this._db.run('DELETE FROM sync_lease WHERE id = 1 AND owner_id = ?', [machineId]);
+        } catch (e) {
+            console.error('[KanbanDatabase] releaseSyncLease failed:', e);
+        }
+    }
     private _localMirrorDebounce: NodeJS.Timeout | null = null;
     /**
      * Set by dispose(). Without it a debounced mirror write fires AFTER dispose,
