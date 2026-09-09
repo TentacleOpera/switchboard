@@ -1586,30 +1586,28 @@
             if (btnConvertSubtask) btnConvertSubtask.style.display = '';
             if (btnToParent) btnToParent.style.display = 'none';
         }
-        // "Push + subtasks" is meaningful only on a parent that has LOCALLY-IMPORTED
-        // subtasks. A subtask has no children (edge case 2), and a parent with no
-        // local subtask files has nothing extra to push (edge case 1) — disable in
-        // both cases rather than hide, so the control stays a stable part of the bar.
-        //
-        // The gate MUST agree with the push: _localSubtaskIdsFor discovers children
-        // from LOCAL files carrying `parentId:` frontmatter, NOT from the remote
-        // subtask list. The detail cache's `subtasks` array is the REMOTE list, so
-        // gating on it would enable the button for a parent whose subtasks exist
-        // remotely but were never imported — the button would then push only the
-        // parent and report "1 pushed", silently degrading to the plain Push beside
-        // it. Use the file-derived count the sidebar card already carries
-        // (listLocalTicketFiles → subtaskCount, counted from parentId frontmatter),
-        // looked up on the card list — not _ticketSubtaskCount, which prefers the
-        // cache and would reintroduce the remote number.
+        // "Push all subtasks" is meaningful when the family has LOCALLY-IMPORTED
+        // subtasks. A subtask selection enables the button when its parent has
+        // local subtasks — the count comes from the PARENT card's subtaskCount
+        // (file-derived, same source as card.subtaskCount per comment above).
+        // When the parent is not in the current list view (drilled in from
+        // another list / not paginated), fall back to 0 — the button stays
+        // disabled, which is safe: switch to the parent's list to enable it.
         const btnPushSubtasks = document.getElementById('btn-push-ticket-subtasks');
         if (btnPushSubtasks) {
             const id = lastIntegrationProvider === 'linear'
                 ? selectedLinearIssue?.issue?.id
                 : selectedClickUpIssue?.task?.id;
             const list = lastIntegrationProvider === 'linear' ? linearProjectIssues : clickUpProjectIssues;
-            const card = id ? list.find(t => t.id === id) : null;
-            const localSubtaskCount = card ? (card.subtaskCount || 0) : 0;
-            btnPushSubtasks.disabled = !!(parentId) || localSubtaskCount === 0;
+            let count;
+            if (parentId) {
+                const parentTicket = list.find(t => t.id === parentId);
+                count = parentTicket ? (parentTicket.subtaskCount || 0) : 0;
+            } else {
+                const card = id ? list.find(t => t.id === id) : null;
+                count = card ? (card.subtaskCount || 0) : 0;
+            }
+            btnPushSubtasks.disabled = count === 0;
         }
         // Recompute the meta-bar "⋯ More" trigger visibility: if every item inside
         // the popover is now hidden (e.g. minimal-capability provider), hide the
@@ -7530,7 +7528,7 @@ Instructions:
                 break;
             case 'pushTicketResult': {
                 setTicketsLoadingState(false);
-                // A batch ("Push + subtasks") reply carries pushed/skippedStale/failed
+                // A batch ("Push all subtasks") reply carries pushed/skippedStale/failed
                 // counts; a plain Push reply does not. A batch reports success ONLY when
                 // failed === 0, so partial success arrives on the failure branch — and
                 // that is exactly the case the counts exist for. Showing the bare error
@@ -7539,7 +7537,7 @@ Instructions:
                 const isBatchReply = typeof message.pushed === 'number';
                 if (!message.success) {
                     if (isBatchReply) {
-                        const summary = message.message || `Push + subtasks: ${message.pushed} pushed, ${message.failed || 0} failed.`;
+                        const summary = message.message || `Push all subtasks: ${message.pushed} pushed, ${message.failed || 0} failed.`;
                         showTicketsStatus(message.error ? `${summary} ${message.error}` : summary, true);
                         // Some children DID push — their badges are stale until refreshed.
                         if (message.pushed > 0) { _requestTicketSyncStatuses(); }
@@ -7548,7 +7546,7 @@ Instructions:
                     }
                 } else {
                     if (isBatchReply) {
-                        showTicketsStatus(message.message || `Push + subtasks: ${message.pushed} pushed.`, false);
+                        showTicketsStatus(message.message || `Push all subtasks: ${message.pushed} pushed.`, false);
                     } else {
                         showTicketsStatus('Pushed to source ✓', false);
                     }

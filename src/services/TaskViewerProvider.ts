@@ -26304,10 +26304,28 @@ Each plan file must include:
         }
         const { provider, id } = data;
 
+        // Resolve the parent: if `id` is a subtask, push its parent + all sister
+        // subtasks. Reuses the _findTicketDocument resolver and the SAME parentId
+        // regex as _localSubtaskIdsFor (26363) — one parse pattern per class.
+        let effectiveParentId = id;
+        const doc = await this._findTicketDocument(resolvedRoot, provider, id);
+        if (doc && fs.existsSync(doc)) {
+            try {
+                const content = fs.readFileSync(doc, 'utf8');
+                const fm = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+                if (fm) {
+                    const pm = fm[1].match(/^parentId:\s*(.+)$/m);
+                    if (pm && pm[1].trim()) {
+                        effectiveParentId = pm[1].trim();
+                    }
+                }
+            } catch { /* unreadable — treat id as the parent */ }
+        }
+
         // Parent first, then children. If the parent push is refused as stale, still
         // attempt the children — they are independent records (edge case 8).
-        const childIds = await this._localSubtaskIdsFor(resolvedRoot, provider, id);
-        const ids = [id, ...childIds];
+        const childIds = await this._localSubtaskIdsFor(resolvedRoot, provider, effectiveParentId);
+        const ids = Array.from(new Set([effectiveParentId, ...childIds]));
         let pushed = 0, skippedStale = 0, failed = 0;
         const failures: string[] = [];
 
@@ -26332,7 +26350,7 @@ Each plan file must include:
         return {
             success: failed === 0,
             pushed, skippedStale, failed,
-            message: `Push + subtasks: ${parts.join(', ')}.`,
+            message: `Push all subtasks: ${parts.join(', ')}.`,
             error: failed > 0 ? failures.slice(0, 3).join('; ') : undefined
         };
     }
