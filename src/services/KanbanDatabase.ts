@@ -1714,12 +1714,57 @@ export class KanbanDatabase {
         return KanbanDatabase._lastBoardPathOverrideSource;
     }
 
+    /**
+     * Memoised `(stable root, customDbPath) -> resolved db path`.
+     *
+     * `forWorkspace()` is not an occasional call: `readConfigValueSync` routes
+     * EVERY config read through it, and `_persist()` reads config on every board
+     * mutation. Measured before this cache, a call that returned an
+     * already-cached instance still cost **103 µs**, because the resolution ran
+     * first: `resolveStorageTopology` (three path resolutions, three
+     * `validateGlobalDbPath`, two `ensureBoardsDir` doing `existsSync` +
+     * `chmodSync`) at 59 µs, plus a `realpathSync` and the relocation probe's
+     * `fs.existsSync`, before the instance map was ever consulted. That is
+     * ~48x the 2.2 µs of the SQLite SELECT the caller actually wanted.
+     *
+     * Cleared by `invalidateWorkspace()` and `dispose()`, which are the two
+     * places the path can legitimately change under us (an override edit routes
+     * through `invalidateWorkspace` via the config-change listener in both
+     * composition roots).
+     */
+    private static _resolvedPathByRoot = new Map<string, string>();
+
+    /** Drop memoised path resolutions for one root, or all of them. */
+    public static invalidateResolvedPathCache(stableRoot?: string): void {
+        if (!stableRoot) { KanbanDatabase._resolvedPathByRoot.clear(); return; }
+        const prefix = `${path.resolve(stableRoot)}\u0000`;
+        for (const key of [...KanbanDatabase._resolvedPathByRoot.keys()]) {
+            if (key.startsWith(prefix)) { KanbanDatabase._resolvedPathByRoot.delete(key); }
+        }
+    }
+
     public static forWorkspace(workspaceRoot: string, customDbPath?: string): KanbanDatabase {
         const validation = KanbanDatabase.isValidWorkspaceRoot(workspaceRoot);
         if (!validation.valid) {
             throw new Error(`Invalid workspace root: ${validation.error}`);
         }
         const stable = validation.resolved!;
+
+        // Fast path: this root has already been resolved AND its instance is live.
+        // Skips the topology resolution, the realpath and the relocation probe —
+        // see `_resolvedPathByRoot`. Deliberately requires BOTH the memo and a live
+        // instance, so a disposed instance still falls through to the full path
+        // rather than being resurrected from a stale memo.
+        const memoKey = `${stable}\u0000${customDbPath ?? ''}`;
+        const memoPath = KanbanDatabase._resolvedPathByRoot.get(memoKey);
+        if (memoPath) {
+            const live = KanbanDatabase._instancesByDbPath.get(memoPath);
+            if (live && !live._disposed) {
+                live.setWorkspaceRoot(stable);
+                return live;
+            }
+            KanbanDatabase._resolvedPathByRoot.delete(memoKey);
+        }
 
         // On-open migration: relocate any unmigrated per-repo database to the
         // per-project board file (1:1, integrity-checked, .migrated.bak, resumable).
@@ -1771,6 +1816,8 @@ export class KanbanDatabase {
 
         resolvedDbPath = path.resolve(KanbanDatabase._expandHome(resolvedDbPath));
         try { resolvedDbPath = fs.realpathSync(resolvedDbPath); } catch {}
+
+        KanbanDatabase._resolvedPathByRoot.set(memoKey, resolvedDbPath);
 
         const cached = KanbanDatabase._instancesByDbPath.get(resolvedDbPath);
         if (cached) {
@@ -1872,6 +1919,9 @@ export class KanbanDatabase {
      */
     public static async invalidateWorkspace(workspaceRoot: string): Promise<void> {
         const stable = path.resolve(workspaceRoot);
+        // Drop the memoised resolution FIRST: the whole point of invalidating is
+        // that the path may now resolve somewhere else.
+        KanbanDatabase.invalidateResolvedPathCache(stable);
         const wsId = resolveCanonicalWorkspaceIdSync(stable).value;
         const dbPath = resolveBoardDbPath(wsId).path;
         const existing = KanbanDatabase._instancesByDbPath.get(dbPath);
@@ -2223,6 +2273,11 @@ export class KanbanDatabase {
 
     public dispose(): void {
         this._disposed = true;
+        // Drop any memoised path resolution pointing at this instance, so the next
+        // forWorkspace() for the same root re-resolves rather than handing back a
+        // disposed handle. (The fast path also re-checks `_disposed`, so this is
+        // belt-and-braces, not the only guard.)
+        KanbanDatabase.invalidateResolvedPathCache(this._workspaceRoot);
         // Cancel the debounced per-repo mirror BEFORE closing the handle. A timer left
         // armed here fires after teardown and resurrects the database (see _disposed).
         if (this._localMirrorDebounce) {

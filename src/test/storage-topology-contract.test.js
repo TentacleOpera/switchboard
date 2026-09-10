@@ -251,6 +251,33 @@ async function run() {
     assert.ok(!currentPlanEvents[1].includes('vector_clock'),
         'vector_clock must be absent from the current plan_events schema.');
 
+    // 8b. forWorkspace() consults its memo BEFORE resolving the topology.
+    //
+    // `readConfigValueSync` routes every config read through `forWorkspace`, and
+    // `_persist` reads config on every board mutation, so this is one of the
+    // hottest paths in the product. Measured: 103 microseconds per call when the
+    // resolution ran first (three path resolutions, three validateGlobalDbPath,
+    // two ensureBoardsDir with existsSync+chmodSync, a realpathSync and the
+    // relocation probe) against 12.5 microseconds with the memo consulted first.
+    // A refactor that moves the resolution back above the memo silently restores
+    // an 8x cost that no functional test would notice.
+    const fwStart = kanbanDbSrc.indexOf('public static forWorkspace(');
+    assert.ok(fwStart > 0, 'Could not locate forWorkspace in KanbanDatabase.ts');
+    const fwBody = kanbanDbSrc.slice(fwStart, fwStart + 9000);
+    const memoAt = fwBody.indexOf('_resolvedPathByRoot.get(');
+    const resolveAt = fwBody.indexOf('resolveStorageTopology(');
+    assert.ok(memoAt > 0, 'forWorkspace must consult the memoised path cache');
+    assert.ok(resolveAt > 0, 'forWorkspace must still resolve the topology on a miss');
+    assert.ok(
+        memoAt < resolveAt,
+        'forWorkspace must consult _resolvedPathByRoot BEFORE resolveStorageTopology — '
+        + 'resolving first costs ~8x on every config read in the product.'
+    );
+    assert.ok(
+        /invalidateResolvedPathCache\(/.test(kanbanDbSrc),
+        'the memo must be invalidatable, or an override edit cannot take effect.'
+    );
+
     // 9. The runtime-tier orphan sweep exists and is invoked.
     assert.ok(/public async sweepOrphanedRuntimeState\(/.test(kanbanDbSrc),
         'The tier split requires an orphan sweep for local-tier rows whose shared row is gone.');
