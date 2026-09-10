@@ -1,5 +1,37 @@
 # Make the orphan-branch board snapshot bidirectional, so a team that shares a repo shares a board with no infrastructure
 
+<!-- one-infra-model -->
+> **REJECTED 2026-09-11 (operator decision).** **The product picks one infrastructure model and
+> sticks to it: one better-sqlite3 database owned by one board host, reached over HTTP.** A team
+> that wants a shared board runs a board host — `two-configurations-board-only-and-board-plus-agents.md`
+> establishes board-only at **1 GB**, which is a ~$50 Pi. "No infrastructure" is not a requirement
+> worth a second storage model, and this plan is explicitly a second one: it makes `board.json` an
+> authoritative store alongside the database, which is another answer to "where does my board live"
+> — the exact count `storage-topology-one-choice-three-stores.md` spent a feature reducing.
+>
+> **Not rejected on quality.** Turning git's non-fast-forward rejection into a lost-write detector is
+> a genuinely good idea and the CAS-plus-intent-replay design is sound. It loses on product shape,
+> not on mechanism, so nothing here needs re-deriving if the decision is ever revisited.
+>
+> **What it would have cost, measured 2026-09-11 for the record:** ~10 git subprocesses and one to
+> two network round trips per board change (up to ~3× under contention), including a
+> `git worktree add`/`remove` pair each time — against one `UPDATE` plus a WAL append today. The
+> click itself stays fast (optimistic move, 500 ms debounce, `void`ed publish), so the cost is
+> background load and, on the 1 GB board-only host, filesystem work on the machine with least of
+> it. The unavoidable UX cost was cards visibly jumping back: a same-card conflict resolves
+> last-writer-wins, so a move you watched land reverts when a sync completes.
+>
+> **This does not by itself decide the read-only mirror.** See the note below.
+
+> **SEPARATE OPEN QUESTION — the read-only snapshot's audience.** Rejecting the bidirectional half
+> does not answer whether `read-only-snapshot` should stay. As of 2026-09-11 **nothing in the tree
+> reads `board.json` back**; the only surface naming it is the `connections.html` mode dropdown that
+> turns it on. Its intended consumers were external / web-only agents pulling the orphan branch, and
+> `db289c05` records that external-agent pull is *superseded by switchboard-next, not unfinished*.
+> If that audience is gone, the mirror is a write-only path that costs ~7 git subprocesses per board
+> change whenever it is enabled — default is `none`, so nobody pays today. Decide that on its own
+> merits; do not read this rejection as settling it.
+
 ## Goal
 
 Turn the existing read-only board snapshot into an optional authoritative shared store: the same `board.json` on the same orphan branch, read back in as well as written out, with git's own ref semantics providing arbitration. A team that already shares a git remote gets a shared board with no account, no token, no server and no database.
