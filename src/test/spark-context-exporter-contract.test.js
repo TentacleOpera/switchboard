@@ -204,8 +204,8 @@ test('the jobs protocol includes the §6 details', () => {
     const res = generateSparkContext(tmp, '1.0.0');
     const content = fs.readFileSync(res.path, 'utf8');
     assert.ok(content.includes('24 hours'), 'staleness window missing');
-    assert.ok(content.includes('kanban-state-<column-slug>'), 'kanban state file format missing');
-    assert.ok(content.includes('frozen'), 'frozen-between-sessions caveat missing');
+    assert.ok(content.includes('/kanban/plans?column='), 'board-state read must point at the API, not the deleted kanban-state exports');
+    assert.ok(content.includes('STORE_UNAVAILABLE'), 'the three read outcomes must be stated — an unreachable store is not an empty board');
     assert.ok(content.includes('run-log.md'), 'run log missing');
     assert.ok(content.includes('mtime-supplement cursor'), 'mtime-supplement rule missing');
     assert.ok(content.includes('kind: board-moves'), 'moves frontmatter missing');

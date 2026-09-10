@@ -2501,21 +2501,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             vscode.postMessage({ type: 'openConnectionsPanel' });
         });
 
-        document.getElementById('board-state-export-select')?.addEventListener('change', (e) => {
-            const value = e.target.value;
-            const remoteUrlRow = document.getElementById('board-state-export-remote-url-row');
-            const initGitRow = document.getElementById('board-state-export-init-git-row');
-            if (remoteUrlRow) remoteUrlRow.classList.toggle('hidden', value === 'none');
-            if (initGitRow) initGitRow.classList.toggle('hidden', value !== 'control-plane');
-            vscode.postMessage({ type: 'setBoardStateExport', value });
-        });
-        document.getElementById('board-state-export-remote-url')?.addEventListener('change', (e) => {
-            vscode.postMessage({ type: 'setBoardStateExportRemoteUrl', value: e.target.value });
-        });
-        document.getElementById('btn-init-control-plane-git')?.addEventListener('click', () => {
-            const remoteUrl = document.getElementById('board-state-export-remote-url')?.value || '';
-            vscode.postMessage({ type: 'initControlPlaneGit', remoteUrl });
-        });
 
         // Scaffold cleanup button — deletes on click (no confirm gate, per project rule).
         // The card enumerates the exact paths per deletable root before the click, so
@@ -3483,19 +3468,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         const toggle = document.getElementById('cyber-animation-toggle');
                         if (toggle) toggle.checked = message.enabled !== true;
                         document.body.classList.toggle('cyber-animation-disabled', message.enabled === true);
-                    });
-                    break;
-                }
-                case 'boardStateExportSetting': {
-                    runSetupHydration(() => {
-                        const select = document.getElementById('board-state-export-select');
-                        if (select) select.value = message.value || 'none';
-                        const remoteUrlRow = document.getElementById('board-state-export-remote-url-row');
-                        const initGitRow = document.getElementById('board-state-export-init-git-row');
-                        const remoteUrlInput = document.getElementById('board-state-export-remote-url');
-                        if (remoteUrlRow) remoteUrlRow.classList.toggle('hidden', (message.value || 'none') === 'none');
-                        if (initGitRow) initGitRow.classList.toggle('hidden', message.value !== 'control-plane');
-                        if (remoteUrlInput) remoteUrlInput.value = message.remoteUrl || '';
                     });
                     break;
                 }

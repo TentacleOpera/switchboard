@@ -9,7 +9,6 @@ import { importPlanFiles } from './PlanFileImporter';
 import { KanbanDatabase } from './KanbanDatabase';
 import { ensureWorkspaceIdentity } from './WorkspaceIdentityService';
 import {
-    generateClaudeMirror,
     buildManagedInner,
     CLAUDE_BLOCK_START,
     CLAUDE_BLOCK_END,
@@ -1443,8 +1442,14 @@ export class ControlPlaneMigrationService {
 
     /**
      * Initialize the control-plane directory as a git repo with a remote,
-     * for workspaces that opt into `control-plane` as their boardStateExport
-     * destination. This is opt-in, not automatic.
+     * for a workspace whose control plane should be its own git repo. Opt-in, not
+     * automatic.
+     *
+     * NOTE (2026-09-11): `boardStateExport` was retired with the board mirrors, so
+     * the Setup UI no longer surfaces the `control-plane` mode that used to reveal
+     * this button. The verb and this service remain — the control-plane layout is
+     * live work, owned by `canonical-control-plane-layout-with-sibling-repos.md`,
+     * which is where its entry point should be rebuilt.
      *
      * Steps:
      *  1. `git init` (if not already a repo)

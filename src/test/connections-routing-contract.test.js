@@ -130,15 +130,21 @@ test('the push redirection restores PRISTINE methods, not whatever is installed'
 const SETUP_HTML = fs.readFileSync(path.join(__dirname, '..', 'webview', 'setup.html'), 'utf8');
 const CNX_HTML = fs.readFileSync(path.join(__dirname, '..', 'webview', 'connections.html'), 'utf8');
 
-// Every control the form needs to round-trip a complete RemoteConfig, plus the
-// board-state-export pair that shared its tab.
+// Every control the form needs to round-trip a complete RemoteConfig.
+//
+// The `board-state-export-select` / `board-state-export-remote-url` pair shared
+// this tab and was REMOVED on 2026-09-11 with the board mirrors: `boardStateExport`
+// is retired, the orphan-branch snapshot is deleted, and one better-sqlite3 store
+// on one board host is the single infra model. Listed here as a deliberate
+// deletion so a future pass does not read its absence as a regression and add it
+// back.
 const REMOTE_CONTROL_IDS = [
     'remote-provider', 'remote-workspace', 'remote-boards-list', 'remote-silent-sync',
     'remote-mode-ingest', 'remote-mode-full', 'remote-comments', 'remote-content',
     'remote-push', 'remote-ping-frequency', 'btn-remote-control-toggle',
-    'remote-health-poll', 'btn-notion-remote-setup',
-    'board-state-export-select', 'board-state-export-remote-url'
+    'remote-health-poll', 'btn-notion-remote-setup'
 ];
+const DELETED_CONTROL_IDS = ['board-state-export-select', 'board-state-export-remote-url'];
 
 // Moved OUT of Connections, into the Linear panel. Tracked here rather than
 // dropped: the control still has to exist somewhere, and "deleted from
@@ -149,6 +155,20 @@ test('the Remote form lives in connections.html, in full', () => {
     const missing = REMOTE_CONTROL_IDS.filter(id => !CNX_HTML.includes(`id="${id}"`));
     assert.deepStrictEqual(missing, [],
         'connections.html is missing controls the Remote form needs — a partial form cannot replace the Setup tab');
+});
+
+test('the retired board-state-export controls stay deleted', () => {
+    // Paired with REMOTE_CONTROL_IDS above: that list pins what must be PRESENT,
+    // this pins what must stay GONE. Without it, "the mirror came back" reads as a
+    // feature rather than as the reversal of a decision — and the setting it drives
+    // (`switchboard.boardStateExport`) is already asserted absent from the config
+    // schema by storage-topology-contract.test.js.
+    for (const id of DELETED_CONTROL_IDS) {
+        assert.ok(!CNX_HTML.includes(`id="${id}"`),
+            `connections.html renders '${id}' — the board-state-export UI was retired with the board mirrors`);
+        assert.ok(!SETUP_HTML.includes(`id="${id}"`),
+            `setup.html renders '${id}' — the board-state-export UI was retired with the board mirrors`);
+    }
 });
 
 test('the Linear rows moved to the Linear panel, not into the void', () => {
@@ -197,7 +217,7 @@ test('no orphaned Remote handler survives in setup.html', () => {
 
 test('connections.js handles every Remote push the host actually sends', () => {
     for (const msg of ['remoteConfig', 'remoteControlState', 'remoteSyncHealth',
-        'boardStateExportSetting', 'notionRemoteSetupResult',
+        'notionRemoteSetupResult',
         'integrationSetupStates']) {
         assert.ok(CNX.includes(`case '${msg}'`),
             `connections.js does not handle '${msg}' — that state renders as a default over the user's real setting`);

@@ -23,7 +23,6 @@ import {
     CustomKanbanColumnConfig
 } from './agentConfig';
 import { deriveAgentDisplayName } from './cliIdentity';
-import { BoardSnapshotPublisher, BOARD_SNAPSHOT_MODE, BOARD_SNAPSHOT_MODE_BIDIRECTIONAL } from './BoardSnapshotPublisher';
 import type {
     PlanTicketAttachment,
     PlanTicketComment,
@@ -1827,13 +1826,6 @@ export class KanbanDatabase {
 
         const created = new KanbanDatabase(stable, resolvedDbPath);
         KanbanDatabase._instancesByDbPath.set(resolvedDbPath, created);
-        try {
-            created.setBoardSnapshotPublisher(new BoardSnapshotPublisher({
-                db: created,
-                getWorkspaceRoot: () => (created as any)._workspaceRoot || stable,
-                getWorkspaceId: () => created.getWorkspaceId(),
-            }));
-        } catch { /* outside extension host — publisher is optional */ }
         return created;
     }
 
@@ -1933,10 +1925,6 @@ export class KanbanDatabase {
             // database through _writeLocalBoardMirror -> getBoard -> ensureReady,
             // after this method removed the instance from the registry.
             existing._disposed = true;
-            if (existing._localMirrorDebounce) {
-                clearTimeout(existing._localMirrorDebounce);
-                existing._localMirrorDebounce = null;
-            }
             KanbanDatabase._instancesByDbPath.delete(existing.dbPath);
             existing._closeDb(existing._db);
             existing._db = null;
@@ -1963,10 +1951,6 @@ export class KanbanDatabase {
             try { await inst._writeTail; } catch { /* swallow */ }
             try { await inst.flushPersist(); } catch { /* best effort */ }
             inst._disposed = true;
-            if (inst._localMirrorDebounce) {
-                clearTimeout(inst._localMirrorDebounce);
-                inst._localMirrorDebounce = null;
-            }
             KanbanDatabase._instancesByDbPath.delete(inst.dbPath);
             inst._closeDb(inst._db);
             inst._db = null;
@@ -2280,11 +2264,6 @@ export class KanbanDatabase {
         KanbanDatabase.invalidateResolvedPathCache(this._workspaceRoot);
         // Cancel the debounced per-repo mirror BEFORE closing the handle. A timer left
         // armed here fires after teardown and resurrects the database (see _disposed).
-        if (this._localMirrorDebounce) {
-            clearTimeout(this._localMirrorDebounce);
-            this._localMirrorDebounce = null;
-        }
-        this._boardSnapshotPublisher = null;
         // NO unawaited export here. `void this.exportStateToFile()` started an async
         // write while `_db` was still set, and by the time its continuation reached
         // `getBoard()` -> `ensureReady()` this method had already closed the driver and
@@ -3026,7 +3005,6 @@ export class KanbanDatabase {
                 const stmt = this._db?.prepare('SELECT plan_id FROM plans WHERE plan_file = ? AND workspace_id = ?', [normalized, workspaceId]);
                 if (stmt?.step()) {
                     const planId = String(stmt.getAsObject().plan_id || '');
-                    if (planId) { this._recordBoardSnapshotIntent(planId, oldColumn, newColumn); }
                 }
                 stmt?.free();
             } catch { /* best-effort */ }
@@ -12116,70 +12094,6 @@ FROM plans
 
     private _exportStateInFlight = false;
     private _exportStatePending = false;
-    private _boardSnapshotPublisher: BoardSnapshotPublisher | null = null;
-
-    /**
-     * Install (or replace) the board-snapshot publisher. When set, every
-     * successful `_persist` schedules a debounced, content-stable publish to
-     * the orphan branch `switchboard/board` — but only when the user has opted
-     * in via `switchboard.boardStateExport === 'read-only-snapshot'`.
-     */
-    public setBoardSnapshotPublisher(publisher: BoardSnapshotPublisher | null): void {
-        this._boardSnapshotPublisher = publisher;
-    }
-
-    private _isBoardSnapshotEnabled(): boolean {
-        const mode = this._getBoardExportMode();
-        return mode === BOARD_SNAPSHOT_MODE || mode === BOARD_SNAPSHOT_MODE_BIDIRECTIONAL;
-    }
-
-    private _getBoardExportMode(): string {
-        if (KanbanDatabase._pathConfigProvider) {
-            return KanbanDatabase._pathConfigProvider.getConfigString('boardStateExport') || 'none';
-        }
-        try {
-            const vscode = require('vscode');
-            const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
-            return String(config.get('boardStateExport', 'none'));
-        } catch { /* outside extension host */ }
-        return 'none';
-    }
-
-    /**
-     * Apply a single card's column from an inbound board snapshot. This is
-     * the board-apply path — the ONE path allowed to move cards between
-     * columns from an external input. The file-import path is explicitly
-     * forbidden from doing so (see the schema comment at KanbanDatabase.ts:874).
-     *
-     * Called by BoardSnapshotPublisher.ingest() for each card in the fetched
-     * remote snapshot. Does NOT record an intent (the change came from the
-     * remote, not from this machine).
-     */
-    public async applyBoardSnapshotCard(workspaceId: string, planId: string, column: string): Promise<boolean> {
-        if (!(await this.ensureReady()) || !this._db) { return false; }
-        try {
-            const now = new Date().toISOString();
-            this._db.run(
-                'UPDATE plans SET kanban_column = ?, updated_at = ?, column_entered_at = ? WHERE plan_id = ? AND workspace_id = ?',
-                [column, now, now, planId, workspaceId]
-            );
-            await this._persist();
-            return true;
-        } catch (e) {
-            console.error('[KanbanDatabase] applyBoardSnapshotCard failed:', e);
-            return false;
-        }
-    }
-
-    /**
-     * Record a board snapshot intent for CAS replay. Called from card-move
-     * paths when the bidirectional board snapshot mode is active.
-     */
-    private _recordBoardSnapshotIntent(planId: string, fromColumn: string, toColumn: string): void {
-        if (this._boardSnapshotPublisher && this._isBoardSnapshotEnabled()) {
-            this._boardSnapshotPublisher.recordIntent(planId, fromColumn, toColumn);
-        }
-    }
 
     // ── Sync ownership lease (shared-store path) ─────────────────────────
     // The sync_lease table lives in the shared store so all candidate machines
@@ -12363,7 +12277,6 @@ FROM plans
             return [];
         }
     }
-    private _localMirrorDebounce: NodeJS.Timeout | null = null;
     /**
      * Set by dispose(). Without it a debounced mirror write fires AFTER dispose,
      * and `_writeLocalBoardMirror()` -> `getBoard()` -> `ensureReady()` re-opens the
@@ -12373,42 +12286,8 @@ FROM plans
      * teardown instead of acquisition.
      */
     private _disposed: boolean = false;
-    private _localMirrorLastHash: string | null = null;
-    private _localMirrorInFlight = false;
-    private _localMirrorPending = false;
-    private static readonly LOCAL_MIRROR_DEBOUNCE_MS = 500;
 
-    private _resolveExportRoot(): string {
-        let exportTarget = 'none';
-        if (KanbanDatabase._pathConfigProvider) {
-            exportTarget = KanbanDatabase._pathConfigProvider.getConfigString('boardStateExport');
-        } else {
-            try {
-                const vscode = require('vscode');
-                const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
-                exportTarget = config.get('boardStateExport', 'none');
-            } catch { /* outside extension host or config unavailable */ }
-        }
-        if (exportTarget === 'control-plane') {
-            try {
-                const { resolveEffectiveWorkspaceRootFromMappings } = require('./WorkspaceIdentityService');
-                const effectiveRoot = resolveEffectiveWorkspaceRootFromMappings(this._workspaceRoot);
-                if (effectiveRoot && effectiveRoot !== this._workspaceRoot) {
-                    return effectiveRoot;
-                }
-            } catch { /* outside extension host */ }
-        }
-        return this._workspaceRoot;
-    }
 
-    private _scheduleLocalMirror(): void {
-        if (this._disposed) return;
-        if (this._localMirrorDebounce) clearTimeout(this._localMirrorDebounce);
-        this._localMirrorDebounce = setTimeout(() => {
-            this._localMirrorDebounce = null;
-            void this._writeLocalBoardMirror();
-        }, KanbanDatabase.LOCAL_MIRROR_DEBOUNCE_MS);
-    }
 
     /**
      * Reads agent configuration for the kanban-state file header writer. Returns
@@ -12510,239 +12389,7 @@ FROM plans
         return deriveAgentDisplayName(cmd);
     }
 
-    private async _writeLocalBoardMirror(): Promise<void> {
-        // `_disposed` as well as `_db`: this method awaits `getBoard()`, which calls
-        // `ensureReady()`, which re-opens a closed database. A `_db` check alone passes
-        // at entry and is stale by the time the await resumes.
-        if (this._disposed || !this._workspaceRoot || !this._db) return;
-        if (this._localMirrorInFlight) {
-            this._localMirrorPending = true;
-            return;
-        }
-        this._localMirrorInFlight = true;
-        try {
-            const workspaceId = await this.getWorkspaceId();
-            if (!workspaceId) return;
-            const exportRoot = this._resolveExportRoot();
-
-            try {
-                const switchboardDir = path.join(exportRoot, '.switchboard');
-                const stat = await fs.promises.stat(switchboardDir);
-                if (!stat.isDirectory()) return;
-            } catch {
-                return;
-            }
-
-            const allPlans = await this.getBoard(workspaceId);
-
-            // Read agent config so per-column file headers can carry the configured
-            // agent name (`**Agent:** <NAME> CLI`). Folded into the content hash below
-            // so a config-only change (no card move) still triggers a rewrite.
-            const agentConfig = await this._readAgentConfig();
-
-            // Content-hash skip: don't rewrite if the serialized representation hasn't changed.
-            // The active project filter is folded in so a filter-only change (no card moves)
-            // still rewrites the mirror — otherwise the Manager Snapshot's filter scope line
-            // goes stale. getConfigSync is a sync DB read (cheap, same _db we hold here).
-            // Agent config is folded in so changing startupCommands (without a card move)
-            // still rewrites the mirror — otherwise the **Agent:** header goes stale.
-            const activeFilter = String(this.getConfigSync('kanban.activeProjectFilter') || '');
-            const serialized = JSON.stringify({
-                activeFilter,
-                agentConfig: {
-                    startupCommands: agentConfig.startupCommands,
-                    visibleAgents: agentConfig.visibleAgents,
-                    customAgents: agentConfig.customAgents,
-                    customKanbanColumns: agentConfig.customKanbanColumns
-                },
-                allPlans: allPlans.map(p => ({
-                    planId: p.planId,
-                    kanbanColumn: p.kanbanColumn,
-                    topic: p.topic,
-                    planFile: p.planFile,
-                    isFeature: p.isFeature,
-                    featureId: p.featureId,
-                    project: p.project
-                }))
-            });
-            const hash = crypto.createHash('sha256').update(serialized).digest('hex');
-            if (hash === this._localMirrorLastHash) return;
-            this._localMirrorLastHash = hash;
-
-            // Build feature-id -> topic lookup so subtask lines can name their parent feature.
-            const featureTopicById = new Map<string, string>();
-            for (const plan of allPlans) {
-                if (plan.isFeature) {
-                    featureTopicById.set(plan.planId, plan.topic);
-                }
-            }
-            const orderedColumns = [...DEFAULT_KANBAN_COLUMNS].sort((a, b) => a.order - b.order);
-            const columns = new Map<string, KanbanPlanRecord[]>();
-            for (const col of orderedColumns) {
-                columns.set(col.id, []);
-            }
-            columns.set('BACKLOG', []);
-            columns.set('CODED', []);
-            for (const plan of allPlans) {
-                const list = columns.get(plan.kanbanColumn);
-                if (list) list.push(plan);
-            }
-
-            const customColumns = new Map<string, KanbanPlanRecord[]>();
-            for (const plan of allPlans) {
-                if (!columns.has(plan.kanbanColumn)) {
-                    if (!customColumns.has(plan.kanbanColumn)) {
-                        customColumns.set(plan.kanbanColumn, []);
-                    }
-                    customColumns.get(plan.kanbanColumn)!.push(plan);
-                }
-            }
-
-            const allColumns = [
-                ...columns.entries(),
-                ...customColumns.entries(),
-            ];
-
-            // One label resolution per column, shared by the per-column files, the
-            // board table, and the Manager Snapshot. Newline-stripped: custom labels
-            // are user-authored free text and a multi-line label would corrupt the
-            // markdown structure.
-            const labelFor = (col: string): string =>
-                resolveColumnLabel(col, agentConfig.customKanbanColumns).label.replace(/[\r\n]+/g, ' ');
-
-            for (const [col, plans] of allColumns) {
-                const perColPath = path.join(exportRoot, '.switchboard', `kanban-state-${_columnSlug(col)}.md`);
-                let colMd = `## ${col}\n\n`;
-                // **Label:** the column's UI label (New, Planned, Reviewed, …) — the
-                // name a user reads off the board header. One line, newline-stripped
-                // (custom labels are user-authored free text). resolveColumnLabel's
-                // fallback emits the ID itself so the line is always present.
-                colMd += `**Label:** ${labelFor(col)}\n\n`;
-                const agentName = this._resolveAgentForColumn(
-                    col,
-                    agentConfig.startupCommands,
-                    agentConfig.visibleAgents,
-                    agentConfig.customAgents,
-                    agentConfig.customKanbanColumns
-                );
-                if (agentName) {
-                    colMd += `**Agent:** ${agentName}\n\n`;
-                }
-                if (plans.length === 0) {
-                    colMd += `_No plans_\n\n`;
-                } else {
-                    for (const plan of plans) {
-                        const filePath = path.isAbsolute(plan.planFile)
-                            ? plan.planFile
-                            : path.join(exportRoot, plan.planFile);
-                        const parts = [`planId:${plan.planId}`];
-                        if (plan.isFeature) { parts.push('feature'); }
-                        if (plan.featureId) {
-                            const featureTopic = featureTopicById.get(plan.featureId);
-                            parts.push(featureTopic ? `subtask-of:"${featureTopic}"` : `subtask-of:${plan.featureId}`);
-                        }
-                        if (plan.project) {
-                            const safeProject = plan.project.replace(/"/g, '');
-                            parts.push(`project:"${safeProject}"`);
-                        }
-                        colMd += `**Column:** ${plan.kanbanColumn}\n`;
-                        colMd += `- [${plan.planFile}](${filePath}) — ${plan.topic} <!-- ${parts.join(' ')} -->\n`;
-                    }
-                    colMd += `\n`;
-                }
-                const tmpPath = `${perColPath}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-                await fs.promises.mkdir(path.dirname(perColPath), { recursive: true });
-                await fs.promises.writeFile(tmpPath, colMd, 'utf8');
-                await fs.promises.rename(tmpPath, perColPath);
-            }
-
-            let md = `# Kanban Board\n\n`;
-            md += `*Workspace: ${workspaceId}* · *Updated: ${new Date().toISOString()}*\n\n`;
-            md += `| Column | Label | File |\n|---|---|---|\n`;
-            for (const [col, plans] of allColumns) {
-                const slug = _columnSlug(col);
-                md += `| ${col} | ${labelFor(col).replace(/\|/g, '\\|')} | [kanban-state-${slug}.md](./kanban-state-${slug}.md) |\n`;
-            }
-
-            // Manager Snapshot — pre-digested board state for the switchboard-manage skill's
-            // entry protocol. One file read + /health replaces the multi-file awk counting
-            // pass. Counts are derived from the same allPlans array the per-column files were
-            // built from, so the snapshot is exactly as fresh as the state files. Column IDs
-            // are canonical uppercase (never slugs) — API calls built from this table must not
-            // strand cards. Custom columns appear by name in both the table and the board line.
-            // Live terminal registration is in-memory only and NOT included — /health is the
-            // sole truthful source (see the provenance note below).
-            md += `\n## Manager Snapshot\n\n`;
-            md += `| Column | Label | Plans | Features |\n|---|---|---|---|\n`;
-            const POST_CODE = new Set(['CODED', 'LEAD CODED', 'CODER CODED', 'INTERN CODED',
-                'CODE REVIEWED', 'ACCEPTANCE TESTED', 'COMPLETED']);
-            let terminalTotal = 0;
-            const preCodeParts: string[] = [];
-            for (const [col, plans] of allColumns) {
-                const feats = plans.filter(p => p.isFeature).length;
-                const plain = plans.length - feats;
-                md += `| ${col} | ${labelFor(col).replace(/\|/g, '\\|')} | ${plain} | ${feats} |\n`;
-                // The Board: line is the entry snapshot a human (or agent) reads —
-                // render labels, not IDs. The table above keeps canonical uppercase
-                // IDs in the first cell, so API calls built from it cannot strand a card.
-                const label = labelFor(col);
-                if (POST_CODE.has(col)) {
-                    terminalTotal += plain;
-                } else if (plain > 0 && feats > 0) {
-                    preCodeParts.push(`${label} ${plain} (+${feats} feature${feats === 1 ? '' : 's'})`);
-                } else if (plain > 0) {
-                    preCodeParts.push(`${label} ${plain}`);
-                } else if (feats > 0) {
-                    // Feature-only column: render explicitly so <COL> 0 is not misread as empty.
-                    preCodeParts.push(`${label} 0 (+${feats} feature${feats === 1 ? '' : 's'})`);
-                }
-            }
-            const boardLine = preCodeParts.length === 0 && terminalTotal === 0
-                ? 'Board: (empty)'
-                : `Board: ${[...preCodeParts, `terminal ${terminalTotal}`].join(' · ')}.`;
-            md += `\n${boardLine}\n`;
-            md += `\nActive project filter: ${activeFilter || '(none)'}\n`;
-            md += `\n_Terminals are NOT in this file — check GET /health._\n`;
-
-            const oldJsonPath = path.join(exportRoot, '.switchboard', 'kanban-state.json');
-            if (fs.existsSync(oldJsonPath)) {
-                await fs.promises.unlink(oldJsonPath);
-            }
-
-            const stateFilePath = path.join(exportRoot, '.switchboard', 'kanban-board.md');
-            const tmpPath = `${stateFilePath}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-            await fs.promises.writeFile(tmpPath, md, 'utf8');
-            await fs.promises.rename(tmpPath, stateFilePath);
-        } catch (error) {
-            console.error('[KanbanDatabase] Failed to export state to file:', error);
-        } finally {
-            this._localMirrorInFlight = false;
-            if (this._localMirrorPending) {
-                this._localMirrorPending = false;
-                void this._writeLocalBoardMirror();
-            }
-        }
-    }
-
-    public async flushLocalBoardMirror(): Promise<void> {
-        if (this._localMirrorDebounce) {
-            clearTimeout(this._localMirrorDebounce);
-            this._localMirrorDebounce = null;
-        }
-        if (this._localMirrorInFlight) {
-            this._localMirrorPending = true;
-            const flushDeadline = Date.now() + 5000;
-            while (this._localMirrorInFlight) {
-                if (Date.now() > flushDeadline) break;
-                await new Promise(r => setTimeout(r, 10));
-            }
-        } else {
-            await this._writeLocalBoardMirror();
-        }
-    }
-
     private async exportStateToFile(): Promise<void> {
-        await this.flushLocalBoardMirror();
     }
 
     /**
@@ -12751,10 +12398,6 @@ FROM plans
      */
     private async _persist(): Promise<boolean> {
         if (!this._db) return false;
-        this._scheduleLocalMirror();
-        if (this._boardSnapshotPublisher && this._isBoardSnapshotEnabled()) {
-            this._boardSnapshotPublisher.schedulePublish();
-        }
         return true;
     }
 
@@ -12768,7 +12411,6 @@ FROM plans
         // disk first"). Dropping the promise made `await db.flushPersist()` return
         // before the mirror was written — a Promise<void> seam where "never awaited"
         // and "working" are the same value to every caller and every gate.
-        await this.flushLocalBoardMirror();
     }
 
     private async _persistedUpdate(sql: string, params: unknown[]): Promise<boolean> {

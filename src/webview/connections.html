@@ -402,28 +402,6 @@
             <div id="remote-health-failure" style="font-size: 11px; display: none; margin-top: 4px; font-weight: bold;"></div>
         </div>
 
-        <!-- Board state export — where board state is mirrored for remote/web-agent
-             visibility. Lives here rather than in Setup because it is a connections
-             concern; its verbs are setBoardStateExport / setBoardStateExportRemoteUrl. -->
-        <div class="form-row" style="margin-top: 20px; border-top: 1px solid var(--border-color); padding-top: 16px;">
-            <div class="conn-heading">Board state export</div>
-            <div style="font-size: 11px; color: var(--text-secondary); margin: 8px 0; line-height: 1.5;">
-                <strong>Default: none</strong> — no git footprint. <code>read-only-snapshot</code> publishes a
-                one-directional, read-only snapshot (<code>board.json</code> + <code>board.md</code>) to the orphan
-                branch <code>switchboard/board</code> — read-only, not a control channel. Notion / Linear are
-                governed by their existing provider config above.
-            </div>
-            <label for="board-state-export-select">Export destination</label>
-            <select id="board-state-export-select">
-                <option value="none">none — no git footprint</option>
-                <option value="read-only-snapshot">read-only-snapshot — publish to orphan branch switchboard/board (read-only)</option>
-            </select>
-            <div id="board-state-export-remote-url-row" style="display: none; margin-top: 8px;">
-                <label for="board-state-export-remote-url">Git remote URL (reserved — currently unused)</label>
-                <input id="board-state-export-remote-url" type="text" placeholder="reserved" />
-            </div>
-        </div>
-
         <span id="remote-config-status" style="font-size: 11px; color: var(--text-secondary);"></span>
     </div>
 

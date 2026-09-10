@@ -593,18 +593,18 @@ Read .switchboard/memo.md. Process each entry into a distinct plan file in .swit
             content: `---
 job: nightly-code-review
 schedule: daily
-reads: .switchboard/kanban-state-coded.md
+reads: switchboard api GET /kanban/plans?column=CODED
 writes: .switchboard/plans/intake/
 ---
 
-Parse plan paths from .switchboard/kanban-state-coded.md and mtime scan. Review each plan file for completeness and potential bugs. Append findings to the respective plan file. Do NOT move cards directly.`
+Read the CODED column with: switchboard api GET "/kanban/plans?column=CODED" — take each record's planFile. Review each plan file for completeness and potential bugs. Append findings to the respective plan file. Do NOT move cards directly.`
         },
         {
             filename: 'research-unknowns.md',
             content: `---
 job: research-unknowns
 schedule: daily
-reads: .switchboard/kanban-state-created.md
+reads: switchboard api GET /kanban/plans?column=CREATED
 writes: .switchboard/plans/intake/
 ---
 

@@ -279,12 +279,13 @@ export function generateSparkContext(workspaceRoot: string, extensionVersion: st
     content += `### Run Log\n`;
     content += `- Append one line per completed run to \`.switchboard/instructions/run-log.md\`.\n`;
     content += `- Format: \`<timestamp> | <job-name> | <summary>\`\n`;
-    content += `- A job reads its own last run-log line as the **mtime-supplement cursor**: it scans \`.switchboard/plans/intake/*.md\` for files whose mtime is newer than that timestamp, then combines those with the \`kanban-state-*.md\` snapshots.\n\n`;
-    content += `### Kanban State Files\n`;
-    content += `- \`.switchboard/kanban-state-<column-slug>.md\` is a DB-exported mirror and is **only refreshed while Switchboard is running**. Between sessions it is frozen; an unattended job must mtime-scan \`.switchboard/plans/intake/\` as a supplement.\n`;
-    content += `- File format per column:\n`;
-    content += `  \`\`\`\n  ## <COLUMN_ID>\n  \n  **Label:** <display-label>\n  **Agent:** <agent-name>   <!-- optional -->\n  \n  **Column:** <column-id>\n  - [<plan-file>](<plan-file-or-absolute-path>) — <plan-topic> <!-- planId:<uuid> [feature] [subtask-of:"..."] [project:"..."] -->\n  \`\`\`\n`;
-    content += `- Each plan is one list line with an HTML comment carrying \`planId\`, optional \`feature\`, optional \`subtask-of\` and optional \`project\`.\n\n`;
+    content += `- A job reads its own last run-log line as the **mtime-supplement cursor**: it scans \`.switchboard/plans/intake/*.md\` for files whose mtime is newer than that timestamp, then combines those with a board read (see **Reading Board State**).\n\n`;
+    content += `### Reading Board State\n`;
+    content += `- Read the board over the API, never from files: \`switchboard api GET "/kanban/plans?column=<COLUMN_ID>"\`.\n`;
+    content += `- Each record carries \`planId\`, \`planFile\`, \`topic\`, \`kanbanColumn\`, \`featureId\` and \`project\`.\n`;
+    content += `- \`GET /kanban/plan?planId=<id>\` returns one record plus its file content, and SPANS the archive — an aged card is still found.\n`;
+    content += `- Three outcomes, and they are distinct: rows, \`404\` (no such card), and \`503\` with \`code: STORE_UNAVAILABLE\` (the store did not answer). Never treat the third as an empty board.\n`;
+    content += `- The \`.switchboard/kanban-state-*.md\` exports this section used to describe were DELETED on 2026-09-11. They were machine-local and gitignored, so they never existed in a worktree, and they went stale whenever Switchboard was not running. The endpoints have neither problem.\n\n`;
     sections.push('scheduled-jobs-protocol');
 
     // 5. Exclusions, Overrides and Anti-Confabulation

@@ -578,24 +578,6 @@ export class SetupPanelProvider implements vscode.Disposable {
                     this.postMessage({ type: 'controlPlaneFreshSetupResult', ...result });
                     return { success: true };
                 }
-                case 'setBoardStateExport': {
-                    const workspaceRoot = this._getCurrentWorkspaceRoot();
-                    if (workspaceRoot) {
-                        const pathConfig = this._seams().pathConfig;
-                        const value = typeof message.value === 'string' ? message.value : 'none';
-                        await pathConfig.updateConfigWorkspace('boardStateExport', value);
-                    }
-                    return { success: true };
-                }
-                case 'setBoardStateExportRemoteUrl': {
-                    const workspaceRoot = this._getCurrentWorkspaceRoot();
-                    if (workspaceRoot) {
-                        const pathConfig = this._seams().pathConfig;
-                        const value = typeof message.value === 'string' ? message.value : '';
-                        await pathConfig.updateConfigWorkspace('boardStateExport.remoteUrl', value);
-                    }
-                    return { success: true };
-                }
                 case 'initControlPlaneGit': {
                     const workspaceRoot = this._getCurrentWorkspaceRoot();
                     if (!workspaceRoot) {

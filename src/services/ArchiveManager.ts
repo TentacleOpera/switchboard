@@ -1,4 +1,11 @@
-import * as vscode from 'vscode';
+// NOT a static `import * as vscode`. RetentionService imports this module and
+// LocalApiServer imports RetentionService, so a top-level require('vscode') here
+// is loaded by every headless consumer — which is exactly what made
+// `test:contract:kanban-column-labels` fail with "Cannot find module 'vscode'"
+// through out/services/ArchiveManager.js. The host is resolved lazily inside the
+// one place it is actually read, in a try/catch that already tolerated its
+// absence. Same treatment, same reason, as machineAttribution.ts.
+import type * as vscode from 'vscode';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
@@ -100,12 +107,14 @@ export class ArchiveManager {
      */
     private _resolveConfiguredArchivePath(): { value: string; source: ArchivePathSource } {
         try {
-            const config = vscode.workspace.getConfiguration('switchboard');
-            const override = String(config.get<string>('storage.archivePathOverride', '') || '').trim();
+            // eslint-disable-next-line @typescript-eslint/no-var-requires
+            const vscodeApi = require('vscode');
+            const config = vscodeApi.workspace.getConfiguration('switchboard');
+            const override = String(config.get('storage.archivePathOverride', '') || '').trim();
             if (override) { return { value: override, source: 'storage.archivePathOverride' }; }
             // Retired from the config schema by the topology plan; still read so an
             // install that configured it keeps its DuckDB archive.
-            const legacy = String(config.get<string>('archive.dbPath', '') || '').trim();
+            const legacy = String(config.get('archive.dbPath', '') || '').trim();
             if (legacy) { return { value: legacy, source: 'legacy:archive.dbPath' }; }
         } catch {
             // Standalone / headless mode outside VS Code — fall through to the env var.

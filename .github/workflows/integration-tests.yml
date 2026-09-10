@@ -912,14 +912,6 @@ jobs:
       - name: Board read endpoints contract (three outcomes, span vs window, host parity)
         run: npm run test:contract:board-read-endpoints
 
-      # The board snapshot's shared-tier projection. The tier split made
-      # BoardSnapshotPublisher's card entry derive from storageTiers.projectSharedCard
-      # instead of a hand-written field list, and this suite is what pins that the
-      # projection carries ONLY shared-tier fields (no dispatch, no liveness) and that
-      # the ticket projection carries no body/comments/attachments. It existed and was
-      # edited by that work while having no npm script and no CI step at all.
-      - name: Board snapshot bidirectional contract (shared-tier projection only)
-        run: npm run test:contract:board-snapshot-bidirectional
 
       # V70 scopes ten previously-unscoped tables by workspace_id and rebuilds three
       # colliding constraints. Two things this pins that nothing else did: the rebuild

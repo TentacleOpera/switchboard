@@ -59,10 +59,16 @@ const KNOWN_ORPHANED_IDS = new Set([
     'notion-backup-status', 'notion-backup-error', 'notion-backup-progress',
     'notion-db-url-input', 'notion-option-realtime-sync', 'notion-option-delete-sync',
     'notion-option-inbound-delete',
-    // ── Board-state export row: markup absent, listeners registered ──
-    'board-state-export-select', 'board-state-export-remote-url',
-    'board-state-export-remote-url-row', 'board-state-export-init-git-row',
-    'btn-init-control-plane-git', 'control-plane-git-init-status',
+    // Still read by setup.html's initControlPlaneGit result handler, whose button
+    // listener went with the board-state-export row (2026-09-11). The status
+    // element is the surviving half; the control-plane layout work owns rebuilding
+    // its entry point (canonical-control-plane-layout-with-sibling-repos.md).
+    'control-plane-git-init-status',
+    // ── Board-state export row: RESOLVED 2026-09-11. This was the honest kind
+    //    of orphan — four ids with listeners registered in setup.html and no
+    //    markup backing any of them. The listeners are now deleted along with the
+    //    board mirrors and the `boardStateExport` setting they drove, so the ids
+    //    are absent from both sides and no longer belong on this list. ──
     // ── Agent-behaviour toggles: markup absent ──
     'accurate-coding-toggle', 'advanced-reviewer-toggle', 'lead-challenge-toggle',
     'jules-auto-sync-toggle',

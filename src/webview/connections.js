@@ -310,16 +310,6 @@
             vscode.postMessage({ type: 'getRemoteConfig', workspaceRoot: e.target.value });
             return;
         }
-        if (e.target.id === 'board-state-export-select') {
-            const row = document.getElementById('board-state-export-remote-url-row');
-            if (row) row.style.display = e.target.value === 'read-only-snapshot' ? 'block' : 'none';
-            vscode.postMessage({ type: 'setBoardStateExport', value: e.target.value });
-            return;
-        }
-        if (e.target.id === 'board-state-export-remote-url') {
-            vscode.postMessage({ type: 'setBoardStateExportRemoteUrl', value: e.target.value || '' });
-            return;
-        }
         // Notion setup options are read on demand by collectNotionRemoteSetupOptions;
         // they are not part of RemoteConfig and must not trigger a config save.
         if (e.target.id && e.target.id.startsWith('notion-option-')) { return; }
@@ -739,15 +729,6 @@
             case 'remoteSyncHealth':
                 renderRemoteSyncHealth(msg.health);
                 break;
-            case 'boardStateExportSetting': {
-                const select = document.getElementById('board-state-export-select');
-                if (select && typeof msg.value === 'string') { select.value = msg.value; }
-                const row = document.getElementById('board-state-export-remote-url-row');
-                if (row) { row.style.display = msg.value === 'read-only-snapshot' ? 'block' : 'none'; }
-                const urlInput = document.getElementById('board-state-export-remote-url');
-                if (urlInput && typeof msg.remoteUrl === 'string') { urlInput.value = msg.remoteUrl; }
-                break;
-            }
             // Hydrates the three Notion sync-option checkboxes. They are part of the
             // Remote form's markup but their stored state travels on the integration
             // state push, not in RemoteConfig — so without this they would render
@@ -803,7 +784,7 @@
     });
 
     // Initial load. `getIntegrationSetupStates` is what carries notionState, which
-    // hydrates the Notion sync-option checkboxes. `boardStateExportSetting` has no
+    // hydrates the Notion sync-option checkboxes. the retired `boardStateExportSetting` had no
     // request verb — it arrives on the Setup panel state push.
     vscode.postMessage({ type: 'getRemoteConfig' });
     vscode.postMessage({ type: 'getIntegrationSetupStates' });
