@@ -1,5 +1,29 @@
 # Storage topology: three stores, one operator choice, and the end of ten answers to "where does my data live"
 
+<!-- libsql-rejected -->
+> **PREMISE CORRECTION 2026-09-11 (operator decision).** **libSQL is rejected** — not deferred, not
+> one option among several. The authoritative store is **one better-sqlite3 database owned by one
+> board host**. Multiple machines participate by running agent *seats*, not stores: a seat's startup
+> command carries an `ssh`/`mosh` transport prefix, the pty stays local, the agent runs on the other
+> box, and that box never opens the database — it is handed a plan path in the board response and
+> reports completion over HTTP. Both machines clone the same repo and git is the sync. See
+> `agents-are-saved-per-machine-and-a-team-picks-one.md` and
+> `two-configurations-board-only-and-board-plus-agents.md`.
+>
+> **What this voids in this plan:** the Resolved Assumption below (libSQL whole-database replication)
+> and everything derived from it — the argument that dormant history *must* be a separate database to
+> keep it out of a replica, the ATTACH prohibition as a constraint, and the "remote sync volume"
+> reason for a cold boundary in the Problem Analysis. The references to
+> `libsql-shared-store-turso-and-self-hosted-sqld.md` as a target this plan feeds are dead; that plan
+> should be retired rather than sequenced.
+>
+> **What survives on independent merits:** the three-store *shape* is still right, but for different
+> reasons. Archive stays a separate database because the working set should be small and history is
+> queried on demand — a size and locality argument, not a replication one. Board stays authoritative.
+> Runtime keyed by machine still earns its place because the `.db` is hand-carried between boxes.
+> The one-operator-choice goal, the retirement of the ten path mechanisms, the activity window and
+> the DuckDB demotion are all untouched by this correction — none of them ever depended on libSQL.
+
 ## Goal
 
 Decide the fundamental shape of Switchboard storage: which stores exist, where each one lives, and how an operator chooses. Three stores — **Runtime**, **Board**, **Archive** — derived from a single decision, so the operator picks a *target* and never types a path. Supersedes the hot/cold file split, whose central justification expires with the engine swap.
@@ -14,7 +38,7 @@ Decide the fundamental shape of Switchboard storage: which stores exist, where e
 
 **What survives from that plan is its other half, and it is genuinely good.** The board read is unbounded: `getBoardFilteredByProject` (`:3152`) is `WHERE status='active'` with no LIMIT, so every pre-completed column loads in full, while `getCompletedPlans` (`:3221`) caps only the already-terminal pile — a cap the plan correctly identifies as "display-only… **the cap has never reduced memory**". That is a query-bound problem, fixed by a time window, not by relocating rows to another file.
 
-**And one new reason for a cold boundary has appeared since that plan was written: remote sync volume.** Replicating dormant history to a remote store costs quota and bandwidth for rows nobody reads. A libSQL embedded replica syncs a *whole* database — partial replication is not on offer — so the only way to say "do not sync the history" is for the history to be a different database.
+~~**And one new reason for a cold boundary has appeared since that plan was written: remote sync volume.**~~ **Void 2026-09-11 (libSQL rejected).** There is no replication, so dormant history costs no quota and no bandwidth. **The cold boundary survives on the original argument alone**, which is the stronger one anyway: the board read is unbounded and query-bound, fixed by a time window, and keeping dormant rows out of the working set keeps the one better-sqlite3 file — and a 1 GB board-only host — small.
 
 ### Root Cause
 
@@ -23,7 +47,7 @@ Each mechanism was added to answer a question the previous one could not, and no
 ### Non-goals
 
 - Deleting anything from the superseded plan. It is marked superseded with a pointer here; its board-window analysis is the input to this plan's window, not waste.
-- Choosing the store *implementations*. `libsql-shared-store-turso-and-self-hosted-sqld.md` and `git-carried-shared-board-state.md` own those; this decides what they are targets *for*.
+- Choosing the store *implementations*. ~~`libsql-shared-store-turso-and-self-hosted-sqld.md` and `git-carried-shared-board-state.md` own those; this decides what they are targets *for*.~~ **Corrected 2026-09-11:** the implementation is settled and is not a choice this plan defers — one better-sqlite3 database, one board host. The libSQL plan should be retired.
 - Retention policy specifics. `retention-and-archive-for-unbounded-growth.md` owns the window's values; this owns the existence of a window and which store each side lands in.
 
 ## Metadata
@@ -51,7 +75,7 @@ Yes — three decisions remain; the fourth is settled.
 ### Complex / Risky
 
 - **Runtime as a third store is new, and it is the piece that makes the hybrid posture possible at all.** "Keep the non-thrashing operations on Turso" requires the thrashing to have somewhere else to be. Runtime holds `dispatched_*`, `last_liveness_at`, `blocked_at`, `worktrees` — never shared, never migrated, re-derived from the live fleet on start, and safe to delete. Getting its lifecycle wrong (persisting it, migrating it, backing it up) reintroduces exactly the write volume the split exists to remove.
-- **Three stores means cross-store reads.** The board view joins Board and Runtime; a history view reads Archive. Under a remote Board and an on-demand Archive those have different latencies and different failure modes, and the UI must not present a partial read as a complete one. **Research constraint (ATTACH):** libSQL does not support `ATTACH DATABASE` in embedded replica mode, so when Board is a remote target (embedded replica), cross-store joins (Board+Runtime, Board+Archive) cannot use SQL-level `ATTACH` — they must be application-level joins in TypeScript, opening separate connections per store and merging in-process. When Board is a local file (default target), `ATTACH` may still be available, but the code path must not depend on it.
+- **Three stores means cross-store reads.** The board view joins Board and Runtime; a history view reads Archive. Under a remote Board and an on-demand Archive those have different latencies and different failure modes, and the UI must not present a partial read as a complete one. ~~**Research constraint (ATTACH):**~~ **Void as a constraint (2026-09-11 — libSQL rejected).** Board is always a local better-sqlite3 file, so `ATTACH` is available and no remote-target case exists. The application-level merges that shipped are kept on their own merits, not because SQL-level joins are unavailable. What *does* survive from this paragraph is the part that was never about libSQL: three stores still means cross-store reads with different failure modes, and the UI still must not present a partial read as a complete one — which is what the read-endpoints subtask built.
 - **Deriving placement retroactively for existing installs.** An install with a custom `kanban.dbPath` and a configured `archive.dbPath` pointing somewhere unrelated has to land somewhere sensible. Derivation cannot silently relocate a database a user deliberately placed.
 - **The escape hatch must not become the interface again.** A path override has to exist, and the moment it appears in onboarding, help text or a default, the ten mechanisms start growing back. It belongs behind an explicit "advanced" surface with a stated support posture.
 - **Card promotion out of Archive.** A dormant card touched again must come back to Board. The superseded plan's phrase "reversible on access" is the right requirement; it is also the one most likely to be skipped, and skipping it silently loses cards from the board.
@@ -81,7 +105,7 @@ Yes — three decisions remain; the fourth is settled.
 - **Hard prerequisites:** the sidecar/real-binding plan (it is what makes one Board store viable and what expires the file split), the tier split (it defines Runtime versus Board contents), and the unscoped-tables plan.
 - **Coordinate with** `board-read-endpoints-must-survive-the-storage-topology.md` — both edit `query-kanban` SKILL.md (this plan changes the documented DB path via consolidation; that plan removes `sqlite3`). Whichever lands second must not revert the first. The write-guardrail plan edits the same files for a third reason — all three must be coordinated.
 - **Supersedes** `split_kanban_hot_cold_dbs.md`.
-- **Feeds** the Database panel (this is the topology it renders), the libSQL and git-carried store plans (these are the targets), and the retention plan (which sets the window).
+- **Feeds** the Database panel (this is the topology it renders) and the retention plan (which sets the window). ~~the libSQL and git-carried store plans (these are the targets)~~ — **corrected 2026-09-11:** there is no store-target plan downstream any more. libSQL is rejected, and the git-carried mechanism that shipped is a one-directional board *snapshot* (`BoardSnapshotPublisher`), not an authoritative store this plan is choosing between.
 
 ## Adversarial Synthesis
 
@@ -131,7 +155,16 @@ Per install: derive the three placements, import anything found at a retired mec
 
 ## Resolved Assumptions
 
-- **libSQL embedded replica sync is whole-database — no partial/table-level replication.** Confirmed by research (Turso docs, libSQL source, sqld architecture). libSQL uses physical WAL frame replication at the 4 KB page level; there are no table filters, row predicates, or publication-subscription mechanisms. ATTACH DATABASE is also unsupported in embedded replica mode. This validates the third-store design: dormant history MUST live in a separate Archive database, because there is no way to exclude it from a replica sync within one database. The two-stores-with-a-windowed-view alternative is not viable under libSQL.
+- ~~**libSQL embedded replica sync is whole-database — no partial/table-level replication.**~~
+  **WITHDRAWN 2026-09-11 — libSQL is rejected; see the premise correction at the top of this file.**
+  The research itself was sound and is not in dispute: libSQL replicates physical WAL frames at page
+  granularity, offers no table filters, and does not support ATTACH in embedded replica mode. It is
+  withdrawn because it is a fact about a technology this product will not use, and it was doing load
+  for three separate requirements — a separate Archive database, a separate Runtime database, and an
+  application-level rather than SQL-level join. **None of those three may cite this any more.** Two
+  of the three still stand on other grounds (Archive on working-set size; the shipped
+  application-level merge on "it works and is tested"); the separate Runtime *file* does not, and is
+  withdrawn with it. Recorded rather than deleted so nobody re-commissions the same research.
 
 ## Outstanding Questions
 
@@ -149,7 +182,7 @@ Reviewed `c3561c23`. Fixed three material defects. The Implementation Summary's 
 
 ## Deferred Findings
 
-- MAJOR — The Runtime store is a path that is computed, validated and logged but never opened; runtime tables live inside the Board database. Runtime disposability, the "delete the Runtime store while running" verification case, and the hybrid-posture "zero remote writes" claim are all untestable until it is a real file: `src/services/storageTopology.ts:118`.
+- NIT (was MAJOR, withdrawn-and-downgraded 2026-09-11) — The Runtime store is a path that is computed, validated and logged but never opened. That is no longer an unmet requirement, because the separate-file mandate is void; it is now simply **dead code that names a store which does not exist**, and it should be deleted or the field documented as informational, since a resolved-and-logged path that nothing opens is the kind of plausible-looking value CLAUDE.md's fallback rule exists to forbid. The "delete the Runtime store while running" and hybrid-posture "zero remote writes" verification cases are void with the premise: `src/services/storageTopology.ts:118`.
 - MAJOR — No promotion-on-access test exists, and the plan names promotion "the requirement most likely to be skipped, which loses cards". `restoreToHot` pre-dates this work and `lookupPlanRecord` deliberately does NOT promote (`promoteOnAccess` defaults false), so nothing asserts that touching a dormant card returns it to Board within one refresh: `src/services/KanbanDatabase.ts:5233`.
 - MAJOR — Six contract suites are red at the committed tree and were red before this feature (verified against `c3561c23` in a clean archive): `kanban-column-labels` (`Cannot find module 'vscode'` through `out/services/ArchiveManager.js` → `RetentionService` → `LocalApiServer` — a top-level `import * as vscode` in a module that headless tests load), `plan-priority-endpoint` (500 vs 401), `browser-planner-dispatch-surface`, `terminal-plan-attribution`, `tickets-auto-refresh`, `tickets-subtasks`. All are CI-wired, so the pipeline is red independently of this work.
 - MAJOR — 104 of 288 `src/test/*.test.js` files are referenced by no `package.json` script at all, so the widened parity gate cannot see them. Only `board-snapshot-bidirectional-contract.test.js` was wired here because this feature edited it; the rest is a systemic gap for its own ticket.

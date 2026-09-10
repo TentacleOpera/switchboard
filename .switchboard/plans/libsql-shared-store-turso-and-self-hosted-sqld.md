@@ -1,5 +1,23 @@
 # A libSQL shared store, hosted on Turso or self-hosted sqld, as an opt-in authoritative target
 
+<!-- libsql-rejected -->
+> **REJECTED 2026-09-11 (operator decision).** libSQL is not a direction this product is taking.
+> The authoritative store is **one better-sqlite3 database owned by one board host**; multiple
+> machines participate by running agent *seats* over an `ssh`/`mosh` transport prefix with the pty
+> local, and those machines never open the database — they are handed a plan path in the board
+> response and report completion over the board's HTTP API. See
+> `agents-are-saved-per-machine-and-a-team-picks-one.md` and
+> `two-configurations-board-only-and-board-plus-agents.md`.
+>
+> This file is annotated rather than deleted because its research was load-bearing elsewhere and
+> should not be re-commissioned: the finding that libSQL replicates whole databases at WAL page
+> granularity, with no table filters and no `ATTACH` in embedded-replica mode, is what justified a
+> separate Runtime database file and a separate Archive database in
+> `split-shared-board-state-from-machine-local-runtime.md` and
+> `storage-topology-one-choice-three-stores.md`. Both of those requirements are withdrawn there.
+> **Do not dispatch this card, and do not cite it as a prerequisite or a downstream target.**
+> Retiring the card itself is the operator's call, not an agent's.
+
 ## Goal
 
 Let an operator point the shared tier at a libSQL server — Turso, or sqld they run themselves, on their machine or a box they own — so board state is authoritative off-machine and reachable from every machine and cloud session they work in. Local reads stay local and microsecond-fast via an embedded replica; offline keeps working. Bring-your-own credential, always: Switchboard ships a client and never an account.

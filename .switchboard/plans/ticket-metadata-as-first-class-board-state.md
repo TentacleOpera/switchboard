@@ -1,5 +1,15 @@
 # Imported ticket metadata is gitignored files and two bare id strings — make it first-class shared board state
 
+<!-- libsql-rejected -->
+> **PREMISE NOTE 2026-09-11 (operator decision: libSQL is rejected).** This plan's goal is
+> **unaffected** — it is recorded here only so a reader does not chase the dead reference below.
+> The authoritative store is one better-sqlite3 database owned by one board host, which lives at
+> `~/.switchboard/boards/<workspace-id>.db`, **outside the repository**. That is what carries the
+> clone-survival and `git clean -xdf` guarantees, and it always was: neither depended on libSQL.
+> "Reaches a teammate" now means a second person or machine reaching that board host over its HTTP
+> API, or a hand-carried `.db`, rather than a replica. The only corrections owed are the words
+> "libSQL" and "replica sync" where they appear as the *reason*; every requirement stands.
+
 ## Goal
 
 Make a plan imported from Linear (or ClickUp) carry everything associated with its ticket, in the board's own store, so the association survives a fresh clone, reaches a teammate, and travels to a shared store. Linear stays the team's coordination surface — Switchboard is not competing with it — which is exactly why the board must faithfully hold what Linear told it.
@@ -14,7 +24,7 @@ Three consequences follow, and all three contradict a Linear-first product:
 
 1. **A teammate sees the plan and not the ticket.** Plans are committed markdown; ticket metadata is not. Whoever imported the ticket is the only person whose Switchboard knows what it said.
 2. **A fresh clone loses it.** The plan comes back from git; the ticket context does not. Same for a worktree, and `git clean -xdf` takes it.
-3. **A shared store cannot carry it.** Board state is what travels to a libSQL or git-carried store. Ticket metadata is not board state today, so a shared board is a board where imported tickets are half-blank for everyone but one machine.
+3. **The board's own store cannot carry it.** Board state is what lives in the board database and what the `board.json` snapshot carries. Ticket metadata is not board state today, so imported tickets are half-blank for everyone but the one machine that holds the gitignored files. *(2026-09-11: previously read "travels to a libSQL or git-carried store" — libSQL is rejected, and the point is unchanged without it.)*
 
 **The related bug class is already documented, which is evidence the seam is thin.** `feature_plan_20260810144300_tickets-sync-badge-reads-a-different-workspace-db-row-than-the-refetch-stamps.md` and `feature_plan_20260807161809_tickets-subtask-drilldown-sync-badge-always-local.md` are both symptoms of ticket truth living in one place and board truth in another, with badges reading across the gap.
 
@@ -80,7 +90,7 @@ Yes — three decisions.
 ## Dependencies
 
 - **Requires** the tier split, which decides that `plan_tickets` is shared state.
-- **Feeds** the shared-store plans (this is part of what travels) and the projections (Linear round-trip legibility).
+- **Feeds** the projections (Linear round-trip legibility) and the `board.json` snapshot. ~~the shared-store plans (this is part of what travels)~~ — **corrected 2026-09-11:** there are no shared-store plans downstream; libSQL is rejected and the board database is the store.
 - **Fixes the root of** the two documented sync-badge bugs, without depending on them.
 
 ## Adversarial Synthesis
@@ -111,7 +121,7 @@ Additive. Nothing removed, nothing unlinked, nothing fabricated. A link that can
 - **Badge correctness:** reproduce the two documented sync-badge bugs' conditions; assert the badge now reads the board record and is correct.
 - **Body exclusion:** with bodies excluded by setting, assert no ticket body reaches the store, the snapshot, or any projection.
 - **Backfill honesty:** an existing install with populated `linear_issue_id` values and no file cache. Assert rows are created with ids and nulls, and that no field was invented.
-- **Size:** measure `plan_tickets` bytes per ticket with and without bodies, and report replica sync cost against the shared-store budget.
+- **Size:** measure `plan_tickets` bytes per ticket with and without bodies. *(2026-09-11: the "replica sync cost against the shared-store budget" half is void — there is no replica. The measurement still matters, against the board database's own working-set size and the board-only 1 GB host in `two-configurations-board-only-and-board-plus-agents.md`.)*
 
 ### Goal Invariants
 
@@ -141,4 +151,4 @@ Reviewed `c3561c23`. This subtask is the strongest of the four and needed no cod
 - NIT — `_applyBoardTicketRecords` sets `t.imported` on every row, and no webview reads it; `syncSource`/`syncStatus` carry the actual signal: `src/services/TicketsPanelProvider.ts:2779` region.
 - NIT — The ClickUp orphan-mark arm is called without the `if (workspaceRoot)` guard its Linear counterpart has. Harmless (`_kanbanDbFor('')` returns null) but asymmetric: `src/services/TicketsPanelProvider.ts:2903`.
 - NIT — `estimate` is typed, migrated and never populated for either provider, by design ("the column exists so a later fetch has somewhere honest to land"). Recorded so a future reader does not read the NULL as a fetch failure: `src/services/planTickets.ts:104`.
-- NIT — Body/comment size is measured by the contract test (full row 1104B, bodies excluded 881B, `board.json` projection 341B) but not reported against any shared-store replica budget, since no shared store exists yet to budget against.
+- NIT — Body/comment size is measured by the contract test (full row 1104B, bodies excluded 881B, `board.json` projection 341B). The "replica budget" it was to be reported against does not exist and will not (libSQL rejected, 2026-09-11); the useful comparison is the board database's working-set size on a 1 GB board-only host.

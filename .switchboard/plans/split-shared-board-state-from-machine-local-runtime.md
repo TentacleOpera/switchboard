@@ -1,5 +1,33 @@
 # Split the schema into shared board state and machine-local runtime, so a remote store carries only what is actually shared
 
+<!-- libsql-rejected -->
+> **PREMISE CORRECTION 2026-09-11 (operator decision).** **libSQL is rejected.** It is not a
+> direction this product is taking, so no requirement in this file may be justified by how libSQL
+> replicates. The authoritative store is **one better-sqlite3 database owned by one board host**.
+> Other machines run agent *seats*, not stores: a seat's startup command carries an `ssh`/`mosh`
+> transport prefix, the pty is local, the agent process runs elsewhere, and the remote box never
+> opens the database — it is handed its plan path in the board response and reports completion over
+> HTTP. See `agents-are-saved-per-machine-and-a-team-picks-one.md` and
+> `two-configurations-board-only-and-board-plus-agents.md`.
+>
+> **Void, with the reasoning that carried them:** the whole-database-replication argument, and with
+> it every "must live in a separate database file" in this plan (Proposed Change 2, and the
+> Outstanding Question below that marks it Resolved); the ATTACH prohibition as a *constraint*; the
+> privacy argument for keeping paths and terminal names off a shared store; and the
+> two-machines-fighting-over-one-row race, which cannot arise with a single writer.
+>
+> **Kept, on merits that survive:** keying the runtime tier by `plan_id` + `device_id`, because the
+> `.db` file does move between machines by hand, and a transferred board must not import the other
+> machine's dispatch and liveness claims as board state; and the application-level merge, which
+> works against one file and costs nothing to keep.
+>
+> **What the split actually buys, therefore, is transfer hygiene — not write reduction.**
+> `plan_runtime_state` shipped inside the one Board database, so the ~172,800 daily liveness
+> row-writes this plan opens by counting still land on the same file they always did. Nothing was
+> removed from anywhere. Against that, the overlay added a prepared statement to every plan read,
+> which makes the N+1 batching audit this plan calls a hard prerequisite the one open item that
+> still matters — sharpened by the board-only 1 GB configuration.
+
 ## Goal
 
 Divide the board's tables along the line of who they belong to: **shared board state** (what a card is and where it sits) versus **machine-local runtime** (which of my terminals is alive right now). Only the shared tier is eligible for a remote authoritative store. This is the prerequisite that makes any remote store viable, and it is the difference between a remote option that works and one that is rate-limited and conflict-ridden a month in.
@@ -26,7 +54,7 @@ One database per repository, opened by one machine, made the distinction invisib
 
 ### Non-goals
 
-- Implementing a remote store. This plan defines the tiers; the libSQL and git-carried plans consume them.
+- Implementing a remote store. This plan defines the tiers. *(2026-09-11: the libSQL consumer is rejected; `git-carried-shared-board-state.md` is a separate mechanism and is the operator's call, not withdrawn here.)*
 - Splitting on age. That axis belongs to `storage-topology-one-choice-three-stores.md`, which supersedes the hot/cold file split; this plan splits on *ownership*. The two are orthogonal: ownership decides what may travel to a shared store, temperature decides what stays in the working set.
 - Reviving `vector_clock`. Under a serialising store the server orders writes; a vector clock is the wrong mechanism and should be deleted, not populated.
 
@@ -79,7 +107,7 @@ Yes — three decisions.
 
 - **Hard prerequisite:** the sidecar/real-binding plan. These table rebuilds under whole-file `export()` are the clobber scenario that plan exists to end.
 - **Pairs with** the unscoped-tables plan (`scope-unscoped-tables-by-workspace-id.md`) — both rebuild tables, and doing them in one pass is cheaper and safer than two rebuilds of `worktrees`.
-- **Blocks** the libSQL and git-carried store plans. Neither is safe to build before the tier boundary exists.
+- ~~**Blocks** the libSQL and git-carried store plans.~~ **Corrected 2026-09-11:** libSQL is rejected, so nothing is blocked on its account. `git-carried-shared-board-state.md` still consumes the shared-tier projection (`BoardCardEntry`), which this plan did deliver via `storageTiers.projectSharedCard`, so it is unblocked rather than blocked.
 
 ## Adversarial Synthesis
 
@@ -88,10 +116,10 @@ Key risks: `plans` is one wide table holding both tiers, so the split turns the 
 ## Proposed Changes
 
 1. **`src/services/storageTiers.ts` (new)** — one exported constant naming every table and column's tier, and the projection helpers. The single source the board view, the snapshot publisher, the state backup and the export format all derive from.
-2. **Local-tier tables** keyed by `plan_id` + `device_id`, holding the `dispatched_*` family, `last_liveness_at`, `blocked_at`, and `worktrees`. Never remote, never migrated, re-derivable from the live fleet. **Must live in a separate database file (the Runtime store defined by `storage-topology-one-choice-three-stores.md`), not in the Board database** — libSQL embedded replica sync is whole-database (confirmed by research), so local-tier tables inside the Board DB would be replicated to every teammate, which is exactly the failure mode this plan exists to prevent.
+2. **Local-tier tables** keyed by `plan_id` + `device_id`, holding the `dispatched_*` family, `last_liveness_at`, `blocked_at`, and `worktrees`. Never migrated, re-derivable from the live fleet. ~~Must live in a separate database file (the Runtime store defined by `storage-topology-one-choice-three-stores.md`), not in the Board database.~~ **The separate-file mandate is void as of 2026-09-11 — see the premise correction at the top.** It was derived entirely from libSQL's whole-database replication, and libSQL is rejected. A device_id-keyed table inside the one Board database is correct; the keying is what does the work, not the file boundary.
 3. **Rebuild `plans`** without the local columns, in the same pass as the workspace-scoping rebuild. Drop `plan_events.vector_clock`; add `user_id` beside `device_id`.
 3b. **Register imported ticket metadata as shared tier.** `plan_tickets` (`ticket-metadata-as-first-class-board-state.md`) is shared board state and travels with the Board store — a plan imported from Linear must carry its ticket context to every machine and teammate. Today the board holds only `plans.linear_issue_id` / `clickup_task_id` as bare strings while the metadata sits in gitignored files under `.switchboard/tickets/`, so it is neither shared nor durable. The tier constant must name it, or the shared store carries plans whose ticket context is blank for everyone but the importer.
-4. **Convert the cross-tier reads to joins**, after the N+1 batching audit, starting with `getBoardFilteredByProject` and the board projection. **Research constraint (ATTACH):** because the local tier lives in a separate database (Runtime store) and libSQL does not support `ATTACH DATABASE` in embedded replica mode, cross-tier joins cannot use SQL-level `ATTACH` when Board is a remote target. The join must be an application-level merge in TypeScript — open separate connections to Board and Runtime, fetch by `plan_id`, and merge in-process. When Board is a local file (default target), `ATTACH` may work, but the code path must not depend on it.
+4. **Convert the cross-tier reads to joins**, after the N+1 batching audit, starting with `getBoardFilteredByProject` and the board projection. ~~**Research constraint (ATTACH):**~~ **Void as a constraint (2026-09-11):** it assumed the local tier lived in a separate database reached by an embedded replica, and libSQL is rejected. Both tiers are tables in one better-sqlite3 file, so an ordinary SQL join is available. What shipped is an application-level merge in TypeScript, and it is **kept** — it is correct against one file, it is already tested, and rewriting a working read path to save one join buys nothing. The N+1 batching audit remains the open item, and is now the *only* one from this change: the merge is a second prepared statement on every plan read for a tier split that no longer reduces write volume.
 5. **Make the shared-tier projection explicit** in `BoardSnapshotPublisher` and the state-backup writer by deriving both from `storageTiers.ts`.
 6. **Orphan sweep** for local-tier rows whose shared row is gone.
 
@@ -121,8 +149,8 @@ One transaction per install: create local tables, copy the local columns out of 
 
 ## Outstanding Questions
 
-- **Resolved: the scanner is change-gated, so it is not a meaningful shared-tier write source.** `_rescanAntigravityPlanSourcesImpl` skips before writing when a candidate is already known and unmodified: `if ((existingEntry || hasDbRow) && !isRecent) { continue; }`, with `isRecent` computed from `birthtimeMs`/`mtimeMs` against a cutoff of the previous rescan. Steady state with no file changes produces zero row writes from the sweep. It does perform a `db.hasPlan()` **read** per candidate per 10s tick, which is free locally or against an embedded replica and a per-candidate round trip against a remote-only connection — recorded in the libSQL plan as a further argument for replica-only.
-- **Resolved: the local tier must be a separate database file, not separate tables in the Board DB.** Research confirmed libSQL embedded replica sync is whole-database with no partial replication. Local-tier tables inside the Board database would be replicated to every teammate — the exact failure mode this plan exists to prevent. The separate file is the Runtime store defined by the topology plan. This also means cross-tier joins are cross-database and must be application-level when Board is an embedded replica (ATTACH DATABASE is unsupported in replica mode).
+- **Resolved: the scanner is change-gated, so it is not a meaningful shared-tier write source.** `_rescanAntigravityPlanSourcesImpl` skips before writing when a candidate is already known and unmodified: `if ((existingEntry || hasDbRow) && !isRecent) { continue; }`, with `isRecent` computed from `birthtimeMs`/`mtimeMs` against a cutoff of the previous rescan. Steady state with no file changes produces zero row writes from the sweep. It does perform a `db.hasPlan()` **read** per candidate per 10s tick, which is free against a local better-sqlite3 file. *(2026-09-11: the replica/remote-connection half of this note is void — libSQL is rejected and every read is local.)*
+- ~~**Resolved: the local tier must be a separate database file, not separate tables in the Board DB.**~~ **WITHDRAWN 2026-09-11 — see the premise correction at the top of this file.** The finding it rested on (libSQL embedded replica sync is whole-database) describes a technology this product rejected. With one better-sqlite3 database and one writing host there is no replication to exclude anything from, so a device_id-keyed table inside the Board database is the correct shape and is what shipped. The cross-database ATTACH consequence goes with it.
 - `projects` is shared, but project *filters* are per-operator UI state. Are they local-tier, or not board state at all?
 
 ## Implementation Summary
@@ -135,9 +163,9 @@ Reviewed `c3561c23`. Fixed four material defects: V74 dropped the four runtime c
 
 ## Deferred Findings
 
-- MAJOR — Runtime tier lives in the Board DB, not a separate Runtime database file, contrary to Proposed Change 2 ("Must live in a separate database file… libSQL embedded replica sync is whole-database"). `resolveStorageTopology` computes `<id>.runtime.db` and nothing opens it; `plan_runtime_state` and `worktrees` are created by `SCHEMA_TABLES_SQL`/`MIGRATION_V74_SQL` against the board store. Nothing is broken today (no remote store exists) but the downstream libSQL and git-carried plans are blocked: `src/services/storageTopology.ts:118`, `src/services/KanbanDatabase.ts:385`.
-- MAJOR — "Dispatched elsewhere" is not distinguishable from "not dispatched". The overlay filters `WHERE device_id = ?` with this machine's id, so a card whose only runtime row belongs to another device renders as undispatched. The plan's Complexity Audit and its "Dispatched-elsewhere rendering" verification case both require the third state; it needs a UI change, not a read change: `src/services/KanbanDatabase.ts:14412`.
-- MAJOR — The N+1 batching audit the plan calls "a hard prerequisite, not a follow-up" was not done, and the overlay adds a second prepared statement to every `_readRows` call. Also unbounded in parameter count: a board with >32766 active rows would exceed SQLite's variable limit and now re-throws: `src/services/KanbanDatabase.ts:14401`.
-- MAJOR — `dispatched_agent`/`dispatched_ide` are declared local tier but remain physically resident on the shared `plans` row and are dual-written to `plan_runtime_state`, so two tiers hold the same fact with no stated winner: `src/services/KanbanDatabase.ts:346`, `src/services/storageTiers.ts:114`.
+- ~~MAJOR — Runtime tier lives in the Board DB, not a separate Runtime database file.~~ **WITHDRAWN 2026-09-11:** the requirement it measured against was derived from libSQL's whole-database replication, and libSQL is rejected (see the premise correction at the top). What shipped — a device_id-keyed table in the one better-sqlite3 database — is the correct shape. `resolveStorageTopology` still computes an unopened `<id>.runtime.db`, which is now dead code rather than an unmet requirement: `src/services/storageTopology.ts:118`.
+- ~~MAJOR — "Dispatched elsewhere" is not distinguishable from "not dispatched".~~ **WITHDRAWN 2026-09-11:** with one writing host every `plan_runtime_state` row carries the same `device_id`, so the overlay's filter never hides a live dispatch. It also stays correct across a hand-carried `.db` transfer, where the previous machine's rows *should* read as not-dispatched-here. The plan's "Dispatched-elsewhere rendering" verification case describes a concurrent-multi-writer board that this architecture does not have: `src/services/KanbanDatabase.ts:14412`.
+- MAJOR — **The most consequential open finding from this subtask.** The N+1 batching audit the plan calls "a hard prerequisite, not a follow-up" was not done, and the overlay adds a second prepared statement to every `_readRows` call. Because the runtime table shipped inside the one Board database, that cost buys no write reduction — it is paid against transfer hygiene alone, and the board-only 1 GB configuration (`two-configurations-board-only-and-board-plus-agents.md`) is where it will be felt. Also unbounded in parameter count: a board with >32766 active rows would exceed SQLite's variable limit and now re-throws: `src/services/KanbanDatabase.ts:14401`.
+- NIT (was MAJOR, downgraded 2026-09-11) — `dispatched_agent`/`dispatched_ide` are declared local tier but remain physically resident on the `plans` row and are dual-written to `plan_runtime_state`. With one writer the two copies cannot diverge and the overlay makes the runtime copy win on read, so this is redundancy rather than a correctness risk: `src/services/KanbanDatabase.ts:346`, `src/services/storageTiers.ts:114`.
 - NIT — `plan_events.vector_clock` survives physically on any install that migrated through V5/V20; no drop migration exists. Correct as it stands (a shipped `MIGRATION_Vnn_SQL` body must never be edited) but the column is still on disk: `src/services/KanbanDatabase.ts:702`, `src/services/KanbanDatabase.ts:1291`.
 - NIT — `_writeKanbanStateBackup`, named by a Goal Invariant as a second serialiser that must derive from the tier constant, no longer exists anywhere in the tree; the invariant is vacuously satisfied rather than met.
