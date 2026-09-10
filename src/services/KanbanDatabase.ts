@@ -24,7 +24,6 @@ import {
 } from './agentConfig';
 import { deriveAgentDisplayName } from './cliIdentity';
 import { BoardSnapshotPublisher, BOARD_SNAPSHOT_MODE, BOARD_SNAPSHOT_MODE_BIDIRECTIONAL } from './BoardSnapshotPublisher';
-import { SHARED_PLAN_COLUMNS, LOCAL_PLAN_COLUMNS } from './storageTiers';
 import type {
     PlanTicketAttachment,
     PlanTicketComment,
@@ -1704,6 +1703,17 @@ export class KanbanDatabase {
         }
     }
 
+    /**
+     * Which layer named the board file on the most recent `forWorkspace()` resolution
+     * — `'explicit-argument'`, `'storage.pathOverride'`, `'legacy:kanban.dbPath'` or
+     * `'derived-default'`. Read by the composition roots so their startup log reports
+     * the path that actually opened, and by whose authority.
+     */
+    private static _lastBoardPathOverrideSource = 'derived-default';
+    public static get lastBoardPathOverrideSource(): string {
+        return KanbanDatabase._lastBoardPathOverrideSource;
+    }
+
     public static forWorkspace(workspaceRoot: string, customDbPath?: string): KanbanDatabase {
         const validation = KanbanDatabase.isValidWorkspaceRoot(workspaceRoot);
         if (!validation.valid) {
@@ -1725,11 +1735,34 @@ export class KanbanDatabase {
 
         let resolvedDbPath: string;
         const wsId = resolveCanonicalWorkspaceIdSync(stable).value;
-        const configuredOverride = customDbPath !== undefined && customDbPath.trim() !== ''
-            ? customDbPath.trim()
-            : (KanbanDatabase._pathConfigProvider?.getConfigString('storage.pathOverride')
-                || KanbanDatabase._pathConfigProvider?.getConfigString('kanban.dbPath')
-                || undefined);
+        // TAGGED, not just resolved. Three layers can name the board file, and the
+        // legacy one is a RETIRED setting kept readable so an install that configured
+        // it is not relocated out from under the user. A silent `a || b` here makes
+        // "the operator chose this path" and "a setting we retired chose it" the same
+        // observable fact — the failure mode CLAUDE.md's fallback rule names. So the
+        // source travels with the value and is logged where it is used, and
+        // `boardPathOverrideSource` keeps "which layer answered?" recoverable after
+        // the fact (the extension's own startup log prints the resolved topology, and
+        // it must not disagree with what actually opened).
+        const overrideResolution = ((): { value: string | undefined; source: string } => {
+            if (customDbPath !== undefined && customDbPath.trim() !== '') {
+                return { value: customDbPath.trim(), source: 'explicit-argument' };
+            }
+            const pathOverride = KanbanDatabase._pathConfigProvider?.getConfigString('storage.pathOverride');
+            if (pathOverride) { return { value: pathOverride, source: 'storage.pathOverride' }; }
+            const legacy = KanbanDatabase._pathConfigProvider?.getConfigString('kanban.dbPath');
+            if (legacy) { return { value: legacy, source: 'legacy:kanban.dbPath' }; }
+            return { value: undefined, source: 'derived-default' };
+        })();
+        const configuredOverride = overrideResolution.value;
+        KanbanDatabase._lastBoardPathOverrideSource = overrideResolution.source;
+        if (overrideResolution.source === 'legacy:kanban.dbPath') {
+            console.log(
+                `[KanbanDatabase] Board path came from the RETIRED setting switchboard.kanban.dbPath ` +
+                `('${configuredOverride}'). It is honoured so the database is not relocated; the current ` +
+                `surface is switchboard.storage.pathOverride.`
+            );
+        }
 
         const topology = resolveStorageTopology(wsId, {
             explicitPathOverride: configuredOverride
@@ -5090,6 +5123,42 @@ export class KanbanDatabase {
     // ~60 in-tree callers whose `null` handling is load-bearing, and widening
     // their return type is a separate change. These are what the API's
     // record-returning reads call.
+
+    /**
+     * Clear machine-local runtime rows whose shared row is gone.
+     *
+     * `plan_runtime_state` is keyed by `plan_id` but carries NO foreign key — on
+     * purpose: a plan deleted on another machine, or moved to the Archive, must not
+     * make this machine's runtime write fail. The cost of that choice is orphans,
+     * and orphans in the BOARD store are shared-tier growth from machine-local
+     * facts, which is precisely what the tier split exists to stop
+     * (`split-shared-board-state-from-machine-local-runtime.md`, Proposed Change 6).
+     *
+     * Deliberately NOT keyed by `device_id`: an orphan is an orphan on whichever
+     * machine wrote it, and no machine but this one will ever open this file.
+     *
+     * Idempotent, best-effort, and never throws — a sweep that cannot run is a
+     * growth problem, not a correctness one, and it must not take a board open with
+     * it. Returns the number of rows cleared so a caller can log it.
+     */
+    public async sweepOrphanedRuntimeState(): Promise<number> {
+        if (!(await this.ensureReady()) || !this._db) { return 0; }
+        const tables = this._getExistingTableNames();
+        if (!tables.has('plan_runtime_state') || !tables.has('plans')) { return 0; }
+        try {
+            const orphans = Number(this._selectSingleValue(
+                'SELECT COUNT(*) AS n FROM plan_runtime_state WHERE plan_id NOT IN (SELECT plan_id FROM plans)'
+            ) ?? 0);
+            if (orphans === 0) { return 0; }
+            this._db.run('DELETE FROM plan_runtime_state WHERE plan_id NOT IN (SELECT plan_id FROM plans)');
+            await this._persist();
+            console.log(`[KanbanDatabase] Runtime-tier orphan sweep cleared ${orphans} plan_runtime_state row(s) with no shared row`);
+            return orphans;
+        } catch (err) {
+            console.warn('[KanbanDatabase] sweepOrphanedRuntimeState failed:', err);
+            return 0;
+        }
+    }
 
     /**
      * Clear this machine's runtime dispatch state for a set of plans.
@@ -10571,6 +10640,12 @@ export class KanbanDatabase {
             await this.setMigrationVersion(75);
             console.log('[KanbanDatabase] V75 migration completed: plan_tickets table added and backfilled');
         }
+
+        // Runtime-tier orphan sweep, once per open. Not version-gated: orphans accrue
+        // continuously (a plan deleted or archived elsewhere leaves this machine's
+        // runtime row behind), so this is maintenance rather than a migration step.
+        // Never throws — see sweepOrphanedRuntimeState.
+        await this.sweepOrphanedRuntimeState();
     }
 
     private async _backfillStagedCardsToMissions(): Promise<void> {
@@ -10809,6 +10884,24 @@ export class KanbanDatabase {
             stmt.free();
         }
         return tables;
+    }
+
+    /**
+     * First column of the first row of a scalar query, or `undefined` when there is
+     * no row. Used by migrations that must VERIFY a copy rather than assume it, so a
+     * failed preservation step can abort before the destructive step runs.
+     */
+    private _selectSingleValue(sql: string, params: unknown[] = []): unknown {
+        if (!this._db) return undefined;
+        const stmt = this._db.prepare(sql, params as any);
+        try {
+            if (!stmt.step()) return undefined;
+            const row = stmt.getAsObject();
+            const keys = Object.keys(row);
+            return keys.length > 0 ? row[keys[0]] : undefined;
+        } finally {
+            stmt.free();
+        }
     }
 
     private _getTableColumns(table: string): Array<{ name: string; type: string; notnull: number; dflt_value: any; pk: number }> {
@@ -11283,24 +11376,76 @@ export class KanbanDatabase {
         }
         if (!wsId) wsId = 'default';
 
-        // 1. Copy local runtime state into plan_runtime_state before table rebuild
-        try {
-            this._db.run(
-                `INSERT OR REPLACE INTO plan_runtime_state (
-                    plan_id, device_id, workspace_id, dispatched_agent, dispatched_ide,
-                    dispatched_terminal, dispatched_at, last_liveness_at, blocked_at, updated_at
-                )
-                SELECT
-                    plan_id, ?, COALESCE(NULLIF(workspace_id, ''), ?),
-                    COALESCE(dispatched_agent, ''), COALESCE(dispatched_ide, ''),
-                    COALESCE(dispatched_terminal, ''), dispatched_at, last_liveness_at, blocked_at,
-                    COALESCE(NULLIF(updated_at, ''), datetime('now'))
-                FROM plans
-                WHERE dispatched_terminal != '' OR dispatched_at IS NOT NULL OR last_liveness_at IS NOT NULL OR blocked_at IS NOT NULL`,
-                [machineId, wsId]
-            );
-        } catch (copyErr) {
-            console.warn('[KanbanDatabase] V74: copying runtime state to plan_runtime_state:', copyErr);
+        // 1. Copy local runtime state into plan_runtime_state BEFORE the rebuild drops it.
+        //
+        // The SELECT is BUILT from the columns that actually exist, not written against
+        // all four. This codebase has already been bitten by a version-gated ALTER that
+        // never landed while the version was stamped anyway (see the `worktrees` note
+        // above SCHEMA_PLAN_COLUMN_DEFS), and the four runtime columns arrived in four
+        // separate migrations. Naming an absent one made the whole statement throw —
+        // and the original code caught that with a `console.warn` and then went on to
+        // drop the columns anyway, losing every dispatch and liveness row silently.
+        //
+        // So: existence-driven SQL, a row count that is VERIFIED, and a THROW rather
+        // than a warning if the copy did not run. A migration that cannot preserve the
+        // data must not proceed to delete it; the pre-migration database stays readable
+        // and the next launch retries.
+        const runtimeCols = ['dispatched_agent', 'dispatched_ide', 'dispatched_terminal',
+            'dispatched_at', 'last_liveness_at', 'blocked_at']
+            .filter(c => this._tableHasColumn('plans', c));
+        const selectFor = (c: string): string => {
+            if (!runtimeCols.includes(c)) {
+                // Never existed on this board — carry the table default, not a guess.
+                return c === 'dispatched_agent' || c === 'dispatched_ide' || c === 'dispatched_terminal'
+                    ? `''` : 'NULL';
+            }
+            return c === 'dispatched_agent' || c === 'dispatched_ide' || c === 'dispatched_terminal'
+                ? `COALESCE(${c}, '')` : c;
+        };
+        const presentPredicates = runtimeCols.map(c =>
+            (c === 'dispatched_terminal' || c === 'dispatched_agent' || c === 'dispatched_ide')
+                ? `${c} != ''`
+                : `${c} IS NOT NULL`);
+        // No runtime column carries a value on this board — nothing to copy, and the
+        // rebuild below is a pure column drop. Distinct from a copy that FAILED.
+        const expected = presentPredicates.length === 0 ? 0 : Number(
+            this._selectSingleValue(
+                `SELECT COUNT(*) AS n FROM plans WHERE ${presentPredicates.join(' OR ')}`
+            ) ?? 0
+        );
+        if (expected > 0) {
+            try {
+                this._db.run(
+                    `INSERT OR REPLACE INTO plan_runtime_state (
+                        plan_id, device_id, workspace_id, dispatched_agent, dispatched_ide,
+                        dispatched_terminal, dispatched_at, last_liveness_at, blocked_at, updated_at
+                    )
+                    SELECT
+                        plan_id, ?, COALESCE(NULLIF(workspace_id, ''), ?),
+                        ${selectFor('dispatched_agent')}, ${selectFor('dispatched_ide')},
+                        ${selectFor('dispatched_terminal')}, ${selectFor('dispatched_at')},
+                        ${selectFor('last_liveness_at')}, ${selectFor('blocked_at')},
+                        COALESCE(NULLIF(updated_at, ''), datetime('now'))
+                    FROM plans
+                    WHERE ${presentPredicates.join(' OR ')}`,
+                    [machineId, wsId]
+                );
+            } catch (copyErr) {
+                throw new Error(
+                    `[KanbanDatabase] V74 aborted: copying ${expected} runtime row(s) into plan_runtime_state failed, ` +
+                    `so the plans rebuild was NOT run and no data was dropped. Cause: ${copyErr instanceof Error ? copyErr.message : String(copyErr)}`
+                );
+            }
+            const copied = Number(this._selectSingleValue(
+                'SELECT COUNT(*) AS n FROM plan_runtime_state WHERE device_id = ?', [machineId]
+            ) ?? 0);
+            if (copied < expected) {
+                throw new Error(
+                    `[KanbanDatabase] V74 aborted: expected at least ${expected} runtime row(s) in plan_runtime_state ` +
+                    `for this device, found ${copied}. The plans rebuild was NOT run and no data was dropped.`
+                );
+            }
+            console.log(`[KanbanDatabase] V74: copied ${expected} runtime row(s) from plans into plan_runtime_state (device ${machineId})`);
         }
 
         // 2. Rebuild plans table without local runtime columns in one transaction

@@ -154,14 +154,46 @@ export class VscodeHostPathConfigProvider implements HostPathConfigProvider {
         }
     }
 
+    /**
+     * Mirror a config write into VS Code's settings, tolerating a key that is no
+     * longer contributed.
+     *
+     * `WorkspaceConfiguration.update()` REJECTS an unregistered key ("not a
+     * registered configuration"). The storage-topology work retired five settings
+     * from `package.json` while their writers stayed — `boardStateExport`,
+     * `boardStateExport.remoteUrl`, `kanban.controlPlaneRoot` — so every one of
+     * those writes began rejecting *after* `_writeConfigFile` had already succeeded:
+     * the value took effect and the UI reported failure.
+     *
+     * The db `config` row is the blessed home and it is written first, so the
+     * mirror failing is not a failed operation. It IS logged, with the key, so a
+     * retired-but-still-written setting is visible rather than merely tolerated —
+     * a silent catch here is how a fallback becomes indistinguishable from success.
+     */
+    private async _mirrorToVscodeSettings(key: string, value: any, global: boolean): Promise<void> {
+        try {
+            const scope = global
+                ? vscode.workspace.getConfiguration('switchboard')
+                : vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this.workspaceRoot));
+            await scope.update(key, value, global);
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            console.warn(
+                `[VscodeHostPathConfigProvider] settings mirror for 'switchboard.${key}' failed (${msg}). ` +
+                `The db config row was written and is authoritative; this key is most likely retired from ` +
+                `package.json's configuration schema.`
+            );
+        }
+    }
+
     async updateConfigGlobal(key: string, value: any, originatorId?: string): Promise<void> {
         this._writeConfigFile(key, value);
-        await vscode.workspace.getConfiguration('switchboard').update(key, value, true);
+        await this._mirrorToVscodeSettings(key, value, true);
         this._notifyListeners(key, value, originatorId);
     }
     async updateConfigWorkspace(key: string, value: any, originatorId?: string): Promise<void> {
         this._writeConfigFile(key, value);
-        await vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this.workspaceRoot)).update(key, value, false);
+        await this._mirrorToVscodeSettings(key, value, false);
         this._notifyListeners(key, value, originatorId);
     }
 }

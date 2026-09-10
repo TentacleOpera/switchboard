@@ -174,7 +174,20 @@ async function initializeMappingIndex(outputChannel?: vscode.OutputChannel): Pro
             if (configuredPresetDbPath && isKnownPresetDbPath(configuredPresetDbPath)) {
                 await adoptPresetDbOnLaunch(configuredPresetDbPath, {
                     clearDbPathConfig: async () => {
-                        await cfg.update('kanban.dbPath', undefined, vscode.ConfigurationTarget.Workspace);
+                        // `switchboard.kanban.dbPath` is RETIRED from package.json's
+                        // configuration schema, and `update()` rejects an unregistered
+                        // key. Without this guard the rejection aborts the rest of
+                        // adoptPresetDbOnLaunch, so the preset is re-adopted on every
+                        // launch. Logged rather than swallowed: the stale value stays
+                        // in the user's settings.json and that is worth seeing.
+                        try {
+                            await cfg.update('kanban.dbPath', undefined, vscode.ConfigurationTarget.Workspace);
+                        } catch (err) {
+                            outputChannel?.appendLine(
+                                `[adoptPresetDb] Could not clear the retired switchboard.kanban.dbPath setting ` +
+                                `(it is no longer a registered configuration key): ${err}`
+                            );
+                        }
                     },
                     notify: (msg: string) => {
                         outputChannel?.appendLine(`[adoptPresetDb] ${msg}`);
@@ -689,11 +702,20 @@ export async function activate(context: vscode.ExtensionContext) {
     if (workspaceRoot) {
         try {
             const canonicalId = resolveCanonicalWorkspaceIdSync(workspaceRoot).value;
-            const explicitOverride = vscode.workspace.getConfiguration('switchboard').get<string>('storage.pathOverride');
+            // Same override chain KanbanDatabase.forWorkspace uses, including the
+            // retired `kanban.dbPath`. Reading only `storage.pathOverride` here made
+            // this line report a DIFFERENT board file from the one that actually
+            // opened for any install still carrying the legacy setting — and
+            // bootstrap.ts already read both, so the two roots disagreed. See
+            // CLAUDE.md, "Standalone and the extension MUST NOT diverge".
+            const cfg = vscode.workspace.getConfiguration('switchboard');
+            const explicitOverride = cfg.get<string>('storage.pathOverride')
+                || cfg.get<string>('kanban.dbPath')
+                || undefined;
             const topology = resolveStorageTopology(canonicalId, { explicitPathOverride: explicitOverride });
-            outputChannel?.appendLine(`[Switchboard] Storage topology resolved: board=${topology.board.path} (source=${topology.board.source}), runtime=${topology.runtime.path}, archive=${topology.archive.path}`);
 
             const db = (kanbanProvider as any)._getKanbanDb(workspaceRoot);
+            outputChannel?.appendLine(`[Switchboard] Storage topology resolved: board=${topology.board.path} (source=${topology.board.source}, key=${KanbanDatabase.lastBoardPathOverrideSource}), runtime=${topology.runtime.path}, archive=${topology.archive.path}`);
             await db.ensureReady();
             const workspaceId = await (kanbanProvider as any)._readWorkspaceId(workspaceRoot);
             if (workspaceId) {

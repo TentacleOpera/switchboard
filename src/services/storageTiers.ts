@@ -91,6 +91,25 @@ export type SharedPlanColumn = typeof SHARED_PLAN_COLUMNS[number];
 
 /**
  * Columns of the runtime tier representing machine-local facts about a process.
+ *
+ * **Tier membership is not the same as physical residence, and the difference is
+ * load-bearing.** V74 physically removed only the last four from `plans`; the first
+ * four remain resident on the shared `plans` row and are dual-written to
+ * `plan_runtime_state` (see `KanbanDatabase._readRows`'s overlay). They are still
+ * LOCAL — decision 1 of the tier-split plan's User Review settled that: they are
+ * facts about a process on one machine. Listing them here is what stops a future
+ * shared-store write path from treating them as board state; it is not a claim
+ * about which table they sit in today.
+ *
+ * `worktree_id` / `worktree_status` are here for the same reason: they point at a
+ * `worktrees` row, and `worktrees` is in `LOCAL_TABLES` because it describes
+ * directories on one filesystem. A shared board that carried them would claim a
+ * teammate's card lives in a worktree that exists only on your disk.
+ *
+ * INVARIANT (pinned by `storage-topology-contract.test.js`): every column of the
+ * `plans` DDL appears in exactly one of `SHARED_PLAN_COLUMNS` and this list. Two
+ * of these were absent from both lists at first landing, which is exactly the
+ * silent drift a "single source of truth" constant is supposed to make impossible.
  */
 export const LOCAL_PLAN_COLUMNS = [
     'dispatched_agent',
@@ -99,6 +118,8 @@ export const LOCAL_PLAN_COLUMNS = [
     'dispatched_at',
     'last_liveness_at',
     'blocked_at',
+    'worktree_id',
+    'worktree_status',
 ] as const;
 
 export type LocalPlanColumn = typeof LOCAL_PLAN_COLUMNS[number];

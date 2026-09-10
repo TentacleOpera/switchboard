@@ -1,6 +1,6 @@
 ---
 name: query-kanban
-description: Read kanban board state via LocalApiServer read endpoints (primary) or local kanban.db SQL (fallback). Requires the extension running or a local kanban.db; unavailable in cloud or tracker-only sessions.
+description: Read kanban board state via the LocalApiServer read endpoints, reached through the Switchboard CLI. Requires a running Switchboard host (extension or standalone); unavailable in cloud or tracker-only sessions, where it reports that and stops rather than reading the database file.
 allowed-tools: Bash
 user-invokable: false
 ---

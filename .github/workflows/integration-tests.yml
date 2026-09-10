@@ -888,6 +888,39 @@ jobs:
       - name: Plan tickets board-state contract (clone survival, backfill honesty, host parity)
         run: npm run test:contract:plan-tickets
 
+      # Storage topology: three stores, one operator choice. Pins the topology plan's
+      # Goal Invariants — the five retired path mechanisms are absent from the config
+      # schema, `storage.pathOverride` is the SOLE path input and defaults empty, the
+      # Runtime/Board/Archive definition exists with its placement rules, DuckDB is
+      # reachable only from ArchiveManager and never defaults onto the SQLite cold
+      # store's own file, every `plans` column is named by exactly one tier in
+      # storageTiers.ts, the four V74-dropped columns are absent from `plans` and
+      # present in `plan_runtime_state`, and the runtime orphan sweep is invoked.
+      #
+      # It was written and left unwired: no package.json script and no workflow step,
+      # so it was green-by-never-running. storage-scripts-parity only covers
+      # `test:contract:db-*`, which this and board-read-endpoints are not.
+      - name: Storage topology contract (retired mechanisms, one path input, tier completeness)
+        run: npm run test:contract:storage-topology
+
+      # Board read endpoints under the storage topology. Pins the three distinguishable
+      # outcomes (found + source label / no-such-record / store-unavailable), that
+      # record lookups SPAN Board and Archive while collection reads stay windowed, that
+      # no layer coerces store-unavailable into `200 []`, and that both composition roots
+      # wire the same single read seam. Defined in package.json at first landing but
+      # never invoked here.
+      - name: Board read endpoints contract (three outcomes, span vs window, host parity)
+        run: npm run test:contract:board-read-endpoints
+
+      # The board snapshot's shared-tier projection. The tier split made
+      # BoardSnapshotPublisher's card entry derive from storageTiers.projectSharedCard
+      # instead of a hand-written field list, and this suite is what pins that the
+      # projection carries ONLY shared-tier fields (no dispatch, no liveness) and that
+      # the ticket projection carries no body/comments/attachments. It existed and was
+      # edited by that work while having no npm script and no CI step at all.
+      - name: Board snapshot bidirectional contract (shared-tier projection only)
+        run: npm run test:contract:board-snapshot-bidirectional
+
       # V70 scopes ten previously-unscoped tables by workspace_id and rebuilds three
       # colliding constraints. Two things this pins that nothing else did: the rebuild
       # re-emits column defaults from PRAGMA table_info, which strips the parentheses

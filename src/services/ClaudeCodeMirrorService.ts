@@ -79,12 +79,16 @@ const MIRROR_MANIFEST: MirrorEntry[] = [
         descriptionFallback: 'Create, group, and rearrange Switchboard features — Create (remote file write, no extension needed), Create from Plans (create-feature.js, requires the extension running), Group (scan/cluster/propose), Rearrange (split/move/merge subtasks without rewriting content).'
     },
     // query-kanban — merged from query-switchboard-kanban + query-kanban-plans.
-    // Primary method is the LocalApiServer read endpoints; SQL is a fallback for
-    // the no-API case. Description leads with the endpoint method so a DB-less
-    // session does not load it expecting direct SQL.
+    // Endpoints ONLY. The SQL fallback was removed from the skill body by
+    // board-read-endpoints-must-survive-the-storage-topology.md: the file read is
+    // broken from a worktree today (`.gitignore` ignores `.switchboard/*`), the
+    // store may be remote, and the endpoints span the board's storage window while
+    // raw SQL does not. The description must not advertise it — a description is
+    // what a host reads when deciding whether the skill can answer at all, so one
+    // promising a DB-less fallback sends a cloud session in expecting SQL.
     {
         source: 'skills/query-kanban', name: 'query-kanban', invocation: 'no-user', allowedTools: 'Bash',
-        descriptionFallback: 'Read kanban board state via LocalApiServer read endpoints (primary) or local kanban.db SQL (fallback). Requires the extension running or a local kanban.db; unavailable in cloud or tracker-only sessions.'
+        descriptionFallback: 'Read kanban board state via the LocalApiServer read endpoints, reached through the Switchboard CLI. Requires a running Switchboard host (extension or standalone); unavailable in cloud or tracker-only sessions, where it reports that and stops rather than reading the database file.'
     },
     {
         source: 'skills/kanban_operations', name: 'kanban-operations', invocation: 'no-model', allowedTools: 'Bash',

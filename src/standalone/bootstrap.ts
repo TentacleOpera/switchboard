@@ -814,9 +814,11 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     const wsId = resolveCanonicalWorkspaceIdSync(workspaceRoot).value;
     const explicitOverride = configProvider.getConfigString('storage.pathOverride') || configProvider.getConfigString('kanban.dbPath');
     const topology = resolveStorageTopology(wsId, { explicitPathOverride: explicitOverride });
-    console.log(`[bootstrap] Storage topology resolved: board=${topology.board.path} (source=${topology.board.source}), runtime=${topology.runtime.path}, archive=${topology.archive.path}`);
 
     const db = KanbanDatabase.forWorkspace(workspaceRoot);
+    // Logged AFTER the store opens, and with the key that answered, so the line can
+    // never claim a path the board did not actually use. Mirrors extension.ts.
+    console.log(`[bootstrap] Storage topology resolved: board=${topology.board.path} (source=${topology.board.source}, key=${KanbanDatabase.lastBoardPathOverrideSource}), runtime=${topology.runtime.path}, archive=${topology.archive.path}`);
     const dbPath = db.dbPath;
     const dbDir = path.dirname(dbPath);
     if (!fs.existsSync(dbDir)) {

@@ -4,8 +4,7 @@ import * as os from 'os';
 import * as fs from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { resolveArchiveDbPath, validateGlobalDbPath } from './globalStore';
-import { resolveCanonicalWorkspaceIdSync } from './WorkspaceIdentityService';
+import { validateGlobalDbPath } from './globalStore';
 
 const execFileAsync = promisify(execFile);
 
@@ -43,25 +42,82 @@ export interface ReviewOutcome {
     parserConfidence: 'high' | 'low';
 }
 
+/**
+ * Which layer supplied the DuckDB analytics archive path. Returned alongside the
+ * value so a default can never be mistaken for a configured one.
+ */
+export type ArchivePathSource =
+    | 'explicit-argument'
+    | 'storage.archivePathOverride'
+    | 'legacy:archive.dbPath'
+    | 'env:SWITCHBOARD_ARCHIVE_DB_PATH'
+    | 'unconfigured';
+
 export class ArchiveManager {
     private _archivePath: string | null;
+    private _archivePathSource: ArchivePathSource = 'unconfigured';
     private _outputChannel?: vscode.OutputChannel;
 
     constructor(workspaceRoot?: string, outputChannel?: vscode.OutputChannel, explicitArchivePath?: string) {
+        this._outputChannel = outputChannel;
         if (explicitArchivePath && explicitArchivePath.trim()) {
             this._archivePath = path.resolve(explicitArchivePath.trim());
-        } else {
-            let configuredPath = '';
-            try {
-                const config = vscode.workspace.getConfiguration('switchboard');
-                configuredPath = config.get<string>('storage.archivePathOverride', '') || '';
-            } catch {
-                // Standalone / headless mode outside VS Code
-                configuredPath = process.env.SWITCHBOARD_ARCHIVE_DB_PATH || '';
-            }
-            this._archivePath = this._resolveArchivePath(configuredPath, workspaceRoot || process.cwd()) || resolveArchiveDbPath(resolveCanonicalWorkspaceIdSync(workspaceRoot || process.cwd()).value);
+            this._archivePathSource = 'explicit-argument';
+            this._log(`DuckDB analytics archive path resolved from ${this._archivePathSource}: ${this._archivePath}`);
+            return;
         }
-        this._outputChannel = outputChannel;
+
+        // OPT-IN ONLY, and TAGGED. Two rules this resolution exists to keep:
+        //
+        //  1. **No derived default.** This manager is the DuckDB *analytics export*
+        //     (storage-topology-one-choice-three-stores.md, Proposed Change 5:
+        //     "demote to an opt-in analytics export that is never load-bearing").
+        //     It must NOT fall back to `resolveArchiveDbPath()` — that is the
+        //     SQLite cold store's own file, and handing the same path to two
+        //     different database engines means whichever writes first makes the
+        //     file unreadable to the other. Unconfigured is a real answer here:
+        //     `isConfigured` goes false and every DuckDB path no-ops.
+        //  2. **The retired key is still read.** `switchboard.archive.dbPath`
+        //     shipped and is populated on real installs; the topology plan requires
+        //     it out of the config schema, and requires in the same breath that an
+        //     existing DuckDB archive be "imported rather than orphaned". Dropping
+        //     the read would orphan it silently — the setting would still be in the
+        //     user's settings.json and simply stop being honoured. So the legacy key
+        //     is a migration read, and `_archivePathSource` records that it answered.
+        const resolution = this._resolveConfiguredArchivePath();
+        this._archivePathSource = resolution.source;
+        this._archivePath = resolution.value
+            ? this._resolveArchivePath(resolution.value, workspaceRoot || process.cwd())
+            : null;
+        this._log(this._archivePath
+            ? `DuckDB analytics archive path resolved from ${this._archivePathSource}: ${this._archivePath}`
+            : 'DuckDB analytics archive not configured (no storage.archivePathOverride, no legacy archive.dbPath, no SWITCHBOARD_ARCHIVE_DB_PATH) — archive operations are inert.');
+    }
+
+    /**
+     * Which layer supplied the archive path, so "why is my archive empty?" is
+     * answerable after the fact rather than only detectable.
+     */
+    private _resolveConfiguredArchivePath(): { value: string; source: ArchivePathSource } {
+        try {
+            const config = vscode.workspace.getConfiguration('switchboard');
+            const override = String(config.get<string>('storage.archivePathOverride', '') || '').trim();
+            if (override) { return { value: override, source: 'storage.archivePathOverride' }; }
+            // Retired from the config schema by the topology plan; still read so an
+            // install that configured it keeps its DuckDB archive.
+            const legacy = String(config.get<string>('archive.dbPath', '') || '').trim();
+            if (legacy) { return { value: legacy, source: 'legacy:archive.dbPath' }; }
+        } catch {
+            // Standalone / headless mode outside VS Code — fall through to the env var.
+        }
+        const env = String(process.env.SWITCHBOARD_ARCHIVE_DB_PATH || '').trim();
+        if (env) { return { value: env, source: 'env:SWITCHBOARD_ARCHIVE_DB_PATH' }; }
+        return { value: '', source: 'unconfigured' };
+    }
+
+    /** Which layer answered for the archive path. */
+    public get archivePathSource(): ArchivePathSource {
+        return this._archivePathSource;
     }
 
     public get archivePath(): string | null {
@@ -197,7 +253,7 @@ ON CONFLICT (plan_id) DO UPDATE SET
      */
     public async queryArchive(sql: string, limit: number = 100): Promise<unknown[]> {
         if (!this._archivePath) {
-            throw new Error('Archive not configured. Check workspace storage topology.');
+            throw new Error('DuckDB analytics archive not configured (opt-in). Set switchboard.storage.archivePathOverride, or SWITCHBOARD_ARCHIVE_DB_PATH outside VS Code.');
         }
 
         if (!fs.existsSync(this._archivePath)) {
