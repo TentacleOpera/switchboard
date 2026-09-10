@@ -66,3 +66,33 @@ The other two predate that: the `workspace-id` second line arrived in `dd7d5b85`
   - `control-plane-repo-scope.test.js` passes after its source-text assertions on the filter are removed; the DB-level `repo_scope` assertions stay green.
 - **Must not touch:** the mapping config / setup panel; `_getKnownRoots` (the API's accepted-root set stays — child paths remain valid API arguments); the `repo_scope` column; `buildWorkspaceItems`'s contract for non-picker callers (TicketsPanelProvider, PlanningPanelProvider, TaskViewerProvider memo) — the picker-only derivation is separate.
 
+
+## Addendum (2026-09-10): the leak survives on the wire, not in storage
+
+The relative-path migration succeeded on the **column** — all 3,141 rows store `plan_file` relative
+(`.switchboard/plans/…`), no absolute roots anywhere, and `needs_relative_conversion` is the flag that
+did it. `KanbanDatabase.getBoard` returns `_readRows(stmt)` with no resolution.
+
+But `GET /kanban/board` answers with an absolute path:
+
+```
+DB:   .switchboard/plans/two-configurations-board-only-and-board-plus-agents.md
+API:  /home/patrick/switchboard/.switchboard/plans/two-configurations-…md
+```
+
+So one machine's folder is still leaking — one layer further out than the migration reached.
+
+**Not yet pinned:** the exact line that resolves it on the way out. `KanbanProvider.ts:3201` has
+`_resolvePlanFilePath(workspaceRoot, plan.planFile)` and `PlanIngestionEngine.ts:2366` has its own,
+but neither is confirmed as the board-response path. **Trace it before fixing** — there may be more
+than one.
+
+**Why it matters now.** A lead fills the `Implement the plan at <path>` template
+(`KanbanProvider.ts:5877`, `:5951`) from what the board hands it, so an agent on another machine gets
+a path from *this* machine. Making the response relative is the enabling change for seats on other
+hosts — see `two-configurations-board-only-and-board-plus-agents` and
+`agents-register-a-command-and-a-host-not-a-command-per-machine`.
+
+**Why it was easy to miss:** for a same-machine consumer an absolute path is a convenience — the
+webview opens it, the lead can read it. It only reads as a leak once a consumer is elsewhere, and
+until now none was.

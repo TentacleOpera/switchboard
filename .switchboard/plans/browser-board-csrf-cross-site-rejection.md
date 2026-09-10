@@ -1,5 +1,14 @@
 # The browser board is served unauthenticated by the extension host — reject cross-site state-changing requests in both hosts
 
+<!-- header-absence-withdrawn-01 -->
+> **DESIGN CORRECTION 2026-09-10.** The rule *"absence of both headers is allowed — that is the
+> local-script/`curl` case"* is **withdrawn.** curl is not a supported client, so it must not be the
+> reason a hole stays open. The exemption is replaced by a positive client marker; see
+> **Header absence no longer allows (2026-09-10)** at the end of this file, which supersedes the
+> corresponding text in Proposed Changes step 1, Non-goals, the Edge-Case audit and the Verification
+> Plan. Line numbers throughout this plan predate substantial growth in `LocalApiServer.ts`; the
+> current sites are listed in that section.
+
 <!-- board-collapse-01b -->
 > **PATH CORRECTION 2026-09-04 (Board Collapse 01).** This file names `.agents/skills/_lib/sb_api_call.sh`, which was **deleted** in commit `96fb16df`. All eight `kanban_operations/*.js` scripts now share `.agents/skills/_lib/cli-call.js`, and `switchboard api` is the shell-side escape hatch. Read every `sb_api_call` reference below as `cli-call.js` / `switchboard api`, and do not restore the shell helper.
 
@@ -156,3 +165,71 @@ Additional cases the measured surface requires:
 ## Outstanding Questions
 
 - Should the body parser also enforce a JSON `Content-Type`? It would independently kill the `text/plain` form vector, but may break in-tree callers that omit the header. Deferred; flag for a follow-up plan after auditing callers.
+
+## Header absence no longer allows (2026-09-10)
+
+Supersedes the "absence of both headers is *allowed*" rule in Proposed Changes step 1, the `curl`
+justification in Non-goals, the corresponding bullet in the Edge-Case audit, and the
+"no headers at all → allowed" contract-test case.
+
+**Why it changed.** That rule was the plan's non-breaking gate, justified by in-tree callers that
+send no `Origin`. The justification named `curl` alongside them. curl is **not a supported client**,
+and an allow-rule keyed on header *absence* cannot tell a supported caller from any other process on
+the box — so it left the guard's single largest hole open to protect something that was never
+supported.
+
+**Replacement: a positive client marker.** Supported non-browser callers send an explicit header
+(`X-Switchboard-Client: <name>`); a request with neither a trusted `Origin`/`Sec-Fetch-Site` nor
+that header is rejected.
+
+This is safe against exactly the attacker the plan is about, and the reason is structural rather
+than incidental: a browser cannot add a custom header to a cross-site request without a CORS
+preflight, and the preflight mirrors `Access-Control-Allow-Origin` **only** for an origin the bind
+policy already allows (`LocalApiServer.ts:11830`). Verified against the running host — an `OPTIONS`
+from `https://evil.example` requesting `content-type` came back `204` carrying
+`Access-Control-Allow-Methods` and `Access-Control-Allow-Headers` but **no**
+`Access-Control-Allow-Origin`, so the real request never fires. A non-browser client sets the header
+trivially; a hostile page cannot set it at all.
+
+**What must be updated to send it:** `.agents/skills/_lib/cli-call.js`, the eight
+`kanban_operations/*.js` scripts, `switchboard api`, `probeHealth` / `waitForHealth` in `cli.ts`, the
+Go client, and the standing-order prompt text that instructs agents to POST to
+`/terminals/verb/ptySendPrompt`. Enumerate them from the code, not from this list — anything missed
+starts failing closed, which is the correct direction but still a break.
+
+`/health` stays exempt (Proposed Changes step 5), so port discovery works before a client knows
+anything about the server.
+
+**Contract-test changes.** Replace "no headers at all → allowed" with:
+
+- no `Origin`, no `Sec-Fetch-Site`, no marker → **403**
+- no `Origin`, no `Sec-Fetch-Site`, valid marker → **allowed**
+- `Sec-Fetch-Site: cross-site` **plus** a valid marker → **403** (a browser signal always wins; the
+  marker is not an override)
+- `/health` with none of the three → **200**
+
+**Current line numbers.** This plan cites positions from 2026-08-27 and the file has grown a long
+way since. As of 2026-09-10:
+
+| Plan cites | Now |
+| :--- | :--- |
+| `_checkAuth` empty-token return at `:883` | `:1560` (function), `:1588` (`if (!expected) return true`) |
+| socket peer / `Host` guard at `:7278-7291` | `:11820` (`Host` guard, still `serveStatic`-gated) |
+| CORS mirroring at `:7295-7298` | `:11828-11833` |
+| `Set-Cookie` sites at `:994`, `:1046`, `:1101` | `:1706`, `:1758`, `:1812` |
+| trust-model comment at `:915-921` | `:1574-1587` and the `_sendUnauthorized` note at `:1631` |
+
+**Also confirmed on the live host, 2026-09-10** — the hole is still open and still reachable exactly
+as described:
+
+```
+POST /kanban/verb/refresh   Origin: https://evil.example   Content-Type: text/plain   ->  200
+GET  /health                Host: evil.example                                        ->  403
+```
+
+The `Host` rebinding guard works; nothing rejects a foreign `Origin`. Note also that this box has
+**no durable token configured** (nothing in `~/.switchboard/`, no token row in the board DB), so the
+standalone host is currently in the same unauthenticated state the plan attributes to the extension
+host — the `SameSite=Strict` cookie defence it relies on never engages, because `_checkAuth` returns
+`true` on the empty-token branch first. Standalone is not the safe half today.
+
