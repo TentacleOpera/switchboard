@@ -34,10 +34,10 @@ import {
     CLAUDE_BLOCK_END,
     RESIDENT_PROTOCOL_BODY,
     buildManagedInner,
-    generateClaudeMirror,
     seedControlPlaneFromBundle,
     projectControlPlane,
 } from './services/ClaudeCodeMirrorService';
+import { scaffoldProtocolLayers as scaffoldProtocolFiles } from './services/protocolScaffolder';
 import { WorkspaceExcludeService } from './services/WorkspaceExcludeService';
 import { cleanWorkspace, pruneZombieTerminalEntries } from './lifecycle/cleanWorkspace';
 import { PlanningPanelProvider } from './services/PlanningPanelProvider';
@@ -3951,229 +3951,6 @@ async function setupProtocolFilesSilent(workspaceRoot: string, extensionUri: vsc
     }
 }
 
-// Boundary markers for managed Switchboard protocol block in AGENTS.md
-const AGENTS_PROTOCOL_HEADER = '# AGENTS.md - Switchboard Protocol';
-const AGENTS_BLOCK_START = '<!-- switchboard:agents-protocol:start -->';
-const AGENTS_BLOCK_END = '<!-- switchboard:agents-protocol:end -->';
-
-type AgentsProtocolStatus = 'created' | 'appended' | 'skipped' | 'updated' | 'failed';
-
-function getErrorMessage(error: unknown): string {
-    if (error instanceof Error) {
-        return error.message;
-    }
-    return String(error);
-}
-
-function isFileNotFoundError(error: unknown): boolean {
-    if (error instanceof vscode.FileSystemError) {
-        return error.code === 'FileNotFound';
-    }
-    if (typeof error === 'object' && error !== null && 'code' in error) {
-        return (error as { code?: unknown }).code === 'FileNotFound';
-    }
-    return false;
-}
-
-function hasProtocolHeaderLine(content: string, header: string): boolean {
-    const escapedHeader = header.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp(`^${escapedHeader}\\s*$`, 'm').test(content);
-}
-
-interface ProtocolFileOptions {
-    /** Target filename in the workspace root, e.g. `AGENTS.md` or `CLAUDE.md`. */
-    targetFileName: string;
-    blockStart: string;
-    blockEnd: string;
-    /** Header line used by the legacy-markerless heuristic — MUST be unique per target. */
-    header: string;
-    /** Optional preamble injected ABOVE the bundled source inside the managed block. Retained for API stability; no caller passes it now. */
-    preamble?: string;
-    /**
-     * Per-host resident body. When set (CLAUDE.md), the emitted block uses this
-     * compact body instead of the bundled AGENTS.md source — the source stays
-     * intact for the AGENTS.md target and for SparkContextExporter curation.
-     * Also serves as the create-discriminator: a target with a bodyOverride is
-     * always created as a managed block (never markerless).
-     */
-    bodyOverride?: string;
-}
-
-/**
- * Ensure a workspace protocol file (AGENTS.md / CLAUDE.md) contains the managed
- * Switchboard protocol block. The bundled source is always `AGENTS.md`; the
- * target filename, boundary markers, header heuristic, and optional preamble are
- * parameterized so AGENTS.md and CLAUDE.md share one code path.
- *
- * Preserves user content outside the boundary markers. For legacy markerless
- * files (per-target header present, no markers), replaces the entire file.
- * Idempotent: skips if the managed block is already up-to-date.
- */
-async function ensureProtocolFile(
-    workspaceUri: vscode.Uri,
-    extensionUri: vscode.Uri,
-    opts: ProtocolFileOptions
-): Promise<{ status: AgentsProtocolStatus; reason: string }> {
-    const { targetFileName, blockStart, blockEnd, header, preamble, bodyOverride } = opts;
-    const sourceUri = vscode.Uri.joinPath(extensionUri, 'AGENTS.md');
-    const targetUri = vscode.Uri.joinPath(workspaceUri, targetFileName);
-
-    // Read bundled source (always AGENTS.md — the single protocol source of truth).
-    // For CLAUDE.md (bodyOverride set) the source is still read so the legacy
-    // markerless/header detection path has content to reason about, but the
-    // emitted body is the compact RESIDENT_PROTOCOL_BODY, not this source.
-    let sourceContent: string;
-    try {
-        const sourceBytes = await vscode.workspace.fs.readFile(sourceUri);
-        sourceContent = Buffer.from(sourceBytes).toString('utf8');
-    } catch (error) {
-        return { status: 'failed', reason: `Bundled AGENTS.md source is missing or unreadable: ${getErrorMessage(error)}` };
-    }
-
-    // Build managed inner content (+ optional preamble + optional per-host body) and the marker-wrapped block.
-    const managedInner = buildManagedInner(sourceContent, preamble, bodyOverride);
-    const managedBlock = `${blockStart}\n${managedInner}\n${blockEnd}`;
-    const sourceForCreate = `${sourceContent.trimEnd()}\n`;
-
-    // Check if target exists
-    let targetContent: string | null = null;
-    try {
-        const targetBytes = await vscode.workspace.fs.readFile(targetUri);
-        targetContent = Buffer.from(targetBytes).toString('utf8');
-    } catch (error) {
-        if (!isFileNotFoundError(error)) {
-            return { status: 'failed', reason: `Failed to read existing ${targetFileName}: ${getErrorMessage(error)}` };
-        }
-        // Target does not exist — will create.
-    }
-
-    if (targetContent === null) {
-        // Create new file. CLAUDE.md (bodyOverride set) MUST be created as the
-        // managed block: a markerless create would emit the bundled AGENTS.md
-        // source instead of the compact resident body, and the legacy branch
-        // would wipe it on the next run. AGENTS.md keeps the historical
-        // markerless create (it self-heals to a managed block on the next pass).
-        const createBody = (preamble || bodyOverride) ? `${managedBlock}\n` : sourceForCreate;
-        try {
-            await vscode.workspace.fs.writeFile(targetUri, Buffer.from(createBody, 'utf8'));
-            return { status: 'created', reason: `${targetFileName} created from bundled source` };
-        } catch (e) {
-            return { status: 'failed', reason: `Failed to write ${targetFileName}: ${getErrorMessage(e)}` };
-        }
-    }
-
-    // Target exists — validate and check for existing protocol block.
-    const hasBlockStart = targetContent.includes(blockStart);
-    const hasBlockEnd = targetContent.includes(blockEnd);
-    const blockStartIndex = targetContent.indexOf(blockStart);
-    // Use the FIRST start marker and the LAST end marker so the managed region
-    // spans any duplicated/stray markers an earlier buggy scaffold may have left
-    // behind (e.g. tripled start/end pairs). Replacing that whole span collapses
-    // them back to a single clean block instead of tripping the malformed guard
-    // or leaving orphaned trailing markers.
-    const blockEndIndex = targetContent.lastIndexOf(blockEnd);
-    const startMarkerCount = targetContent.split(blockStart).length - 1;
-    const endMarkerCount = targetContent.split(blockEnd).length - 1;
-    const hasDuplicateMarkers = startMarkerCount > 1 || endMarkerCount > 1;
-
-    if ((hasBlockStart && !hasBlockEnd) || (!hasBlockStart && hasBlockEnd) || (hasBlockStart && hasBlockEnd && blockStartIndex > blockEndIndex)) {
-        return {
-            status: 'failed',
-            reason: `Detected malformed managed protocol markers in ${targetFileName}; fix markers before rerunning setup`
-        };
-    }
-
-    if (hasBlockStart && hasBlockEnd) {
-        // Extract existing block content. Spans from the first start marker to the
-        // last end marker, so any duplicate inner markers are captured here and get
-        // collapsed when the managed block is rewritten below.
-        const existingBlockContent = targetContent.substring(
-            blockStartIndex + blockStart.length,
-            blockEndIndex
-        ).trim();
-
-        // Compare with the expected managed inner content (preamble + source for
-        // CLAUDE.md, bare source for AGENTS.md). Duplicate markers always force an
-        // update so the file heals to a single clean block.
-        if (!hasDuplicateMarkers && existingBlockContent === managedInner.trim()) {
-            return { status: 'skipped', reason: 'Switchboard protocol block already up-to-date' };
-        }
-
-        // Content differs (or duplicate markers need collapsing) — perform in-place update
-        try {
-            const before = targetContent.substring(0, blockStartIndex);
-            const after = targetContent.substring(blockEndIndex + blockEnd.length);
-            const updated = before + managedBlock + after;
-            await vscode.workspace.fs.writeFile(targetUri, Buffer.from(updated, 'utf8'));
-            return {
-                status: 'updated',
-                reason: hasDuplicateMarkers
-                    ? 'Collapsed duplicate protocol markers and updated block to latest bundled version'
-                    : 'Switchboard protocol block updated to latest bundled version'
-            };
-        } catch (e) {
-            return { status: 'failed', reason: `Failed to update ${targetFileName}: ${getErrorMessage(e)}` };
-        }
-    }
-
-    if (hasProtocolHeaderLine(targetContent, header)) {
-        // Legacy markerless file — replace entire content with managed block.
-        // The old file was fully scaffolded by the extension, so this is safe.
-        // Keyed on the PER-TARGET header so a normal CLAUDE.md (or a CLAUDE.md
-        // whose copied body still contains the AGENTS header) is not mis-detected.
-        try {
-            await vscode.workspace.fs.writeFile(targetUri, Buffer.from(managedBlock + '\n', 'utf8'));
-            return { status: 'updated', reason: `Legacy markerless ${targetFileName} replaced with managed block` };
-        } catch (e) {
-            return { status: 'failed', reason: `Failed to replace legacy ${targetFileName}: ${getErrorMessage(e)}` };
-        }
-    }
-
-    // Append protocol block, preserving existing content
-    try {
-        const separator = targetContent.endsWith('\n') ? '\n' : '\n\n';
-        const merged = targetContent + separator + managedBlock + '\n';
-        await vscode.workspace.fs.writeFile(targetUri, Buffer.from(merged, 'utf8'));
-        return { status: 'appended', reason: `Switchboard protocol block appended to existing ${targetFileName}` };
-    } catch (e) {
-        return { status: 'failed', reason: `Failed to append to ${targetFileName}: ${getErrorMessage(e)}` };
-    }
-}
-
-/** Thin wrapper: scaffold the AGENTS.md managed block (Antigravity host). */
-async function ensureAgentsProtocol(
-    workspaceUri: vscode.Uri,
-    extensionUri: vscode.Uri
-): Promise<{ status: AgentsProtocolStatus; reason: string }> {
-    return ensureProtocolFile(workspaceUri, extensionUri, {
-        targetFileName: 'AGENTS.md',
-        blockStart: AGENTS_BLOCK_START,
-        blockEnd: AGENTS_BLOCK_END,
-        header: AGENTS_PROTOCOL_HEADER,
-        // Same compact body as CLAUDE.md. Antigravity discovers skills correctly,
-        // so there is nothing host-specific left to carry — and leaving this
-        // target on the bundled source is what kept ~14,300 chars resident for
-        // every Antigravity user after CLAUDE.md was already cut.
-        bodyOverride: RESIDENT_PROTOCOL_BODY,
-    });
-}
-
-/** Thin wrapper: scaffold the CLAUDE.md managed block (Claude Code host) with the compact resident body. */
-async function ensureClaudeProtocol(
-    workspaceUri: vscode.Uri,
-    extensionUri: vscode.Uri
-): Promise<{ status: AgentsProtocolStatus; reason: string }> {
-    return ensureProtocolFile(workspaceUri, extensionUri, {
-        targetFileName: 'CLAUDE.md',
-        blockStart: CLAUDE_BLOCK_START,
-        blockEnd: CLAUDE_BLOCK_END,
-        // CLAUDE_PROTOCOL_HEADER is the legacy-markerless detector key only —
-        // it is NOT emitted into new blocks (see RESIDENT_PROTOCOL_BODY doc).
-        header: CLAUDE_PROTOCOL_HEADER,
-        bodyOverride: RESIDENT_PROTOCOL_BODY,
-    });
-}
-
 /** Resolve which protocol layers to scaffold from the `switchboard.protocol.target` setting. */
 function getProtocolTargets(workspaceUri?: vscode.Uri): { agents: boolean; claude: boolean } {
     let target = 'both';
@@ -4200,22 +3977,18 @@ async function scaffoldProtocolLayers(
 ): Promise<void> {
     const targets = getProtocolTargets(workspaceUri);
 
-    if (targets.agents) {
-        try {
-            const r = await ensureAgentsProtocol(workspaceUri, extensionUri);
-            outputChannel?.appendLine(`[${logPrefix}] AGENTS.md: ${r.status} — ${r.reason}`);
-        } catch (e) {
-            outputChannel?.appendLine(`[${logPrefix}] AGENTS.md scaffolding error (non-fatal): ${e}`);
-        }
-    }
+    // Protocol-file scaffolding is host-neutral and SHARED with the standalone
+    // composition root (src/services/protocolScaffolder.ts). Do not re-inline it
+    // here: when it lived in this file behind vscode.workspace.fs, standalone
+    // workspaces silently kept a pre-cut 18KB protocol block forever.
+    await scaffoldProtocolFiles(
+        workspaceUri.fsPath,
+        extensionUri.fsPath,
+        targets,
+        line => outputChannel?.appendLine(`[${logPrefix}] ${line}`)
+    );
 
     if (targets.claude) {
-        try {
-            const r = await ensureClaudeProtocol(workspaceUri, extensionUri);
-            outputChannel?.appendLine(`[${logPrefix}] CLAUDE.md: ${r.status} — ${r.reason}`);
-        } catch (e) {
-            outputChannel?.appendLine(`[${logPrefix}] CLAUDE.md scaffolding error (non-fatal): ${e}`);
-        }
         try {
             // The version stamps every control_plane row and drives the
             // downgrade guard (an older extension must refuse a newer

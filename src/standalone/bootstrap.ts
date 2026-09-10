@@ -22,6 +22,7 @@ import { discoverAndMergeDatabases } from '../services/dbMerge';
 import { adoptPresetDbOnLaunch, isKnownPresetDbPath } from '../services/cloudSyncMigration';
 import { WorkspaceExcludeService } from '../services/WorkspaceExcludeService';
 import { seedControlPlaneFromBundle, projectControlPlane } from '../services/ClaudeCodeMirrorService';
+import { scaffoldProtocolLayers } from '../services/protocolScaffolder';
 import {
     columnToPromptRole,
     buildSeatDirectiveBlock,
@@ -863,6 +864,34 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         }
     } catch (projErr) {
         console.warn('[standalone] Control-plane projection failed (non-fatal):', projErr);
+    }
+
+    // ─── Protocol files: the AGENTS.md / CLAUDE.md managed block ──────────────
+    // Wired in BOTH composition roots deliberately. This scaffolding used to live
+    // only in extension.ts behind `vscode.workspace.fs`, so no standalone
+    // workspace ever had its protocol block rewritten: the 2026-08-24 cut from
+    // 14,826 chars to ~600 never reached a standalone user, and later cuts
+    // "did not stick" for that reason alone. If you move this, move it in both
+    // roots — no gate catches a composition-root seam.
+    try {
+        const protocolBundleDir = path.resolve(__dirname, '..', '..');
+        // No settings store is wired on this host, so the target cannot come from
+        // user config here. Report which store answered instead of letting the
+        // contributed default read as a configured choice.
+        const protocolTarget: { value: 'agents' | 'claude' | 'both'; source: string } =
+            { value: 'both', source: 'contributed-default' };
+        console.log(`[standalone] Protocol target: ${protocolTarget.value} (source: ${protocolTarget.source})`);
+        await scaffoldProtocolLayers(
+            workspaceRoot,
+            protocolBundleDir,
+            {
+                agents: protocolTarget.value === 'agents' || protocolTarget.value === 'both',
+                claude: protocolTarget.value === 'claude' || protocolTarget.value === 'both',
+            },
+            line => console.log(`[standalone] ${line}`)
+        );
+    } catch (protoErr) {
+        console.warn('[standalone] Protocol scaffolding failed (non-fatal):', protoErr);
     }
 
     // NOTE: the former `hostState = new StandaloneHostState(db)` is gone. Its sole
