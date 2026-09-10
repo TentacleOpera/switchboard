@@ -5103,7 +5103,7 @@ export class KanbanDatabase {
     // ═══════════════════════════════════════════════════════════════════════
     //
     // The hot DB (this instance) holds the working set; the cold DB (kanban-archive.db)
-    // holds dormant plans. A plan MOVES between stores (never copied like DuckDB). The
+    // holds dormant plans. A plan MOVES between stores, never copied. The
     // hot/cold boundary is activity-based: a plan is hot if updated_at is within
     // hotWindowDays (default 45) OR it is in-flight (active worktree / dispatched).
     // Feature/subtask cohesion: a feature and its subtasks move as a unit.
@@ -12500,7 +12500,7 @@ FROM plans
             }
             stmt.free();
 
-            // Opt-in archive join: if includeArchived is requested, query DuckDB archive
+            // Opt-in archive join: if includeArchived is requested, query the cold store
             if (options?.includeArchived && options.archiveManager) {
                 try {
                     const archived = await options.archiveManager.getArchivedPlanEvents(planId);

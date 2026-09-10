@@ -1682,30 +1682,6 @@ Start by checking which documents exist, then present the menu.`;
                 console.warn('[PlanningPanel] Failed to query cold SQLite archive for tuning plans:', root, err);
             }
 
-            // Optional legacy DuckDB query (opt-in only, non-fatal if missing)
-            try {
-                const { ArchiveManager } = require('./ArchiveManager');
-                const archive = new ArchiveManager(root);
-                if (archive.isConfigured) {
-                    const archivedPlans = await archive.queryArchive(
-                        `SELECT plan_file FROM plans WHERE kanban_column IN ('PLAN REVIEWED', 'CODE REVIEWED', 'CODED', 'COMPLETED') OR status = 'completed'`,
-                        500
-                    );
-                    for (const row of archivedPlans as any[]) {
-                        if (row.plan_file) {
-                            const filePath = path.isAbsolute(row.plan_file)
-                                ? row.plan_file
-                                : path.resolve(root, row.plan_file);
-                            if (fs.existsSync(filePath) && !seenFiles.has(filePath)) {
-                                seenFiles.add(filePath);
-                                planFiles.push(filePath);
-                            }
-                        }
-                    }
-                }
-            } catch (err) {
-                // DuckDB is purely an opt-in analytics export; failure is non-critical
-            }
         }
 
         return planFiles;

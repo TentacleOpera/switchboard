@@ -11451,107 +11451,11 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) return { success: false, error: 'No workspace root resolved' };
                 
-                // Import ArchiveManager and archive the selected plans
-                // AI NOTICE: DO NOT append .js to this import. tsc complains about Node16 module resolution, but Webpack requires it to be extensionless here to bundle correctly.
-                const { ArchiveManager } = await import('./ArchiveManager');
-                const archiveMgr = new ArchiveManager(workspaceRoot);
-                
-                // Check if archive is configured
-                if (!archiveMgr.isConfigured) {
-                    void this._seams().ui.showWarningMessage('Archive path not configured. Please set it in the Database Operations panel first.');
-                    return { success: false, error: 'Archive path not configured.' };
-                }
-
-                // Check DuckDB CLI
-                const cliStatus = await archiveMgr.checkDuckDbCli();
-                if (!cliStatus.installed) {
-                    void this._seams().ui.showWarningMessage('DuckDB CLI not found. Please install DuckDB to use the archive feature.');
-                    return { success: false, error: 'DuckDB CLI not found.' };
-                }
-                
-                // Get plan data from database
-                const db = this._getKanbanDb(workspaceRoot);
-                const plansToArchive = [];
-                for (const sid of sessionIds) {
-                    const plan = await db.getPlanBySessionId(sid);
-                    if (plan) plansToArchive.push(plan);
-                }
-                
-                if (plansToArchive.length === 0) {
-                    void this._seams().ui.showWarningMessage('No valid plans found to archive.');
-                    return { success: false, error: 'No valid plans found to archive.' };
-                }
-                
-                // Feature guard: check if any selected plan is a feature with subtasks
-                let archived = 0;
-                const featurePlans = plansToArchive.filter(p => p.isFeature);
-                if (featurePlans.length > 0) {
-                    let totalSubtasks = 0;
-                    for (const ep of featurePlans) {
-                        const subs = await db.getSubtasksByFeatureId(ep.planId);
-                        totalSubtasks += subs.length;
-                    }
-                    if (totalSubtasks > 0) {
-                        const choice = await this._seams().ui.showModalWarningMessage(
-                            `${featurePlans.length} feature(s) with ${totalSubtasks} subtask(s) selected. Archive subtasks too?`,
-                            'Archive all (features + subtasks)',
-                            'Orphan subtasks',
-                            'Cancel'
-                        );
-                        if (!choice || choice === 'Cancel') return { success: false, error: 'Cancelled' };
-                        if (choice === 'Archive all (features + subtasks)') {
-                            for (const ep of featurePlans) {
-                                const subs = await db.getSubtasksByFeatureId(ep.planId);
-                                for (const st of subs) {
-                                    const success = await archiveMgr.archivePlan(st);
-                                    if (success) archived++;
-                                }
-                            }
-                        } else {
-                            // Orphan: clear feature_id on subtasks
-                            for (const ep of featurePlans) {
-                                await db.clearFeatureIdForFeature(ep.planId);
-                            }
-                        }
-                    }
-                }
-                
-                // Archive each plan
-                for (const plan of plansToArchive) {
-                    const success = await archiveMgr.archivePlan(plan);
-                    if (success) archived++;
-
-                    // Archive review outcomes if plan file is readable
-                    if (plan.planFile) {
-                        try {
-                            const resolvedPath = path.isAbsolute(plan.planFile)
-                                ? plan.planFile
-                                : path.join(workspaceRoot, plan.planFile);
-                            if (fs.existsSync(resolvedPath)) {
-                                const content = await fs.promises.readFile(resolvedPath, 'utf8');
-                                const severity = ArchiveManager.parseReviewSeverity(content);
-                                const outcome = {
-                                    reviewId: `${plan.planId}-review`,
-                                    planId: plan.planId,
-                                    sessionId: plan.sessionId,
-                                    complexityAtRouting: plan.complexity,
-                                    routedTo: plan.routedTo || '',
-                                    dispatchedAgent: plan.dispatchedAgent || '',
-                                    dispatchedIde: plan.dispatchedIde || '',
-                                    ...severity,
-                                };
-                                await archiveMgr.archiveReviewOutcome(outcome);
-                            }
-                        } catch (err) {
-                            console.warn(`[KanbanProvider] Failed to archive review outcome for ${plan.planId}:`, err);
-                        }
-                    }
-                }
-                
-                if (archived > 0) {
-                    void this._seams().ui.showInformationMessage(`📦 Archived ${archived} plan(s) to DuckDB.`);
-                }
-                return { success: true, archived };
+                // The DuckDB archive-selected export was deleted with ArchiveManager
+                // (2026-09-11). Archiving is a status + a board window in the one
+                // better-sqlite3 store, not an export to a second engine, so there is
+                // nothing for this button to do that moving the card does not already do.
+                return { success: false, error: 'The archive export has been removed. Completed cards leave the board via the hot window; their rows stay in the board store.' };
             }
             case 'recoverAll': {
                 const count = msg.count || 0;

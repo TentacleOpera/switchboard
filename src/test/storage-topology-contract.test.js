@@ -154,42 +154,32 @@ async function run() {
         'switchboard.storage.pathOverride must be described as an advanced override, so it is not read as the interface.'
     );
 
-    // 6. DuckDB is off every board read path.
+    // 6. DuckDB is GONE, not merely off the board read path.
     //
-    // Goal Invariant: "assert no board read path imports or shells out to duckdb".
-    // Also claimed in this file's header and never asserted. `ArchiveManager` is the
-    // opt-in analytics export and is the ONLY module allowed to name the binary.
+    // The topology plan asked only that DuckDB be demoted to an opt-in analytics
+    // export off every board read path. It was deleted outright on 2026-09-11:
+    // it needed a ~50 MB binary nobody has, its default path collided with the
+    // SQLite cold store's own file, and the CLI check that gated it sat above the
+    // control-plane prune and the VACUUM, so a missing analytics tool silently
+    // disabled database maintenance unrelated to it.
     const servicesDir = path.join(__dirname, '..', 'services');
-    const DUCKDB_ALLOWED = new Set(['ArchiveManager.ts']);
     const duckDbOffenders = [];
     for (const file of fs.readdirSync(servicesDir)) {
-        if (!file.endsWith('.ts') || DUCKDB_ALLOWED.has(file)) { continue; }
+        if (!file.endsWith('.ts')) { continue; }
         const src = fs.readFileSync(path.join(servicesDir, file), 'utf8');
-        // Match an actual invocation or import, not the word in a comment.
         if (/execFile(?:Async|Sync)?\(\s*['"`]duckdb['"`]/.test(src)
             || /require\(\s*['"`]duckdb['"`]/.test(src)
-            || /from\s+['"`]duckdb['"`]/.test(src)) {
+            || /require\(\s*['"`]\.\/ArchiveManager['"`]/.test(src)
+            || /from\s+['"`]\.\/ArchiveManager['"`]/.test(src)) {
             duckDbOffenders.push(file);
         }
     }
-    assert.deepStrictEqual(
-        duckDbOffenders,
-        [],
-        `Only ArchiveManager may reach the duckdb CLI; the board must render with no duckdb binary present. Offenders: ${duckDbOffenders.join(', ')}`
-    );
-
-    // The DuckDB archive must be OPT-IN: no derived default may point it at the
-    // SQLite cold store's own file, because two engines on one path means whichever
-    // writes first makes the file unreadable to the other.
-    const archiveMgrSrc = fs.readFileSync(path.join(servicesDir, 'ArchiveManager.ts'), 'utf8');
-    assert.ok(
-        !/_archivePath\s*=\s*[^;]*resolveArchiveDbPath\(/.test(archiveMgrSrc),
-        'ArchiveManager must NOT default its DuckDB path to resolveArchiveDbPath() — that is the SQLite cold store file.'
-    );
-    assert.ok(
-        /'legacy:archive\.dbPath'/.test(archiveMgrSrc),
-        'ArchiveManager must still READ the retired switchboard.archive.dbPath, tagged as legacy, so an existing DuckDB archive is not orphaned.'
-    );
+    assert.deepStrictEqual(duckDbOffenders, [],
+        `No module may reach duckdb or ArchiveManager — both were deleted. Offenders: ${duckDbOffenders.join(', ')}`);
+    assert.ok(!fs.existsSync(path.join(servicesDir, 'ArchiveManager.ts')),
+        'ArchiveManager.ts must stay deleted');
+    assert.ok(!fs.existsSync(path.join(servicesDir, 'archiveSchema.sql')),
+        'archiveSchema.sql must stay deleted');
 
     // 7. Every `plans` column belongs to exactly one tier.
     //

@@ -37,7 +37,6 @@ const SWITCHBOARD_ALLOW_ENTRIES = [
     'Bash(node *)',
     'Bash(switchboard *)',
     'Bash(sqlite3 *)',
-    'Bash(duckdb *)',
 ];
 
 const SETTINGS_SCHEMA_URL = 'https://json.schemastore.org/claude-code-settings.json';

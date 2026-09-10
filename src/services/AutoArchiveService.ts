@@ -2,7 +2,6 @@ import * as path from 'path';
 import type { KanbanDatabase, KanbanPlanRecord } from './KanbanDatabase';
 import type { RemoteProvider } from './remote/RemoteProvider';
 import type { RemoteProviderKind } from './RemoteControlService';
-import { ArchiveManager } from './ArchiveManager';
 
 /**
  * Auto-Archive Rule (feature 7 — Auto-Archive & Production Hardening).
@@ -222,7 +221,6 @@ export class AutoArchiveService {
             const provider = providerKind ? this._deps.getProvider(providerKind) : null;
             const archiveCapability = provider?.capabilities.archive === true;
 
-            const archiveMgr = new ArchiveManager(workspaceRoot);
 
             for (const plan of plans) {
                 // Dwell from column-entry time; fall back to updatedAt if the plan was
@@ -236,20 +234,6 @@ export class AutoArchiveService {
                 if (!moved) {
                     errors.push(`Failed to mark ${plan.planFile} as completed in the kanban DB.`);
                     continue;
-                }
-
-                // 2. Archive to DuckDB (best-effort — archive may be unconfigured).
-                if (archiveMgr.isConfigured) {
-                    try {
-                        const cliOk = await archiveMgr.checkDuckDbCli();
-                        if (cliOk.installed) {
-                            await archiveMgr.archivePlan(this._toArchiveRecord(plan));
-                        }
-                    } catch (e) {
-                        // DuckDB archive is best-effort; the kanban DB move above is the
-                        // source-of-truth transition. Log but don't fail the sweep.
-                        this._log(`DuckDB archive skipped for ${plan.planFile}: ${e instanceof Error ? e.message : String(e)}`);
-                    }
                 }
 
                 // 3. Push archive to the remote provider (Linear/Notion follow).
@@ -294,25 +278,4 @@ export class AutoArchiveService {
         return '';
     }
 
-    /** Map a KanbanPlanRecord to the ArchiveManager's PlanRecord shape. */
-    private _toArchiveRecord(plan: KanbanPlanRecord): import('./ArchiveManager').PlanRecord {
-        return {
-            planId: plan.planId,
-            sessionId: plan.sessionId,
-            topic: plan.topic,
-            planFile: plan.planFile,
-            kanbanColumn: 'COMPLETED',
-            status: 'archived',
-            complexity: plan.complexity,
-            workspaceId: plan.workspaceId,
-            createdAt: plan.createdAt,
-            updatedAt: plan.updatedAt,
-            lastAction: 'auto-archived',
-            sourceType: plan.sourceType,
-            tags: plan.tags,
-            routedTo: plan.routedTo || '',
-            dispatchedAgent: plan.dispatchedAgent || '',
-            dispatchedIde: plan.dispatchedIde || '',
-        };
-    }
 }
