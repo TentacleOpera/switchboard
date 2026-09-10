@@ -87,6 +87,7 @@ None. Two open questions below are refinements, not blockers.
 | duplicate topics | identical topic strings | **0 — too weak, see change 7** |
 | dead references | plan cites `src/**` paths that no longer exist | e.g. `tmuxTeamSeating.ts`, deleted |
 | already shipped | plan's subject is present in the tree | 3 (groups-ephemeral, stop teardown, pty-host) |
+| expired premise | a *different* mechanism shipped after the card was written that answers its problem | see change 9a |
 | spanning features | feature whose members sit in >1 column, at rest | 5 pre-existing |
 
 - **Never mix columns in a proposed feature.** This is a hard constraint, not a preference: a feature
@@ -180,6 +181,50 @@ None. Two open questions below are refinements, not blockers.
   fast as the cards, leaving two things to keep true instead of one. The output is a short list of
   "is this still what you want?", never a set of cards marked obsolete.
 
+### 9a. Check the card's premise against what shipped after it was written
+
+**Distinct from "already shipped".** That signal asks whether the card's own subject is in the tree.
+This one asks whether the *problem* still exists, because something else solved it. A card can be
+entirely unimplemented and still dead.
+
+**The worked example, dated from git.** The operator's read on this was that a lot of the file-inbox
+and HTTP-surface work predates the CLI and got superseded. Two thirds right, and the remaining third
+is worse:
+
+| | date |
+| :--- | :--- |
+| file inbox (`writeInboxFile`) | 2026-08-19 |
+| card *Register an Agent in Any Local Terminal* created | 2026-08-24 |
+| `writeMissionControlReport` | 2026-08-24 |
+| **CLI `verb`** | **2026-08-31** |
+| **CLI `next`** | **2026-09-01** |
+| **CLI `api`** | **2026-09-03** |
+| `switchboard-mission-control-http` protocol (34.7 KB of prompt text) | 2026-09-04 |
+| card *`/switchboard-next`* created, then PLAN REVIEWED | 2026-09-06 |
+| **`/agents/register` + heartbeat + inbox shipped** (`e4ee66a1`) | **2026-09-09** |
+
+The file inbox and the report mirror do predate the CLI, so they are ordinary supersession. But
+`mission-control-http` was written *after* `verb`, `next` and `api` existed, and `/agents/register`
+shipped **eight days after `next`** and **three days after its own replacement was written and
+reviewed**.
+
+**So the failure is not that old ideas linger. It is that a card written before the CLI got built
+after it, with nobody re-reading its premise.** The card was correct on 2026-08-24 and wrong by
+2026-09-01; it was implemented on 2026-09-09. That is the specific thing this check exists to catch,
+and no clustering or duplicate-detection pass would have seen it — the card had no duplicate and its
+subject was genuinely absent from the tree.
+
+**How the audit surfaces it.** Compare each card's `created_at` against the mechanisms that landed
+since, and present the cards whose framing predates a shipped mechanism in the same area as a
+question: *"this was written before X shipped — does X answer it?"* Do not attempt to decide. Same
+rule as change 9: the audit asks, the operator answers.
+
+**And check the card's own plan file for the tell.** These cards usually quote the constraint that
+has since dissolved. `register-an-agent-in-any-local-terminal.md` quotes *"there is no portable OS
+mechanism to write into an unrelated process's stdin. This is a genuine capability gap"* — still
+true, and irrelevant once the agent pulls instead of being pushed to. A quoted constraint that is
+still true is not evidence the card is still needed.
+
 ### 10. Delete features through the API, never by removing the file
 
 - **This is the cause of the 512 remnants**, and the one thing this protocol must not repeat. Removing
@@ -206,6 +251,8 @@ remnants, 0 exact-duplicate topics, 5 features spanning columns.
 
 ## Outstanding Questions
 
+- Change 9a settles half of the question below: premise-expiry belongs here, because it needs the
+  operator in the loop and that is what this protocol is for.
 - Should the "already shipped" check be part of this protocol or its own? It is the most valuable and
   the least reliable — proving a plan's subject exists in the tree needs per-plan reasoning, not a
   grep. Reporting it as *candidates for verification* rather than as fact is the honest option.
