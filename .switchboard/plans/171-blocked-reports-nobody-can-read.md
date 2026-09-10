@@ -101,8 +101,25 @@ None.
   and there is no pty host, the file must still be written. Gate on *existence*, never on pty
   readiness — that distinction is the whole point of the `_ptyHostPort` note at
   `TaskViewerProvider.ts:2545`.
-- Decide what "armed" means from state that survives a restart. `missionControlActive` already
-  answers a version of this for the directive; reuse it rather than inventing a second predicate.
+- The predicate already exists and does not need inventing. `buildMissionControlKickoffPrompt`
+  reads both (`TaskViewerProvider.ts:12766-12769`):
+
+  ```js
+  const sessionPath = path.join(root, '.switchboard', 'mission-control', 'session.md');
+  const armed = !!this._autobanState?.missionControlArmed;
+  ```
+
+  On this box there is no `session.md` and no mission state at all — only `reports/` — so both
+  answer "no" for all 190 files. Reuse these rather than adding a third notion of armed.
+
+**But first, question whether the mirror should exist at all.** Its entire stated purpose is *"a
+non-pty Mission Control reads the same notice as a file"* — that is the **external** variant only.
+`buildMissionControlKickoffPrompt` picks the runsheet by delivery mode
+(`TaskViewerProvider.ts:12733-12735`): `deliveryMode === 'self'` →
+`switchboard-mission-control-external`, otherwise `switchboard-mission-control-internal`. An
+internal Mission Control is a pty seat and is prompted directly; it never reads these files. So if
+external Mission Control is not a configuration this product supports, the mirror has no consumer in
+any state and should be deleted, not gated. Settle that before writing a gate for it.
 
 ### 2. Read and claim routes, from one shared helper
 
