@@ -87,10 +87,24 @@ would break under it, and the wrong fix is to add `-H 'X-Switchboard-Client: …
 keeps curl and spreads a transport detail back into prompt text an agent can garble. The CLI sets
 the header itself, which is the whole reason it should be the only client.
 
-**A genuine exception, not to be swept in.** `EXTERNAL_AGENT_PULL_INSTRUCTION`
-(`teamWiring.ts:99-106`) instructs raw HTTP for register / heartbeat / poll / done. That is for an
-agent in a terminal Switchboard cannot push into, which may have no `switchboard` binary on PATH at
-all. It needs a decision, not a rewrite.
+**A third surface that looks like an exception and is actually an unfinished feature.**
+`EXTERNAL_AGENT_PULL_INSTRUCTION` (`teamWiring.ts:99-106`) instructs raw HTTP for register /
+heartbeat / poll / done — the only remaining template that names raw endpoints instead of the CLI.
+On inspection it is not an exception to the curl rule, because **nothing consumes it.** Its only
+references are its own `export` and `src/test/external-agent-pull-registration.test.js`, which
+asserts the string's shape (that it names the three endpoints, omits `api-server-port.txt`, cites
+the `SWITCHBOARD STATUS` line, specifies a heartbeat interval). No production path installs it, so
+no agent has ever received it — and the test makes it look maintained.
+
+Its endpoints do exist in source (`LocalApiServer.ts:12560`, `:12599`, `:12631`, added in
+`e4ee66a1`), but they are **not in the running build**: `dist/services/LocalApiServer.js` contains
+no `agents/register`, which is why a live `POST /agents/register` returns 404 from the chain's
+terminal `else` at `:12661` rather than the 501 the unwired-seam branch would give. Stale `dist`,
+not a routing defect.
+
+So the open question is not "raw HTTP or the CLI here" — it is whether this feature is being
+finished or removed. The transport question only becomes real once something delivers the
+instruction.
 
 ## Metadata
 
@@ -139,10 +153,20 @@ None. The operator has stated the rule: curl is not a supported client.
   verification swept `.agents` and `.claude` and passed while seven curls sat in `src/`. That is the
   regression this test exists to prevent.
 
-### 5. Decide the external-agent case
+### 5. Decide whether the external-agent pull surface is finished or deleted
 
-- Either ship a tiny pull helper the agent can run, or keep raw HTTP and document it as the one
-  exempt surface with the reason. Do not leave it as an unmarked inconsistency.
+Not a transport decision. `EXTERNAL_AGENT_PULL_INSTRUCTION` has no production consumer and its
+endpoints are absent from the running build. Two honest outcomes:
+
+- **Finish it** — give the instruction a consumer (a scope that installs it for a seat the host
+  cannot push into), rebuild so the endpoints are live, and only then decide raw HTTP vs the CLI.
+  If the CLI wins, note that the heartbeat is every 50 s per external agent, so a node process
+  every 50 s is a real cost on a Pi and worth measuring before choosing.
+- **Delete it** — remove the constant and `src/test/external-agent-pull-registration.test.js`'s
+  string assertions along with it. A contract test pinning the wording of a constant nothing reads
+  is worse than no test: it reports health for a feature that does not run.
+
+Either way, do not leave a passing test guarding an unreachable string.
 
 ## Verification Plan
 
