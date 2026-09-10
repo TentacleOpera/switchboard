@@ -78,6 +78,43 @@ report can ever be marked handled. Write-only plus never-claimed is the accumula
 So a previous plan reasoned from "untested feature, therefore no data" and was wrong on both counts.
 Do not repeat it: the files are real, some are substantive, and the fix is not a delete.
 
+**And a host-written report should not be a file at all — the table already exists and is empty.**
+The board DB carries the DB twin of every file-based coordination directory, and the file
+implementations are the live ones:
+
+```
+plan_events          10378 rows    (workflow_event 10166, completed 212)
+activity_log           257 rows
+job_instructions         0 rows    <- twin of the file `inbox/`
+job_runs                 0 rows
+board_move_requests      0 rows    <- twin of the file `moves/`
+```
+
+`plan_events` is exactly this shape and is already indexed for the query the reports need:
+
+```sql
+plan_id, event_type, workflow, action, timestamp, device_id, payload, workspace_id
+FOREIGN KEY (plan_id) REFERENCES plans(plan_id)
+INDEX (plan_id, timestamp) / (timestamp) / (workspace_id, timestamp)
+```
+
+A turn-end report *is* a plan event: a `planId`, a kind (`finished` / `blocked`), a one-line body.
+Writing it as a file gives up everything the table provides:
+
+- **No query.** `?kind=blocked` means walking 190 files and parsing frontmatter; in SQL it is a
+  `WHERE` on an indexed column.
+- **No referential integrity.** `plan_events` has a foreign key to `plans`. The files carry
+  `planId` as a raw **absolute** path (`planId: /home/patrick/switchboard/.switchboard/plans/….md`)
+  — the same absolute-path class the mapping-state work is unwinding, reintroduced in a directory
+  nothing validates.
+- **No retention.** `RetentionService` prunes DB rows; nothing prunes this directory. That is why
+  190 accumulate and why nothing would ever have stopped.
+- **No atomicity** with the board state the event describes.
+
+The file form has exactly one justification: an agent with only filesystem access can write one.
+That covers *agent-written* reports — an external team head, an external Mission Control. It does
+not cover the `from: system` mirror, which the host writes while holding the database open.
+
 ## Metadata
 
 **Complexity:** 3
@@ -91,7 +128,21 @@ None.
 
 ## Proposed Changes
 
-### 1. Gate the mirror on a Mission Control existing — the primary fix
+### 0. Record the host's turn-end in `plan_events`, not as a file
+
+- The host already holds the database. Write the turn-end as a `plan_events` row — `event_type`
+  `turn_end`, `action` `finished` / `blocked`, `plan_id` the plan's **relative** path (never the
+  absolute one the files carry), body in `payload`.
+- It then inherits the indexes, the foreign key, `RetentionService` pruning, and a `WHERE` clause in
+  place of a directory walk. This is what makes the accumulation problem structurally impossible
+  rather than merely gated.
+- Keep the file form for what only it can do: a report written by an agent that has no route to the
+  database. Gate that on the same existence test as change 1.
+- Check whether `job_instructions` / `job_runs` / `board_move_requests` should absorb the other
+  file directories too — they are the same pattern, 0 rows each, with the file version live. That is
+  a bigger question and belongs in its own plan; note the finding, do not fold it in here.
+
+### 1. Gate the mirror on a Mission Control existing
 
 - Add the existence test the comments assume and never make: is a Mission Control armed for this
   workspace? Skip the mirror when the answer is no.
