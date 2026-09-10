@@ -7,7 +7,6 @@
 > 
 > **Two features give opposite instructions for that card, and Memo's is correct.** This file says the Memo tab "is independent of all three and can proceed in parallel". Memo sequences it **last**, behind the shared `memoFile.ts` module and the dirty guard, because the geometry plans make `memo.js` post to `window.parent` and in an editor tab the frame is its own parent. Follow Memo's ordering; treat that sentence here as void.
 
-
 **Complexity:** 5
 
 ## Goal
@@ -26,7 +25,6 @@ Stop the narrow sidebar column trying to be everything. Restructure it into name
 ## Subtasks
 - [ ] [The Sidebar Becomes a Launcher and a Status Board, Not a Cramped Column of Everything](../plans/sidebar-becomes-launcher-and-status-board.md) — **CREATED** — ID: c335a73d-6724-48d3-9d35-cf1813640c3c
 - [ ] [A Read-Only Status Section in the Sidebar: What Is Running, Never What Should Run](../plans/sidebar-read-only-status-section.md) — **CREATED** — ID: 665c24e0-2077-4b4b-a2b9-161b66c001ed
-- [ ] [Spike: Find Out Whether a VS Code Editor-Area Terminal Grid Is Actually Usable](../plans/vscode-editor-grid-spike.md) — **CREATED** — ID: dc574a6d-a593-480d-8ba1-7bf778bb8b68
 - [ ] [The Cockpit Polls a Dead Host Forever Without Saying So](../plans/cockpit-must-say-when-the-host-is-gone.md) — **CREATED** — ID: 046e5e5c-7fa3-47c3-b364-cbb4f8b42bc0
 <!-- END SUBTASKS -->
 

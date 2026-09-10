@@ -27,7 +27,6 @@ Soft ordering: **The PTY Host Should Outlive the Board** should land second. Its
 
 Last: **Groups Are Ephemeral, Teams Are Durable**. Its sidecar write depends on the shutdown fix (hard), and its survival model depends on the adoption path (soft). Landing it before either dependency means the sidecar is inert and groups die on every restart — correct but not the intended end state.
 
-
 ## Implementation Summary
 
 All three subtasks implemented and committed (b5dba3df). `switchboard stop` now unifies signal and /shutdown teardown behind a re-entrancy-latched teardownAndExit with a bounded force-exit timer, and the CLI replaces its fixed sleep with a liveness poll plus a Linux starttime recycle guard that fails loudly if the process survives. The PTY host gains a `--survive-parent` flag that gates the parent-death watcher, a 0600 state file recording host identity, and a PtyHostSupervisor adoption probe (protocol-version gated) wired in both composition roots; /health surfaces adopted-vs-spawned identity and `stop --fleet` tears a surviving host down. Manual groups (`grp_`) moved out of the durable config DB into an in-memory ManualGroupStore with a 0600 sidecar written on clean /shutdown and restored on boot intersected with the live adopted fleet; SAVE AS GROUP is retired and FILL GRID is the sole creation path, with terminal exits evicting members and reaping empty groups.
