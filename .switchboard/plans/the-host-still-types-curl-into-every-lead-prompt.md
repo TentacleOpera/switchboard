@@ -102,9 +102,20 @@ no `agents/register`, which is why a live `POST /agents/register` returns 404 fr
 terminal `else` at `:12661` rather than the 501 the unwired-seam branch would give. Stale `dist`,
 not a routing defect.
 
-So the open question is not "raw HTTP or the CLI here" — it is whether this feature is being
-finished or removed. The transport question only becomes real once something delivers the
-instruction.
+And there is no open question, because the approach is superseded.
+`switchboard-next-a-seat-asks-for-its-own-card.md` (complexity 4, **PLAN REVIEWED**) states it
+directly: *"The board cannot write into an unseated terminal, **and does not need to.** … this flow
+needs no registration on top of it. The agent is already in the terminal; handing it the prompt text
+**is** delivery."* `switchboard next` already ships as a subcommand (`cli.ts:68`). So the pull
+direction exists without any of register / heartbeat / inbox / per-seat token.
+
+Note that the server half of the registration surface is **fully built and wired in both hosts** —
+`registerExternalAgent` at `TaskViewerProvider.ts:11712`, wired at `bootstrap.ts:4417` and
+`TaskViewerProvider.ts:4668`. It is only the *instruction* that has no consumer. So this is a
+complete feature whose delivery half was never connected, now obsoleted by a simpler design that
+sits further along in review than it does — while the plan that built it is marked COMPLETED.
+
+Retiring it is therefore not this plan's business, and change 5 no longer proposes doing it here.
 
 ## Metadata
 
@@ -153,20 +164,28 @@ None. The operator has stated the rule: curl is not a supported client.
   verification swept `.agents` and `.claude` and passed while seven curls sat in `src/`. That is the
   regression this test exists to prevent.
 
-### 5. Decide whether the external-agent pull surface is finished or deleted
+### 5. Exclude the external-agent pull surface — superseded, and not this plan's job
 
-Not a transport decision. `EXTERNAL_AGENT_PULL_INSTRUCTION` has no production consumer and its
-endpoints are absent from the running build. Two honest outcomes:
+`EXTERNAL_AGENT_PULL_INSTRUCTION` is the one remaining template naming raw endpoints, so the
+no-curl rule appears to reach it. It does not, because the surface should not exist: unseated
+terminals are answered by `switchboard-next-a-seat-asks-for-its-own-card.md`, which needs no
+registration at all.
 
-- **Finish it** — give the instruction a consumer (a scope that installs it for a seat the host
-  cannot push into), rebuild so the endpoints are live, and only then decide raw HTTP vs the CLI.
-  If the CLI wins, note that the heartbeat is every 50 s per external agent, so a node process
-  every 50 s is a real cost on a Pi and worth measuring before choosing.
-- **Delete it** — remove the constant and `src/test/external-agent-pull-registration.test.js`'s
-  string assertions along with it. A contract test pinning the wording of a constant nothing reads
-  is worse than no test: it reports health for a feature that does not run.
+Retiring it belongs with that plan as a cleanup subtask, not here. Scope, so whoever picks it up
+does not have to re-derive it:
 
-Either way, do not leave a passing test guarding an unreachable string.
+- `teamWiring.ts:99` — the constant
+- `src/test/external-agent-pull-registration.test.js` — asserts the constant's wording; must go
+  with it, since a passing test on an unreachable string reports health for code that never runs
+- `LocalApiServer.ts:12560`, `:12599`, `:12631` — the three routes
+- `TaskViewerProvider.ts:11712` — `registerExternalAgent`, plus its wiring at
+  `TaskViewerProvider.ts:4668` and `bootstrap.ts:4417`
+
+**One difference to decide before deleting, not after.** Registration would make an unseated
+terminal *addressable* — the board initiates, and the sidebar can show it alive off the heartbeat.
+`switchboard next` is pull-only: the agent initiates and the board never routes to it. The operator
+has taken pull-only as sufficient. Record that as the decision so the capability is knowingly
+dropped rather than quietly lost.
 
 ## Verification Plan
 
