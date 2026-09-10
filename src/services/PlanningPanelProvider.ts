@@ -1658,6 +1658,31 @@ Start by checking which documents exist, then present the menu.`;
                 console.warn('[PlanningPanel] Failed to query Kanban DB for tuning plans:', root, err);
             }
 
+            // Query cold SQLite archive for historical plans
+            try {
+                if (KanbanDatabase.archiveAvailable(root)) {
+                    const coldDb = KanbanDatabase.getArchiveInstanceIfPresent(root);
+                    if (coldDb) {
+                        const workspaceId = await this._getWorkspaceId(root);
+                        const coldPlans = await coldDb.getCompletedPlansCold(workspaceId, 500);
+                        for (const row of coldPlans) {
+                            if (row.planFile) {
+                                const filePath = path.isAbsolute(row.planFile)
+                                    ? row.planFile
+                                    : path.resolve(root, row.planFile);
+                                if (fs.existsSync(filePath) && !seenFiles.has(filePath)) {
+                                    seenFiles.add(filePath);
+                                    planFiles.push(filePath);
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (err) {
+                console.warn('[PlanningPanel] Failed to query cold SQLite archive for tuning plans:', root, err);
+            }
+
+            // Optional legacy DuckDB query (opt-in only, non-fatal if missing)
             try {
                 const { ArchiveManager } = require('./ArchiveManager');
                 const archive = new ArchiveManager(root);
@@ -1679,7 +1704,7 @@ Start by checking which documents exist, then present the menu.`;
                     }
                 }
             } catch (err) {
-                console.warn('[PlanningPanel] Failed to query archive DB for tuning plans:', root, err);
+                // DuckDB is purely an opt-in analytics export; failure is non-critical
             }
         }
 

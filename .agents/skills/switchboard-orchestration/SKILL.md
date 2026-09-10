@@ -46,7 +46,24 @@ primary workspace.
 - **Read** endpoints return `{ "success": true, "data": <payload> }`.
 - **Mutation** endpoints return `{ "success": true, ...fields }` (no `data` wrapper).
 - Errors return `{ "error": "<message>" }` with an HTTP status: `400` bad input, `401` unauthorized,
-  `404` not found, `409` conflict, `503` DB/extension not ready, `500` handler error.
+  `404` not found, `409` conflict, `503` store/extension not ready, `500` handler error.
+- A `503` from a **read** endpoint also carries `code` and `tier`:
+  `{ "error": "...", "code": "STORE_UNAVAILABLE", "tier": "board" | "archive" }`.
+
+**Three read outcomes — branch on all three.** A board read has exactly three answers, and
+two of them used to be the same value:
+
+| Outcome | Shape | Meaning |
+|---|---|---|
+| **Rows** | `200` `{success:true, data:...}` | The store answered. An empty `data: []` genuinely means *nothing matches*. |
+| **No such record** | `404` `{error}` | The card does not exist — in the board window **or** the archive. Both were searched. |
+| **Store unavailable** | `503` `{error, code:"STORE_UNAVAILABLE", tier}` | The store did not answer. You know **nothing** about the board's contents. |
+
+`STORE_UNAVAILABLE` is **not** an empty board. An orchestrator that reads it as one makes
+confident decisions about a board it cannot see — it will dispatch nothing, report a fleet
+as idle, or mark work missing. On `STORE_UNAVAILABLE`: retry once after a few seconds; if
+it repeats, **stop and report**, naming the `tier` that failed. Never poll it in a loop, and
+never fold it into "no cards found".
 
 ---
 
@@ -58,7 +75,7 @@ primary workspace.
 | `GET /kanban/board` | Full board: every active plan record for the workspace |
 | `GET /kanban/plans?column=<col>` | Plans filtered to one column |
 | `GET /kanban/plans?featureId=<id>` | Subtasks of a feature |
-| `GET /kanban/plan?planId=<id>` | **One** plan record **plus its full file content** (`.data.content`) |
+| `GET /kanban/plan?planId=<id>` | **One** plan record, **its full file content** (`.data.content`), and **which store answered** (`.data.source`: `'board'` \| `'archive'`) |
 | `GET /kanban/columns` | `{ builtIn: [...defs], custom: [{id,label,labelSource,enabled,displayModeOf?,legacyAliasOf?}], displayOnly: [{label,aliasOf}] }` — every column includes `enabled` (boolean) and `enabledSource` (`'config' | 'default' | 'structural' | 'unknown'`). `displayModeOf`/`legacyAliasOf` mark a column that is NOT an independent peer (`BACKLOG` is a view of `CREATED`; `CODED` is a legacy alias of `LEAD CODED`). Filter destinations to `enabled !== false`. |
 | `GET /kanban/features` | All features (`isFeature` rows) |
 | `GET /worktree/list` | All worktree rows (`path`, `branch`, `subtask_plan_id`, `feature_id`, `tier`, `status`, `base_branch`) |
@@ -87,6 +104,22 @@ switchboard api GET /worktree/list
 > `PLAN REVIEWED`, URL-encoded as `PLAN%20REVIEWED`. See the column-translation
 > table in `query-kanban/SKILL.md` or call `GET /kanban/columns` for the live
 > `{id, label}` mapping.
+
+**Record lookups span the archive; collection reads stay windowed.** The board keeps a
+window of recent work; completed cards that age past it move to a separate archive store.
+The two kinds of read treat that boundary differently, on purpose:
+
+- `GET /kanban/plan?planId=` **spans both stores** and labels the result with
+  `.data.source` (`'board'` or `'archive'`). A card is returned exactly once even while
+  the archive sweep is moving it. So a `404` here is a real absence in both stores — never
+  "it got old". The storage window is a fact about where a card is kept, not a fact about
+  the card.
+- `GET /kanban/board`, `GET /kanban/plans` and `GET /kanban/features` are **windowed** and
+  deliberately exclude dormant cards — that is the human board's view, and spanning them
+  would flood it. To ask about a specific old card, use the record lookup.
+
+`.data.source` is where the record was **found**; a GET does not promote a dormant card
+back to the board.
 
 Plan records include: `planId`, `sessionId`, `topic`, `planFile`, `kanbanColumn`, `status`,
 `complexity`, `tags`, `project`, `isFeature`, `featureId`, `worktreeId`, `worktreeStatus`,
@@ -395,7 +428,8 @@ claim.
 - **`404`** — plan/feature/worktree not found (bad id).
 - **`400`** — invalid input (bad column, empty body, path-traversal slug); the message names the problem.
 - **`409`** — `create_plan` slug already exists.
-- **`503`** — DB/extension not ready yet → retry after a short delay.
+- **`503` with `code: "STORE_UNAVAILABLE"`** — the board or archive store did not answer (`tier` says which). This is NOT an empty board and NOT a missing card. Retry **once** after a few seconds, then stop and report — do not loop on a store that is down, and do not act as though the board were empty.
+- **`503`** without that code — extension not ready yet → retry after a short delay.
 
 ## 11. File-based fallback (no HTTP)
 If the API server is down you can still communicate via the filesystem (Mission Control reads these):

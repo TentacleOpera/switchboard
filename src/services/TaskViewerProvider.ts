@@ -61,6 +61,14 @@ import type { JSDOM } from 'jsdom';
 let JSDOMClass: any;
 import { SessionActionLog, ArchiveSpec, ArchiveResult } from './SessionActionLog';
 import { KanbanProvider } from './KanbanProvider';
+import {
+    describeTicketContentPolicy,
+    mapClickUpTaskToSnapshot,
+    mapLinearIssueToSnapshot,
+    resolveTicketContentPolicy,
+    type PlanTicketSnapshot,
+    type ResolvedTicketContentPolicy,
+} from './planTickets';
 import type { SetupPanelProvider } from './SetupPanelProvider';
 import { sendRobustText, getAntigravityHash, pasteTextViaClipboard, withTerminalSendLock, clearTerminalInputLine, CLEAR_INPUT_LINE, CLEAR_INPUT_SETTLE_MS, SUBMIT_SETTLE_MS } from './terminalUtils';
 import { buildFetchPlansPrompt, buildReconcilePrompt, buildTeamAutomationPrompt } from './schedulerPresets';
@@ -5601,7 +5609,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     /**
-     * Resolve a kanban.dbPath setting value to an absolute path.
+     * Resolve a storage.pathOverride setting value (or legacy kanban.dbPath) to an absolute path.
      * Falls back to the default local DB path if the setting is empty.
      */
     private _resolveDbPathSetting(settingValue: string | undefined, wsRoot: string): string {
@@ -9410,7 +9418,12 @@ Each plan file must include:
         const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot) || '';
         const controlPlaneStatus = await this.handleGetControlPlaneStatus(resolvedWorkspaceRoot || undefined);
         const config = vscode.workspace.getConfiguration('switchboard');
-        const configuredPath = config.get<string>('kanban.dbPath', '');
+        let configuredPath = config.get<string>('storage.pathOverride', '') || config.get<string>('kanban.dbPath', '');
+        if (!config.get<string>('storage.pathOverride') && config.get<string>('kanban.dbPath')) {
+            // Auto-migrate legacy kanban.dbPath to storage.pathOverride
+            void config.update('storage.pathOverride', configuredPath, vscode.ConfigurationTarget.Workspace);
+            void config.update('kanban.dbPath', undefined, vscode.ConfigurationTarget.Workspace);
+        }
         return {
             path: configuredPath || '.switchboard/kanban.db',
             workspaceRoot: resolvedWorkspaceRoot,
@@ -10607,6 +10620,7 @@ Each plan file must include:
         linearService: LinearSyncService,
         node: LinearImportNode,
         createdPlanFiles: string[],
+        contentPolicy: ResolvedTicketContentPolicy,
         parentPlanFile?: string,
         parentIssue?: LinearIssue,
         projectName?: string
@@ -10631,6 +10645,26 @@ Each plan file must include:
         if (!linked) {
             throw new Error(`Failed to record the Linear issue ID for imported plan ${planFileRelative}.`);
         }
+
+        // The board's own snapshot of what Linear told us. The id column above is
+        // the link; this is the metadata that used to exist only as gitignored
+        // files. Attachments ride as URL references — never as blobs.
+        await this._recordPlanTicketSnapshot(
+            db,
+            workspaceId,
+            planFileRelative,
+            mapLinearIssueToSnapshot(
+                {
+                    issue: node.issue,
+                    comments: node.comments ?? null,
+                    attachments: node.attachments ?? null,
+                },
+                createdAt,
+                contentPolicy.policy,
+                'import'
+            )
+        );
+
         createdPlanFiles.push(planFileRelative);
         for (const child of node.subtasks) {
             await this._createImportedLinearPlan(
@@ -10638,6 +10672,7 @@ Each plan file must include:
                 linearService,
                 child,
                 createdPlanFiles,
+                contentPolicy,
                 planFileRelative,
                 node.issue,
                 projectName
@@ -10645,6 +10680,67 @@ Each plan file must include:
         }
 
         return planFileRelative;
+    }
+
+    /**
+     * Resolve the ticket content policy (bodies/comments in the board store, and
+     * their size caps) once per import, and log it WITH its provenance.
+     *
+     * The log line is not decoration. Ticket bodies and commenter identities are
+     * the two things an operator may need kept off a shared store, and a body that
+     * is missing months later must be traceable to the setting that excluded it
+     * rather than mistaken for a fetch that failed. `resolveTicketContentPolicy`
+     * tags every field with the layer that answered; this prints it.
+     */
+    private _ticketContentPolicy(): ResolvedTicketContentPolicy {
+        let resolved: ResolvedTicketContentPolicy;
+        try {
+            resolved = resolveTicketContentPolicy(vscode.workspace.getConfiguration('switchboard') as any);
+        } catch {
+            // No configuration surface at all (a bare unit-test host). Fall back to
+            // the built-in policy, which resolveTicketContentPolicy tags as such.
+            resolved = resolveTicketContentPolicy(null);
+        }
+        console.log(`[TaskViewerProvider] ticket content policy: ${describeTicketContentPolicy(resolved)}`);
+        return resolved;
+    }
+
+    /**
+     * Write the board's own record of the ticket a freshly-imported plan came from.
+     *
+     * This is the durable half of an import. `plans.linear_issue_id` /
+     * `plans.clickup_task_id` keep the bare id (nothing here removes or replaces
+     * them), and `.switchboard/tickets/` keeps its browsing cache — but the cache
+     * is gitignored, so before `plan_tickets` a fresh clone kept the plan and lost
+     * everything the ticket said. This writes that metadata into shared board state.
+     *
+     * A failure here is logged and NOT thrown: the plan and its link already exist,
+     * and losing the whole import over a metadata row would be worse than a card
+     * that renders from the id alone. The missing row is visible — the card has no
+     * ticket context — rather than silent.
+     */
+    private async _recordPlanTicketSnapshot(
+        db: KanbanDatabase,
+        workspaceId: string,
+        planFileRelative: string,
+        snapshot: PlanTicketSnapshot
+    ): Promise<void> {
+        try {
+            const plan = await db.getPlanByPlanFile(planFileRelative, workspaceId);
+            if (!plan?.planId) {
+                console.warn(
+                    `[TaskViewerProvider] plan_tickets: no plan row for ${planFileRelative} in workspace ${workspaceId} — ` +
+                    `${snapshot.provider}:${snapshot.externalId} metadata not recorded.`
+                );
+                return;
+            }
+            const ok = await db.upsertPlanTicket(plan.planId, workspaceId, snapshot);
+            if (!ok) {
+                console.warn(`[TaskViewerProvider] plan_tickets: upsert returned false for ${snapshot.provider}:${snapshot.externalId}`);
+            }
+        } catch (e) {
+            console.warn(`[TaskViewerProvider] plan_tickets: failed to record ${snapshot.provider}:${snapshot.externalId}:`, e);
+        }
     }
 
     public async importLinearTask(
@@ -10689,12 +10785,15 @@ Each plan file must include:
 
         const projectFilter = await this._kanbanProvider?.resolveAuthoringProject(effectiveRoot, initiatorProject) ?? null;
 
+        const contentPolicy = this._ticketContentPolicy();
+
         const importedPlanFiles: string[] = [];
         const rootPlanFile = await this._createImportedLinearPlan(
             db,
             linearService,
             rootNode,
             importedPlanFiles,
+            contentPolicy,
             undefined,
             undefined,
             projectFilter || undefined
@@ -10774,6 +10873,23 @@ Each plan file must include:
             const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
             const rootPlanFileRelative = path.relative(effectiveRoot, rootPlanFile).replace(/\\/g, '/');
             await db.updateClickUpTaskIdByPlanFile(rootPlanFile, workspaceId, task.id);
+
+            // The board's own snapshot of what ClickUp told us — the durable half
+            // of the link the id column above records. getTaskDetails returns
+            // attachments, so they ride along as URL references (never blobs).
+            const contentPolicy = this._ticketContentPolicy();
+            await this._recordPlanTicketSnapshot(
+                db,
+                workspaceId,
+                rootPlanFileRelative,
+                mapClickUpTaskToSnapshot(
+                    { task, comments: details.comments ?? null, attachments: details.attachments ?? null },
+                    createdAt,
+                    contentPolicy.policy,
+                    'import'
+                )
+            );
+
             const importedPlanFiles = [rootPlanFileRelative];
 
             // Import subtasks as separate plans (each with its own comments —
@@ -10796,6 +10912,20 @@ Each plan file must include:
                 );
                 const subtaskPlanFileRelative = path.relative(effectiveRoot, subtaskPlanFile).replace(/\\/g, '/');
                 await db.updateClickUpTaskIdByPlanFile(subtaskPlanFile, workspaceId, subtask.id);
+                await this._recordPlanTicketSnapshot(
+                    db,
+                    workspaceId,
+                    subtaskPlanFileRelative,
+                    mapClickUpTaskToSnapshot(
+                        // Comments are refetched per subtask above; the bulk subtask
+                        // shape carries no attachments, so they stay NULL — "never
+                        // told", not "this subtask has none".
+                        { task: subtask, comments: subtaskComments, attachments: null },
+                        subtaskCreatedAt,
+                        contentPolicy.policy,
+                        'import'
+                    )
+                );
                 importedPlanFiles.push(subtaskPlanFileRelative);
             }
 
@@ -14462,7 +14592,7 @@ Each plan file must include:
         }
 
         const localDbConfig = vscode.workspace.getConfiguration('switchboard');
-        const currentCustomPath = localDbConfig.get<string>('kanban.dbPath', '');
+        const currentCustomPath = localDbConfig.get<string>('storage.pathOverride', '') || localDbConfig.get<string>('kanban.dbPath', '');
         if (!currentCustomPath || !currentCustomPath.trim()) {
             this._showTemporaryNotification('Already using local database.');
             return;
@@ -14485,6 +14615,7 @@ Each plan file must include:
             this._showTemporaryNotification('✅ Migrated plans back to local database.');
         }
 
+        await localDbConfig.update('storage.pathOverride', undefined, vscode.ConfigurationTarget.Workspace);
         await localDbConfig.update('kanban.dbPath', undefined, vscode.ConfigurationTarget.Workspace);
         await KanbanDatabase.invalidateWorkspace(wsRoot);
         this._postSharedWebviewMessage({ type: 'dbPathUpdated', path: '.switchboard/kanban.db' });
@@ -14521,7 +14652,7 @@ Each plan file must include:
         }
 
         const customConfig = vscode.workspace.getConfiguration('switchboard');
-        const oldDbPath = customConfig.get<string>('kanban.dbPath', '');
+        const oldDbPath = customConfig.get<string>('storage.pathOverride', '') || customConfig.get<string>('kanban.dbPath', '');
         const oldResolvedPath = this._resolveDbPathSetting(oldDbPath, wsRoot);
         const newResolvedPath = this._resolveDbPathSetting(customPath, wsRoot);
 
@@ -14539,7 +14670,8 @@ Each plan file must include:
             this._showTemporaryNotification('✅ Migrated plans to custom database location.');
         }
 
-        await customConfig.update('kanban.dbPath', customPath, vscode.ConfigurationTarget.Workspace);
+        await customConfig.update('storage.pathOverride', customPath, vscode.ConfigurationTarget.Workspace);
+        await customConfig.update('kanban.dbPath', undefined, vscode.ConfigurationTarget.Workspace);
         await KanbanDatabase.invalidateWorkspace(wsRoot);
         this._postSharedWebviewMessage({ type: 'dbPathUpdated', path: customPath, workspaceRoot: wsRoot });
         this._showTemporaryNotification('✅ Database location set to custom path.');
@@ -16144,7 +16276,7 @@ Each plan file must include:
                     }
                     case 'editDbPath': {
                         const dbConfig = this._seams().pathConfig;
-                        const currentDbPath = dbConfig.getConfigStringWithDefault('kanban.dbPath', '');
+                        const currentDbPath = dbConfig.getConfigString('storage.pathOverride') || dbConfig.getConfigStringWithDefault('kanban.dbPath', '');
                         const dbResult = await this._seams().ui.showInputBox({
                             prompt: 'Enter path for kanban database (supports ~ for home dir)',
                             value: currentDbPath || '',
@@ -16190,7 +16322,8 @@ Each plan file must include:
 
                                 await KanbanDatabase.invalidateWorkspace(wsRoot);
                             }
-                            await dbConfig.updateConfigWorkspace('kanban.dbPath', trimmedPath || undefined);
+                            await dbConfig.updateConfigWorkspace('storage.pathOverride', trimmedPath || undefined);
+                            await dbConfig.updateConfigWorkspace('kanban.dbPath', undefined);
                             this.postMessage({ type: 'dbPathUpdated', path: trimmedPath || '.switchboard/kanban.db' });
                             void this._refreshSessionStatus();
                             this._showTemporaryNotification('✅ Database path updated successfully.');
@@ -21550,7 +21683,7 @@ Each plan file must include:
                 : await db.getBoard(workspaceId);
             const completedRows = repoScope
                 ? await db.getCompletedPlansFilteredByProject(workspaceId, null, repoScope)
-                : await db.getCompletedPlans(workspaceId);
+                : await db.getCompletedPlansInHotWindow(workspaceId);
             // Log column distribution for debugging
             const colDist: Record<string, number> = {};
             for (const row of activeRows) {

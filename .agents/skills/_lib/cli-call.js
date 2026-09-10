@@ -88,7 +88,14 @@ function resolveCli(workspaceRoot) {
  * @param {object|string|null} [body] Optional request body
  * @param {string} [workspaceRoot] Optional workspace root
  * @param {{ timeoutMs?: number }} [options]
- * @returns {Promise<{ reachable: boolean, success: boolean, status?: number, result?: any, error?: string }>}
+ * @returns {Promise<{ reachable: boolean, success: boolean, storeUnavailable: boolean, tier?: string, status?: number, result?: any, error?: string }>}
+ *
+ * `reachable` and `storeUnavailable` are DIFFERENT facts and a caller needs both.
+ * `reachable: false` means nothing was asked — no CLI, or no host answering.
+ * `storeUnavailable: true` means the host answered and told us its board store did
+ * not: a `503` carrying `code: "STORE_UNAVAILABLE"`. Neither is an empty result, and
+ * a script that folds either into "no rows" reports a board it never read. `tier`
+ * names which store failed (`board` or `archive`) when the host said.
  */
 function cliApiCall(method, apiPath, body, workspaceRoot, options) {
   return new Promise((resolve) => {
@@ -121,9 +128,20 @@ function cliApiCall(method, apiPath, body, workspaceRoot, options) {
         const finalSuccess = !!parsed.success && innerSuccess !== false;
         const finalError = parsed.error || (innerResult && typeof innerResult === "object" && innerResult.error) || (!finalSuccess ? (typeof innerResult === "string" ? innerResult : "Request failed") : undefined);
 
+        // The host answered and said its board store did not. Surfaced as its own
+        // flag rather than folded into `success: false`, because "the request
+        // failed" is what a caller retries and "the store is down" is what a caller
+        // reports — and the failure a caller must never make is reading either as
+        // an empty result. Read from the error body, which is where
+        // LocalApiServer's read endpoints put it.
+        const codeCarrier = (innerResult && typeof innerResult === "object") ? innerResult : parsed;
+        const storeUnavailable = codeCarrier.code === "STORE_UNAVAILABLE";
+
         resolve({
           reachable,
           success: finalSuccess,
+          storeUnavailable,
+          ...(typeof codeCarrier.tier === "string" ? { tier: codeCarrier.tier } : {}),
           status: parsed.status,
           result: innerResult !== undefined ? innerResult : parsed,
           error: finalError
@@ -141,7 +159,7 @@ function cliApiCall(method, apiPath, body, workspaceRoot, options) {
             `[cli-call] Switchboard CLI not found via ${source}. Set SWITCHBOARD_CLI_PATH ` +
             `to the extension's dist/standalone/cli.js, or install the CLI on PATH.`
           );
-          resolve({ reachable: false, success: false, error: `Switchboard CLI not found (tried ${source})` });
+          resolve({ reachable: false, success: false, storeUnavailable: false, error: `Switchboard CLI not found (tried ${source})` });
           return;
         }
         const text = output || err.message;
@@ -151,6 +169,7 @@ function cliApiCall(method, apiPath, body, workspaceRoot, options) {
         resolve({
           reachable: !offline,
           success: false,
+          storeUnavailable: false,
           error: offline ? text : `${text} [cli: ${source}]`
         });
         return;
@@ -159,6 +178,7 @@ function cliApiCall(method, apiPath, body, workspaceRoot, options) {
       resolve({
         reachable: true,
         success: true,
+        storeUnavailable: false,
         result: output
       });
     });

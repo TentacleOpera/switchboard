@@ -382,7 +382,7 @@ export function validateTmuxSessionName(name: string): void {
  * the role, so `$G-<windowName>` would be wrong. The group's actual member
  * session names are the source of truth.
  */
-export async function buildTmuxGrid(team: string, viewSessions: string[], socket?: TmuxSocket): Promise<string> {
+export async function buildTmuxGrid(team: string, viewSessions?: string[], socket?: TmuxSocket): Promise<string> {
     validateTmuxSessionName(team);
     // Idempotency guard: kill an existing `grid` window before rebuilding.
     // `tmux has-session -t <team>:grid` would also work, but list-windows is

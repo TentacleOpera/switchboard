@@ -521,61 +521,41 @@
           "description": "Days to retain activity_log rows before pruning. Default 30.",
           "scope": "application"
         },
-        "switchboard.kanban.dbPath": {
+        "switchboard.storage.pathOverride": {
           "type": "string",
           "default": "",
-          "description": "Custom file path for the Kanban database (e.g., ~/Google Drive/Switchboard/kanban.db). If empty, uses the default .switchboard/kanban.db in the workspace root. Use this to store the DB in a cloud-synced folder for multi-machine handover.",
+          "description": "Advanced override: custom file path for the board database. Leave empty to use default derived placement (~/.switchboard/boards/<workspace-id>.db).",
           "scope": "resource"
         },
-        "switchboard.kanban.controlPlaneRoot": {
-          "type": "string",
-          "default": "",
-          "description": "Explicit Control Plane folder override. Must point to a folder containing .switchboard/kanban.db. Leave empty to use auto-detect.",
+        "switchboard.tickets.storeBodyInBoardStore": {
+          "type": "boolean",
+          "default": true,
+          "description": "Store the ticket description in the board database when a Linear/ClickUp ticket is imported as a plan, so the ticket's text survives a fresh clone and reaches teammates through a shared Board store. Turn OFF if ticket bodies must not leave the machine that imported them — the plan keeps its link, the title, state, assignee and labels, and the card shows the body as excluded by policy rather than as absent.",
           "scope": "resource"
         },
-        "switchboard.workspaceDatabaseMappings": {
-          "type": "object",
-          "default": {
-            "enabled": false,
-            "mappings": []
-          },
-          "description": "(DEPRECATED - Mappings are now stored in the database) Workspace-to-database mapping configuration. When enabled, redirects configured workspace folders to shared kanban.db paths.",
-          "properties": {
-            "enabled": {
-              "type": "boolean",
-              "default": false
-            },
-            "mappings": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "required": [
-                  "id",
-                  "name",
-                  "dbPath",
-                  "workspaceFolders"
-                ],
-                "properties": {
-                  "id": {
-                    "type": "string"
-                  },
-                  "name": {
-                    "type": "string"
-                  },
-                  "dbPath": {
-                    "type": "string"
-                  },
-                  "workspaceFolders": {
-                    "type": "array",
-                    "items": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "scope": "window"
+        "switchboard.tickets.storeCommentsInBoardStore": {
+          "type": "boolean",
+          "default": true,
+          "description": "Store the ticket's comment thread in the board database on import. Comments are the fastest-growing ticket field; turn OFF to keep the board store small or to keep commenter identities off a shared store.",
+          "scope": "resource"
+        },
+        "switchboard.tickets.maxBodyChars": {
+          "type": "number",
+          "default": 64000,
+          "description": "Hard cap on stored ticket-body characters. A longer body is stored truncated with a visible marker, so a replica sync cannot be made expensive by one oversized ticket.",
+          "scope": "resource"
+        },
+        "switchboard.tickets.maxComments": {
+          "type": "number",
+          "default": 100,
+          "description": "Hard cap on the number of ticket comments stored per ticket.",
+          "scope": "resource"
+        },
+        "switchboard.tickets.maxCommentChars": {
+          "type": "number",
+          "default": 8000,
+          "description": "Hard cap on stored characters per ticket comment.",
+          "scope": "resource"
         },
         "switchboard.workspace.ignoreStrategy": {
           "type": "string",
@@ -602,12 +582,6 @@
           },
           "default": [],
           "description": "Stored ignore rules used by the localExclude preset and the editable custom preset. Each entry is appended as a separate line.",
-          "scope": "resource"
-        },
-        "switchboard.archive.dbPath": {
-          "type": "string",
-          "default": "",
-          "description": "Path to DuckDB archive database for historical plan research (e.g., ~/GoogleDrive/SwitchboardArchives/{workspace}.duckdb). Leave empty to disable archiving.",
           "scope": "resource"
         },
         "switchboard.archive.autoArchiveCompleted": {
@@ -681,22 +655,6 @@
           "minimum": 3600000,
           "maximum": 604800000,
           "description": "How long (ms) a dispatched card may be out with no completion posted before the dispatch-timeout sweep ends the attempt in a `timed out` state and releases the seat. Default 4 hours — well past the 30-min dispatch-stall nudge (dispatchStallMs), so a human has a long window to act between the nudge and the abandonment. Invariant: dispatchStallMs < dispatchTimeoutMs (the nudge fires before the timeout). The timeout does NOT write completed_at (an abandonment is not a completion) and does NOT retry — a re-dispatch is a human decision. The sole abandonment path that nulls dispatched_at for a live-but-silent seat now that the activity-light sweep (timeoutMs) no longer does.",
-          "scope": "resource"
-        },
-        "switchboard.boardStateExport": {
-          "type": "string",
-          "enum": [
-            "none",
-            "read-only-snapshot"
-          ],
-          "default": "none",
-          "description": "Where (if anywhere) the kanban board state gets mirrored for remote/web-agent visibility. 'none' = no git footprint; 'read-only-snapshot' = publish a one-directional, read-only snapshot (board.json + board.md) to the orphan branch 'switchboard/board'. Notion/Linear are governed by their existing provider config, not this setting.",
-          "scope": "resource"
-        },
-        "switchboard.boardStateExport.remoteUrl": {
-          "type": "string",
-          "default": "",
-          "description": "Reserved. Git remote URL for the board-state export destination (currently unused — the read-only snapshot publishes to the repo's own orphan branch 'switchboard/board').",
           "scope": "resource"
         },
         "switchboard.planScanner.enabled": {
@@ -976,6 +934,8 @@
     "test:contract:db-control-plane-override": "node --expose-gc --require ./src/test/bootstrap/sandboxStateHome.js src/test/db-control-plane-override-contract.test.js",
     "test:contract:db-backup-hygiene": "node --expose-gc --require ./src/test/bootstrap/sandboxStateHome.js src/test/db-backup-hygiene-contract.test.js",
     "test:contract:storage-scripts-parity": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/storage-scripts-parity-contract.test.js",
+    "test:contract:plan-tickets": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/plan-tickets-board-state-contract.test.js",
+    "test:contract:board-read-endpoints": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/board-read-endpoints-contract.test.js",
     "test:contract:schema-workspace-id": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/schema-workspace-id-invariant.test.js",
     "test:contract:feature-status-clobber": "mocha --ui tdd --require ./src/test/bootstrap/sandboxStateHome.js out/services/__tests__/KanbanDatabase.epicStatus.test.js",
     "test:contract:panel-scrollbars": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/browser-panel-scrollbar-contract.test.js",

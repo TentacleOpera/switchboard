@@ -23,8 +23,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { KanbanDatabase, KanbanPlanRecord } from './KanbanDatabase';
-import type { RemoteProvider, RemoteProviderCapabilities } from './remote/RemoteProvider';
-import type { RemoteStateDelta } from './RemoteControlService';
+import type { RemoteProvider, RemoteProviderCapabilities, RemoteStateDelta } from './remote/RemoteProvider';
 
 export const STORE_QUEUE_TABLE = 'plan_inbox';
 
@@ -114,7 +113,7 @@ export class StoreRemoteProvider implements RemoteProvider {
             const rows = this._db.querySql(
                 `SELECT id, workspace_id, title, body, provenance, created_at FROM ${STORE_QUEUE_TABLE} WHERE status = 'pending' AND created_at > ? ORDER BY created_at ASC LIMIT 100`,
                 [sinceCursor]
-            ) as PlanInboxRow[];
+            ) as unknown as PlanInboxRow[];
 
             if (!rows || rows.length === 0) {
                 return { deltas: [], nextCursor: sinceCursor };
@@ -165,7 +164,7 @@ export class StoreRemoteProvider implements RemoteProvider {
             const rows = this._db.querySql(
                 `SELECT id, workspace_id, title, body, provenance FROM ${STORE_QUEUE_TABLE} WHERE id = ? AND status = 'pending'`,
                 [remoteId]
-            ) as PlanInboxRow[];
+            ) as unknown as PlanInboxRow[];
 
             if (!rows || rows.length === 0) { return null; }
             const row = rows[0];
@@ -222,7 +221,7 @@ export class StoreRemoteProvider implements RemoteProvider {
             const rows = this._db.querySql(
                 `SELECT title, body FROM ${STORE_QUEUE_TABLE} WHERE id = ?`,
                 [remoteId]
-            ) as PlanInboxRow[];
+            ) as unknown as PlanInboxRow[];
 
             if (!rows || rows.length === 0) { return; }
             const row = rows[0];

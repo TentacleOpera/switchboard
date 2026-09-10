@@ -264,7 +264,7 @@ export async function mergeDatabase(
         const candidateTables = [
             'plans', 'projects', 'worktrees', 'activity_log', 'job_runs',
             'job_instructions', 'board_move_requests', 'plan_events',
-            'plan_dependencies', 'missions', 'mission_members', 'mission_milestones',
+            'plan_dependencies', 'plan_tickets', 'missions', 'mission_members', 'mission_milestones',
             'project_config', 'kanban_meta', 'stitch_projects', 'stitch_screens',
             'imported_docs', 'import_sync_meta', 'control_plane', 'config'
         ];
@@ -292,6 +292,9 @@ export async function mergeDatabase(
         const srcStitchScr = sourceDriver.all<any>('SELECT * FROM stitch_screens');
         const srcDocs = sourceDriver.all<any>('SELECT * FROM imported_docs');
         const srcSyncMeta = sourceDriver.all<any>('SELECT * FROM import_sync_meta');
+        // plan_tickets may be absent on a source DB that predates V75.
+        let srcPlanTickets: any[] = [];
+        try { srcPlanTickets = sourceDriver.all<any>('SELECT * FROM plan_tickets'); } catch { /* pre-V75 source */ }
 
         const rowsMerged: Record<string, number> = {};
 
@@ -384,8 +387,8 @@ export async function mergeDatabase(
             for (const ev of srcEvents) {
                 const newId = nextEventId++;
                 targetDriver.run(
-                    'INSERT OR REPLACE INTO plan_events (event_id, plan_id, event_type, workflow, action, timestamp, device_id, vector_clock, payload, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                    [newId, ev.plan_id, ev.event_type, ev.workflow, ev.action, ev.timestamp, ev.device_id || '', ev.vector_clock || '', ev.payload || '{}', targetWorkspaceId]
+                    'INSERT OR REPLACE INTO plan_events (event_id, plan_id, event_type, workflow, action, timestamp, device_id, payload, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    [newId, ev.plan_id, ev.event_type, ev.workflow, ev.action, ev.timestamp, ev.device_id || '', ev.payload || '{}', targetWorkspaceId]
                 );
             }
             rowsMerged['plan_events'] = srcEvents.length;
@@ -500,6 +503,20 @@ export async function mergeDatabase(
                     [targetWorkspaceId, sm.last_heal_scan_at, sm.orphaned_entries, sm.orphaned_files]
                 );
             }
+
+            // 14. plan_tickets — imported ticket metadata (shared board state).
+            // Column-generic on purpose: the typed core will gain columns, and an
+            // explicit column list here would quietly stop carrying the new ones.
+            for (const pt of srcPlanTickets) {
+                const cols = Object.keys(pt);
+                if (cols.length === 0) { continue; }
+                const values = cols.map(c => (c === 'workspace_id' ? targetWorkspaceId : pt[c]));
+                targetDriver.run(
+                    `INSERT OR REPLACE INTO plan_tickets (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`,
+                    values
+                );
+            }
+            rowsMerged['plan_tickets'] = srcPlanTickets.length;
 
             // Record this source in merged_source_databases idempotency ledger
             targetDriver.run(
@@ -728,7 +745,7 @@ export async function relocateBoardDatabase(
         const rowsRelocated: Record<string, number> = {};
         const countTables = ['plans', 'projects', 'worktrees', 'activity_log', 'job_runs',
             'job_instructions', 'board_move_requests', 'plan_events', 'plan_dependencies',
-            'missions', 'mission_members', 'mission_milestones', 'project_config',
+            'plan_tickets', 'missions', 'mission_members', 'mission_milestones', 'project_config',
             'kanban_meta', 'stitch_projects', 'stitch_screens', 'imported_docs',
             'import_sync_meta', 'control_plane', 'config'];
         for (const tbl of countTables) {
@@ -909,7 +926,7 @@ export async function splitConsolidatedDatabase(
 
         // Also check workspace_ids in other scoped tables
         const scopedTables = ['projects', 'worktrees', 'activity_log', 'job_runs',
-            'job_instructions', 'board_move_requests', 'plan_events',
+            'job_instructions', 'board_move_requests', 'plan_events', 'plan_tickets',
             'missions', 'mission_milestones', 'kanban_meta', 'stitch_projects',
             'stitch_screens', 'imported_docs', 'import_sync_meta'];
         for (const tbl of scopedTables) {
@@ -962,6 +979,10 @@ export async function splitConsolidatedDatabase(
                 const copyTables = [
                     'plans', 'projects', 'worktrees', 'activity_log', 'job_runs',
                     'job_instructions', 'board_move_requests', 'plan_events',
+                    // plan_tickets is workspace_id-scoped shared board state; a split
+                    // that skipped it would silently drop every imported ticket's
+                    // metadata while keeping its plan.
+                    'plan_tickets',
                     'missions', 'mission_milestones', 'kanban_meta',
                     'stitch_projects', 'stitch_screens', 'imported_docs',
                     'import_sync_meta',

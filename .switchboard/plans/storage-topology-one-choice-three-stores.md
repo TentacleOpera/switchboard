@@ -138,3 +138,7 @@ Per install: derive the three placements, import anything found at a retired mec
 - Should Archive be per-workspace or global, once Board is global? Per-workspace makes "hand this project over" cleaner; global makes cross-project history queryable.
 - Is there any read path that genuinely needs Archive synchronously, or is on-demand sufficient everywhere?
 - What is the support posture for the path override — supported configuration, or best-effort with reduced guarantees?
+
+## Implementation Summary
+
+Implemented the three-store storage topology separating machine-local disposable Runtime state, authoritative Board state, and on-demand cold Archive state. Resolved storage topology placement via `src/services/storageTopology.ts` across both composition roots (`src/extension.ts` and `src/standalone/bootstrap.ts`), binding the operator choice `switchboard.storage.pathOverride` to the authoritative board placement while maintaining legacy `kanban.dbPath` migration across all call sites (`TaskViewerProvider.ts`, `SetupPanelProvider.ts`, `dbMerge.ts`). Enforced the board activity window across `TaskViewerProvider.ts` and `KanbanProvider.ts` using `getCompletedPlansInHotWindow`, ensuring completed plans beyond the hot window are excluded from default board queries. Fully demoted DuckDB off board read paths with derived SQLite archive paths and opt-in analytics exports, validated by `src/test/storage-topology-contract.test.js`.

@@ -61,7 +61,6 @@ CREATE TABLE IF NOT EXISTS plan_events (
     action VARCHAR,
     timestamp TIMESTAMP NOT NULL,
     device_id VARCHAR,
-    vector_clock VARCHAR,
     payload TEXT,
     workspace_id VARCHAR,
     archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP

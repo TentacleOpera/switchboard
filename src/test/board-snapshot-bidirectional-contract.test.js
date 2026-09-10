@@ -23,6 +23,14 @@ const assert = require('assert');
 const SRC = path.join(__dirname, '..', '..', 'src', 'services', 'BoardSnapshotPublisher.ts');
 const source = fs.readFileSync(SRC, 'utf8');
 
+// `BoardCardEntry` is an alias of `SharedBoardCard`, which the tier split moved into
+// storageTiers.ts as the single source of truth for what a shared card is. The
+// field-leakage assertions below must follow it there — reading only
+// BoardSnapshotPublisher.ts would pass vacuously against the bare alias while the
+// actual shape grew local-tier fields elsewhere.
+const TIERS_SRC = path.join(__dirname, '..', '..', 'src', 'services', 'storageTiers.ts');
+const tiersSource = fs.readFileSync(TIERS_SRC, 'utf8');
+
 let failures = 0;
 function check(name, fn) {
     try {
@@ -95,9 +103,14 @@ function run() {
     // ── 8. No local-tier fields in BoardCardEntry ────────────────────────
 
     check('BoardCardEntry contains only shared-tier fields', () => {
-        // Extract the BoardCardEntry interface
-        const match = source.match(/interface BoardCardEntry \{([\s\S]*?)\}/);
-        assert.ok(match, 'BoardCardEntry interface must exist');
+        // BoardCardEntry is `type BoardCardEntry = SharedBoardCard`. Assert the alias
+        // still points at the shared-tier definition, then read the fields from there.
+        assert.ok(
+            /type BoardCardEntry\s*=\s*SharedBoardCard\s*;/.test(source),
+            'BoardCardEntry must alias SharedBoardCard — the shared-tier definition is the one under test'
+        );
+        const match = tiersSource.match(/export interface SharedBoardCard \{([\s\S]*?)\n\}/);
+        assert.ok(match, 'SharedBoardCard interface must exist in storageTiers.ts');
         const fields = match[1];
         // Must contain shared-tier fields
         assert.ok(/plan_id/.test(fields), 'must have plan_id');
@@ -118,6 +131,30 @@ function run() {
         assert.ok(!/token/.test(fields), 'must NOT have token');
         assert.ok(!/secret/.test(fields), 'must NOT have secret');
         assert.ok(!/api_key/.test(fields), 'must NOT have api_key');
+    });
+
+    // ── 8b. The ticket projection is bounded ─────────────────────────────
+    //
+    // A card imported from Linear/ClickUp carries a ticket projection
+    // (ticket-metadata-as-first-class-board-state.md). board.json is git-carried by
+    // every clone, so that projection must stay a card index: the ticket BODY, its
+    // comment thread and its attachment list belong in the Board store, not here.
+
+    check('the shared ticket projection carries no body, comments or attachments', () => {
+        const ticketsSrc = fs.readFileSync(
+            path.join(__dirname, '..', '..', 'src', 'services', 'planTickets.ts'), 'utf8'
+        );
+        const match = ticketsSrc.match(/export interface SharedTicketProjection \{([\s\S]*?)\n\}/);
+        assert.ok(match, 'SharedTicketProjection interface must exist');
+        const fields = match[1];
+        assert.ok(/external_id/.test(fields), 'must identify the ticket');
+        assert.ok(/metadata_source/.test(fields), 'must say whether it was fetched or backfilled');
+        for (const forbidden of ['body', 'comments', 'attachments', 'payload']) {
+            assert.ok(
+                !new RegExp(`\\b${forbidden}\\b`).test(fields),
+                `SharedTicketProjection must NOT carry ${forbidden} — board.json is not a ticket archive`
+            );
+        }
     });
 
     // ── 9. Non-force push in CAS mode ────────────────────────────────────

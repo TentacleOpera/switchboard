@@ -13,7 +13,8 @@ import { KanbanDatabase, type WorkspaceDatabaseMapping } from './services/Kanban
 import { BackupService } from './services/BackupService';
 import { RetentionService } from './services/RetentionService';
 import { TransferBundleService } from './services/TransferBundleService';
-import { resolveEffectiveWorkspaceRootFromMappings, getMappingsFromIndex } from './services/WorkspaceIdentityService';
+import { resolveEffectiveWorkspaceRootFromMappings, getMappingsFromIndex, resolveCanonicalWorkspaceIdSync } from './services/WorkspaceIdentityService';
+import { resolveStorageTopology } from './services/storageTopology';
 import { SetupPanelProvider } from './services/SetupPanelProvider';
 import { ConnectionsPanelProvider } from './services/ConnectionsPanelProvider';
 import { ReviewCommentRequest, ReviewCommentResult } from './services/reviewTypes';
@@ -687,6 +688,11 @@ export async function activate(context: vscode.ExtensionContext) {
     // to PLAN REVIEWED. Runs once at activation; idempotent (no-op once no cards remain).
     if (workspaceRoot) {
         try {
+            const canonicalId = resolveCanonicalWorkspaceIdSync(workspaceRoot).value;
+            const explicitOverride = vscode.workspace.getConfiguration('switchboard').get<string>('storage.pathOverride');
+            const topology = resolveStorageTopology(canonicalId, { explicitPathOverride: explicitOverride });
+            outputChannel?.appendLine(`[Switchboard] Storage topology resolved: board=${topology.board.path} (source=${topology.board.source}), runtime=${topology.runtime.path}, archive=${topology.archive.path}`);
+
             const db = (kanbanProvider as any)._getKanbanDb(workspaceRoot);
             await db.ensureReady();
             const workspaceId = await (kanbanProvider as any)._readWorkspaceId(workspaceRoot);
@@ -1809,10 +1815,10 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(reconcileKanbanDisposable);
 
-    // Invalidate DB cache when kanban.dbPath setting changes
+    // Invalidate DB cache when storage.pathOverride setting changes
     context.subscriptions.push(
         vscode.workspace.onDidChangeConfiguration(async e => {
-            if (e.affectsConfiguration('switchboard.kanban.dbPath')) {
+            if (e.affectsConfiguration('switchboard.storage.pathOverride')) {
                 const workspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
                 if (workspaceRoot) {
                     await KanbanDatabase.invalidateWorkspace(workspaceRoot);

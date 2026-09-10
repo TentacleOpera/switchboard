@@ -8191,6 +8191,15 @@ Return ONLY the drafted prompt with no additional commentary.`;
     // Builds the sync-status badge shown bottom-left on each card. Renders for all
     // states (synced / modified / local-only) so it's present on every card.
     function _ticketSyncBadge(syncStatus) {
+        // Board-record statuses (a ticket imported as a plan — plan_tickets is the
+        // board's own truth and survives a fresh clone). These answer a different
+        // question from the file-cache statuses below: whether the ticket moved
+        // upstream since the board read it, not whether the local file drifted.
+        if (syncStatus === 'board-orphaned') { return `<span class="ticket-sync-badge ticket-sync-orphaned" title="Imported as a plan; the ticket no longer exists upstream. The board kept its snapshot.">orphaned</span>`; }
+        if (syncStatus === 'board-stale') { return `<span class="ticket-sync-badge ticket-sync-stale" title="Imported as a plan; the ticket changed upstream since the board last read it.">stale</span>`; }
+        if (syncStatus === 'board-fresh') { return `<span class="ticket-sync-badge ticket-sync-imported" title="Imported as a plan; the board's snapshot is up to date with the ticket.">imported</span>`; }
+        if (syncStatus === 'board-unknown') { return `<span class="ticket-sync-badge ticket-sync-imported" title="Imported as a plan, but the board holds no source timestamp for it — the link is known, the ticket's current state is not.">imported?</span>`; }
+        // File-cache statuses (a ticket browsed but not imported as a plan).
         if (syncStatus === 'modified') { return `<span class="ticket-sync-badge ticket-sync-modified">modified</span>`; }
         if (syncStatus === 'synced') { return `<span class="ticket-sync-badge ticket-sync-synced">synced</span>`; }
         return `<span class="ticket-sync-badge ticket-sync-local">local</span>`;

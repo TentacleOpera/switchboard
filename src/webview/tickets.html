@@ -3103,6 +3103,20 @@
             color: var(--text-secondary);
             opacity: 0.5;
         }
+        /* Board-record badges (plan_tickets). Distinct from the file-cache badges
+           above on purpose: those say whether the LOCAL FILE drifted from the last
+           push; these say whether the TICKET changed upstream since the board last
+           read it. See TicketsPanelProvider._boardTicketBadge. */
+        .ticket-sync-imported {
+            color: var(--vscode-testing-iconPassed, #73c991);
+            opacity: 0.7;
+        }
+        .ticket-sync-stale {
+            color: var(--vscode-editorWarning-foreground, #cca700);
+        }
+        .ticket-sync-orphaned {
+            color: var(--vscode-editorError-foreground, #f14c4c);
+        }
 
         .ticket-subtask-count {
             display: inline-flex;

@@ -4,6 +4,8 @@ import * as cp from 'child_process';
 import * as crypto from 'crypto';
 import { promisify } from 'util';
 import type { KanbanDatabase, KanbanPlanRecord } from './KanbanDatabase';
+import { projectSharedCard, type SharedBoardCard } from './storageTiers';
+import { projectSharedTicket, type SharedTicketProjection } from './planTickets';
 
 const execFileAsync = promisify(cp.execFile);
 
@@ -18,17 +20,7 @@ interface BoardSnapshotPublisherDeps {
     log?: (msg: string) => void;
 }
 
-interface BoardCardEntry {
-    plan_id: string;
-    topic: string;
-    column: string;
-    feature: string | null;
-    project: string | null;
-    complexity: string;
-    planFile: string;
-    device_id?: string;
-    user_id?: string;
-}
+type BoardCardEntry = SharedBoardCard;
 
 interface BoardSnapshot {
     schema: number;
@@ -178,7 +170,13 @@ export class BoardSnapshotPublisher {
             }
 
             const plans = await this._deps.db.getBoard(workspaceId);
-            const { json, md, hash, html } = this._serialize(plans);
+            // Bounded ticket projections for imported cards. Read WITHOUT bodies —
+            // the snapshot is a card index every clone carries, not a ticket
+            // archive; the body lives in the Board store. An empty map (no tickets,
+            // or a store that predates plan_tickets) simply produces cards with no
+            // `tickets` key, which is what an un-imported board has always looked like.
+            const tickets = await this._collectTicketProjections(workspaceId);
+            const { json, md, hash, html } = this._serialize(plans, tickets);
             if (hash === this._lastPublishedHash) {
                 return 'skipped';
             }
@@ -210,7 +208,38 @@ export class BoardSnapshotPublisher {
         this._lastPublishedHash = null;
     }
 
-    private _serialize(plans: KanbanPlanRecord[]): { json: string; md: string; hash: string; html: string } {
+    /**
+     * Read this workspace's `plan_tickets` rows and project them to the bounded
+     * subset that may ride in `board.json`, grouped by plan id.
+     *
+     * Body, comments and attachments are excluded by construction — see
+     * `projectSharedTicket`. Never throws: a snapshot without ticket decoration is
+     * strictly better than a failed publish, and the absence is visible (cards
+     * simply carry no `tickets` key) rather than silent.
+     */
+    private async _collectTicketProjections(workspaceId: string): Promise<Map<string, SharedTicketProjection[]>> {
+        const byPlan = new Map<string, SharedTicketProjection[]>();
+        const db = this._deps.db as unknown as {
+            getPlanTicketsForWorkspace?: (wsId: string, includeBodies?: boolean) => Promise<any[]>;
+        };
+        if (typeof db.getPlanTicketsForWorkspace !== 'function') { return byPlan; }
+        try {
+            const rows = await db.getPlanTicketsForWorkspace(workspaceId, false);
+            for (const row of rows) {
+                const list = byPlan.get(row.planId) ?? [];
+                list.push(projectSharedTicket(row));
+                byPlan.set(row.planId, list);
+            }
+        } catch (e) {
+            this._log(`ticket projection unavailable: ${e instanceof Error ? e.message : String(e)}`);
+        }
+        return byPlan;
+    }
+
+    private _serialize(
+        plans: KanbanPlanRecord[],
+        tickets?: Map<string, SharedTicketProjection[]>
+    ): { json: string; md: string; hash: string; html: string } {
         const root = this._deps.getWorkspaceRoot();
 
         const features: Record<string, string> = {};
@@ -222,23 +251,17 @@ export class BoardSnapshotPublisher {
 
         const entries: BoardCardEntry[] = plans.map(p => {
             const relPlanFile = p.planFile ? path.relative(root, p.planFile).replace(/\\/g, '/') : p.planFile;
-            return {
-                plan_id: p.planId,
-                topic: p.topic,
-                column: p.kanbanColumn,
-                feature: p.featureId ?? null,
-                project: p.project ?? null,
-                complexity: p.complexity,
-                planFile: relPlanFile,
-                // Identity fields (schema 3, additive). Present only in bidirectional
-                // mode so read-only snapshots remain byte-identical to schema 2 for
-                // backward compatibility — an old-mode client reading a new-mode ref
-                // simply ignores the extra keys.
-                ...(this._isBidirectional() ? {
-                    device_id: this._deviceId,
-                    ...(this._userId ? { user_id: this._userId } : {}),
-                } : {}),
-            };
+            return projectSharedCard(
+                p,
+                relPlanFile,
+                this._isBidirectional()
+                    ? {
+                        device_id: this._deviceId,
+                        ...(this._userId ? { user_id: this._userId } : {}),
+                    }
+                    : undefined,
+                tickets?.get(p.planId)
+            );
         });
 
         const snapshot: BoardSnapshot = {

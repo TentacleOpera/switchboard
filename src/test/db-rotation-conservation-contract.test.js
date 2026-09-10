@@ -51,8 +51,8 @@ async function buildWorkspaceWithEvents(root, workspaceId, events) {
     const driver = db.getDriver();
     for (const ev of events) {
         driver.run(
-            'INSERT INTO plan_events (event_id, plan_id, event_type, workflow, action, timestamp, device_id, vector_clock, payload, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [ev.eventId, ev.planId, ev.eventType || 'state_change', ev.workflow || 'test', ev.action || 'test', ev.timestamp, '', '', '{}', workspaceId]
+            'INSERT INTO plan_events (event_id, plan_id, event_type, workflow, action, timestamp, device_id, payload, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [ev.eventId, ev.planId, ev.eventType || 'state_change', ev.workflow || 'test', ev.action || 'test', ev.timestamp, '', '{}', workspaceId]
         );
     }
     await KanbanDatabase.invalidateWorkspace(root);

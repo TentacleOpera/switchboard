@@ -161,25 +161,36 @@ proposal step. Just create the feature, verify it, and write the narrative.
 
 Check with `switchboard api GET /health`. If unreachable, the host is not running — fall back to the Create section (direct file write).
 
-#### 2. Plans must be in the kanban DB
+#### 2. Plans must be on the board
 
-`create-feature.js` needs `planId` values from the kanban DB `plans` table.
-If the plans were just written as files to `.switchboard/plans/`, the
-`GlobalPlanWatcherService` will import them within a few seconds.
+`create-feature.js` needs `planId` values from the board. If the plans were just
+written as files to `.switchboard/plans/`, the `GlobalPlanWatcherService` will
+import them within a few seconds.
 
-To check if plans are imported:
+To check if plans are imported, read the board through the API — never the database
+file. The file is not present in a per-feature worktree and its path differs per
+deployment mode:
 ```bash
-sqlite3 {{WORKSPACE_ROOT}}/.switchboard/kanban.db \
-  "SELECT plan_id, topic FROM plans WHERE plan_file LIKE '%{plan-filename}%'"
+switchboard api GET /kanban/board \
+  | jq '.data[] | select(.planFile | contains("{plan-filename}")) | {planId, topic}'
 ```
 
-If the query returns no rows, wait 3-5 seconds for the watcher and re-check.
-Do NOT proceed until all plan IDs are confirmed in the DB.
+**Three outcomes, and you must tell them apart:**
+- **Rows** — the plans are imported; collect their `planId`s and proceed.
+- **`200` with an empty result** — the watcher has not imported them yet. Wait 3-5
+  seconds and re-check.
+- **`503` with `code: "STORE_UNAVAILABLE"`** — the store did not answer. This is
+  **not** "the plans are missing". Do NOT wait-and-retry in a loop and do NOT
+  proceed: retry once, then report the store as unreachable (naming the `tier` from
+  the response) and stop. Creating a feature against a board you cannot read
+  produces a blank feature.
+
+Do NOT proceed until all plan IDs are confirmed present.
 
 #### 3. Collect plan IDs
 
-If the user gave plan filenames, resolve them to plan_ids via the SQL query
-above. If the user gave plan_ids directly, use those.
+If the user gave plan filenames, resolve them to planIds with the board read above.
+If the user gave planIds directly, use those.
 
 ### Execution
 
@@ -204,22 +215,28 @@ Expected output:
 
 If `ok: false`, read the `error` field. Common failures:
 - Extension not reachable → fall back to the Create section (the script itself returns ok:false with a clear message; the AGENT then switches sections).
-- Zero subtasks linked (silent blank feature) → `create-feature.js` returns `ok: true` even when none of the supplied plan IDs resolve to DB rows (the extension deliberately allows blank features). This is NOT an error. The Prerequisites §2 pre-flight SQL check is the ONLY gate that prevents this. If you skipped it, Step 2 verification will show zero subtasks — recover by deleting the blank feature: `node .agents/skills/kanban_operations/delete-feature.js "<featurePlanId>" "<workspaceRoot>"`, then re-run the pre-flight and retry.
+- Zero subtasks linked (silent blank feature) → `create-feature.js` returns `ok: true` even when none of the supplied plan IDs resolve to board rows (the extension deliberately allows blank features). This is NOT an error. The Prerequisites §2 pre-flight board read is the ONLY gate that prevents this. If you skipped it, Step 2 verification will show zero subtasks — recover by deleting the blank feature: `node .agents/skills/kanban_operations/delete-feature.js "<featurePlanId>" "<workspaceRoot>"`, then re-run the pre-flight and retry.
 
 #### Step 2: Verify
 
 ```bash
-sqlite3 {{WORKSPACE_ROOT}}/.switchboard/kanban.db \
-  "SELECT plan_id, is_feature, topic FROM plans WHERE plan_id='<featurePlanId>'"
+switchboard api GET "/kanban/plan?planId=<featurePlanId>" \
+  | jq '.data | {planId, topic, isFeature, source}'
 ```
 
-Confirm `is_feature=1`. Then verify subtasks are linked:
+Confirm `isFeature` is `1`. Then verify subtasks are linked:
 ```bash
-sqlite3 {{WORKSPACE_ROOT}}/.switchboard/kanban.db \
-  "SELECT plan_id, topic, feature_id FROM plans WHERE feature_id='<featurePlanId>'"
+switchboard api GET "/kanban/plans?featureId=<featurePlanId>" \
+  | jq '.data[] | {planId, topic, featureId}'
 ```
 
-All subtask plan IDs should appear with the feature's plan_id in `feature_id`.
+All subtask plan IDs should come back with the feature's planId in `featureId`.
+
+`GET /kanban/plan` spans the board window and the archive, so a `404` here means the
+feature really was not created — not that it aged out. `.data.source` says which store
+answered (`board` for anything just created). A `503` with
+`code: "STORE_UNAVAILABLE"` means the read failed, NOT that the feature is missing:
+report the store as unreachable rather than deleting and retrying.
 
 #### Step 3: Write narrative sections
 

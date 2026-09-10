@@ -1073,6 +1073,55 @@ type CodingRoundRow = {
     closedAt: string | null;
 };
 
+/**
+ * Machine-readable discriminator for the third read outcome.
+ *
+ * A caller must be able to branch on rows / no-such-record / store-unavailable as
+ * THREE outcomes. The first two are already distinguishable by HTTP status (`200`
+ * vs `404`); the third was not distinguishable at all, because every layer between
+ * the store and the response answered an unreachable store with an empty success.
+ * `503` plus this code is the third arm, and it is deliberately a code rather than
+ * only a status: `503` is also what a not-yet-ready extension returns, and a caller
+ * deciding whether to retry or to stop wants to know which.
+ */
+export const STORE_UNAVAILABLE_CODE = 'STORE_UNAVAILABLE';
+
+/**
+ * The board store could not be read — which is NOT the same answer as "the board
+ * is empty" or "no such card".
+ *
+ * This is a type, not a convention, precisely because the convention is the thing
+ * that keeps failing: a `try/catch` returning `[]` anywhere between the store and
+ * the response silently restores the ambiguity, passes lint and review, and looks
+ * like care. Throwing a distinct error that `_handleReadEndpoint` maps to `503` +
+ * `code` means a future `catch` has to actively discard a typed error to reintroduce
+ * the bug, and `board-read-endpoints-contract.test.js` fails when it does.
+ */
+export class StoreUnavailableError extends Error {
+    public readonly statusCode = 503;
+    public readonly code = STORE_UNAVAILABLE_CODE;
+    /** Which store did not answer — `'board'` or `'archive'`. */
+    public readonly tier: string;
+
+    constructor(tier: string, reason: string) {
+        super(`Board store unavailable (${tier}): ${reason}`);
+        this.name = 'StoreUnavailableError';
+        this.tier = tier;
+    }
+}
+
+/**
+ * `KanbanDatabase.lookupPlanRecord`'s three-outcome result, mirrored locally.
+ *
+ * Declared here rather than imported for the same reason as `CodingRoundRow`
+ * above: this module holds no import edge to `KanbanDatabase` and its db handle is
+ * `any`. Keep in step with `PlanLookupResult` in `KanbanDatabase.ts`.
+ */
+type PlanLookupResultRow =
+    | { outcome: 'found'; record: any; source: 'board' | 'archive' }
+    | { outcome: 'absent' }
+    | { outcome: 'unavailable'; tier: 'board' | 'archive'; reason: string };
+
 export class LocalApiServer {
     private _server: http.Server | null = null;
     /**
@@ -7987,8 +8036,14 @@ export class LocalApiServer {
 
         const db = await this._resolveFleetOrdersDb();
         if (!db) {
+            // `available: false` is the discriminator, NOT the empty `orders` array — a
+            // caller must read the flag, never the length. `reason` makes "which store
+            // answered?" recoverable after the fact rather than only detectable.
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: true, available: false, orders: [] }));
+            res.end(JSON.stringify({
+                success: true, available: false, orders: [],
+                reason: 'no standing-orders store is wired for this host'
+            }));
             return;
         }
 
@@ -8016,9 +8071,15 @@ export class LocalApiServer {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: true, available: true, orders, definitions }));
         } catch (err) {
+            // NOT `orders: []` on its own — that would be "no standing orders are
+            // configured", a different and load-bearing answer. `available: false`
+            // plus the reason says the store did not answer.
             console.warn('[LocalApiServer] Failed to read standing orders:', err);
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: true, available: false, orders: [] }));
+            res.end(JSON.stringify({
+                success: true, available: false, orders: [],
+                reason: `standing-orders store read failed: ${err instanceof Error ? err.message : String(err)}`
+            }));
         }
     }
 
@@ -9328,14 +9389,69 @@ export class LocalApiServer {
             const status = (err && typeof err.statusCode === 'number') ? err.statusCode : 500;
             if (status >= 500) console.error('[LocalApiServer] read endpoint error:', err);
             res.writeHead(status, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: err instanceof Error ? err.message : 'read endpoint failed' }));
+            // `code` is carried through so an unreachable store is machine-detectable and
+            // not merely a 503 with prose. A caller MUST be able to tell "the store did
+            // not answer" from "no such card" and from a genuinely empty board — see
+            // StoreUnavailableError. `tier` names which store, so "which store answered?"
+            // is answerable after the fact.
+            res.end(JSON.stringify({
+                error: err instanceof Error ? err.message : 'read endpoint failed',
+                ...(err && typeof err.code === 'string' ? { code: err.code } : {}),
+                ...(err && typeof err.tier === 'string' ? { tier: err.tier } : {}),
+            }));
         }
     }
 
+    /**
+     * Resolve the board store for a READ, or refuse the read.
+     *
+     * Every record- or collection-returning read goes through here rather than
+     * `_resolveDbFromQuery` directly, because the two failures the old call site
+     * produced were both wrong:
+     *
+     *   * no store wired for the root → `throw new Error(...)` → `500`, which reads
+     *     as a handler bug rather than a store that is not there; and
+     *   * a store that is wired but unreadable → the handler proceeded, every
+     *     `KanbanDatabase` reader returned `[]`/`null` on `!ensureReady()`, and the
+     *     response was `200 []`. An orchestrator reading an empty board acts on it.
+     *
+     * Both now surface as `503` + `STORE_UNAVAILABLE`. The probe is a real read
+     * against `plans`, not just `ensureReady()`, because a handle that opened
+     * successfully and has since become unusable only faults on the first statement.
+     */
+    private async _requireReadableStore(req: http.IncomingMessage): Promise<any> {
+        const db = await this._resolveDbFromQuery(req);
+        if (!db) {
+            throw new StoreUnavailableError(
+                'board',
+                'no board store is wired for this workspace root (the getKanbanDatabase seam is absent or returned nothing)'
+            );
+        }
+        // Guarded so a host handing over a partial db double (tests, headless probes)
+        // degrades to today's behaviour rather than throwing on a missing method.
+        if (typeof db.probeStore === 'function') {
+            const probe = await db.probeStore();
+            if (!probe || probe.reachable !== true) {
+                throw new StoreUnavailableError(
+                    (probe && probe.tier) || 'board',
+                    (probe && probe.reason) || 'store did not answer'
+                );
+            }
+        }
+        return db;
+    }
+
+    /**
+     * GET /kanban/board — the board's active cards.
+     *
+     * A COLLECTION read, so it stays windowed: dormant cards are not spanned in.
+     * Record lookups (`GET /kanban/plan`) span Board and Archive; collections do
+     * not. Getting that pairing backwards either floods the human board with
+     * dormant cards or hides existing cards from agents.
+     */
     private async _handleGetBoard(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         await this._handleReadEndpoint(req, res, async () => {
-            const db = await this._resolveDbFromQuery(req);
-            if (!db) throw new Error('Kanban database not available');
+            const db = await this._requireReadableStore(req);
             const board = await this._resolveBoard(db);
             return board;
         });
@@ -9400,10 +9516,10 @@ export class LocalApiServer {
         res.end(resolved.body);
     }
 
+    /** GET /kanban/plans — a windowed COLLECTION read (see `_handleGetBoard`). */
     private async _handleGetPlans(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         await this._handleReadEndpoint(req, res, async () => {
-            const db = await this._resolveDbFromQuery(req);
-            if (!db) throw new Error('Kanban database not available');
+            const db = await this._requireReadableStore(req);
             const url = new URL(req.url || '', `http://localhost:${this._port}`);
             const column = url.searchParams.get('column') || undefined;
             const featureId = url.searchParams.get('featureId') || undefined;
@@ -9443,10 +9559,10 @@ export class LocalApiServer {
         });
     }
 
+    /** GET /kanban/features — a windowed COLLECTION read (see `_handleGetBoard`). */
     private async _handleGetFeatures(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         await this._handleReadEndpoint(req, res, async () => {
-            const db = await this._resolveDbFromQuery(req);
-            if (!db) throw new Error('Kanban database not available');
+            const db = await this._requireReadableStore(req);
             const board = await this._resolveBoard(db);
             const features = (board || []).filter((p: any) => p.isFeature === 1 || p.isFeature === true);
             return this._withRecommendedRole(features);
@@ -9455,8 +9571,7 @@ export class LocalApiServer {
 
     private async _handleGetWorktrees(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         await this._handleReadEndpoint(req, res, async () => {
-            const db = await this._resolveDbFromQuery(req);
-            if (!db) throw new Error('Kanban database not available');
+            const db = await this._requireReadableStore(req);
             const worktrees = await db.getWorktrees();
             return worktrees;
         });
@@ -10360,29 +10475,102 @@ export class LocalApiServer {
         return db.setPriorityStarred(record.planId, wsId, starred);
     }
 
-    /** GET /kanban/plan?planId= — a single plan record plus its full file content. */
+    /**
+     * GET /kanban/plan?planId= — one plan record, its file content, and WHICH STORE
+     * ANSWERED.
+     *
+     * A RECORD lookup, so it SPANS Board and Archive. The storage window is a fact
+     * about where a card is kept, never a fact about the card: an agent asking about
+     * a specific card must not be told it does not exist because it got old. A
+     * well-formed `404` for an archived card is confidently wrong, which is worse
+     * than the broken direct-file read this endpoint replaces.
+     *
+     * Three outcomes, and they are all distinguishable:
+     *   * `200` + `data.source` (`'board'` | `'archive'`) — found, and where;
+     *   * `404` — no such card in either store;
+     *   * `503` + `code: 'STORE_UNAVAILABLE'` + `tier` — a store did not answer, so
+     *     we decline to claim the card is missing.
+     *
+     * The span is an application-level merge over two connections, not a SQL
+     * `ATTACH` join: libSQL does not support `ATTACH DATABASE` in embedded-replica
+     * mode, so a remote Board could never satisfy an `ATTACH`-based path. See
+     * `KanbanDatabase.lookupPlanRecord`, which also owns the negative cache that
+     * keeps a genuinely absent id from paying for the Archive on every call.
+     *
+     * `source` is where the record was FOUND, before any promotion — a GET does not
+     * promote a dormant card, so the label cannot be invalidated by the read
+     * reporting it.
+     */
     private async _handleGetPlan(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         await this._handleReadEndpoint(req, res, async () => {
-            const db = await this._resolveDbFromQuery(req);
-            if (!db) throw new Error('Kanban database not available');
+            const db = await this._requireReadableStore(req);
             const url = new URL(req.url || '', `http://localhost:${this._port}`);
             const planId = url.searchParams.get('planId');
             if (!planId) { const e: any = new Error('Missing required query param: planId'); e.statusCode = 400; throw e; }
-            const record = await db.getPlanByPlanId(planId);
-            if (!record) { const e: any = new Error(`Plan not found: ${planId}`); e.statusCode = 404; throw e; }
+
+            const lookup = await this._lookupPlanAcrossStores(db, planId);
+            if (lookup.outcome === 'unavailable') {
+                throw new StoreUnavailableError(lookup.tier, lookup.reason);
+            }
+            if (lookup.outcome === 'absent') {
+                const e: any = new Error(`Plan not found: ${planId}`); e.statusCode = 404; throw e;
+            }
+            const record = lookup.record;
             let content = '';
             try {
                 const root = url.searchParams.get('workspaceRoot') || this._options.workspaceRoot;
                 const abs = path.isAbsolute(record.planFile) ? record.planFile : path.join(root, record.planFile);
                 content = await fs.readFile(abs, 'utf8');
             } catch { /* file may be missing — return the record without content */ }
-            return this._withRecommendedRole([{ ...record, content }])[0];
+            return { ...this._withRecommendedRole([{ ...record, content }])[0], source: lookup.source };
         });
+    }
+
+    /**
+     * Span Board and Archive for one card, or say the store did not answer.
+     *
+     * Delegates to `KanbanDatabase.lookupPlanRecord` when the host's db provides it.
+     * The fallback arm exists for a host handing over a partial db double, and it is
+     * deliberately NOT allowed to fabricate the `found`/`absent` distinction it
+     * cannot make: with no `lookupPlanRecord` and no `probeStore`, `getPlanByPlanId`
+     * returning `null` is ambiguous, so the fallback labels what it did find
+     * (`source: 'board'` — `getPlanByPlanId` restores cold rows into Board before
+     * returning them) and reports absence only when a probe confirmed the store was
+     * readable. Without that confirmation it reports `unavailable`, because an
+     * unverifiable absence must never be served as a fact.
+     */
+    private async _lookupPlanAcrossStores(db: any, planId: string): Promise<PlanLookupResultRow> {
+        if (typeof db.lookupPlanRecord === 'function') {
+            return await db.lookupPlanRecord(planId) as PlanLookupResultRow;
+        }
+        const record = await db.getPlanByPlanId?.(planId);
+        if (record) { return { outcome: 'found', record, source: 'board' }; }
+        if (typeof db.probeStore === 'function') {
+            // `_requireReadableStore` already probed, so a readable store here means the
+            // absence is a real one.
+            return { outcome: 'absent' };
+        }
+        return {
+            outcome: 'unavailable',
+            tier: 'board',
+            reason: 'this host\'s board store exposes neither lookupPlanRecord nor probeStore, '
+                + 'so "no such card" cannot be distinguished from "store did not answer"'
+        };
     }
 
     /** GET /kanban/columns — built-in column definitions + custom columns present
      *  on the board, each resolved to its UI label via resolveColumnLabel, plus the
-     *  display-only labels (e.g. AUTOCODE) that name no writable column. */
+     *  display-only labels (e.g. AUTOCODE) that name no writable column.
+     *
+     *  The ONE read endpoint that deliberately does NOT go through
+     *  `_requireReadableStore`. It answers a question about the column CATALOGUE, not
+     *  about any card, and it already reports which store answered: with no reachable
+     *  store it returns the built-in definitions tagged `enabledSource: 'unknown'` and
+     *  an empty `custom` list. That is honest — the caller can see the derivation was
+     *  not authoritative — and it is load-bearing: an agent translating a board label
+     *  to a storage id must still get the built-in mapping when the board is down.
+     *  A 503 here would take the label table away exactly when it is needed to report
+     *  the failure. This is the documented exception, not a missed call site. */
     private async _handleGetColumns(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         await this._handleReadEndpoint(req, res, async () => {
             const db = await this._resolveDbFromQuery(req);

@@ -719,7 +719,7 @@ Manual verification steps:
                 complexity: '5',
                 workspaceRoot
             }];
-            sandbox.stub(provider as any, '_filterUnknownComplexitySessions').callsFake((ids: string[]) => ({ filtered: ids, skippedCount: 0 }));
+            sandbox.stub(provider as any, '_filterUnknownComplexitySessions').callsFake(((ids: any) => ({ filtered: ids, skippedCount: 0 })) as any);
             const groups = new Map<'lead' | 'coder' | 'intern', string[]>([['lead', []], ['coder', [sessionId]], ['intern', []]]);
             sandbox.stub(provider as any, '_partitionByComplexityRoute').resolves(groups);
             sandbox.stub(provider as any, '_getVisibleAgents').resolves({ lead: true, coder: true, intern: true });

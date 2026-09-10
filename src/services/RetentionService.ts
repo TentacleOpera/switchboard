@@ -417,12 +417,12 @@ export class RetentionService {
         try {
             candidateEvents = driver.all<any>(
                 `WITH ranked AS (
-                    SELECT event_id, plan_id, event_type, workflow, action, timestamp, device_id, vector_clock, payload, workspace_id,
+                    SELECT event_id, plan_id, event_type, workflow, action, timestamp, device_id, payload, workspace_id,
                            ROW_NUMBER() OVER (PARTITION BY plan_id ORDER BY timestamp DESC) AS rn
                     FROM plan_events
                     WHERE timestamp < ?
                 )
-                SELECT event_id, plan_id, event_type, workflow, action, timestamp, device_id, vector_clock, payload, workspace_id
+                SELECT event_id, plan_id, event_type, workflow, action, timestamp, device_id, payload, workspace_id
                 FROM ranked WHERE rn > ?`,
                 [cutoffIso, minPerPlan]
             );

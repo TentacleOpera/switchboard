@@ -875,6 +875,19 @@ jobs:
       - name: Storage scripts parity contract (package.json vs workflow)
         run: npm run test:contract:storage-scripts-parity
 
+      # plan_tickets: imported ticket metadata as shared board state. Pins the five
+      # Goal Invariants from ticket-metadata-as-first-class-board-state.md — the table
+      # exists and is shared tier; an imported ticket's assignee/state/labels resolve
+      # from the Board store with .switchboard/tickets/ absent (clone survival); the
+      # shipped linear_issue_id / clickup_task_id columns are untouched; the sync badge
+      # reads the board record rather than the file cache; and the V75 backfill yields
+      # a row with the id and NULLs rather than an invented field. Also pins that both
+      # composition roots wire the seams these reads land on — the extension wired the
+      # tickets adapter factories and the ticket-import commands, standalone did not,
+      # so board-record reads there fell back to the gitignored cache with no error.
+      - name: Plan tickets board-state contract (clone survival, backfill honesty, host parity)
+        run: npm run test:contract:plan-tickets
+
       # V70 scopes ten previously-unscoped tables by workspace_id and rebuilds three
       # colliding constraints. Two things this pins that nothing else did: the rebuild
       # re-emits column defaults from PRAGMA table_info, which strips the parentheses

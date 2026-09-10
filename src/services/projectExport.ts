@@ -166,8 +166,13 @@ export async function exportProject(options: ProjectExportOptions): Promise<Proj
             const remappedWtId = plan.worktree_id ? (worktreeIdRemap.get(Number(plan.worktree_id)) ?? null) : null;
 
             exportDriver.run(
-                'INSERT INTO plans (plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies, repo_scope, workspace_id, created_at, updated_at, last_action, source_type, brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide, clickup_task_id, linear_issue_id, needs_path_fix, needs_relative_conversion, project, worktree_id, worktree_status, workspace_name, project_id, notion_page_id, is_feature, feature_id, dispatched_at, dispatched_terminal, last_liveness_at, blocked_at, queue_position, column_entered_at, completed_at, priority_starred, column_order, map_fingerprint, priority) ' +
-                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                // A bundle carries SHARED board state only. `dispatched_at`, `dispatched_terminal`,
+                // `last_liveness_at` and `blocked_at` are machine-local runtime state — the V74
+                // tier split moved them out of `plans` into `plan_runtime_state`, so naming them
+                // here fails outright against a current schema, and carrying them would import
+                // one machine's live dispatch onto another as though it were board state.
+                'INSERT INTO plans (plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies, repo_scope, workspace_id, created_at, updated_at, last_action, source_type, brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide, clickup_task_id, linear_issue_id, needs_path_fix, needs_relative_conversion, project, worktree_id, worktree_status, workspace_name, project_id, notion_page_id, is_feature, feature_id, queue_position, column_entered_at, completed_at, priority_starred, column_order, map_fingerprint, priority) ' +
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 [
                     plan.plan_id, plan.session_id, plan.topic, plan.plan_file, plan.kanban_column,
                     plan.status, plan.complexity, plan.tags, plan.dependencies, plan.repo_scope,
@@ -177,8 +182,7 @@ export async function exportProject(options: ProjectExportOptions): Promise<Proj
                     plan.linear_issue_id, plan.needs_path_fix ?? 0, plan.needs_relative_conversion ?? 0,
                     plan.project, remappedWtId, plan.worktree_status,
                     plan.workspace_name, remappedProjId,
-                    plan.notion_page_id, plan.is_feature, plan.feature_id, plan.dispatched_at,
-                    plan.dispatched_terminal, plan.last_liveness_at, plan.blocked_at,
+                    plan.notion_page_id, plan.is_feature, plan.feature_id,
                     plan.queue_position, plan.column_entered_at, plan.completed_at,
                     plan.priority_starred, plan.column_order, plan.map_fingerprint, plan.priority
                 ]
@@ -200,8 +204,8 @@ export async function exportProject(options: ProjectExportOptions): Promise<Proj
             const newId = nextEventId++;
             planEventIdRemap.set(Number(ev.event_id), newId);
             exportDriver.run(
-                'INSERT INTO plan_events (event_id, plan_id, event_type, workflow, action, timestamp, device_id, vector_clock, payload, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                [newId, ev.plan_id, ev.event_type, ev.workflow, ev.action, ev.timestamp, ev.device_id || '', ev.vector_clock || '', ev.payload || '{}', workspaceId]
+                'INSERT INTO plan_events (event_id, plan_id, event_type, workflow, action, timestamp, device_id, payload, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                [newId, ev.plan_id, ev.event_type, ev.workflow, ev.action, ev.timestamp, ev.device_id || '', ev.payload || '{}', workspaceId]
             );
         }
         rowsExported['plan_events'] = planEvents.length;
@@ -460,8 +464,12 @@ export async function importProject(options: ProjectImportOptions): Promise<Proj
             const remappedWtId = plan.worktree_id ? (wtIdRemap.get(Number(plan.worktree_id)) ?? (Number(plan.worktree_id) + wtIdOffset)) : null;
 
             targetDriver.run(
-                'INSERT OR REPLACE INTO plans (plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies, repo_scope, workspace_id, created_at, updated_at, last_action, source_type, brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide, clickup_task_id, linear_issue_id, needs_path_fix, needs_relative_conversion, project, worktree_id, worktree_status, workspace_name, project_id, notion_page_id, is_feature, feature_id, dispatched_at, dispatched_terminal, last_liveness_at, blocked_at, queue_position, column_entered_at, completed_at, priority_starred, column_order, map_fingerprint, priority) ' +
-                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                // Shared tier only — see the matching note in exportProject. An OLD bundle may
+                // still carry the four runtime columns; they are deliberately dropped on import
+                // rather than restored, because another machine's dispatch and liveness are not
+                // facts about this one.
+                'INSERT OR REPLACE INTO plans (plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies, repo_scope, workspace_id, created_at, updated_at, last_action, source_type, brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide, clickup_task_id, linear_issue_id, needs_path_fix, needs_relative_conversion, project, worktree_id, worktree_status, workspace_name, project_id, notion_page_id, is_feature, feature_id, queue_position, column_entered_at, completed_at, priority_starred, column_order, map_fingerprint, priority) ' +
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 [
                     plan.plan_id, plan.session_id, plan.topic, plan.plan_file, plan.kanban_column,
                     plan.status, plan.complexity, plan.tags, plan.dependencies, plan.repo_scope,
@@ -471,8 +479,7 @@ export async function importProject(options: ProjectImportOptions): Promise<Proj
                     plan.linear_issue_id, plan.needs_path_fix ?? 0, plan.needs_relative_conversion ?? 0,
                     plan.project, remappedWtId, plan.worktree_status,
                     plan.workspace_name, remappedProjId,
-                    plan.notion_page_id, plan.is_feature, plan.feature_id, plan.dispatched_at,
-                    plan.dispatched_terminal, plan.last_liveness_at, plan.blocked_at,
+                    plan.notion_page_id, plan.is_feature, plan.feature_id,
                     plan.queue_position, plan.column_entered_at, plan.completed_at,
                     plan.priority_starred, plan.column_order, plan.map_fingerprint, plan.priority
                 ]
@@ -484,8 +491,8 @@ export async function importProject(options: ProjectImportOptions): Promise<Proj
         for (const ev of eventsToImport) {
             const newId = Number(ev.event_id) + eventIdOffset;
             targetDriver.run(
-                'INSERT OR REPLACE INTO plan_events (event_id, plan_id, event_type, workflow, action, timestamp, device_id, vector_clock, payload, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                [newId, ev.plan_id, ev.event_type, ev.workflow, ev.action, ev.timestamp, ev.device_id || '', ev.vector_clock || '', ev.payload || '{}', effectiveTargetWorkspaceId]
+                'INSERT OR REPLACE INTO plan_events (event_id, plan_id, event_type, workflow, action, timestamp, device_id, payload, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                [newId, ev.plan_id, ev.event_type, ev.workflow, ev.action, ev.timestamp, ev.device_id || '', ev.payload || '{}', effectiveTargetWorkspaceId]
             );
         }
         rowsImported['plan_events'] = eventsToImport.length;

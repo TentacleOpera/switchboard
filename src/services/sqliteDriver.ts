@@ -32,7 +32,7 @@ export interface SqliteDriverOptions {
     timeout?: number;
 }
 
-class BetterSqliteStatementShim implements ISqliteStatement {
+export class BetterSqliteStatementShim implements ISqliteStatement {
     private _rawStmt: any | null;
     private _params: unknown[] | null = null;
     private _rows: Record<string, unknown>[] | null = null;

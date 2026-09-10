@@ -1350,7 +1350,7 @@ export class KanbanProvider implements vscode.Disposable {
                 : await db.getBoard(wsId);
             const completedRows = repoScope
                 ? await db.getCompletedPlansFilteredByProject(wsId, null, repoScope)
-                : await db.getCompletedPlans(wsId);
+                : await db.getCompletedPlansInHotWindow(wsId);
             const timeoutMs = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', DEFAULT_WORKING_STATE_TIMEOUT_MS);
             const cards = await this._buildBoardCards(db, wsId, root, activeRows, completedRows, timeoutMs);
             // Columns must reflect the user's CONFIGURED + filtered set (mirror the editor
@@ -13856,7 +13856,7 @@ ${FOCUS_DIRECTIVE}`;
                     : await db.getBoard(wsId);
                 const completedRows = repoScope
                     ? await db.getCompletedPlansFilteredByProject(wsId, null, repoScope)
-                    : await db.getCompletedPlans(wsId);
+                    : await db.getCompletedPlansInHotWindow(wsId);
                 const timeoutMs = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', DEFAULT_WORKING_STATE_TIMEOUT_MS);
                 // Canonical pipeline — same as getFullStateMessages (line 1094).
                 const cards = await this._buildBoardCards(db, wsId, workspaceRoot, activeRows, completedRows, timeoutMs);

@@ -3,7 +3,6 @@
 <!-- board-collapse-07 -->
 > **Sequenced within the storage programme (2026-09-04, Board Collapse 07).** The full seven-step order is stated once, in the *Storage layer overhaul* feature file. This feature is step 5 and 6 of that order and cannot start until steps 1 and 2 land. Do not dispatch a card from it before its prerequisites.
 
-
 **Complexity:** 9
 
 ## Goal
@@ -19,10 +18,10 @@ Decide the fundamental shape of Switchboard storage - which stores exist, where 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Split the schema into shared board state and machine-local runtime, so a remote store carries only what is actually shared](../plans/split-shared-board-state-from-machine-local-runtime.md) — **PLAN REVIEWED** — ID: dd72f3a2-1c31-4624-b2f4-9a39de4c99c4
-- [ ] [Storage topology: three stores, one operator choice, and the end of ten answers to "where does my data live"](../plans/storage-topology-one-choice-three-stores.md) — **PLAN REVIEWED** — ID: fbdddc53-51bd-4c8d-892f-c31b0eb0827c
-- [ ] [Imported ticket metadata is gitignored files and two bare id strings — make it first-class shared board state](../plans/ticket-metadata-as-first-class-board-state.md) — **PLAN REVIEWED** — ID: 7e6272a5-b2cb-4b13-9440-71174038931c
-- [ ] [The board read endpoints must survive the storage topology, or the SQL-to-endpoints migration lands on endpoints that lie](../plans/board-read-endpoints-must-survive-the-storage-topology.md) — **PLAN REVIEWED** — ID: c521a681-91b9-4c7e-8fb4-c59c691a329b
+- [ ] [Split the schema into shared board state and machine-local runtime, so a remote store carries only what is actually shared](../plans/split-shared-board-state-from-machine-local-runtime.md) — **LEAD CODED** — ID: dd72f3a2-1c31-4624-b2f4-9a39de4c99c4
+- [ ] [Storage topology: three stores, one operator choice, and the end of ten answers to "where does my data live"](../plans/storage-topology-one-choice-three-stores.md) — **LEAD CODED** — ID: fbdddc53-51bd-4c8d-892f-c31b0eb0827c
+- [ ] [Imported ticket metadata is gitignored files and two bare id strings — make it first-class shared board state](../plans/ticket-metadata-as-first-class-board-state.md) — **LEAD CODED** — ID: 7e6272a5-b2cb-4b13-9440-71174038931c
+- [ ] [The board read endpoints must survive the storage topology, or the SQL-to-endpoints migration lands on endpoints that lie](../plans/board-read-endpoints-must-survive-the-storage-topology.md) — **LEAD CODED** — ID: c521a681-91b9-4c7e-8fb4-c59c691a329b
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

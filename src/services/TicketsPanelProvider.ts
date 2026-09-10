@@ -24,6 +24,16 @@ import {
 import { classifyHttpError } from './errorMessages';
 import { stripImportedSubtasksBlock } from './ticketDisplayContent';
 import type { TaskViewerProvider } from './TaskViewerProvider';
+import type { PlanTicketRecord } from './KanbanDatabase';
+import {
+    describeTicketContentPolicy,
+    mapClickUpTaskToSnapshot,
+    mapLinearIssueToSnapshot,
+    resolveTicketContentPolicy,
+    ticketStaleness,
+    type PlanTicketSnapshot,
+    type ResolvedTicketContentPolicy,
+} from './planTickets';
 
 // Imported ticket filename shape: `<provider>_<id>_<slug>.md`. Shared by the display
 // watcher's change and delete paths so the two cannot drift apart on what counts as a
@@ -392,6 +402,231 @@ export class TicketsPanelProvider {
             }
         }
         return null;
+    }
+
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Board-record reads for IMPORTED tickets.
+    //
+    // Two truths exist and they will disagree the moment a refetch updates one:
+    //   • `plan_tickets` in the board store — the BOARD's truth. Shared tier, so it
+    //     survives a fresh clone, a worktree and `git clean -xdf`, and it reaches a
+    //     teammate through a shared Board store.
+    //   • `.switchboard/tickets/*.md` — the PANEL's browsing cache. Gitignored,
+    //     machine-local, and the only home ticket metadata had before this.
+    //
+    // Which one a badge reads is stated, not left to whichever call site got there
+    // first: a ticket that has been imported as a plan is answered by the board
+    // record and every emitted row carries `syncSource: 'board-record'`; a ticket
+    // that has not is answered by the file cache and carries
+    // `syncSource: 'file-cache'`. The two documented sync-badge bugs
+    // (feature_plan_20260810144300_tickets-sync-badge-reads-a-different-workspace-db-row-than-the-refetch-stamps,
+    // feature_plan_20260807161809_tickets-subtask-drilldown-sync-badge-always-local)
+    // are both a reader crossing that line without saying so.
+    // ──────────────────────────────────────────────────────────────────────
+
+    /**
+     * The KanbanDatabase behind the cache service, or null.
+     *
+     * Null is a real answer here — a tracker-only or misconfigured session has no
+     * board store — and every caller treats it as "no board record available" and
+     * falls back to the file cache *while saying so*, rather than reporting a
+     * board-record answer it never obtained.
+     */
+    private _kanbanDbFor(workspaceRoot: string): any | null {
+        try {
+            if (!this._cacheService && workspaceRoot) {
+                this._cacheService = this._adapterFactories.getCacheService(workspaceRoot);
+            }
+            return (this._cacheService as any)?._kanbanDb ?? null;
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * Index this workspace's `plan_tickets` rows for one provider, keyed by the
+     * provider's external id.
+     *
+     * A ticket legitimately maps to more than one plan (two machines importing the
+     * same ticket is a supported case), so where several rows share an external id
+     * the most recently fetched one answers and `planCount` records that there were
+     * others — the index never silently pretends there was exactly one.
+     */
+    private async _boardTicketIndex(
+        workspaceRoot: string,
+        provider: 'clickup' | 'linear'
+    ): Promise<Map<string, PlanTicketRecord & { planCount: number }>> {
+        const index = new Map<string, PlanTicketRecord & { planCount: number }>();
+        const db = this._kanbanDbFor(workspaceRoot);
+        if (!db || typeof db.getPlanTicketsForWorkspace !== 'function') { return index; }
+        try {
+            const workspaceId = await db.getWorkspaceId();
+            if (!workspaceId) { return index; }
+            const rows: PlanTicketRecord[] = await db.getPlanTicketsForWorkspace(workspaceId);
+            for (const row of rows) {
+                if (row.provider !== provider) { continue; }
+                const existing = index.get(row.externalId);
+                if (!existing) {
+                    index.set(row.externalId, { ...row, planCount: 1 });
+                    continue;
+                }
+                const keepNew = (row.fetchedAt ?? '') > (existing.fetchedAt ?? '');
+                index.set(row.externalId, {
+                    ...(keepNew ? row : existing),
+                    planCount: existing.planCount + 1,
+                });
+            }
+        } catch (e) {
+            console.warn('[TicketsPanelProvider] plan_tickets index unavailable:', e);
+        }
+        return index;
+    }
+
+    /**
+     * The badge an imported ticket gets, derived from the board record.
+     *
+     * Distinct values from the file-cache badge on purpose. The file-cache badge
+     * answers "has the local file drifted from the last push"; this answers "has
+     * the ticket changed upstream since the board last read it". Collapsing the two
+     * into one word would assert an equivalence that does not hold — and is exactly
+     * the confusion the documented bugs came from.
+     */
+    private _boardTicketBadge(record: PlanTicketRecord): {
+        syncStatus: 'board-orphaned' | 'board-stale' | 'board-fresh' | 'board-unknown';
+        syncSource: 'board-record';
+        staleness: 'fresh' | 'stale' | 'unknown';
+        metadataSource: string;
+    } {
+        const staleness = ticketStaleness(record.sourceUpdatedAt, record.fetchedAt);
+        const syncStatus = record.orphanedAt
+            ? 'board-orphaned' as const
+            : staleness === 'stale'
+                ? 'board-stale' as const
+                : staleness === 'fresh'
+                    ? 'board-fresh' as const
+                    // A backfilled row, or one whose provider never gave an
+                    // updated-at. Deliberately not reported as fresh: the board
+                    // knows the link, not the ticket's current state.
+                    : 'board-unknown' as const;
+        return { syncStatus, syncSource: 'board-record', staleness, metadataSource: record.metadataSource };
+    }
+
+    /**
+     * Overlay board-record truth onto a list of ticket rows headed for the sidebar.
+     *
+     * Rows with a `plan_tickets` record are answered by the board and tagged
+     * `syncSource: 'board-record'`, with the ticket fields the board holds
+     * (title, state, assignee, labels) taking precedence over the file cache's —
+     * a fresh clone has no files at all, and that is the whole point of the table.
+     * Rows without a record keep whatever the file cache said and are tagged
+     * `syncSource: 'file-cache'`, so a reader can always tell which answered.
+     */
+    private async _applyBoardTicketRecords(
+        workspaceRoot: string,
+        provider: 'clickup' | 'linear',
+        tickets: any[]
+    ): Promise<void> {
+        if (tickets.length === 0) { return; }
+        const index = await this._boardTicketIndex(workspaceRoot, provider);
+        for (const t of tickets) {
+            const record = index.get(String(t.id));
+            if (!record) {
+                t.syncSource = 'file-cache';
+                t.imported = false;
+                continue;
+            }
+            const badge = this._boardTicketBadge(record);
+            t.syncSource = badge.syncSource;
+            t.syncStatus = badge.syncStatus;
+            t.staleness = badge.staleness;
+            t.metadataSource = badge.metadataSource;
+            t.imported = true;
+            t.planId = record.planId;
+            t.planCount = record.planCount;
+            if (record.orphanedAt) {
+                t.orphanedAt = record.orphanedAt;
+                t.orphanReason = record.orphanReason;
+            }
+            // Board-held ticket fields win over the file cache. `null` means the
+            // board was never told, so it never overwrites a value the cache has.
+            if (record.title !== null) { t.title = record.title; }
+            if (record.stateName !== null) { t.status = record.stateName; }
+            if (record.assigneeName !== null) { t.assignees = [record.assigneeName]; }
+            if (record.labels !== null) { t.labels = record.labels; }
+            if (record.url !== null) { t.url = record.url; }
+            if (record.parentExternalId !== null) { t.parentId = record.parentExternalId; }
+            t.sourceUpdatedAt = record.sourceUpdatedAt;
+            t.fetchedAt = record.fetchedAt;
+        }
+    }
+
+    /**
+     * Refresh the board's snapshot for every plan linked to a ticket that was just
+     * fetched from its provider, and bump `fetched_at`.
+     *
+     * This is the "refresh on refetch" half of snapshot-on-import: the detail fetch
+     * the panel already performs is the freshest read available, so the board record
+     * is updated from it rather than left to drift until the next import. Never
+     * throws — a stale board record is a visibly stale card, and failing the user's
+     * detail view over it would be worse.
+     */
+    private async _refreshBoardTicketRecords(
+        workspaceRoot: string,
+        snapshot: PlanTicketSnapshot
+    ): Promise<void> {
+        const db = this._kanbanDbFor(workspaceRoot);
+        if (!db || typeof db.getPlansForTicket !== 'function') { return; }
+        try {
+            const workspaceId = await db.getWorkspaceId();
+            if (!workspaceId) { return; }
+            const existing: PlanTicketRecord[] = await db.getPlansForTicket(
+                workspaceId, snapshot.provider, snapshot.externalId
+            );
+            for (const row of existing) {
+                await db.upsertPlanTicket(row.planId, workspaceId, snapshot);
+            }
+        } catch (e) {
+            console.warn(`[TicketsPanelProvider] plan_tickets refresh failed for ${snapshot.provider}:${snapshot.externalId}:`, e);
+        }
+    }
+
+    /**
+     * Mark every plan's association with a ticket orphaned because the provider no
+     * longer has it.
+     *
+     * The snapshot is retained — somebody may have worked the plan from it, and the
+     * board record is then the only surviving account of what the work was for.
+     */
+    private async _orphanBoardTicketRecords(
+        workspaceRoot: string,
+        provider: 'clickup' | 'linear',
+        externalId: string
+    ): Promise<void> {
+        const db = this._kanbanDbFor(workspaceRoot);
+        if (!db || typeof db.getPlansForTicket !== 'function') { return; }
+        try {
+            const workspaceId = await db.getWorkspaceId();
+            if (!workspaceId) { return; }
+            const existing: PlanTicketRecord[] = await db.getPlansForTicket(workspaceId, provider, externalId);
+            for (const row of existing) {
+                await db.markPlanTicketOrphaned(row.planId, provider, externalId, 'deleted-upstream');
+            }
+        } catch (e) {
+            console.warn(`[TicketsPanelProvider] plan_tickets orphan-mark failed for ${provider}:${externalId}:`, e);
+        }
+    }
+
+    /** Resolve the ticket content policy for a refetch, logging its provenance. */
+    private _ticketContentPolicy(): ResolvedTicketContentPolicy {
+        let resolved: ResolvedTicketContentPolicy;
+        try {
+            resolved = resolveTicketContentPolicy(vscode.workspace.getConfiguration('switchboard') as any);
+        } catch {
+            resolved = resolveTicketContentPolicy(null);
+        }
+        console.log(`[TicketsPanelProvider] ticket content policy: ${describeTicketContentPolicy(resolved)}`);
+        return resolved;
     }
 
     private _ticketSyncStatusFromTimestamps(filePath: string, lastSyncedAt?: string): 'synced' | 'modified' | 'local-only' {
@@ -2392,6 +2627,11 @@ export class TicketsPanelProvider {
                     }
                 }
 
+                // Imported tickets are answered by the board record, not the file
+                // cache — that is what survives a fresh clone. Rows keep a
+                // `syncSource` saying which of the two truths answered them.
+                await this._applyBoardTicketRecords(workspaceRoot, provider, tickets);
+
                 const res = this._scoped({ type: 'localTicketFilesListed', provider, tickets, ...(scopeCoverage ? { scopeCoverage } : {}) }, workspaceRoot, scopeId || undefined);
                 this.postMessageToWebview(res);
                 return { success: true, ...res };
@@ -2412,19 +2652,34 @@ export class TicketsPanelProvider {
                 if (!this._cacheService) {
                     return { success: false, error: 'No cache service', ...this._scoped({ type: 'ticketSyncStatusesLoaded', provider, statuses: {} }, workspaceRoot, syncScopeId) };
                 }
-                const statuses: Record<string, 'synced' | 'modified' | 'local-only'> = {};
+                const statuses: Record<string, string> = {};
+                // Per-id record of WHICH truth answered. Emitted alongside the
+                // statuses so a drilldown badge can never be read as file-derived
+                // when it is board-derived, or the reverse — the ambiguity behind
+                // both documented sync-badge bugs.
+                const statusSources: Record<string, 'board-record' | 'file-cache'> = {};
                 try {
+                    const boardIndex = await this._boardTicketIndex(workspaceRoot, provider);
                     const dbTickets = await this._cacheService.getImportedTickets();
                     for (const id of ids) {
+                        // An imported ticket has a board record; it answers, and it
+                        // answers even when no local file exists at all (fresh clone).
+                        const boardRecord = boardIndex.get(String(id));
+                        if (boardRecord) {
+                            statuses[id] = this._boardTicketBadge(boardRecord).syncStatus;
+                            statusSources[id] = 'board-record';
+                            continue;
+                        }
                         const slugPrefix = `${provider}_${id}`;
                         const dbT = dbTickets.find((t: any) => t.slugPrefix === slugPrefix);
+                        statusSources[id] = 'file-cache';
                         if (!dbT || !fs.existsSync(dbT.filePath)) { statuses[id] = 'local-only'; continue; }
                         statuses[id] = this._ticketSyncStatusFromTimestamps(dbT.filePath, dbT.lastSyncedAt);
                     }
                 } catch (err) {
                     console.error('[TicketsPanelProvider] getTicketSyncStatuses error:', err);
                 }
-                const res = this._scoped({ type: 'ticketSyncStatusesLoaded', provider, statuses }, workspaceRoot, syncScopeId);
+                const res = this._scoped({ type: 'ticketSyncStatusesLoaded', provider, statuses, statusSources }, workspaceRoot, syncScopeId);
                 this.postMessageToWebview(res);
                 return { success: true, ...res };
             }
@@ -2515,6 +2770,20 @@ export class TicketsPanelProvider {
                         renderedDescriptionHtml = '';
                     }
 
+                    // Refetch: this is the freshest read of the issue available, so
+                    // every plan already linked to it gets its board snapshot
+                    // refreshed and `fetched_at` bumped. `source_updated_at` comes
+                    // from Linear, so staleness stays visible on the card afterwards.
+                    await this._refreshBoardTicketRecords(
+                        workspaceRoot,
+                        mapLinearIssueToSnapshot(
+                            { issue, comments, attachments },
+                            new Date().toISOString(),
+                            this._ticketContentPolicy().policy,
+                            'refetch'
+                        )
+                    );
+
                     const res = {
                         type: 'linearTaskDetailsLoaded',
                         issue,
@@ -2540,6 +2809,13 @@ export class TicketsPanelProvider {
                                 { workspaceRoot, provider: 'linear', id: issueId }
                             );
                         } catch { /* best-effort cleanup */ }
+                        // The local file goes; the board record STAYS, marked
+                        // orphaned. A plan may have been worked from this ticket,
+                        // and the snapshot is then the only surviving account of
+                        // what the work was for.
+                        if (workspaceRoot) {
+                            await this._orphanBoardTicketRecords(workspaceRoot, 'linear', issueId);
+                        }
                     }
                     const res = {
                         type: 'linearError',
@@ -2581,6 +2857,24 @@ export class TicketsPanelProvider {
                         renderedDescriptionHtml = '';
                     }
 
+                    // Refetch: refresh the board snapshot for every plan already
+                    // linked to this task and bump `fetched_at`. Attachments come
+                    // from the same fetch here, so they are carried as URL
+                    // references (never blobs).
+                    await this._refreshBoardTicketRecords(
+                        workspaceRoot,
+                        mapClickUpTaskToSnapshot(
+                            {
+                                task: details.task,
+                                comments: details.comments ?? null,
+                                attachments: details.attachments ?? null,
+                            },
+                            new Date().toISOString(),
+                            this._ticketContentPolicy().policy,
+                            'refetch'
+                        )
+                    );
+
                     const res = {
                         type: 'clickupTaskDetailsLoaded',
                         task: this._mapClickUpTaskToSidebar(details.task),
@@ -2609,6 +2903,9 @@ export class TicketsPanelProvider {
                                 { workspaceRoot, provider: 'clickup', id: msg.taskId }
                             );
                         } catch { /* best-effort cleanup */ }
+                        // File goes, board record stays — marked orphaned, snapshot
+                        // retained. See the Linear arm.
+                        await this._orphanBoardTicketRecords(workspaceRoot, 'clickup', String(msg.taskId || ''));
                     }
                     const res = {
                         type: 'clickupError',

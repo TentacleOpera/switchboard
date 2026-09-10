@@ -15,7 +15,9 @@ import {
     resolveParentsForTerminals,
     pruneNonExistentMappings,
     setHostWorkspaceRoots,
+    resolveCanonicalWorkspaceIdSync,
 } from '../services/WorkspaceIdentityService';
+import { resolveStorageTopology } from '../services/storageTopology';
 import { discoverAndMergeDatabases } from '../services/dbMerge';
 import { adoptPresetDbOnLaunch, isKnownPresetDbPath } from '../services/cloudSyncMigration';
 import { WorkspaceExcludeService } from '../services/WorkspaceExcludeService';
@@ -807,10 +809,13 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
 
     const secrets = createStandaloneHostSecrets(workspaceRoot);
 
-    // DB resolution goes through KanbanDatabase.forWorkspace, which after
-    // consolidation resolves every workspace to the one global store. The mapping
-    // redirect and openness gate this block used to describe are retired — there is
-    // no per-folder database left to adjudicate.
+    // DB resolution goes through KanbanDatabase.forWorkspace, which derives
+    // placement from resolveStorageTopology.
+    const wsId = resolveCanonicalWorkspaceIdSync(workspaceRoot).value;
+    const explicitOverride = configProvider.getConfigString('storage.pathOverride') || configProvider.getConfigString('kanban.dbPath');
+    const topology = resolveStorageTopology(wsId, { explicitPathOverride: explicitOverride });
+    console.log(`[bootstrap] Storage topology resolved: board=${topology.board.path} (source=${topology.board.source}), runtime=${topology.runtime.path}, archive=${topology.archive.path}`);
+
     const db = KanbanDatabase.forWorkspace(workspaceRoot);
     const dbPath = db.dbPath;
     const dbDir = path.dirname(dbPath);
@@ -1497,12 +1502,45 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     applyExtraPathToProcessEnv(hostSettingsResolution.extraPath.effectiveValue);
     setupProvider.setHostSettingsService(hostSettingsService, () => opts.hostSettingsContext ?? {});
 
-    // Tickets: extensionUri, context, stateStore. The ticket verb surface still lives in
-    // PlanningPanelProvider, so this currently serves the panel's own chrome verbs only.
+    // Cache services, memoized per workspace root — the SAME shape extension.ts
+    // builds (extension.ts `getCacheService`), including the KanbanDatabase handoff.
+    //
+    // §Composition-root diff (tickets/board records). Both halves of this were
+    // divergent and both were silent:
+    //   1. This host constructed TicketsPanelProvider with NO adapterFactories, so
+    //      every factory was the throwing default and `getCacheService` was
+    //      unreachable here while working in the extension.
+    //   2. This host built PlanningPanelCacheService WITHOUT its KanbanDatabase
+    //      argument, leaving `_kanbanDb` undefined — so even a wired factory would
+    //      have handed back a cache service with no board store behind it.
+    // Either one alone makes TicketsPanelProvider's plan_tickets reads (the board's
+    // own truth for imported tickets, which is what survives a fresh clone) fall
+    // back to the gitignored file cache with no error anywhere: "never wired" and
+    // "working" would be the same value. See CLAUDE.md, "Standalone and the
+    // extension MUST NOT diverge".
+    const _cacheServiceInstances = new Map<string, PlanningPanelCacheService>();
+    const getCacheService = (root: string): PlanningPanelCacheService => {
+        const resolved = path.resolve(root);
+        let service = _cacheServiceInstances.get(resolved);
+        if (!service) {
+            service = new PlanningPanelCacheService(resolved, KanbanDatabase.forWorkspace(resolved));
+            _cacheServiceInstances.set(resolved, service);
+        }
+        return service;
+    };
+
+    // Tickets: extensionUri, context, stateStore, apiServer, adapterFactories —
+    // the same five arguments extension.ts passes.
     const ticketsProvider = new TicketsPanelProvider(
         { fsPath: repoRoot } as any,
         headlessContext,
-        panelStateStore
+        panelStateStore,
+        undefined,
+        {
+            getLinearSyncService: (_root: string) => linearService,
+            getClickUpSyncService: (_root: string) => clickUpService,
+            getCacheService,
+        }
     );
     (ticketsProvider as any)._hostSeams = headlessSeams;
     (ticketsProvider as any)._broadcaster = headlessBroadcaster;
@@ -1631,14 +1669,14 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         getLocalFolderService: (root: string) => new LocalFolderService(root),
         getLinearDocsAdapter: (root: string) => new LinearDocsAdapter(root, linearService),
         getClickUpDocsAdapter: (root: string) => new ClickUpDocsAdapter(root, clickUpService),
-        getCacheService: (root: string) => new PlanningPanelCacheService(root),
+        getCacheService,
     });
     const planningAdapterFactories = {
         getNotionService: (_root: string) => notionService,
         getNotionBrowseService: (_root: string) => notionBrowseService,
         getLinearDocsAdapter: (root: string) => new LinearDocsAdapter(root, linearService),
         getClickUpDocsAdapter: (root: string) => new ClickUpDocsAdapter(root, clickUpService),
-        getCacheService: (root: string) => new PlanningPanelCacheService(root),
+        getCacheService,
         getLinearSyncService: (_root: string) => linearService,
         getClickUpSyncService: (_root: string) => clickUpService,
     };
@@ -1808,6 +1846,29 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         taskViewerProvider.pushTicketEdits(data.workspaceRoot || workspaceRoot, data));
     switchboardCommandRegistry.register('switchboard.pushTicketEditsWithSubtasks', async (data: any) =>
         taskViewerProvider.pushTicketEditsWithSubtasks(data.workspaceRoot || workspaceRoot, data));
+
+    // Ticket IMPORT — the path that turns a Linear/ClickUp ticket into a plan and,
+    // with plan_tickets, writes the board's own snapshot of what the provider said
+    // (`.switchboard/plans/ticket-metadata-as-first-class-board-state.md`).
+    //
+    // §Composition-root diff. These five were registered in extension.ts only, so on
+    // this host TicketsPanelProvider's `executeCommand('switchboard.importLinearTask',
+    // …)` fell through the registry to vscodeShim's no-op — and the handler then
+    // posted `linearTaskImported: success: true` regardless, because the no-op
+    // resolves rather than throws. The standalone host therefore reported successful
+    // imports that never created a plan, and no gate caught it: the verb was
+    // answered, so a verb-reachability audit came back green. Delegating to the same
+    // TaskViewerProvider methods the extension delegates to is the whole fix.
+    switchboardCommandRegistry.register('switchboard.importLinearTask', async (data: any) =>
+        taskViewerProvider.importLinearTask(data.workspaceRoot || workspaceRoot, data.issueId, data.includeSubtasks));
+    switchboardCommandRegistry.register('switchboard.importClickUpTask', async (data: any) =>
+        taskViewerProvider.importClickUpTask(data.workspaceRoot || workspaceRoot, data.taskId, data.includeSubtasks));
+    switchboardCommandRegistry.register('switchboard.importTaskAsDocument', async (data: any) =>
+        taskViewerProvider.importTaskAsDocument(data.workspaceRoot || workspaceRoot, data));
+    switchboardCommandRegistry.register('switchboard.importAllTasks', async (data: any) =>
+        taskViewerProvider.importAllTasks(data.workspaceRoot || workspaceRoot, data));
+    switchboardCommandRegistry.register('switchboard.removeLocalTicket', async (data: any) =>
+        taskViewerProvider.removeLocalTicket(data.workspaceRoot || workspaceRoot, data));
 
     // Transfer bundle — parity with the extension's export/import commands
     // (extension.ts). The shared API routes in LocalApiServer cover both hosts,
@@ -4263,10 +4324,10 @@ Each plan file must include:
             // cannot distinguish "unset" from "explicitly true" — read the raw
             // config-table value directly. Both storage shapes the bridge writes
             // (`config.switchboard.<key>` and `config.<key>`) are checked.
-            const rawTmuxEnabled = db.getConfigJsonSync<boolean | undefined>('config.switchboard.terminal.tmux.enabled', undefined)
-                ?? db.getConfigJsonSync<boolean | undefined>('config.terminal.tmux.enabled', undefined);
+            const rawTmuxEnabled = db.getConfigJsonSync<boolean | string | undefined>('config.switchboard.terminal.tmux.enabled', undefined)
+                ?? db.getConfigJsonSync<boolean | string | undefined>('config.terminal.tmux.enabled', undefined);
             const explicitlyOff = rawTmuxEnabled === false
-                || (typeof rawTmuxEnabled === 'string' && rawTmuxEnabled.toLowerCase() === 'false');
+                || (typeof rawTmuxEnabled === 'string' && (rawTmuxEnabled as string).toLowerCase() === 'false');
             if (!explicitlyOff) {
                 await configProvider.updateConfigGlobal('terminal.tmux.enabled', true);
                 log(opts, '[tmux-bridge] migrated legacy terminalBackend:tmux → terminal.tmux.enabled:true');

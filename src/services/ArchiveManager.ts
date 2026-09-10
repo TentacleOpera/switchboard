@@ -54,7 +54,7 @@ export class ArchiveManager {
             let configuredPath = '';
             try {
                 const config = vscode.workspace.getConfiguration('switchboard');
-                configuredPath = config.get<string>('archive.dbPath', '') || '';
+                configuredPath = config.get<string>('storage.archivePathOverride', '') || '';
             } catch {
                 // Standalone / headless mode outside VS Code
                 configuredPath = process.env.SWITCHBOARD_ARCHIVE_DB_PATH || '';
@@ -197,7 +197,7 @@ ON CONFLICT (plan_id) DO UPDATE SET
      */
     public async queryArchive(sql: string, limit: number = 100): Promise<unknown[]> {
         if (!this._archivePath) {
-            throw new Error('Archive not configured. Set switchboard.archive.dbPath in settings.');
+            throw new Error('Archive not configured. Check workspace storage topology.');
         }
 
         if (!fs.existsSync(this._archivePath)) {
@@ -328,13 +328,12 @@ ON CONFLICT (review_id) DO UPDATE SET
                 ${this._escapeDuckDb(e.action || '')},
                 ${this._escapeDuckDb(e.timestamp)},
                 ${this._escapeDuckDb(e.device_id || '')},
-                ${this._escapeDuckDb(e.vector_clock || '')},
                 ${this._escapeDuckDb(e.payload || '{}')},
                 ${this._escapeDuckDb(e.workspace_id || '')},
                 CURRENT_TIMESTAMP
             )`).join(',\n');
 
-            const sql = `INSERT INTO plan_events (event_id, plan_id, event_type, workflow, action, timestamp, device_id, vector_clock, payload, workspace_id, archived_at)
+            const sql = `INSERT INTO plan_events (event_id, plan_id, event_type, workflow, action, timestamp, device_id, payload, workspace_id, archived_at)
             VALUES ${valStrings}
             ON CONFLICT (event_id) DO NOTHING;`;
 

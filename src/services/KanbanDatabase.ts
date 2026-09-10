@@ -8,6 +8,7 @@ import { openDriver, resolveStoreTarget, checkLibSqlAvailability } from './store
 import { resolveBoardDbPath, resolveArchiveDbPath, getGlobalStoreDir } from './globalStore';
 import { relocateBoardDatabase } from './dbMerge';
 import { resolveCanonicalWorkspaceIdSync } from './WorkspaceIdentityService';
+import { resolveStorageTopology } from './storageTopology';
 import { STATE_KEY_TO_CONFIG } from './stateConfigBridge';
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
 import { generateCodename } from './codenameGenerator';
@@ -23,6 +24,14 @@ import {
 } from './agentConfig';
 import { deriveAgentDisplayName } from './cliIdentity';
 import { BoardSnapshotPublisher, BOARD_SNAPSHOT_MODE, BOARD_SNAPSHOT_MODE_BIDIRECTIONAL } from './BoardSnapshotPublisher';
+import { SHARED_PLAN_COLUMNS, LOCAL_PLAN_COLUMNS } from './storageTiers';
+import type {
+    PlanTicketAttachment,
+    PlanTicketComment,
+    PlanTicketMetadataSource,
+    PlanTicketProvider,
+    PlanTicketSnapshot,
+} from './planTickets';
 import type { HostPathConfigProvider } from './hostSeams';
 import type { SortMode } from './kanbanOrdering';
 
@@ -251,6 +260,67 @@ export interface DatabaseStorageStats {
  * This is RECORD-KEEPING state — the operational `dispatched_at` lives on the
  * plans row (see the schema comment in SCHEMA_TABLES_SQL).
  */
+/**
+ * A `plan_tickets` row, as read back from the board store — the board's own record
+ * of the ticket a plan was imported from
+ * (ticket-metadata-as-first-class-board-state.md).
+ *
+ * Every optional field is `string | null`, and `null` means "the board was never
+ * told", never "the ticket has an empty one". `labels: null` (never fetched) and
+ * `labels: []` (fetched, none) are different facts. `metadataSource` says which
+ * path wrote the row, so a V75 backfill row holding only an id can never be read
+ * as a fetched snapshot; `bodyExcluded` says a NULL body was an operator policy
+ * decision rather than an empty ticket; and `fetchedAt` is null on a row that was
+ * never fetched at all.
+ */
+export interface PlanTicketRecord {
+    planId: string;
+    provider: PlanTicketProvider;
+    externalId: string;
+    workspaceId: string;
+    externalKey: string | null;
+    url: string | null;
+    title: string | null;
+    stateName: string | null;
+    stateType: string | null;
+    assigneeName: string | null;
+    assigneeEmail: string | null;
+    labels: string[] | null;
+    parentExternalId: string | null;
+    containerKind: string | null;
+    containerId: string | null;
+    containerName: string | null;
+    estimate: string | null;
+    priorityRaw: string | null;
+    priorityScheme: string | null;
+    /** Null when never fetched, when the ticket has none, or when policy excluded it — `bodyExcluded` disambiguates. */
+    body: string | null;
+    bodyHash: string | null;
+    bodyExcluded: boolean;
+    comments: PlanTicketComment[] | null;
+    commentsHash: string | null;
+    commentsExcluded: boolean;
+    attachments: PlanTicketAttachment[] | null;
+    payload: Record<string, unknown>;
+    sourceCreatedAt: string | null;
+    sourceUpdatedAt: string | null;
+    /** Null on a backfilled row: no fetch ever happened, and pretending otherwise would report it fresh. */
+    fetchedAt: string | null;
+    orphanedAt: string | null;
+    orphanReason: string | null;
+    metadataSource: PlanTicketMetadataSource;
+    /**
+     * True when the READ omitted the body/comments columns for size, rather than the
+     * row not having them.
+     *
+     * Without this, `getPlanTicketsForWorkspace`'s default (bodies off) would hand
+     * back `body: null` on a row that has a perfectly good body — a null that reads
+     * exactly like "the ticket has no body" and exactly like "policy excluded it".
+     * Three different facts, one value. This is the tag that separates them.
+     */
+    bodyOmittedFromRead?: boolean;
+}
+
 export interface CodingRoundRecord {
     roundId: string;
     featureId: string;
@@ -295,10 +365,6 @@ CREATE TABLE IF NOT EXISTS plans (
     routed_to         TEXT DEFAULT '',
     dispatched_agent  TEXT DEFAULT '',
     dispatched_ide    TEXT DEFAULT '',
-    dispatched_terminal TEXT DEFAULT '',
-    dispatched_at     TEXT DEFAULT NULL,
-    last_liveness_at  TEXT DEFAULT NULL,
-    blocked_at        TEXT DEFAULT NULL,
     clickup_task_id   TEXT DEFAULT '',
     linear_issue_id   TEXT DEFAULT '',
     notion_page_id    TEXT DEFAULT '',
@@ -316,10 +382,86 @@ CREATE TABLE IF NOT EXISTS plans (
     map_fingerprint   TEXT DEFAULT NULL,
     priority          INTEGER DEFAULT NULL
 );
+CREATE TABLE IF NOT EXISTS plan_runtime_state (
+    plan_id             TEXT NOT NULL,
+    device_id           TEXT NOT NULL,
+    workspace_id        TEXT NOT NULL,
+    dispatched_agent    TEXT DEFAULT '',
+    dispatched_ide      TEXT DEFAULT '',
+    dispatched_terminal TEXT DEFAULT '',
+    dispatched_at       TEXT DEFAULT NULL,
+    last_liveness_at    TEXT DEFAULT NULL,
+    blocked_at          TEXT DEFAULT NULL,
+    updated_at          TEXT NOT NULL,
+    PRIMARY KEY (plan_id, device_id)
+);
 CREATE TABLE IF NOT EXISTS plan_dependencies (
     plan_id            TEXT NOT NULL,
     depends_on_plan_id TEXT NOT NULL,
     PRIMARY KEY (plan_id, depends_on_plan_id)
+);
+-- plan_tickets: the board's own record of a ticket a plan was imported from
+-- (ticket-metadata-as-first-class-board-state.md). SHARED tier — see
+-- storageTiers.SHARED_TABLES — so it travels with the Board store and survives a
+-- fresh clone, which the gitignored .switchboard/tickets/ file cache does not.
+--
+-- The primary key is (plan_id, provider, external_id), NOT plan_id alone and NOT
+-- external_id alone: two machines legitimately import the same ticket as two
+-- plans, and one plan can legitimately carry a ticket from more than one provider.
+--
+-- Every optional column is nullable and NULL means "never told", never "empty".
+-- metadata_source records which path wrote the row, so a V75 backfill row that
+-- holds only an id is never mistaken for a fetched snapshot. body_excluded /
+-- comments_excluded record an operator policy decision, so a NULL body is never
+-- ambiguous between "policy said no" and "the ticket has none". fetched_at is
+-- nullable for exactly the same reason — a backfilled row was never fetched, and
+-- stamping it with the migration's clock would fabricate a read that never
+-- happened and make ticketStaleness() report fresh for a row holding nothing.
+--
+-- The board record is the BOARD's truth for imported tickets; .switchboard/tickets/
+-- remains the tickets PANEL's browsing cache. Badges read this table (see
+-- TicketsPanelProvider._boardTicketIndex) — that ambiguity is the root of the two
+-- documented sync-badge bugs.
+--
+-- Attachments are stored as references (title + url), never as blobs: a shared
+-- store that carries attachment bytes is one nobody can afford to replicate.
+CREATE TABLE IF NOT EXISTS plan_tickets (
+    plan_id            TEXT NOT NULL,
+    provider           TEXT NOT NULL,
+    external_id        TEXT NOT NULL,
+    workspace_id       TEXT NOT NULL,
+    external_key       TEXT DEFAULT NULL,
+    url                TEXT DEFAULT NULL,
+    title              TEXT DEFAULT NULL,
+    state_name         TEXT DEFAULT NULL,
+    state_type         TEXT DEFAULT NULL,
+    assignee_name      TEXT DEFAULT NULL,
+    assignee_email     TEXT DEFAULT NULL,
+    labels             TEXT DEFAULT NULL,
+    parent_external_id TEXT DEFAULT NULL,
+    container_kind     TEXT DEFAULT NULL,
+    container_id       TEXT DEFAULT NULL,
+    container_name     TEXT DEFAULT NULL,
+    estimate           TEXT DEFAULT NULL,
+    priority_raw       TEXT DEFAULT NULL,
+    priority_scheme    TEXT DEFAULT NULL,
+    body               TEXT DEFAULT NULL,
+    body_hash          TEXT DEFAULT NULL,
+    body_excluded      INTEGER NOT NULL DEFAULT 0,
+    comments           TEXT DEFAULT NULL,
+    comments_hash      TEXT DEFAULT NULL,
+    comments_excluded  INTEGER NOT NULL DEFAULT 0,
+    attachments        TEXT DEFAULT NULL,
+    payload            TEXT NOT NULL DEFAULT '{}',
+    source_created_at  TEXT DEFAULT NULL,
+    source_updated_at  TEXT DEFAULT NULL,
+    fetched_at         TEXT DEFAULT NULL,
+    orphaned_at        TEXT DEFAULT NULL,
+    orphan_reason      TEXT DEFAULT NULL,
+    metadata_source    TEXT NOT NULL DEFAULT 'import',
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL,
+    PRIMARY KEY (plan_id, provider, external_id)
 );
 CREATE TABLE IF NOT EXISTS missions (
     id                  TEXT PRIMARY KEY,
@@ -433,7 +575,6 @@ CREATE TABLE IF NOT EXISTS plan_events (
     timestamp TEXT NOT NULL,
     device_id TEXT DEFAULT '',
     user_id TEXT DEFAULT '',
-    vector_clock TEXT DEFAULT '',
     payload TEXT DEFAULT '{}',
     workspace_id TEXT
 );
@@ -531,6 +672,10 @@ export const SCHEMA_INDEX_STATEMENTS: string[] = [
     `CREATE INDEX IF NOT EXISTS idx_kanban_meta_workspace ON kanban_meta(workspace_id)`,
     `CREATE INDEX IF NOT EXISTS idx_coding_rounds_feature ON coding_rounds(feature_id)`,
     `CREATE INDEX IF NOT EXISTS idx_coding_rounds_workspace ON coding_rounds(workspace_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_plan_runtime_state_workspace ON plan_runtime_state(workspace_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_plan_tickets_workspace ON plan_tickets(workspace_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_plan_tickets_external ON plan_tickets(workspace_id, provider, external_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_plan_tickets_plan ON plan_tickets(plan_id)`,
 ];
 
 // Migration SQL to add new columns to existing databases
@@ -903,6 +1048,76 @@ const MIGRATION_V73_SQL = [
     `CREATE INDEX IF NOT EXISTS idx_coding_rounds_workspace ON coding_rounds(workspace_id)`,
 ];
 
+// V74: Split shared board state from machine-local runtime state.
+// Rebuilds plans table without local runtime columns: dispatched_terminal, dispatched_at,
+// last_liveness_at, blocked_at. Local runtime state is copied to plan_runtime_state.
+const MIGRATION_V74_SQL = [
+    `CREATE TABLE IF NOT EXISTS plan_runtime_state (
+        plan_id             TEXT NOT NULL,
+        device_id           TEXT NOT NULL,
+        workspace_id        TEXT NOT NULL,
+        dispatched_agent    TEXT DEFAULT '',
+        dispatched_ide      TEXT DEFAULT '',
+        dispatched_terminal TEXT DEFAULT '',
+        dispatched_at       TEXT DEFAULT NULL,
+        last_liveness_at    TEXT DEFAULT NULL,
+        blocked_at          TEXT DEFAULT NULL,
+        updated_at          TEXT NOT NULL,
+        PRIMARY KEY (plan_id, device_id)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_plan_runtime_state_workspace ON plan_runtime_state(workspace_id)`,
+];
+
+// V75: plan_tickets — imported ticket metadata becomes shared board state
+// (ticket-metadata-as-first-class-board-state.md). Purely additive: nothing is
+// dropped, plans.linear_issue_id / plans.clickup_task_id stay in place and stay
+// populated, and every .switchboard/tickets/ file is left alone. The DDL is kept
+// byte-identical to the SCHEMA_TABLES_SQL copy so a fresh DB and an upgraded DB
+// end up with the same table.
+const MIGRATION_V75_SQL = [
+    `CREATE TABLE IF NOT EXISTS plan_tickets (
+        plan_id            TEXT NOT NULL,
+        provider           TEXT NOT NULL,
+        external_id        TEXT NOT NULL,
+        workspace_id       TEXT NOT NULL,
+        external_key       TEXT DEFAULT NULL,
+        url                TEXT DEFAULT NULL,
+        title              TEXT DEFAULT NULL,
+        state_name         TEXT DEFAULT NULL,
+        state_type         TEXT DEFAULT NULL,
+        assignee_name      TEXT DEFAULT NULL,
+        assignee_email     TEXT DEFAULT NULL,
+        labels             TEXT DEFAULT NULL,
+        parent_external_id TEXT DEFAULT NULL,
+        container_kind     TEXT DEFAULT NULL,
+        container_id       TEXT DEFAULT NULL,
+        container_name     TEXT DEFAULT NULL,
+        estimate           TEXT DEFAULT NULL,
+        priority_raw       TEXT DEFAULT NULL,
+        priority_scheme    TEXT DEFAULT NULL,
+        body               TEXT DEFAULT NULL,
+        body_hash          TEXT DEFAULT NULL,
+        body_excluded      INTEGER NOT NULL DEFAULT 0,
+        comments           TEXT DEFAULT NULL,
+        comments_hash      TEXT DEFAULT NULL,
+        comments_excluded  INTEGER NOT NULL DEFAULT 0,
+        attachments        TEXT DEFAULT NULL,
+        payload            TEXT NOT NULL DEFAULT '{}',
+        source_created_at  TEXT DEFAULT NULL,
+        source_updated_at  TEXT DEFAULT NULL,
+        fetched_at         TEXT DEFAULT NULL,
+        orphaned_at        TEXT DEFAULT NULL,
+        orphan_reason      TEXT DEFAULT NULL,
+        metadata_source    TEXT NOT NULL DEFAULT 'import',
+        created_at         TEXT NOT NULL,
+        updated_at         TEXT NOT NULL,
+        PRIMARY KEY (plan_id, provider, external_id)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_plan_tickets_workspace ON plan_tickets(workspace_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_plan_tickets_external ON plan_tickets(workspace_id, provider, external_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_plan_tickets_plan ON plan_tickets(plan_id)`,
+];
+
 const MIGRATION_V13_SQL = [
     `ALTER TABLE plans ADD COLUMN repo_scope TEXT DEFAULT ''`,
     `CREATE INDEX IF NOT EXISTS idx_plans_repo_scope ON plans(workspace_id, repo_scope)`,
@@ -1220,14 +1435,28 @@ const MIGRATION_V35_SQL = [
  * re-imported after a false tombstone. Use updateStatus() and updateColumn()
  * for explicit lifecycle or kanban transitions in all other cases.
  */
-const UPSERT_PLAN_SQL = `
-INSERT INTO plans (
-    plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
-    repo_scope, project, workspace_id, created_at, updated_at, last_action, source_type,
-    brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide, dispatched_at,
-    clickup_task_id, linear_issue_id, notion_page_id, worktree_id, is_feature, feature_id,
-    workspace_name, project_id, column_entered_at
- ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+/**
+ * Insert column list for the plan upsert, in parameter order.
+ *
+ * `dispatched_at` is the odd one out: the V74 tier split moved machine-local runtime
+ * state out of `plans` into `plan_runtime_state`, so on a migrated board the column is
+ * gone and an INSERT naming it fails outright — taking plan import, archival, restore
+ * and the Notion restore path with it. Boards that have not reached V74 still have it.
+ * So the statement is BUILT from this list rather than written twice, and the tier is a
+ * parameter: one ON CONFLICT body, two shapes, no drift.
+ */
+const UPSERT_PLAN_INSERT_COLUMNS = [
+    'plan_id', 'session_id', 'topic', 'plan_file', 'kanban_column', 'status', 'complexity', 'tags',
+    'repo_scope', 'project', 'workspace_id', 'created_at', 'updated_at', 'last_action', 'source_type',
+    'brain_source_path', 'mirror_path', 'routed_to', 'dispatched_agent', 'dispatched_ide', 'dispatched_at',
+    'clickup_task_id', 'linear_issue_id', 'notion_page_id', 'worktree_id', 'is_feature', 'feature_id',
+    'workspace_name', 'project_id', 'column_entered_at',
+] as const;
+
+/** The runtime-tier column the V74 split removed from `plans`. */
+const UPSERT_PLAN_LOCAL_TIER_COLUMN = 'dispatched_at';
+
+const UPSERT_PLAN_CONFLICT_SQL = `
 ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
     topic = excluded.topic,
     plan_file = excluded.plan_file,
@@ -1275,13 +1504,28 @@ ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
     project_id = COALESCE(excluded.project_id, plans.project_id)
 `;
 
+function buildUpsertPlanSql(includeLocalTierColumn: boolean): string {
+    const cols = UPSERT_PLAN_INSERT_COLUMNS.filter(
+        c => includeLocalTierColumn || c !== UPSERT_PLAN_LOCAL_TIER_COLUMN
+    );
+    return `
+INSERT INTO plans (
+    ${cols.join(', ')}
+ ) VALUES (${cols.map(() => '?').join(', ')})${UPSERT_PLAN_CONFLICT_SQL}
+`;
+}
+
+/** Pre-V74 board: `plans` still carries `dispatched_at`. */
+const UPSERT_PLAN_SQL = buildUpsertPlanSql(true);
+/** Post-V74 board: runtime state lives in `plan_runtime_state`, not `plans`. */
+const UPSERT_PLAN_SQL_SHARED_TIER = buildUpsertPlanSql(false);
+
 const MIGRATION_VERSION_KEY = 'kanban_db_migration_version';
 const ORPHAN_PURGE_CONFIRMATION_DELAY_MS = 350;
 
 const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
                        repo_scope, project, workspace_id, created_at, updated_at, last_action, source_type,
                        brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
-                       dispatched_terminal, dispatched_at, last_liveness_at, blocked_at,
                        clickup_task_id, linear_issue_id, notion_page_id, worktree_id, worktree_status, is_feature, feature_id,
                        workspace_name, project_id, queue_position, column_entered_at, completed_at,
                        priority_starred, column_order, map_fingerprint, priority`;
@@ -1354,6 +1598,38 @@ export type ColumnUpdateOutcome =
           reason: 'not_found' | 'invalid_column' | 'no_rows_matched' | 'cascade_failed' | 'not_ready' | 'mission_staging_only' | 'error';
           detail: string;   // caller-safe sentence, no SQL, no paths beyond what the caller supplied
       };
+
+/**
+ * Which store answered a board read.
+ *
+ * The storage window is an implementation detail of where a card is kept, never a
+ * fact about the card. A caller that is handed a record with no idea which tier it
+ * came from cannot answer "why did this take a round-trip?" or "is this card
+ * dormant?" after the fact — so every record-returning read carries its source.
+ */
+export type StoreTierLabel = 'board' | 'archive';
+
+/** Result of asking a store whether it is actually readable right now. */
+export interface StoreReachability {
+    reachable: boolean;
+    tier: StoreTierLabel;
+    /** Why the store could not be reached. Present only when `reachable` is false. */
+    reason?: string;
+}
+
+/**
+ * The three — and only three — outcomes of a record lookup.
+ *
+ * `absent` and `unavailable` are DIFFERENT ANSWERS and must never be collapsed.
+ * "There is no such card" is a fact about the board; "I could not read the board"
+ * is a fact about the process. An orchestrator that reads the second as the first
+ * makes confident decisions about a board it cannot see. This union exists so that
+ * collapsing them requires deleting an arm rather than forgetting a check.
+ */
+export type PlanLookupResult =
+    | { outcome: 'found'; record: KanbanPlanRecord; source: StoreTierLabel }
+    | { outcome: 'absent' }
+    | { outcome: 'unavailable'; tier: StoreTierLabel; reason: string };
 
 function delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -1448,15 +1724,17 @@ export class KanbanDatabase {
         }
 
         let resolvedDbPath: string;
-        if (customDbPath !== undefined && customDbPath.trim() !== '') {
-            const expanded = KanbanDatabase._expandHome(customDbPath.trim());
-            resolvedDbPath = path.isAbsolute(expanded) ? expanded : path.join(stable, expanded);
-        } else {
-            // One board per project: resolve the canonical workspace id, then
-            // the per-project board path under ~/.switchboard/boards/<id>.db.
-            const wsId = resolveCanonicalWorkspaceIdSync(stable).value;
-            resolvedDbPath = resolveBoardDbPath(wsId).path;
-        }
+        const wsId = resolveCanonicalWorkspaceIdSync(stable).value;
+        const configuredOverride = customDbPath !== undefined && customDbPath.trim() !== ''
+            ? customDbPath.trim()
+            : (KanbanDatabase._pathConfigProvider?.getConfigString('storage.pathOverride')
+                || KanbanDatabase._pathConfigProvider?.getConfigString('kanban.dbPath')
+                || undefined);
+
+        const topology = resolveStorageTopology(wsId, {
+            explicitPathOverride: configuredOverride
+        });
+        resolvedDbPath = topology.board.path;
 
         resolvedDbPath = path.resolve(KanbanDatabase._expandHome(resolvedDbPath));
         try { resolvedDbPath = fs.realpathSync(resolvedDbPath); } catch {}
@@ -2352,12 +2630,19 @@ export class KanbanDatabase {
             resolved.push(await this._resolveProjectForInsert(record, isExisting));
         }
 
+        // Which shape does THIS store's `plans` table have? The V74 tier split removed
+        // `dispatched_at`, so the statement and its parameter list must match the table
+        // in front of us — the hot board and the cold archive can be at different
+        // migration versions, and a fresh archive file is created at the current one.
+        const hasLocalTierColumn = this._tableHasColumn('plans', UPSERT_PLAN_LOCAL_TIER_COLUMN);
+        const upsertSql = hasLocalTierColumn ? UPSERT_PLAN_SQL : UPSERT_PLAN_SQL_SHARED_TIER;
+
         this._db.run('BEGIN');
         try {
             for (let i = 0; i < records.length; i++) {
                 const record = records[i];
                 const r = resolved[i];
-                this._db.run(UPSERT_PLAN_SQL, [
+                const params: unknown[] = [
                     record.planId,        // 1
                     record.sessionId,     // 2
                     record.topic,         // 3
@@ -2378,7 +2663,9 @@ export class KanbanDatabase {
                     record.routedTo || '',       // 18
                     record.dispatchedAgent || '', // 19
                     record.dispatchedIde || '',   // 20
-                    record.dispatchedAt ?? null,  // 21 — dispatched_at (preserved on conflict via omitted ON CONFLICT clause)
+                    // 21 — dispatched_at, pre-V74 only (preserved on conflict via omitted
+                    // ON CONFLICT clause). Omitted entirely post-V74; the runtime tier owns it.
+                    ...(hasLocalTierColumn ? [record.dispatchedAt ?? null] : []),
                     record.clickupTaskId || '',   // 22
                     record.linearIssueId || '',   // 23
                     record.notionPageId || '',    // 24
@@ -2388,7 +2675,8 @@ export class KanbanDatabase {
                     record.workspaceName || '',      // 28
                     r.projectId,         // 29 — resolved (auto-created if needed)
                     record.columnEnteredAt ?? record.createdAt ?? null // 30 — column_entered_at (preserved on conflict)
-                ]);
+                ];
+                this._db.run(upsertSql, params);
             }
             this._db.run('COMMIT');
         } catch (error) {
@@ -2534,6 +2822,23 @@ export class KanbanDatabase {
         }
     }
 
+    public getPlanIdByPlanFileSync(planFile: string, workspaceId: string): string | null {
+        if (!this._db || !planFile || !workspaceId) return null;
+        const normalized = this._ensureRelativePlanFile(planFile);
+        const stmt = this._db.prepare('SELECT plan_id FROM plans WHERE plan_file = ? AND workspace_id = ? LIMIT 1', [normalized, workspaceId]);
+        try {
+            if (stmt.step()) {
+                const row = stmt.getAsObject();
+                return String(row.plan_id || '') || null;
+            }
+        } catch (e) {
+            console.error('[KanbanDatabase] getPlanIdByPlanFileSync failed:', e);
+        } finally {
+            stmt.free();
+        }
+        return null;
+    }
+
     public async hasPlanByPlanFile(planFile: string, workspaceId: string): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
         const normalized = this._ensureRelativePlanFile(planFile);
@@ -2612,11 +2917,15 @@ export class KanbanDatabase {
                 } catch { /* best-effort */ }
             }
             const now = new Date().toISOString();
+            const planIdForRuntime = this.getPlanIdByPlanFileSync(normalized, workspaceId);
             this._db.run(
-                'UPDATE plans SET kanban_column = ?, updated_at = ?, column_entered_at = ?, dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL WHERE plan_file = ? AND workspace_id = ?',
+                `UPDATE plans SET kanban_column = ?, updated_at = ?, column_entered_at = ?${this._columnMoveDispatchClearSql()} WHERE plan_file = ? AND workspace_id = ?`,
                 [newColumn, now, now, normalized, workspaceId]
             );
             affected = this._db.getRowsModified();   // NO await between run() and this line
+            if (affected > 0 && planIdForRuntime) {
+                this._clearRuntimeDispatchForPlanIds([planIdForRuntime]);
+            }
             await this._persist();
             await this.flushPersist();
         } catch (error) {
@@ -4673,27 +4982,54 @@ export class KanbanDatabase {
         workspaceId: string,
         project: string | null,
         repoScope: string | null,
-        limit: number = 100
+        limit: number = 100,
+        hotWindowDays?: number,
+        minCount: number = 25
     ): Promise<KanbanPlanRecord[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
         const effectiveProject = project === KanbanDatabase.UNASSIGNED_PROJECT_FILTER ? '' : project;
         if (effectiveProject === null && !repoScope) {
-            return this.getCompletedPlans(workspaceId, limit);
+            return this.getCompletedPlansInHotWindow(workspaceId, hotWindowDays, minCount);
         }
-        let sql = `SELECT ${PLAN_COLUMNS} FROM plans WHERE workspace_id = ? AND status = 'completed'`;
-        const params: unknown[] = [workspaceId];
+
+        const days = hotWindowDays ?? KanbanDatabase.getHotWindowDays();
+        const cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - days);
+        const cutoffIso = cutoff.toISOString();
+
+        let baseSql = `SELECT ${PLAN_COLUMNS} FROM plans WHERE workspace_id = ? AND status = 'completed'`;
+        const baseParams: unknown[] = [workspaceId];
         if (effectiveProject !== null && effectiveProject !== undefined) {
-            sql += ' AND project = ?';
-            params.push(effectiveProject);
+            baseSql += ' AND project = ?';
+            baseParams.push(effectiveProject);
         }
         if (repoScope) {
-            sql += " AND repo_scope IN (?, '')";
-            params.push(repoScope);
+            baseSql += " AND repo_scope IN (?, '')";
+            baseParams.push(repoScope);
         }
-        sql += ' ORDER BY updated_at DESC LIMIT ?';
-        params.push(limit);
-        const stmt = this._db.prepare(sql, params);
-        return this._readRows(stmt);
+
+        // Windowed query first
+        const windowStmt = this._db.prepare(
+            `${baseSql} AND updated_at >= ? ORDER BY updated_at DESC LIMIT ?`,
+            [...baseParams, cutoffIso, limit]
+        );
+        const windowed = this._readRows(windowStmt);
+        if (windowed.length >= minCount) return windowed;
+
+        // Top-up query to satisfy minCount floor
+        const topUpStmt = this._db.prepare(
+            `${baseSql} ORDER BY updated_at DESC LIMIT ?`,
+            [...baseParams, minCount]
+        );
+        const topped = this._readRows(topUpStmt);
+        const seen = new Set(windowed.map(r => r.planId));
+        for (const r of topped) {
+            if (!seen.has(r.planId)) {
+                windowed.push(r);
+                seen.add(r.planId);
+            }
+        }
+        return windowed;
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -4733,6 +5069,311 @@ export class KanbanDatabase {
         } catch { return KanbanDatabase.DEFAULT_HOT_WINDOW_DAYS; }
     }
 
+    // ═══════════════════════════════════════════════════════════════════════
+    //  Board reads: three outcomes, and which store answered
+    // ═══════════════════════════════════════════════════════════════════════
+    //
+    // The read endpoints were written when the board was one table set in one
+    // file, so "the board" and "what a read can see" were the same thing. With a
+    // window, an Archive and a possibly-remote target they are not, and the two
+    // ways a read can go wrong stopped being distinguishable:
+    //
+    //   * an aged card lives in Archive, so a Board-only lookup returns a
+    //     well-formed "not found" for a card that exists — confidently wrong,
+    //     which is worse than the broken direct-file read it replaced; and
+    //   * every reader below returns `[]` / `null` when `ensureReady()` says no,
+    //     so "the board is empty" and "I could not read the board" arrive as the
+    //     same value.
+    //
+    // `probeStore()` and `lookupPlanRecord()` are the honest pair. They are
+    // deliberately NOT retrofitted onto `getPlanByPlanId` and friends: those have
+    // ~60 in-tree callers whose `null` handling is load-bearing, and widening
+    // their return type is a separate change. These are what the API's
+    // record-returning reads call.
+
+    /**
+     * Clear this machine's runtime dispatch state for a set of plans.
+     *
+     * A column move ends the dispatch, and post-V74 that state lives in
+     * `plan_runtime_state`, not in `plans`. Every column-move path calls this after its
+     * `plans` UPDATE so a moved card releases its seat on both tiers. Keyed by
+     * `device_id`: another machine's dispatch is not ours to clear.
+     *
+     * Best-effort and synchronous — the caller owns the persist. Silent on a store that
+     * has no `plan_runtime_state` yet (pre-V74), where the `plans` UPDATE did the job.
+     */
+    private _clearRuntimeDispatchForPlanIds(planIds: string[]): void {
+        if (!this._db || planIds.length === 0) return;
+        if (!this._getExistingTableNames().has('plan_runtime_state')) return;
+        try {
+            const placeholders = planIds.map(() => '?').join(', ');
+            this._db.run(
+                `UPDATE plan_runtime_state SET dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL, updated_at = ?
+                 WHERE device_id = ? AND plan_id IN (${placeholders})`,
+                [new Date().toISOString(), getMachineId(), ...planIds]
+            );
+        } catch (err) {
+            console.warn('[KanbanDatabase] _clearRuntimeDispatchForPlanIds failed:', err);
+        }
+    }
+
+    /**
+     * The `SET` fragment that clears dispatch state on a column move, for THIS store's
+     * schema. Post-V74 the four runtime columns are gone from `plans`, and naming them
+     * makes the whole UPDATE fail — which silently broke every card move. Pre-V74 they
+     * are still there and must still be cleared, so the fragment is derived, not fixed.
+     */
+    private _columnMoveDispatchClearSql(): string {
+        return this._tableHasColumn('plans', 'dispatched_at')
+            ? ', dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL'
+            : '';
+    }
+
+    /** Which tier this instance is — `'archive'` for the cold store, else `'board'`. */
+    public get storeTier(): StoreTierLabel {
+        return this._isArchiveInstance ? 'archive' : 'board';
+    }
+
+    /**
+     * Is this store actually readable right now?
+     *
+     * `ensureReady()` alone is not enough: it resolves true for a handle that was
+     * opened successfully and has since become unusable (file removed underneath a
+     * replica, WAL sidecar unreadable, corrupt page). Those only fault on the first
+     * statement, so this issues the cheapest real one against the board's own table.
+     *
+     * Returns the reason as well as the verdict — an unreachable store must be
+     * reportable, not merely detectable.
+     */
+    public async probeStore(): Promise<StoreReachability> {
+        const tier = this.storeTier;
+        let ready = false;
+        let readyError = '';
+        try {
+            ready = await this.ensureReady();
+        } catch (err) {
+            readyError = err instanceof Error ? err.message : String(err);
+        }
+        if (!ready) {
+            return {
+                reachable: false,
+                tier,
+                reason: readyError || `${tier} store did not become ready (${this.dbPath})`
+            };
+        }
+        if (!this._db) {
+            return {
+                reachable: false,
+                tier,
+                reason: `${tier} store reported ready but holds no open handle (${this.dbPath})`
+            };
+        }
+        try {
+            const stmt = this._db.prepare('SELECT 1 FROM plans LIMIT 1');
+            try { stmt.step(); } finally { stmt.free(); }
+        } catch (err) {
+            return {
+                reachable: false,
+                tier,
+                reason: `${tier} store is open but unreadable (${this.dbPath}): ${err instanceof Error ? err.message : String(err)}`
+            };
+        }
+        return { reachable: true, tier };
+    }
+
+    /**
+     * Board-store-only lookup by plan_id, then session_id (legacy vintage rows).
+     * No cold recursion — the span is composed explicitly in `lookupPlanRecord`
+     * so the source label survives it.
+     */
+    private _lookupInThisStore(id: string): KanbanPlanRecord | null {
+        if (!this._db) return null;
+        for (const column of ['plan_id', 'session_id']) {
+            const stmt = this._db.prepare(
+                `SELECT ${PLAN_COLUMNS} FROM plans WHERE ${column} = ? LIMIT 1`,
+                [id]
+            );
+            const rows = this._readRows(stmt);
+            if (rows.length > 0) return rows[0];
+        }
+        return null;
+    }
+
+    /**
+     * Resolve one card across Board and Archive, saying which store answered.
+     *
+     * Three outcomes, never two: `found` (with `source`), `absent`, `unavailable`.
+     *
+     * **Board first, not Archive first.** The plan's edge-case audit offers either
+     * order so long as exactly one record comes back; Board-first is the one that
+     * is also *correct*. Both moves are write-destination → verify → delete-origin
+     * (`archiveToCold`, `restoreToHot`), so mid-sweep the row is in BOTH stores and
+     * never in neither — exactly-once holds under either order. But during a
+     * restore the Board copy is the fresher one, so Archive-first would hand back
+     * the stale archived row. Board-first is also the hot-wins precedence every
+     * other union reader in this file already uses (`_readUnion`).
+     *
+     * **A genuine absence does not pay for Archive twice.** A miss in both stores
+     * is remembered in a bounded, in-memory negative cache, so the hot path an
+     * orchestrator hammers (an id that never existed) costs one Board query and
+     * zero Archive round-trips thereafter. In-memory, not a Board-side tombstone:
+     * a tombstone is a row the retention sweep would have to know about, and it
+     * would outlive the process that learned nothing. Cache entries are for
+     * ABSENCE only, and only a card ENTERING the Archive can falsify one — which
+     * is exactly where the cache is cleared.
+     *
+     * **Unreachable is never absence.** If the Archive exists but will not answer,
+     * this returns `unavailable` rather than `absent`: we cannot say a card does
+     * not exist when we could not look.
+     *
+     * `promoteOnAccess` is off by default. The older `getPlanByPlanId` restores a
+     * cold row to Board on touch; a plain GET should not mutate storage, and
+     * promoting would relabel the card's source on the very read that reports it.
+     */
+    public async lookupPlanRecord(
+        id: string,
+        options?: { promoteOnAccess?: boolean }
+    ): Promise<PlanLookupResult> {
+        const trimmed = String(id || '').trim();
+        if (!trimmed) return { outcome: 'absent' };
+
+        // ── Board ──────────────────────────────────────────────────────────
+        const boardProbe = await this.probeStore();
+        if (!boardProbe.reachable) {
+            return { outcome: 'unavailable', tier: boardProbe.tier, reason: boardProbe.reason || 'board store did not answer' };
+        }
+        const boardRow = this._lookupInThisStore(trimmed);
+        if (boardRow) return { outcome: 'found', record: boardRow, source: 'board' };
+
+        // A read against the cold store itself does not recurse into another archive.
+        if (this._isArchiveInstance) return { outcome: 'absent' };
+
+        // ── Archive ────────────────────────────────────────────────────────
+        // No archive has ever been created for this board: absence is genuine and free.
+        // Do NOT create one to prove a card is missing, and do NOT report `unavailable`
+        // — "there is no archive" is a different fact from "the archive is down", and
+        // conflating them would make EVERY absence on an archive-less board a 503.
+        //
+        // Deliberately not `archiveAvailable()`: that returns true as soon as an archive
+        // INSTANCE is cached, and one is cached during the V55 migration on boards whose
+        // archive file was never written. Searchable means a real file on disk, or an
+        // instance actually holding an open handle.
+        if (!this._archiveIsSearchable()) return { outcome: 'absent' };
+
+        if (this._isRememberedAbsentFromArchive(trimmed)) return { outcome: 'absent' };
+
+        const cold = KanbanDatabase.getArchiveInstance(this._workspaceRoot);
+        const coldProbe = await cold.probeStore();
+        if (!coldProbe.reachable) {
+            return { outcome: 'unavailable', tier: 'archive', reason: coldProbe.reason || 'archive store did not answer' };
+        }
+        const coldRow = cold._lookupInThisStore(trimmed);
+        if (!coldRow) {
+            this._rememberAbsentFromArchive(trimmed);
+            return { outcome: 'absent' };
+        }
+        if (options?.promoteOnAccess) {
+            const promoted = await this.restoreToHot(coldRow.planId);
+            if (promoted) return { outcome: 'found', record: promoted, source: 'archive' };
+        }
+        return { outcome: 'found', record: coldRow, source: 'archive' };
+    }
+
+    // Bounded in-memory record of ids the Archive has been asked for and did not
+    // have. Absence only — a `found` is never cached, so a promotion or an edit
+    // can never be served from here.
+    private static readonly ABSENT_IN_ARCHIVE_TTL_MS = 5 * 60 * 1000;
+    private static readonly ABSENT_IN_ARCHIVE_MAX_ENTRIES = 2000;
+    private readonly _absentInArchive = new Map<string, number>();
+    private _absentInArchiveSignature = '';
+
+    /**
+     * Is there an Archive to search at all?
+     *
+     * True when the archive file exists on disk, or when a cached archive instance is
+     * holding an open handle (a store opened this session whose file could still be
+     * pending a flush). False means no archive has ever been written for this board, so
+     * a Board miss is a complete answer.
+     */
+    private _archiveIsSearchable(): boolean {
+        try {
+            const p = KanbanDatabase.resolveArchiveDbPath(this._workspaceRoot);
+            if (fs.existsSync(p)) return true;
+            const cached = KanbanDatabase._archiveInstancesByDbPath.get(p);
+            return !!(cached && cached._db);
+        } catch {
+            return false;
+        }
+    }
+
+    /**
+     * Signature of the Archive file — size + mtime. Remembered absences are only valid
+     * for the Archive they were learned from: another process (or a restore) writing to
+     * the Archive changes this, and every remembered absence is dropped. Without it a
+     * card archived out-of-process would read as `absent` for the whole TTL, which is
+     * the confidently-wrong answer this endpoint exists to remove. A `stat` is orders of
+     * magnitude cheaper than the Archive round-trip it is protecting.
+     */
+    private _archiveSignature(): string {
+        try {
+            const p = KanbanDatabase.resolveArchiveDbPath(this._workspaceRoot);
+            const st = fs.statSync(p);
+            return `${st.size}:${st.mtimeMs}`;
+        } catch {
+            return 'absent';
+        }
+    }
+
+    private _isRememberedAbsentFromArchive(id: string): boolean {
+        const sig = this._archiveSignature();
+        if (sig !== this._absentInArchiveSignature) {
+            this._absentInArchive.clear();
+            this._absentInArchiveSignature = sig;
+            return false;
+        }
+        const expiry = this._absentInArchive.get(id);
+        if (expiry === undefined) return false;
+        if (expiry <= Date.now()) {
+            this._absentInArchive.delete(id);
+            return false;
+        }
+        return true;
+    }
+
+    private _rememberAbsentFromArchive(id: string): void {
+        // Re-stamp against the CURRENT signature, dropping anything learned from a
+        // different Archive first — otherwise an entry learned before a write would be
+        // silently re-validated under the new signature.
+        const sig = this._archiveSignature();
+        if (sig !== this._absentInArchiveSignature) {
+            this._absentInArchive.clear();
+            this._absentInArchiveSignature = sig;
+        }
+        if (this._absentInArchive.size >= KanbanDatabase.ABSENT_IN_ARCHIVE_MAX_ENTRIES) {
+            // Oldest-inserted first (Map preserves insertion order). A bound matters
+            // more than a perfect eviction policy: this must never become a leak on a
+            // board an orchestrator polls with generated ids.
+            const oldest = this._absentInArchive.keys().next();
+            if (!oldest.done) this._absentInArchive.delete(oldest.value);
+        }
+        this._absentInArchive.set(id, Date.now() + KanbanDatabase.ABSENT_IN_ARCHIVE_TTL_MS);
+    }
+
+    /**
+     * Forget every remembered Archive absence. Called whenever a card ENTERS the
+     * Archive — the only event that can turn a cached "not in Archive" into a lie.
+     * (A card LEAVING the Archive only makes cached absences more true.)
+     */
+    public invalidateArchiveAbsenceCache(): void {
+        this._absentInArchive.clear();
+        this._absentInArchiveSignature = '';
+    }
+
+    /** Test/diagnostic seam: how many Archive absences are currently remembered. */
+    public get rememberedArchiveAbsences(): number {
+        return this._absentInArchive.size;
+    }
+
     /**
      * Move a plan from the hot store to the cold store. Write-cold → verify → delete-hot.
      * Serialized through the hot instance's write chain so a concurrent read resolves via
@@ -4743,7 +5384,13 @@ export class KanbanDatabase {
         const plan = await this.getPlanByPlanId(planId);
         if (!plan) return false; // not in hot — maybe already cold
         const cold = KanbanDatabase.getArchiveInstance(this._workspaceRoot);
-        if (!(await cold.ensureReady()) || !cold._db) return false;
+        // createIfMissing, NOT ensureReady: `getArchiveInstance` only constructs the
+        // handle, and `ensureReady` refuses to create a database that does not exist
+        // ("not auto-creating"). Nothing else on this path writes the archive file, so
+        // with `ensureReady` here the FIRST archival on any board returned false and the
+        // cold store was never created — which made the whole archive tier, and every
+        // read that spans it, unreachable in practice.
+        if (!(await cold.createIfMissing()) || !cold._db) return false;
         // Write to cold (upsert). The cold instance's _persist is coalesced; flush after.
         const ok = await cold.upsertPlans([plan]);
         if (!ok) {
@@ -4757,6 +5404,11 @@ export class KanbanDatabase {
             console.warn(`[KanbanDatabase] archiveToCold: cold verify failed for ${planId} — keeping hot row`);
             return false;
         }
+        // A card has ENTERED the Archive (verified above), so any remembered "not in
+        // Archive" may now be a lie. This is the only event that can falsify one, and
+        // clearing here — BEFORE the hot delete, which can fail — is what makes the
+        // negative cache in lookupPlanRecord safe.
+        this.invalidateArchiveAbsenceCache();
         // Delete from hot. Route through _persistedUpdate so the coalesced persist fires.
         const removed = await this._persistedUpdate(
             'DELETE FROM plans WHERE plan_id = ?',
@@ -6172,6 +6824,286 @@ export class KanbanDatabase {
         } catch (err) {
             try { this._db.run('ROLLBACK'); } catch {}
             console.error('[KanbanDatabase] replaceAllLinearIssueLinks failed:', err);
+            return false;
+        }
+        return this._persist();
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // plan_tickets — the board's own record of an imported ticket.
+    //
+    // This table, not `.switchboard/tickets/`, is the BOARD's truth for a ticket
+    // that was imported as a plan. The file cache remains the tickets PANEL's
+    // browsing cache: it is gitignored, machine-local, and disappears on a fresh
+    // clone or a `git clean -xdf`. Anything that renders a card, a badge or a
+    // drilldown for an IMPORTED ticket reads through these accessors; anything
+    // browsing not-yet-imported tickets still reads the files. That split is the
+    // structural fix for the two documented sync-badge bugs, which were both a
+    // reader crossing between the two truths.
+    // ──────────────────────────────────────────────────────────────────────
+
+    /** Parse a JSON column that is allowed to be NULL. NULL stays null — it means "never told". */
+    private static _parseNullableJson<T>(raw: unknown): T | null {
+        if (raw === null || raw === undefined) { return null; }
+        const s = String(raw);
+        if (!s) { return null; }
+        try { return JSON.parse(s) as T; } catch { return null; }
+    }
+
+    private static _nullableText(raw: unknown): string | null {
+        if (raw === null || raw === undefined) { return null; }
+        const s = String(raw);
+        return s.length > 0 ? s : null;
+    }
+
+    private static _rowToPlanTicket(r: Record<string, any>): PlanTicketRecord {
+        const N = KanbanDatabase._nullableText;
+        return {
+            planId: String(r.plan_id ?? ''),
+            provider: String(r.provider ?? '') as PlanTicketProvider,
+            externalId: String(r.external_id ?? ''),
+            workspaceId: String(r.workspace_id ?? ''),
+            externalKey: N(r.external_key),
+            url: N(r.url),
+            title: N(r.title),
+            stateName: N(r.state_name),
+            stateType: N(r.state_type),
+            assigneeName: N(r.assignee_name),
+            assigneeEmail: N(r.assignee_email),
+            labels: KanbanDatabase._parseNullableJson<string[]>(r.labels),
+            parentExternalId: N(r.parent_external_id),
+            containerKind: N(r.container_kind),
+            containerId: N(r.container_id),
+            containerName: N(r.container_name),
+            estimate: N(r.estimate),
+            priorityRaw: N(r.priority_raw),
+            priorityScheme: N(r.priority_scheme),
+            body: N(r.body),
+            bodyHash: N(r.body_hash),
+            bodyExcluded: Number(r.body_excluded ?? 0) === 1,
+            comments: KanbanDatabase._parseNullableJson<PlanTicketComment[]>(r.comments),
+            commentsHash: N(r.comments_hash),
+            commentsExcluded: Number(r.comments_excluded ?? 0) === 1,
+            attachments: KanbanDatabase._parseNullableJson<PlanTicketAttachment[]>(r.attachments),
+            payload: KanbanDatabase._parseNullableJson<Record<string, unknown>>(r.payload) ?? {},
+            sourceCreatedAt: N(r.source_created_at),
+            sourceUpdatedAt: N(r.source_updated_at),
+            fetchedAt: N(r.fetched_at),
+            orphanedAt: N(r.orphaned_at),
+            orphanReason: N(r.orphan_reason),
+            metadataSource: String(r.metadata_source ?? 'import') as PlanTicketMetadataSource,
+        };
+    }
+
+    private _readPlanTickets(sql: string, params: unknown[]): PlanTicketRecord[] {
+        if (!this._db) { return []; }
+        if (!this._getExistingTableNames().has('plan_tickets')) { return []; }
+        const rows: PlanTicketRecord[] = [];
+        let stmt: ISqliteStatement | null = null;
+        try {
+            stmt = this._db.prepare(sql, params as any);
+            while (stmt.step()) {
+                rows.push(KanbanDatabase._rowToPlanTicket(stmt.getAsObject()));
+            }
+        } catch (e) {
+            console.warn('[KanbanDatabase] plan_tickets read failed:', e);
+        } finally {
+            try { stmt?.free(); } catch { /* already freed */ }
+        }
+        return rows;
+    }
+
+    private static readonly PLAN_TICKET_COLUMNS =
+        `plan_id, provider, external_id, workspace_id, external_key, url, title,
+         state_name, state_type, assignee_name, assignee_email, labels,
+         parent_external_id, container_kind, container_id, container_name, estimate,
+         priority_raw, priority_scheme, body, body_hash, body_excluded, comments,
+         comments_hash, comments_excluded, attachments, payload, source_created_at,
+         source_updated_at, fetched_at, orphaned_at, orphan_reason, metadata_source`;
+
+    /**
+     * Write (or refresh) the board's snapshot of a ticket a plan was imported from.
+     *
+     * Upsert on (plan_id, provider, external_id). A refresh overwrites the snapshot
+     * fields and bumps `fetched_at`, and clears any orphan mark — a ticket that
+     * answers a fetch is not deleted upstream any more.
+     *
+     * `created_at` is preserved across refreshes so "when did this board first learn
+     * about the ticket" survives; `updated_at` moves.
+     */
+    public async upsertPlanTicket(
+        planId: string,
+        workspaceId: string,
+        snapshot: PlanTicketSnapshot
+    ): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) { return false; }
+        if (!planId || !snapshot.externalId) { return false; }
+        const now = new Date().toISOString();
+        try {
+            this._db.run(
+                `INSERT INTO plan_tickets (${KanbanDatabase.PLAN_TICKET_COLUMNS}, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(plan_id, provider, external_id) DO UPDATE SET
+                    workspace_id = excluded.workspace_id,
+                    external_key = excluded.external_key,
+                    url = excluded.url,
+                    title = excluded.title,
+                    state_name = excluded.state_name,
+                    state_type = excluded.state_type,
+                    assignee_name = excluded.assignee_name,
+                    assignee_email = excluded.assignee_email,
+                    labels = excluded.labels,
+                    parent_external_id = excluded.parent_external_id,
+                    container_kind = excluded.container_kind,
+                    container_id = excluded.container_id,
+                    container_name = excluded.container_name,
+                    estimate = excluded.estimate,
+                    priority_raw = excluded.priority_raw,
+                    priority_scheme = excluded.priority_scheme,
+                    body = excluded.body,
+                    body_hash = excluded.body_hash,
+                    body_excluded = excluded.body_excluded,
+                    comments = excluded.comments,
+                    comments_hash = excluded.comments_hash,
+                    comments_excluded = excluded.comments_excluded,
+                    attachments = excluded.attachments,
+                    payload = excluded.payload,
+                    source_created_at = excluded.source_created_at,
+                    source_updated_at = excluded.source_updated_at,
+                    fetched_at = excluded.fetched_at,
+                    orphaned_at = NULL,
+                    orphan_reason = NULL,
+                    metadata_source = excluded.metadata_source,
+                    updated_at = excluded.updated_at`,
+                [
+                    planId,
+                    snapshot.provider,
+                    snapshot.externalId,
+                    workspaceId,
+                    snapshot.externalKey,
+                    snapshot.url,
+                    snapshot.title,
+                    snapshot.stateName,
+                    snapshot.stateType,
+                    snapshot.assigneeName,
+                    snapshot.assigneeEmail,
+                    snapshot.labels === null ? null : JSON.stringify(snapshot.labels),
+                    snapshot.parentExternalId,
+                    snapshot.containerKind,
+                    snapshot.containerId,
+                    snapshot.containerName,
+                    snapshot.estimate,
+                    snapshot.priorityRaw,
+                    snapshot.priorityScheme,
+                    snapshot.body,
+                    snapshot.bodyHash,
+                    snapshot.bodyExcluded ? 1 : 0,
+                    snapshot.comments === null ? null : JSON.stringify(snapshot.comments),
+                    snapshot.commentsHash,
+                    snapshot.commentsExcluded ? 1 : 0,
+                    snapshot.attachments === null ? null : JSON.stringify(snapshot.attachments),
+                    JSON.stringify(snapshot.payload ?? {}),
+                    snapshot.sourceCreatedAt,
+                    snapshot.sourceUpdatedAt,
+                    snapshot.fetchedAt,
+                    null,
+                    null,
+                    snapshot.metadataSource,
+                    now,
+                    now,
+                ]
+            );
+        } catch (e) {
+            console.error(`[KanbanDatabase] upsertPlanTicket failed for ${snapshot.provider}:${snapshot.externalId} on plan ${planId}:`, e);
+            return false;
+        }
+        return this._persist();
+    }
+
+    /** Every ticket associated with one plan. Ordered so the display is stable. */
+    public async getPlanTickets(planId: string): Promise<PlanTicketRecord[]> {
+        if (!(await this.ensureReady())) { return []; }
+        return this._readPlanTickets(
+            `SELECT ${KanbanDatabase.PLAN_TICKET_COLUMNS} FROM plan_tickets
+              WHERE plan_id = ? ORDER BY provider ASC, external_id ASC`,
+            [planId]
+        );
+    }
+
+    /**
+     * Every ticket row in a workspace. Used by the board-record index the tickets
+     * panel consults, and by the snapshot publisher's bounded projection.
+     *
+     * `includeBodies` defaults to false: almost every reader wants the card fields,
+     * and the body is by far the largest column.
+     */
+    public async getPlanTicketsForWorkspace(
+        workspaceId: string,
+        includeBodies = false
+    ): Promise<PlanTicketRecord[]> {
+        if (!(await this.ensureReady())) { return []; }
+        const cols = includeBodies
+            ? KanbanDatabase.PLAN_TICKET_COLUMNS
+            : KanbanDatabase.PLAN_TICKET_COLUMNS
+                .replace(/(^|[\s,])body,/, '$1NULL AS body,')
+                .replace(/(^|[\s,])comments,/, '$1NULL AS comments,');
+        const rows = this._readPlanTickets(
+            `SELECT ${cols} FROM plan_tickets WHERE workspace_id = ? ORDER BY provider ASC, external_id ASC`,
+            [workspaceId]
+        );
+        if (!includeBodies) {
+            // Say that the READ dropped them. A caller must never read this null as
+            // "the ticket has no body" — call with includeBodies to actually ask.
+            for (const row of rows) { row.bodyOmittedFromRead = true; }
+        }
+        return rows;
+    }
+
+    /**
+     * Every plan associated with one external ticket.
+     *
+     * Deliberately a list: two machines importing the same ticket as two plans is
+     * legitimate, and a caller that assumed one row would silently pick a winner.
+     */
+    public async getPlansForTicket(
+        workspaceId: string,
+        provider: PlanTicketProvider,
+        externalId: string
+    ): Promise<PlanTicketRecord[]> {
+        if (!(await this.ensureReady())) { return []; }
+        return this._readPlanTickets(
+            `SELECT ${KanbanDatabase.PLAN_TICKET_COLUMNS} FROM plan_tickets
+              WHERE workspace_id = ? AND provider = ? AND external_id = ?
+              ORDER BY plan_id ASC`,
+            [workspaceId, provider, externalId]
+        );
+    }
+
+    /**
+     * Mark a ticket association orphaned — the ticket was deleted upstream, or the
+     * plan was unlinked from it.
+     *
+     * The snapshot is RETAINED. Somebody may have worked the plan from it, and
+     * deleting the record would destroy the only remaining account of what the work
+     * was for. `orphan_reason` records which of the two happened, because "Linear
+     * deleted it" and "we unlinked it" are different facts with different fixes.
+     */
+    public async markPlanTicketOrphaned(
+        planId: string,
+        provider: PlanTicketProvider,
+        externalId: string,
+        reason: 'deleted-upstream' | 'unlinked' | string
+    ): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) { return false; }
+        const now = new Date().toISOString();
+        try {
+            this._db.run(
+                `UPDATE plan_tickets SET orphaned_at = ?, orphan_reason = ?, updated_at = ?
+                  WHERE plan_id = ? AND provider = ? AND external_id = ?`,
+                [now, reason, now, planId, provider, externalId]
+            );
+        } catch (e) {
+            console.warn(`[KanbanDatabase] markPlanTicketOrphaned failed for ${provider}:${externalId}:`, e);
             return false;
         }
         return this._persist();
@@ -7602,13 +8534,31 @@ export class KanbanDatabase {
         const statusClause = targetStatus ? ', status = ?' : '';
         const subtaskStatusFilter = includeAllSubtasks ? '' : " AND status = 'active'";
         try {
+            const dispatchClear = this._columnMoveDispatchClearSql();
+            // Collect the moved ids BEFORE the UPDATE — the runtime-tier clear is keyed by
+            // plan_id, and after the move the subtask filter would still match but the read
+            // would be a second query inside the transaction for no gain.
+            const movedIds: string[] = [featurePlanId];
+            try {
+                const idStmt = this._db.prepare(
+                    `SELECT plan_id FROM plans WHERE feature_id = ?${subtaskStatusFilter}`,
+                    [featurePlanId]
+                );
+                try {
+                    while (idStmt.step()) {
+                        const id = String((idStmt.getAsObject() as any).plan_id || '');
+                        if (id) movedIds.push(id);
+                    }
+                } finally { idStmt.free(); }
+            } catch { /* best-effort: the plans UPDATE below is the load-bearing half */ }
+
             this._db.run('BEGIN');
             // Move the feature itself
             const featureParams: unknown[] = targetStatus
                 ? [targetColumn, targetStatus, now, now, featurePlanId]
                 : [targetColumn, now, now, featurePlanId];
             this._db.run(
-                `UPDATE plans SET kanban_column = ?${statusClause}, updated_at = ?, column_entered_at = ?, dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL WHERE plan_id = ?`,
+                `UPDATE plans SET kanban_column = ?${statusClause}, updated_at = ?, column_entered_at = ?${dispatchClear} WHERE plan_id = ?`,
                 featureParams
             );
             // Cascade subtasks atomically (no read-then-write race)
@@ -7616,9 +8566,10 @@ export class KanbanDatabase {
                 ? [targetColumn, targetStatus, now, now, featurePlanId]
                 : [targetColumn, now, now, featurePlanId];
             this._db.run(
-                `UPDATE plans SET kanban_column = ?${statusClause}, updated_at = ?, column_entered_at = ?, dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL WHERE feature_id = ?${subtaskStatusFilter}`,
+                `UPDATE plans SET kanban_column = ?${statusClause}, updated_at = ?, column_entered_at = ?${dispatchClear} WHERE feature_id = ?${subtaskStatusFilter}`,
                 subtaskParams
             );
+            this._clearRuntimeDispatchForPlanIds(movedIds);
             this._db.run('COMMIT');
             await this._persist();
             // Force an immediate disk flush — _persist() is debounced 300ms, so the
@@ -9597,6 +10548,29 @@ export class KanbanDatabase {
             await this.setMigrationVersion(73);
             console.log('[KanbanDatabase] V73 migration completed: coding_rounds table added');
         }
+
+        // V74: Split shared board state from machine-local runtime state.
+        // Rebuilds plans table without local runtime columns: dispatched_terminal, dispatched_at,
+        // last_liveness_at, blocked_at. Local runtime state is copied to plan_runtime_state.
+        const v74 = await this.getMigrationVersion();
+        if (v74 < 74) {
+            await this._runMigrationV74();
+            await this.setMigrationVersion(74);
+            console.log('[KanbanDatabase] V74 migration completed: split shared board state from machine-local runtime state');
+        }
+
+        // V75: plan_tickets — imported ticket metadata as shared board state
+        // (ticket-metadata-as-first-class-board-state.md). Additive: creates the
+        // table, then backfills a row per existing plan↔ticket link. Nothing is
+        // removed and nothing is fabricated — a link whose metadata cannot be
+        // resolved yields a row holding the id and NULLs, tagged with the backfill
+        // source that produced it.
+        const v75 = await this.getMigrationVersion();
+        if (v75 < 75) {
+            await this._runMigrationV75();
+            await this.setMigrationVersion(75);
+            console.log('[KanbanDatabase] V75 migration completed: plan_tickets table added and backfilled');
+        }
     }
 
     private async _backfillStagedCardsToMissions(): Promise<void> {
@@ -10274,6 +11248,397 @@ export class KanbanDatabase {
         for (const sql of MIGRATION_V70_INDEXES_SQL) {
             try { this._db.exec(sql); } catch { /* ignore if already exists */ }
         }
+    }
+
+    /**
+     * V74: Split shared board state from machine-local runtime state.
+     * Copies existing runtime state from plans into plan_runtime_state (keyed by plan_id + device_id),
+     * then rebuilds plans without the local runtime columns (dispatched_terminal, dispatched_at,
+     * last_liveness_at, blocked_at), preserving any unknown/legacy columns from PRAGMA table_info.
+     */
+    private async _runMigrationV74(): Promise<void> {
+        if (!this._db) return;
+        for (const sql of MIGRATION_V74_SQL) {
+            try { this._db.exec(sql); } catch { /* ignore if already exists */ }
+        }
+
+        const existingTables = this._getExistingTableNames();
+        if (!existingTables.has('plans')) return;
+
+        // Check if plans still has local runtime columns to drop
+        const hasTerminal = this._tableHasColumn('plans', 'dispatched_terminal');
+        const hasDispatchedAt = this._tableHasColumn('plans', 'dispatched_at');
+        const hasLiveness = this._tableHasColumn('plans', 'last_liveness_at');
+        const hasBlockedAt = this._tableHasColumn('plans', 'blocked_at');
+
+        if (!hasTerminal && !hasDispatchedAt && !hasLiveness && !hasBlockedAt) {
+            // Already migrated or clean
+            return;
+        }
+
+        const machineId = getMachineId();
+        let wsId = await this.getWorkspaceId();
+        if (!wsId && this._workspaceRoot) {
+            wsId = this._getWorkspaceIdFallback();
+        }
+        if (!wsId) wsId = 'default';
+
+        // 1. Copy local runtime state into plan_runtime_state before table rebuild
+        try {
+            this._db.run(
+                `INSERT OR REPLACE INTO plan_runtime_state (
+                    plan_id, device_id, workspace_id, dispatched_agent, dispatched_ide,
+                    dispatched_terminal, dispatched_at, last_liveness_at, blocked_at, updated_at
+                )
+                SELECT
+                    plan_id, ?, COALESCE(NULLIF(workspace_id, ''), ?),
+                    COALESCE(dispatched_agent, ''), COALESCE(dispatched_ide, ''),
+                    COALESCE(dispatched_terminal, ''), dispatched_at, last_liveness_at, blocked_at,
+                    COALESCE(NULLIF(updated_at, ''), datetime('now'))
+                FROM plans
+                WHERE dispatched_terminal != '' OR dispatched_at IS NOT NULL OR last_liveness_at IS NOT NULL OR blocked_at IS NOT NULL`,
+                [machineId, wsId]
+            );
+        } catch (copyErr) {
+            console.warn('[KanbanDatabase] V74: copying runtime state to plan_runtime_state:', copyErr);
+        }
+
+        // 2. Rebuild plans table without local runtime columns in one transaction
+        this._db.exec('BEGIN TRANSACTION');
+        try {
+            this._db.exec('DROP TABLE IF EXISTS plans_new');
+            const cols = this._getTableColumns('plans');
+            const localCols = new Set(['dispatched_terminal', 'dispatched_at', 'last_liveness_at', 'blocked_at']);
+            const keepCols = cols.filter(c => !localCols.has(c.name));
+
+            const colDefs: string[] = [];
+            const copyColNames: string[] = [];
+            for (const c of keepCols) {
+                copyColNames.push(c.name);
+                if (c.name === 'plan_id') {
+                    colDefs.push('plan_id TEXT PRIMARY KEY');
+                } else if (c.name === 'session_id') {
+                    colDefs.push('session_id TEXT NOT NULL');
+                } else if (c.name === 'topic') {
+                    colDefs.push('topic TEXT NOT NULL');
+                } else if (c.name === 'workspace_id') {
+                    colDefs.push('workspace_id TEXT NOT NULL');
+                } else {
+                    let def = `${c.name} ${c.type || 'TEXT'}`;
+                    if (c.notnull) def += ' NOT NULL';
+                    if (c.dflt_value !== null && c.dflt_value !== undefined) {
+                        def += ` DEFAULT (${c.dflt_value})`;
+                    }
+                    colDefs.push(def);
+                }
+            }
+
+            const createSql = `CREATE TABLE plans_new (
+                ${colDefs.join(',\n                ')}
+            )`;
+            this._db.exec(createSql);
+            this._db.exec(`INSERT INTO plans_new (${copyColNames.join(', ')}) SELECT ${copyColNames.join(', ')} FROM plans`);
+            this._db.exec('DROP TABLE plans');
+            this._db.exec('ALTER TABLE plans_new RENAME TO plans');
+
+            // Re-apply plans indexes
+            this._db.exec('CREATE INDEX IF NOT EXISTS idx_plans_column ON plans(kanban_column)');
+            this._db.exec('CREATE INDEX IF NOT EXISTS idx_plans_workspace ON plans(workspace_id)');
+            this._db.exec('CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status)');
+            this._db.exec('CREATE INDEX IF NOT EXISTS idx_plans_workspace_name ON plans(workspace_name)');
+            this._db.exec('CREATE INDEX IF NOT EXISTS idx_plans_project_id ON plans(project_id)');
+            this._db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_plans_plan_file_workspace ON plans(plan_file, workspace_id)');
+            this._db.exec('CREATE INDEX IF NOT EXISTS idx_plans_notion_page ON plans(workspace_id, notion_page_id)');
+            this._db.exec('CREATE INDEX IF NOT EXISTS idx_plans_repo_scope ON plans(workspace_id, repo_scope)');
+            this._db.exec('CREATE INDEX IF NOT EXISTS idx_plans_clickup_task ON plans(workspace_id, clickup_task_id)');
+            this._db.exec('CREATE INDEX IF NOT EXISTS idx_plans_linear_issue ON plans(workspace_id, linear_issue_id)');
+
+            this._db.exec('COMMIT');
+        } catch (err) {
+            try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
+            throw err;
+        }
+    }
+
+    /**
+     * V75: `plan_tickets` — imported ticket metadata becomes shared board state.
+     *
+     * See `.switchboard/plans/ticket-metadata-as-first-class-board-state.md`.
+     *
+     * Strictly additive. Creates the table, then backfills one row per plan↔ticket
+     * link that already exists on this install, from three sources in descending
+     * order of trust:
+     *
+     *   1. `plans.linear_issue_id` / `plans.clickup_task_id` — the shipped columns.
+     *      They stay in place and stay populated; this reads them, never clears them.
+     *   2. `linear_issue_links` — the older path-keyed link table, for rows whose
+     *      plan column was never stamped.
+     *   3. The `.switchboard/tickets/` file cache, which is machine-local and
+     *      gitignored — so it may be absent, and its absence is not an error. Only
+     *      the frontmatter keys actually present are copied.
+     *
+     * **Nothing is invented.** A link that resolves to no metadata yields a row
+     * holding the provider, the external id, and NULL everywhere else, tagged with
+     * the backfill source that produced it. `fetched_at` stays NULL on a backfilled
+     * row because no fetch happened — stamping it with the migration's clock would
+     * make `ticketStaleness()` answer `fresh` for a row that holds nothing.
+     */
+    private async _runMigrationV75(): Promise<void> {
+        if (!this._db) return;
+        for (const sql of MIGRATION_V75_SQL) {
+            try { this._db.exec(sql); } catch { /* table or index already exists */ }
+        }
+
+        const existingTables = this._getExistingTableNames();
+        if (!existingTables.has('plans')) return;
+
+        const now = new Date().toISOString();
+        let wsFallback = await this.getWorkspaceId();
+        if (!wsFallback && this._workspaceRoot) {
+            wsFallback = this._getWorkspaceIdFallback();
+        }
+        if (!wsFallback) { wsFallback = 'default'; }
+
+        // The file cache is optional and machine-local. Index it once, up front —
+        // an absent directory simply yields an empty index, which is the correct
+        // outcome for a fresh clone and for every install that never used tickets.
+        const fileCache = this._indexTicketFileCacheForBackfill();
+
+        // Rows are inserted with INSERT OR IGNORE against the (plan_id, provider,
+        // external_id) primary key, so re-running the migration is a no-op and a
+        // later, richer source never clobbers an earlier one silently — the file
+        // pass below UPDATEs only rows it can actually add fields to.
+        const insert = (
+            planId: string,
+            workspaceId: string,
+            provider: 'linear' | 'clickup',
+            externalId: string,
+            metadataSource: string
+        ): void => {
+            try {
+                this._db!.run(
+                    `INSERT OR IGNORE INTO plan_tickets
+                        (plan_id, provider, external_id, workspace_id, payload,
+                         body_excluded, comments_excluded, metadata_source,
+                         fetched_at, created_at, updated_at)
+                     VALUES (?, ?, ?, ?, '{}', 0, 0, ?, NULL, ?, ?)`,
+                    [planId, provider, externalId, workspaceId, metadataSource, now, now]
+                );
+            } catch (e) {
+                console.warn(`[KanbanDatabase] V75 backfill: insert failed for ${provider}:${externalId}:`, e);
+            }
+        };
+
+        // ── Source 1: the two id columns on plans ──
+        const linked: Array<{ planId: string; workspaceId: string; provider: 'linear' | 'clickup'; externalId: string }> = [];
+        try {
+            const stmt = this._db.prepare(
+                `SELECT plan_id, workspace_id, linear_issue_id, clickup_task_id
+                   FROM plans
+                  WHERE (linear_issue_id IS NOT NULL AND linear_issue_id != '')
+                     OR (clickup_task_id IS NOT NULL AND clickup_task_id != '')`
+            );
+            try {
+                while (stmt.step()) {
+                    const r = stmt.getAsObject();
+                    const planId = String(r.plan_id ?? '');
+                    if (!planId) { continue; }
+                    const wsId = String(r.workspace_id ?? '') || wsFallback;
+                    const li = String(r.linear_issue_id ?? '').trim();
+                    const cu = String(r.clickup_task_id ?? '').trim();
+                    if (li) { linked.push({ planId, workspaceId: wsId, provider: 'linear', externalId: li }); }
+                    if (cu) { linked.push({ planId, workspaceId: wsId, provider: 'clickup', externalId: cu }); }
+                }
+            } finally {
+                stmt.free();
+            }
+        } catch (e) {
+            console.warn('[KanbanDatabase] V75 backfill: reading plans id columns failed:', e);
+        }
+
+        for (const l of linked) {
+            insert(l.planId, l.workspaceId, l.provider, l.externalId, 'backfill-plan-column');
+        }
+
+        // ── Source 2: linear_issue_links, keyed by plan PATH rather than plan id ──
+        // Its plan_path is stored relative to the workspace root in the modern path
+        // and absolute in older rows, so both shapes are resolved. A row whose path
+        // matches no plan is skipped, not guessed at.
+        if (existingTables.has('linear_issue_links')) {
+            const links: Array<{ issueId: string; planPath: string }> = [];
+            try {
+                const stmt = this._db.prepare('SELECT issue_id, plan_path FROM linear_issue_links');
+                try {
+                    while (stmt.step()) {
+                        const r = stmt.getAsObject();
+                        const issueId = String(r.issue_id ?? '').trim();
+                        const planPath = String(r.plan_path ?? '').trim();
+                        if (issueId && planPath) { links.push({ issueId, planPath }); }
+                    }
+                } finally {
+                    stmt.free();
+                }
+            } catch (e) {
+                console.warn('[KanbanDatabase] V75 backfill: reading linear_issue_links failed:', e);
+            }
+
+            for (const link of links) {
+                const normalized = link.planPath.replace(/\\/g, '/');
+                const basename = normalized.split('/').pop() || normalized;
+                let planId = '';
+                let wsId = '';
+                try {
+                    const stmt = this._db.prepare(
+                        `SELECT plan_id, workspace_id FROM plans
+                          WHERE plan_file = ? OR plan_file LIKE ?
+                          LIMIT 1`,
+                        [link.planPath, `%/${basename}`]
+                    );
+                    try {
+                        if (stmt.step()) {
+                            const r = stmt.getAsObject();
+                            planId = String(r.plan_id ?? '');
+                            wsId = String(r.workspace_id ?? '');
+                        }
+                    } finally {
+                        stmt.free();
+                    }
+                } catch { /* unresolvable link — skipped below */ }
+                if (!planId) { continue; }
+                insert(planId, wsId || wsFallback, 'linear', link.issueId, 'backfill-issue-link');
+            }
+        }
+
+        // ── Source 3: the gitignored file cache, where present ──
+        // Only fields the file actually carries are written, and only onto rows that
+        // still hold NULL there. `metadata_source` is re-tagged so a reader can see
+        // that these fields came from a local cache rather than from the provider.
+        if (fileCache.size > 0) {
+            let enriched = 0;
+            const rows: Array<{ planId: string; provider: string; externalId: string }> = [];
+            try {
+                const stmt = this._db.prepare(
+                    `SELECT plan_id, provider, external_id FROM plan_tickets WHERE title IS NULL`
+                );
+                try {
+                    while (stmt.step()) {
+                        const r = stmt.getAsObject();
+                        rows.push({
+                            planId: String(r.plan_id ?? ''),
+                            provider: String(r.provider ?? ''),
+                            externalId: String(r.external_id ?? ''),
+                        });
+                    }
+                } finally {
+                    stmt.free();
+                }
+            } catch { /* nothing to enrich */ }
+
+            for (const row of rows) {
+                const cached = fileCache.get(`${row.provider}:${row.externalId}`);
+                if (!cached) { continue; }
+                try {
+                    this._db.run(
+                        `UPDATE plan_tickets
+                            SET title = COALESCE(title, ?),
+                                state_name = COALESCE(state_name, ?),
+                                state_type = COALESCE(state_type, ?),
+                                assignee_name = COALESCE(assignee_name, ?),
+                                parent_external_id = COALESCE(parent_external_id, ?),
+                                container_kind = COALESCE(container_kind, ?),
+                                container_id = COALESCE(container_id, ?),
+                                container_name = COALESCE(container_name, ?),
+                                metadata_source = 'backfill-file-cache',
+                                updated_at = ?
+                          WHERE plan_id = ? AND provider = ? AND external_id = ?`,
+                        [
+                            cached.title, cached.stateName, cached.stateType, cached.assigneeName,
+                            cached.parentExternalId, cached.containerKind, cached.containerId,
+                            cached.containerName, now,
+                            row.planId, row.provider, row.externalId,
+                        ]
+                    );
+                    enriched++;
+                } catch (e) {
+                    console.warn(`[KanbanDatabase] V75 backfill: file-cache enrich failed for ${row.provider}:${row.externalId}:`, e);
+                }
+            }
+            if (enriched > 0) {
+                console.log(`[KanbanDatabase] V75 backfill: enriched ${enriched} plan_tickets row(s) from the local ticket file cache`);
+            }
+        }
+
+        console.log(`[KanbanDatabase] V75 backfill: ${linked.length} plan↔ticket link(s) read from the plans id columns`);
+    }
+
+    /**
+     * Index `.switchboard/tickets/<provider>/**\/<provider>_<id>_<slug>.md` for the
+     * V75 backfill, keyed `<provider>:<id>`.
+     *
+     * This cache is machine-local and gitignored — the very problem plan_tickets
+     * exists to fix — so an absent directory is the expected case, not a failure.
+     * Only the frontmatter keys the importer actually writes are read, and a key
+     * that is missing stays `null`; nothing here substitutes a plausible value.
+     */
+    private _indexTicketFileCacheForBackfill(): Map<string, {
+        title: string | null;
+        stateName: string | null;
+        stateType: string | null;
+        assigneeName: string | null;
+        parentExternalId: string | null;
+        containerKind: string | null;
+        containerId: string | null;
+        containerName: string | null;
+    }> {
+        const index = new Map<string, any>();
+        if (!this._workspaceRoot) { return index; }
+        const ticketsRoot = path.join(this._workspaceRoot, '.switchboard', 'tickets');
+        if (!fs.existsSync(ticketsRoot)) { return index; }
+
+        const fm = (block: string, key: string): string | null => {
+            const m = block.match(new RegExp(`^${key}:\\s*(.+)$`, 'm'));
+            if (!m) { return null; }
+            const v = m[1].trim();
+            return v.length > 0 ? v : null;
+        };
+
+        const walk = (dir: string, depth: number): void => {
+            if (depth > 6) { return; }
+            let entries: fs.Dirent[];
+            try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+            for (const entry of entries) {
+                const full = path.join(dir, entry.name);
+                if (entry.isDirectory()) { walk(full, depth + 1); continue; }
+                if (!entry.isFile() || !entry.name.endsWith('.md')) { continue; }
+                const match = entry.name.match(/^(clickup|linear)_([^_]+)_(.+)\.md$/);
+                if (!match) { continue; }
+                const provider = match[1];
+                const externalId = match[2];
+                let content = '';
+                try { content = fs.readFileSync(full, 'utf8'); } catch { continue; }
+                const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+                const block = fmMatch ? fmMatch[1] : '';
+                const h1 = content.match(/^#\s+(.+)$/m);
+                const containerId = provider === 'clickup' ? fm(block, 'listId') : fm(block, 'projectId');
+                const containerName = provider === 'clickup' ? null : fm(block, 'projectName');
+                index.set(`${provider}:${externalId}`, {
+                    title: h1 ? h1[1].trim() : null,
+                    stateName: fm(block, 'status'),
+                    stateType: fm(block, 'statusType'),
+                    assigneeName: fm(block, 'assignees'),
+                    parentExternalId: fm(block, 'parentId'),
+                    // Provider-qualified, so a ClickUp list is never read as a Linear project.
+                    containerKind: (containerId || containerName)
+                        ? (provider === 'clickup' ? 'clickup.list' : 'linear.project')
+                        : null,
+                    containerId,
+                    containerName,
+                });
+            }
+        };
+
+        walk(ticketsRoot, 0);
+        return index;
     }
 
     private _safeExec(label: string, sql: string): void {
@@ -11310,7 +12675,6 @@ FROM plans
                                     timestamp: arc.timestamp,
                                     device_id: arc.device_id,
                                     user_id: arc.user_id,
-                                    vector_clock: arc.vector_clock,
                                     payload: arc.payload,
                                     workspace_id: arc.workspace_id,
                                     archived: true
@@ -11957,10 +13321,50 @@ FROM plans
         // NOTE: For feature cards, the working flag is derived from subtasks' dispatched_at
         // values, but we still write/clear the feature row's own dispatched_at for dispatch-identity.
         const terminalName = info.dispatchedTerminal || '';
-        return this._persistedUpdate(
-            'UPDATE plans SET routed_to = ?, dispatched_agent = ?, dispatched_ide = ?, dispatched_terminal = ?, dispatched_at = ?, completed_at = NULL, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
-            [info.routedTo, info.dispatchedAgent, info.dispatchedIde, terminalName, new Date().toISOString(), new Date().toISOString(), normalized, workspaceId]
-        );
+        const now = new Date().toISOString();
+
+        // 1. Shared tier update: routed_to, completed_at, updated_at on plans (plus backwards-compat columns if table not yet migrated)
+        let ok = false;
+        if (this._tableHasColumn('plans', 'dispatched_terminal')) {
+            ok = await this._persistedUpdate(
+                'UPDATE plans SET routed_to = ?, dispatched_agent = ?, dispatched_ide = ?, dispatched_terminal = ?, dispatched_at = ?, completed_at = NULL, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+                [info.routedTo, info.dispatchedAgent, info.dispatchedIde, terminalName, now, now, normalized, workspaceId]
+            );
+        } else {
+            ok = await this._persistedUpdate(
+                'UPDATE plans SET routed_to = ?, completed_at = NULL, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+                [info.routedTo, now, normalized, workspaceId]
+            );
+        }
+
+        // 2. Machine-local runtime tier update: upsert into plan_runtime_state
+        if (this._db) {
+            try {
+                const planId = this.getPlanIdByPlanFileSync(normalized, workspaceId);
+                if (planId) {
+                    const machineId = getMachineId();
+                    this._db.run(
+                        `INSERT INTO plan_runtime_state (
+                            plan_id, device_id, workspace_id, dispatched_agent, dispatched_ide,
+                            dispatched_terminal, dispatched_at, last_liveness_at, blocked_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
+                        ON CONFLICT(plan_id, device_id) DO UPDATE SET
+                            dispatched_agent = excluded.dispatched_agent,
+                            dispatched_ide = excluded.dispatched_ide,
+                            dispatched_terminal = excluded.dispatched_terminal,
+                            dispatched_at = excluded.dispatched_at,
+                            last_liveness_at = NULL,
+                            blocked_at = NULL,
+                            updated_at = excluded.updated_at`,
+                        [planId, machineId, workspaceId, info.dispatchedAgent, info.dispatchedIde, terminalName, now, now]
+                    );
+                    await this._persist();
+                }
+            } catch (err) {
+                console.warn('[KanbanDatabase] updateDispatchInfoByPlanFile runtime state upsert failed:', err);
+            }
+        }
+        return ok;
     }
 
     /** @deprecated session_id is no longer the unique key; use updateDispatchInfoByPlanFile instead. */
@@ -11999,10 +13403,48 @@ FROM plans
         const normalized = this._ensureRelativePlanFile(planFile);
         const terminalName = info.dispatchedTerminal || '';
         const stamp = info.dispatchedAt || new Date().toISOString();
-        return this._persistedUpdate(
-            'UPDATE plans SET dispatched_agent = ?, dispatched_terminal = ?, dispatched_at = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
-            [info.dispatchedAgent, terminalName, stamp, new Date().toISOString(), normalized, workspaceId]
-        );
+        const now = new Date().toISOString();
+
+        let ok = false;
+        if (this._tableHasColumn('plans', 'dispatched_terminal')) {
+            ok = await this._persistedUpdate(
+                'UPDATE plans SET dispatched_agent = ?, dispatched_terminal = ?, dispatched_at = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+                [info.dispatchedAgent, terminalName, stamp, now, normalized, workspaceId]
+            );
+        } else {
+            ok = await this._persistedUpdate(
+                'UPDATE plans SET updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+                [now, normalized, workspaceId]
+            );
+        }
+
+        // Machine-local runtime tier update
+        if (this._db) {
+            try {
+                const planId = this.getPlanIdByPlanFileSync(normalized, workspaceId);
+                if (planId) {
+                    const machineId = getMachineId();
+                    this._db.run(
+                        `INSERT INTO plan_runtime_state (
+                            plan_id, device_id, workspace_id, dispatched_agent, dispatched_ide,
+                            dispatched_terminal, dispatched_at, last_liveness_at, blocked_at, updated_at
+                        ) VALUES (?, ?, ?, ?, '', ?, ?, NULL, NULL, ?)
+                        ON CONFLICT(plan_id, device_id) DO UPDATE SET
+                            dispatched_agent = excluded.dispatched_agent,
+                            dispatched_terminal = excluded.dispatched_terminal,
+                            dispatched_at = excluded.dispatched_at,
+                            last_liveness_at = NULL,
+                            blocked_at = NULL,
+                            updated_at = excluded.updated_at`,
+                        [planId, machineId, workspaceId, info.dispatchedAgent, terminalName, stamp, now]
+                    );
+                    await this._persist();
+                }
+            } catch (err) {
+                console.warn('[KanbanDatabase] attributePasteDispatch runtime state upsert failed:', err);
+            }
+        }
+        return ok;
     }
 
     /**
@@ -12029,12 +13471,32 @@ FROM plans
         // re-dispatch starts from a clean widened basis (no stale heartbeat or
         // blocked stamp from a prior run).
         try {
-            this._db.run(
-                'UPDATE plans SET dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL ' +
-                'WHERE plan_file = ? AND workspace_id = ? AND dispatched_at IS NOT NULL',
-                [normalized, workspaceId]
-            );
-            const transitioned = this._db.getRowsModified() > 0;
+            let transitioned = false;
+            if (this._tableHasColumn('plans', 'dispatched_at')) {
+                this._db.run(
+                    'UPDATE plans SET dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL ' +
+                    'WHERE plan_file = ? AND workspace_id = ? AND dispatched_at IS NOT NULL',
+                    [normalized, workspaceId]
+                );
+                if (this._db.getRowsModified() > 0) {
+                    transitioned = true;
+                }
+            }
+
+            // Also clear in machine-local plan_runtime_state
+            const planId = this.getPlanIdByPlanFileSync(normalized, workspaceId);
+            if (planId) {
+                const machineId = getMachineId();
+                this._db.run(
+                    'UPDATE plan_runtime_state SET dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL, updated_at = ? ' +
+                    'WHERE plan_id = ? AND device_id = ? AND dispatched_at IS NOT NULL',
+                    [new Date().toISOString(), planId, machineId]
+                );
+                if (this._db.getRowsModified() > 0) {
+                    transitioned = true;
+                }
+            }
+
             if (transitioned) { await this._persist(); }
             return transitioned;
         } catch (error) {
@@ -12052,12 +13514,41 @@ FROM plans
         if (!(await this.ensureReady()) || !this._db) return false;
         const normalized = this._ensureRelativePlanFile(planFile);
         try {
-            this._db.run(
-                'UPDATE plans SET dispatched_terminal = NULL, dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL, updated_at = ? ' +
-                'WHERE plan_file = ? AND workspace_id = ?',
-                [new Date().toISOString(), normalized, workspaceId]
-            );
-            const transitioned = this._db.getRowsModified() > 0;
+            let transitioned = false;
+            const now = new Date().toISOString();
+            if (this._tableHasColumn('plans', 'dispatched_terminal')) {
+                this._db.run(
+                    'UPDATE plans SET dispatched_terminal = NULL, dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL, updated_at = ? ' +
+                    'WHERE plan_file = ? AND workspace_id = ?',
+                    [now, normalized, workspaceId]
+                );
+                if (this._db.getRowsModified() > 0) {
+                    transitioned = true;
+                }
+            } else {
+                this._db.run(
+                    'UPDATE plans SET updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+                    [now, normalized, workspaceId]
+                );
+                if (this._db.getRowsModified() > 0) {
+                    transitioned = true;
+                }
+            }
+
+            // Also null in machine-local plan_runtime_state
+            const planId = this.getPlanIdByPlanFileSync(normalized, workspaceId);
+            if (planId) {
+                const machineId = getMachineId();
+                this._db.run(
+                    'UPDATE plan_runtime_state SET dispatched_terminal = \'\', dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL, updated_at = ? ' +
+                    'WHERE plan_id = ? AND device_id = ?',
+                    [now, planId, machineId]
+                );
+                if (this._db.getRowsModified() > 0) {
+                    transitioned = true;
+                }
+            }
+
             if (transitioned) { await this._persist(); }
             return transitioned;
         } catch (error) {
@@ -12323,13 +13814,20 @@ FROM plans
      */
     public async getActiveDispatchedByTerminal(workspaceId: string, terminalName: string): Promise<KanbanPlanRecord | null> {
         if (!(await this.ensureReady()) || !this._db || !workspaceId || !terminalName) return null;
-        const stmt = this._db.prepare(
-            `SELECT ${PLAN_COLUMNS} FROM plans
-             WHERE workspace_id = ? AND status = 'active' AND is_feature = 0
-               AND dispatched_terminal = ? AND dispatched_at IS NOT NULL
-             ORDER BY dispatched_at DESC LIMIT 1`,
-            [workspaceId, terminalName]
-        );
+        const hasTerminalCol = this._tableHasColumn('plans', 'dispatched_terminal');
+        const sql = hasTerminalCol
+            ? `SELECT ${PLAN_COLUMNS} FROM plans
+               WHERE workspace_id = ? AND status = 'active' AND is_feature = 0
+                 AND dispatched_terminal = ? AND dispatched_at IS NOT NULL
+               ORDER BY dispatched_at DESC LIMIT 1`
+            : `SELECT p.* FROM plans p
+               JOIN plan_runtime_state r ON p.plan_id = r.plan_id
+               WHERE p.workspace_id = ? AND p.status = 'active' AND p.is_feature = 0
+                 AND r.device_id = ? AND r.dispatched_terminal = ? AND r.dispatched_at IS NOT NULL
+               ORDER BY r.dispatched_at DESC LIMIT 1`;
+        const machineId = getMachineId();
+        const params = hasTerminalCol ? [workspaceId, terminalName] : [workspaceId, machineId, terminalName];
+        const stmt = this._db.prepare(sql, params);
         try {
             const rows = this._readRows(stmt);
             return rows[0] ?? null;
@@ -12359,12 +13857,18 @@ FROM plans
      */
     public async countActiveDispatchedByTerminal(workspaceId: string, terminalName: string): Promise<number> {
         if (!(await this.ensureReady()) || !this._db || !workspaceId || !terminalName) return 0;
-        const stmt = this._db.prepare(
-            `SELECT COUNT(*) AS n FROM plans
-             WHERE workspace_id = ? AND status = 'active' AND is_feature = 0
-               AND dispatched_terminal = ? AND dispatched_at IS NOT NULL`,
-            [workspaceId, terminalName]
-        );
+        const hasTerminalCol = this._tableHasColumn('plans', 'dispatched_terminal');
+        const sql = hasTerminalCol
+            ? `SELECT COUNT(*) AS n FROM plans
+               WHERE workspace_id = ? AND status = 'active' AND is_feature = 0
+                 AND dispatched_terminal = ? AND dispatched_at IS NOT NULL`
+            : `SELECT COUNT(*) AS n FROM plans p
+               JOIN plan_runtime_state r ON p.plan_id = r.plan_id
+               WHERE p.workspace_id = ? AND p.status = 'active' AND p.is_feature = 0
+                 AND r.device_id = ? AND r.dispatched_terminal = ? AND r.dispatched_at IS NOT NULL`;
+        const machineId = getMachineId();
+        const params = hasTerminalCol ? [workspaceId, terminalName] : [workspaceId, machineId, terminalName];
+        const stmt = this._db.prepare(sql, params);
         try {
             if (stmt.step()) {
                 return Number((stmt.getAsObject() as any)?.n ?? 0);
@@ -12390,13 +13894,20 @@ FROM plans
         limit = 50
     ): Promise<KanbanPlanRecord[]> {
         if (!(await this.ensureReady()) || !this._db || !workspaceId || !terminalName) return [];
-        const stmt = this._db.prepare(
-            `SELECT ${PLAN_COLUMNS} FROM plans
-             WHERE workspace_id = ? AND status = 'active' AND is_feature = 0
-               AND dispatched_terminal = ? AND dispatched_at IS NOT NULL
-             ORDER BY dispatched_at DESC LIMIT ?`,
-            [workspaceId, terminalName, limit]
-        );
+        const hasTerminalCol = this._tableHasColumn('plans', 'dispatched_terminal');
+        const sql = hasTerminalCol
+            ? `SELECT ${PLAN_COLUMNS} FROM plans
+               WHERE workspace_id = ? AND status = 'active' AND is_feature = 0
+                 AND dispatched_terminal = ? AND dispatched_at IS NOT NULL
+               ORDER BY dispatched_at DESC LIMIT ?`
+            : `SELECT p.* FROM plans p
+               JOIN plan_runtime_state r ON p.plan_id = r.plan_id
+               WHERE p.workspace_id = ? AND p.status = 'active' AND p.is_feature = 0
+                 AND r.device_id = ? AND r.dispatched_terminal = ? AND r.dispatched_at IS NOT NULL
+               ORDER BY r.dispatched_at DESC LIMIT ?`;
+        const machineId = getMachineId();
+        const params = hasTerminalCol ? [workspaceId, terminalName, limit] : [workspaceId, machineId, terminalName, limit];
+        const stmt = this._db.prepare(sql, params);
         try {
             return this._readRows(stmt);
         } finally {
@@ -12425,12 +13936,11 @@ FROM plans
         const filtered = names.filter(n => !!n);
         if (filtered.length === 0) return [];
         const placeholders = filtered.map(() => '?').join(', ');
-        // ROW_NUMBER() picks the newest row per terminal by dispatched_at DESC
-        // (sql.js bundles SQLite 3.49.1, which supports window functions). This
-        // deliberately does NOT collapse to a single row across the set — one
-        // row per terminal is the whole point.
-        const stmt = this._db.prepare(
-            `WITH ranked AS (
+        const hasTerminalCol = this._tableHasColumn('plans', 'dispatched_terminal');
+        const machineId = getMachineId();
+
+        const sql = hasTerminalCol
+            ? `WITH ranked AS (
                 SELECT ${PLAN_COLUMNS},
                        ROW_NUMBER() OVER (PARTITION BY dispatched_terminal ORDER BY dispatched_at DESC) AS _rn
                 FROM plans
@@ -12438,9 +13948,20 @@ FROM plans
                   AND dispatched_at IS NOT NULL
                   AND dispatched_terminal IN (${placeholders})
             )
-            SELECT ${PLAN_COLUMNS} FROM ranked WHERE _rn = 1`,
-            [workspaceId, ...filtered]
-        );
+            SELECT ${PLAN_COLUMNS} FROM ranked WHERE _rn = 1`
+            : `WITH ranked AS (
+                SELECT p.*,
+                       ROW_NUMBER() OVER (PARTITION BY r.dispatched_terminal ORDER BY r.dispatched_at DESC) AS _rn
+                FROM plans p
+                JOIN plan_runtime_state r ON p.plan_id = r.plan_id
+                WHERE p.workspace_id = ? AND p.status = 'active' AND p.is_feature = 0
+                  AND r.device_id = ? AND r.dispatched_at IS NOT NULL
+                  AND r.dispatched_terminal IN (${placeholders})
+            )
+            SELECT * FROM ranked WHERE _rn = 1`;
+
+        const params = hasTerminalCol ? [workspaceId, ...filtered] : [workspaceId, machineId, ...filtered];
+        const stmt = this._db.prepare(sql, params);
         try {
             return this._readRows(stmt);
         } finally {
@@ -12465,20 +13986,26 @@ FROM plans
      */
     public async getActiveDispatchedByCwd(workspaceId: string, cwd: string): Promise<KanbanPlanRecord | null> {
         if (!(await this.ensureReady()) || !this._db || !workspaceId || !cwd) return null;
-        // Subquery, NOT a JOIN. `PLAN_COLUMNS` is an unqualified column list and
-        // `worktrees` shares `status`, `created_at`, `project` and `feature_id` with
-        // `plans` — joining the two tables makes every one of those ambiguous and
-        // SQLite rejects the statement at prepare time ("ambiguous column name:
-        // status"). A subquery on `worktree_id` keeps the shared column list usable.
-        const stmt = this._db.prepare(
-            `SELECT ${PLAN_COLUMNS} FROM plans
-             WHERE workspace_id = ? AND status = 'active' AND is_feature = 0
-               AND dispatched_at IS NOT NULL
-               AND (dispatched_terminal IS NULL OR dispatched_terminal = '')
-               AND worktree_id IN (SELECT id FROM worktrees WHERE path = ?)
-             ORDER BY dispatched_at DESC LIMIT 1`,
-            [workspaceId, cwd]
-        );
+        const hasTerminalCol = this._tableHasColumn('plans', 'dispatched_terminal');
+        const machineId = getMachineId();
+
+        const sql = hasTerminalCol
+            ? `SELECT ${PLAN_COLUMNS} FROM plans
+               WHERE workspace_id = ? AND status = 'active' AND is_feature = 0
+                 AND dispatched_at IS NOT NULL
+                 AND (dispatched_terminal IS NULL OR dispatched_terminal = '')
+                 AND worktree_id IN (SELECT id FROM worktrees WHERE path = ?)
+               ORDER BY dispatched_at DESC LIMIT 1`
+            : `SELECT p.* FROM plans p
+               JOIN plan_runtime_state r ON p.plan_id = r.plan_id
+               WHERE p.workspace_id = ? AND p.status = 'active' AND p.is_feature = 0
+                 AND r.device_id = ? AND r.dispatched_at IS NOT NULL
+                 AND (r.dispatched_terminal IS NULL OR r.dispatched_terminal = '')
+                 AND p.worktree_id IN (SELECT id FROM worktrees WHERE path = ?)
+               ORDER BY r.dispatched_at DESC LIMIT 1`;
+
+        const params = hasTerminalCol ? [workspaceId, cwd] : [workspaceId, machineId, cwd];
+        const stmt = this._db.prepare(sql, params);
         try {
             const rows = this._readRows(stmt);
             return rows[0] ?? null;
@@ -12500,14 +14027,24 @@ FROM plans
     public async getLiveDispatchAttribution(workspaceId: string): Promise<LiveDispatchAttributionRow[]> {
         const out: LiveDispatchAttributionRow[] = [];
         if (!(await this.ensureReady()) || !this._db || !workspaceId) return out;
-        const stmt = this._db.prepare(
-            `SELECT plan_id, topic, dispatched_terminal, dispatched_at, feature_id, project
-             FROM plans
-             WHERE workspace_id = ? AND status = 'active'
-               AND dispatched_at IS NOT NULL
-             ORDER BY dispatched_at DESC`,
-            [workspaceId]
-        );
+        const hasTerminalCol = this._tableHasColumn('plans', 'dispatched_terminal');
+        const machineId = getMachineId();
+
+        const sql = hasTerminalCol
+            ? `SELECT plan_id, topic, dispatched_terminal, dispatched_at, feature_id, project
+               FROM plans
+               WHERE workspace_id = ? AND status = 'active'
+                 AND dispatched_at IS NOT NULL
+               ORDER BY dispatched_at DESC`
+            : `SELECT p.plan_id, p.topic, r.dispatched_terminal, r.dispatched_at, p.feature_id, p.project
+               FROM plans p
+               JOIN plan_runtime_state r ON p.plan_id = r.plan_id
+               WHERE p.workspace_id = ? AND p.status = 'active'
+                 AND r.device_id = ? AND r.dispatched_at IS NOT NULL
+               ORDER BY r.dispatched_at DESC`;
+
+        const params = hasTerminalCol ? [workspaceId] : [workspaceId, machineId];
+        const stmt = this._db.prepare(sql, params);
         try {
             while (stmt.step()) {
                 const row = stmt.getAsObject();
@@ -12590,11 +14127,20 @@ FROM plans
             // stall nudge and the dispatch-timeout sweep key on. blocked_at is a
             // transient flag (dead writer — see KanbanPlanRecord.blockedAt) and the
             // only field this arm still clears.
+            if (this._tableHasColumn('plans', 'dispatched_at')) {
+                this._db.run(
+                    'UPDATE plans SET blocked_at = NULL ' +
+                    'WHERE workspace_id = ? AND dispatched_at IS NOT NULL ' +
+                    '  AND MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at)) < ?',
+                    [workspaceId, cutoff]
+                );
+            }
+            const machineId = getMachineId();
             this._db.run(
-                'UPDATE plans SET blocked_at = NULL ' +
-                'WHERE workspace_id = ? AND dispatched_at IS NOT NULL ' +
+                'UPDATE plan_runtime_state SET blocked_at = NULL, updated_at = ? ' +
+                'WHERE workspace_id = ? AND device_id = ? AND dispatched_at IS NOT NULL ' +
                 '  AND MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at)) < ?',
-                [workspaceId, cutoff]
+                [new Date().toISOString(), workspaceId, machineId, cutoff]
             );
             let modified = this._db.getRowsModified();
             // Exited-terminal force-clear: dead agents release immediately rather
@@ -12604,11 +14150,16 @@ FROM plans
             // orphan state). Only rows still carrying dispatched_at are in scope.
             if (forceTerminals.length > 0) {
                 const placeholders = forceTerminals.map(() => '?').join(', ');
-                const stmt = this._db.prepare(
-                    `SELECT plan_file FROM plans WHERE workspace_id = ? AND dispatched_at IS NOT NULL ` +
-                    `AND dispatched_terminal IN (${placeholders})`,
-                    [workspaceId, ...forceTerminals]
-                );
+                const query = this._tableHasColumn('plans', 'dispatched_terminal')
+                    ? `SELECT plan_file FROM plans WHERE workspace_id = ? AND dispatched_at IS NOT NULL ` +
+                      `AND dispatched_terminal IN (${placeholders})`
+                    : `SELECT p.plan_file FROM plans p JOIN plan_runtime_state r ON p.plan_id = r.plan_id ` +
+                      `WHERE r.workspace_id = ? AND r.device_id = ? AND r.dispatched_at IS NOT NULL ` +
+                      `AND r.dispatched_terminal IN (${placeholders})`;
+                const params = this._tableHasColumn('plans', 'dispatched_terminal')
+                    ? [workspaceId, ...forceTerminals]
+                    : [workspaceId, machineId, ...forceTerminals];
+                const stmt = this._db.prepare(query, params);
                 try {
                     while (stmt.step()) {
                         const pf = String(stmt.getAsObject().plan_file || '');
@@ -12657,14 +14208,31 @@ FROM plans
         if (names.length === 0) return 0;
         try {
             const placeholders = names.map(() => '?').join(', ');
+            let modified = 0;
+            if (this._tableHasColumn('plans', 'last_liveness_at')) {
+                this._db.run(
+                    `UPDATE plans SET last_liveness_at = ?, blocked_at = NULL ` +
+                    `WHERE workspace_id = ? AND dispatched_at IS NOT NULL ` +
+                    `AND dispatched_terminal IN (${placeholders})`,
+                    [atIso, workspaceId, ...names]
+                );
+                modified = this._db.getRowsModified();
+            }
+
+            // Update machine-local plan_runtime_state
+            const machineId = getMachineId();
             this._db.run(
-                `UPDATE plans SET last_liveness_at = ?, blocked_at = NULL ` +
-                `WHERE workspace_id = ? AND dispatched_at IS NOT NULL ` +
+                `UPDATE plan_runtime_state SET last_liveness_at = ?, blocked_at = NULL, updated_at = ? ` +
+                `WHERE workspace_id = ? AND device_id = ? AND dispatched_at IS NOT NULL ` +
                 `AND dispatched_terminal IN (${placeholders})`,
-                [atIso, workspaceId, ...names]
+                [atIso, atIso, workspaceId, machineId, ...names]
             );
-            const modified = this._db.getRowsModified();
-            if (modified > 0) { await this._persist(); }
+            const runtimeModified = this._db.getRowsModified();
+            if (modified === 0) {
+                modified = runtimeModified;
+            }
+
+            if (modified > 0 || runtimeModified > 0) { await this._persist(); }
             return modified;
         } catch (e) {
             console.error('[KanbanDatabase] recordLiveness failed:', e);
@@ -12829,6 +14397,65 @@ FROM plans
         } finally {
             stmt.free();
         }
+
+        // Application-level merge: join machine-local runtime state from plan_runtime_state.
+        // If the table exists and rows are present, local runtime facts (dispatched_terminal,
+        // dispatched_at, last_liveness_at, blocked_at) overlay the row for this device_id.
+        if (rows.length > 0 && this._db) {
+            try {
+                const machineId = getMachineId();
+                const planIds = rows.map(r => r.planId).filter(id => !!id);
+                if (planIds.length > 0) {
+                    const placeholders = planIds.map(() => '?').join(', ');
+                    const rStmt = this._db.prepare(
+                        `SELECT plan_id, dispatched_agent, dispatched_ide, dispatched_terminal, dispatched_at, last_liveness_at, blocked_at ` +
+                        `FROM plan_runtime_state WHERE device_id = ? AND plan_id IN (${placeholders})`,
+                        [machineId, ...planIds]
+                    );
+                    try {
+                        const runtimeMap = new Map<string, any>();
+                        while (rStmt.step()) {
+                            const ro = rStmt.getAsObject();
+                            runtimeMap.set(String(ro.plan_id), ro);
+                        }
+                        for (const row of rows) {
+                            const rt = runtimeMap.get(row.planId);
+                            if (rt) {
+                                if (rt.dispatched_terminal !== undefined && rt.dispatched_terminal !== null && rt.dispatched_terminal !== '') {
+                                    row.dispatchedTerminal = String(rt.dispatched_terminal);
+                                }
+                                if (rt.dispatched_agent !== undefined && rt.dispatched_agent !== null && rt.dispatched_agent !== '') {
+                                    row.dispatchedAgent = String(rt.dispatched_agent);
+                                }
+                                if (rt.dispatched_ide !== undefined && rt.dispatched_ide !== null && rt.dispatched_ide !== '') {
+                                    row.dispatchedIde = String(rt.dispatched_ide);
+                                }
+                                if (rt.dispatched_at !== undefined) {
+                                    row.dispatchedAt = rt.dispatched_at !== null ? String(rt.dispatched_at) : null;
+                                }
+                                if (rt.last_liveness_at !== undefined) {
+                                    row.lastLivenessAt = rt.last_liveness_at !== null ? String(rt.last_liveness_at) : null;
+                                }
+                                if (rt.blocked_at !== undefined) {
+                                    row.blockedAt = rt.blocked_at !== null ? String(rt.blocked_at) : null;
+                                }
+                            }
+                        }
+                    } finally {
+                        rStmt.free();
+                    }
+                }
+            } catch (runtimeErr) {
+                // If plan_runtime_state table doesn't exist yet (e.g. before V74 migration runs),
+                // it is safe to skip overlay. If the table DOES exist, do not silently swallow failures.
+                const tableExists = this._getExistingTableNames().has('plan_runtime_state');
+                if (tableExists) {
+                    console.error('[KanbanDatabase] Failed to merge plan_runtime_state into plan rows:', runtimeErr);
+                    throw runtimeErr;
+                }
+            }
+        }
+
         return rows;
     }
 
