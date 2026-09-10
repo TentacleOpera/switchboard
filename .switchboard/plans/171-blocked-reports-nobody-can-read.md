@@ -2,9 +2,9 @@
 
 ## Goal
 
-Stop writing Mission Control reports when no Mission Control exists. When one does exist, make its
-reports readable and claimable through the API and the CLI, the way `switchboard next` hands a seat
-its work.
+Stop writing Mission Control reports as files. The host holds the database, so a turn-end belongs in
+`plan_events` — indexed, pruned, and joined to its plan. The file mirror has no reader it can
+reach in any configuration, so it goes.
 
 ### Problem analysis
 
@@ -76,7 +76,9 @@ report can ever be marked handled. Write-only plus never-claimed is the accumula
 > a directory nothing reads any more."*
 
 So a previous plan reasoned from "untested feature, therefore no data" and was wrong on both counts.
-Do not repeat it: the files are real, some are substantive, and the fix is not a delete.
+Do not repeat it. Deleting the *writer* (change 2) is right; deleting the *records* is not — the
+files are real and some are substantive, which is why change 5 imports them before anything is
+removed.
 
 **And a host-written report should not be a file at all — the table already exists and is empty.**
 The board DB carries the DB twin of every file-based coordination directory, and the file
@@ -111,84 +113,82 @@ Writing it as a file gives up everything the table provides:
   190 accumulate and why nothing would ever have stopped.
 - **No atomicity** with the board state the event describes.
 
-The file form has exactly one justification: an agent with only filesystem access can write one.
-That covers *agent-written* reports — an external team head, an external Mission Control. It does
-not cover the `from: system` mirror, which the host writes while holding the database open.
+The file form has exactly one claimed justification: an agent with only filesystem access can write
+one. That class is already small — a cloud or CI agent, a web session with a repo but no route to
+the box. **And for this directory it is empty, because the files are gitignored.** `.gitignore:60`:
+
+```
+.switchboard/*
+!.switchboard/reviews/
+!.switchboard/plans/
+!.switchboard/features/
+```
+
+`git ls-files .switchboard/mission-control/` returns **0**, and `git check-ignore` confirms both
+`.switchboard/mission-control/reports/` and `.switchboard/teams/<id>/reports/` are ignored. So the
+files never leave the machine. They serve:
+
+- **not** an agent on the box — it has the API and the database;
+- **not** an agent on the tailnet — the API answers with no credential;
+- **not** a disconnected CI, cloud or web agent — the files are never committed, so nothing
+  transports them.
+
+The only reader that could ever exist is a process on that same box with filesystem access, which
+is precisely the case that also has the API and the DB. The "filesystem but no API" justification
+does not survive contact with the ignore rules.
+
+Note the contrast, because it is the design that already works: `plans/` and `features/` are
+deliberately **un-ignored**. A cross-machine agent is reached through a tracked plan file, not
+through an ignored inbox. If a git-transported report channel is ever wanted, that is the shape it
+has to take.
 
 ## Metadata
 
 **Complexity:** 3
 **Tags:** mission-control, backend, api, cli, reports
-**Dependencies:** none. Change 3 should match the command shape of
+**Dependencies:** none — and deliberately so. This no longer waits on
+`mission-control-reads-its-protocols-from-a-directory-nothing-writes` or on whether Mission Control
+is kept at all: the turn-end record belongs in `plan_events` either way, and the file mirror has no
+reader in any configuration. Change 3 should match the command shape of
 `switchboard-next-a-seat-asks-for-its-own-card.md`.
 
 ## User Review Required
 
-None.
+None. An earlier draft deferred to the "is Mission Control wanted?" decision; that turned out to be
+irrelevant here. The mirror's output is unreachable whether or not Mission Control exists, so this
+plan stands on its own.
 
 ## Proposed Changes
 
-### 0. Record the host's turn-end in `plan_events`, not as a file
+### 1. Record the host's turn-end in `plan_events`
 
-- The host already holds the database. Write the turn-end as a `plan_events` row — `event_type`
-  `turn_end`, `action` `finished` / `blocked`, `plan_id` the plan's **relative** path (never the
-  absolute one the files carry), body in `payload`.
-- It then inherits the indexes, the foreign key, `RetentionService` pruning, and a `WHERE` clause in
-  place of a directory walk. This is what makes the accumulation problem structurally impossible
-  rather than merely gated.
-- Keep the file form for what only it can do: a report written by an agent that has no route to the
-  database. Gate that on the same existence test as change 1.
-- Check whether `job_instructions` / `job_runs` / `board_move_requests` should absorb the other
-  file directories too — they are the same pattern, 0 rows each, with the file version live. That is
-  a bigger question and belongs in its own plan; note the finding, do not fold it in here.
+- `event_type` `turn_end`, `action` `finished` / `blocked`, `plan_id` the plan's **relative** path
+  (never the absolute one the files carry), the one-line message in `payload`.
+- No existence gate is needed. The row is cheap, indexed, joined to `plans`, and pruned by
+  `RetentionService` — the properties whose absence is what made 190 files a problem. Write it
+  always, whether or not a Mission Control exists.
+- Both composition roots, byte-aligned: `bootstrap.ts:3973` and `TaskViewerProvider.ts:2550` are
+  deliberate twins and the comments say so.
 
-### 1. Gate the mirror on a Mission Control existing
+### 2. Delete the file mirror
 
-- Add the existence test the comments assume and never make: is a Mission Control armed for this
-  workspace? Skip the mirror when the answer is no.
-- Keep the two sites byte-aligned. They are deliberate twins and the comments say so; a gate added
-  to one only is the composition-root divergence CLAUDE.md warns about.
-- Preserve the property those comments are actually defending: when a Mission Control **is** armed
-  and there is no pty host, the file must still be written. Gate on *existence*, never on pty
-  readiness — that distinction is the whole point of the `_ptyHostPort` note at
-  `TaskViewerProvider.ts:2545`.
-- The predicate already exists and does not need inventing. `buildMissionControlKickoffPrompt`
-  reads both (`TaskViewerProvider.ts:12766-12769`):
+- Remove `writeMissionControlReport` and both call sites. Nothing can read what it writes: the
+  directory is gitignored, so it never reaches another machine, and any process that *can* read it
+  is on the box and already has the API and the database.
+- Keep `.switchboard/mission-control/reports/` on disk for the existing 190 until change 5 has
+  triaged them. Deleting the writer does not delete the record.
+- The comments at `TaskViewerProvider.ts:2545` defending an unguarded write ("with no pty host the
+  file is the ONLY thing that survives") must be removed with it, not left contradicting the code.
+  A `plan_events` row survives a missing pty host strictly better than a file does.
 
-  ```js
-  const sessionPath = path.join(root, '.switchboard', 'mission-control', 'session.md');
-  const armed = !!this._autobanState?.missionControlArmed;
-  ```
+### 3. Read the reports out of the DB, not the directory
 
-  On this box there is no `session.md` and no mission state at all — only `reports/` — so both
-  answer "no" for all 190 files. Reuse these rather than adding a third notion of armed.
-
-**But first, question whether the mirror should exist at all.** Its entire stated purpose is *"a
-non-pty Mission Control reads the same notice as a file"* — that is the **external** variant only.
-`buildMissionControlKickoffPrompt` picks the runsheet by delivery mode
-(`TaskViewerProvider.ts:12733-12735`): `deliveryMode === 'self'` →
-`switchboard-mission-control-external`, otherwise `switchboard-mission-control-internal`. An
-internal Mission Control is a pty seat and is prompted directly; it never reads these files. So if
-external Mission Control is not a configuration this product supports, the mirror has no consumer in
-any state and should be deleted, not gated. Settle that before writing a gate for it.
-
-### 2. Read and claim routes, from one shared helper
-
-- `GET /mission-control/reports` and `POST /mission-control/reports/claim`, moving into the existing
-  `claimed/`.
-- Extract the team handler's body (`LocalApiServer.ts:9500`, claim at `:9532`) into a helper taking
-  a directory, and call it from both. Not a copy — the claim path validation (`..`, `/`, `\`, the
-  `^[\w.-]+\.md$` test) is security-relevant and must not fork.
-- Listing returns `filename` plus parsed frontmatter (`from`, `kind`, `planId`, `created`), not
-  bodies; `?kind=blocked` filters; content comes from a per-report fetch. The team route returns
-  every body in one unpaginated response today — fix that in the same pass.
-
-### 3. A CLI surface shaped like `switchboard next`
-
-- `switchboard reports [--kind blocked] [--json]` to list, `switchboard reports <filename>` to read
-  one, `switchboard reports claim <filename>` to claim.
-- Same reasoning as `switchboard-next`: the operator is already in a terminal, so handing them the
-  text is delivery.
+- The reader this needed is now a query, not a route: `plan_events` filtered by `event_type` and
+  `action`, joined to `plans` for the card's current column — which immediately answers the
+  question the files could not, namely whether a blocked card is still blocked.
+- `switchboard reports [--kind blocked]`, in the pull shape of `switchboard next`, over that query.
+- **Do not** build `GET /mission-control/reports` or a claim route. Claiming was file bookkeeping
+  standing in for a query; a row joined to live board state needs neither.
 
 ### 4. Settle `orchestratorPresent`
 
@@ -196,30 +196,41 @@ any state and should be deleted, not gated. Settle that before writing a gate fo
   `ctx.orchestratorPresent`, and the only production assignment is `teamWiring.ts:1631`:
   `orchestratorPresent: false`. `standingOrders.ts:511` reads
   `options.orchestratorPresent === true` and nothing passes it.
-- So the disciplined instruction may never install while the same text sits as ungated prose at
-  `teamWiring.ts:870` and `terminals.js:11411`. Wire it or delete it; do not leave a
-  permanently-false gate beside an ungated duplicate.
+- That fragment tells an agent to write a file to the directory change 2 stops writing. Delete the
+  fragment and the ungated duplicates of its text at `teamWiring.ts:870` and `terminals.js:11411`,
+  or replace them with the CLI call that records a `plan_events` row.
 
 ### 5. Triage the existing 190 by machine
 
 - `planId` is in the frontmatter, so cross-reference the board: a report whose card has since moved
-  on is stale and bulk-claimable; one whose card is still parked is real backlog.
+  on is stale; one whose card is still parked is real backlog. Import the latter as `plan_events`
+  rows so the record survives the directory.
 - Do not bulk-delete — see the `ScheduledJobsService.ts:181` history above. Several are plainly
   substantive: `2026-09-05-half-delivered-dispatch-no-seat.md`,
   `feature-dfcbc7eb-libsql-rejected.md`, `feature-dfcbc7eb-open-question.md`.
 
+### 6. Note, do not fix: the other file/DB twins
+
+`job_instructions`, `job_runs` and `board_move_requests` are the same pattern — DB tables at 0 rows
+with a live file implementation beside them (`inbox/`, `moves/`). The team report inbox
+(`.switchboard/teams/<id>/reports/`) differs in one respect that matters: it has a working local
+reader (`GET /teams/<id>/reports`, used by the terminals panel for seat declarations), so it is
+functioning local coordination rather than a write-only directory. All of it deserves the same
+question and none of it belongs in this plan.
+
 ## Verification Plan
 
-- With no Mission Control armed, run a full dispatch → turn-end cycle: **no new report file
-  appears**, and the live pty send still lands. This is the fix.
-- With one armed and the pty host stopped, the same cycle **does** write the file — the unattended
-  channel the comments protect still works.
-- Both hosts behave identically; assert it rather than reading the two sites and assuming.
-- `GET /mission-control/reports` returns metadata for 190 entries; `?kind=blocked` returns 171.
-- `switchboard reports --kind blocked` prints those rows in a terminal.
-- Claiming moves a file into `claimed/` and drops it from the listing; a path-traversal filename is
-  rejected.
-- After triage, state the surviving unclaimed count in the completion report.
+- A full dispatch → turn-end cycle writes a `plan_events` row with a relative `plan_id` and **no**
+  file under `.switchboard/mission-control/reports/`.
+- The row is present whether or not a Mission Control is armed, and whether or not a pty host is
+  running — the case the deleted comments were defending.
+- Both hosts produce identical rows; assert it rather than reading the two sites and assuming.
+- `switchboard reports --kind blocked` lists blocked turn-ends with each card's current column, in
+  a terminal.
+- `RetentionService` prunes these rows on its normal schedule, so the count is bounded without
+  anything new.
+- After triage, the surviving report count and how many were imported are stated in the completion
+  report.
 
 ## Outstanding Questions
 
