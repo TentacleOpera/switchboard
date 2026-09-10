@@ -204,8 +204,15 @@ test('the jobs protocol includes the §6 details', () => {
     const res = generateSparkContext(tmp, '1.0.0');
     const content = fs.readFileSync(res.path, 'utf8');
     assert.ok(content.includes('24 hours'), 'staleness window missing');
-    assert.ok(content.includes('/kanban/plans?column='), 'board-state read must point at the API, not the deleted kanban-state exports');
-    assert.ok(content.includes('STORE_UNAVAILABLE'), 'the three read outcomes must be stated — an unreachable store is not an empty board');
+    // Spark reads the FILESYSTEM only — it cannot call the board API. The context
+    // must say the board-state source is gone and that a column-dependent job is
+    // blocked, rather than handing it an endpoint it has no way to reach.
+    assert.ok(content.includes('Spark cannot make that call'),
+        'the context must state that Spark cannot reach the board API');
+    assert.ok(content.includes('blocked, not broken'),
+        'a job needing column state must be told to stop, not to guess or use a stale file');
+    assert.ok(!/switchboard api GET "\/kanban\/plans\?column=<COLUMN_ID>"/.test(content),
+        'the context must not instruct Spark to call an endpoint it cannot reach');
     assert.ok(content.includes('run-log.md'), 'run log missing');
     assert.ok(content.includes('mtime-supplement cursor'), 'mtime-supplement rule missing');
     assert.ok(content.includes('kind: board-moves'), 'moves frontmatter missing');

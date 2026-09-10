@@ -281,11 +281,11 @@ export function generateSparkContext(workspaceRoot: string, extensionVersion: st
     content += `- Format: \`<timestamp> | <job-name> | <summary>\`\n`;
     content += `- A job reads its own last run-log line as the **mtime-supplement cursor**: it scans \`.switchboard/plans/intake/*.md\` for files whose mtime is newer than that timestamp, then combines those with a board read (see **Reading Board State**).\n\n`;
     content += `### Reading Board State\n`;
-    content += `- Read the board over the API, never from files: \`switchboard api GET "/kanban/plans?column=<COLUMN_ID>"\`.\n`;
-    content += `- Each record carries \`planId\`, \`planFile\`, \`topic\`, \`kanbanColumn\`, \`featureId\` and \`project\`.\n`;
-    content += `- \`GET /kanban/plan?planId=<id>\` returns one record plus its file content, and SPANS the archive — an aged card is still found.\n`;
-    content += `- Three outcomes, and they are distinct: rows, \`404\` (no such card), and \`503\` with \`code: STORE_UNAVAILABLE\` (the store did not answer). Never treat the third as an empty board.\n`;
-    content += `- The \`.switchboard/kanban-state-*.md\` exports this section used to describe were DELETED on 2026-09-11. They were machine-local and gitignored, so they never existed in a worktree, and they went stale whenever Switchboard was not running. The endpoints have neither problem.\n\n`;
+    content += `- **Spark has no board-state source right now. Do not invent one.**\n`;
+    content += `- The \`.switchboard/kanban-state-*.md\` per-column exports this section used to describe were DELETED on 2026-09-11 with the board mirrors. They were machine-local and gitignored, went stale whenever the board was not running, and never existed in a worktree at all.\n`;
+    content += `- The board is now read over HTTP (\`switchboard api GET "/kanban/plans?column=<ID>"\`), and **Spark cannot make that call** — Spark reads the filesystem only. So the endpoints are NOT a substitute here, and instructing you to call them would be instructing you to fail.\n`;
+    content += `- What you CAN still read is unchanged and is enough for the intake jobs: \`.switchboard/plans/**/*.md\` on disk, including \`plans/intake/\`, plus your own \`run-log.md\` cursor. A plan's own file is the source for its content; what you cannot currently derive from the filesystem is which COLUMN a plan sits in.\n`;
+    content += `- A job that needs column state is therefore **blocked, not broken** — say so and stop, rather than guessing a column or falling back to a stale file. The plans-repo work restores a filesystem source for this, and this section is rewritten to point at that repo when it lands.\n\n`;
     sections.push('scheduled-jobs-protocol');
 
     // 5. Exclusions, Overrides and Anti-Confabulation

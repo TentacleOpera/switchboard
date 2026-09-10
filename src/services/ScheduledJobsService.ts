@@ -593,22 +593,31 @@ Read .switchboard/memo.md. Process each entry into a distinct plan file in .swit
             content: `---
 job: nightly-code-review
 schedule: daily
-reads: switchboard api GET /kanban/plans?column=CODED
+reads: .switchboard/plans/**/*.md
 writes: .switchboard/plans/intake/
 ---
 
-Read the CODED column with: switchboard api GET "/kanban/plans?column=CODED" — take each record's planFile. Review each plan file for completeness and potential bugs. Append findings to the respective plan file. Do NOT move cards directly.`
+BLOCKED on a column source. This job needs the CODED column, and the per-column
+exports it used to read were deleted on 2026-09-11 with the board mirrors. The
+board is now read over HTTP, which this runner cannot call — it reads the
+filesystem only. Report that and stop; do not guess a column, and do not fall
+back to a stale file. The plans-repo work restores a filesystem source, and this
+job is repointed at it when that lands. Review each plan file for completeness and potential bugs. Append findings to the respective plan file. Do NOT move cards directly.`
         },
         {
             filename: 'research-unknowns.md',
             content: `---
 job: research-unknowns
 schedule: daily
-reads: switchboard api GET /kanban/plans?column=CREATED
+reads: .switchboard/plans/**/*.md
 writes: .switchboard/plans/intake/
 ---
 
-Scan new plans in CREATED. Identify ## Uncertain Assumptions. Dispatch your own research sub-agents to resolve each unknown, then rewrite ## Uncertain Assumptions in place with findings.`
+BLOCKED on a column source — see nightly-code-review. This job needs the CREATED
+column and no filesystem source for column state currently exists. Report that
+and stop.
+
+When a source exists again: scan new plans in CREATED. Identify ## Uncertain Assumptions. Dispatch your own research sub-agents to resolve each unknown, then rewrite ## Uncertain Assumptions in place with findings.`
         }
     ];
 
