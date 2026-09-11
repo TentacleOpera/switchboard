@@ -117,7 +117,10 @@ func (f *fleet) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 		if messageType == websocket.BinaryMessage {
 			if len(raw) > 1 && raw[0] == 0x01 {
-				_, _ = f.write(name, string(raw[1:]))
+				// Operator keystrokes. Raw, always: `false` is what keeps a
+				// typed "/" from being read as a slash command and answered
+				// with Ctrl+U and a submitting CR.
+				_, _ = f.write(name, string(raw[1:]), false)
 			}
 			continue
 		}
@@ -130,7 +133,8 @@ func (f *fleet) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 		switch message.T {
 		case "input":
-			_, _ = f.write(name, message.Data)
+			// Legacy JSON input frame — operator keystrokes, same as above.
+			_, _ = f.write(name, message.Data, false)
 		case "resize":
 			if message.Cols > 0 && message.Rows > 0 {
 				_ = ptyResize(t, message.Cols, message.Rows)

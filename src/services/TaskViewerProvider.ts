@@ -706,7 +706,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
         const seatCacheDropName =
             (verb === 'ptyClearTerminal' || verb === 'ptyRenameTerminal'
-                || (verb === 'ptyWrite' && String(payload?.data ?? '').trim() === '/clear'))
+                || (verb === 'ptyWrite' && payload?.slashCommand === true
+                    && String(payload?.data ?? '').trim() === '/clear'))
                 ? payload?.name
                 : undefined;
         if (typeof seatCacheDropName === 'string') {
@@ -16396,7 +16397,13 @@ Each plan file must include:
                                 if (target && target.status === 'active') {
                                     let ptyRes: any;
                                     if (isControlString) {
-                                        ptyRes = await this._ptyHostVerb('ptyWrite', { name: target.friendlyName, data: input + '\r' });
+                                        // `slashCommand: true` is the declaration the pty
+                                        // host now requires: it no longer reads the leading
+                                        // '/' off the data to decide. isControlString is
+                                        // resolved from the VERB's payload above — a caller
+                                        // asking for a command — which is a different thing
+                                        // from the keystroke bytes that share this door.
+                                        ptyRes = await this._ptyHostVerb('ptyWrite', { name: target.friendlyName, data: input + '\r', slashCommand: true });
                                     } else {
                                         // Prompt path: ptySendPrompt owns framing, chunking,
                                         // the lock, and the confirm CR. clearBeforePrompt is

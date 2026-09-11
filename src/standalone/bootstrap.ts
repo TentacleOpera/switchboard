@@ -1605,7 +1605,11 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     taskViewerProvider.setPtyHostSupervisor(ptyHostSupervisor);
     const clearPty = async (handle: any): Promise<void> => { await ptyHostSupervisor.request('ptyClearTerminal', { name: handle.friendlyName || handle.name }); };
     const modelPty = async (handle: any): Promise<void> => { await ptyHostSupervisor.request('ptySendModel', { name: handle.friendlyName || handle.name }); };
-    const writeSlashCommand = async (handle: any, command: string): Promise<void> => { await ptyHostSupervisor.request('ptyWrite', { name: handle.friendlyName || handle.name, data: `${command}\r` }); };
+    // `slashCommand: true` is the DECLARATION that makes the pty host reset the
+    // input line and submit. It used to be inferred there from the leading '/',
+    // which meant the operator typing a slash in a browser pane got Ctrl+U and a
+    // CR — same door, same bytes. Intent travels with the call now.
+    const writeSlashCommand = async (handle: any, command: string): Promise<void> => { await ptyHostSupervisor.request('ptyWrite', { name: handle.friendlyName || handle.name, data: `${command}\r`, slashCommand: true }); };
     taskViewerProvider.activateHostIntegrations();
     taskViewerProvider.initHeadlessVerbServing(headlessSeams, headlessBroadcaster);
     // Setup arms delegate startup-command / integration-state reads to the
@@ -2604,13 +2608,19 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     if (!handle) { return { success: false, error: `No such terminal: ${payload.name}` }; }
                     if (handle.status !== 'active') { return { success: false, error: `Terminal ${payload.name} is not active` }; }
                     const data: string = payload.data || '';
-                    // Content rule, mirroring sendToTerminal / ptyHost: a single-line
-                    // leading-slash write is a slash command, and every slash command
-                    // gets the input line reset first. writeSlashCommand also takes the
-                    // per-terminal lock, so the command cannot splice into an in-flight
-                    // chunked paste from sendPromptToPty.
+                    // Slash handling is DECLARED by the caller (`slashCommand: true`),
+                    // never read off the leading character. This arm used to sniff, and
+                    // so did the pty host underneath it — and that lower copy also
+                    // served the terminal WebSocket's keystroke frames, so an operator
+                    // typing "/" in a browser pane got the command recipe applied to
+                    // their finger: Ctrl+U wiped the line they were composing and a CR
+                    // submitted the bare slash. A declaration cannot do that to a
+                    // keystroke, because a keystroke never carries one.
                     const body = data.replace(/[\r\n]+$/, '');
-                    if (body && !body.includes('\n') && body.trimStart().startsWith('/')) {
+                    if (payload.slashCommand === true && body && !body.includes('\n') && body.trimStart().startsWith('/')) {
+                        // writeSlashCommand takes the per-terminal lock, so the command
+                        // cannot splice into an in-flight chunked paste from
+                        // sendPromptToPty.
                         await writeSlashCommand(handle, body);
                     } else {
                         handle.write(data);

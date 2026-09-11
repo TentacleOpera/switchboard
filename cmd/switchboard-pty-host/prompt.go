@@ -34,6 +34,18 @@ func writeSlashLocked(t *terminal, command string) error {
 	return err
 }
 
+// Whether a payload the caller ALREADY declared to be a slash command is
+// well-formed enough to get the Ctrl+U / settle / CR treatment.
+//
+// This is a validity check, never a discovery one. It is called only after a
+// caller has set `slashCommand: true` on the ptyWrite payload. `fleet.write`
+// used to call it on EVERY write to decide for itself what the bytes meant,
+// and the same door carries the operator's keystrokes from the browser: a
+// single "/" keypress passed this test, so typing a slash sent Ctrl+U (killing
+// the half-typed line) followed by "/" and a CR (submitting the bare slash).
+// Every CLI, every pane, and invisible to the gates — a keystroke and a
+// command are byte-identical, so no test could tell them apart. Intent is
+// declared by the caller now. Do not reintroduce a content test on this path.
 func isSlashCommand(data string) bool {
 	body := strings.TrimRight(data, "\r\n")
 	return body != "" && !strings.Contains(body, "\n") && strings.HasPrefix(strings.TrimLeft(body, " \t"), "/")

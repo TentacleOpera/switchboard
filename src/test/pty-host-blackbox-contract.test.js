@@ -249,48 +249,81 @@ function startHost(bin, workspace = REPO_ROOT, extra = {}) {
                 await new Promise((resolve, reject) => {
                     const timer = setTimeout(() => reject(new Error('ws hello timeout')), 5000);
                     ws.on('error', err => { clearTimeout(timer); reject(err); });
-                    ws.on('message', raw => {
+                    // Removed on resolve. Left registered, this handler outlives the
+                    // handshake and JSON.parses every later frame — and output frames
+                    // are BINARY (encodeOutputFrame, ws.go:103), so the first line of
+                    // pty output threw SyntaxError and killed the suite before the
+                    // output assertion below ever ran.
+                    const onHello = raw => {
                         const msg = JSON.parse(String(raw));
                         frames.push(msg);
-                        if (msg.t === 'hello') { clearTimeout(timer); resolve(); }
-                    });
+                        if (msg.t === 'hello') { clearTimeout(timer); ws.off('message', onHello); resolve(); }
+                    };
+                    ws.on('message', onHello);
                 });
                 assert.strictEqual(frames[0].t, 'hello');
 
+                // Output is BINARY: 4-byte big-endian seq then the payload
+                // (encodeOutputFrame, ws.go:152, mirroring terminalWsGateway.ts).
+                // This phase used to JSON.parse it, so it threw on the first line
+                // of pty output and the assertions below never ran.
+                const decodeOutput = raw => {
+                    const buf = Buffer.from(raw);
+                    if (buf.length < 4) { return null; }
+                    return { seq: buf.readUInt32BE(0), data: buf.subarray(4).toString('utf8') };
+                };
+                const collectUntil = (sock, predicate, label, sink) => new Promise((resolve, reject) => {
+                    const timer = setTimeout(() => reject(new Error(`${label} timeout`)), 5000);
+                    const onMsg = raw => {
+                        const out = decodeOutput(raw);
+                        if (!out) { return; }
+                        sink.push(out);
+                        if (predicate(out)) { clearTimeout(timer); sock.off('message', onMsg); resolve(); }
+                    };
+                    sock.on('message', onMsg);
+                });
+
                 const marker = `BLACKBOX_${Date.now()}`;
                 ws.send(JSON.stringify({ t: 'input', data: `echo ${marker}\r` }));
-                await new Promise((resolve, reject) => {
-                    const timer = setTimeout(() => reject(new Error('ws output timeout')), 5000);
-                    const onMsg = raw => {
-                        const msg = JSON.parse(String(raw));
-                        frames.push(msg);
-                        if ((msg.t === 'output' || msg.t === 'replay') && String(msg.data).includes(marker)) {
-                            clearTimeout(timer);
-                            ws.off('message', onMsg);
-                            resolve();
-                        }
-                    };
-                    ws.on('message', onMsg);
-                });
+                await collectUntil(ws, out => out.data.includes(marker), 'ws output', frames);
+
+                // A single "/" keystroke must reach the pty as a single "/".
+                //
+                // fleet.write used to decide for itself that any write starting with
+                // a slash was a slash command and answer it with \x15 (Ctrl+U), the
+                // body, and a submitting CR — and this WebSocket's input frames are
+                // the operator's keystrokes. Typing a slash in a browser pane
+                // therefore wiped the line being composed and submitted a bare "/".
+                // `cat` echoes what it receives, so a Ctrl+U shows up as ^U and the
+                // stray CR as a new prompt line.
+                const slashOut = [];
+                ws.send(JSON.stringify({ t: 'input', data: 'cat\r' }));
+                await new Promise(r => setTimeout(r, 600));
+                // A PERSISTENT collector, not collectUntil: the Ctrl+U and the
+                // submitting CR land a few ms after the slash echoes, and a
+                // listener removed on the first matching frame never sees them.
+                // That is what made the first version of this assertion green
+                // against the very behaviour it exists to forbid.
+                const slashSink = raw => { const out = decodeOutput(raw); if (out) { slashOut.push(out); } };
+                ws.on('message', slashSink);
+                ws.send(JSON.stringify({ t: 'input', data: '/' }));
+                await new Promise(r => setTimeout(r, 900));
+                ws.off('message', slashSink);
+                const slashText = slashOut.map(o => o.data).join('');
+                assert.ok(!slashText.includes('\u0015') && !slashText.includes('^U'),
+                    `a typed "/" must not be answered with Ctrl+U — got ${JSON.stringify(slashText)}`);
+                assert.ok(!/\r\n|\n/.test(slashText),
+                    `a typed "/" must not be submitted — got ${JSON.stringify(slashText)}`);
+                ws.send(JSON.stringify({ t: 'input', data: '\u0003' }));
 
                 const lastSeq = frames.filter(f => typeof f.seq === 'number').reduce((m, f) => Math.max(m, f.seq), 0);
                 ws.close();
 
                 const ws2 = new WebSocket(`${wsUrl}&lastSeq=0`);
                 const replayed = [];
-                await new Promise((resolve, reject) => {
-                    const timer = setTimeout(() => reject(new Error('replay timeout')), 5000);
-                    ws2.on('error', err => { clearTimeout(timer); reject(err); });
-                    ws2.on('message', raw => {
-                        const msg = JSON.parse(String(raw));
-                        replayed.push(msg);
-                        if (msg.t === 'replay' && String(msg.data).includes(marker)) {
-                            clearTimeout(timer);
-                            resolve();
-                        }
-                    });
-                });
-                assert.ok(replayed.some(f => f.t === 'replay' && String(f.data).includes(marker)), 'replay must re-send earlier output');
+                ws2.on('error', () => { /* surfaced by the collect timeout below */ });
+                await collectUntil(ws2, out => out.data.includes(marker), 'replay', replayed);
+                assert.ok(replayed.some(f => String(f.data).includes(marker)), 'replay must re-send earlier output');
                 assert.ok(lastSeq >= 1);
                 ws2.send(JSON.stringify({ t: 'resize', cols: 120, rows: 40 }));
                 await new Promise(r => setTimeout(r, 150));

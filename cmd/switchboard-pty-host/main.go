@@ -324,7 +324,15 @@ func (f *fleet) get(name string) (*terminal, bool) {
 	return t, ok
 }
 
-func (f *fleet) write(name, data string) (map[string]any, error) {
+// write puts bytes on the pty. `slashCommand` is the CALLER'S declaration that
+// this write is a deliberate slash command and wants the input line reset and a
+// submitting CR; it is never inferred from the data.
+//
+// This function is the transport. The operator's keystrokes reach it from the
+// browser by the same door the board's own commands do — gateway -> handle.write
+// -> ptyWrite -> here — so any content rule applied at this level applies to a
+// human's fingers. See isSlashCommand for what that cost.
+func (f *fleet) write(name, data string, slashCommand bool) (map[string]any, error) {
 	t, ok := f.get(name)
 	if !ok {
 		return map[string]any{"success": false, "error": "No such terminal: " + name}, nil
@@ -332,7 +340,10 @@ func (f *fleet) write(name, data string) (map[string]any, error) {
 	if t.status != "active" {
 		return map[string]any{"success": false, "error": "Terminal " + name + " is not active"}, nil
 	}
-	if isSlashCommand(data) {
+	if slashCommand {
+		if !isSlashCommand(data) {
+			return map[string]any{"success": false, "error": "slashCommand write is not a single-line slash command"}, nil
+		}
 		if err := writeSlashLocked(t, strings.TrimRight(data, "\r\n")); err != nil {
 			return nil, err
 		}
@@ -451,7 +462,7 @@ func (f *fleet) handleVerb(verb string, payload map[string]any) (any, error) {
 	case "ptyWrite":
 		name, _ := payload["name"].(string)
 		data, _ := payload["data"].(string)
-		return f.write(name, data)
+		return f.write(name, data, boolField(payload, "slashCommand"))
 	case "ptyRenameTerminal":
 		name, _ := payload["name"].(string)
 		alias, _ := payload["alias"].(string)
@@ -557,7 +568,7 @@ func main() {
 			if strings.ContainsAny(filePath, " \t") {
 				atPath = `@"` + filePath + `"`
 			}
-			if _, err := f.write(name, "\x1b[200~"+atPath+"\x1b[201~"); err != nil {
+			if _, err := f.write(name, "\x1b[200~"+atPath+"\x1b[201~", false); err != nil {
 				writeJSON(w, 500, ptyhost.ErrorResponse{Success: false, Error: err.Error()})
 				return
 			}
