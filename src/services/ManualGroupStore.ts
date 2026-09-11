@@ -157,6 +157,42 @@ export class ManualGroupStore {
     }
 
     /**
+     * Drop every member that no longer names a live terminal, and reap any group
+     * left empty. The close hook (`onTerminalExit`) is event-driven and only as
+     * good as the events it receives — the extension host has no fleet-change
+     * event at all, and a seat that dies while the board is not listening leaves
+     * a phantom member behind either way. This is the invariant enforced on
+     * read: no group may hold a member name with no live terminal.
+     */
+    public async reconcileAgainstLiveFleet(liveTerminalNames: string[]): Promise<{ dropped: string[]; deletedGroups: string[] }> {
+        return this._serialize(async () => {
+            const live = new Set(liveTerminalNames);
+            const dropped: string[] = [];
+            const deletedGroups: string[] = [];
+            for (const [id, g] of this._groups.entries()) {
+                const survivors = g.members.filter(m => live.has(m));
+                if (survivors.length === g.members.length) { continue; }
+                for (const m of g.members) {
+                    if (!live.has(m)) { dropped.push(m); }
+                }
+                g.members = survivors;
+                if (g.order) { g.order = g.order.filter(m => live.has(m)); }
+                if (g.members.length === 0) {
+                    this._groups.delete(id);
+                    deletedGroups.push(g.name || id);
+                }
+            }
+            if (dropped.length > 0) {
+                console.log(`[ManualGroupStore] Dropped ${dropped.length} dead member(s) from manual groups: ${dropped.join(', ')}`);
+            }
+            for (const name of deletedGroups) {
+                console.log(`[ManualGroupStore] Manual group '${name}' is now empty, removed`);
+            }
+            return { dropped, deletedGroups };
+        });
+    }
+
+    /**
      * Sidecar file path for a given workspace root.
      */
     public static getSidecarPath(workspaceRoot: string): string {

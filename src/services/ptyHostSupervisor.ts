@@ -208,9 +208,22 @@ export class PtyHostSupervisor {
             return null;
         }
 
-        const { port, token, protocolVersion, workspaceRoot, pid, startedAt } = data || {};
+        const { port, token, protocolVersion, workspaceRoot, pid, startedAt, surviveParent } = data || {};
         if (typeof port !== 'number' || typeof token !== 'string' || !token) {
             try { fs.unlinkSync(stateFile); } catch {}
+            return null;
+        }
+
+        // Only a host started with `--survive-parent` is adoptable. Every host
+        // writes the state file, so without this gate a board restarting inside
+        // the parent-death watcher's 200ms poll window could adopt a host that
+        // is about to dispose itself — making "surviveBoard off = today's
+        // behaviour" a race rather than a guarantee. The flag is recorded by the
+        // host itself, so a host that survived an earlier `surviveBoard: true`
+        // session stays adoptable after the setting is turned off (it is then
+        // torn down by the ordinary stop path, never orphaned).
+        if (surviveParent !== true) {
+            this.options.onDiagnostic?.('[pty-host] State file records a non-surviving host; not adopting.');
             return null;
         }
 
@@ -380,6 +393,8 @@ export class PtyHostSupervisor {
         this.child = undefined;
         this.ready = undefined;
         this.adopted = false;
+        this.hostPid = undefined;
+        this.hostStartedAt = undefined;
         this.state = 'stopped';
         return { stopped: true, pid: pidToKill };
     }
@@ -392,9 +407,20 @@ export class PtyHostSupervisor {
                 try { child.stdin?.end(); } catch {}
                 try { child.kill('SIGTERM'); } catch {}
                 this.child = undefined;
+            } else if (this.adopted && this.hostPid) {
+                // An adopted host is not our child, so `child.kill` cannot reach
+                // it. Without this arm a board that adopted a surviving host and
+                // is then stopped with `surviveBoard` off leaves it running with
+                // nothing left to signal it — the "it must not become immortal"
+                // case. Signal the recorded pid and drop its state file so the
+                // next start does not probe a dying host.
+                try { process.kill(this.hostPid, 'SIGTERM'); } catch { /* already gone */ }
+                try { fs.unlinkSync(this.getStateFilePath()); } catch { /* already gone */ }
             }
             this.ready = undefined;
             this.adopted = false;
+            this.hostPid = undefined;
+            this.hostStartedAt = undefined;
             this.state = 'stopped';
         })();
         return this.stopPromise;

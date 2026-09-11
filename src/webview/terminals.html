@@ -810,6 +810,18 @@
         .group-tab.active:hover {
             background: color-mix(in srgb, var(--accent-violet, #c586c0) 12%, transparent);
         }
+        /* A manual group is an impromptu arrangement that dies with its
+           terminals; a team carries a durable roster. They render in the same
+           strip, so the kind has to be visible — the id prefix is not something
+           an operator can see. Dashed border = ephemeral. */
+        .group-tab.is-manual-group {
+            border-style: dashed;
+            border-color: var(--border-color);
+        }
+        .group-tab.is-manual-group.active {
+            border-style: dashed;
+            border-color: var(--accent-violet, #c586c0);
+        }
         .group-tab-count {
             font-size: 9px;
             font-weight: 700;

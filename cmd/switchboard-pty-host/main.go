@@ -617,6 +617,10 @@ func main() {
 		"workspaceRoot":   f.root,
 		"pid":             pid,
 		"startedAt":       startedAt,
+		// Whether this host was started to outlive its parent. Every host writes
+		// a state file, so the successor board needs this to tell an adoptable
+		// host from one whose parent-death watcher is about to dispose it.
+		"surviveParent":   surviveParent,
 	}
 	if stateBytes, err := json.Marshal(stateFilePayload); err == nil {
 		_ = os.MkdirAll(filepath.Dir(stateFilePath), 0o755)

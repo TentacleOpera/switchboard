@@ -172,3 +172,14 @@ Key risks: (1) the bounded force-exit timer firing during the 50ms response-flus
 
 ## Implementation Summary
 Unified signal cleanup and `/shutdown` API teardown in `src/standalone/bootstrap.ts` under a shared `teardownAndExit` routine with a re-entrancy latch (`teardownStarted`) and bounded 5000ms force-exit timer. Added active resource logging (`getActiveResourcesInfo`) to inspect surviving handles on both graceful and forced exit. In `src/standalone/cli.ts`, replaced fixed sleep after `/shutdown` with a bounded liveness poll against the server PID and Linux starttime recycling guard. The CLI now confirms the process has truly terminated before logging `Server stopped`, and fails loudly with PID/port diagnostics if the process remains alive.
+
+## Review Findings
+
+Reviewed at `b5dba3df` plus this pass's fixes; files changed in review: `src/standalone/bootstrap.ts` (arm the bounded force-exit timer before the awaited sidecar write, not after). The unified `teardownAndExit` + `teardownStarted` latch, the 50ms-flush-then-teardown ordering, and the CLI's liveness poll with the Linux starttime recycle guard all match the plan, and `switchboard stop` can no longer print `Server stopped` while the pid is alive. Verification: `tsc -p tsconfig.test.json --noEmit` clean, `eslint` 0 errors, `npm test` (standalone-parity + catalog + icons + banner) passed, `compile-tests` clean; the Go host could not be compiled here — no Go toolchain on this machine. Proposed Change #3 (identify what actually survives `instance.stop()`) was **not** done: the survivor log is wired on both paths but no handle was released, so the force-exit path is still the one doing the work. No automated check exists for the core mechanism, so passing the unrelated suites is not evidence that `/shutdown` now exits.
+
+## Deferred Findings
+
+- MAJOR — Proposed Change #3 not implemented: no handle named in the `getActiveResourcesInfo()` survivor log is released in `instance.stop()`; the 5000ms force-exit remains the actual exit path. `src/standalone/bootstrap.ts:5288`
+- MAJOR — none of the six automated tests named in the plan's `### Automated` subsection exist or are wired into CI (no `/shutdown`-exits test, no force-exit survivor-log test, no CLI liveness-poll test, no `teardownStarted` double-stop test). `.github/workflows/integration-tests.yml`
+- NIT — `teardownStarted` is module-level, so a second `startHeadlessSwitchboard()` in the same process (test harnesses) can never tear down. `src/standalone/bootstrap.ts:213`
+- NIT — the CLI's no-`health.pid` defensive fallback described in the plan's edge cases was not written; `health.pid` is used unguarded. `src/standalone/cli.ts:3905`

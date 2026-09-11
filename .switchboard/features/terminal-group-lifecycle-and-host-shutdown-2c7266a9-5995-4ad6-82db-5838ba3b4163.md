@@ -14,9 +14,9 @@ Make terminal groups ephemeral and make host shutdown safe, so a maintenance res
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [The PTY Host Should Outlive the Board, Not Die With It](../plans/the-pty-host-should-outlive-the-board-not-die-with-it.md) — **LEAD CODED** — ID: 0ae4378c-cbf9-4213-98f4-ccf57574119c
-- [ ] [`switchboard stop` Tears the Host Down and Leaves the Process Running](../plans/switchboard-stop-tears-down-the-host-and-leaves-the-process-running.md) — **LEAD CODED** — ID: 3a0561b9-673b-4502-9e87-adca159eb1fb
-- [ ] [Groups Are Ephemeral, Teams Are Durable — One Store Cannot Be Both](../plans/groups-are-ephemeral-teams-are-durable-one-store-cannot-be-both.md) — **LEAD CODED** — ID: b8aec6cd-3de8-4f4a-be22-79260e152c84
+- [ ] [The PTY Host Should Outlive the Board, Not Die With It](../plans/the-pty-host-should-outlive-the-board-not-die-with-it.md) — **CODE REVIEWED** — ID: 0ae4378c-cbf9-4213-98f4-ccf57574119c
+- [ ] [`switchboard stop` Tears the Host Down and Leaves the Process Running](../plans/switchboard-stop-tears-down-the-host-and-leaves-the-process-running.md) — **CODE REVIEWED** — ID: 3a0561b9-673b-4502-9e87-adca159eb1fb
+- [ ] [Groups Are Ephemeral, Teams Are Durable — One Store Cannot Be Both](../plans/groups-are-ephemeral-teams-are-durable-one-store-cannot-be-both.md) — **CODE REVIEWED** — ID: b8aec6cd-3de8-4f4a-be22-79260e152c84
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -30,3 +30,13 @@ Last: **Groups Are Ephemeral, Teams Are Durable**. Its sidecar write depends on 
 ## Implementation Summary
 
 All three subtasks implemented and committed (b5dba3df). `switchboard stop` now unifies signal and /shutdown teardown behind a re-entrancy-latched teardownAndExit with a bounded force-exit timer, and the CLI replaces its fixed sleep with a liveness poll plus a Linux starttime recycle guard that fails loudly if the process survives. The PTY host gains a `--survive-parent` flag that gates the parent-death watcher, a 0600 state file recording host identity, and a PtyHostSupervisor adoption probe (protocol-version gated) wired in both composition roots; /health surfaces adopted-vs-spawned identity and `stop --fleet` tears a surviving host down. Manual groups (`grp_`) moved out of the durable config DB into an in-memory ManualGroupStore with a 0600 sidecar written on clean /shutdown and restored on boot intersected with the live adopted fleet; SAVE AS GROUP is retired and FILL GRID is the sole creation path, with terminal exits evicting members and reaping empty groups.
+
+## Review Findings
+
+All three subtasks reviewed together at `b5dba3df`; per-subtask findings and deferred lists live in the three plan files. Seven material defects were fixed in this pass, four of them writer/reader field mismatches that every gate passed: `ptyAddGroupMember` sent `{id, name}` into arms reading `{groupId, memberName}`; `/health`'s `ptyHost.adopted` was read as `isAdopted` at three sites, so an adopted host reported as "spawned" everywhere; `ptyStopFleet` returned `{stopped}` into a webview reading `{success}`; and `PtyHostSupervisor.stop()` could not signal an adopted host at all, leaving one unkillable. Also fixed: the bounded force-exit timer was armed *after* an awaited sidecar write, the group-restore intersection raced a fire-and-forget fleet refresh, the extension host evicted group members only on the operator-initiated close path, and one contract assertion was left red. Verification: `tsc --noEmit` clean, `eslint` 0 errors, `npm test` (standalone-parity + catalog + icons + banner) passed, `compile-tests` clean; `terminal-sidebar-groupings` and `shell-terminal-strip` are back to their `b5dba3df^` baselines (5 and 1 pre-existing failures respectively), `pty-host-gating` and `standalone-fleet-seam` green. Two things this pass could not establish: the Go host was never compiled (no Go toolchain on this machine), and **not one of the three plans' named automated checks exists or is wired into CI** — so passing the suites above is not evidence that shutdown-exits, host adoption, or the group survival model actually work; those verdicts are provisional pending the manual runs each plan describes.
+
+## Deferred Findings
+
+- MAJOR — zero of the ~27 automated checks named across the three plans' `### Automated` subsections exist; `test:contract:groups-are-ephemeral` in particular is named as new and is absent from `package.json` and CI. `.github/workflows/integration-tests.yml`
+- MAJOR — `test:contract:pty-route-surface` is wired into CI and is red at HEAD with 7 failures, all asserting against `src/standalone/ptyHost.ts`, which was gutted to a throwing stub at `e26ac375`. Pre-existing and unrelated to this feature, but it is a CI gate that cannot go green. `src/standalone/ptyHost.ts:5`
+- NIT — `b5dba3df` also carries another card's work (the three preset teams gaining members, and the removal of `OLD_SEEDED_AGENT_GROUP`/`isUntouchedOldSeed` from `teamWiring.ts`); it belongs to `the-three-preset-teams-ship-member-less-and-a-migration-strips-members-on-load.md` and was deliberately left untouched here rather than reviewed under this feature's scope. `src/services/teamWiring.ts:758`

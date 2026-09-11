@@ -657,7 +657,7 @@
                 return;
             }
             const lines = [
-                `Status:         ${ptyHost.isAdopted ? 'Adopted existing host' : 'Spawned by board'}`,
+                `Status:         ${ptyHost.adopted ? 'Adopted existing host' : 'Spawned by board'}`,
                 `PID:            ${ptyHost.pid ?? 'unknown'}`,
                 `Port:           ${ptyHost.port ?? 'unknown'}`,
                 `surviveBoard:   ${ptyHost.surviveBoard ?? false}`,
@@ -942,9 +942,9 @@
                     });
                     const data = await res.json().catch(() => ({}));
                     if (data && data.success) {
-                        showPaneToast('PTY fleet stopped');
+                        showPaneToast('PTY fleet stopped' + (data.pid ? ` (PID ${data.pid})` : ''));
                     } else {
-                        showPaneToast('Failed to stop fleet: ' + (data?.error || 'unknown error'));
+                        showPaneToast('Failed to stop fleet: ' + (data?.message || data?.error || 'unknown error'));
                     }
                 } catch (err) {
                     showPaneToast('Failed to stop fleet: ' + (err instanceof Error ? err.message : String(err)));
@@ -4246,10 +4246,13 @@
             if (!group.members.includes(name)) { group.members.push(name); }
             if (Array.isArray(group.order) && !group.order.includes(name)) { group.order.push(name); }
             if (group.id.startsWith('grp_')) {
+                // The host arms read `groupId` / `memberName` (ManualGroupStore.addMember's
+                // own parameter names). Sending `{ id, name }` here reached both roots as
+                // two undefineds and the member was never added host-side.
                 fetch('/terminals/verb/ptyAddGroupMember', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ id: group.id, name })
+                    body: JSON.stringify({ groupId: group.id, memberName: name })
                 }).catch(() => {});
             }
         } else {

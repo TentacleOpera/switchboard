@@ -1732,7 +1732,7 @@ async function cmdFleet(workspaceRoot: string, argv: string[]): Promise<void> {
 
     if ((health as any).ptyHost) {
         const h = (health as any).ptyHost;
-        const statusStr = h.isAdopted ? 'adopted' : 'spawned';
+        const statusStr = h.adopted ? 'adopted' : 'spawned';
         console.log(`PTY Host: PID ${h.pid ?? 'unknown'}, port ${h.port ?? 'unknown'} (${statusStr}, surviveBoard=${h.surviveBoard ?? false})`);
     }
 
@@ -4125,7 +4125,7 @@ async function main() {
             console.log(`  Terminals: ${payload.terminalCount}`);
             if (payload.ptyHost) {
                 const h = payload.ptyHost;
-                const statusStr = h.isAdopted ? 'adopted' : 'spawned';
+                const statusStr = h.adopted ? 'adopted' : 'spawned';
                 console.log(`  PTY Host:  PID ${h.pid ?? 'unknown'}, port ${h.port ?? 'unknown'} (${statusStr}, surviveBoard=${h.surviveBoard ?? false})`);
             }
         }

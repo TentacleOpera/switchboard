@@ -224,14 +224,12 @@ async function teardownAndExit(
     teardownStarted = true;
 
     log(opts, `Shutdown initiated (${reason}), beginning cleanup...`);
-    if (reason === '/shutdown' && opts?.workspaceRoot) {
-        try {
-            await ManualGroupStore.getInstance().saveSidecar(opts.workspaceRoot);
-            log(opts, 'Manual groups sidecar saved.');
-        } catch (e) {
-            log(opts, `Failed to save manual groups sidecar: ${e}`);
-        }
-    }
+
+    // The bounded force-exit timer is armed BEFORE any awaited teardown work.
+    // The sidecar write below is an `await` on the filesystem; arming after it
+    // would leave a hung write able to stall the shutdown unboundedly — the
+    // exact failure this routine exists to make impossible. (It is still armed
+    // AFTER the route's 50ms response flush, which stays outside this function.)
     const BOUNDED_EXIT_MS = 5000;
     const forceExitTimer = setTimeout(() => {
         log(opts, `Shutdown timed out after ${BOUNDED_EXIT_MS}ms — forcing exit.`);
@@ -245,6 +243,21 @@ async function teardownAndExit(
         process.exit(0);
     }, BOUNDED_EXIT_MS);
     forceExitTimer.unref();
+
+    // Manual groups are host session state; the sidecar is how a clean restart
+    // gets them back. Written on EVERY clean teardown, not just /shutdown: a
+    // Ctrl-C is just as clean, and with `surviveBoard` on its seats survive —
+    // so its groups must be able to survive with them. Written before
+    // instance.stop(), which disposes the fleet and would empty every group
+    // through the close hook first.
+    if (opts?.workspaceRoot) {
+        try {
+            await ManualGroupStore.getInstance().saveSidecar(opts.workspaceRoot);
+            log(opts, 'Manual groups sidecar saved.');
+        } catch (e) {
+            log(opts, `Failed to save manual groups sidecar: ${e}`);
+        }
+    }
 
     try {
         await instance.stop();
@@ -2450,7 +2463,11 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 }
 
                 case 'ptyStopFleet': {
-                    return await ptyHostSupervisor.stopFleet();
+                    // Every terminal verb answers `{ success, ... }`; stopFleet's
+                    // own result says `stopped`. Returning it raw made a
+                    // successful stop read as a failure in the Config tab.
+                    const res = await ptyHostSupervisor.stopFleet();
+                    return { success: res.stopped, ...res };
                 }
 
                 case 'ptyListTerminals': {
@@ -2472,6 +2489,13 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // round-trip every 5s per open panel.
                     await ptyFleetService.reconcile();
                     const all = ptyFleetService.list();
+                    // Enforce the manual-group invariant on the read path too:
+                    // no group may hold a member with no live terminal. The
+                    // close hook covers the events it sees; this covers the rest
+                    // (a seat that died while the board was down or restarting).
+                    void ManualGroupStore.getInstance()
+                        .reconcileAgainstLiveFleet(all.filter(t => t.status === 'active').map(t => t.friendlyName))
+                        .catch(() => {});
                     const projectTerminals = (terminals: any[]) => terminals.map(t => ({
                         friendlyName: t.friendlyName,
                         agentInstanceId: t.agentInstanceId,
@@ -5241,6 +5265,13 @@ Each plan file must include:
     // Restore manual groups from sidecar intersected with live adopted fleet.
     // Ordering: after ptyFleetService is up and reconciled so adoption probe has completed.
     try {
+        // The projection's initial refresh is fire-and-forget from its
+        // constructor, so reading listActive() here could intersect against an
+        // empty cache and drop every restored group. reconcile() is
+        // single-flighted and is what actually drives the adoption probe to
+        // completion, so awaiting it makes the plan's ordering invariant
+        // ("the intersection runs after adoption") a guarantee, not a race.
+        try { await ptyFleetService.reconcile(); } catch { /* fall through to whatever the cache holds */ }
         const liveNames = ptyFleetService.listActive().map(t => t.friendlyName);
         const restoredGroups = await ManualGroupStore.getInstance().restoreSidecar(workspaceRoot, liveNames);
         if (restoredGroups.length > 0) {

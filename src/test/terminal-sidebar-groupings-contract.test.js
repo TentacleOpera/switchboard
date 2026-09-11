@@ -84,9 +84,17 @@ test('loadLayoutSettings loads terminalGroups with a widened shape guard', () =>
 
 test('saveLayoutSettings persists groups, activeGroupId, and groupPrefs', () => {
     const saveBlock = block(terminalsJs, 'function saveLayoutSettings()', 'async function fetchTerminalList()');
+    // The durable key carries TEAMS only. Manual `grp_` groups are host
+    // in-memory session state with a sidecar (plan: groups-are-ephemeral-
+    // teams-are-durable), so the persist call filters them out — but it must
+    // still persist terminalGroups, or team rows stop round-tripping.
     assert.ok(
-        saveBlock.includes("saveSetting('terminals.groups', terminalGroups)"),
+        /saveSetting\('terminals\.groups', terminalGroups/.test(saveBlock),
         'saveLayoutSettings must persist terminalGroups'
+    );
+    assert.ok(
+        /saveSetting\('terminals\.groups', terminalGroups\.filter\([^)]*startsWith\('grp_'\)/.test(saveBlock),
+        'saveLayoutSettings must NOT write grp_ rows to the durable teams key'
     );
     assert.ok(
         saveBlock.includes("saveSetting('terminals.activeGroupId', activeGroupId)"),

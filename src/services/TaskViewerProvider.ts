@@ -4260,7 +4260,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return { success: res.ok, groupDeleted: res.groupDeleted };
             }
             if (verb === 'ptyStopFleet') {
-                return await this.stopFleet();
+                // Every terminal verb answers `{ success, ... }`; stopFleet's own
+                // result says `stopped`. Matches the standalone arm.
+                const stopped = await this.stopFleet();
+                return { success: stopped.stopped, ...stopped };
             }
             // ─── tmux verbs (extension host) ──────────────────────────────
             // The extension host runs tmux locally (the Go PTY host shells out
@@ -4554,6 +4557,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 this._ptyTerminalNames = [...(result.terminals || []), ...(result.hiddenTerminals || [])]
                     .filter((t: any) => t.status === 'active')
                     .map((t: any) => t.friendlyName);
+                // Manual-group invariant, enforced on the read path. This host has
+                // no fleet-change event (it holds no GoPtyFleetProjection), so the
+                // `ptyCloseTerminal` hook alone would only ever catch the
+                // operator-initiated exit — a seat whose CLI exits on its own would
+                // stay a phantom member forever. Mirrors the standalone arm in
+                // bootstrap.ts's ptyListTerminals.
+                void ManualGroupStore.getInstance()
+                    .reconcileAgainstLiveFleet(this._ptyTerminalNames)
+                    .catch(() => {});
                 const fallback = root || effectiveRoot;
                 // Scope the mapping set to THIS board's own workspaces before
                 // resolving parents. The global index (getMappingsFromIndex)
