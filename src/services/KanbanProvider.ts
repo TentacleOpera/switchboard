@@ -7346,8 +7346,23 @@ This step is what moves the plan forward in the Switchboard pipeline.
         // derived from the board enum for the non-team path; a team's coder
         // seat is a terminal, so a team split dispatches to the coder
         // terminal, never the IDE clipboard.
-        const teamPP = targetTerminal
-            ? await this.resolveTeamPairProgrammingForTerminal(workspaceRoot, targetTerminal)
+        // Resolve the lead's own terminal when the caller had no explicit
+        // override — the ordinary drag path passes none, and it is exactly the
+        // path a team's lead is dispatched on. Without this the team's intensity
+        // was unreachable here while the LEAD prompt (built with
+        // dispatchTargetTerminal) already honoured it: the lead would be told to
+        // take only the Band B half while no coder was ever dispatched the Band A
+        // half. Same role→name fallback isCodingTeamHead uses.
+        let resolvedTarget = String(targetTerminal || '').trim();
+        if (!resolvedTarget) {
+            try {
+                const agentNames = await this._getAgentNames(workspaceRoot);
+                const leadName = String(agentNames['lead'] || '').trim();
+                if (leadName && leadName !== 'No agent assigned') { resolvedTarget = leadName; }
+            } catch { /* unresolvable name → non-team scope, board enum governs */ }
+        }
+        const teamPP = resolvedTarget
+            ? await this.resolveTeamPairProgrammingForTerminal(workspaceRoot, resolvedTarget)
             : null;
         const mode = this._autobanState?.pairProgrammingMode ?? 'off';
         const pairActive = teamPP ? teamPP.intensity !== 'off' : mode !== 'off';

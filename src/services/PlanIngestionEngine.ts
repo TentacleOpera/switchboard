@@ -479,6 +479,15 @@ export class PlanIngestionEngine {
      * nothing leaks and no separate lifecycle exists to get wrong.
      */
     private _dispatchStallState = new Map<string, { lastNudgedAt: number; lastObservedMtime: number; lastObservedSeatOutputAt: number }>();
+    /**
+     * One-shot latch for the `dispatchStallMs < dispatchTimeoutMs` ordering
+     * warning. The two thresholds are separate settings with overlapping allowed
+     * ranges (stall up to 4 h, timeout from 1 h), so an operator CAN configure a
+     * timeout that abandons a card before anyone is ever nudged about it. That is
+     * a legal config, not a crash — say so once, loudly, instead of clamping to a
+     * plausible value the operator never chose or repeating it every tick.
+     */
+    private _dispatchThresholdOrderWarned = false;
 
     public setFeatureFileRegenerator(cb: (workspaceRoot: string, featureId: string) => Promise<void>): void {
         this._regenerateFeatureFile = cb;
@@ -605,6 +614,14 @@ export class PlanIngestionEngine {
                 // `_runDispatchTimeoutSweep`. Invariant: dispatchStallMs <
                 // dispatchTimeoutMs (the nudge fires before the timeout).
                 const dispatchTimeoutMs = activityCfg.getNumber('dispatchTimeoutMs', 4 * 60 * 60 * 1000);
+                if (dispatchTimeoutMs <= dispatchStallMs && !this._dispatchThresholdOrderWarned) {
+                    this._dispatchThresholdOrderWarned = true;
+                    this._host.logger.appendLine(
+                        `[GlobalPlanWatcher] CONFIG: switchboard.activityLight.dispatchTimeoutMs (${dispatchTimeoutMs}ms) is not greater than dispatchStallMs (${dispatchStallMs}ms). `
+                        + 'The dispatch timeout will abandon a card and release its seat before — or instead of — the dispatch-stall nudge that tells a human to look. '
+                        + 'Running with the configured values as given.'
+                    );
+                }
                 // Partition the fleet ONCE per tick (not per folder) — the fleet
                 // is process-global and the snapshot is cheap. A miss on the
                 // provider (fleet-less host) yields empty arrays and the sweep
@@ -2368,6 +2385,59 @@ export class PlanIngestionEngine {
         return path.isAbsolute(planFile) ? planFile : path.join(folder, planFile);
     }
 
+    /**
+     * The active board with each row's **machine-local dispatch stamp** hydrated
+     * onto it (`dispatchedAt`, `dispatchedTerminal`).
+     *
+     * `getBoard()` selects `PLAN_COLUMNS`, and `PLAN_COLUMNS` does **not** list
+     * `dispatched_at` / `dispatched_terminal`: the V74 storage-tier split moved
+     * them out of `plans` into `plan_runtime_state` and narrowed the SELECT with
+     * them. `_readRows` still maps both fields, so every row `getBoard()` returns
+     * carries `dispatchedAt: null` and `dispatchedTerminal: ''` — a default that
+     * is indistinguishable from "this card was never dispatched" no matter what
+     * is stored. Any sweep whose predicate keys on the stamp therefore matched
+     * NOTHING, on every board, silently: the dispatch-stall nudge and the
+     * dispatch-timeout sweep both read the stamp and both went dead.
+     *
+     * `getLiveDispatchAttribution` is the tier-aware reader (legacy columns while
+     * `plans` still has them, the `plan_runtime_state` JOIN afterwards) and is
+     * already scoped to `status = 'active' AND dispatched_at IS NOT NULL`, the
+     * same rows `getBoard` returns. Joining it back by `plan_id` is what makes a
+     * dispatched card visible to a sweep at all.
+     *
+     * Returns `[]` when the board is unreadable — no evidence, try next tick. A
+     * readable board with an unreadable stamp read returns the board unhydrated
+     * rather than dropping it: the callers' predicates then match nothing, which
+     * is the same "no evidence" outcome without losing the rows.
+     */
+    private async _readBoardWithDispatchStamps(db: KanbanDatabase): Promise<KanbanPlanRecord[]> {
+        let board: KanbanPlanRecord[] = [];
+        let wsId = '';
+        try {
+            wsId = (await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '';
+            board = await db.getBoard(wsId) || [];
+        } catch { return []; } // unreadable board is no evidence — try next tick.
+        if (board.length === 0) return [];
+
+        try {
+            const stamps = await db.getLiveDispatchAttribution(wsId);
+            if (stamps.length === 0) return board;
+            const byPlanId = new Map(stamps.map(s => [s.planId, s]));
+            for (const card of board) {
+                if (!card || !card.planId) continue;
+                const stamp = byPlanId.get(card.planId);
+                if (!stamp) continue;
+                card.dispatchedAt = stamp.dispatchedAt || null;
+                card.dispatchedTerminal = stamp.dispatchedTerminal || '';
+            }
+        } catch (err) {
+            this._host.logger.appendLine(
+                `[GlobalPlanWatcher] dispatch-stamp hydration failed; dispatch sweeps see no dispatched cards this tick: ${err}`
+            );
+        }
+        return board;
+    }
+
     private async _runDispatchStallSweep(args: {
         db: KanbanDatabase;
         folder: string;
@@ -2394,11 +2464,10 @@ export class PlanIngestionEngine {
         }
 
         // (3) Read the board and filter to cards matching the predicate.
-        let board: KanbanPlanRecord[] = [];
-        try {
-            const wsId = (await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '';
-            board = await db.getBoard(wsId) || [];
-        } catch { return; } // unreadable board is no evidence — try next tick.
+        // Via _readBoardWithDispatchStamps, NOT getBoard: getBoard's SELECT list
+        // carries no dispatch stamp at all (see that helper's docblock), so this
+        // predicate matched nothing on any board.
+        const board = await this._readBoardWithDispatchStamps(db);
         if (board.length === 0) return;
 
         // The predicate is exactly the plan's rule: dispatched_at set AND
@@ -2714,13 +2783,11 @@ export class PlanIngestionEngine {
     }): Promise<void> {
         const { db, folder, nowMs, dispatchTimeoutMs } = args;
 
-        // Read the board; filter to cards matching the predicate. Same
-        // `getWorkspaceId || getDominantWorkspaceId` fallback the other sweeps use.
-        let board: KanbanPlanRecord[] = [];
-        try {
-            const wsId = (await db.getWorkspaceId()) || (await db.getDominantWorkspaceId()) || '';
-            board = await db.getBoard(wsId) || [];
-        } catch { return; } // unreadable board is no evidence — try next tick.
+        // Read the board with the dispatch stamp hydrated; filter to cards
+        // matching the predicate. Via _readBoardWithDispatchStamps, NOT getBoard:
+        // getBoard's SELECT list carries no dispatch stamp at all (see that
+        // helper's docblock), so this predicate would match nothing on any board.
+        const board = await this._readBoardWithDispatchStamps(db);
         if (board.length === 0) return;
 
         let acted = 0;

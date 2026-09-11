@@ -931,6 +931,17 @@ jobs:
       - name: Feature status clobber contract (updateFeatureStatus wrong-row guard)
         run: npm run test:contract:feature-status-clobber
 
+      # A drag onto the COLLAPSED coder bucket posts triggerAction with the
+      # synthetic 'CODED_AUTO' target. The gate belongs on the DISPATCH, not the
+      # move: with CLI triggers off the card must still move (to a REAL coder
+      # column, never the synthetic string), and a BACKWARD drag must never
+      # dispatch. Verb-reachability gates go green on this — the verb answers with
+      # a plausible {success:false} — so only an assertion on the persisted column
+      # catches it. The suite lives in KanbanProvider.test.ts, which `npm test`
+      # does not run; this is the only gate that executes it.
+      - name: Collapsed-coder drag contract (_advanceCards CODED_AUTO gate placement)
+        run: npm run test:contract:coded-auto-gate
+
       # The machine-global secrets store is the ONLY copy of a standalone user's API
       # tokens. Three separate paths silently destroyed them and all three read fine
       # in a diff: an un-awaited migration loop that renamed the legacy store away

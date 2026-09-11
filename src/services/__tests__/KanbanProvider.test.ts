@@ -703,7 +703,13 @@ Manual verification steps:
     // A backward drag (CODE REVIEWED → coder column) moves but never dispatches.
     suite('_advanceCards CODED_AUTO gate placement (plan: collapsed-coder drag)', () => {
         const workspaceRoot = '/test/workspace';
-        const sessionId = 'session-1';
+        // _advanceCards looks its card up by `(planId || sessionId)` — the same key
+        // the webview builds its drop ids from — so the id handed in MUST be the
+        // planId when one exists. A fixture whose planId differs from the id under
+        // test finds no card, and `_isColumnBefore(target, '')` then returns false,
+        // silently classifying EVERY move as forward: the backward case below would
+        // pass with the direction check deleted.
+        const sessionId = 'plan-1';
 
         // Wire the minimum surface _advanceCards touches for a CODED_AUTO move.
         // Returns the executeCommand spy so each test can assert dispatch calls.

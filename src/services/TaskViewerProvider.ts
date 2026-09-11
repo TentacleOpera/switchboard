@@ -23297,6 +23297,13 @@ Each plan file must include:
             messagePayload = await this._kanbanProvider.generateUnifiedPrompt('planner', dispatchPlans, effectiveWorkspaceRoot, {
                 instruction: plannerInstruction,
                 originTerminal: targetAgent,
+                // §Pair-programming team scope: the resolved dispatch target, so
+                // generateUnifiedPrompt resolves the team's `pairProgramming`
+                // intensity on THIS path too. handleKanbanBatchTrigger already
+                // passed it; without it here the single-card drag — the ordinary
+                // way a card reaches a seat — fell back to the board-wide
+                // non-team value and a team's setting was unreachable.
+                dispatchTargetTerminal: targetAgent,
                 ...delegateOptions,
                 gitProhibitionEnabled,
                 unattended: options?.unattended
@@ -23333,6 +23340,8 @@ Each plan file must include:
             messagePayload = await this._kanbanProvider.generateUnifiedPrompt('lead', dispatchPlans, effectiveWorkspaceRoot, {
                 includeInlineChallenge,
                 originTerminal: targetAgent,
+                // §Pair-programming team scope — see the planner branch above.
+                dispatchTargetTerminal: targetAgent,
                 ...delegateOptions,
                 gitProhibitionEnabled
             });
@@ -23342,6 +23351,8 @@ Each plan file must include:
                 instruction: baseInstruction,
                 includeInlineChallenge,
                 originTerminal: targetAgent,
+                // §Pair-programming team scope — see the planner branch above.
+                dispatchTargetTerminal: targetAgent,
                 ...delegateOptions,
                 gitProhibitionEnabled
             });
@@ -23350,6 +23361,8 @@ Each plan file must include:
                 instruction: baseInstruction,
                 includeInlineChallenge,
                 originTerminal: targetAgent,
+                // §Pair-programming team scope — see the planner branch above.
+                dispatchTargetTerminal: targetAgent,
                 ...delegateOptions,
                 gitProhibitionEnabled
             });

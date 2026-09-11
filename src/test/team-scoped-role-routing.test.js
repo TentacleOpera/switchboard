@@ -506,6 +506,25 @@ async function item4() {
     });
 }
 
+/**
+ * Slice the source from `startIdx` up to the next occurrence of `endAnchor`
+ * (exclusive), falling back to `startIdx + fallbackLen` when the anchor is
+ * absent.
+ *
+ * These branch assertions used FIXED character windows (2000 / 2600 / 3200 /
+ * 4000). A fixed window is a trap on a source-text contract: adding a COMMENT
+ * inside the branch pushes the code being asserted past the end of the window,
+ * and the suite then reports "the shipped shape is gone" when the shipped shape
+ * is exactly where it always was. That is precisely what happened when the
+ * pair-programming team-scope work added a non-team-only note to both branches
+ * — four assertions went red against correct source. Bound the window by the
+ * next STRUCTURAL boundary instead, so the window grows with the branch.
+ */
+function branchSlice(src, startIdx, endAnchor, fallbackLen) {
+    const end = endAnchor ? src.indexOf(endAnchor, startIdx + 1) : -1;
+    return src.slice(startIdx, end > startIdx ? end : startIdx + fallbackLen);
+}
+
 // ── Item 5: custom-user branch regression ───────────────────────────────────
 
 async function item5() {
@@ -520,7 +539,7 @@ async function item5() {
         // Locate the custom-user branch block and assert the override guard.
         const branchIdx = kanbanProviderTs.indexOf("dispatchSpec?.source === 'custom-user'");
         assert.ok(branchIdx > 0, 'custom-user branch must be present');
-        const branch = kanbanProviderTs.slice(branchIdx, branchIdx + 2000);
+        const branch = branchSlice(kanbanProviderTs, branchIdx, 'if (canDispatch) {', 2000);
 
         // The fix: `if (msg?.targetTerminalOverride)` ahead of the planner `else if`.
         assert.ok(
@@ -541,9 +560,9 @@ async function item5() {
         // built-in branch still has it.
         const builtInStart = kanbanProviderTs.indexOf('if (canDispatch) {');
         assert.ok(builtInStart > 0);
-        // The IDE-lead sub-branch sits between the anchor and the override read
-        // (~2190 chars in), so a 2000-char window stops just short of it.
-        const builtIn = kanbanProviderTs.slice(builtInStart, builtInStart + 2600);
+        // The IDE-lead sub-branch sits between the anchor and the override read,
+        // so the window must run to the END of the arm — see branchSlice.
+        const builtIn = branchSlice(kanbanProviderTs, builtInStart, "case 'triggerBatchAction'", 2600);
         assert.ok(
             /if\s*\(\s*msg\?\.targetTerminalOverride\s*\)/.test(builtIn),
             'built-in branch must still read msg.targetTerminalOverride (Change 4 does not touch it)'
@@ -662,8 +681,8 @@ async function item7() {
         const branchIdx = kanbanProviderTs.indexOf("dispatchSpec?.source === 'custom-user'");
         assert.ok(branchIdx > 0);
         // The cursor advance sits after the dispatchConfiguredKanbanColumnAction
-        // call (~2800 chars in), past a 2000-char window.
-        const branch = kanbanProviderTs.slice(branchIdx, branchIdx + 3200);
+        // call, well past a 2000-char window — run to the next branch.
+        const branch = branchSlice(kanbanProviderTs, branchIdx, 'if (canDispatch) {', 3200);
         // The advance must be gated on `dispatched && plannerCursorLocationKey`.
         assert.ok(
             /if\s*\(\s*dispatched\s*&&\s*plannerCursorLocationKey/.test(branch),
@@ -685,7 +704,7 @@ async function item7() {
         // conjunction fails on correct source because that expression never existed.
         const builtInStart = kanbanProviderTs.indexOf('if (canDispatch) {');
         assert.ok(builtInStart > 0);
-        const builtIn = kanbanProviderTs.slice(builtInStart, builtInStart + 4000);
+        const builtIn = branchSlice(kanbanProviderTs, builtInStart, "case 'triggerBatchAction'", 4000);
         const outerIdx = builtIn.search(/if\s*\(\s*dispatched\s*&&\s*workspaceRoot\s*\)/);
         assert.ok(outerIdx > -1,
             'built-in branch must still gate its post-dispatch block on dispatched && workspaceRoot');

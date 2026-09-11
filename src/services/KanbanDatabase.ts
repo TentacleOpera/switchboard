@@ -14182,10 +14182,22 @@ FROM plans
             // stall nudge and the dispatch-timeout sweep key on. blocked_at is a
             // transient flag (dead writer — see KanbanPlanRecord.blockedAt) and the
             // only field this arm still clears.
+            //
+            // `AND blocked_at IS NOT NULL` is load-bearing for the RETURN VALUE,
+            // not for the write. SQLite counts a row as modified when an UPDATE
+            // matches it, even when the assigned value equals the stored one, and
+            // the caller gates a board refresh (and a "cleared N stale working
+            // card(s)" log line) on `> 0`. Without the predicate every silent-past-
+            // timeout card is re-counted on every tick forever, so the sweep would
+            // refresh the board and claim it cleared work on each pass while
+            // clearing nothing. Before the conflation fix the arm nulled the stamp
+            // too, so a row could only be counted once; now that it nulls only
+            // `blocked_at`, the count has to be narrowed to rows that actually had
+            // one.
             if (this._tableHasColumn('plans', 'dispatched_at')) {
                 this._db.run(
                     'UPDATE plans SET blocked_at = NULL ' +
-                    'WHERE workspace_id = ? AND dispatched_at IS NOT NULL ' +
+                    'WHERE workspace_id = ? AND dispatched_at IS NOT NULL AND blocked_at IS NOT NULL ' +
                     '  AND MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at)) < ?',
                     [workspaceId, cutoff]
                 );
@@ -14193,7 +14205,7 @@ FROM plans
             const machineId = getMachineId();
             this._db.run(
                 'UPDATE plan_runtime_state SET blocked_at = NULL, updated_at = ? ' +
-                'WHERE workspace_id = ? AND device_id = ? AND dispatched_at IS NOT NULL ' +
+                'WHERE workspace_id = ? AND device_id = ? AND dispatched_at IS NOT NULL AND blocked_at IS NOT NULL ' +
                 '  AND MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at)) < ?',
                 [new Date().toISOString(), workspaceId, machineId, cutoff]
             );

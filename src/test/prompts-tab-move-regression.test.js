@@ -49,7 +49,6 @@ function run() {
         'plannerAddonConstitution',
         'plannerAddonAdviseResearch',
         'plannerAddonDesignSystemDoc',
-        'plannerAddonAggressivePairProgramming',
         'plannerAddonGitProhibition',
         'plannerAddonClearAntigravityContext',
         'roleAddonsDesc',
@@ -73,6 +72,10 @@ function run() {
         'agents-tab-lead-challenge-toggle',
         'agents-tab-advanced-reviewer-toggle',
         'agents-tab-aggressive-pair-toggle',
+        // Retired when pair programming became a property of a team (the team
+        // card's `pairProgramming` field). The board-wide
+        // #pairProgrammingModeSelect dropdown remains as the non-team scope.
+        'plannerAddonAggressivePairProgramming',
         'agents-tab-prompt-role-tabs',
         'agents-tab-prompt-preview-text',
         'agents-tab-prompt-mode',
