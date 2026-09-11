@@ -268,6 +268,26 @@ export class GoPtyFleetProjection {
                 // Per-session, never `-g`: `-g` would strip the status line from the
                 // operator's own tmux, which this has no business touching.
                 + `tmux set-option -t ${view} status off 2>/dev/null; `
+                // The view is rendered in a board pane, so tmux's own INPUT handling is
+                // as unwanted as its status line. Two options, both per-session on the
+                // VIEW only — never `-g`, which would rewrite the operator's own tmux:
+                //
+                //   mouse off — with mouse on, a scroll wheel puts the pane into
+                //   copy-mode, and copy-mode swallows every keystroke instead of
+                //   passing it to the agent. The operator's typing silently stops
+                //   arriving and nothing says why. The board pane has its own scrollback
+                //   and its own selection, so tmux's mouse layer buys nothing here.
+                //
+                //   prefix None — the browser client has no business driving tmux. A
+                //   stray C-b in a prompt should reach the agent as a keystroke, not
+                //   open a tmux command table over the top of the pane.
+                //
+                // The BASE session keeps both: that is the one an operator attaches to
+                // over SSH, where the window list, copy-mode and the prefix are the
+                // whole point. This is what lets a seat be reachable by `tmux attach`
+                // while the board renders it as a plain terminal.
+                + `tmux set-option -t ${view} mouse off 2>/dev/null; `
+                + `tmux set-option -t ${view} prefix None 2>/dev/null; `
                 + `tmux select-window -t ${view}:${win}; `
                 // Grouped sessions share their window list, so with aggressive-resize
                 // OFF a window is sized against every client in the session — the four
