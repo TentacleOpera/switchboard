@@ -60,6 +60,9 @@ async function test(name, fn) {
         _resetTmuxAvailability,
         TMUX_IDE_NAME,
         run,
+        listTmuxSessions,
+        buildTmuxGrid,
+        validateTmuxSessionName,
     } = backend;
     const { sendPromptToTmux, clearTmuxPane } = delivery;
 
@@ -605,6 +608,107 @@ async function test(name, fn) {
         } finally {
             restoreRun();
         }
+    });
+
+    // ─── tmux session list + grid builder (the tmux tab's backend) ───────
+    // MEASURED on tmux 3.4: tmux vis-escapes the 0x1f field separator we ask
+    // for and writes it back as the four literal characters `\037`. A bare
+    // `split('\x1f')` therefore finds ONE field per line, every pane is
+    // dropped, and listTmuxPanes/listTmuxSessions return [] against a real
+    // server while every mock that feeds raw 0x1f stays green. The fixtures
+    // below deliberately use the ESCAPED form — that is what tmux emits.
+    const ESC = '\\037';
+    const paneLine = (session, win, name, group) =>
+        ['%1', session, '1', win, '0', name, 'sleep', '/tmp', '123', group].join(ESC);
+
+    await test('listTmuxPanes parses the escaped \\037 separator tmux actually emits', async () => {
+        mockRun(async () => [
+            paneLine('lc-coding-team', 'lead', 'lead', 'lc-coding-team'),
+        ].join('\n') + '\n');
+        try {
+            const panes = await listTmuxPanes();
+            assert.strictEqual(panes.length, 1, 'the escaped separator must still parse');
+            assert.strictEqual(panes[0].sessionName, 'lc-coding-team');
+            assert.strictEqual(panes[0].sessionGroup, 'lc-coding-team');
+        } finally {
+            restoreRun();
+        }
+    });
+
+    await test('listTmuxSessions groups by session_group, flags the base, and lists only lc- groups', async () => {
+        mockRun(async () => [
+            paneLine('lc-coding-team', 'lead', 'lead', 'lc-coding-team'),
+            paneLine('lc-coding-team', 'coder-1', 'coder-1', 'lc-coding-team'),
+            paneLine('lc-coding-team-lead', 'lead', 'lead', 'lc-coding-team'),
+            paneLine('lc-coding-team-coder-1', 'coder-1', 'coder-1', 'lc-coding-team'),
+            // The operator's own session must never be published by the board.
+            paneLine('my-own-work', 'shell', 'shell', ''),
+        ].join('\n') + '\n');
+        try {
+            const teams = await listTmuxSessions();
+            assert.strictEqual(teams.length, 1, 'only lc- groups are the board\'s to list');
+            assert.strictEqual(teams[0].group, 'lc-coding-team');
+            assert.strictEqual(teams[0].baseSession, 'lc-coding-team',
+                'the base is the member whose session_name equals its session_group');
+            assert.deepStrictEqual(teams[0].windows.sort(), ['coder-1', 'lead'],
+                'windows come from the BASE session only, never the per-seat views');
+            assert.strictEqual(teams[0].members.length, 3);
+        } finally {
+            restoreRun();
+        }
+    });
+
+    await test('listTmuxSessions leaves baseSession empty when no member matches the group', async () => {
+        mockRun(async () => [
+            paneLine('lc-old-team-lead', 'lead', 'lead', 'lc-old-team'),
+        ].join('\n') + '\n');
+        try {
+            const teams = await listTmuxSessions();
+            assert.strictEqual(teams.length, 1);
+            assert.strictEqual(teams[0].baseSession, '',
+                'a session predating grouping must report no base, never guess a seat');
+        } finally {
+            restoreRun();
+        }
+    });
+
+    await test('buildTmuxGrid is idempotent: an existing grid window is killed, never duplicated', async () => {
+        const calls = mockRun(async (args) => {
+            if (args[0] === 'list-windows') { return 'lead\ncoder-1\ngrid\n'; }
+            if (args[0] === 'list-panes') {
+                return [
+                    paneLine('lc-coding-team', 'lead', 'lead', 'lc-coding-team'),
+                    paneLine('lc-coding-team-lead', 'lead', 'lead', 'lc-coding-team'),
+                    paneLine('lc-coding-team-coder-1', 'coder-1', 'coder-1', 'lc-coding-team'),
+                ].join('\n') + '\n';
+            }
+            return '';
+        });
+        try {
+            const cmd = await buildTmuxGrid('lc-coding-team');
+            assert.strictEqual(cmd, 'tmux attach -t lc-coding-team:grid');
+            const verbs = calls.map(c => c.args[0]);
+            assert.ok(verbs.includes('kill-window'),
+                'an existing grid window must be killed first — tmux permits duplicate window names');
+            assert.strictEqual(verbs.filter(v => v === 'new-window').length, 1);
+            assert.ok(verbs.includes('select-layout'));
+            assert.ok(!verbs.includes('attach'),
+                'the board can never attach — the attach string is returned for the human');
+            // TMUX= is load-bearing: tmux refuses to attach from inside itself.
+            const newWin = calls.find(c => c.args[0] === 'new-window');
+            assert.ok(/^TMUX= tmux attach -t /.test(newWin.args[newWin.args.length - 1]),
+                'the pane command must clear TMUX before nest-attaching');
+        } finally {
+            restoreRun();
+        }
+    });
+
+    await test('buildTmuxGrid refuses a team name outside the deriveTmuxSessionName charset', async () => {
+        for (const bad of ['lc-a; kill-server', '-L/tmp/evil', 'coding-team', 'lc-Team', '']) {
+            assert.throws(() => validateTmuxSessionName(bad), /invalid tmux session name/,
+                `'${bad}' reaches tmux argv and must be rejected`);
+        }
+        validateTmuxSessionName('lc-coding-team');
     });
 
     if (failures > 0) {

@@ -496,8 +496,6 @@
     // One row per team (grouped by session_group), with the base session flagged
     // as the only safe attach point. Per-seat views are hidden (status off +
     // shared current-window pointer — see plan §4).
-    let _tmuxSessionsCache = null;
-
     async function fetchTmuxSessions() {
         try {
             const res = await fetch('/terminals/verb/tmuxListSessions', {
@@ -636,9 +634,7 @@
         // No-op when the tmux tab is not the active tab AND this is a focus
         // refresh — but the toggle-change and refresh-button callers always
         // want a fresh read, so fetch unconditionally.
-        const data = await fetchTmuxSessions();
-        _tmuxSessionsCache = data;
-        renderTmuxSessions(data);
+        renderTmuxSessions(await fetchTmuxSessions());
     }
 
     async function refreshConfigTab() {
@@ -870,7 +866,8 @@
         }
         // Solo / kanban-dock / team-scoped embed the panel for one terminal —
         // no cockpit, so no tab bar. The body class is set in init() above.
-        setTerminalsTabBarVisible(!soloTerminalName && !isKanbanDock && !teamScopeId);
+        const terminalsTabsEnabled = !soloTerminalName && !isKanbanDock && !teamScopeId;
+        setTerminalsTabBarVisible(terminalsTabsEnabled);
 
         function setActiveTerminalTab(tab) {
             if (tab !== 'agents' && tab !== 'tmux' && tab !== 'config') { tab = 'agents'; }
@@ -883,7 +880,7 @@
             document.querySelectorAll('.shared-tab-content').forEach(c => {
                 c.classList.toggle('active', c.getAttribute('data-tab-content') === tab);
             });
-            if (!soloTerminalName && !isKanbanDock) {
+            if (terminalsTabsEnabled) {
                 saveSetting(TAB_KEY, tab);
             }
             if (tab === 'tmux') { refreshTmuxTab(); }
@@ -898,11 +895,19 @@
 
         // Restore the persisted tab. Agents is the default; a never-opened
         // tmux/config tab means no change for the operator.
-        loadSetting(TAB_KEY, 'agents').then((saved) => {
-            if (saved === 'tmux' || saved === 'agents' || saved === 'config') {
-                if (saved !== activeTerminalTab) { setActiveTerminalTab(saved); }
-            }
-        }).catch(() => { /* leave the default agents tab */ });
+        //
+        // ONLY where the bar is visible. The key is shared with the cockpit, so
+        // an operator who left the cockpit on the tmux tab would otherwise open
+        // a solo/dock/team-scoped embed to the tmux tab with NO bar to leave it
+        // by — the agents pane is `display:none` and the terminal it was opened
+        // for is unreachable. Those modes are pinned to Agents.
+        if (terminalsTabsEnabled) {
+            loadSetting(TAB_KEY, 'agents').then((saved) => {
+                if (saved === 'tmux' || saved === 'agents' || saved === 'config') {
+                    if (saved !== activeTerminalTab) { setActiveTerminalTab(saved); }
+                }
+            }).catch(() => { /* leave the default agents tab */ });
+        }
 
         const tmuxRefreshBtn = document.getElementById('tmux-refresh');
         if (tmuxRefreshBtn) {

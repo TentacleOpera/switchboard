@@ -200,6 +200,61 @@ test('shell.js opens solo terminal pop-out URL and fans out theme changes', () =
     assert.ok(themeFanout.includes('popoutWindows'), 'applyThemeToAll must fan out theme to popoutWindows');
 });
 
+// ------------------------------------------------ Terminals panel tab contracts
+
+test('the Terminals panel has an Agents tab and a tmux tab, Agents default', () => {
+    assert.ok(terminalsHtml.includes('data-tab="agents"'), 'an Agents tab button must exist');
+    assert.ok(terminalsHtml.includes('data-tab="tmux"'), 'a tmux tab button must exist');
+    assert.ok(terminalsHtml.includes('<button class="shared-tab-btn active" data-tab="agents"'),
+        'Agents is the default tab — an operator who ignores tmux sees no change');
+    assert.ok(terminalsHtml.includes('class="shared-tab-content active" data-tab-content="agents"'),
+        'the Agents pane must be the active content on load');
+});
+
+// The goal MOVES the toggle, so assert it both ways: gone from the Agents
+// action column, present exactly once in the tmux tab.
+test('#tmux-enabled moved out of .sidebar-ops and lives once in the tmux tab', () => {
+    const occurrences = terminalsHtml.split('id="tmux-enabled"').length - 1;
+    assert.strictEqual(occurrences, 1, 'the enable toggle must be declared exactly once');
+    const sidebarOps = block(terminalsHtml, 'class="sidebar-ops"', '</div>');
+    assert.ok(!sidebarOps.includes('tmux-enabled'),
+        'the toggle is a setting, not an action — it must not sit in the Agents action list');
+    const tmuxTab = block(terminalsHtml, 'data-tab-content="tmux"', 'data-tab-content="config"');
+    assert.ok(tmuxTab.includes('id="tmux-enabled"'), 'the toggle must live in the tmux tab');
+});
+
+// The tab key is shared with the cockpit. Restoring it where the bar is hidden
+// strands the operator on a tab with no way back — the agents pane is
+// display:none and the terminal the embed was opened for is unreachable.
+test('the persisted tab is only restored where the tab bar is visible', () => {
+    assert.ok(terminalsJs.includes('const terminalsTabsEnabled = !soloTerminalName && !isKanbanDock && !teamScopeId;'),
+        'one predicate must gate both the bar visibility and the restore');
+    const restore = block(terminalsJs, '// Restore the persisted tab.', 'const tmuxRefreshBtn');
+    assert.ok(/if \(terminalsTabsEnabled\) \{\s*\n\s*loadSetting\(TAB_KEY/.test(restore),
+        'the loadSetting(TAB_KEY) restore must be gated on terminalsTabsEnabled');
+});
+
+// The point of the list is what is TRUE, not what the board believes. A
+// registry-merged list would show a seat the board recorded and tmux has lost.
+test('the tmux tab reads its session list from the tmux-derived verb, never the registry', () => {
+    assert.ok(terminalsJs.includes("fetch('/terminals/verb/tmuxListSessions'"),
+        'the session list must come from tmuxListSessions');
+    const fetchBlock = block(terminalsJs, 'async function fetchTmuxSessions()', 'function escapeHtml(');
+    assert.ok(!/ptyListTerminals|tmuxListPanes/.test(fetchBlock),
+        'the session list must not be built from the registry-merged pane list');
+});
+
+// Attaching to a per-seat view shares its current-window pointer with a board
+// pane and it carries `status off` — the base session is the only safe target.
+test('no per-seat attach command is offered; the grid button posts the base session', () => {
+    const render = block(terminalsJs, 'function renderTmuxSessions(data)', 'async function refreshTmuxTab()');
+    assert.ok(render.includes('team.baseSession'), 'the attach command must be built from the base session');
+    assert.ok(!/attach -t \$\{(?!base)/.test(render),
+        'only the base session may appear in a copyable attach command');
+    assert.ok(/JSON\.stringify\(\{ team: base \}\)/.test(render),
+        'tmuxBuildGrid must be called with the base session, not a seat view');
+});
+
 console.log(`\nResults: ${passed} passed, ${failed} failed`);
 if (failed > 0) {
     process.exit(1);

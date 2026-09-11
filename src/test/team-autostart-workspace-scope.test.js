@@ -31,7 +31,7 @@ const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
 
-const { findTeamForHeadRoleInRoots, wireSpawnedTeam, listTeamsInRoots, resolveTeamByIdInRoots, isUntouchedSeed, SEEDED_AGENT_GROUP } = require('../../out/services/teamWiring');
+const { findTeamForHeadRoleInRoots, wireSpawnedTeam, listTeamsInRoots, resolveTeamByIdInRoots, isUntouchedSeed, SEEDED_AGENT_GROUP, migrateAgentGroups } = require('../../out/services/teamWiring');
 const { instantiateAgentGroupCore } = require('../../out/services/agentGroupInstantiation');
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
@@ -260,6 +260,28 @@ const LEAD_TEAM = { id: 'feature-implementation', name: 'Lead team', headRole: '
         // An extra key (e.g. headPrompt) also breaks the match — the operator touched it.
         const withExtra = { ...SEEDED_AGENT_GROUP, headPrompt: 'x' };
         assert.strictEqual(isUntouchedSeed(withExtra), false);
+    });
+
+    // 14b. THE SHAPE THAT REACHES DISK. `_loadAgentGroups` seeds the group, runs
+    //      `migrateAgentGroups`, and PERSISTS the converted result — so the row a
+    //      later read sees carries the step-1 member defaults (`scope`,
+    //      `relationship`) that the literal in DEFAULT_TEAM_DEFINITIONS does not.
+    //      Asserting only against the raw literal (test 14) is green while
+    //      `hasAuthoredTeams` reads a seed-only root as authored and
+    //      listTeamsInRoots stops there — the phantom-seed bug, restored. This is
+    //      the assertion that has to fail if the predicate is tightened again.
+    await test('isUntouchedSeed recognises the PERSISTED seed (post-migrateAgentGroups), not just the literal', async () => {
+        const persisted = migrateAgentGroups([JSON.parse(JSON.stringify(SEEDED_AGENT_GROUP))])[0];
+        assert.ok(persisted.members[0].scope, 'fixture guard: the converter must have stamped scope');
+        assert.strictEqual(isUntouchedSeed(persisted), true);
+        // …and a seed-only root holding that persisted row is still not authored.
+        const r = await listTeamsInRoots(['/pinned'], async () => fakeDb([persisted]));
+        assert.strictEqual(r.root, null);
+        assert.strictEqual(r.teams.length, 0);
+        // The tolerance is the DEFAULT VALUE only — an operator-set scope is an edit.
+        const edited = JSON.parse(JSON.stringify(persisted));
+        edited.members[0].scope = 'global';
+        assert.strictEqual(isUntouchedSeed(edited), false);
     });
 
     // 15. resolveTeamByIdInRoots finds a team by id in the second candidate root

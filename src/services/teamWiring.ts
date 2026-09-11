@@ -1307,13 +1307,31 @@ export async function resolveDefinitionForGroup(db: any, g: any): Promise<any | 
 }
 
 /**
- * True when a group is byte-for-byte the shipped starter (`SEEDED_AGENT_GROUP`)
- * — id, name, headRole, the seeded member array (3 × coder), and no extra keys.
+ * True when a group is the shipped starter (`SEEDED_AGENT_GROUP`) — id, name,
+ * headRole, the seeded member array (3 × coder), and no extra keys.
  * Exact-value, never heuristic: an operator-authored team differs by at least
  * one field (a renamed group, a different count, an added/edited member, an
  * extra key) and must NOT match. A group that matches every field has
  * demonstrably never been edited by the operator.
+ *
+ * ONE tolerance, and it is not a heuristic: the two member-shape defaults
+ * `migrateAgentGroups` step 1 stamps — `scope: 'per-team'` and
+ * `relationship: 'reports-to-head'` — are accepted AT THEIR DEFAULT VALUES.
+ * They have to be. `_loadAgentGroups` seeds the group, runs the converter, and
+ * PERSISTS the converted result, so the shape that reaches disk is never the
+ * literal in `DEFAULT_TEAM_DEFINITIONS`; a strict key-set match returns false
+ * for every seed that has ever been loaded, `hasAuthoredTeams` then reads a
+ * seed-only root as authored, and `listTeamsInRoots` stops there — the exact
+ * phantom-seed bug this predicate exists to prevent. (Member-less presets hid
+ * this: with `members: []` the converter changed nothing, so nothing was
+ * written back.) A member carrying a NON-default scope/relationship is the
+ * operator's edit and still fails the match.
  */
+const SEED_MEMBER_MIGRATION_DEFAULTS: Record<string, string> = {
+    scope: 'per-team',
+    relationship: 'reports-to-head',
+};
+
 export function isUntouchedSeed(group: any): boolean {
     if (!group || typeof group !== 'object') { return false; }
     if (group.id !== SEEDED_AGENT_GROUP.id) { return false; }
@@ -1328,10 +1346,18 @@ export function isUntouchedSeed(group: any): boolean {
         if (!m || m.role !== sm.role || m.count !== sm.count) { return false; }
         if ((m.label || '') !== (sm.label || '')) { return false; }
         if ((m.startupCommand || '') !== (sm.startupCommand || '')) { return false; }
-        // Any extra keys on the member mean it was edited.
-        const mKeys = Object.keys(m).sort().join(',');
-        const smKeys = Object.keys(sm).sort().join(',');
-        if (mKeys !== smKeys) { return false; }
+        // Keys beyond the seed's own are allowed ONLY for the two converter
+        // defaults, and only at their default values.
+        const smKeys = new Set(Object.keys(sm));
+        for (const key of Object.keys(m)) {
+            if (smKeys.has(key)) { continue; }
+            if (!(key in SEED_MEMBER_MIGRATION_DEFAULTS)) { return false; }
+            if (m[key] !== SEED_MEMBER_MIGRATION_DEFAULTS[key]) { return false; }
+        }
+        // Every seed key must still be present.
+        for (const key of smKeys) {
+            if (!(key in m)) { return false; }
+        }
     }
     // Check for extra keys on the group itself (e.g. scope, relationship
     // already added by a prior partial migration — those mean it was

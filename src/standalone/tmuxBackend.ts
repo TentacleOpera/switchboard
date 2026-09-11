@@ -226,6 +226,13 @@ export function _resetTmuxAvailability(): void {
 // `\x1f` (ASCII unit separator) delimits fields so pane titles containing
 // `|` or `:` cannot corrupt the parse. `list-panes -a` sees only the default
 // (or configured) socket — no cross-socket discovery.
+//
+// MEASURED (tmux 3.4): tmux vis-escapes non-printable bytes in `-F` output, so
+// the 0x1f we ask for comes BACK as the four literal characters `\037` — a
+// `split('\x1f')` therefore finds one field per line and every pane is dropped.
+// (Tab and backslash are NOT escaped, so neither is a safe separator instead.)
+// `splitPaneFields` below un-escapes `\037` before splitting, so both the
+// escaped and the raw form parse. Do not "simplify" it back to a bare split.
 
 const PANE_FORMAT = [
     '#{pane_id}', '#{session_name}', '#{window_index}', '#{window_name}',
@@ -248,6 +255,15 @@ function deriveFriendlyName(pane: Omit<TmuxPane, 'friendlyName'>): string {
 }
 
 /**
+ * Split one `-F` output line into its fields. tmux writes the 0x1f separator
+ * back as the literal `\\037` (vis octal escape); accept both that and the raw
+ * byte so the parse does not depend on a tmux version's escaping policy.
+ */
+function splitPaneFields(line: string): string[] {
+    return line.replace(/\\037/g, '\x1f').split('\x1f');
+}
+
+/**
  * List all panes across all sessions on the (configured) socket.
  * Returns an empty array if no server is running (swallows the error —
  * callers should gate on `isTmuxAvailable` first).
@@ -262,7 +278,7 @@ export async function listTmuxPanes(socket?: TmuxSocket): Promise<TmuxPane[]> {
     const lines = out.split('\n').filter(l => l.length > 0);
     const panes: TmuxPane[] = [];
     for (const line of lines) {
-        const fields = line.split('\x1f');
+        const fields = splitPaneFields(line);
         if (fields.length < 9) { continue; }
         const base: Omit<TmuxPane, 'friendlyName'> = {
             paneId: fields[0],
