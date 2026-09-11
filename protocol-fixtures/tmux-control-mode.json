@@ -1,0 +1,45 @@
+{
+  "protocolVersion": 1,
+  "capturedWith": "tmux 3.4",
+  "capturedAt": "2026-09-11",
+  "what": "Raw `tmux -CC attach` control-mode output captured from this host, so a parser is proven against real bytes rather than a spec reading.",
+  "entrySequence": {
+    "reprOfFirstBytes": "'\\x1bP1000p%'",
+    "note": "DCS 1000 p -- ESC P 1000 p. Control mode opens with this, NOT with a % line. A parser that only scans for lines beginning with % will swallow it into the first message."
+  },
+  "idSigils": {
+    "session": "$",
+    "window": "@",
+    "pane": "%",
+    "note": "'%output %16 ...' is message type %output addressed to PANE 16. The second % is an id sigil, not a second message type."
+  },
+  "payloadEscaping": {
+    "form": "octal",
+    "examples": {
+      "backslash-033": "ESC 0x1b",
+      "backslash-015": "CR 0x0d",
+      "backslash-012": "LF 0x0a"
+    },
+    "note": "Unescape before writing to the terminal, or panes render literal backslashes."
+  },
+  "attachReplaysNothing": {
+    "observed": true,
+    "note": "The scratch session had already printed three lines; only the two emitted AFTER attach arrived as %output. The real seat, mid-conversation and idle, produced no %output at all. A client MUST fetch existing screen and history (capture-pane -p -S) on attach, or every panel opens blank and fills only as the agent next speaks."
+  },
+  "captures": {
+    "scratchWithOutput": {
+      "description": "Scratch session emitting colour and CRLF, to exercise %output and escaping.",
+      "raw": "\u001bP1000p%begin 1789098069 398116 0\r\n%end 1789098069 398116 0\r\n%session-changed $16 ccprobe\r\n%output %16 \\033[32mline 3\\033[0m ok\\015\\012\r\n%output %16 \\033[1;31mDONE\\033[0m\\015\\012\r\n%window-renamed @16 sleep\r\n"
+    },
+    "realSeatIdle": {
+      "description": "A live Devin planner seat, attached READ-ONLY (-r) at matched size. Idle agents are silent, so volume tracks agent speech, not polling.",
+      "raw": "\u001bP1000p%begin 1789098117 398209 0\r\n%end 1789098117 398209 0\r\n%session-changed $8 lc-planner-3-planner\r\n"
+    }
+  },
+  "messageTypesObserved": [
+    "%end",
+    "%output",
+    "%session-changed",
+    "%window-renamed"
+  ]
+}
