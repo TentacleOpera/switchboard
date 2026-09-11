@@ -610,6 +610,11 @@ func main() {
 	pid := os.Getpid()
 
 	stateFilePath := filepath.Join(f.root, ".switchboard", "pty-host-state.json")
+	// `surviveParent` records whether this host was started to outlive its parent.
+	// Every host writes a state file, so the successor board needs it to tell an
+	// adoptable host from one whose parent-death watcher is about to dispose it.
+	// (Kept above the literal: a comment inside breaks gofmt's key-alignment
+	// group for every entry that follows it.)
 	stateFilePayload := map[string]any{
 		"port":            listenPort,
 		"token":           f.token,
@@ -617,9 +622,6 @@ func main() {
 		"workspaceRoot":   f.root,
 		"pid":             pid,
 		"startedAt":       startedAt,
-		// Whether this host was started to outlive its parent. Every host writes
-		// a state file, so the successor board needs this to tell an adoptable
-		// host from one whose parent-death watcher is about to dispose it.
 		"surviveParent":   surviveParent,
 	}
 	if stateBytes, err := json.Marshal(stateFilePayload); err == nil {
