@@ -799,19 +799,6 @@
             box-shadow: var(--glow-teal);
         }
 
-        /* "showing N of M" hint — appears only when a column is render-capped
-           (plan: the-board-ships-2-8mb-of-uncompressed-json-so-a-remote-device-waits-minutes,
-           change 1). The count badge keeps the honest total; this says how many
-           are actually in the DOM so a truncated column is never mistaken for an
-           empty one. */
-        .column-cap-hint {
-            font-family: var(--font-code);
-            font-size: 9px;
-            color: var(--vscode-descriptionForeground, var(--text-secondary));
-            white-space: nowrap;
-        }
-        .column-cap-hint:empty { display: none; }
-
         /* "Load more" control appended to a capped column. Pages the rest of the
            column into the DOM on demand without re-rendering the board. */
         .column-load-more {
@@ -6677,7 +6664,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         // demand via the "Load more" control. No column is special — the same N
         // applies to every column, so the fix is habit-agnostic and scales for a
         // genuinely busy board. The count badge keeps the honest total; the
-        // cap-hint span says "showing N of M" when they differ.
         const COLUMN_RENDER_CAP = 50;
         // Per-column current render limit. Defaults to COLUMN_RENDER_CAP and
         // grows by COLUMN_RENDER_CAP each time the operator pages that column.
@@ -8541,13 +8527,11 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                             <button class="column-header-btn" id="btn-add-plan" data-tooltip="Add Plan">+</button>
                             <button class="column-header-btn" id="btn-import-clipboard" data-tooltip="Import plan(s) from clipboard&#10;&#10;Multi-plan? Separate with markers:&#10;### PLAN 1 START&#10;[plan 1 content]&#10;### PLAN 2 START&#10;[plan 2 content]"><img src="${ICON_IMPORT_CLIPBOARD}" alt="Import"></button>
                             <span class="column-count" id="count-${escapeAttr(def.id)}">0</span>
-                            <span class="column-cap-hint" id="cap-hint-${escapeAttr(def.id)}"></span>
                        </div>`
                     : `<div style="display: flex; align-items: center; gap: 4px;">
                             ${complexityRoutingToggle}
                             ${modeToggle}
                             <span class="column-count" id="count-${escapeAttr(def.id)}">0</span>
-                            <span class="column-cap-hint" id="cap-hint-${escapeAttr(def.id)}"></span>
                        </div>`;
                 const subline = hasAgent
                     ? `<div class="column-agent" id="agent-${escapeAttr(def.id)}"></div>`
@@ -9595,18 +9579,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         }
 
         // ─── Per-column render cap + paging (plan change 1) ────────────────────
-        // Update the "showing N of M" hint for a column. `rendered` is the count
-        // actually in the DOM; `pool` is the count that WOULD render if uncapped
-        // (the project-filtered set for this column). The count badge keeps the
-        // unfiltered true total; this hint says how many of the current view's
-        // cards are in the DOM, so a capped column is never mistaken for empty.
-        function updateCapHint(col, rendered, pool) {
-            const hintEl = document.getElementById('cap-hint-' + col);
-            if (!hintEl) return;
-            hintEl.textContent = (rendered < pool && pool > 0)
-                ? `showing ${rendered} of ${pool}`
-                : '';
-        }
+        // The cap and its Load more control stay; the "showing N of M" text that
+        // sat beside every column count does not — it was added to stop a capped
+        // column reading as empty, but the Load more button already says that,
+        // and only when there is actually more. Kept as a no-op so the render
+        // path keeps one place to hang a future signal off.
+        function updateCapHint(_col, _rendered, _pool) { /* no hint text by design */ }
 
         // Build the "Load more" control HTML for a capped column. Clicking it
         // grows that column's render limit by COLUMN_RENDER_CAP and re-renders

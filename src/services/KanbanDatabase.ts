@@ -1482,7 +1482,38 @@ ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
     repo_scope = excluded.repo_scope,
     project = COALESCE(NULLIF(excluded.project, ''), plans.project),
     workspace_id = excluded.workspace_id,
-    updated_at = excluded.updated_at,
+    -- A re-import that changes nothing must not advance updated_at. The watcher
+    -- re-imports every plan file on any working-tree change, and this line used to
+    -- be a bare excluded.updated_at, so a single sweep re-stamped thousands of
+    -- rows with the same minute. Measured on this board before the fix: 1759
+    -- completed plans all carrying 2026-09-09T06:55, and 2094 of 2557 completed
+    -- rows inside a 7-day window that only 32 had genuinely entered. That is the
+    -- hot window's key, so the window stopped bounding anything, and it is the
+    -- ORDER BY for every board read, so import order outranked real activity.
+    --
+    -- Same rule kanban_column and column_entered_at already use above: a file
+    -- re-import is not activity. IS NOT is null-safe, so a column going to or
+    -- from NULL counts as a change; a plain != would read as NULL and be skipped.
+    updated_at = CASE
+        WHEN plans.topic             IS NOT excluded.topic
+          OR plans.complexity        IS NOT excluded.complexity
+          OR plans.tags              IS NOT excluded.tags
+          OR plans.repo_scope        IS NOT excluded.repo_scope
+          OR plans.last_action       IS NOT excluded.last_action
+          OR plans.source_type       IS NOT excluded.source_type
+          OR plans.brain_source_path IS NOT excluded.brain_source_path
+          OR plans.mirror_path       IS NOT excluded.mirror_path
+          OR plans.routed_to         IS NOT excluded.routed_to
+          OR plans.clickup_task_id   IS NOT excluded.clickup_task_id
+          OR plans.linear_issue_id   IS NOT excluded.linear_issue_id
+          OR plans.notion_page_id    IS NOT excluded.notion_page_id
+          OR plans.worktree_id       IS NOT excluded.worktree_id
+          OR plans.workspace_name    IS NOT excluded.workspace_name
+          OR plans.project_id        IS NOT excluded.project_id
+          OR (plans.status = 'deleted' AND excluded.status = 'active')
+        THEN excluded.updated_at
+        ELSE plans.updated_at
+    END,
     last_action = excluded.last_action,
     source_type = excluded.source_type,
     brain_source_path = excluded.brain_source_path,
@@ -2866,7 +2897,30 @@ export class KanbanDatabase {
                 -- never make a subtask diverge, so feature-linked rows never fill.
                 project    = CASE WHEN plans.project = '' AND (plans.feature_id IS NULL OR plans.feature_id = '') THEN excluded.project    ELSE plans.project    END,
                 project_id = CASE WHEN plans.project = '' AND (plans.feature_id IS NULL OR plans.feature_id = '') THEN excluded.project_id ELSE plans.project_id END,
-                updated_at = excluded.updated_at,
+                -- A re-import that changes nothing must not advance updated_at.
+                -- This is the WATCHER's write path, and the watcher re-imports every
+                -- plan file on any working-tree change, so a bare
+                -- excluded.updated_at re-stamped thousands of rows at once:
+                -- measured before this fix, 1759 completed plans all carried
+                -- 2026-09-09T06:55, and 2094 of 2557 completed rows sat inside a
+                -- 7-day window only 32 had genuinely entered. updated_at is the hot
+                -- window's key AND the ORDER BY of every board read, so import order
+                -- was outranking real activity on both.
+                --
+                -- The conditions mirror exactly what this clause can change: topic,
+                -- complexity and tags, plus the two guarded fills. Anything this
+                -- statement cannot write must not count as a change. IS NOT is
+                -- null-safe, so a value arriving at or leaving NULL still counts.
+                updated_at = CASE
+                    WHEN plans.topic      IS NOT excluded.topic
+                      OR plans.complexity IS NOT excluded.complexity
+                      OR plans.tags       IS NOT excluded.tags
+                      OR (plans.project = '' AND (plans.feature_id IS NULL OR plans.feature_id = '')
+                          AND plans.project IS NOT excluded.project)
+                      OR (excluded.is_feature > 0 AND plans.is_feature IS NOT excluded.is_feature)
+                    THEN excluded.updated_at
+                    ELSE plans.updated_at
+                END,
                 is_feature = CASE WHEN excluded.is_feature > 0 THEN excluded.is_feature ELSE plans.is_feature END
         `;
         try {
@@ -8551,16 +8605,38 @@ export class KanbanDatabase {
         const workingStates = new Map<string, { working: boolean }>();
         if (!(await this.ensureReady()) || !this._db || !workspaceId) return workingStates;
         const cutoff = new Date(Date.now() - timeoutMs).toISOString();
-        const stmt = this._db.prepare(
-            `SELECT feature_id AS featureId,
-                    MAX(dispatched_at IS NOT NULL
-                        AND MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at)) >= ?) AS anyWorking
-             FROM plans
-             WHERE workspace_id = ? AND feature_id IS NOT NULL AND feature_id != ''
-               AND status = 'active' AND is_feature = 0
-             GROUP BY feature_id`,
-            [cutoff, workspaceId]
-        );
+        // V74 moved the runtime columns off `plans` into `plan_runtime_state`
+        // (keyed plan_id + device_id). This read was never migrated with them, and
+        // it is on the BOARD's read path: getFullStateMessages -> _buildBoardCards
+        // -> here, with a catch that returns []. So the moment V74 actually
+        // succeeded, every card vanished from the board — not a degraded working
+        // light, an empty board. Same guarded shape as getLiveDispatchAttribution.
+        const hasLegacyRuntimeCols = this._tableHasColumn('plans', 'dispatched_at');
+        const stmt = hasLegacyRuntimeCols
+            ? this._db.prepare(
+                `SELECT feature_id AS featureId,
+                        MAX(dispatched_at IS NOT NULL
+                            AND MAX(dispatched_at, COALESCE(last_liveness_at, dispatched_at)) >= ?) AS anyWorking
+                 FROM plans
+                 WHERE workspace_id = ? AND feature_id IS NOT NULL AND feature_id != ''
+                   AND status = 'active' AND is_feature = 0
+                 GROUP BY feature_id`,
+                [cutoff, workspaceId]
+            )
+            // LEFT JOIN, not JOIN: a plan with no runtime row on THIS device is not
+            // working, and must still be counted into its feature's rollup.
+            : this._db.prepare(
+                `SELECT p.feature_id AS featureId,
+                        MAX(r.dispatched_at IS NOT NULL
+                            AND MAX(r.dispatched_at, COALESCE(r.last_liveness_at, r.dispatched_at)) >= ?) AS anyWorking
+                 FROM plans p
+                 LEFT JOIN plan_runtime_state r
+                        ON p.plan_id = r.plan_id AND r.device_id = ?
+                 WHERE p.workspace_id = ? AND p.feature_id IS NOT NULL AND p.feature_id != ''
+                   AND p.status = 'active' AND p.is_feature = 0
+                 GROUP BY p.feature_id`,
+                [cutoff, getMachineId(), workspaceId]
+            );
         try {
             while (stmt.step()) {
                 const row = stmt.getAsObject();
