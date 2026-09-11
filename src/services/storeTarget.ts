@@ -1,125 +1,41 @@
 /**
- * Store-target abstraction — selects the database binding per configured target.
+ * Store target resolution.
  *
- * `local-file` (default): uses `better-sqlite3` via `BetterSqliteDriver`.
- * `libsql`: uses `libsql` via `LibSqlDriver`, lazily required as an
- *   `optionalDependency` only when a libSQL target is configured. Local-only
- *   installs never load `libsql`, so they take no prebuild risk for a feature
- *   they do not use.
+ * There is ONE target: a local better-sqlite3 file. libSQL was rejected as a
+ * direction on 2026-09-11 — the product is a Raspberry Pi appliance with one
+ * board host and one store, and other machines reach it over HTTP rather than
+ * replicating it. `libSqlDriver.ts` and the `libsql` dependency are deleted with
+ * that decision; see the REJECTED note at the top of
+ * `.switchboard/plans/libsql-shared-store-turso-and-self-hosted-sqld.md`.
  *
- * The sidecar is the sole opener of the database and every other client reaches
- * it over the `LocalApiServer` HTTP surface, so the binding changes inside one
- * process behind an unchanged contract.
+ * This module is kept rather than inlined because `openDriver` is the single
+ * place a driver is constructed (`KanbanDatabase` calls it twice), and a future
+ * binding change wants one seam rather than two call sites.
  *
- * See `.switchboard/plans/libsql-shared-store-turso-and-self-hosted-sqld.md`.
+ * It also kept the BUILD broken: `libsql` was a declared dependency that was
+ * never installed, so webpack could not resolve the lazy `require` and every
+ * bundle failed. A rejected technology must not stay wired in — that is the same
+ * shape as the board mirrors and the DuckDB archive removed the same day.
  */
 
-import type { ISqliteDriver, SqliteDriverOptions } from './sqliteDriver';
-import { BetterSqliteDriver } from './sqliteDriver';
+import { BetterSqliteDriver, ISqliteDriver, SqliteDriverOptions } from './sqliteDriver';
 
-export type StoreTargetKind = 'local-file' | 'libsql';
+export type StoreTargetKind = 'local-file';
 
-export interface StoreTargetConfig {
+export interface StoreTarget {
     kind: StoreTargetKind;
-    /** For `libsql`: the remote URL (e.g. `libsql://<db>.turso.io` or `http://localhost:8080`). */
-    url?: string;
-    /** For `libsql`: the auth token. Stored in `encryptedSecretsStore`, never `settings.json`. */
-    authToken?: string;
-    /** For `libsql` embedded replica: the local replica file path. */
-    replicaPath?: string;
-    /** For `libsql` embedded replica: the sync URL. */
-    syncUrl?: string;
 }
 
-/**
- * Resolve the active store target from configuration. Returns `local-file`
- * (the default) when no libSQL target is configured.
- *
- * Configuration is read from the `switchboard.storeTarget` setting:
- *   - `none` / `local-file` → local-file (default)
- *   - `libsql` → libSQL (requires `storeTarget.url` and `storeTarget.authToken`)
- */
-export function resolveStoreTarget(): StoreTargetConfig {
-    const mode = _readConfig('storeTarget', 'local-file');
-    if (mode === 'libsql') {
-        const url = _readConfig('storeTarget.url', '');
-        const authToken = _readConfig('storeTarget.authToken', '');
-        const replicaPath = _readConfig('storeTarget.replicaPath', '');
-        const syncUrl = _readConfig('storeTarget.syncUrl', '');
-        return { kind: 'libsql', url, authToken, replicaPath, syncUrl };
-    }
+/** The only target. Retained as a function so callers keep one shape. */
+export function resolveStoreTarget(): StoreTarget {
     return { kind: 'local-file' };
 }
 
-function _readConfig(key: string, fallback: string): string {
-    // Try the path config provider first (set by the extension host).
-    try {
-        const KanbanDatabase = require('./KanbanDatabase');
-        const provider = KanbanDatabase.KanbanDatabase._pathConfigProvider;
-        if (provider) {
-            const val = provider.getConfigString(key);
-            if (val) { return val; }
-        }
-    } catch { /* outside extension host */ }
-    // Fall back to VS Code configuration.
-    try {
-        const vscode = require('vscode');
-        const config = vscode.workspace.getConfiguration('switchboard');
-        return String(config.get(key, fallback));
-    } catch { /* outside extension host */ }
-    return fallback;
-}
-
 /**
- * Open a database driver for the given path, selecting the binding based on
- * the configured store target.
+ * Open a database driver for the given path.
  *
- * For `local-file`: opens a `BetterSqliteDriver` against `dbPath`.
- * For `libsql` with a `replicaPath`: opens a `LibSqlDriver` in embedded-replica
- *   mode, using `replicaPath` as the local file and `syncUrl`/`authToken` for
- *   the remote.
- * For `libsql` without a `replicaPath`: opens a `LibSqlDriver` in remote-only
- *   mode against `url`/`authToken`.
+ * The single construction seam for the board store.
  */
 export function openDriver(dbPath: string, options?: SqliteDriverOptions): ISqliteDriver {
-    const target = resolveStoreTarget();
-    if (target.kind === 'libsql') {
-        // Lazily require LibSqlDriver so local-only installs never load `libsql`.
-        const { LibSqlDriver } = require('./libSqlDriver');
-        const replicaPath = target.replicaPath || dbPath;
-        return new LibSqlDriver(replicaPath, {
-            url: target.url,
-            authToken: target.authToken,
-            syncUrl: target.syncUrl || target.url,
-            ...options,
-        });
-    }
     return new BetterSqliteDriver(dbPath, options);
-}
-
-/**
- * Check whether a libSQL target is configured and the `libsql` binding is
- * available. Returns `{ available: false, reason: string }` when the binding
- * cannot be loaded, so the caller can surface a clear error rather than a
- * silent fallback to local-only (which would diverge from the configured
- * authority).
- */
-export function checkLibSqlAvailability(): { available: boolean; reason?: string } {
-    const target = resolveStoreTarget();
-    if (target.kind !== 'libsql') {
-        return { available: true }; // local-file — better-sqlite3 is always available
-    }
-    if (!target.url) {
-        return { available: false, reason: 'storeTarget is libsql but storeTarget.url is not set' };
-    }
-    try {
-        require('libsql');
-        return { available: true };
-    } catch (e) {
-        return {
-            available: false,
-            reason: `libsql binding not available: ${e instanceof Error ? e.message : String(e)}. ` +
-                'Install it with `npm install libsql` or switch storeTarget to local-file.',
-        };
-    }
 }

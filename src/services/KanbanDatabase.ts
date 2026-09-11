@@ -4,7 +4,7 @@ import { createRequire } from 'module';
 import * as os from 'os';
 import * as path from 'path';
 import { ISqliteDriver, ISqliteStatement, BetterSqliteDriver } from './sqliteDriver';
-import { openDriver, resolveStoreTarget, checkLibSqlAvailability } from './storeTarget';
+import { openDriver, resolveStoreTarget } from './storeTarget';
 import { resolveBoardDbPath, resolveArchiveDbPath, getGlobalStoreDir } from './globalStore';
 import { relocateBoardDatabase } from './dbMerge';
 import { resolveCanonicalWorkspaceIdSync } from './WorkspaceIdentityService';
@@ -1733,6 +1733,14 @@ export class KanbanDatabase {
      */
     private static _resolvedPathByRoot = new Map<string, string>();
 
+    /**
+     * Roots whose path is being resolved right now. See the re-entrancy guard in
+     * `forWorkspace`: the config read that selects the database path is itself
+     * served BY the database, so the resolution must be able to detect that it has
+     * been re-entered and fall back rather than recurse.
+     */
+    private static _resolvingRoots = new Set<string>();
+
     /** Drop memoised path resolutions for one root, or all of them. */
     public static invalidateResolvedPathCache(stableRoot?: string): void {
         if (!stableRoot) { KanbanDatabase._resolvedPathByRoot.clear(); return; }
@@ -1792,11 +1800,34 @@ export class KanbanDatabase {
             if (customDbPath !== undefined && customDbPath.trim() !== '') {
                 return { value: customDbPath.trim(), source: 'explicit-argument' };
             }
-            const pathOverride = KanbanDatabase._pathConfigProvider?.getConfigString('storage.pathOverride');
-            if (pathOverride) { return { value: pathOverride, source: 'storage.pathOverride' }; }
-            const legacy = KanbanDatabase._pathConfigProvider?.getConfigString('kanban.dbPath');
-            if (legacy) { return { value: legacy, source: 'legacy:kanban.dbPath' }; }
-            return { value: undefined, source: 'derived-default' };
+            // RE-ENTRANCY GUARD — load-bearing, and its absence is a hard crash.
+            //
+            // The config providers read the db `config` table, and that read goes
+            // `getConfigString` -> `readConfigValueSync` -> `KanbanDatabase.forWorkspace`.
+            // So asking config where the database lives calls the function that is
+            // currently deciding where the database lives. With no base case the
+            // standalone host died on boot with `RangeError: Maximum call stack size
+            // exceeded`, the stack alternating those four frames forever.
+            //
+            // The path override cannot come from the store whose path it selects. While
+            // a resolution for this root is already in flight, skip the config read and
+            // take the derived default — tagged `derived-default:reentrant` so the log
+            // says WHY it skipped rather than silently reporting an ordinary default.
+            // The outer call is resolving the same root, so the answer is the same one
+            // it is about to reach.
+            if (KanbanDatabase._resolvingRoots.has(stable)) {
+                return { value: undefined, source: 'derived-default:reentrant' };
+            }
+            KanbanDatabase._resolvingRoots.add(stable);
+            try {
+                const pathOverride = KanbanDatabase._pathConfigProvider?.getConfigString('storage.pathOverride');
+                if (pathOverride) { return { value: pathOverride, source: 'storage.pathOverride' }; }
+                const legacy = KanbanDatabase._pathConfigProvider?.getConfigString('kanban.dbPath');
+                if (legacy) { return { value: legacy, source: 'legacy:kanban.dbPath' }; }
+                return { value: undefined, source: 'derived-default' };
+            } finally {
+                KanbanDatabase._resolvingRoots.delete(stable);
+            }
         })();
         const configuredOverride = overrideResolution.value;
         KanbanDatabase._lastBoardPathOverrideSource = overrideResolution.source;
@@ -11481,7 +11512,32 @@ export class KanbanDatabase {
             console.log(`[KanbanDatabase] V74: copied ${expected} runtime row(s) from plans into plan_runtime_state (device ${machineId})`);
         }
 
-        // 2. Rebuild plans table without local runtime columns in one transaction
+        // 2. Rebuild plans table without local runtime columns in one transaction.
+        //
+        // `PRAGMA foreign_keys=OFF` around the rebuild is MANDATORY, not hygiene, and
+        // its absence took the board down on 2026-09-11. `plan_events` declares
+        // `FOREIGN KEY (plan_id) REFERENCES plans(plan_id)` (V20), and this workspace
+        // carried 1,919 plan_events rows whose plan_id no longer matches any plans row
+        // — `PRAGMA foreign_key_check` lists them. Dropping and renaming `plans`
+        // underneath those children raises `FOREIGN KEY constraint failed`, the
+        // migration throws, `_initialize` returns false, and EVERY read answers
+        // `503 STORE_UNAVAILABLE` because the store never opens.
+        //
+        // This is SQLite's documented procedure for a table rebuild: pragma off,
+        // rebuild inside a transaction, verify with foreign_key_check, pragma on. The
+        // pragma is a no-op inside a transaction, so it must be set BEFORE `BEGIN`
+        // and restored AFTER `COMMIT`.
+        //
+        // Why the contract tests missed it: they build fresh databases, where there
+        // are no orphaned children for the FK to catch. Only a real board that has
+        // deleted plans while keeping their history has them.
+        let fkWasOn = true;
+        try {
+            const v = this._selectSingleValue('PRAGMA foreign_keys');
+            fkWasOn = String(v) === '1' || v === 1 || v === true;
+        } catch { /* older driver: assume on, restoring it is the safe default */ }
+        try { this._db.exec('PRAGMA foreign_keys=OFF'); } catch { /* best effort */ }
+
         this._db.exec('BEGIN TRANSACTION');
         try {
             this._db.exec('DROP TABLE IF EXISTS plans_new');
@@ -11534,8 +11590,33 @@ export class KanbanDatabase {
             this._db.exec('COMMIT');
         } catch (err) {
             try { this._db.exec('ROLLBACK'); } catch { /* ignore */ }
+            if (fkWasOn) { try { this._db.exec('PRAGMA foreign_keys=ON'); } catch { /* best effort */ } }
             throw err;
         }
+
+        // Restore enforcement, and report what the rebuild left behind rather than
+        // leaving it silent. Pre-existing orphans are NOT created by this migration and
+        // are not fixed by it — they are the subject of
+        // `a-dead-row-keeps-its-working-column-and-nothing-reaps-it.md`. Counting them
+        // here is what makes "the FK is off for a moment" an observation rather than a
+        // hole: if the number is non-zero, something upstream is deleting plans without
+        // reaping their history.
+        if (fkWasOn) {
+            try { this._db.exec('PRAGMA foreign_keys=ON'); } catch { /* best effort */ }
+        }
+        try {
+            const orphans = Number(this._selectSingleValue(
+                'SELECT COUNT(*) AS n FROM plan_events WHERE plan_id IS NOT NULL '
+                + 'AND plan_id NOT IN (SELECT plan_id FROM plans)'
+            ) ?? 0);
+            if (orphans > 0) {
+                console.warn(
+                    `[KanbanDatabase] V74: ${orphans} plan_events row(s) reference a plan that no longer exists. `
+                    + 'Pre-existing, not created by this migration, and left in place — history outliving its row '
+                    + 'is the dead-row reaping card, not a migration failure.'
+                );
+            }
+        } catch { /* the count is diagnostics; never fail the migration on it */ }
     }
 
     /**
