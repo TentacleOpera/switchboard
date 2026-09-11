@@ -1668,6 +1668,15 @@ jobs:
       - name: Resident memory budget contract (probe schema, watch bounds, published budget)
         run: npm run test:contract:resident-memory
 
+      # Watch topology, measured against the real kernel counter rather than
+      # source text: one inotify watch per DIRECTORY (not per entry), nothing
+      # armed under node_modules/.git, dispose() returning the process to
+      # baseline, and a late-created subdirectory still delivering events. The
+      # 16,776-watch leak passed every source-text gate in the repo; only a
+      # /proc/<pid>/fdinfo count discriminates on it.
+      - name: inotify watch topology contract (per-directory arming, close on dispose)
+        run: npm run test:contract:inotify-watch-topology
+
       - name: Run integration suite
         run: npm run test:integration:all
 

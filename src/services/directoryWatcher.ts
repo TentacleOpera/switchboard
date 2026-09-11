@@ -100,12 +100,29 @@ export function attachDirectoryWatcher(
     let armedHere = 0;
     const ceiling = getInotifyCeiling();
 
+    let ceilingLogged = false;
     const ceilingHit = (dir: string): boolean => {
         if (opts.skipCeilingCheck) return false;
         if (startCount === 0 && process.platform !== 'linux') return false; // off-Linux — no ceiling enforced
         if (startCount + armedHere < ceiling) return false;
-        log?.(`${tag}inotify watch ceiling (${startCount + armedHere}/${ceiling}) reached — NOT arming ${dir}`);
+        // Log ONCE per walker. A large tree at the ceiling would otherwise emit one
+        // warn per skipped directory — thousands of identical lines, which on the Pi
+        // is its own failure mode. The first line names the offending call site and
+        // the first directory that was refused; that is what the operator needs.
+        if (!ceilingLogged) {
+            ceilingLogged = true;
+            log?.(`${tag}inotify watch ceiling (${startCount + armedHere}/${ceiling}) reached — NOT arming ${dir} (and any further directories under ${rootDir})`);
+        }
         return true;
+    };
+
+    /** Close and forget the watcher for a directory that has gone away. */
+    const reapWatcher = (dir: string): void => {
+        const w = subWatchers.get(dir);
+        if (!w) return;
+        try { w.close(); } catch {}
+        subWatchers.delete(dir);
+        if (armedHere > 0) armedHere--;
     };
 
     const attachNonRecursive = (dir: string): void => {
@@ -124,9 +141,18 @@ export function attachDirectoryWatcher(
                             attachNonRecursive(fullPath);
                             void rescanDir(fullPath);
                         }
-                        return;
+                        // Fall through: `fs.watch({recursive:true})` reported directory
+                        // creates too, and `**/*` consumers (hostSeams.watchFolder) key
+                        // a refresh off them. Consumers that only want files filter on
+                        // the extension, so forwarding is parity, not noise.
                     }
-                } catch { /* file may be transient */ }
+                } catch {
+                    // The entry is gone. If it was a directory WE were watching, the
+                    // kernel has already dropped the inotify registration but Node's
+                    // FSWatcher (and its fd) stays open until closed — the exact
+                    // unclosed-handle accumulation this walker exists to prevent.
+                    reapWatcher(fullPath);
+                }
                 onEvent(eventType, fullPath);
             });
             w.on('error', () => { /* transient — the engine's periodic scan is the backstop */ });
@@ -146,6 +172,11 @@ export function attachDirectoryWatcher(
                 if (entry.isDirectory()) {
                     if (!EXCLUDED_DIR_NAMES.has(entry.name)) {
                         if (!subWatchers.has(entryPath)) attachNonRecursive(entryPath);
+                        // Recurse. A whole subtree moved in atomically (a `mv`, a
+                        // worktree checkout) produces ONE rename event on the parent;
+                        // stopping at depth 1 would leave every grandchild directory
+                        // unwatched forever and its files never reported.
+                        await rescanDir(entryPath);
                     }
                     continue;
                 }

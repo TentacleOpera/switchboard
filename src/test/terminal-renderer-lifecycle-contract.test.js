@@ -271,5 +271,89 @@ test('the per-document cap is documented as NOT the process ceiling', () => {
         '__sbTerminalStats must expose rendererDeferred so "on canvas, owed an upgrade" is distinguishable from "on canvas, retired"');
 });
 
+
+// ─── A re-box must not release the renderer (layout-switch churn) ───────────
+//
+// Measured 2026-09-08: one seated terminal, six layout switches, NINE WebGL
+// acquires and nine releases. The seat never left the fleet — only the box it
+// was drawn in changed. The release path was suspendTerminalStream, which the
+// reconcile's trailing loop calls whenever isTerminalRendered(name) is false,
+// and a container transiently measures 0x0 mid-reflow. That site released
+// IMMEDIATELY, bypassing RENDERER_RELEASE_DELAY_MS entirely.
+
+test('a seated terminal is never released without the delay timer', () => {
+    const suspend = block('function suspendTerminalStream(entry)', 'function resumeTerminalStream(entry)');
+    assert.ok(/deps\.isTerminalSeated/.test(suspend),
+        'suspendTerminalStream must consult isTerminalSeated — "assigned to a rendered, non-status slot" is what separates a re-box from a leave');
+    assert.ok(/if \(seated\) \{\s*armRendererRelease\(entry\);/.test(suspend),
+        'a SEATED terminal must ARM the 5 s release, never release inline: an immediate release on a transient 0x0 is the 9/9 acquire/release churn');
+    // The immediate release must still exist for a terminal that genuinely left.
+    assert.ok(/\} else \{[\s\S]*?cancelRendererRelease\(entry\);[\s\S]*?rendererAddon\.release\(\)/.test(suspend),
+        'an UNSEATED terminal (unassigned, or a status pane) must still release immediately — that path is not the churn and must not regress');
+    // And the seated branch must NOT cancel: panelVisibility arms the genuine
+    // hidden-panel reclaim, and a cancel here would silently keep every context
+    // for the life of a hidden panel.
+    const seatedBranch = block('if (seated) {', '} else {', suspend);
+    assert.ok(!/cancelRendererRelease/.test(seatedBranch),
+        'the seated branch must not cancel a release the panelVisibility hide path armed — that timer IS the hidden-panel reclaim');
+});
+
+test('the ResizeObserver still arms on a lost box, for every terminal', () => {
+    const observer = block('const resizeObserver = new ResizeObserver', 'resizeObserver.observe(container)');
+    const lostBox = block('if (!isRendered(entry.container)) {', 'cancelRendererRelease(entry);', observer);
+    assert.ok(/armRendererRelease\(entry\);/.test(lostBox),
+        'the observer must arm unconditionally: the 5 s timer is the transient-vs-real discriminator, and gating it on seating means a Peek-collapsed or long-hidden pane never gives its context back');
+    assert.ok(!/isTerminalSeated/.test(lostBox),
+        'the seating guard belongs at the IMMEDIATE-release site (suspendTerminalStream), not on the already-delayed arm');
+});
+
+test('the ceiling reclaims a hidden context instead of skipping the acquire', () => {
+    assert.ok(VP.includes('function evictLeastRecentlyVisibleHiddenWebgl(requestingEntry)'),
+        'the budget-exhausted path must have an eviction policy, not an order-determined skip');
+    const evict = block('function evictLeastRecentlyVisibleHiddenWebgl(requestingEntry)', 'function cancelRendererRelease');
+    assert.ok(/if \(isRendered\(e\.container\)\) \{ continue; \}/.test(evict),
+        'eviction must NEVER take a currently-rendered pane: degrading the pane the operator is watching is a regression skip-on-ceiling did not have');
+    assert.ok(/deps\.terminalsMap\.values\(\)/.test(evict),
+        'eviction must be page-global — liveWebglContexts is script-scoped and shared by the dock\'s two viewports');
+    assert.ok(/swapRenderer\(candidate, \/\* wantWebgl \*\/ false\)/.test(evict),
+        'the drop must route through swapRenderer -> the one-shot holder.release, so the decrement and forceReleaseWebglContext guarantee are unchanged');
+    // The re-entry must not add a second increment site (pinned at one above).
+    const attach = RENDERER_BLOCK();
+    assert.ok(/function acquireWebgl\(\)/.test(attach),
+        'the acquire body must be factored into one closure so the eviction re-entry cannot duplicate the liveWebglContexts++');
+    assert.ok(/evictLeastRecentlyVisibleHiddenWebgl\(entry\)\s*\n?\s*&& liveWebglContexts < MAX_WEBGL_CONTEXTS/.test(attach),
+        'the eviction re-entry must re-check the budget before acquiring');
+});
+
+test('the per-switch fit ladder is coalesced, not doubled', () => {
+    const observer = block('const resizeObserver = new ResizeObserver', 'resizeObserver.observe(container)');
+    // batchFitVisiblePanes runs after every renderPaneGrid and bumps fitLadderGen
+    // for each assigned pane. A gen that MOVED since this observer last looked means
+    // that ladder is already serving this reflow — the observer must skip, not add
+    // a second one. Inverting this reads as a coalescing guard while coalescing
+    // nothing (and suppressing the one case it should serve).
+    assert.ok(/if \(fitGen !== entry\.lastObservedFitGen\) \{\s*\n\s*entry\.lastObservedFitGen = fitGen;\s*\n\s*return;/.test(observer),
+        'a MOVED fitLadderGen must SKIP the observer ladder — the switch already started one');
+    assert.ok(/deps\.startFitLadder\(entry\.name\);\s*\n\s*entry\.lastObservedFitGen = readFitGen\(\);/.test(observer),
+        'after running its own ladder the observer must re-stamp the gen, or the next fire mistakes its own bump for someone else\'s');
+});
+
+test('the churn probe is opt-in and changes nothing when off', () => {
+    assert.ok(VP.includes('window.__sbWebglChurnProbe'),
+        'the instrumentation must land as a repeatable check, not be re-patched by hand each time');
+    assert.ok(/let churnProbe = null;/.test(VP),
+        'the probe must be OFF by default');
+    for (const fn of ['recordChurnAcquire', 'recordChurnRelease', 'recordChurnResize']) {
+        const at = VP.indexOf(`function ${fn}(entry) {`);
+        assert.ok(at !== -1, `missing ${fn}`);
+        assert.ok(/^\s*if \(!churnProbe\) \{ return; \}/m.test(VP.slice(at, at + 200)),
+            `${fn} must return immediately when the probe is disabled — a probe that costs anything when off is not dev-only`);
+    }
+    // Per-entry by construction: this is the filter the global ResizeObserver patch
+    // that produced the original 33-callback figure did not have.
+    assert.ok(/recordChurnResize\(entry\);/.test(block('const resizeObserver = new ResizeObserver', 'resizeObserver.observe(container)')),
+        'the resize count must come from the PER-ENTRY observer, never a global ResizeObserver patch');
+});
+
 console.log(failed === 0 ? '\nAll terminal renderer lifecycle contracts passed.' : `\n${failed} contract(s) failed.`);
 process.exit(failed === 0 ? 0 : 1);

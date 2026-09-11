@@ -1433,20 +1433,20 @@
                 // clamping the shared pty to a viewport nobody can see.
                 if (!isRendered(entry.container)) {
                     releaseSizeVote(entry);
-                    // #1 (re-box must not release): a terminal still SEATED
-                    // (assigned to a rendered, non-status slot) whose container
-                    // transiently measures 0x0 during a grid reflow must NOT arm
-                    // a renderer release. The box will return; arming here races
-                    // the next switch and is the 9/9 churn this plan stops. The
-                    // panelVisibility hide path (terminals.js) arms releases for
-                    // ALL terminals regardless of seating — that is the genuine-
-                    // hide path and is unaffected by this guard, which only
-                    // short-circuits the per-pane observer's transient-0x0 arm.
-                    // A terminal that genuinely left the fleet (unassigned, or
-                    // assigned to a status pane) is NOT seated, so the arm fires
-                    // as before.
-                    const seated = deps.isTerminalSeated ? deps.isTerminalSeated(entry.name) : false;
-                    if (!seated) { armRendererRelease(entry); }
+                    // #1 (re-box must not release): ARM, do not release. The 5 s
+                    // RENDERER_RELEASE_DELAY_MS timer is the transient-vs-real
+                    // discriminator this plan asked us to confirm was not being
+                    // short-circuited — a 0x0 that recovers inside a grid reflow is
+                    // cancelled by the rendered branch below long before the timer
+                    // fires, so this path never contributed to the acquire/release
+                    // churn. The short-circuit was suspendTerminalStream, which
+                    // released IMMEDIATELY with no timer; that is where the seating
+                    // guard belongs and where it now lives. Gating THIS arm on
+                    // seating instead would mean a pane collapsed for good (Peek
+                    // hiding a sibling, a long-hidden panel) never gives its context
+                    // back — the hidden-pane reclaim the plan's edge-case audit
+                    // says must not regress.
+                    armRendererRelease(entry);
                     return;
                 }
                 // Re-cast BEFORE the ladder: a pane restored at its previous size
@@ -1459,20 +1459,29 @@
                 reconcileRendererForVisibility(entry);
                 // #3 (do not reflow panes nobody can see): coalesce per switch.
                 // batchFitVisiblePanes (called after every renderPaneGrid) already
-                // started a fit ladder for this terminal, bumping fitLadderGen.
-                // If the gen changed since this observer last fired, the switch
-                // already handled the reflow and this observer's ladder is
-                // redundant — skip it. This extends the existing fitLadderGen
-                // guard (which collapses rapid minimize/restore cycles per
-                // terminal) to also collapse the per-switch burst across panes,
-                // rather than adding a second mechanism. The reconcile and size
-                // vote above still run — only the ladder is skipped.
-                const fitGen = deps.fitLadderGen ? (deps.fitLadderGen.get(entry.name) || 0) : 0;
+                // started a fit ladder for this terminal, bumping fitLadderGen. If
+                // the gen MOVED since this observer last looked, somebody else's
+                // ladder is already serving this reflow and ours would be a second
+                // one for the same box — record the gen and skip. If the gen did
+                // NOT move, this resize is nobody else's (a window drag, a Peek
+                // restore) and the ladder is ours to run; stamp the gen our own
+                // startFitLadder just bumped so the next fire does not mistake it
+                // for someone else's.
+                //
+                // This extends the existing fitLadderGen guard (which collapses
+                // rapid minimize/restore cycles per terminal) to also collapse the
+                // per-switch burst across panes, rather than adding a second
+                // mechanism. The reconcile and size vote above still run — only the
+                // redundant ladder is skipped.
+                const readFitGen = () => (deps.fitLadderGen ? (deps.fitLadderGen.get(entry.name) || 0) : 0);
+                const fitGen = readFitGen();
                 if (fitGen !== entry.lastObservedFitGen) {
                     entry.lastObservedFitGen = fitGen;
-                    if (entry.container.classList.contains('active')) {
-                        deps.startFitLadder(entry.name);
-                    }
+                    return;
+                }
+                if (entry.container.classList.contains('active')) {
+                    deps.startFitLadder(entry.name);
+                    entry.lastObservedFitGen = readFitGen();
                 }
             }, 100);
         });
@@ -1722,33 +1731,43 @@
         // WebGL context held by an invisible surface is one the visible panes
         // cannot get. entry.term is NOT disposed; its buffer survives.
         //
-        // #1 (re-box must not release): SKIP the renderer release when the
+        // #1 (re-box must not release): DELAY the renderer release when the
         // terminal is still SEATED (assigned to a rendered, non-status slot).
         // The reconcile trailing loop calls suspend when isTerminalRendered is
         // false, and during a grid reflow a container can transiently measure
         // 0x0 — making isTerminalRendered false even though the terminal has
-        // not left the fleet. Releasing the renderer on that transient 0x0 and
-        // re-acquiring it when the box returns is the 9/9 acquire/release churn
-        // this plan exists to stop. The stream still suspends (socket closes,
-        // size vote withdrawn) — the gateway should not clamp the shared pty to
-        // a 0x0 viewport — but the renderer is kept alive; resumeTerminalStream's
-        // `!entry.rendererAddon?.current` guard skips the re-attach when the
-        // renderer survived, so no acquire fires on the way back either.
-        // A terminal that genuinely left the fleet (unassigned, or assigned to
-        // a status pane) is NOT seated, so the release fires as before.
-        cancelRendererRelease(entry);
+        // not left the fleet. This site released IMMEDIATELY, with no timer:
+        // that is the short-circuit of RENDERER_RELEASE_DELAY_MS the plan told
+        // us to look for, and re-acquiring when the box returns is the 9/9
+        // acquire/release churn. The stream still suspends (socket closes, size
+        // vote withdrawn) — the gateway should not clamp the shared pty to a
+        // 0x0 viewport.
+        //
+        // Seated: arm the ordinary 5 s timer instead. A transient 0x0 that
+        // recovers inside the switch is cancelled by the ResizeObserver's
+        // rendered branch, so nothing is released and nothing re-acquired; a
+        // pane collapsed for good (Peek, a hidden panel) still gives its
+        // context back after 5 s, which is the hidden-pane reclaim the plan's
+        // edge-case audit says must not regress. armRendererRelease is
+        // idempotent, so the 5 s clock starts once and is NOT restarted by the
+        // fleet poll re-entering this function — and we deliberately do not
+        // cancel first, because a release armed by the panelVisibility hide
+        // path is exactly the timer we want to leave standing.
+        //
+        // Not seated (genuinely left the fleet — unassigned, or a status pane):
+        // release immediately, as before.
         const seated = deps.isTerminalSeated ? deps.isTerminalSeated(entry.name) : false;
         if (seated) {
-            // Keep the renderer; only the stream suspends. The box will return
-            // (it is a re-box, not a leave), and resumeTerminalStream will skip
-            // the re-attach. rendererDeferred stays as-is: a seated pane that
-            // already holds WebGL keeps it; one on canvas keeps its debt.
-        } else if (entry.rendererAddon) {
-            entry.rendererAddon.release();
-            try {
-                if (entry.rendererAddon.current) { entry.rendererAddon.current.dispose(); }
-            } catch { /* ignore */ }
-            entry.rendererAddon.current = null;
+            armRendererRelease(entry);
+        } else {
+            cancelRendererRelease(entry);
+            if (entry.rendererAddon) {
+                entry.rendererAddon.release();
+                try {
+                    if (entry.rendererAddon.current) { entry.rendererAddon.current.dispose(); }
+                } catch { /* ignore */ }
+                entry.rendererAddon.current = null;
+            }
             entry.rendererDeferred = false;
         }
         deps.refreshInputState(entry.name);

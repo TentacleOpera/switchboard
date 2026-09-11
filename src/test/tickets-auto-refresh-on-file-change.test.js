@@ -14,6 +14,7 @@ function testTicketsAutoRefreshOnFileChange() {
     const ticketsJs = fs.readFileSync(path.join(__dirname, '../webview/tickets.js'), 'utf8');
     const providerTs = fs.readFileSync(path.join(__dirname, '../services/TicketsPanelProvider.ts'), 'utf8');
     const standaloneTs = fs.readFileSync(path.join(__dirname, '../standalone/hostServices.ts'), 'utf8');
+    const directoryWatcherTs = fs.readFileSync(path.join(__dirname, '../services/directoryWatcher.ts'), 'utf8');
     const bootstrapTs = fs.readFileSync(path.join(__dirname, '../standalone/bootstrap.ts'), 'utf8');
     const vscodeShimTs = fs.readFileSync(path.join(__dirname, '../standalone/vscodeShim.ts'), 'utf8');
 
@@ -159,10 +160,21 @@ function testTicketsAutoRefreshOnFileChange() {
         !/watchFolder:\s*\(\)\s*=>\s*\(\{\s*dispose/.test(standaloneTs),
         'standalone hostServices watchFolder must not be a no-op stub — it powers the browser host Tickets auto-refresh'
     );
+    // The recursive `fs.watch` this used to pin was replaced by the shared manual
+    // per-directory walker (`src/services/directoryWatcher.ts`) — Node's Linux
+    // recursive emulation arms one inotify watch per file AND directory, which is
+    // how one board reached 16,776 watches. The invariant is unchanged: this seam
+    // must be backed by a REAL filesystem watcher, not a stub. Pin the walker call
+    // here and the `fs.watch` inside the walker there.
     assert.match(
         standaloneTs,
-        /function createStandaloneFolderWatcher\([\s\S]*?fs\.watch\(/,
-        'standalone hostServices must back watchFolder with a real fs.watch'
+        /function createStandaloneFolderWatcher\([\s\S]*?attachDirectoryWatcher\(/,
+        'standalone hostServices must back watchFolder with the shared directory walker'
+    );
+    assert.match(
+        directoryWatcherTs,
+        /export function attachDirectoryWatcher\([\s\S]*?fs\.watch\(/,
+        'the shared directory walker must be backed by a real fs.watch — a stub silently disables every folder watcher in the standalone host'
     );
     assert.match(
         standaloneTs,

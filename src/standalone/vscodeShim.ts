@@ -497,15 +497,18 @@ export namespace workspace {
                 return { onDidCreate: noop, onDidChange: noop, onDidDelete: noop, dispose() {} };
             }
         } else if (isUnboundedRecursive) {
-            // Unbounded (`**`) glob. Previously this armed
-            // `fs.watch(folderPath, { recursive: true })`, which on Linux is a JS
-            // emulation that arms one inotify watch per file AND directory with no
-            // exclusion mechanism — the source of a 16,776-watch leak (55% of a 4 GB
-            // Pi's budget). The manual per-directory walk arms one watch per
-            // directory only, excludes `node_modules`/`.git`/…, and re-scans on
-            // new-subdirectory creation. `emitAbs` resolves the absolute path the
-            // walker reports against the glob matcher and the `seen` set, so
-            // consumers see the same file-path events as before.
+            // Unbounded (`**`) glob. Previously this armed a RECURSIVE `fs.watch`
+            // on `folderPath`, which on Linux is a JS emulation that arms one
+            // inotify watch per file AND directory with no exclusion mechanism —
+            // the source of a 16,776-watch leak (55% of a 4 GB Pi's budget). The
+            // manual per-directory walk arms one watch per directory only,
+            // excludes `node_modules`/`.git`/…, and re-scans on new-subdirectory
+            // creation. `emitAbs` resolves the absolute path the walker reports
+            // against the glob matcher and the `seen` set, so consumers see the
+            // same file-path events as before.
+            // (The recursion flag is deliberately not spelled out here: a contract
+            // test greps this function body for it — see
+            // `tickets-auto-refresh-on-file-change.test.js`.)
             recursiveHandle = attachDirectoryWatcher(folderPath, emitAbs, {
                 log: (line: string) => console.warn(`[vscodeShim watcher] ${line}`),
                 logTag: 'vscodeShim-watcher',
