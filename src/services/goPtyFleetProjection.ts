@@ -272,12 +272,6 @@ export class GoPtyFleetProjection {
                 // as unwanted as its status line. Two options, both per-session on the
                 // VIEW only — never `-g`, which would rewrite the operator's own tmux:
                 //
-                //   mouse off — with mouse on, a scroll wheel puts the pane into
-                //   copy-mode, and copy-mode swallows every keystroke instead of
-                //   passing it to the agent. The operator's typing silently stops
-                //   arriving and nothing says why. The board pane has its own scrollback
-                //   and its own selection, so tmux's mouse layer buys nothing here.
-                //
                 //   prefix None — the browser client has no business driving tmux. A
                 //   stray C-b in a prompt should reach the agent as a keystroke, not
                 //   open a tmux command table over the top of the pane.
@@ -286,7 +280,20 @@ export class GoPtyFleetProjection {
                 // over SSH, where the window list, copy-mode and the prefix are the
                 // whole point. This is what lets a seat be reachable by `tmux attach`
                 // while the board renders it as a plain terminal.
-                + `tmux set-option -t ${view} mouse off 2>/dev/null; `
+                // NOT `mouse off`, though it is tempting and was briefly committed
+                // (a742f14d, reverted here). `mouse on` is what makes the wheel useful:
+                // tmux's root table binds WheelUpPane to `copy-mode -e`, so scrolling a
+                // pane enters copy-mode and scrolls tmux's 50,000-line history. That
+                // history is the ONLY thing tmux is wanted for in a board pane, and
+                // xterm's own scrollback cannot replace it while tmux is drawing —
+                // tmux repaints its screen rather than emitting lines the outer
+                // terminal can retain, so the client buffer never meaningfully fills.
+                //
+                // The cost is real and is the reported symptom: in copy-mode, typed
+                // keys go to copy-mode instead of the agent. The resolution is NOT to
+                // turn the mouse off — it is to stop tmux drawing the pane (control
+                // mode) or to back the pane's scrollback with the on-disk session log,
+                // at which point the wheel no longer needs to reach tmux at all.
                 + `tmux set-option -t ${view} prefix None 2>/dev/null; `
                 + `tmux select-window -t ${view}:${win}; `
                 // Grouped sessions share their window list, so with aggressive-resize
