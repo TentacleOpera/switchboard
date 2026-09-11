@@ -4024,12 +4024,43 @@ export class KanbanDatabase {
         return this.updateNotionPageIdByPlanFile(plan.planFile, plan.workspaceId, notionPageId);
     }
 
+    /**
+     * Delete a plan row and the audit trail that points at it.
+     *
+     * `plan_events.plan_id` is a foreign key to `plans` with ON DELETE NO ACTION —
+     * SQLite's default, not a decision — so deleting a plan that was ever moved
+     * between columns raised FOREIGN KEY constraint failed. The caller swallowed
+     * it (`_persistedUpdate` logs and returns false), so the delete silently did
+     * nothing and the row stayed on the board with no file behind it. Observed
+     * firing repeatedly against this board's own watcher.
+     *
+     * The events go with the plan. An audit row whose plan no longer exists cannot
+     * be read back by anything — `plan_events` is queried by plan_id — and the
+     * foreign key is there precisely to stop that orphan existing.
+     *
+     * One transaction: a half-delete that removed the history and kept the row
+     * would destroy the only record of how the card got where it is.
+     */
     public async deletePlanByPlanFile(planFile: string, workspaceId: string): Promise<boolean> {
         const normalized = this._ensureRelativePlanFile(planFile);
-        return this._persistedUpdate(
-            'DELETE FROM plans WHERE plan_file = ? AND workspace_id = ?',
-            [normalized, workspaceId]
-        );
+        if (!(await this.ensureReady()) || !this._db) { return false; }
+        try {
+            this._db.run('BEGIN');
+            this._db.run(
+                'DELETE FROM plan_events WHERE plan_id IN (SELECT plan_id FROM plans WHERE plan_file = ? AND workspace_id = ?)',
+                [normalized, workspaceId]
+            );
+            this._db.run(
+                'DELETE FROM plans WHERE plan_file = ? AND workspace_id = ?',
+                [normalized, workspaceId]
+            );
+            this._db.run('COMMIT');
+        } catch (error) {
+            try { this._db.run('ROLLBACK'); } catch { /* the transaction is already gone */ }
+            console.error(`[KanbanDatabase] deletePlanByPlanFile failed for ${normalized}:`, error);
+            return false;
+        }
+        return this._persist();
     }
 
     public async markPlanMissingByPlanFile(planFile: string, workspaceId: string): Promise<boolean> {
@@ -12575,7 +12606,14 @@ FROM plans
         try {
             this._db.run(sql, params);
         } catch (error) {
-            console.error('[KanbanDatabase] Failed to update record:', error);
+            // Name the statement. Every caller funnels through here, so a bare
+            // "Failed to update record" identifies neither the write that was lost
+            // nor the row it was for — the write is dropped AND its record of being
+            // dropped is anonymous. The SQL is first-line-only and the params are
+            // counted rather than printed, because plan topics and paths go through
+            // here and this log is not the place for them.
+            const stmt = sql.trim().split('\n')[0].slice(0, 120);
+            console.error(`[KanbanDatabase] Failed to update record (${params.length} params): ${stmt} —`, error);
             return false;
         }
         return this._persist();
