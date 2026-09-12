@@ -4554,8 +4554,15 @@ Each plan file must include:
             // the same and adds the `=` exact-match prefix.
             try {
                 const sessions = await listTmuxSessions(tmuxSocket);
+                // `baseSession`, NOT `members`. The registry's `tmuxSession` is the
+                // BASE session (goPtyFleetProjection sets `tmuxSession:
+                // tmuxSessionName`, with the per-seat view kept separately as
+                // `tmuxViewSession`), so ownership below is only ever expressed in
+                // base names. Flattening `members` — base plus every per-seat view —
+                // would make every live view look unowned and reap it. Killing the
+                // base kills its grouped views anyway, which is the intended reap.
                 const lcSessions = sessions
-                    .map(s => s.sessionName)
+                    .map(s => s.baseSession)
                     .filter(n => typeof n === 'string' && n.startsWith('lc-'));
                 if (lcSessions.length === 0) {
                     // No `lc-*` sessions at all — nothing to reap. Logged at

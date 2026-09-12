@@ -395,8 +395,8 @@ export class GoPtyFleetProjection {
                 // session's current window (grouped sessions each keep their own);
                 // `set-window-option -t ${wid}` targets the window directly.
                 + `tmux set-option -t ${view} window-size manual 2>/dev/null; `
-                + `tmux set-window-option -t ${wid} automatic-rename off 2>/dev/null; `
-                + `tmux select-window -t ${view}:${wid}; `
+                + `tmux set-window-option -t $wid automatic-rename off 2>/dev/null; `
+                + `tmux select-window -t ${view}:$wid; `
                 // `-u` forces UTF-8 mode so `utf8_sanitize` does not replace
                 // non-ASCII bytes with `_` in format output (window names, pane
                 // titles, `list-panes`/`capture-pane` format strings) on a headless
