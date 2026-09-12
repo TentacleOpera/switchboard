@@ -5248,13 +5248,30 @@ Each plan file must include:
                 seatCount: ptyFleetService?.listActive()?.length,
             };
         },
-        // Validate the page's token, hand back the CHILD's. The Go host mints its
-        // own credential at boot (PtyHostReady.terminalToken) which is not the one
-        // the page carries, so forwarding the page's token verbatim 401s forever.
-        authorizePtyHostUpgrade: (supplied: string) => {
+        // No page-token check. Hand back the CHILD's credential. The Go host mints
+        // its own at boot (PtyHostReady.terminalToken), which is an internal
+        // board<->host credential and is unaffected by this.
+        //
+        // The page token gated nothing. Exposure is decided ONCE at launch —
+        // `switchboard local` binds loopback, `switchboard tailnet` binds the
+        // tailnet — and on the tailnet the board already serves every panel
+        // unauthenticated by design, which its own banner states: "Tailnet URL
+        // (no token needed, on your tailnet only)". The terminal token was baked
+        // into that same freely-served HTML, so anyone who could reach the port
+        // could read it with a plain unauthenticated GET and then open the
+        // socket. Verified 2026-09-12 by fetching it over the tailnet address
+        // with curl. It was a lock whose key hung on the door.
+        //
+        // What it did do was regenerate every boot, so a board restart silently
+        // invalidated every open panel: the upgrade 401'd and the pane rendered
+        // nothing — no error, no reconnect, no hint. A restart was
+        // indistinguishable from the product being broken.
+        //
+        // An operator who wants the board private runs the loopback board. Any
+        // configured API token still gates the HTTP surface exactly as before.
+        authorizePtyHostUpgrade: (_supplied: string) => {
             const ready = ptyHostSupervisor?.getReady();
-            if (!ready || !terminalSessionToken) { return undefined; }
-            if (supplied !== terminalSessionToken) { return undefined; }
+            if (!ready) { return undefined; }
             return { port: ready.port, token: ready.terminalToken };
         },
         serveStatic: {
