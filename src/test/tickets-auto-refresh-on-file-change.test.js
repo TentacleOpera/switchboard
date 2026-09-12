@@ -109,6 +109,52 @@ function testTicketsAutoRefreshOnFileChange() {
         'ensureTicketsWatcherArmed must remain in tickets.js — it is the live watcher that made the 4s poll redundant'
     );
 
+    // ── The polls that were KEPT, and the comments that are the only thing stopping a
+    //    future sweep from deleting them ──
+    // Same sweep as the deletion above (four-polls-that-ask-the-app-about-its-own-events):
+    // three of the four polls it examined earn their place, and the original plan would have
+    // deleted two of them "on principle" — freezing the dock's hop-state display and the
+    // cockpit's kanban panes. The reasoning lives in code comments, and a comment has no gate,
+    // which is exactly how the one-file-scoped guard above stayed green while planning.js kept
+    // the dead poll. These assertions give the keep-decisions the gate the delete-decision has.
+    const keptPolls = [
+        {
+            file: 'dock.js',
+            // The fleet-tab poll moved out of shell.js when the dock became its own
+            // document (495538ee); shell.js has no setInterval at all today.
+            poll: /function startFleetPoll\(\)[\s\S]{0,400}?setInterval\(/,
+            pollWhy: 'the 60s fleet-tab poll is the only source of hop state for the fleet tab',
+            comment: /hop state/i,
+            commentWhy: 'the keep-comment must say the poll carries hop state, which no push carries',
+        },
+        {
+            file: 'terminals.js',
+            poll: /setInterval\(pollKanbanPanes/,
+            pollWhy: 'the 5s kanban-pane poll is the only refresh path for board cards in the cockpit',
+            comment: /KEEP THIS POLL[\s\S]{0,900}?board CARDS/,
+            commentWhy: 'the keep-comment must say the poll is the only card-refresh path on this surface',
+        },
+        {
+            file: 'connections.js',
+            poll: /setInterval\(requestRemoteHealth, 15000\)/,
+            pollWhy: 'the 15s health poll watches a third-party API, which has no event source',
+            comment: /reachability|third-party/i,
+            commentWhy: 'the keep-comment must record why reachability cannot be pushed',
+        },
+        {
+            file: 'linear.js',
+            poll: /setInterval\(requestRemoteHealth, 15000\)/,
+            pollWhy: 'the 15s health poll watches a third-party API, which has no event source',
+            comment: /reachability|third-party/i,
+            commentWhy: 'the keep-comment must record why reachability cannot be pushed',
+        },
+    ];
+    for (const k of keptPolls) {
+        const src = fs.readFileSync(path.join(webviewDir, k.file), 'utf8');
+        assert.ok(k.poll.test(src), `${k.file}: this poll must not be deleted — ${k.pollWhy}`);
+        assert.ok(k.comment.test(src), `${k.file}: ${k.commentWhy}`);
+    }
+
     // ── Side effect the plan called in-scope: a refresh must not lose the user's place ──
     for (const renderer of ['renderTicketsLinearList', 'renderTicketsClickUpList']) {
         const idx = ticketsJs.indexOf(`function ${renderer}()`);

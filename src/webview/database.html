@@ -614,13 +614,13 @@
                     <span id="schedule-owner-badge" class="badge neutral">Checking…</span>
                 </div>
                 <div style="font-size: 11px; color: var(--text-secondary); line-height: 1.4; margin-bottom: 8px;">
-                    One owner per machine for rotation (store lock). A scheduled rotation run that lost the lock is recorded here with its reason, so a missing rotation is never indistinguishable from one that never ran. Backup is no longer scheduled; the fields below retain their last values as history (manual/shutdown/pre-restore backups still update "Backup Last Run").
+                    One owner per machine for rotation (store lock). A scheduled rotation run that lost the lock is recorded here with its reason, so a missing rotation is never indistinguishable from one that never ran. Backup is no longer scheduled, but it is still lock-coordinated: a manual, shutdown or pre-restore backup that lost the lock records its reason in "Backup Last Skip", and a successful one updates "Backup Last Run". Any values predating the scheduler's retirement remain as history.
                 </div>
                 <div class="prop-grid">
-                    <div class="prop-label">Backup Last Run (manual/shutdown):</div>
+                    <div class="prop-label">Backup Last Run (manual/shutdown/pre-restore):</div>
                     <div id="schedule-backup-last-run" class="prop-value">—</div>
 
-                    <div class="prop-label">Backup Last Skip (history):</div>
+                    <div class="prop-label">Backup Last Skip:</div>
                     <div id="schedule-backup-last-skip" class="prop-value">—</div>
 
                     <div class="prop-label">Rotation Last Run:</div>

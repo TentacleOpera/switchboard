@@ -221,3 +221,19 @@ to a hard requirement of the architecture, which is a reason to depend on
 - Assert `buildPromptDispatchContext` emits no local `Plan File: <absolutePath>` line for a seat whose resolved host is non-empty (the API-fetch directive replaces it).
 - Assert no code path writes a plan file to the worker's filesystem when the seat is remote; reviewer findings route through `POST /kanban/plans`.
 - Assert an unreachable host produces a failure result with no spawned local CLI process (count of locally-spawned agent CLIs does not increase).
+
+## Review Findings
+
+**Nothing was implemented — there is no diff to review.** A repo-wide search finds zero occurrences of `remoteHost`, `sshHost`, `remoteCwd`, or `ssh -tt` in `src/`; `src/services/agentConfig.ts` (598 lines) contains no `host`/`ssh`/`remote` token at all; `ExtendedTerminalHandle` (`src/standalone/ptyFleetService.ts:102-130`) has no `host` field; `PtyFleetService.create` composes no SSH invocation; and `buildPromptDispatchContext` still emits the bare local `Plan File: <absolutePath>` line. No files changed, so no validation was applicable to this card (the suites run below belong to the other two plans in this batch). The card was dispatched as "implementation complete" and is not — it needs a coder, not a reviewer.
+
+## Deferred Findings
+
+- CRITICAL — Change 1 (host field in the three config stores) unimplemented: no `host` field in `agents.startupCommands`, `customAgents[]`, or `DelegateDefinition`. `src/services/agentConfig.ts:1`
+- CRITICAL — Change 1 (SSH composition) unimplemented: `PtyFleetService.create` passes the bare command through; no `ssh -tt` composition exists. `src/standalone/ptyFleetService.ts:548`
+- CRITICAL — Edge-case 1 / Goal Invariant 3 unimplemented: `deriveCliFamily` is still fed the whole command string, so a wrapped command would classify as `unknown`. `src/services/cliIdentity.ts:59`
+- CRITICAL — Change 2b unimplemented: `buildPromptDispatchContext` still emits a local `Plan File: <absolutePath>` with no host-conditional API-fetch directive. `src/services/agentPromptBuilder.ts:600`
+- CRITICAL — Change 2a unimplemented: no remote git-repo/branch/cleanliness precondition check exists. `src/standalone/ptyFleetService.ts:719`
+- CRITICAL — Change 3 unimplemented: no unreachable-host failure path, therefore no guard against a silent local fallback. `src/standalone/ptyFleetService.ts:719`
+- CRITICAL — Change 4 unimplemented: neither `project()` in the Go host nor `ExtendedTerminalHandle` carries a `host` field. `cmd/switchboard-pty-host/main.go:100`
+- MAJOR — Change 5 unimplemented: no push/fetch reachability clause on the head's prompt path. `src/services/agentPromptBuilder.ts:600`
+- MAJOR — No automated check exists for any of the six Goal Invariants; the plan names no `### Automated` subsection, so even a correct implementation would ship with a manual-only gate. `.switchboard/plans/an-agent-seat-can-run-its-cli-on-another-machine-over-ssh.md:1`
