@@ -540,3 +540,45 @@ func TestPreambleCapGivesUp(t *testing.T) {
 		t.Fatalf("preambleGaveUp must latch so later chunks are not suppressed")
 	}
 }
+
+// TestWriterIsTheSoleFifoPusher: writeControlCommandLocked owns the pendingBlocks
+// push so the writer and the FIFO cannot drift. A caller that ALSO pushes queues
+// each kind twice, and every block after it pops a stale kind — a list-panes
+// reply routed to the browser as terminal content, a capture reply parsed as a
+// pane id. That regressed twice; this pins it.
+func TestWriterIsTheSoleFifoPusher(t *testing.T) {
+	for _, f := range []string{"main.go", "ws.go", "prompt.go"} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		if strings.Contains(string(b), "pendingBlocks = append") {
+			t.Fatalf("%s pushes pendingBlocks directly; only writeControlCommandLocked may", f)
+		}
+	}
+}
+
+// TestHistoryFetchGuardsOnPaneID: an unlearned pane id produced
+// `capture-pane -t %`, which tmux answers with `can't find pane: %` in an %error
+// block — and publish() routes block contents to the browser, the ring and the
+// log. That is the "cannot find panel" an operator sees.
+func TestHistoryFetchGuardsOnPaneID(t *testing.T) {
+	b, err := os.ReadFile("controlmode_io.go")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	src := string(b)
+	i := strings.Index(src, "func sendHistoryFetchLocked")
+	if i < 0 {
+		t.Fatal("sendHistoryFetchLocked not found")
+	}
+	body := src[i:]
+	if j := strings.Index(body, "\nfunc "); j > 0 {
+		body = body[:j]
+	}
+	guard := strings.Index(body, `t.paneID == ""`)
+	cap := strings.Index(body, "capture-pane -t %s")
+	if guard < 0 || cap < 0 || guard > cap {
+		t.Fatalf("sendHistoryFetchLocked must return early on an empty pane id BEFORE issuing capture-pane")
+	}
+}

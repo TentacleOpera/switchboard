@@ -446,10 +446,21 @@ func (f *fleet) publish(name, data string) {
 						learned = true
 						_ = flushPendingInputLocked(t)
 					}
-					if !t.historyFetched {
-						t.historyFetched = true
-						t.pendingBlocks = append(t.pendingBlocks, blockScrollback, blockPending)
-						_ = sendHistoryFetchLocked(t)
+					// NO explicit pendingBlocks push here. writeControlCommandLocked
+					// owns the push (controlmode_io.go:55) precisely so the writer
+					// and the FIFO cannot drift; pushing here too queues each kind
+					// TWICE, so every block after the history fetch pops a stale
+					// kind — a list-panes reply routed to the browser as terminal
+					// content, a capture reply parsed as a pane id.
+					//
+					// And latch historyFetched only when the fetch was actually
+					// issued: sendHistoryFetchLocked returns nil without sending
+					// when the pane id is not yet known, and latching regardless
+					// would lose the scrollback for the life of the seat.
+					if !t.historyFetched && t.paneID != "" {
+						if err := sendHistoryFetchLocked(t); err == nil {
+							t.historyFetched = true
+						}
 					}
 					t.mu.Unlock()
 					if learned {
@@ -609,7 +620,9 @@ func (f *fleet) handleControlEvent(name string, t *terminal, msg ControlMessage)
 		t.sessionTarget = target
 		_ = sendFlowControlLocked(t)
 		if target != "" && t.paneID == "" {
-			t.pendingBlocks = append(t.pendingBlocks, blockPaneID)
+			// sendListPanesLocked pushes blockPaneID itself — see the note on the
+			// history fetch above. Pushing here as well double-queues the kind and
+			// desyncs every block that follows.
 			_ = sendListPanesLocked(t, target)
 		}
 		t.mu.Unlock()

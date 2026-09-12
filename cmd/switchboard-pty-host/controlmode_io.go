@@ -286,6 +286,18 @@ func sendListPanesLocked(t *terminal, target string) error {
 // bounded value, so the unbounded `-S -` hang risk does not apply. Caller
 // holds t.mu.
 func sendHistoryFetchLocked(t *terminal) error {
+	// GUARD on a known pane id. Every other command site checks this
+	// (ws.go's resize, writeControlModeInputLocked, the %pause resume arm); the
+	// history fetch did not, so an unlearned id produced `capture-pane -t %` —
+	// tmux answers `can't find pane: %` in an %error block, and publish() routes
+	// block contents to the browser, the ring and the log. That is the
+	// "cannot find panel" an operator sees, repeated once per command.
+	//
+	// Returning nil rather than erroring: the fetch is re-issued when the id is
+	// learned (the blockPaneID arm in publish()), so there is nothing to report.
+	if t.paneID == "" {
+		return nil
+	}
 	pane := "%" + t.paneID
 	if err := writeControlCommandLocked(t, fmt.Sprintf("capture-pane -t %s -peqJN -S -50000 -E -1", pane), blockScrollback); err != nil {
 		return err
