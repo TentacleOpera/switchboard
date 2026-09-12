@@ -43,6 +43,16 @@ type terminal struct {
 	cliFamily            string
 	startupCommand       string
 	startupCommandSource string
+	// startupCommandInner is the per-machine CLI BEFORE transport composition
+	// (e.g. `claude`), while startupCommand holds the COMPOSED command that is
+	// typed into the pty and replayed on respawn (e.g. `ssh host 'claude'`).
+	// Used by the TS projection to re-derive cliFamily without seeing a
+	// transport-wrapped string. See the plan
+	// `agents-are-saved-per-machine-and-a-team-picks-one`.
+	startupCommandInner string
+	// machineId is the machine this seat spawns on (`'local'` default). The
+	// transport prefix lives on the machine definition (TS-side), not here.
+	machineId string
 	// env is the environment slice the terminal was spawned with, retained so
 	// a respawn can start a fresh login shell under the SAME identity env
 	// (SWITCHBOARD_TERMINAL, SWITCHBOARD_AGENT_INSTANCE_ID, SWITCHBOARD_API_TOKEN,
@@ -85,6 +95,12 @@ type terminal struct {
 	// under f.mu in close() — no race.
 	tmuxSession string
 	tmuxWindow  string
+	// tmuxSizedCols/Rows are the last size actually pushed to the seat's tmux
+	// WINDOW by resizeTmuxWindow, so a stationary panel does not fork a tmux
+	// process per resize frame. mu-protected. Zeroed on respawn: the seating
+	// chain re-runs and the new window must be sized again from scratch.
+	tmuxSizedCols uint16
+	tmuxSizedRows uint16
 	// tmuxWindowId is the seat's OWN window id (e.g. `@7`), the stable,
 	// unambiguous handle for the window this seat's agent runs in. Captured
 	// after the seating chain completes (controlActive flips + pane id is
@@ -185,6 +201,8 @@ func (f *fleet) project(t *terminal) map[string]any {
 		"cliFamily": t.cliFamily, "startupCommand": t.startupCommand,
 		"startupCommandSource": t.startupCommandSource, "lastDataAt": t.lastDataAt,
 		"promptCount": t.promptCount, "hidden": t.hidden,
+		"startupCommandInner": t.startupCommandInner,
+		"machineId":           t.machineId,
 	}
 }
 
@@ -293,8 +311,10 @@ func (f *fleet) create(payload map[string]any) (map[string]any, error) {
 		// The Go host replays this string into a fresh login shell; it never
 		// re-derives or parses it. See
 		// a-seats-clear-strategy-is-declared-per-cli-family-not-assumed.md.
-		startupCommand: strField(payload, "startupCommand"),
-		env:            env,
+		startupCommand:      strField(payload, "startupCommand"),
+		startupCommandInner: strField(payload, "startupCommandInner"),
+		machineId:           strField(payload, "machineId"),
+		env:                 env,
 	}
 	if controlMode {
 		t.parseState = &ParseState{}
@@ -905,6 +925,8 @@ func (f *fleet) respawnTerminal(t *terminal) (int, error) {
 	t.tmuxMisrouted = false
 	t.copyModeActive = false
 	t.pendingInput = nil
+	t.tmuxSizedCols = 0
+	t.tmuxSizedRows = 0
 	t.pendingCols = 0
 	t.pendingRows = 0
 	t.parseState = &ParseState{}

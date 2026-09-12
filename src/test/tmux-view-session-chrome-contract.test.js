@@ -234,6 +234,56 @@ test('the base session keeps its status line', () => {
     );
 });
 
+// ── The Go host's resize path ───────────────────────────────────────────────
+// The seat chain sets `window-size manual` on the view session, which makes a
+// tmux WINDOW ignore every attached client and take its size only from
+// `resize-window`. A pty ioctl therefore sizes the tmux CLIENT and leaves the
+// window frozen — the same class of no-op the host's own comment records for
+// `refresh-client -C`. The `resize-window` fix was written into the control-mode
+// branch only, so turning control mode off silently put every seat back on the
+// broken path: measured on a live team, the lead window sat at 59x24 while its
+// client was 96x33 and nothing could ever correct it.
+//
+// These assertions live beside the control-mode-off ones because they guard the
+// SAME mistake: one flag (`controlMode`) standing for two decisions (is there a
+// protocol parser / is this seat tmux-backed). It has now been made three times.
+const wsSrc = fs.readFileSync(
+    path.join(REPO_ROOT, 'cmd', 'switchboard-pty-host', 'ws.go'), 'utf8');
+const wsCode = wsSrc.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+
+test('a non-control-mode resize still reaches the tmux window', () => {
+    assert.ok(
+        /resizeTmuxWindow\(t, cols, rows\)/.test(wsCode),
+        'ptyResize must drive `resize-window` for a tmux-backed seat outside control '
+        + 'mode — a pty ioctl only sizes the client, and under `window-size manual` the '
+        + 'window ignores clients entirely',
+    );
+});
+
+test('the resize path never short-circuits to a bare pty ioctl when control mode is off', () => {
+    assert.ok(
+        !/if !t\.controlMode \|\| !t\.controlActive \{\s*return pty\.Setsize/.test(wsCode),
+        'returning pty.Setsize as the whole non-control-mode body is the regression: it '
+        + 'sizes the tmux client and leaves the window at its birth size forever',
+    );
+});
+
+test('the tmux window resize is gated on being tmux-backed, not on control mode', () => {
+    const fn = wsCode.slice(wsCode.indexOf('func resizeTmuxWindow'));
+    assert.ok(fn.length > 0, 'resizeTmuxWindow must exist');
+    const body = fn.slice(0, fn.indexOf('\n}'));
+    assert.ok(
+        /t\.tmuxSession|session == ""/.test(body) && /t\.tmuxWindow|window == ""/.test(body),
+        'the guard must be a non-empty tmuxSession/tmuxWindow — the honest test for '
+        + '"can I address this seat in tmux"',
+    );
+    assert.ok(
+        !/controlMode/.test(body),
+        'controlMode must not gate the window resize: it says whether a protocol parser '
+        + 'is in the path, not whether tmux owns the seat',
+    );
+});
+
 if (failures > 0) {
     console.error(`\n${failures} failure(s)`);
     process.exit(1);

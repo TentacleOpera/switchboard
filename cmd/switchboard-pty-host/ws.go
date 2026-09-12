@@ -8,6 +8,7 @@ import (
 	"github.com/gorilla/websocket"
 	"net/http"
 	"net/url"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -208,9 +209,73 @@ func utf16Len(s string) int {
 func (f *fleet) next(name string) uint64 { f.mu.RLock(); defer f.mu.RUnlock(); return f.nextSeq[name] }
 
 func ptyResize(t *terminal, cols, rows uint16) error {
-	if !t.controlMode || !t.controlActive {
-		return pty.Setsize(t.file, &pty.Winsize{Cols: cols, Rows: rows})
+	if t.controlMode && t.controlActive {
+		return ptyResizeControlMode(t, cols, rows)
 	}
+	// NOT control mode. Size the host pty first: for a plain seat that is the
+	// agent's own terminal, and for a tmux-backed seat it is the terminal the
+	// `tmux attach` CLIENT runs in.
+	if err := pty.Setsize(t.file, &pty.Winsize{Cols: cols, Rows: rows}); err != nil {
+		return err
+	}
+	// ...but sizing the CLIENT does not size the WINDOW. The seat chain sets
+	// `window-size manual`, and under `manual` a window takes its size from
+	// `resize-window` and ignores every attached client — the same trap the
+	// control-mode branch below documents for `refresh-client -C`. A pty ioctl
+	// is that same class of no-op: it sets the client, not the window.
+	//
+	// The `resize-window` fix was originally written into the control-mode
+	// branch ONLY, so turning control mode off put every seat back on the
+	// broken path and no browser resize reached any tmux window. Measured on a
+	// live team: the lead window sat at 59x24 while its client was 96x33 and
+	// its sibling windows were 96x33, because those were merely BORN the right
+	// size by `new-window` and nothing had resized any of them since.
+	//
+	// `t.controlMode` is not the test — being tmux-backed is. This is the same
+	// one-flag-two-decisions shape that previously turned "control mode off"
+	// into "tmux off" and into "closing a terminal no longer closes its tmux
+	// session".
+	resizeTmuxWindow(t, cols, rows)
+	return nil
+}
+
+// resizeTmuxWindow drives `resize-window` for a tmux-backed seat outside
+// control mode, where there is no block FIFO to write the command through.
+// Best-effort and non-throwing, exactly like the kill-window in fleet.close():
+// no tmux, no such session, or a window that has gone away are all "cannot
+// resize", never a failed resize for the caller.
+//
+// `=<session>:<window>` forces an exact session-name match so `lc-coding-team`
+// cannot match `lc-coding-team-coder-1`, matching close()'s kill-window target.
+// The base session is the right target even though the seat attaches to a view:
+// grouped sessions share one window list, so resizing the window there resizes
+// it for every view onto it.
+//
+// The last applied size is cached because the browser sends a resize frame on
+// every fit pass, not only on a size CHANGE (`fitAndReportSize` in
+// terminalViewport.js sends unconditionally). Without the cache a stationary
+// panel would fork a tmux process per frame. A failed resize clears the cache
+// so a transient failure is retried rather than latched.
+func resizeTmuxWindow(t *terminal, cols, rows uint16) {
+	t.mu.Lock()
+	session, window := t.tmuxSession, t.tmuxWindow
+	if session == "" || window == "" || (t.tmuxSizedCols == cols && t.tmuxSizedRows == rows) {
+		t.mu.Unlock()
+		return
+	}
+	t.tmuxSizedCols, t.tmuxSizedRows = cols, rows
+	t.mu.Unlock()
+	// Run OUTSIDE t.mu — a fork+exec must never be held under the lock the
+	// read/write paths take on every chunk.
+	if err := exec.Command("tmux", "resize-window", "-t", "="+session+":"+window,
+		"-x", strconv.Itoa(int(cols)), "-y", strconv.Itoa(int(rows))).Run(); err != nil {
+		t.mu.Lock()
+		t.tmuxSizedCols, t.tmuxSizedRows = 0, 0
+		t.mu.Unlock()
+	}
+}
+
+func ptyResizeControlMode(t *terminal, cols, rows uint16) error {
 	// Control mode: a pty ioctl does not resize the agent's pane.
 	//
 	// `resize-window`, NOT `refresh-client -C`. The seat chain sets
