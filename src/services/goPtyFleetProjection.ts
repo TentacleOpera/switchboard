@@ -236,12 +236,22 @@ export class GoPtyFleetProjection {
         // and to encode input as `send-keys` — a fallback here would make a
         // control-mode seat indistinguishable from a raw one, so it is an explicit
         // flag, never inferred from the stream.
-        // Control mode is OFF — see the chain below for why. Hard false rather
-        // than deleting the plumbing: the Go host still branches on `controlMode`
-        // (publish/writeToPty), so flipping this one value is the whole switch,
-        // and a half-removed protocol is worse than a disabled one.
+        // TWO SEPARATE DECISIONS. They were one variable, and collapsing them
+        // turned "control mode off" into "tmux off": `usesTmuxSeating` gates the
+        // whole chain below, so setting it false meant no seat got a tmux session
+        // at all — no SSH attach, no surviving a board restart. Those are the
+        // reasons tmux is here; control mode was only ever about who DRAWS.
+        //
+        // usesTmuxSeating — the seat runs inside a tmux session Switchboard owns.
+        const usesTmuxSeating = !!effectiveStartupCommand && this._tmuxSeatingEnabled();
+        // usesControlMode — that session is attached with `-CC` and the Go host
+        // demuxes the protocol instead of rendering bytes. OFF: see the chain
+        // below. Hard false rather than deleting the plumbing, since the Go host
+        // still branches on `controlMode` (publish/writeToPty), so this one value
+        // is the whole switch and a half-removed protocol is worse than a
+        // disabled one.
         const usesControlMode = false;
-        // Hoisted out of the `if (usesControlMode)` block so the create
+        // Hoisted out of the `if (usesTmuxSeating)` block so the create
         // payload below can pass them to the Go host even on the non-control-
         // mode path (where they stay '' and the host skips the teardown). The
         // Go host stores them write-once at create time. `tmuxViewSession` is
@@ -252,7 +262,7 @@ export class GoPtyFleetProjection {
         let view = '';
         let tmuxSessionName = '';
         let tmuxWindowName = '';
-        if (usesControlMode) {
+        if (usesTmuxSeating) {
             const session = deriveTmuxSessionName(opts?.tmuxSession || name || role);
             const win = String(name || role).replace(/[^A-Za-z0-9_.-]/g, '-');
             const inner = JSON.stringify(effectiveStartupCommand);

@@ -52,6 +52,26 @@ console.log('\n── tmux view session chrome contract ──');
 
 const src = fs.readFileSync(PROJECTION_FILE, 'utf8');
 
+test('tmux seating and control mode are separate decisions', () => {
+    // These were one variable. Turning control mode off by setting it false also
+    // turned tmux OFF — the same flag gated the whole chain — so no seat got a
+    // tmux session, and with it went SSH attach and surviving a board restart,
+    // which are the only reasons tmux is here. Control mode was only ever about
+    // who DRAWS the pane.
+    assert.ok(
+        /const usesTmuxSeating = .*_tmuxSeatingEnabled\(\)/.test(src),
+        'tmux seating must be decided by _tmuxSeatingEnabled(), not by the control-mode flag'
+    );
+    assert.ok(
+        /if \(usesTmuxSeating\) \{/.test(src),
+        'the tmux chain must be gated on usesTmuxSeating, never on usesControlMode'
+    );
+    assert.ok(
+        !/if \(usesControlMode\) \{/.test(src),
+        'usesControlMode must not gate the chain — it only tells the Go host how to read the stream'
+    );
+});
+
 test('the view attaches WITHOUT control mode, UTF-8 forced', () => {
     // Control mode is OFF. `-CC` puts a protocol parser between the agent and the
     // screen, and twelve distinct defects came out of that parser in one day —
