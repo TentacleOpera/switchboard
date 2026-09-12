@@ -25,30 +25,30 @@ import (
 )
 
 type terminal struct {
-	name                  string
-	role                  string
-	cmd                   *exec.Cmd
-	file                  *os.File
-	pid                   int
-	mu                    sync.Mutex
-	status                string
-	cwd                   string
-	worktreePath          string
-	agentInstanceId       string
-	parentInstanceId      string
-	startTime             string
-	lastDataAt            int64
-	promptCount           int
-	hidden                bool
-	cliFamily             string
-	startupCommand        string
-	startupCommandSource  string
+	name                 string
+	role                 string
+	cmd                  *exec.Cmd
+	file                 *os.File
+	pid                  int
+	mu                   sync.Mutex
+	status               string
+	cwd                  string
+	worktreePath         string
+	agentInstanceId      string
+	parentInstanceId     string
+	startTime            string
+	lastDataAt           int64
+	promptCount          int
+	hidden               bool
+	cliFamily            string
+	startupCommand       string
+	startupCommandSource string
 	// env is the environment slice the terminal was spawned with, retained so
 	// a respawn can start a fresh login shell under the SAME identity env
 	// (SWITCHBOARD_TERMINAL, SWITCHBOARD_AGENT_INSTANCE_ID, SWITCHBOARD_API_TOKEN,
 	// CLAUDE_CODE_*). Without it a respawned devin seat would lose its seat
 	// identity and its board API token.
-	env []string
+	env                   []string
 	claudeInlineRendering bool
 	isTeamMember          bool
 	listenersMu           sync.Mutex
@@ -489,7 +489,7 @@ func (f *fleet) handleControlEvent(name string, t *terminal, msg ControlMessage)
 		}
 		if pane != "" {
 			t.mu.Lock()
-			_ = writeControlCommandLocked(t, fmt.Sprintf("refresh-client -A '%%%s:continue'", pane))
+			_ = writeControlCommandLocked(t, fmt.Sprintf("refresh-client -A '%%%s:continue'", pane), blockNone)
 			t.mu.Unlock()
 		}
 		f.broadcastControl(name, "pause", msg.Fields)
@@ -890,7 +890,7 @@ func (f *fleet) handleVerb(verb string, payload map[string]any) (any, error) {
 			t.mu.Lock()
 			res := f.respawnAndReinject(t, t.cliFamily, "")
 			t.mu.Unlock()
-			return res
+			return res, nil
 		}
 		if err := writeSlashLocked(t, "/clear"); err != nil {
 			return nil, err
