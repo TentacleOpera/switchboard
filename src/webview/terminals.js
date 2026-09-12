@@ -494,7 +494,7 @@
     // Fetched from `tmuxListSessions` (a tmux-derived, registry-free read —
     // the registry records what the board believes; the point is what is true).
     // One row per team (grouped by session_group), with the base session flagged
-    // as the only safe attach point. Per-seat views are hidden (status off +
+    // as the only safe attach point. Per-seat views are hidden (control mode +
     // shared current-window pointer — see plan §4).
     async function fetchTmuxSessions() {
         try {

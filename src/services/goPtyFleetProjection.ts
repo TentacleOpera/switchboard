@@ -227,7 +227,15 @@ export class GoPtyFleetProjection {
         // `-A` is attach-or-create, which is what makes a restart cheap: the restart
         // kills the PTY, the tmux session and the agent inside it survive, and the next
         // spawn of the same name reattaches to the still-running agent.
-        if (effectiveStartupCommand && this._tmuxSeatingEnabled()) {
+        //
+        // `usesControlMode` is captured BEFORE the chain is built so the Go host can
+        // be told, at create time, that this seat's pty will speak tmux control mode.
+        // The Go host uses it to demux the byte stream through the control-mode parser
+        // and to encode input as `send-keys` — a fallback here would make a
+        // control-mode seat indistinguishable from a raw one, so it is an explicit
+        // flag, never inferred from the stream.
+        const usesControlMode = !!effectiveStartupCommand && this._tmuxSeatingEnabled();
+        if (usesControlMode) {
             const session = deriveTmuxSessionName(opts?.tmuxSession || name || role);
             const win = String(name || role).replace(/[^A-Za-z0-9_.-]/g, '-');
             const inner = JSON.stringify(effectiveStartupCommand);
@@ -259,53 +267,33 @@ export class GoPtyFleetProjection {
                 + `&& tmux new-window -d -t ${session} -n ${win} ${inner} `
                 + `|| tmux new-session -d -s ${session} -n ${win} ${inner}; `
                 + `tmux new-session -A -d -t ${session} -s ${view} 2>/dev/null; `
-                // A view session is rendered inside a board pane that already has the
-                // panel's own chrome, so tmux's status line is duplicate navigation —
-                // it lists the same four seats the sidebar does, overlaps it, and costs
-                // a row of every pane. Off on the VIEW only: the base session keeps its
-                // strip, because that is the one an operator attaches to over SSH and
-                // there the window list is the only way to see the team.
-                // Per-session, never `-g`: `-g` would strip the status line from the
-                // operator's own tmux, which this has no business touching.
-                + `tmux set-option -t ${view} status off 2>/dev/null; `
-                // The view is rendered in a board pane, so tmux's own INPUT handling is
-                // as unwanted as its status line. Two options, both per-session on the
-                // VIEW only — never `-g`, which would rewrite the operator's own tmux:
+                // Control mode (`-CC`) makes tmux stop drawing the pane and emit
+                // line-oriented notifications instead; the board renders the agent
+                // as a plain terminal. That removes the need for the per-view
+                // suppressions this chain used to carry: tmux no longer draws a
+                // status line, no longer interprets a prefix key, and no longer
+                // arbitrates window size between competing clients. The base
+                // session an operator attaches to over SSH keeps all of its own
+                // options — these are per-view, never `-g`.
                 //
-                //   prefix None — the browser client has no business driving tmux. A
-                //   stray C-b in a prompt should reach the agent as a keystroke, not
-                //   open a tmux command table over the top of the pane.
-                //
-                // The BASE session keeps both: that is the one an operator attaches to
-                // over SSH, where the window list, copy-mode and the prefix are the
-                // whole point. This is what lets a seat be reachable by `tmux attach`
-                // while the board renders it as a plain terminal.
-                // NOT `mouse off`, though it is tempting and was briefly committed
-                // (a742f14d, reverted here). `mouse on` is what makes the wheel useful:
-                // tmux's root table binds WheelUpPane to `copy-mode -e`, so scrolling a
-                // pane enters copy-mode and scrolls tmux's 50,000-line history. That
-                // history is the ONLY thing tmux is wanted for in a board pane, and
-                // xterm's own scrollback cannot replace it while tmux is drawing —
-                // tmux repaints its screen rather than emitting lines the outer
-                // terminal can retain, so the client buffer never meaningfully fills.
-                //
-                // The cost is real and is the reported symptom: in copy-mode, typed
-                // keys go to copy-mode instead of the agent. The resolution is NOT to
-                // turn the mouse off — it is to stop tmux drawing the pane (control
-                // mode) or to back the pane's scrollback with the on-disk session log,
-                // at which point the wheel no longer needs to reach tmux at all.
-                + `tmux set-option -t ${view} prefix None 2>/dev/null; `
+                // `window-size manual` gives the browser panel deterministic
+                // authority over pane geometry — under the default `latest`, a
+                // second attached client (SSH) ping-pongs the window size, which is
+                // the exact arbitration failure `aggressive-resize` used to paper
+                // over. Under `manual`, `clients_calculate_size` skips the client
+                // loop and the window uses its manual size, driven by the board's
+                // `refresh-client -C`. `automatic-rename off` stops
+                // `%window-renamed` from firing on every command the agent runs,
+                // which would otherwise thrash any board re-render on rename.
+                + `tmux set-option -t ${view} window-size manual 2>/dev/null; `
+                + `tmux set-window-option -t ${view}:${win} automatic-rename off 2>/dev/null; `
                 + `tmux select-window -t ${view}:${win}; `
-                // Grouped sessions share their window list, so with aggressive-resize
-                // OFF a window is sized against every client in the session — the four
-                // browser panes at 221x40 and an SSH client at 183x53 fought over it,
-                // and `window-size latest` handed the size to whichever acted last.
-                // The losing panes repeated their bottom line forever. ON sizes each
-                // window by the clients actually VIEWING it, which is what we want.
-                // Per-window, never `-g`: this is the board's window, not the operator's
-                // tmux config, and a `-g` here silently rewrites their global.
-                + `tmux set-window-option -t ${view}:${win} aggressive-resize on 2>/dev/null; `
-                + `exec tmux attach -t ${view}`;
+                // `-u` forces UTF-8 mode so `utf8_sanitize` does not replace
+                // non-ASCII bytes with `_` in format output (window names, pane
+                // titles, `list-panes`/`capture-pane` format strings) on a headless
+                // Pi where `LANG` may be unset. `%output` and `capture-pane -p`
+                // bypass that path and are byte-exact regardless.
+                + `exec tmux -u -CC attach -t ${view}`;
         }
 
         const result = await this.supervisor.request('ptyCreateTerminal', {
@@ -318,6 +306,7 @@ export class GoPtyFleetProjection {
             claudeInlineRendering,
             apiToken: this.apiToken,
             _isTeamMember: opts?._isTeamMember === true,
+            controlMode: usesControlMode,
         });
         if (!result || result.success === false) {
             throw new Error(result?.error || `PTY create failed (state: ${this.supervisor.getState()})`);

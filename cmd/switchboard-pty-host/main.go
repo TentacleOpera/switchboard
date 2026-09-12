@@ -48,6 +48,35 @@ type terminal struct {
 	isTeamMember          bool
 	listenersMu           sync.Mutex
 	listeners             map[chan string]struct{}
+	// ── control mode (`tmux -CC`) state ──────────────────────────────────────
+	// controlMode is set at create time from the ptyCreateTerminal payload. The
+	// standalone host sets it for seats that run the tmux control-mode chain;
+	// the extension host never sets it, so its terminals stay raw. This is the
+	// one read that distinguishes "render as a plain terminal" from "render
+	// tmux's UI" — a fallback here would make a control-mode seat look
+	// identical to a raw one, so it is an explicit flag, never inferred.
+	controlMode bool
+	// controlActive is the runtime gate: it flips true only when tmux's DCS
+	// entry is actually seen in the stream, i.e. `exec tmux -u -CC attach` has
+	// taken over the pty. Before that the pty runs the login shell and the
+	// seat's startup command (the tmux chain) must be written RAW — encoding
+	// it as send-keys would type `send-keys -H …` into the shell. controlMode
+	// says "this seat will use control mode"; controlActive says "tmux has
+	// taken over now". mu-protected (read by write/ptyResize, set by publish).
+	controlActive bool
+	// The fields below marked "publish-only" are touched solely in publish(),
+	// which runs on the single read goroutine for this terminal; they need no
+	// lock. paneID, copyModeActive, pendingInput, pendingCols/Rows are read
+	// from write()/ptyResize too, so they live under mu.
+	parseState     *ParseState // publish-only: the carried partial line + open block
+	pendingBlocks  []blockKind // publish-only: FIFO of expected block kinds
+	sessionTarget  string      // publish-only: session id/name from %session-changed
+	historyFetched bool        // publish-only: capture-pane has been issued
+	paneID         string      // mu: tmux pane id without `%`, learned from %output/list-panes
+	copyModeActive bool        // mu: a copy/choose mode is active (from %pane-mode-changed)
+	pendingInput   []byte      // mu: keystrokes buffered before the pane id was known
+	pendingCols    uint16      // mu: resize issued before the pane id was known
+	pendingRows    uint16      // mu: resize issued before the pane id was known
 }
 
 type outputEvent struct {
@@ -166,6 +195,7 @@ func (f *fleet) create(payload map[string]any) (map[string]any, error) {
 		return nil, err
 	}
 	now := time.Now()
+	controlMode := boolField(payload, "controlMode")
 	t := &terminal{
 		name: name, role: role, cmd: cmd, file: file, pid: cmd.Process.Pid,
 		status: "active", cwd: cwd, worktreePath: strField(payload, "worktreePath"),
@@ -174,6 +204,10 @@ func (f *fleet) create(payload map[string]any) (map[string]any, error) {
 		hidden: boolField(payload, "hidden"), claudeInlineRendering: claudeInline,
 		isTeamMember: boolField(payload, "_isTeamMember"),
 		listeners:    make(map[chan string]struct{}),
+		controlMode:  controlMode,
+	}
+	if controlMode {
+		t.parseState = &ParseState{}
 	}
 	f.terminals[name] = t
 	f.clients[name] = make(map[*websocket.Conn]struct{})
@@ -192,7 +226,6 @@ func (f *fleet) readOutput(name string, file *os.File) {
 			f.mu.Lock()
 			if t := f.terminals[name]; t != nil {
 				t.lastDataAt = time.Now().UnixMilli()
-				t.emit(chunk)
 			}
 			f.mu.Unlock()
 			f.publish(name, chunk)
@@ -215,7 +248,211 @@ func (f *fleet) readOutput(name string, file *os.File) {
 	}
 }
 
+// publish is the single fan-out point for pty output. In raw mode it routes
+// the bytes verbatim to the log tee, the scrollback ring and the browser. In
+// control mode it first demuxes the chunk through the control-mode parser
+// (controlmode.go) and routes the DECODED output to all three consumers —
+// one parse, one call site, three consumers fed from the parsed output. The
+// `rest` (partial-line remainder) is per-terminal state in t.parseState,
+// threaded across calls. Control events (%exit, %layout-change, …) are sent
+// to the browser as JSON WS messages; the browser already handles JSON
+// (hello, resize, ack), so a new message type is additive.
 func (f *fleet) publish(name, data string) {
+	t, ok := f.get(name)
+	if !ok {
+		return
+	}
+	if !t.controlMode {
+		t.emit(data)
+		f.routeOutput(name, data)
+		return
+	}
+	// Control mode: demux once, feed all three consumers from the parsed
+	// output. parseState is publish-only (this goroutine), so no lock here.
+	if t.parseState == nil {
+		t.parseState = &ParseState{}
+	}
+	wasDcs := t.parseState.dcsSeen
+	msgs := ParseControlMode(data, t.parseState)
+	// Flip the runtime gate the moment tmux's DCS entry is actually seen —
+	// before that the pty is the login shell and input must stay raw.
+	if !wasDcs && t.parseState.dcsSeen {
+		t.mu.Lock()
+		t.controlActive = true
+		t.mu.Unlock()
+	}
+	for _, msg := range msgs {
+		switch msg.Kind {
+		case KindOutput:
+			// Learn the pane id from the first %output that carries one. This
+			// is the fallback path; the list-panes reply (blockPaneID) usually
+			// arrives first because %session-changed fires before %output.
+			if msg.PaneID != "" {
+				learned := false
+				t.mu.Lock()
+				if t.paneID == "" {
+					t.paneID = msg.PaneID
+					learned = true
+					_ = flushPendingInputLocked(t)
+				}
+				t.mu.Unlock()
+				if learned {
+					f.onPaneIDLearned(name, t)
+				}
+			}
+			decoded := string(msg.Data)
+			t.emit(decoded)
+			f.routeOutput(name, decoded)
+		case KindBlock:
+			// Pop the expected block kind. Blocks return strictly in command
+			// order, so a FIFO matches them up.
+			kind := blockNone
+			if len(t.pendingBlocks) > 0 {
+				kind = t.pendingBlocks[0]
+				t.pendingBlocks = t.pendingBlocks[1:]
+			}
+			if kind == blockPaneID {
+				// list-panes reply: parse the pane id, then fetch history.
+				paneID := parsePaneIDFromBlock(msg.Block)
+				if paneID != "" {
+					learned := false
+					t.mu.Lock()
+					if t.paneID == "" {
+						t.paneID = paneID
+						learned = true
+						_ = flushPendingInputLocked(t)
+						if !t.historyFetched {
+							t.historyFetched = true
+							t.pendingBlocks = append(t.pendingBlocks, blockScrollback, blockPending)
+							_ = sendHistoryFetchLocked(t)
+						}
+					}
+					t.mu.Unlock()
+					if learned {
+						f.onPaneIDLearned(name, t)
+					}
+				}
+				// A list-panes reply is a query response, NOT terminal content
+				// — never route it to the ring/log/browser.
+			} else {
+				// capture-pane reply (scrollback or pending fragment): terminal
+				// content, route to all three consumers.
+				decoded := string(msg.Block.Data)
+				t.emit(decoded)
+				f.routeOutput(name, decoded)
+			}
+		case KindControl:
+			f.handleControlEvent(name, t, msg)
+		case KindIgnored:
+			// A non-`%` line outside a block (Type == "") is not control
+			// protocol — in normal operation there are none, so this is a
+			// safety net that surfaces a broken tmux (or no tmux at all) as
+			// readable output instead of a blank pane. An unknown `%` type is
+			// dropped: a future tmux must not break rendering.
+			if msg.Type == "" && len(msg.Fields) > 0 {
+				line := msg.Fields[0]
+				t.emit(line)
+				f.routeOutput(name, line)
+			}
+		}
+	}
+}
+
+// onPaneIDLearned fires the first time the pane id becomes known. It flushes
+// any resize that was issued before the pane id existed (a control client is
+// invisible to sizing until its first `refresh-client -C`).
+func (f *fleet) onPaneIDLearned(name string, t *terminal) {
+	t.mu.Lock()
+	cols, rows := t.pendingCols, t.pendingRows
+	t.pendingCols, t.pendingRows = 0, 0
+	t.mu.Unlock()
+	if cols > 0 && rows > 0 {
+		_ = ptyResize(t, cols, rows)
+	}
+}
+
+// handleControlEvent routes a tmux notification to the browser as a JSON WS
+// message and arms any host-side response (%session-changed → pane-id query +
+// flow control; %pane-mode-changed → copy-mode tracking).
+func (f *fleet) handleControlEvent(name string, t *terminal, msg ControlMessage) {
+	switch msg.Type {
+	case "%exit":
+		// %exit comes from the client process's stdio, not the server's
+		// buffered output — they are not ordered against each other and it
+		// can arrive mid-block (the parser force-closes any open block).
+		// Surface it as a stated end state; the read goroutine's EOF path
+		// still closes the socket.
+		f.broadcastControl(name, "exit", msg.Fields)
+	case "%session-changed":
+		// The first notification on attach. Arm flow control and learn the
+		// pane id via list-panes (works for idle seats that emit no %output).
+		// The reply is a block tagged blockPaneID; history fetch follows once
+		// the pane id is parsed from it.
+		target := ""
+		if len(msg.Fields) >= 2 {
+			target = msg.Fields[1] // session name
+		} else if len(msg.Fields) >= 1 {
+			target = msg.Fields[0] // session id
+		}
+		t.mu.Lock()
+		t.sessionTarget = target
+		_ = sendFlowControlLocked(t)
+		if target != "" && t.paneID == "" {
+			t.pendingBlocks = append(t.pendingBlocks, blockPaneID)
+			_ = sendListPanesLocked(t, target)
+		}
+		t.mu.Unlock()
+		f.broadcastControl(name, "session-changed", msg.Fields)
+	case "%pane-mode-changed":
+		// %pane-mode-changed <pane> <mode>: a non-empty mode means a copy/choose
+		// mode is active and would swallow send-keys. Track it; sendKeysLocked
+		// cancels it before the next input. An empty mode means it cleared.
+		mode := ""
+		if len(msg.Fields) >= 2 {
+			mode = msg.Fields[1]
+		}
+		t.mu.Lock()
+		t.copyModeActive = mode != ""
+		t.mu.Unlock()
+		f.broadcastControl(name, "pane-mode-changed", msg.Fields)
+	default:
+		// Every other notification (%layout-change, %window-close,
+		// %window-renamed, %sessions-changed, %pause, …) is forwarded to the
+		// browser by name so it can render it without the host having to
+		// understand it. The parser only returns KindControl for the tmux 3.4
+		// notification inventory, so this never fires for an unknown type.
+		event := strings.TrimPrefix(msg.Type, "%")
+		f.broadcastControl(name, event, msg.Fields)
+	}
+}
+
+// broadcastControl sends a control event to every WS client of a terminal as
+// a JSON message: `{"t":"control","event":"<name>","fields":[...]}`. The WS
+// protocol already handles JSON (hello, resize, ack); this is additive.
+func (f *fleet) broadcastControl(name, event string, fields []string) {
+	f.mu.Lock()
+	clients := make([]*websocket.Conn, 0, len(f.clients[name]))
+	for client := range f.clients[name] {
+		clients = append(clients, client)
+	}
+	f.mu.Unlock()
+	msg := map[string]any{"t": "control", "event": event}
+	if fields != nil {
+		msg["fields"] = fields
+	}
+	for _, client := range clients {
+		if err := client.WriteJSON(msg); err != nil {
+			_ = client.Close()
+			f.removeClient(name, client)
+		}
+	}
+}
+
+// routeOutput feeds decoded terminal bytes to the three consumers: the log
+// tee, the scrollback ring, and the browser (binary WS frames). This is the
+// body the old publish() had, factored out so the control-mode demux can call
+// it with decoded output instead of raw bytes.
+func (f *fleet) routeOutput(name, data string) {
 	f.logOutput(name, data)
 	f.mu.Lock()
 	f.nextSeq[name]++
@@ -351,8 +588,7 @@ func (f *fleet) write(name, data string, slashCommand bool) (map[string]any, err
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	_, err := io.WriteString(t.file, data)
-	if err != nil {
+	if err := writeToPty(t, data); err != nil {
 		return nil, err
 	}
 	return map[string]any{"success": true}, nil

@@ -245,7 +245,8 @@ test('the tmux tab reads its session list from the tmux-derived verb, never the 
 });
 
 // Attaching to a per-seat view shares its current-window pointer with a board
-// pane and it carries `status off` — the base session is the only safe target.
+// pane and it runs in control mode — the base session is the only safe target
+// for a human attaching over SSH.
 test('no per-seat attach command is offered; the grid button posts the base session', () => {
     const render = block(terminalsJs, 'function renderTmuxSessions(data)', 'async function refreshTmuxTab()');
     assert.ok(render.includes('team.baseSession'), 'the attach command must be built from the base session');

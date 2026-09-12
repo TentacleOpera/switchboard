@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
 	"net/http"
@@ -176,5 +177,23 @@ func utf16Len(s string) int {
 func (f *fleet) next(name string) uint64 { f.mu.RLock(); defer f.mu.RUnlock(); return f.nextSeq[name] }
 
 func ptyResize(t *terminal, cols, rows uint16) error {
-	return pty.Setsize(t.file, &pty.Winsize{Cols: cols, Rows: rows})
+	if !t.controlMode || !t.controlActive {
+		return pty.Setsize(t.file, &pty.Winsize{Cols: cols, Rows: rows})
+	}
+	// Control mode: a pty ioctl does not resize the agent's pane. A control
+	// client is invisible to sizing until it issues its first `refresh-client
+	// -C` (`ignore_client_size` in resize.c); after that, `window-size manual`
+	// (set in the seat chain) gives the browser panel deterministic authority
+	// over geometry instead of ping-ponging with a second attached client.
+	// `refresh-client -C` is written to the pty stdin as a control command.
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.paneID == "" {
+		// The pane id is not known yet (no %session-changed / list-panes).
+		// Remember the desired size and apply it once the pane id arrives.
+		t.pendingCols = cols
+		t.pendingRows = rows
+		return nil
+	}
+	return writeControlCommandLocked(t, fmt.Sprintf("refresh-client -C %dx%d", cols, rows))
 }

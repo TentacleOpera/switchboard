@@ -1,8 +1,9 @@
 'use strict';
 
 /**
- * Contract test: a tmux VIEW session carries no status line, and the BASE
- * session keeps its own.
+ * Contract test: a tmux VIEW session runs in control mode (`tmux -u -CC
+ * attach`), so the per-view chrome suppressions the chain used to carry are
+ * gone and the geometry options control mode needs are present.
  *
  * Style mirrors `tmux-backend-contract.test.js` — a source-level assertion on
  * the composed seating command, which is a shell string built in
@@ -10,17 +11,20 @@
  * to mock and nothing that needs a live tmux server.
  *
  * Why this is a contract and not a preference:
- *   A view session is rendered inside a board pane that already has the
- *   panel's own seat navigation. tmux's status line there is duplicate
- *   navigation — it lists the same seats the sidebar does, overlaps it, and
- *   costs a row of every pane. The base session is the opposite case: it is
- *   what an operator attaches to over SSH, where the window list is the only
- *   way to see the team, so its strip must survive.
- *
- * The three assertions:
- *   1. `status off` is set, and targeted at the view session.
- *   2. It is never set with `-g` — that would rewrite the operator's own tmux.
- *   3. The base session's status is never touched.
+ *   Control mode makes tmux stop drawing the pane and emit line-oriented
+ *   notifications instead; the board renders the agent as a plain terminal.
+ *   That removes the need for the three per-view suppressions the chain used to
+ *   carry — `status off` (tmux draws no status line), `prefix None` (tmux
+ *   interprets no prefix key) and `aggressive-resize on` (tmux no longer
+ *   arbitrates window size between competing clients). If any of them creeps
+ *   back, they are dead options under control mode at best and a sign the
+ *   cutover was reverted at worst. `window-size manual` and
+ *   `automatic-rename off` are the options control mode DOES need: manual
+ *   sizing gives the browser panel deterministic authority over geometry
+ *   (under the default `latest` a second attached client ping-pongs the size),
+ *   and `automatic-rename off` stops `%window-renamed` thrashing on every
+ *   command. The base session an operator attaches to over SSH keeps its own
+ *   options — these are per-view, never `-g`.
  */
 
 const assert = require('assert');
@@ -46,19 +50,64 @@ console.log('\n── tmux view session chrome contract ──');
 
 const src = fs.readFileSync(PROJECTION_FILE, 'utf8');
 
-test('the view session is created with its status line off', () => {
+test('the view attaches in control mode with UTF-8 forced', () => {
     assert.ok(
-        /tmux set-option -t \$\{view\} status off/.test(src),
-        'goPtyFleetProjection.ts must set `status off` on ${view} — without it every '
-        + 'board pane renders a tmux strip duplicating the panel sidebar',
+        /exec tmux -u -CC attach -t \$\{view\}/.test(src),
+        'goPtyFleetProjection.ts must end the seat chain with `exec tmux -u -CC attach -t ${view}` '
+        + '— a bare `tmux attach` makes the board pane a tmux client again (the state this '
+        + 'feature reverts), and `-u` prevents utf8_sanitize replacing non-ASCII with `_`',
     );
 });
 
-test('status off is never applied globally', () => {
-    const globalStatus = /tmux set-option[^`]*-g[^`]*status/.test(src);
+test('the chain no longer suppresses the view status line', () => {
     assert.ok(
-        !globalStatus,
-        'status must be set per-session; `-g` rewrites the operator\'s own tmux config',
+        !/tmux set-option -t \$\{view\} status off/.test(src),
+        'control mode draws no status line, so `status off` is dead weight — its presence '
+        + 'signals the cutover was reverted',
+    );
+});
+
+test('the chain no longer neutralises the view prefix key', () => {
+    assert.ok(
+        !/tmux set-option -t \$\{view\} prefix None/.test(src),
+        'control mode interprets no prefix key, so `prefix None` is dead weight — its '
+        + 'presence signals the cutover was reverted',
+    );
+});
+
+test('the chain no longer sets aggressive-resize on the view window', () => {
+    assert.ok(
+        !/tmux set-window-option -t \$\{view\}:\$\{win\} aggressive-resize on/.test(src),
+        'control mode no longer arbitrates window size between clients, so '
+        + '`aggressive-resize on` is dead weight (and inert under window-size manual) — '
+        + 'its presence signals the cutover was reverted',
+    );
+});
+
+test('the view session uses manual window sizing', () => {
+    assert.ok(
+        /tmux set-option -t \$\{view\} window-size manual/.test(src),
+        'goPtyFleetProjection.ts must set `window-size manual` on ${view} — under the '
+        + 'default `latest` a second attached client (SSH) ping-pongs the window size, '
+        + 'which is the arbitration failure aggressive-resize used to paper over',
+    );
+});
+
+test('the view window disables automatic rename', () => {
+    assert.ok(
+        /tmux set-window-option -t \$\{view\}:\$\{win\} automatic-rename off/.test(src),
+        'goPtyFleetProjection.ts must set `automatic-rename off` on the view window — '
+        + 'without it `%window-renamed` fires on every command the agent runs and thrashes '
+        + 'any board re-render on rename',
+    );
+});
+
+test('view options are never applied globally', () => {
+    const globalViewOption = /tmux set(?:-option|-window-option)[^`]*-g[^`]*(?:window-size|automatic-rename|status|prefix)/.test(src);
+    assert.ok(
+        !globalViewOption,
+        'view options must be set per-session/per-window; `-g` rewrites the operator\'s '
+        + 'own tmux config',
     );
 });
 
@@ -77,4 +126,4 @@ if (failures > 0) {
     console.error(`\n${failures} failure(s)`);
     process.exit(1);
 }
-console.log('\nResults: 3 passed, 0 failed.');
+console.log('\nResults: 8 passed, 0 failed.');

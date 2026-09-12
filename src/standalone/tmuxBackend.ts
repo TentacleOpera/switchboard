@@ -302,7 +302,7 @@ export async function listTmuxPanes(socket?: TmuxSocket): Promise<TmuxPane[]> {
 // flagged as the only safe attach point. The base is the member whose
 // `session_name` equals its `session_group` — the session with no board pane
 // on it, which keeps its status strip. Per-seat views (`lc-<team>-team-<role>`)
-// are created with `status off` and share a current-window pointer with a
+// are created in control mode and share a current-window pointer with a
 // board pane, so they are NOT offered as attach targets (see plan §4).
 //
 // Board-owned sessions are namespaced `lc-` (deriveTmuxSessionName, teamWiring).

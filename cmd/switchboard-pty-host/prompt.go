@@ -22,16 +22,15 @@ func sleep(d time.Duration) { time.Sleep(d) }
 func writeSlashLocked(t *terminal, command string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if _, err := t.file.WriteString(clearInputLine); err != nil {
+	if err := writeToPty(t, clearInputLine); err != nil {
 		return err
 	}
 	sleep(clearInputSettle)
-	if _, err := t.file.WriteString(strings.TrimRight(command, "\r\n")); err != nil {
+	if err := writeToPty(t, strings.TrimRight(command, "\r\n")); err != nil {
 		return err
 	}
 	sleep(submitSettle)
-	_, err := t.file.WriteString("\r")
-	return err
+	return writeToPty(t, "\r")
 }
 
 // Whether a payload the caller ALREADY declared to be a slash command is
@@ -235,7 +234,7 @@ func (f *fleet) deliverPrompt(name, text string, clearBefore bool, delayMs int, 
 		}
 	}
 	t.mu.Lock()
-	if _, err := t.file.WriteString(bracketedPasteOpen); err != nil {
+	if err := writeToPty(t, bracketedPasteOpen); err != nil {
 		t.mu.Unlock()
 		return map[string]any{"success": false, "cleared": cleared, "error": err.Error()}
 	}
@@ -244,7 +243,7 @@ func (f *fleet) deliverPrompt(name, text string, clearBefore bool, delayMs int, 
 		if end > len(text) {
 			end = len(text)
 		}
-		if _, err := t.file.WriteString(text[i:end]); err != nil {
+		if err := writeToPty(t, text[i:end]); err != nil {
 			t.mu.Unlock()
 			return map[string]any{"success": false, "cleared": cleared, "error": err.Error()}
 		}
@@ -254,7 +253,7 @@ func (f *fleet) deliverPrompt(name, text string, clearBefore bool, delayMs int, 
 			t.mu.Lock()
 		}
 	}
-	if _, err := t.file.WriteString(bracketedPasteClose); err != nil {
+	if err := writeToPty(t, bracketedPasteClose); err != nil {
 		t.mu.Unlock()
 		return map[string]any{"success": false, "cleared": cleared, "error": err.Error()}
 	}
@@ -262,14 +261,14 @@ func (f *fleet) deliverPrompt(name, text string, clearBefore bool, delayMs int, 
 	f.logPrompt(name, text)
 	sleep(submitSettle)
 	t.mu.Lock()
-	if _, err := t.file.WriteString("\r"); err != nil {
+	if err := writeToPty(t, "\r"); err != nil {
 		t.mu.Unlock()
 		return map[string]any{"success": false, "cleared": cleared, "error": err.Error()}
 	}
 	t.mu.Unlock()
 	sleep(confirmEnterDelay)
 	t.mu.Lock()
-	if _, err := t.file.WriteString("\r"); err != nil {
+	if err := writeToPty(t, "\r"); err != nil {
 		t.mu.Unlock()
 		return map[string]any{"success": false, "cleared": cleared, "error": err.Error()}
 	}
