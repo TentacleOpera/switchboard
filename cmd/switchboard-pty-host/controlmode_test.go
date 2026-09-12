@@ -380,3 +380,58 @@ func dump(msgs []normMsg) string {
 	b, _ := json.MarshalIndent(msgs, "", "  ")
 	return string(b)
 }
+
+// TestExtendedOutputIsPaneOutput: with flow control armed (`pause-after`, which
+// sendFlowControlLocked issues on every attach) tmux emits %extended-output
+// INSTEAD of %output — measured on tmux 3.4 as 6707 vs 14 on a busy pane. It
+// must decode to pane output; classifying it as a notification renders a blank
+// pane and an empty transcript.
+func TestExtendedOutputIsPaneOutput(t *testing.T) {
+	in := "%extended-output %49 294 : hi\\015\\012\r\n"
+	var st ParseState
+	msgs := ParseControlMode(in, &st)
+	if len(msgs) != 1 {
+		t.Fatalf("want 1 message, got %d: %+v", len(msgs), msgs)
+	}
+	if msgs[0].Kind != KindOutput {
+		t.Fatalf("kind=%v want KindOutput (extended-output is pane data)", msgs[0].Kind)
+	}
+	if msgs[0].PaneID != "49" {
+		t.Fatalf("pane=%q want 49", msgs[0].PaneID)
+	}
+	if string(msgs[0].Data) != "hi\r\n" {
+		t.Fatalf("data=%q want %q", msgs[0].Data, "hi\r\n")
+	}
+}
+
+// TestBlockDataIsNotOctalDecoded: capture-pane replies are NOT \ooo-escaped.
+// Measured on tmux 3.4: a pane showing the literal text \033[31m came back from
+// `capture-pane -peqJN -S -50000` as the raw bytes \,0,3,3. Decoding it turned
+// scrollback text into a live ESC and injected escape sequences into the pane,
+// the ring and the log.
+func TestBlockDataIsNotOctalDecoded(t *testing.T) {
+	in := "%begin 100 9 0\r\nLIT:\\033[31m TAIL:\\134\r\n%end 100 9 0\r\n"
+	var st ParseState
+	msgs := ParseControlMode(in, &st)
+	if len(msgs) != 1 || msgs[0].Kind != KindBlock {
+		t.Fatalf("want one block, got %+v", msgs)
+	}
+	want := "LIT:\\033[31m TAIL:\\134"
+	if string(msgs[0].Block.Data) != want {
+		t.Fatalf("block data=%q want %q (block content must stay verbatim)", msgs[0].Block.Data, want)
+	}
+}
+
+// TestDecodeCaptureC: `capture-pane -C` uses its own scheme — backslash doubled,
+// non-printables as \ooo — which is NOT the %output scheme.
+func TestDecodeCaptureC(t *testing.T) {
+	if got := string(decodeCaptureC("a\\\\b")); got != "a\\b" {
+		t.Fatalf("doubled backslash: got %q want %q", got, "a\\b")
+	}
+	if got := string(decodeCaptureC("x\\033y")); got != "x\x1by" {
+		t.Fatalf("octal: got %q want %q", got, "x\x1by")
+	}
+	if got := string(decodeCaptureC("plain")); got != "plain" {
+		t.Fatalf("passthrough: got %q want %q", got, "plain")
+	}
+}

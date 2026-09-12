@@ -300,6 +300,23 @@ func (f *fleet) publish(name, data string) {
 					f.onPaneIDLearned(name, t)
 				}
 			}
+			// Route ONLY this seat's pane. A view session is GROUPED with its
+			// team base session, so one -CC client receives %output for every
+			// pane in the group — measured on tmux 3.4: a single client on a
+			// two-window group saw both panes' output. Unfiltered, every seat in
+			// a team rendered all four agents interleaved and wrote all four
+			// into its own .md transcript, destroying the per-seat diagnostic
+			// record. `list-panes -t <view-session>` resolves to the view's OWN
+			// current window (verified), so t.paneID is the right key.
+			// Before the id is learned there is nothing to filter on, so those
+			// first bytes still pass — the list-panes reply lands on the first
+			// %session-changed, ahead of steady-state output.
+			t.mu.Lock()
+			mine := t.paneID
+			t.mu.Unlock()
+			if mine != "" && msg.PaneID != "" && msg.PaneID != mine {
+				continue
+			}
 			decoded := string(msg.Data)
 			t.emit(decoded)
 			f.routeOutput(name, decoded)
@@ -317,15 +334,21 @@ func (f *fleet) publish(name, data string) {
 				if paneID != "" {
 					learned := false
 					t.mu.Lock()
-					if t.paneID == "" {
+					// The list-panes reply is AUTHORITATIVE and may CORRECT an id
+					// latched from a foreign %output. In a grouped session the
+					// first %output can belong to another seat's pane; the old
+					// `if t.paneID == ""` guard made that latch permanent, which
+					// mis-targeted send-keys and — now that output is filtered on
+					// this id — would blank the pane for good.
+					if t.paneID != paneID {
 						t.paneID = paneID
 						learned = true
 						_ = flushPendingInputLocked(t)
-						if !t.historyFetched {
-							t.historyFetched = true
-							t.pendingBlocks = append(t.pendingBlocks, blockScrollback, blockPending)
-							_ = sendHistoryFetchLocked(t)
-						}
+					}
+					if !t.historyFetched {
+						t.historyFetched = true
+						t.pendingBlocks = append(t.pendingBlocks, blockScrollback, blockPending)
+						_ = sendHistoryFetchLocked(t)
 					}
 					t.mu.Unlock()
 					if learned {
@@ -337,7 +360,21 @@ func (f *fleet) publish(name, data string) {
 			} else {
 				// capture-pane reply (scrollback or pending fragment): terminal
 				// content, route to all three consumers.
-				decoded := string(msg.Block.Data)
+				//
+				// The two captures use DIFFERENT encodings, so the decode is
+				// per-kind and cannot live in the parser. `-peqJN -S -50000`
+				// (blockScrollback) returns RAW bytes — real ESC included, via
+				// `-e` — and must be routed verbatim. `-p -P -C` (blockPending)
+				// is `-C`-escaped (backslash doubled, non-printables as \ooo)
+				// and must be decoded with decodeCaptureC. Octal-decoding the
+				// raw scrollback turned literal `\033` in an agent's output
+				// into a live escape sequence.
+				var decoded string
+				if kind == blockPending {
+					decoded = string(decodeCaptureC(string(msg.Block.Data)))
+				} else {
+					decoded = string(msg.Block.Data)
+				}
 				t.emit(decoded)
 				f.routeOutput(name, decoded)
 			}
@@ -403,6 +440,25 @@ func (f *fleet) handleControlEvent(name string, t *terminal, msg ControlMessage)
 		}
 		t.mu.Unlock()
 		f.broadcastControl(name, "session-changed", msg.Fields)
+	case "%pause":
+		// sendFlowControlLocked arms `pause-after=30`, so tmux PAUSES a pane
+		// whose client falls 30s behind and then emits nothing for it until the
+		// client resumes it. Nothing resumed it: there was no %pause arm and no
+		// `refresh-client -A` anywhere in the host, so a seat whose panel lagged
+		// (a phone over the tailnet is the stated use case) went permanently
+		// silent with no recovery short of a reattach. Resume immediately — the
+		// pre-control-mode seat had no backpressure either, so resuming restores
+		// the previous behaviour rather than inventing a new one.
+		pane := ""
+		if len(msg.Fields) >= 1 {
+			pane = strings.TrimPrefix(msg.Fields[0], "%")
+		}
+		if pane != "" {
+			t.mu.Lock()
+			_ = writeControlCommandLocked(t, fmt.Sprintf("refresh-client -A '%%%s:continue'", pane))
+			t.mu.Unlock()
+		}
+		f.broadcastControl(name, "pause", msg.Fields)
 	case "%pane-mode-changed":
 		// %pane-mode-changed <pane> <mode>: a non-empty mode means a copy/choose
 		// mode is active and would swallow send-keys. Track it; sendKeysLocked

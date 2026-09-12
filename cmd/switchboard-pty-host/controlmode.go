@@ -123,7 +123,6 @@ const stTerminator = "\x1b\\"
 // `%exit`). Anything not in this set, and not `%output` or a block guard, is
 // reported as KindIgnored so a future tmux cannot break rendering.
 var knownControlTypes = map[string]bool{
-	"%extended-output":          true,
 	"%layout-change":             true,
 	"%window-add":                true,
 	"%unlinked-window-add":       true,
@@ -244,6 +243,16 @@ func parseControlLine(line string, state *ParseState) []ControlMessage {
 	if typ == "%output" {
 		return []ControlMessage{parseOutput(line)}
 	}
+	// `%extended-output` is pane output too, not a notification. tmux emits it
+	// INSTEAD of `%output` for any client that armed flow control — and
+	// sendFlowControlLocked arms `pause-after=30` on every attach, so in this
+	// host it is the DOMINANT output form, not an edge case (measured on tmux
+	// 3.4: 6707 %extended-output vs 14 %output on a busy pane). Classifying it
+	// as KindControl sent every byte to handleControlEvent and rendered a blank
+	// pane. Shape: `%extended-output %<pane> <age> : <octal payload>`.
+	if typ == "%extended-output" {
+		return []ControlMessage{parseExtendedOutput(line)}
+	}
 	if typ == "%exit" {
 		return []ControlMessage{{Kind: KindControl, Type: "%exit", Exit: true, Fields: tokensAfter(line, "%exit")}}
 	}
@@ -267,6 +276,53 @@ func parseOutput(line string) ControlMessage {
 	}
 	paneID = strings.TrimPrefix(paneID, "%")
 	return ControlMessage{Kind: KindOutput, Type: "%output", PaneID: paneID, Data: decodeOctal(payload)}
+}
+
+// parseExtendedOutput decodes `%extended-output %<pane> <age> : <payload>`.
+// The payload uses the same octal escaping as `%output`; `<age>` is the
+// milliseconds the data sat in tmux's buffer and is not needed for rendering.
+func parseExtendedOutput(line string) ControlMessage {
+	rest := strings.TrimPrefix(line, "%extended-output")
+	rest = strings.TrimPrefix(rest, " ")
+	sp := strings.IndexByte(rest, ' ')
+	if sp < 0 {
+		return ControlMessage{Kind: KindOutput, Type: "%extended-output", PaneID: strings.TrimPrefix(rest, "%")}
+	}
+	paneID := strings.TrimPrefix(rest[:sp], "%")
+	rest = rest[sp+1:]
+	// Skip the age token.
+	if sp = strings.IndexByte(rest, ' '); sp < 0 {
+		return ControlMessage{Kind: KindOutput, Type: "%extended-output", PaneID: paneID}
+	}
+	rest = rest[sp+1:]
+	// The separator is ": " (a bare ":" when the payload is empty).
+	if strings.HasPrefix(rest, ": ") {
+		rest = rest[2:]
+	} else {
+		rest = strings.TrimPrefix(rest, ":")
+	}
+	return ControlMessage{Kind: KindOutput, Type: "%extended-output", PaneID: paneID, Data: decodeOctal(rest)}
+}
+
+// decodeCaptureC decodes `capture-pane -C` escaping, which is NOT the `%output`
+// scheme: `-C` doubles a backslash (`\\`) and writes non-printables as `\ooo`.
+// Measured on tmux 3.4. Only the `-C` capture reply goes through this.
+func decodeCaptureC(s string) []byte {
+	out := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) && s[i+1] == '\\' {
+			out = append(out, '\\')
+			i++
+			continue
+		}
+		if s[i] == '\\' && i+3 < len(s) && isOctalDigit(s[i+1]) && isOctalDigit(s[i+2]) && isOctalDigit(s[i+3]) {
+			out = append(out, byte(octalValue(s[i+1], s[i+2], s[i+3])))
+			i += 3
+			continue
+		}
+		out = append(out, s[i])
+	}
+	return out
 }
 
 // openBlock begins a `%begin <time> <number> <flags>` block.
@@ -297,8 +353,18 @@ func isBlockGuard(line, guard string, b *blockState) bool {
 	return f[2] == b.number
 }
 
-// closeBlock emits the captured block contents (octal-decoded) and clears the
-// open block.
+// closeBlock emits the captured block contents VERBATIM and clears the open
+// block.
+//
+// Block contents are NOT `\ooo`-escaped. Only `%output`/`%extended-output`
+// payloads are. Measured against tmux 3.4 on this host: a pane whose visible
+// text was the literal `\033[31m` came back from
+// `capture-pane -peqJN -S -50000` as the raw bytes `\`,`0`,`3`,`3` — so
+// octal-decoding block data turned literal scrollback text into a live ESC and
+// injected escape sequences into the pane, the ring and the log transcript.
+// A `capture-pane -C` reply uses a DIFFERENT scheme again (backslash doubled as
+// `\\`), so the decode belongs to the caller that knows which command it
+// issued — see decodeCaptureC and the blockPending arm in publish().
 func closeBlock(state *ParseState, errored bool) ControlMessage {
 	b := state.block
 	state.block = nil
@@ -308,12 +374,11 @@ func closeBlock(state *ParseState, errored bool) ControlMessage {
 	lines := make([]string, 0, len(b.lines))
 	var data []byte
 	for i, ln := range b.lines {
-		decoded := decodeOctal(ln)
-		lines = append(lines, string(decoded))
+		lines = append(lines, ln)
 		if i > 0 {
 			data = append(data, '\n')
 		}
-		data = append(data, decoded...)
+		data = append(data, ln...)
 	}
 	return ControlMessage{
 		Kind: KindBlock,

@@ -166,6 +166,12 @@ jobs:
       - name: tmux backend contract (argv-only, pane-id validation, dispose != kill)
         run: npm run test:contract:tmux-backend
 
+      # The control-mode cutover's own acceptance gate. It was defined in
+      # package.json and invoked by nothing, so the suppressions it pins could be
+      # reintroduced with every check green.
+      - name: tmux view session chrome contract (control-mode chain, no per-view suppressions)
+        run: npm run test:contract:tmux-view-chrome
+
       # WSL detection decides which binary opens the board's browser. Getting it
       # wrong on native Linux would call cmd.exe; getting it wrong inside WSL calls
       # an xdg-open that minimal installs do not ship.
