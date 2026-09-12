@@ -1,0 +1,3128 @@
+        :root {
+            --bg-color: #0d0d0d;
+            --panel-bg: #000000;
+            --panel-bg2: #050505;
+            --border-color: #333333;
+            --border-bright: #444444;
+            --text-primary: #e0e0e0;
+            --text-secondary: #8C8C8C;
+            --accent-primary: #00e5ff;
+            --accent-teal: var(--accent-primary);
+            --font-family: 'Hanken Grotesk', Menlo, Consolas, sans-serif;
+            --font-code:   Menlo, Consolas, monospace;
+
+            /* Terminal surface tokens — the ONLY place these colours are written.
+               terminals.js reads them via getComputedStyle to build xterm's theme,
+               so the panel chrome and the terminal can never drift apart. */
+            --term-surface:   #171717;                    /* matches the docs reading surface */
+            --term-grid:      rgba(0, 229, 255, 0.03);    /* afterburner: cyan grid */
+            --term-grid-size: 32px;
+            --term-selection: rgba(0, 229, 255, 0.3);
+
+            /* Input-state chip. Semantic status, NOT brand accent — deliberately
+               absent from body.theme-claudify so a connecting terminal reads amber
+               in both themes. Tokens rather than literals so there is one place to
+               change, per the no-literals rule the accent family already follows. */
+            --state-connecting: #d7a03a;
+            --state-readonly:   #f85149;
+        }
+
+        /* ── Themes ────────────────────────────────────────────────────────────
+           `theme-claudify` / `cyber-theme-enabled` arrive on the body element two
+           ways (do not write the tag literally here — see rewriteBodyTag):
+           injected server-side by applyThemeClass() (headlessPanelHtml.ts) on first
+           paint, and swapped live by applyThemeToAllTerminals() when the host sends
+           switchboardThemeChanged. Both surfaces use the same #171717 base as the
+           planning/design docs panels; only the grid tint and accent differ. */
+        body.theme-claudify {
+            /* --accent-teal derives from --accent-primary ON :root, so it resolves to
+               cyan there and would inherit cyan even after --accent-primary changes.
+               The whole family has to be redeclared here, not just the source. */
+            --accent-primary: #D97757;
+            --accent-teal:    #D97757;
+            --feature-accent: #D4A017;   /* gold: matches kanban.html Claudify feature accent */
+            --term-grid:      rgba(255, 255, 255, 0.03);  /* claudify: neutral grey grid */
+            --term-selection: rgba(217, 119, 87, 0.3);
+        }
+        body.cyber-theme-enabled,
+        body.theme-claudify {
+            background-color: var(--term-surface);
+            background-image:
+                linear-gradient(var(--term-grid) 1px, transparent 1px),
+                linear-gradient(90deg, var(--term-grid) 1px, transparent 1px);
+            background-size: var(--term-grid-size) var(--term-grid-size),
+                             var(--term-grid-size) var(--term-grid-size);
+        }
+        /* Let the body grid read through the chrome. The terminal rectangle itself
+           stays opaque — xterm's WebGL renderer paints theme.background as a flat
+           fill and cannot reproduce a gradient grid, and making it transparent would
+           force allowTransparency and give up the fast opaque render path. */
+        body.cyber-theme-enabled .terminals-main,
+        body.theme-claudify .terminals-main {
+            background: transparent;
+        }
+        body.cyber-theme-enabled .terminals-sidebar,
+        body.theme-claudify .terminals-sidebar {
+            background: rgba(10, 10, 10, 0.55);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+        }
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            font-family: var(--font-family);
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+        .terminals-sidebar {
+            width: 220px;
+            background: var(--panel-bg2);
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            user-select: none;
+        }
+        .sidebar-header {
+            padding: 12px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .sidebar-title {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+        }
+        .sidebar-session-count {
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1px 7px;
+        }
+        .sidebar-seatless-section {
+            padding: 8px 12px 4px;
+            border-top: 1px solid var(--border-color);
+        }
+        .sidebar-seatless-header {
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+        }
+        .sidebar-seatless-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 8px;
+            margin-bottom: 4px;
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            background: var(--panel-bg);
+        }
+        .sidebar-seatless-name {
+            flex: 1;
+            min-width: 0;
+            font-size: 11px;
+            font-family: var(--font-code);
+            color: var(--text-primary);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .sidebar-seatless-badge {
+            font-size: 9px;
+            font-weight: 700;
+            text-transform: uppercase;
+            color: var(--state-readonly);
+            border: 1px solid var(--state-readonly);
+            border-radius: 3px;
+            padding: 1px 4px;
+            flex-shrink: 0;
+        }
+        .sidebar-seatless-close {
+            background: none;
+            border: 1px solid var(--state-readonly);
+            color: var(--state-readonly);
+            font-size: 9px;
+            text-transform: uppercase;
+            border-radius: 2px;
+            padding: 2px 6px;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        .sidebar-seatless-close:hover { background: color-mix(in srgb, var(--state-readonly) 14%, transparent); }
+        /* Terminal-ops block. Ports .secondary-btn / .w-full from the extension
+           sidebar's Terminals sub-tab (implementation.html) so the browser page
+           presents the same full-width stacked controls rather than a row of
+           glyphs. Keep the padding, casing and letter-spacing in step with that
+           file — this is a mirror, not a variant. */
+        .sidebar-ops {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 10px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .secondary-btn {
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            padding: 8px;
+            font-size: 10px;
+            font-family: inherit;
+            text-transform: uppercase;
+            letter-spacing: 1.2px;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            border-radius: 2px;
+        }
+        .secondary-btn:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--border-bright) 10%, transparent);
+            border-color: var(--border-bright);
+            color: var(--text-primary);
+        }
+        .secondary-btn:disabled {
+            opacity: 0.45;
+            cursor: default;
+        }
+        .secondary-btn.is-teal {
+            border-color: var(--accent-teal);
+            color: var(--accent-teal);
+        }
+        .secondary-btn.is-teal:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--accent-teal) 12%, transparent);
+            color: var(--accent-teal);
+        }
+        .secondary-btn.w-full { width: 100%; }
+        .terminals-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 6px;
+        }
+        .role-picker {
+            padding: 8px;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--panel-bg);
+        }
+        .role-picker[hidden] { display: none; }
+        /* Inline picker: nested under the group header that opened it. The static
+           top-of-sidebar picker had a bottom border acting as a section divider;
+           inside a group that divider is wrong, so it becomes a left rail instead —
+           the same 2px accent rail .parent-group-header wears at :556, so the picker
+           reads as continuous with the header that opened it. */
+        .role-picker.is-inline {
+            border-bottom: none;
+            border-left: 2px solid var(--accent-teal, #4ec9b0);
+            margin: 2px 0 4px 6px;
+            border-radius: 0 3px 3px 0;
+        }
+        .role-picker-title {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+        }
+        .role-picker-options {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-bottom: 6px;
+        }
+        .role-option {
+            background: transparent;
+            border: 1px solid var(--border-bright);
+            color: var(--text-primary);
+            border-radius: 3px;
+            padding: 3px 7px;
+            font-size: 11px;
+            font-family: inherit;
+            cursor: pointer;
+            text-transform: capitalize;
+        }
+        .role-option:hover {
+            border-color: var(--accent-teal);
+            color: var(--accent-teal);
+        }
+        /* Not a role — the absence of one. Takes its own row below the role chips
+           and wears a dashed, muted border so it does not read as a peer of them.
+           text-transform is reset because the roles are capitalized generically
+           and this is a literal label, not a role name. */
+        .role-option.is-no-role {
+            flex-basis: 100%;
+            border-style: dashed;
+            border-color: var(--border-color);
+            color: var(--text-secondary);
+            text-transform: none;
+            margin-top: 2px;
+        }
+        .role-option.is-no-role:hover {
+            border-color: var(--accent-teal);
+            color: var(--accent-teal);
+        }
+        .role-picker-cancel {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 11px;
+            font-family: inherit;
+            cursor: pointer;
+            padding: 0;
+        }
+        .role-picker-cancel:hover { color: var(--text-primary); }
+        /* A role option that heads a team carries a subtitle naming the team
+           and what it spawns, so "New terminal — Lead" never silently
+           produces five. The button becomes a column: label over note. */
+        .role-option.has-team {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 1px;
+            text-transform: none;
+        }
+        .role-option.has-team .role-option-label { text-transform: capitalize; }
+        .role-option-team-note {
+            font-size: 9px;
+            color: var(--text-secondary);
+            text-transform: none;
+            font-weight: normal;
+            line-height: 1.2;
+        }
+        .item-name-input {
+            font-size: 12px;
+            font-weight: 600;
+            font-family: inherit;
+            background: var(--panel-bg);
+            color: var(--text-primary);
+            border: 1px solid var(--accent-teal);
+            border-radius: 2px;
+            padding: 1px 3px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        /* Per-terminal row actions. Ports .locate-btn from the extension sidebar:
+           text labels, not glyphs, and always visible rather than revealed on
+           hover — `locate`/`clear` are the same two words the sidebar uses. The
+           only deviation is padding: the sidebar sets 0, which gives a ~10px
+           target. Kept the type identical and grew the box instead. */
+        .locate-btn {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 10px;
+            font-family: inherit;
+            letter-spacing: 0.5px;
+            padding: 4px 6px;
+            border-radius: 2px;
+            opacity: 0.7;
+            transition: all 0.2s;
+        }
+        .locate-btn:hover:not(:disabled) {
+            opacity: 1;
+            color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+        .locate-btn:disabled {
+            opacity: 0.3;
+            cursor: default;
+        }
+        .locate-btn.is-danger:hover:not(:disabled) {
+            color: #f85149;
+            background: color-mix(in srgb, #f85149 12%, transparent);
+        }
+        /* The sidebar row's `clear` shares .btn-unassign-pane's rules outright
+           (line 809) rather than getting a same-valued copy: two definitions of
+           one button language drift the first time either is touched. It carries
+           only the one declaration that differs — see .item-clear-btn there. */
+        .toolbar-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        /* Hide the New Window button when the panel is already in its own top-level
+           window (popped out, or loaded directly at /terminals). Inside the shell
+           iframe, window.parent !== window and the class is absent, so the button
+           shows. Solo mode already hides .layout-toolbar entirely. */
+        body.is-standalone #btn-new-window {
+            display: none !important;
+        }
+        /* Stacked, not a single row. The sidebar is 220px and the actions are now
+           four words rather than four glyphs, so they get their own line instead of
+           competing with the terminal name for horizontal space. */
+        .terminal-item {
+            padding: 8px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-bottom: 4px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            background: transparent;
+            border: 1px solid transparent;
+        }
+        .terminal-item-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 6px;
+        }
+        .terminal-item:hover {
+            background: rgba(255, 255, 255, 0.04);
+        }
+        .terminal-item.active {
+            /* Derived from the accent, not a literal cyan — this sat under a
+               var()-driven border, so claudify rendered a terracotta border around
+               a cyan fill. */
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+            border-color: var(--accent-teal);
+        }
+        .terminal-item.is-peeked {
+            background: color-mix(in srgb, var(--accent-violet, #c586c0) 12%, transparent);
+            border-color: var(--accent-violet, #c586c0);
+        }
+        body.is-solo .item-peek-btn,
+        body.is-solo .btn-peek-dismiss,
+        body.is-solo .btn-popout-pane { display: none !important; }
+        .item-info {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            overflow: hidden;
+        }
+        .item-name {
+            font-size: 12px;
+            font-weight: 600;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        /* Name + inline edit affordance. min-width:0 on the name is load-bearing:
+           it is what lets the name ellipsize instead of pushing the pencil out of
+           the 220px sidebar. */
+        .item-name-row {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            min-width: 0;
+        }
+        .item-name-row .item-name { min-width: 0; flex: 1; }
+        /* beginInlineRename swaps .item-name for .item-name-input in this row, and
+           that input is width:100% — it needs the same flex treatment or it
+           overflows and displaces the pencil mid-edit. */
+        .item-name-row .item-name-input { min-width: 0; flex: 1; width: auto; }
+        .item-edit-btn {
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 16px;
+            height: 16px;
+            padding: 0;
+            background: none;
+            border: none;
+            border-radius: 3px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            opacity: 0.55;
+            transition: all 0.15s;
+        }
+        .item-edit-btn:hover {
+            opacity: 1;
+            color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 12%, transparent);
+        }
+        .item-role {
+            font-size: 10px;
+            color: var(--text-secondary);
+            /* The subline now leads with friendlyName, an identity key whose case is
+               meaningful ("planner-2", and any mixed-case custom rename). text-transform
+               was decoration for the old `role · CLI LABEL` content; kept, it would print
+               "Planner-2". */
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            min-width: 0;
+        }
+        .item-role-row {
+            display: flex;
+            align-items: center;
+            gap: 0;
+            color: var(--text-secondary);
+        }
+        .item-role-icon {
+            width: 14px;
+            height: 14px;
+            flex-shrink: 0;
+            align-self: center;
+            margin-right: 4px;
+            opacity: 0.9;
+            object-fit: contain;
+            pointer-events: none;
+        }
+        /* Row close. Occupies the slot the status dot held — the row's most
+           reachable point — because ending the process is the row's most
+           consequential action and used to be its least visible control (a 10px
+           borderless `close` link, third in a strip of three lookalikes).
+           Fires immediately on click: this codebase does not gate destructive
+           buttons behind confirms, it makes them hard to misclick instead — hence
+           the fixed 16px box and danger colour on hover only. No margin: the dot
+           sat flush against the row's 10px padding edge and the × keeps that
+           alignment. */
+        .item-close-btn {
+            flex-shrink: 0;
+            width: 16px;
+            height: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            background: none;
+            border: none;
+            border-radius: 3px;
+            color: var(--text-secondary);
+            font-size: 14px;
+            line-height: 1;
+            font-family: inherit;
+            cursor: pointer;
+            opacity: 0.6;
+            transition: all 0.15s;
+        }
+        .item-close-btn:hover {
+            opacity: 1;
+            color: #f85149;
+            background: color-mix(in srgb, #f85149 14%, transparent);
+        }
+        /* Exited rows: the state the deleted red dot used to carry, now in the
+           name/subline text plus this dimming. Opacity, not colour — it must
+           compose with `.terminal-item.assigned .item-name` (line 871), which
+           sets colour. */
+        .terminal-item.is-exited .item-name,
+        .terminal-item.is-exited .item-role { opacity: 0.55; }
+        /* Always visible. Hover-reveal put a destructive action underneath a cursor
+           that was already moving, and hid it from anyone who never hovered. Now a
+           single bordered `clear`; `rename` moved to the pencil beside the name and
+           `close` to the × at the row's right edge. */
+        .item-actions {
+            display: flex;
+            gap: 4px;
+            flex-wrap: wrap;
+        }
+        .terminals-main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            background: var(--panel-bg);
+            position: relative;
+        }
+        .terminal-view-host {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            padding: 8px;
+            display: none;
+        }
+        .terminal-view-host.active {
+            display: block;
+        }
+        /* Anchored to the view host, not the pane, so it is re-parented with the
+           terminal on every renderPaneGrid() rebuild. Hidden by state rather than
+           hover — an operator who does not know it exists never hovers for it.
+           right: 22px clears the 12px scrollbar with room to spare. */
+        .jump-to-latest {
+            position: absolute;
+            right: 22px;
+            bottom: 12px;
+            display: none;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 9px;
+            font-size: 11px;
+            font-family: inherit;
+            line-height: 1.4;
+            color: var(--term-surface);
+            background: var(--accent-teal);
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            z-index: 3;
+            box-shadow: 0 1px 6px rgba(0, 0, 0, 0.45);
+        }
+        .jump-to-latest.visible { display: inline-flex; }
+        .jump-to-latest:hover { filter: brightness(1.12); }
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-secondary);
+            font-size: 13px;
+        }
+
+        /* Layout & Pane Grid */
+        .layout-toolbar {
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--panel-bg2);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            z-index: 10;
+        }
+        .layout-picker {
+            display: flex;
+            gap: 4px;
+        }
+        .btn-layout {
+            background: transparent;
+            border: 1px solid var(--border-bright);
+            color: var(--text-secondary);
+            font-size: 11px;
+            font-weight: 600;
+            padding: 2px 6px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .btn-layout:hover {
+            color: var(--text-primary);
+            border-color: var(--accent-teal);
+        }
+        .btn-layout.active {
+            background: color-mix(in srgb, var(--accent-teal) 15%, transparent);
+            border-color: var(--accent-teal);
+            color: var(--accent-teal);
+        }
+
+        /* Worktree Groups */
+        .worktree-group {
+            margin-bottom: 8px;
+        }
+        .worktree-group-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 4px 6px;
+            background: rgba(255, 255, 255, 0.02);
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            cursor: pointer;
+        }
+        .worktree-group-header:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.05);
+        }
+        .worktree-title-area {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            overflow: hidden;
+        }
+        .worktree-collapse-icon {
+            font-size: 10px;
+            transition: transform 0.15s ease;
+        }
+        .worktree-group.collapsed .worktree-collapse-icon {
+            transform: rotate(-90deg);
+        }
+        .worktree-name {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .worktree-count {
+            font-size: 9px;
+            background: var(--border-color);
+            color: var(--text-secondary);
+            padding: 1px 4px;
+            border-radius: 8px;
+        }
+        .btn-group-new {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 11px;
+            cursor: pointer;
+            padding: 0 4px;
+        }
+        .btn-group-new:hover { color: var(--accent-teal); }
+        .worktree-items {
+            padding-left: 6px;
+            margin-top: 4px;
+        }
+        .worktree-group.collapsed .worktree-items {
+            display: none;
+        }
+
+        /* Parent Workspace Groups */
+        .parent-group {
+            margin-bottom: 10px;
+        }
+        .parent-group-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 5px 6px;
+            background: rgba(255, 255, 255, 0.04);
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--text-primary);
+            cursor: pointer;
+            border-left: 2px solid var(--accent-teal, #4ec9b0);
+        }
+        .parent-group-header:hover {
+            background: rgba(255, 255, 255, 0.08);
+        }
+        .parent-group.collapsed .worktree-collapse-icon {
+            transform: rotate(-90deg);
+        }
+        .parent-group-items {
+            padding-left: 6px;
+            margin-top: 4px;
+        }
+        .parent-group.collapsed .parent-group-items {
+            display: none;
+        }
+        .empty-parent-notice {
+            font-size: 10px;
+            color: var(--text-muted, #777);
+            font-style: italic;
+            padding: 4px 8px;
+        }
+        .worktree-group.indent-worktree {
+            margin-left: 6px;
+            border-left: 1px solid rgba(255, 255, 255, 0.08);
+            padding-left: 4px;
+        }
+
+        /* Team tier — one level inside a workspace or worktree. Header internals reuse
+           .worktree-* classes; only the wrapper, indent and accent are new. */
+        .team-group {
+            margin-bottom: 6px;
+            border-left: 1px solid var(--accent-violet, #c586c0);
+            padding-left: 4px;
+        }
+        .team-group.indent-team {
+            margin-left: 6px;
+        }
+        .team-group-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 3px 6px;
+            background: rgba(255, 255, 255, 0.025);
+            border-radius: 3px;
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            cursor: pointer;
+        }
+        .team-group-header:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.05);
+        }
+        .team-group.collapsed .worktree-collapse-icon {
+            transform: rotate(-90deg);
+        }
+        .team-items {
+            padding-left: 6px;
+            margin-top: 3px;
+        }
+        .team-group.collapsed .team-items {
+            display: none;
+        }
+
+        /* Logical Groups tier */
+        .group-tier-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 5px 6px;
+            margin-bottom: 4px;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            cursor: pointer;
+            border-left: 2px solid var(--accent-violet, #c586c0);
+        }
+        .group-tier-header.active {
+            color: var(--accent-violet, #c586c0);
+            background: color-mix(in srgb, var(--accent-violet, #c586c0) 8%, transparent);
+        }
+        .group-tier-header:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.06);
+        }
+        .group-new-row {
+            border-left-color: var(--border-color);
+            opacity: 0.85;
+        }
+        .group-tier-actions {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .group-tier-btn {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 10px;
+            font-family: inherit;
+            cursor: pointer;
+            padding: 2px 4px;
+            border-radius: 2px;
+            text-transform: lowercase;
+        }
+        .group-tier-btn:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.08);
+        }
+        .group-tier-btn.is-danger:hover { color: #f85149; }
+        .terminal-item.is-selected {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+
+        /* Group tab strip — sits above the pane grid, below the toolbar.
+           Replaces the groups tier that used to live inside the sidebar.
+           One tab per group plus a leading "All" tab and a trailing "+".
+           Uses --accent-violet (the same accent the old group-tier-header
+           wore) so the group affordance keeps its colour identity. */
+        .group-tab-strip {
+            display: flex;
+            flex-direction: column;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--panel-bg2);
+        }
+        .group-tab-row {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            padding: 4px 8px;
+            min-height: 30px;
+            flex-wrap: nowrap;
+            overflow: hidden;
+        }
+        .group-tab {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 8px;
+            font-size: 11px;
+            font-family: inherit;
+            font-weight: 600;
+            color: var(--text-secondary);
+            background: transparent;
+            border: 1px solid transparent;
+            border-radius: 3px;
+            cursor: pointer;
+            white-space: nowrap;
+            flex-shrink: 0;
+            transition: all 0.15s;
+        }
+        .group-tab:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.06);
+        }
+        .group-tab.active {
+            color: var(--accent-violet, #c586c0);
+            border-color: var(--accent-violet, #c586c0);
+            background: color-mix(in srgb, var(--accent-violet, #c586c0) 8%, transparent);
+        }
+        .group-tab.active:hover {
+            background: color-mix(in srgb, var(--accent-violet, #c586c0) 12%, transparent);
+        }
+        /* A manual group is an impromptu arrangement that dies with its
+           terminals; a team carries a durable roster. They render in the same
+           strip, so the kind has to be visible — the id prefix is not something
+           an operator can see. Dashed border = ephemeral. */
+        .group-tab.is-manual-group {
+            border-style: dashed;
+            border-color: var(--border-color);
+        }
+        .group-tab.is-manual-group.active {
+            border-style: dashed;
+            border-color: var(--accent-violet, #c586c0);
+        }
+        .group-tab-count {
+            font-size: 9px;
+            font-weight: 700;
+            opacity: 0.7;
+        }
+        .group-tab-delete {
+            background: none;
+            border: none;
+            color: inherit;
+            font-size: 10px;
+            font-family: inherit;
+            cursor: pointer;
+            padding: 0 2px;
+            border-radius: 2px;
+            opacity: 0.5;
+            line-height: 1;
+        }
+        .group-tab-delete:hover {
+            opacity: 1;
+            color: #f85149;
+        }
+        .group-tab-add {
+            background: none;
+            border: 1px dashed var(--border-bright);
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-family: inherit;
+            padding: 2px 8px;
+            border-radius: 3px;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        .group-tab-add:hover {
+            color: var(--accent-teal);
+            border-color: var(--accent-teal);
+        }
+        .group-tab-overflow {
+            position: relative;
+            flex-shrink: 0;
+        }
+        .group-tab-overflow-btn {
+            background: none;
+            border: 1px solid transparent;
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-family: inherit;
+            padding: 3px 8px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .group-tab-overflow-btn:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.06);
+        }
+        .group-tab-overflow-menu {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            z-index: 50;
+            min-width: 160px;
+            background: var(--panel-bg);
+            border: 1px solid var(--border-bright);
+            border-radius: 3px;
+            padding: 4px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .group-tab-overflow-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 4px 6px;
+            font-size: 11px;
+            font-family: inherit;
+            color: var(--text-secondary);
+            border-radius: 2px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .group-tab-overflow-item:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.06);
+        }
+        .group-tab-overflow-item.active {
+            color: var(--accent-violet, #c586c0);
+        }
+        .group-tab-overflow-divider {
+            height: 1px;
+            background: var(--border-color);
+            margin: 2px 0;
+        }
+        .group-tab-overflow-restore {
+            font-size: 10px;
+            color: var(--text-secondary);
+            padding: 4px 6px;
+            border-radius: 2px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .group-tab-overflow-restore:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.06);
+        }
+        /* Group membership chip on terminal rows. Supplements the team tier for
+           derived claims (role/worktree groups have no tier); suppressed on rows
+           rendered under a team subheader. Uses the same --accent-violet the group
+           affordance wears elsewhere. */
+        .item-group-chip {
+            font-size: 9px;
+            font-weight: 600;
+            padding: 0 4px;
+            border-radius: 2px;
+            margin-left: 4px;
+            color: var(--accent-violet, #c586c0);
+            background: color-mix(in srgb, var(--accent-violet, #c586c0) 12%, transparent);
+            white-space: nowrap;
+            max-width: 80px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            flex-shrink: 0;
+        }
+
+        /* Grid container & Panes */
+        .pane-grid {
+            flex: 1;
+            display: grid;
+            gap: 4px;
+            padding: 4px;
+            position: relative;
+            background: var(--bg-color);
+            width: 100%;
+            min-height: 0;
+            box-sizing: border-box;
+        }
+        /* minmax(0, 1fr) on EVERY row track, not a bare `1fr`. `1fr` means
+           minmax(auto, 1fr): the auto minimum lets a row grow past the grid to fit
+           an over-tall pane, which reintroduces the clipped-and-unscrollable kanban
+           list in exactly the two layouts that were spelled differently from the
+           other five. This is the declaration in this plan that can actually change
+           pane HEIGHT — verify terminal mode in layout-1 and layout-2h specifically. */
+        .pane-grid.layout-1  { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr); }
+        .pane-grid.layout-2h { grid-template-columns: 1fr 1fr; grid-template-rows: minmax(0, 1fr); }
+        .pane-grid.layout-2v { grid-template-columns: 1fr; grid-template-rows: repeat(2, minmax(0, 1fr)); }
+        /* Layout keys are ROWS x COLUMNS, matching 2x3/3x3: `1x3` is ONE row of THREE
+           columns. Do not flip these axes back — a single column of three stacked panes
+           would be `3x1`, which is not what this key means. */
+        .pane-grid.layout-1x3 { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: minmax(0, 1fr); }
+        .pane-grid.layout-2x2 { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); }
+        .pane-grid.layout-2x3 { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); }
+        .pane-grid.layout-3x3 { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(3, minmax(0, 1fr)); }
+
+        /* Peek: hide all panes except the peeked one, which spans the whole grid. */
+        .pane-grid.is-peeking > .terminal-pane { display: none; }
+        /* display:flex, NOT grid — .terminal-pane is a flex column (header + content)
+           and switching its own display mode collapses that stacking. */
+        .pane-grid.is-peeking > .terminal-pane.is-peeked {
+            display: flex;
+            grid-column: 1 / -1;
+            grid-row: 1 / -1;
+        }
+
+        .pane-grid.layout-2x3 .pane-header,
+        .pane-grid.layout-3x3 .pane-header {
+            padding: 2px 4px;
+            font-size: 10px;
+        }
+        /* 1x3 is included here but NOT in the 10px-header rule above: its columns are as
+           narrow as 2x3's, so the title must ellipsise, but with a single row each pane
+           has full height and keeps the standard header. */
+        .pane-grid.layout-1x3 .pane-title,
+        .pane-grid.layout-2x3 .pane-title,
+        .pane-grid.layout-3x3 .pane-title {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            min-width: 0;
+        }
+
+        .terminal-pane {
+            position: relative;
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .terminal-pane.focused {
+            /* `.focused` is pane SELECTION (see setFocusedPane) — it survives the
+               document losing focus, so it can never mean "type here". Demote it to a
+               quiet border and let .has-caret carry the real signal. Kept visible
+               rather than deleted: .focused is also where a sidebar assignment lands,
+               so the operator does still need to see it.
+               ORDER MATTERS — .has-caret below shares border-color at equal
+               specificity and must stay AFTER this rule. */
+            border-color: var(--border-bright);
+        }
+
+        /* Driven by xterm's own onFocus/onBlur. THIS is the typing target: the
+           real input element is xterm's helper textarea, which is opacity:0 and
+           parked at left:-9999em, and xterm.css:46 strips the browser focus ring
+           off the terminal element. Nothing else in this panel draws one.
+
+           outline, NOT box-shadow. Three reasons: (1) .terminal-pane.focused
+           already claims box-shadow (inset 1px) and the pinned-panes plan claims
+           it again (inset 3px 0 0) — one property, one winner, and a third
+           claimant would need a rule per class combination; (2) outline is
+           layout-neutral, so no ResizeObserver refit and no {t:'resize'} frame to
+           the shared pty; (3) outline-offset:-1px draws the ring inside the pane
+           box, so it cannot be clipped by the 4px .pane-grid gap or painted over
+           by an opaque grid neighbour. */
+        .terminal-pane.has-caret {
+            outline: 1px solid var(--accent-teal);
+            outline-offset: -1px;
+            border-color: var(--accent-teal);
+        }
+        .terminal-pane.has-caret .pane-header {
+            background: color-mix(in srgb, var(--accent-teal) 14%, var(--panel-bg2));
+            color: var(--text-primary);
+        }
+        /* A focused pane that cannot take input must not wear the "type here"
+           colour — that is the same lie .focused was demoted for. Recolour the
+           ring to the state instead of hiding it: the caret really is there, it
+           just has nowhere to go. */
+        .terminal-pane.has-caret.is-input-connecting {
+            outline-color: var(--state-connecting);
+            border-color: var(--state-connecting);
+        }
+        .terminal-pane.has-caret.is-input-connecting .pane-header {
+            background: color-mix(in srgb, var(--state-connecting) 14%, var(--panel-bg2));
+        }
+        .terminal-pane.has-caret.is-input-readonly {
+            outline-color: var(--state-readonly);
+            border-color: var(--state-readonly);
+        }
+        .terminal-pane.has-caret.is-input-readonly .pane-header {
+            background: color-mix(in srgb, var(--state-readonly) 14%, var(--panel-bg2));
+        }
+
+        /* Input-state chip. Styled off the PANE's is-input-* class, not its own —
+           see resolveInputState for why there is exactly one state writer. */
+        .pane-input-state {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 9px;
+            font-weight: 600;
+            letter-spacing: 0.4px;
+            text-transform: lowercase;
+            padding: 0 4px;
+            border-radius: 2px;
+            /* Mandatory: .pane-title is a flex row whose terminal name is an
+               anonymous item, and the name is what must shrink, not the chip. */
+            flex-shrink: 0;
+        }
+        .pane-input-state::before {
+            content: '';
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: currentColor;
+            flex-shrink: 0;
+        }
+        /* No .is-input-live rule: the live state renders no chip at all — see
+           syncInputStateChip. The other three each say something the operator
+           cannot otherwise see. */
+        .is-input-queued .pane-input-state {
+            color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 12%, transparent);
+        }
+        .is-input-connecting .pane-input-state {
+            color: var(--state-connecting);
+            background: color-mix(in srgb, var(--state-connecting) 12%, transparent);
+        }
+        .is-input-readonly .pane-input-state {
+            color: var(--state-readonly);
+            background: color-mix(in srgb, var(--state-readonly) 12%, transparent);
+        }
+        /* Dot-only in the two dense layouts — the header is 10px with an
+           ellipsised title and a word here would consume the terminal name. */
+        .pane-grid.layout-2x3 .pane-input-state,
+        .pane-grid.layout-3x3 .pane-input-state {
+            padding: 0 2px;
+            gap: 0;
+        }
+
+        /* Dispatch-in-progress chip. Mirrors .pane-input-state's box so the two
+           cannot disagree on metrics; they are mutually exclusive by construction
+           (syncInputStateChip early-returns while .is-dispatching is set). */
+        .pane-dispatch-state {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 9px;
+            font-weight: 600;
+            letter-spacing: 0.4px;
+            text-transform: lowercase;
+            padding: 0 4px;
+            border-radius: 2px;
+            flex-shrink: 0;
+            color: var(--accent-teal);
+        }
+        .pane-dispatch-state::before {
+            content: '';
+            width: 5px; height: 5px;
+            border-radius: 50%;
+            background: currentColor;
+            flex-shrink: 0;
+            animation: sb-dispatch-pulse 900ms ease-in-out infinite;
+        }
+        /* Dot-only in the two dense layouts, matching .pane-input-state.
+           Without this the 4px gap survives an empty label and the chip reserves
+           width for text that isTerseLayout() has already removed. */
+        .pane-grid.layout-2x3 .pane-dispatch-state,
+        .pane-grid.layout-3x3 .pane-dispatch-state {
+            padding: 0 2px;
+            gap: 0;
+        }
+        body.cyber-animation-disabled .pane-dispatch-state::before { animation: none; }
+        @media (prefers-reduced-motion: reduce) {
+            .pane-dispatch-state::before { animation: none; }
+        }
+        @keyframes sb-dispatch-pulse {
+            0%, 100% { opacity: 0.35; }
+            50%      { opacity: 1; }
+        }
+
+        /* Pane-header actions use the same text-label treatment as the sidebar
+           rows. They were two identically-styled single glyphs (⌫ and ⊟) sitting
+           side by side, one of which sends /clear to the agent and the other of
+           which only unassigns the pane — indistinguishable at a glance. */
+        .pane-actions {
+            display: flex;
+            gap: 2px;
+            flex-shrink: 0;
+        }
+        /* Also worn by the sidebar row's `clear` (.item-clear-btn) and `peek`
+           (.item-peek-btn). ONE bordered small-button language for the panel: a
+           box that reads as pressable at 10px on black, which .locate-btn does
+           not. The row variants differ by a single declaration (padding), which
+           follows this block. */
+        .btn-unassign-pane,
+        .item-clear-btn,
+        .item-peek-btn {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-size: 10px;
+            font-family: inherit;
+            letter-spacing: 0.5px;
+            line-height: 1;
+            padding: 3px 6px;
+            border-radius: 3px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        /* Roomier than the pane-header buttons: the sidebar row has the horizontal
+           space the terse pane headers do not. */
+        .item-clear-btn,
+        .item-peek-btn { padding: 3px 8px; }
+        .btn-unassign-pane:hover:not(:disabled),
+        .item-clear-btn:hover:not(:disabled),
+        .item-peek-btn:hover:not(:disabled) {
+            color: var(--accent-teal);
+            border-color: var(--accent-teal);
+        }
+        .btn-unassign-pane:disabled,
+        .item-clear-btn:disabled,
+        .item-peek-btn:disabled {
+            opacity: 0.4;
+            cursor: default;
+        }
+        /* The peek button in its `restore` state (the peeked terminal's own row)
+           reads from the same violet accent as the row marker
+           (.terminal-item.is-peeked) so the button and the row border agree.
+           Placed after the hover rule so the peeked colour holds even on hover —
+           the row's violet border is already the pressable signal. */
+        .terminal-item.is-peeked .item-peek-btn {
+            color: var(--accent-violet, #c586c0);
+            border-color: var(--accent-violet, #c586c0);
+        }
+        /* Brand mark in the pane header. Deliberately NOT .item-role-icon: that
+           class declares margin-right:4px (.item-role-icon rule), which stacks with
+           .pane-title's gap:6px (.pane-title rule) into a 10px lead gap, and it is
+           sidebar-semantic — the curtain teardown addresses
+           `.item-role-icon[data-terminal=…]` (scoped to listEl today, but the class
+           should not acquire a second meaning). This element carries NO
+           data-terminal for the same reason.
+           An <img>, not a CSS mask, for the same reason the sidebar uses one:
+           these are multi-hue brand marks whose baked-in fill IS the identity. */
+        .pane-brand-icon {
+            width: 14px;
+            height: 14px;
+            flex-shrink: 0;
+            align-self: center;
+            object-fit: contain;
+            opacity: 0.9;
+            pointer-events: none;
+        }
+        /* Class on the IMAGE, not on .terminal-pane: `is-exited` is a
+           .terminal-item (sidebar row) class only — set in renderTerminalRow — and
+           the pane element never receives it, so a `.terminal-pane.is-exited …`
+           selector would be dead. updatePaneElement stamps this directly, where
+           fleetItem.status is already in scope. */
+        .pane-brand-icon.is-exited { opacity: 0.45; }
+        /* Team-lead mark. NO margin, for the reason spelled out on .pane-brand-icon
+           above: .pane-title already declares gap:6px, and a margin here stacks with
+           it into a lopsided lead gap. */
+        .pane-crown-icon {
+            flex-shrink: 0;
+            align-self: center;
+            width: 14px;
+            height: 14px;
+            color: var(--feature-accent, #D4A017);
+            opacity: 0.95;
+            pointer-events: none;
+        }
+        .pane-crown-icon.is-exited { opacity: 0.45; }
+        /* Dense grids: match the brand icon shrink — 1x3/2x3/3x3 have narrow columns */
+        .pane-grid.layout-1x3 .pane-crown-icon,
+        .pane-grid.layout-2x3 .pane-crown-icon,
+        .pane-grid.layout-3x3 .pane-crown-icon {
+            width: 12px;
+            height: 12px;
+        }
+        /* The crown is an inline <svg> in a <span> wrapper, not an <img> like
+           .pane-brand-icon — so the wrapper's box does NOT size the mark. CROWN_SVG
+           carries width="14" height="14" attributes, which win over the wrapper and
+           make the dense-grid 12px rule above a no-op (a 14px glyph spilling out of a
+           12px slot). Sizing the svg to the wrapper is what makes that rule real. */
+        .pane-crown-icon svg,
+        .item-crown-icon svg {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        /* margin-left, unlike the pane: .item-role-row declares gap:0, so the row
+           supplies no separation of its own. */
+        .item-crown-icon {
+            flex-shrink: 0;
+            width: 14px;
+            height: 14px;
+            color: var(--feature-accent, #D4A017);
+            opacity: 0.95;
+            pointer-events: none;
+            margin-left: 2px;
+        }
+        .item-crown-icon.is-exited { opacity: 0.45; }
+        /* Dense grids: the title ellipsises first by flex design, so shrink the
+           icon rather than drop it — at these densities the icon is the primary
+           identifier. Scoped to the three ELLIPSISING layouts
+           (.pane-grid.layout-1x3/2x3/3x3 .pane-title), not to isTerseLayout()'s
+           2x3/3x3 pair: isTerseLayout gates on header HEIGHT (which is what
+           collapses the input-state chip to a dot), while this is a column-WIDTH
+           concern, and 1x3's columns are as narrow as 2x3's — see the comment
+           above the .pane-grid.layout-1x3 .pane-title ellipsis rule. */
+        .pane-grid.layout-1x3 .pane-brand-icon,
+        .pane-grid.layout-2x3 .pane-brand-icon,
+        .pane-grid.layout-3x3 .pane-brand-icon {
+            width: 12px;
+            height: 12px;
+        }
+        .pane-index-chip {
+            font-size: 9px;
+            font-weight: 700;
+            padding: 0 3px;
+            margin-right: 4px;
+            border-radius: 2px;
+            color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 18%, transparent);
+        }
+        .pane-index-chip.is-pinned {
+            color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 30%, transparent);
+        }
+        .btn-pin-pane.is-pinned {
+            color: var(--accent-teal);
+            border-color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 14%, transparent);
+        }
+        /* A pinned pane is visually distinct from the merely-selected one: pin is a
+           3px inset teal edge that survives focus moving away. Inset shadow, never
+           a border — a border would shrink the content box by 2px and fire the
+           per-terminal ResizeObserver (a refit + a {t:'resize'} frame to the shared
+           pty).
+           The selection component is NEUTRAL, not teal. box-shadow does not merge
+           across two matching class rules, so the pinned+selected pane needs its
+           own declaration or it loses one of the two — but that declaration must
+           not resurrect the teal ring .terminal-pane.focused was demoted for.
+           `.focused` is SELECTION; only .has-caret (an outline, so no contention
+           here) may claim the accent. */
+        .terminal-pane.pinned {
+            box-shadow: inset 3px 0 0 var(--accent-teal);
+        }
+        .terminal-pane.pinned.focused {
+            box-shadow: inset 0 0 0 1px var(--border-bright), inset 3px 0 0 var(--accent-teal);
+        }
+        .terminal-item.assigned .item-name { color: var(--text-primary); }
+
+        .pane-toast {
+            position: absolute;
+            bottom: 12px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: none;
+            align-items: center;
+            gap: 10px;
+            padding: 6px 10px;
+            font-size: 11px;
+            border: 1px solid var(--border-bright);
+            border-radius: 4px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            z-index: 40;
+        }
+        .pane-toast.visible { display: flex; }
+        .pane-toast button {
+            background: transparent;
+            border: 1px solid var(--accent-teal);
+            color: var(--accent-teal);
+            font-size: 10px;
+            font-weight: 700;
+            padding: 1px 6px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .pane-header {
+            height: 22px;
+            background: var(--panel-bg2);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 8px;
+            font-size: 11px;
+            color: var(--text-secondary);
+            user-select: none;
+        }
+        .pane-title {
+            font-weight: 600;
+            color: var(--text-primary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        /* The name is the ONLY shrinkable child of the .pane-title flex row — the
+           pane-index chip, badge and input-state chip must keep their intrinsic width
+           (see the mandatory note on .pane-title above). */
+        .pane-title-name {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .pane-badge {
+            background: var(--accent-teal);
+            color: #000;
+            font-size: 9px;
+            font-weight: 700;
+            padding: 1px 5px;
+            border-radius: 3px;
+        }
+        /* Semantic status, not brand accent — a gap is a warning, and reusing
+           --accent-teal would make a lost-output notice look like DONE. Same token
+           family and same reasoning as the input-state chip. */
+        .pane-badge.is-gap {
+            background: var(--state-connecting);
+        }
+        .pane-plan-title {
+            flex: 0 0 auto;
+            height: 18px;
+            line-height: 18px;
+            padding: 0 8px;
+            background: var(--panel-bg2);
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-size: 10px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            user-select: none;
+        }
+        .pane-grid.layout-2x3 .pane-plan-title,
+        .pane-grid.layout-3x3 .pane-plan-title {
+            height: 16px;
+            line-height: 16px;
+            padding: 0 4px;
+            font-size: 9px;
+        }
+        .pane-content {
+            flex: 1;
+            /* LOAD-BEARING. A column flex item defaults to min-height:auto, i.e. its
+               content-based minimum, so without this .pane-content refuses to shrink
+               below the height of whatever is IN FLOW inside it. In kanban mode that
+               is a plain block list: the item grows past the pane, .terminal-pane's
+               overflow:hidden clips the tail, and .kanban-pane-list never overflows
+               its own box — so overflow-y:auto produces no scrollbar at all.
+               Every other link in this chain already declares it: .pane-grid,
+               .kanban-pane-body and .kanban-pane-list. This one was missed, and it
+               is the reason the kanban pane's card list cannot scroll.
+
+               Terminal mode is UNAFFECTED, structurally rather than incidentally:
+               .terminal-view-host and .startup-curtain are both position:absolute,
+               hence out of flow, hence excluded from min-height:auto's
+               content-based minimum — which therefore already computed to 0 here. The
+               only in-flow children this box ever has are .kanban-pane-body,
+               .kanban-pane-loading and .pane-empty-slot. */
+            min-height: 0;
+            position: relative;
+            /* The terminal rectangle is painted --term-surface by xterm, but the
+               8px .terminal-view-host gutter fell through to the pane's --panel-bg
+               (#000000), framing every terminal in a hard edge that read as chrome
+               rather than as the typing surface. Carry the surface colour into the
+               gutter. */
+            background: var(--term-surface);
+        }
+        /* Drag-and-drop: highlight a terminal pane when a kanban card is dragged over it */
+        .terminal-pane.drag-drop-target {
+            outline: 2px dashed var(--accent-teal);
+            outline-offset: -4px;
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+        }
+        .terminal-pane.drag-drop-target .pane-content {
+            pointer-events: none; /* let the drop land on the pane, not xterm */
+        }
+        /* Still height:100% for centring, but NOT clickable any more. The
+           placeholder used to fill the pane body and was itself the click target
+           for the role picker, so every near-miss on the small `kanban mode`
+           button — and every press that released a few pixels outside it — opened
+           an agent picker at the top of the panel instead. The actions are explicit
+           buttons now; the placeholder is just the label above them. */
+        .pane-empty-slot {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-style: italic;
+            flex-direction: column;
+            gap: 8px;
+            pointer-events: none;   /* the buttons below re-enable their own */
+        }
+        .pane-empty-actions {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 6px;
+            pointer-events: auto;
+        }
+        .pane-empty-actions > button { margin-top: 0; }
+
+        /* ---------------------------------------------------------------------
+           Status pane: a seat rendered as STATE. In flow (not absolute) so
+           .pane-content's min-height:0 governs it the same way it governs the
+           kanban list; the terminal's own .terminal-view-host is display:none
+           here because updatePaneElement drops its .active class.
+           --------------------------------------------------------------------- */
+        .status-pane-card {
+            height: 100%;
+            box-sizing: border-box;
+            overflow-y: auto;
+            padding: 10px 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            font-size: 11px;
+            line-height: 1.45;
+            color: var(--text-primary, #e6e6e6);
+            background: var(--term-surface);
+        }
+        .status-pane-identity {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            min-width: 0;
+        }
+        .status-pane-brand {
+            width: 14px;
+            height: 14px;
+            object-fit: contain;
+            flex-shrink: 0;
+        }
+        .status-pane-brand.is-exited { opacity: 0.45; }
+        .status-pane-name {
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .status-pane-crown { display: inline-flex; color: var(--feature-accent, #D4A017); flex-shrink: 0; opacity: 0.95; }
+        .status-pane-role {
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            color: var(--text-secondary);
+            flex-shrink: 0;
+        }
+        .status-pane-plan {
+            font-size: 10px;
+            color: var(--text-secondary);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        /* DECLARED. Given the weight — a border, full-contrast text — because it is
+           the only thing on this card the agent actually said. The host-derived
+           block below is deliberately quieter; the ordering is the feature. */
+        .status-pane-declared {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: baseline;
+            gap: 6px;
+            padding: 6px 8px;
+            border-left: 2px solid var(--border-color);
+            background: color-mix(in srgb, var(--text-primary, #e6e6e6) 5%, transparent);
+        }
+        .status-pane-kind {
+            font-size: 9px;
+            font-weight: 700;
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            padding: 1px 5px;
+            border-radius: 2px;
+            color: var(--term-surface);
+            background: var(--text-secondary);
+        }
+        .status-pane-kind.is-blocked { background: var(--accent-red, #f48771); }
+        .status-pane-kind.is-question { background: var(--accent-gold, #dcdcaa); }
+        .status-pane-kind.is-finished { background: var(--accent-teal); }
+        .status-pane-declared-meta { font-size: 9px; color: var(--text-secondary); }
+        .status-pane-declared-text { flex-basis: 100%; }
+        .status-pane-declared-none { font-size: 10px; font-style: italic; color: var(--text-secondary); }
+        .status-pane-declared-none.is-unreachable { color: var(--accent-red, #f48771); font-style: normal; }
+        /* Host-derived: smaller, dimmer, and labelled. A guess must never be able
+           to read as a declaration. */
+        .status-pane-inferred {
+            margin-top: auto;
+            font-size: 10px;
+            color: var(--text-secondary);
+        }
+        .status-pane-inferred-label {
+            font-size: 8px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            opacity: 0.65;
+            margin-bottom: 2px;
+        }
+        .status-pane-signal { opacity: 0.85; }
+        /* Unreachable. NOT the empty state, and deliberately not styled like one:
+           a pane whose job is telling you what your fleet is doing must not answer
+           a failed read with a blank card. */
+        .status-pane-card.is-unreachable {
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            gap: 6px;
+            border: 1px dashed var(--accent-red, #f48771);
+        }
+        .status-pane-unreachable-label {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 1.4px;
+            text-transform: uppercase;
+            color: var(--accent-red, #f48771);
+        }
+        .status-pane-unreachable-why { font-size: 10px; color: var(--text-secondary); }
+        /* The output toggle reads as engaged while output is off — the pane is in a
+           non-default state and the button is the only thing that says so. */
+        .btn-output-pane.is-status { color: var(--accent-teal); border-color: var(--accent-teal); }
+
+        /* Startup / Dispatch curtain. An OVERLAY, not output filtering: xterm keeps rendering
+           underneath, so scrollback survives and the operator can scroll back to the
+           banner. .pane-content is already position:relative (line 860). */
+        .startup-curtain, .terminal-curtain {
+            position: absolute;
+            inset: 0;
+            z-index: 4;                       /* above .terminal-view-host (z-index auto) and
+                                                 .jump-to-latest (3); below the toast host (100) */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            background: var(--term-surface);  /* opaque — this is the whole point */
+            pointer-events: none;             /* keystrokes still reach xterm's textarea */
+        }
+        /* The icon and its sweep ring share ONE positioned box, so the ring is centred on
+           the icon rather than on the pane. */
+        .startup-curtain-badge, .terminal-curtain-badge {
+            position: relative;
+            width: 96px;
+            height: 96px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        .startup-curtain-icon, .terminal-curtain-icon {
+            width: 56px;
+            height: 56px;
+            object-fit: contain;
+        }
+        .startup-curtain-icon.is-ufo,
+        .terminal-curtain-icon.is-ufo,
+        .dispatch-curtain-icon {
+            width: 80px;
+            height: 45px;
+            object-fit: contain;
+        }
+        .startup-curtain-label, .terminal-curtain-label {
+            font-size: 10px;
+            letter-spacing: 1px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+        }
+        .startup-curtain-sublabel, .terminal-curtain-sublabel {
+            font-size: 10px;
+            letter-spacing: 0.5px;
+            color: var(--text-muted, var(--text-secondary));
+            margin-top: -4px;
+        }
+        .startup-curtain-dismiss, .terminal-curtain-dismiss {
+            pointer-events: auto;             /* the ONE interactive element */
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-size: 10px;
+            font-family: inherit;
+            letter-spacing: 0.5px;
+            padding: 3px 8px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .startup-curtain-dismiss:hover, .terminal-curtain-dismiss:hover {
+            color: var(--accent-teal);
+            border-color: var(--accent-teal);
+        }
+        /* Motion gated on the same class the other panels use for the animation
+           preference (project.html:629, planning.html:2087). NOTE: that class only
+           reaches this panel under the extension host — see the Dependencies audit. */
+        body:not(.cyber-animation-disabled) .startup-curtain-icon,
+        body:not(.cyber-animation-disabled) .terminal-curtain-icon {
+            animation: curtain-breathe 1.6s ease-in-out infinite;
+        }
+        body:not(.cyber-animation-disabled) .startup-curtain-badge::after,
+        body:not(.cyber-animation-disabled) .terminal-curtain-badge::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: 50%;
+            border: 1px solid var(--accent-teal-dim, var(--border-color));
+            border-top-color: var(--accent-teal);
+            animation: curtain-sweep 1.1s linear infinite;
+        }
+        @keyframes curtain-breathe {
+            0%, 100% { transform: scale(1);    opacity: 0.75; }
+            50%      { transform: scale(1.10); opacity: 1; }
+        }
+        @keyframes curtain-sweep {
+            to { transform: rotate(360deg); }
+        }
+        /* Sidebar row echo: the same brand icon pulses while its terminal boots or prepares. */
+        body:not(.cyber-animation-disabled) .item-role-icon.is-starting,
+        body:not(.cyber-animation-disabled) .item-role-icon.is-preparing {
+            animation: curtain-breathe 1.6s ease-in-out infinite;
+        }
+        /* Reduced motion keeps the curtain (it still hides the noise) and drops the
+           movement — matches kanban.html:1047. Covers the sidebar echo too. */
+        @media (prefers-reduced-motion: reduce) {
+            body:not(.cyber-animation-disabled) .startup-curtain-icon,
+            body:not(.cyber-animation-disabled) .terminal-curtain-icon,
+            body:not(.cyber-animation-disabled) .item-role-icon.is-starting,
+            body:not(.cyber-animation-disabled) .item-role-icon.is-preparing,
+            body:not(.cyber-animation-disabled) .startup-curtain-badge::after,
+            body:not(.cyber-animation-disabled) .terminal-curtain-badge::after {
+                animation: none;
+            }
+            body:not(.cyber-animation-disabled) .startup-curtain-badge::after,
+            body:not(.cyber-animation-disabled) .terminal-curtain-badge::after { display: none; }
+        }
+
+        /* "Working, no output" affordance — a NON-opaque bottom banner, the
+           opposite of the startup curtain's full cover. The pane is live
+           (heartbeats are arriving) and the point is to tell the operator that
+           while NOT hiding the cursor wiggles that prove it: a covered pane
+           would read as dead for the same reason an uncovered silent one does.
+           pointer-events:none so keystrokes still reach xterm's textarea. */
+        .working-silence {
+            position: absolute;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 4;                     /* above .terminal-view-host, below the toast host (100) */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2px;
+            padding: 6px 10px;
+            background: color-mix(in srgb, var(--panel-bg, #000) 72%, transparent);
+            backdrop-filter: blur(2px);
+            pointer-events: none;
+            border-top: 1px solid var(--border-color);
+        }
+        .working-silence-label {
+            font-size: 10px;
+            letter-spacing: 0.5px;
+            color: var(--accent-teal);
+            text-transform: uppercase;
+        }
+        .working-silence-sub {
+            font-size: 10px;
+            letter-spacing: 0.3px;
+            color: var(--text-muted, var(--text-secondary));
+        }
+
+        /* Kanban-mode pane — a live kanban column viewer in an empty grid slot.
+           Styling mirrors the board's .kanban-card design language: gradient
+           background, border-color hover, compact action buttons. */
+        /* Column: fixed hint strip on top, scrolling plan list below. min-height:0
+           is load-bearing — without it the flex item refuses to shrink below its
+           content height and the list scrolls the whole pane instead of itself. */
+        .kanban-pane-body {
+            height: 100%;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+        }
+        /* The drag-to-dispatch affordance is invisible without this line: rows are
+           draggable but nothing on screen says so. Stated outright rather than
+           hidden behind a hover — see the note in renderKanbanPane. Ellipsizes
+           rather than wrapping, so a 2x3/3x3 pane loses width, never a second row. */
+        .kanban-pane-hint {
+            flex-shrink: 0;
+            padding: 4px 6px;
+            font-size: 10px;
+            line-height: 1.3;
+            color: var(--text-secondary);
+            border-bottom: 1px solid var(--border-color);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .kanban-pane-list {
+            overflow-y: auto;
+            flex: 1;
+            min-height: 0;
+            padding: 4px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .kanban-pane-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 6px;
+            padding: 6px 8px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg) 100%);
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+        .kanban-pane-row:hover {
+            border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
+            box-shadow: 0 2px 8px color-mix(in srgb, var(--accent-teal) 15%, transparent);
+        }
+        .kanban-pane-row.is-working {
+            border-color: color-mix(in srgb, var(--accent-teal) 60%, transparent);
+        }
+        .kanban-pane-row.is-feature {
+            border-left: 3px solid var(--feature-accent, #7c3aed);
+        }
+        .kanban-pane-row.selected {
+            border-color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2));
+        }
+        .kanban-pane-row.dragging {
+            opacity: 0.5;
+        }
+        .kanban-pane-row-text {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .kanban-pane-row-title {
+            font-size: 11px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            color: var(--text-primary);
+        }
+        .kanban-pane-row-meta {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 9px;
+            color: var(--text-secondary);
+        }
+        .kanban-pane-complexity-label {
+            font-weight: 400;
+        }
+        .kanban-pane-complexity {
+            font-weight: 600;
+            letter-spacing: 0.3px;
+        }
+        .kanban-pane-complexity.very-low { color: #00e5ff; }
+        .kanban-pane-complexity.low { color: #98c379; }
+        .kanban-pane-complexity.medium { color: #d29922; }
+        .kanban-pane-complexity.high { color: #da3633; }
+        .kanban-pane-complexity.very-high { color: #ff00ff; }
+        .kanban-pane-complexity.unknown { color: #7f848e; }
+        .kanban-pane-feature-label {
+            color: #7c3aed;
+            font-size: 9px;
+            font-weight: 700;
+            white-space: nowrap;
+            letter-spacing: 0.3px;
+        }
+        body.theme-claudify .kanban-pane-feature-label {
+            color: var(--feature-accent);
+        }
+        .kanban-pane-working {
+            color: var(--accent-teal);
+            font-size: 9px;
+        }
+        .kanban-pane-project {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 80px;
+        }
+        .kanban-pane-column-chip {
+            font-size: 9px;
+            font-weight: 700;
+            letter-spacing: 0.4px;
+            padding: 0 3px;
+            border-radius: 2px;
+            color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 16%, transparent);
+            flex-shrink: 0;
+        }
+        .kanban-pane-row-actions {
+            display: flex;
+            gap: 4px;
+            flex-shrink: 0;
+        }
+        .kanban-pane-copy-btn {
+            background: transparent;
+            border: 1px solid var(--accent-teal);
+            color: var(--accent-teal);
+            font-size: 9px;
+            font-family: inherit;
+            padding: 3px 6px;
+            border-radius: 3px;
+            cursor: pointer;
+            flex-shrink: 0;
+            transition: background 0.15s;
+        }
+        .kanban-pane-copy-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--accent-teal) 15%, transparent); }
+        .kanban-pane-copy-btn:disabled { opacity: 0.5; cursor: default; }
+        .kanban-pane-link-btn,
+        .kanban-pane-view-btn {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-size: 9px;
+            font-family: inherit;
+            padding: 3px 6px;
+            border-radius: 3px;
+            cursor: pointer;
+            flex-shrink: 0;
+            transition: border-color 0.15s, color 0.15s;
+        }
+        .kanban-pane-link-btn:hover,
+        .kanban-pane-view-btn:hover { border-color: var(--border-bright); color: var(--text-primary); }
+        .kanban-pane-view-btn:disabled { opacity: 0.5; cursor: default; }
+        .kanban-pane-column-picker,
+        .kanban-pane-ws-project-picker {
+            background: var(--panel-bg);
+            color: var(--text-primary);
+            border: 1px solid var(--border-bright);
+            border-radius: 3px;
+            font-size: 11px;
+            font-family: inherit;
+            padding: 1px 4px;
+            max-width: 120px;
+            cursor: pointer;
+            /* A <select> has an intrinsic min content width; without this it
+               refuses to shrink and overflows the 22px .pane-header instead of
+               truncating. Both pickers are flex children of .pane-title. */
+            min-width: 0;
+            /* Cosmetic only. A <select> button face clips rather than ellipsises in
+               most engines; this is a free improvement where it is honoured and a
+               no-op where it is not. The `title` set in terminals.js is what
+               actually makes a capped label recoverable — do not chase this. */
+            text-overflow: ellipsis;
+        }
+        /* The combined picker's options read "<workspace> > <project>" in a
+           multi-workspace install (terminals.js renderKanbanPane), which is
+           routinely 30+ characters. The old flat 170px cap was sized for a
+           workspace-only dropdown and cut every such label mid-word.
+           Percentage-of-pane, not a bigger fixed number: at 3x3 the pane is a
+           third of the panel and a fixed 340px would push the column picker and
+           the header buttons off-screen. flex-shrink lets it give way to the
+           column picker first when the pane is genuinely tiny. */
+        .kanban-pane-ws-project-picker {
+            max-width: min(340px, 55%);
+            flex: 0 1 auto;
+        }
+        .kanban-pane-loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-style: italic;
+        }
+        .pane-mode-toggle {
+            display: block;
+            margin-top: 8px;
+            background: transparent;
+            border: 1px dashed var(--border-bright);
+            color: var(--text-secondary);
+            font-size: 10px;
+            font-family: inherit;
+            padding: 3px 8px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .pane-mode-toggle:hover { border-color: var(--accent-teal); color: var(--accent-teal); }
+
+        /* Toasts */
+        .toast-container {
+            position: absolute;
+            bottom: 12px;
+            right: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            z-index: 100;
+            pointer-events: none;
+        }
+        .completion-toast {
+            pointer-events: auto;
+            background: #14181c;
+            border: 1px solid var(--accent-teal);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            border-radius: 4px;
+            padding: 8px 12px;
+            min-width: 220px;
+            max-width: 320px;
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 8px;
+            animation: toast-in 0.2s ease-out;
+        }
+        @keyframes toast-in {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .toast-content {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .toast-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--accent-teal);
+        }
+        .toast-body {
+            font-size: 11px;
+            color: var(--text-primary);
+        }
+        .toast-close {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 12px;
+            padding: 0;
+        }
+        .toast-close:hover { color: var(--text-primary); }
+        .completion-toast.is-error {
+            border-color: var(--state-readonly);
+        }
+        .completion-toast.is-error .toast-title {
+            color: var(--state-readonly);
+        }
+
+        .layout-fallback-banner {
+            background: rgba(248, 81, 73, 0.15);
+            color: #f85149;
+            border-bottom: 1px solid #f85149;
+            padding: 4px 12px;
+            font-size: 11px;
+            display: none;
+        }
+        .layout-fallback-banner.visible { display: block; }
+        .banner-page-btn {
+            background: none;
+            border: 1px solid currentColor;
+            color: inherit;
+            font-family: inherit;
+            font-size: 10px;
+            padding: 0 6px;
+            margin-left: 6px;
+            border-radius: 2px;
+            cursor: pointer;
+        }
+        .banner-page-btn:disabled { opacity: 0.4; cursor: default; }
+
+        /* Browser-only gap: without this a plain browser stops painting dark
+           scrollbars and form controls on a black surface. Unscoped on purpose —
+           this panel has no light presentation. */
+        :root { color-scheme: dark; }
+
+        /* Link-up modal. Scoped as .link-modal so nothing leaks into the pane
+           grid. z-index: 200 clears the panel's current ceiling of 100
+           (.toast-container) — which is exactly why send failures render inline
+           in .link-error rather than via showPaneToast: a toast raised from
+           here would be painted behind this overlay. */
+        .link-modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 200;
+        }
+        /* MANDATORY. The UA `[hidden] { display: none }` rule is a plain author-level
+           default and loses to the `display: flex` above; without this the modal is
+           permanently visible. */
+        .link-modal[hidden] { display: none; }
+        .link-modal .modal-content {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            max-width: 480px; width: 90%; max-height: 80vh;
+            display: flex; flex-direction: column;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+        }
+        .link-modal .modal-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 14px 18px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .link-modal .modal-header h3 {
+            margin: 0; font-size: 13px; font-weight: 600;
+            color: var(--text-primary);
+            text-transform: uppercase; letter-spacing: 0.5px;
+        }
+        .link-modal .modal-close-btn {
+            background: transparent; border: none; color: var(--text-secondary);
+            font-size: 22px; cursor: pointer;
+            width: 28px; height: 28px; border-radius: 4px;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .link-modal .modal-close-btn:hover { color: var(--text-primary); }
+        /* No ::-webkit-scrollbar rules here — the bare block below is unscoped
+           and already styles this scroller. A second bare rule would trip
+           browser-panel-scrollbar-contract.test.js. */
+        .link-modal .modal-body { padding: 18px; overflow-y: auto; flex: 1; }
+        .link-modal .modal-footer {
+            display: flex; gap: 8px; justify-content: flex-end;
+            padding: 12px 18px;
+            border-top: 1px solid var(--border-color);
+        }
+        .link-field-label {
+            display: block;
+            font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;
+            color: var(--text-secondary);
+            margin: 12px 0 4px;
+        }
+        .link-field-label:first-child { margin-top: 0; }
+        .link-select, .link-message {
+            width: 100%;
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            font-family: inherit; font-size: 11px;
+            padding: 6px; border-radius: 3px;
+        }
+        .link-message { min-height: 72px; resize: vertical; }
+        .link-error {
+            margin-top: 10px; padding: 6px 8px; border-radius: 3px;
+            font-size: 11px;
+            color: var(--state-readonly, #e06c75);
+            background: color-mix(in srgb, var(--state-readonly, #e06c75) 12%, transparent);
+        }
+        .link-error[hidden] { display: none; }
+        .link-counter {
+            text-align: right;
+            font-size: 10px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+        .link-counter.is-over { color: var(--state-readonly, #e06c75); }
+        .link-standing-list {
+            margin-top: 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            max-height: 120px;
+            overflow-y: auto;
+        }
+        .link-standing-list[hidden] { display: none; }
+        .link-standing-item {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 6px 8px; font-size: 11px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .link-standing-item:last-child { border-bottom: none; }
+        .link-standing-item.dead { color: var(--text-secondary); opacity: 0.6; }
+        .link-standing-item .delete-btn {
+            background: transparent; border: none; color: var(--text-secondary);
+            cursor: pointer; font-size: 15px; padding: 0 2px;
+        }
+        .link-standing-item .delete-btn:hover { color: var(--state-readonly, #e06c75); }
+
+        /* Composer modal. Mirrors .link-modal (same z-index: 200, same
+           position: fixed; inset: 0 overlay, same [hidden] override) so the
+           composer dialog lands on the same palette and stacking as the
+           panel's first modal. Scoped as .composer-modal so nothing leaks
+           into the pane grid. Send failures render inline in
+           #composer-status (same reason as .link-error: a toast raised from
+           here would be painted behind this overlay). */
+        .composer-modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 200;
+        }
+        /* MANDATORY. The UA `[hidden] { display: none }` rule is a plain
+           author-level default and loses to the `display: flex` above;
+           without this the modal is permanently visible. */
+        .composer-modal[hidden] { display: none; }
+        .composer-modal .modal-content {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            max-width: 480px; width: 90%; max-height: 80vh;
+            display: flex; flex-direction: column;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+        }
+        .composer-modal .modal-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 14px 18px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .composer-modal .modal-header h3 {
+            margin: 0; font-size: 13px; font-weight: 600;
+            color: var(--text-primary);
+            text-transform: uppercase; letter-spacing: 0.5px;
+        }
+        .composer-modal .modal-close-btn {
+            background: transparent; border: none; color: var(--text-secondary);
+            font-size: 22px; cursor: pointer;
+            width: 28px; height: 28px; border-radius: 4px;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .composer-modal .modal-close-btn:hover { color: var(--text-primary); }
+        .composer-modal .modal-body { padding: 18px; overflow-y: auto; flex: 1; }
+        .composer-modal .modal-footer {
+            display: flex; gap: 8px; justify-content: flex-end;
+            padding: 12px 18px;
+            border-top: 1px solid var(--border-color);
+        }
+        .composer-select, .composer-input {
+            width: 100%;
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            font-family: inherit; font-size: 11px;
+            padding: 6px; border-radius: 3px;
+        }
+        .composer-input { min-height: 96px; resize: vertical; }
+        .composer-status {
+            margin-top: 10px; padding: 6px 8px; border-radius: 3px;
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+        .composer-status.is-error {
+            color: var(--state-readonly, #e06c75);
+            background: color-mix(in srgb, var(--state-readonly, #e06c75) 12%, transparent);
+        }
+
+        /* Team Standing Orders Modal */
+        .team-orders-modal {
+            position: fixed; inset: 0;
+            background: rgba(0, 0, 0, 0.65);
+            display: flex; align-items: center; justify-content: center;
+            z-index: 200;
+        }
+        .team-orders-modal[hidden] { display: none; }
+        .team-orders-content {
+            background: var(--panel-bg, #1e1e1e);
+            border: 1px solid var(--border-color, #333);
+            border-radius: 6px;
+            width: 600px;
+            max-width: 90vw;
+            max-height: 85vh;
+            display: flex; flex-direction: column;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+            overflow: hidden;
+        }
+        .team-orders-body {
+            padding: 16px;
+            overflow-y: auto;
+            display: flex; flex-direction: column; gap: 14px;
+        }
+        .team-orders-section {
+            display: flex; flex-direction: column; gap: 6px;
+        }
+        .team-orders-section-header {
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .team-orders-section-title {
+            font-size: 11px; font-weight: 600; text-transform: uppercase;
+            color: var(--accent-violet, #c586c0);
+            letter-spacing: 0.5px;
+        }
+        .team-orders-notice {
+            font-size: 11px; color: var(--text-secondary); line-height: 1.4;
+            padding: 6px 10px; background: rgba(255, 255, 255, 0.03);
+            border-left: 2px solid var(--accent-teal, #4ec9b0);
+            border-radius: 2px;
+        }
+        .team-orders-textarea {
+            width: 100%; min-height: 60px; resize: vertical;
+            background: var(--panel-bg2, #252526);
+            border: 1px solid var(--border-color, #3c3c3c);
+            border-radius: 3px; color: var(--text-primary, #ccc);
+            font-family: inherit; font-size: 11px; padding: 6px 8px;
+            box-sizing: border-box;
+        }
+        .team-orders-textarea:focus {
+            outline: none; border-color: var(--accent-teal, #4ec9b0);
+        }
+        .team-orders-preview {
+            background: var(--panel-bg2, #1a1a1a);
+            border: 1px solid var(--border-color, #333);
+            border-radius: 3px; padding: 8px;
+            font-family: monospace; font-size: 10px;
+            color: var(--text-secondary, #aaa);
+            max-height: 120px; overflow-y: auto;
+            white-space: pre-wrap; word-break: break-word;
+            margin: 0;
+        }
+        .inherited-orders-list {
+            display: flex; flex-direction: column; gap: 4px;
+            max-height: 100px; overflow-y: auto;
+            border: 1px solid var(--border-color, #333);
+            border-radius: 3px; padding: 6px;
+            background: rgba(0,0,0,0.15);
+        }
+        .inherited-order-item {
+            font-size: 10px; color: var(--text-secondary);
+            display: flex; gap: 6px; align-items: baseline;
+        }
+        .inherited-order-badge {
+            font-size: 9px; text-transform: uppercase;
+            padding: 1px 4px; border-radius: 2px;
+            background: rgba(255,255,255,0.08);
+            color: var(--text-secondary);
+            flex-shrink: 0;
+        }
+
+        .tmux-toggle {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            width: 100%;
+            padding: 4px 2px 6px;
+            font-size: 11px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            user-select: none;
+        }
+        .tmux-toggle input { margin: 0; cursor: pointer; }
+        .fill-grid-form {
+            display: flex; flex-direction: column; gap: 6px;
+            padding: 8px; border-bottom: 1px solid var(--border-color);
+        }
+        .fill-grid-form[hidden] { display: none; }
+        .fill-grid-actions { display: flex; gap: 6px; }
+        .fill-grid-actions .secondary-btn { flex: 1; }
+
+        /* Scrollbar styling — same block as the sibling browser panels, plus
+           -corner. The --vscode-* var is absent in a browser and falls through to
+           this panel's own token, so one declaration serves both hosts. */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-corner {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: var(--vscode-scrollbarSlider-background, var(--border-bright));
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--vscode-scrollbarSlider-hoverBackground, var(--text-secondary));
+        }
+
+        /* Terminal viewports only. The block above is sized for sidebar and
+           dropdown lists; at 6px with a transparent track and a #444 thumb it is
+           effectively invisible against --term-surface, and .terminal-view-host's
+           8px padding sets it in from the pane edge where no pointer looks for it.
+           SCOPED on purpose: browser-panel-scrollbar-contract.test.js requires
+           exactly one BARE ::-webkit-scrollbar rule per panel file, and a second
+           unscoped block would fail it. */
+        .xterm-viewport::-webkit-scrollbar {
+            width: 12px;
+        }
+        .xterm-viewport::-webkit-scrollbar-track {
+            background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+        }
+        .xterm-viewport::-webkit-scrollbar-thumb {
+            background: color-mix(in srgb, var(--text-secondary) 55%, transparent);
+            border-radius: 6px;
+            border: 2px solid transparent;
+            background-clip: content-box;
+        }
+        .xterm-viewport::-webkit-scrollbar-thumb:hover {
+            background: var(--accent-teal);
+            background-clip: content-box;
+        }
+
+        /* Firefox only. DO NOT hoist these two properties out of the @supports
+           gate: Chromium 121+ and Safari 17.4+ ignore EVERY ::-webkit-scrollbar
+           rule on a scroller that declares scrollbar-width or scrollbar-color,
+           so an ungated copy silently deletes the 6px styling above. */
+        @supports not selector(::-webkit-scrollbar) {
+            :root {
+                scrollbar-width: thin;
+                scrollbar-color: var(--border-bright) transparent;
+            }
+            .xterm-viewport {
+                scrollbar-width: auto;
+                scrollbar-color: var(--text-secondary) transparent;
+            }
+        }
+        body.is-solo .terminals-sidebar,
+        body.is-solo .layout-toolbar,
+        body.is-solo .layout-fallback-banner,
+        body.is-solo .group-tab-strip {
+            display: none !important;
+        }
+        body.is-kanban .terminals-sidebar,
+        body.is-kanban .layout-toolbar,
+        body.is-kanban .layout-fallback-banner,
+        body.is-kanban .group-tab-strip,
+        body.is-kanban #empty-state {
+            display: none !important;
+        }
+        body.is-kanban #pane-grid {
+            grid-template-columns: 1fr !important;
+            grid-template-rows: 1fr !important;
+            height: 100% !important;
+            width: 100% !important;
+        }
+        body.is-kanban .terminal-pane {
+            height: 100% !important;
+            width: 100% !important;
+        }
+        /* #empty-state is a full-height flex SIBLING of #pane-grid, and
+           renderSidebarList() shows it inline whenever the fleet list is empty. In
+           solo mode the pane is pinned, so an empty fleet (operator close, rename)
+           is normal and the pane keeps rendering — leaving the empty state visible
+           would stack "No terminal selected. Use the + beside a workspace" above the
+           live terminal and halve the window. It also collides with #solo-status on
+           the not-found path. Suppress it outright; solo mode hides the sidebar, so
+           it never offers a spawn control at all. */
+        body.is-solo #empty-state {
+            display: none !important;
+        }
+        body.is-solo .solo-status-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-secondary);
+            font-size: 14px;
+        }
+        /* Team-scoped mode: the sidebar stays visible (unlike solo), but the
+           group tab strip is now visible — it shows "← All" + team tabs for
+           direct team-to-team switching. The layout toolbar stays so the
+           operator can choose a grid for the team. The solo-status element is
+           reused for the team not-found / connecting states. */
+        body.is-team-scoped .solo-status-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-secondary);
+            font-size: 14px;
+        }
+        body.is-team-scoped .solo-status-container a {
+            text-decoration: underline;
+            cursor: pointer;
+        }
+        /* Team-scoped mode: hide general-purpose sidebar buttons that are
+           irrelevant to a single team's view. The team-relevant controls
+           (#btn-team-orders, #btn-team-automations) are shown/hidden by
+           renderSidebarList based on teamScopeId — they stay visible. */
+        body.is-team-scoped #btn-start-all-teams,
+        body.is-team-scoped #btn-open-all,
+        body.is-team-scoped #btn-fill-grid,
+        body.is-team-scoped #fill-grid-form,
+        body.is-team-scoped #btn-start-team,
+        body.is-team-scoped #start-team-form,
+        body.is-team-scoped #btn-clear-all,
+        body.is-team-scoped #btn-link-up,
+        body.is-team-scoped #btn-composer {
+            display: none !important;
+        }
+        /* Controller-scoped mode: hide general-purpose sidebar buttons
+           (same set as team-scoped) and reveal the controller-specific ops
+           block (#btn-controller-stop). Mirrors is-team-scoped /
+           #btn-team-close — the end-session control lives here, where it
+           can carry a label, rather than on the unlabeled rail icon. The
+           rail button is now navigational (lit → reveal this scope). */
+        body.is-controller-scoped #btn-start-all-teams,
+        body.is-controller-scoped #btn-open-all,
+        body.is-controller-scoped #btn-fill-grid,
+        body.is-controller-scoped #fill-grid-form,
+        body.is-controller-scoped #btn-start-team,
+        body.is-controller-scoped #start-team-form,
+        body.is-controller-scoped #btn-clear-all,
+        body.is-controller-scoped #btn-link-up,
+        body.is-controller-scoped #btn-composer,
+        body.is-controller-scoped #btn-team-orders,
+        body.is-controller-scoped #btn-team-automations,
+        body.is-controller-scoped #btn-team-clear,
+        body.is-controller-scoped #btn-team-clear-members,
+        body.is-controller-scoped #btn-team-close,
+        body.is-controller-scoped #btn-team-restart,
+        body.is-controller-scoped #btn-team-ack,
+        body.is-controller-scoped #btn-team-add {
+            display: none !important;
+        }
+        /* The team header's back button is gone — exiting team scope is the
+           "← All" tab that renderGroupTabStrip puts at the head of the tab
+           row, styled by .group-tab like every other tab. Its .team-header-back
+           rules were deleted with it rather than left as dead selectors. */
+        /* Team header — rendered into #group-tab-strip by renderTeamHeader().
+           Reuses the strip's positioning so no new layout area is needed.
+           Renders as a second row below the tab row (border-top separates
+           the navigation tabs from the team context bar). */
+        .team-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 8px;
+            min-height: 32px;
+            border-top: 1px solid var(--border-color);
+        }
+        .team-header-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--accent-gold, #dcdcaa);
+            flex-shrink: 0;
+        }
+        .team-header-icon.is-generic-group {
+            color: var(--text-secondary);
+            font-weight: 600;
+            font-size: 14px;
+        }
+        .team-header-name {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            min-width: 0;
+        }
+        .team-header-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-primary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .team-header-count {
+            font-size: 11px;
+            color: var(--text-secondary);
+            white-space: nowrap;
+        }
+        /* Drag-to-reorder roster rows in team-scoped sidebar */
+        .terminal-item.is-draggable {
+            cursor: grab;
+        }
+        .terminal-item.is-dragging {
+            opacity: 0.4;
+            cursor: grabbing;
+        }
+        .terminal-item.is-drag-over {
+            border-top: 2px solid var(--accent-teal, #4ec9b0);
+        }
+        /* Team work queue panel — rendered below the team header in the
+           sidebar. Each row shows position, kind, title, target, state.
+           Drag to reorder; immediate delete (no confirm gate per CLAUDE.md). */
+        .team-queue-panel {
+            display: flex; flex-direction: column;
+            border-bottom: 1px solid var(--border-color, rgba(255,255,255,0.08));
+        }
+        .team-queue-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 6px 8px;
+            font-size: 11px; font-weight: 600; text-transform: uppercase;
+            color: var(--accent-violet, #c586c0);
+            letter-spacing: 0.5px;
+        }
+        .team-queue-mode-toggle {
+            display: flex; gap: 2px;
+            background: var(--panel-bg2, #252526);
+            border: 1px solid var(--border-color, #3c3c3c);
+            border-radius: 3px;
+            padding: 1px;
+        }
+        .team-queue-mode-btn {
+            background: transparent; border: none; cursor: pointer;
+            font-size: 10px; font-family: inherit;
+            padding: 2px 6px; border-radius: 2px;
+            color: var(--text-secondary);
+        }
+        .team-queue-mode-btn.active {
+            background: var(--accent-violet, #c586c0);
+            color: var(--panel-bg, #1e1e1e);
+        }
+        .team-queue-list {
+            display: flex; flex-direction: column;
+            max-height: 240px; overflow-y: auto;
+        }
+        .team-queue-item {
+            display: flex; align-items: center; gap: 6px;
+            padding: 4px 8px;
+            font-size: 11px;
+            cursor: grab;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+        }
+        .team-queue-item:hover {
+            background: rgba(255,255,255,0.04);
+        }
+        .team-queue-item.dragging {
+            opacity: 0.5;
+            cursor: grabbing;
+        }
+        .team-queue-item-pos {
+            font-size: 10px; color: var(--text-secondary);
+            width: 16px; text-align: right; flex-shrink: 0;
+        }
+        .team-queue-item-kind {
+            font-size: 9px; text-transform: uppercase;
+            padding: 1px 4px; border-radius: 2px;
+            background: rgba(255,255,255,0.08);
+            color: var(--text-secondary);
+            flex-shrink: 0;
+        }
+        .team-queue-item-kind.kind-plan {
+            background: rgba(78, 201, 176, 0.15);
+            color: var(--accent-teal, #4ec9b0);
+        }
+        .team-queue-item-kind.kind-prompt {
+            background: rgba(220, 220, 170, 0.15);
+            color: var(--accent-gold, #dcdcaa);
+        }
+        .team-queue-item-kind.kind-card {
+            background: rgba(197, 134, 192, 0.15);
+            color: var(--accent-violet, #c586c0);
+        }
+        .team-queue-item-title {
+            flex: 1; min-width: 0;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            color: var(--text-primary, #ccc);
+        }
+        .team-queue-item-state {
+            font-size: 9px; text-transform: uppercase;
+            padding: 1px 4px; border-radius: 2px;
+            flex-shrink: 0;
+        }
+        .team-queue-item-state.state-pending {
+            color: var(--text-secondary);
+            background: rgba(255,255,255,0.05);
+        }
+        .team-queue-item-state.state-claimed {
+            color: var(--accent-gold, #dcdcaa);
+            background: rgba(220, 220, 170, 0.1);
+        }
+        .team-queue-item-delete {
+            background: transparent; border: none; cursor: pointer;
+            color: var(--text-secondary);
+            font-size: 14px; line-height: 1;
+            padding: 0 2px; flex-shrink: 0;
+        }
+        .team-queue-item-delete:hover {
+            color: var(--state-readonly, #e06c75);
+        }
+        .team-queue-empty {
+            padding: 8px; font-size: 11px;
+            color: var(--text-secondary);
+            text-align: center;
+        }
+        .team-queue-actions {
+            display: flex; gap: 4px; padding: 4px 8px;
+            border-top: 1px solid rgba(255,255,255,0.04);
+        }
+        .team-queue-send-btn {
+            background: rgba(78, 201, 176, 0.1);
+            border: 1px solid var(--accent-teal, #4ec9b0);
+            color: var(--accent-teal, #4ec9b0);
+            font-size: 10px; font-family: inherit;
+            cursor: pointer; padding: 2px 8px;
+            border-radius: 3px;
+        }
+        .team-queue-send-btn:hover {
+            background: rgba(78, 201, 176, 0.2);
+        }
+        .team-queue-send-btn:disabled {
+            opacity: 0.4; cursor: default;
+        }
+        /* Pixel-art <img> treatment — one class per webview document (these
+           documents share no sheet). Integer display sizes plus `pixelated`
+           keep raster art hard-edged; applied to art <img> elements by the
+           surface-render code. Harmless on elements that do not use it. */
+        .pixel-art {
+            image-rendering: pixelated;
+            -ms-interpolation-mode: nearest-neighbor;
+        }
+
+        /* ── Terminal session log viewer ─────────────────────────────────── */
+        /* Full-screen overlay with a sidebar (session list) + detail (rendered
+           markdown), reusing the .content-row layout pattern from tickets.html. */
+        .log-view-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: var(--bg-primary, #1e1e1e);
+            z-index: 10000;
+            display: flex;
+            flex-direction: column;
+        }
+        .log-view-content-row {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+        .log-view-sidebar {
+            width: 240px;
+            flex-shrink: 0;
+            border-right: 1px solid var(--border-color, #333);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .log-view-sidebar-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--border-color, #333);
+            font-size: 11px;
+            color: var(--text-secondary, #888);
+            font-family: var(--font-mono, monospace);
+        }
+        .log-view-close-btn {
+            background: transparent;
+            border: 1px solid var(--border-color, #333);
+            color: var(--text-secondary, #888);
+            font-size: 10px;
+            padding: 2px 8px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        .log-view-close-btn:hover {
+            color: var(--accent-teal, #4ec9b0);
+            border-color: var(--accent-teal, #4ec9b0);
+        }
+        .log-view-session-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 4px 0;
+        }
+        .log-view-session-item {
+            padding: 6px 12px;
+            font-size: 11px;
+            color: var(--text-secondary, #888);
+            cursor: pointer;
+            font-family: var(--font-mono, monospace);
+            border-left: 2px solid transparent;
+            transition: background 0.15s;
+        }
+        .log-view-session-item:hover {
+            background: var(--bg-hover, rgba(255,255,255,0.05));
+        }
+        .log-view-session-item.selected {
+            border-left-color: var(--accent-teal, #4ec9b0);
+            color: var(--text-primary, #ccc);
+            background: var(--bg-hover, rgba(255,255,255,0.05));
+        }
+        .log-view-session-empty {
+            padding: 12px;
+            font-size: 11px;
+            color: var(--text-secondary, #888);
+            font-family: var(--font-mono, monospace);
+        }
+        .log-view-detail {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px 24px;
+        }
+        .log-view-detail-content {
+            max-width: 900px;
+            margin: 0 auto;
+            font-size: 13px;
+            line-height: 1.6;
+            color: var(--text-primary, #ccc);
+            font-family: var(--font-mono, 'Menlo', 'Monaco', monospace);
+        }
+        .log-view-detail-content h1,
+        .log-view-detail-content h2 {
+            color: var(--accent-teal, #4ec9b0);
+            margin-top: 1.5em;
+            margin-bottom: 0.5em;
+        }
+        .log-view-detail-content h1 { font-size: 18px; }
+        .log-view-detail-content h2 { font-size: 15px; }
+        .log-view-detail-content pre {
+            background: var(--bg-secondary, #252526);
+            padding: 12px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-size: 12px;
+        }
+        .log-view-detail-content code {
+            font-family: var(--font-mono, monospace);
+            font-size: 12px;
+        }
+        .log-view-detail-content p {
+            margin: 0.5em 0;
+        }
+        .log-view-loading,
+        .log-view-empty,
+        .log-view-error {
+            padding: 24px;
+            text-align: center;
+            color: var(--text-secondary, #888);
+            font-size: 13px;
+            font-family: var(--font-mono, monospace);
+        }
+        .log-view-error {
+            color: var(--accent-red, #f48771);
+        }
+
+        /* ── Terminal pane paste overlay ─────────────────────────────────── */
+        /* Visible editable textarea overlay for touch & insecure contexts.
+           Positioned absolutely over the pane-content with high z-index (z-index: 10),
+           above the xterm viewport and curtains. Visible, editable element allows iOS
+           long-press paste callout and browser native paste events. */
+        .pane-paste-overlay {
+            position: absolute;
+            inset: 0;
+            z-index: 10;
+            background: rgba(0, 0, 0, 0.75);
+            backdrop-filter: blur(2px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 12px;
+            box-sizing: border-box;
+        }
+        .pane-paste-content {
+            background: var(--panel-bg2, #252526);
+            border: 1px solid var(--border-color, #3c3c3c);
+            border-radius: 4px;
+            width: 100%;
+            max-width: 480px;
+            max-height: 90%;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 10px;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+            box-sizing: border-box;
+        }
+        .pane-paste-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        .pane-paste-title {
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--accent-teal, #4ec9b0);
+        }
+        .pane-paste-textarea {
+            width: 100%;
+            min-height: 80px;
+            max-height: 180px;
+            resize: vertical;
+            background: var(--panel-bg, #1e1e1e);
+            border: 1px solid var(--border-color, #3c3c3c);
+            border-radius: 3px;
+            color: var(--text-primary, #ccc);
+            font-family: var(--font-mono, monospace);
+            font-size: 11px;
+            padding: 8px;
+            box-sizing: border-box;
+            outline: none;
+        }
+        .pane-paste-textarea:focus {
+            border-color: var(--accent-teal, #4ec9b0);
+        }
+        .pane-paste-footer {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+        .pane-paste-status {
+            font-size: 10px;
+            color: var(--text-secondary);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            flex: 1;
+        }
+        .pane-paste-status.is-error {
+            color: var(--accent-red, #f48771);
+        }
+        .pane-paste-actions {
+            display: flex;
+            gap: 6px;
+            flex-shrink: 0;
+        }
+
+        /* ── Panel tabs ─────────────────────────────────────────────────────
+           Inlined per repo convention (tickets.html:30-33 documents the dead
+           shared-tabs.css attempt — every panel inlines its own tab styles).
+           Copied from connections.html:82-121. The Agents tab content is a
+           flex ROW (sidebar + main), so .shared-tab-content.active is overridden
+           to flex-row for the agents pane below; the default block display from
+           the sibling idiom is kept for the tmux pane. */
+        .shared-tab-bar {
+            display: flex;
+            background: #181818;
+            border-bottom: 1px solid var(--border-color);
+            padding: 0 8px;
+            gap: 4px;
+            flex: 0 0 auto;
+        }
+        .shared-tab-btn {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            padding: 8px 12px;
+            font-family: var(--font-family);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+        }
+        .shared-tab-btn:hover:not(.active) { color: var(--text-primary); }
+        .shared-tab-btn.active {
+            color: var(--accent-teal);
+            border-bottom-color: var(--accent-teal);
+        }
+        .shared-tab-content {
+            display: none;
+            flex: 1 1 auto;
+            min-height: 0;
+        }
+        .shared-tab-content.active { display: block; }
+        /* Agents tab holds the existing sidebar + main side by side, so it must
+           be a flex row that fills the remaining height — not the block default. */
+        .shared-tab-content.active[data-tab-content="agents"] {
+            display: flex;
+            flex-direction: row;
+        }
+
+        /* ── tmux tab ────────────────────────────────────────────────────── */
+        .tmux-tab {
+            padding: 16px;
+            overflow-y: auto;
+            color: var(--text-secondary);
+            font-size: 12px;
+            line-height: 1.6;
+            max-width: 760px;
+        }
+        .tmux-tab h2 {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-primary);
+            margin: 0 0 8px;
+            font-weight: 700;
+        }
+        .tmux-section {
+            margin-bottom: 20px;
+            padding: 14px 16px;
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+        }
+        .tmux-toggle-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 4px;
+        }
+        .tmux-toggle-row label { cursor: pointer; color: var(--text-primary); }
+        .tmux-hint {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 6px;
+        }
+        .tmux-empty {
+            color: var(--text-secondary);
+            font-size: 12px;
+            padding: 8px 0;
+        }
+        .tmux-team-row {
+            border: 1px solid var(--border-color);
+            border-left: 3px solid var(--accent-teal);
+            border-radius: 4px;
+            padding: 10px 12px;
+            margin-bottom: 10px;
+            background: var(--panel-bg);
+        }
+        .tmux-team-name {
+            color: var(--text-primary);
+            font-weight: 600;
+            font-size: 12px;
+            margin-bottom: 4px;
+        }
+        .tmux-team-meta {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+        }
+        .tmux-cmd-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 6px;
+        }
+        .tmux-cmd {
+            flex: 1;
+            min-width: 0;
+            font-family: var(--font-code);
+            font-size: 11px;
+            color: var(--accent-teal);
+            background: #111;
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            padding: 6px 8px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .tmux-copy-btn {
+            background: #0e639c;
+            color: #fff;
+            border: none;
+            padding: 6px 10px;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            border-radius: 2px;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        .tmux-copy-btn:hover { background: #1177bb; }
+        .tmux-grid-btn {
+            background: var(--panel-bg2);
+            border: 1px solid var(--accent-teal);
+            color: var(--accent-teal);
+            padding: 6px 10px;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            border-radius: 2px;
+            cursor: pointer;
+            margin-top: 6px;
+        }
+        .tmux-grid-btn:hover { background: color-mix(in srgb, var(--accent-teal) 12%, transparent); }
+        .tmux-grid-btn:disabled { opacity: 0.45; cursor: default; }
+        .tmux-attached-badge {
+            display: inline-block;
+            background: color-mix(in srgb, var(--accent-teal) 22%, transparent);
+            color: var(--accent-teal);
+            border: 1px solid var(--accent-teal);
+            border-radius: 8px;
+            padding: 1px 7px;
+            font-size: 9px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            margin-left: 6px;
+            vertical-align: middle;
+        }
+        .tmux-close-row {
+            margin-top: 8px;
+        }
+        .tmux-close-btn {
+            background: var(--panel-bg2);
+            border: 1px solid var(--state-readonly);
+            color: var(--state-readonly);
+            padding: 6px 10px;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            border-radius: 2px;
+            cursor: pointer;
+            width: 100%;
+        }
+        .tmux-close-btn:hover { background: color-mix(in srgb, var(--state-readonly) 14%, transparent); }
+        .tmux-close-btn:disabled { opacity: 0.45; cursor: default; }
+        .tmux-refresh-btn {
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            padding: 4px 10px;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            border-radius: 2px;
+            cursor: pointer;
+        }
+        .tmux-refresh-btn:hover { color: var(--text-primary); border-color: var(--border-bright); }
+        .tmux-note {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 8px;
+            padding: 8px 10px;
+            background: #111;
+            border-left: 2px solid var(--accent-teal);
+            border-radius: 0 3px 3px 0;
+        }

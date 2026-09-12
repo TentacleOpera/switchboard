@@ -29,6 +29,8 @@ const {
     isLoopbackHostname,
     isLoopbackHostHeader,
     isLoopbackOrigin,
+    isAllowedHostFor,
+    normalizeIpv6Literal,
     DEFAULT_DISPLAY_HOSTNAME,
     resolveDisplayHostname,
 } = require(path.join(OUT, 'utils', 'loopbackHostname.js'));
@@ -190,6 +192,71 @@ check('the server still binds loopback — hostname is presentation, not reach',
         !src.includes("listen(this._port") || !/listen\([^)]*0\.0\.0\.0/.test(src),
         'the server must never bind 0.0.0.0'
     );
+});
+
+// -------------------------------------------------- tailnet bind policy (Host guard)
+// `switchboard tailnet` populates `bindPolicy.magicDnsNames` from the node's own
+// Tailscale identity, and the IPv6 tailnet address is carried bracketed inside
+// that array (Option B1). The Host guard must accept the FQDN, its bare first
+// label, and the bracketed v6 literal — and must NOT accept a suffix match or a
+// fabricated rebinding host.
+check('tailnet policy: accepts the MagicDNS FQDN', () => {
+    const policy = { tailnetAddress: '100.110.206.86', magicDnsNames: ['patrickremotedev.taile9aab9.ts.net'] };
+    assert.ok(isAllowedHostFor(policy, 'patrickremotedev.taile9aab9.ts.net:7777'), 'FQDN Host must pass');
+});
+
+check('tailnet policy: accepts the bare first label derived from the FQDN', () => {
+    const policy = { tailnetAddress: '100.110.206.86', magicDnsNames: ['patrickremotedev.taile9aab9.ts.net'] };
+    assert.ok(isAllowedHostFor(policy, 'patrickremotedev:7777'), 'bare label must pass');
+});
+
+check('tailnet policy: accepts the v4 tailnet address', () => {
+    const policy = { tailnetAddress: '100.110.206.86', magicDnsNames: [] };
+    assert.ok(isAllowedHostFor(policy, '100.110.206.86:7777'), 'v4 tailnet address must pass');
+});
+
+check('tailnet policy: accepts the bracketed v6 tailnet address from magicDnsNames', () => {
+    const policy = {
+        tailnetAddress: '100.110.206.86',
+        magicDnsNames: ['patrickremotedev.taile9aab9.ts.net', '[fd7a:115c:a1e0::1001:cec3]'],
+    };
+    assert.ok(isAllowedHostFor(policy, '[fd7a:115c:a1e0::1001:cec3]:7777'), 'bracketed v6 Host must pass');
+});
+
+check('tailnet policy: accepts a v6 Host whose compression differs from the stored entry', () => {
+    // The kernel may report the address expanded while Tailscale reports it
+    // compressed (or vice versa). The normaliser must equate them.
+    const policy = {
+        tailnetAddress: '100.110.206.86',
+        magicDnsNames: ['[fd7a:115c:a1e0:0000:0000:0000:1001:cec3]'],
+    };
+    assert.ok(isAllowedHostFor(policy, '[fd7a:115c:a1e0::1001:cec3]:7777'), 'compressed v6 Host must match expanded entry');
+});
+
+check('tailnet policy: rejects a fabricated rebinding host (no suffix, no wildcard)', () => {
+    const policy = { tailnetAddress: '100.110.206.86', magicDnsNames: ['patrickremotedev.taile9aab9.ts.net'] };
+    assert.strictEqual(isAllowedHostFor(policy, 'evil.example:7777'), false, 'an attacker host must not pass');
+    assert.strictEqual(isAllowedHostFor(policy, 'patrickremotedev.evil.example:7777'), false, 'a prefix of the bare label must not pass');
+    assert.strictEqual(isAllowedHostFor(policy, 'notpatrickremotedev.taile9aab9.ts.net:7777'), false, 'a suffix match must not pass');
+});
+
+check('tailnet policy: a bracketed entry that is not a v6 literal is not treated as a name', () => {
+    // Defensive: a malformed bracketed entry must not crash and must not match
+    // an unrelated host. It simply contributes nothing to the allowlist.
+    const policy = { tailnetAddress: '100.110.206.86', magicDnsNames: ['[not-an-ip]'] };
+    assert.strictEqual(isAllowedHostFor(policy, 'not-an-ip:7777'), false);
+    assert.strictEqual(isAllowedHostFor(policy, '[not-an-ip]:7777'), false);
+});
+
+check('normalizeIpv6Literal: strips brackets, expands ::, zero-pads hextets', () => {
+    assert.strictEqual(
+        normalizeIpv6Literal('[fd7a:115c:a1e0::1001:cec3]'),
+        normalizeIpv6Literal('fd7a:115c:a1e0:0000:0000:0000:1001:cec3'),
+        'compressed and expanded forms must canonicalise equal'
+    );
+    assert.strictEqual(normalizeIpv6Literal('[::1]'), normalizeIpv6Literal('0000:0000:0000:0000:0000:0000:0000:0001'));
+    assert.strictEqual(normalizeIpv6Literal('127.0.0.1'), '127.0.0.1', 'a non-v6 value is returned lowercased unchanged');
+    assert.strictEqual(normalizeIpv6Literal('[fe80::1%eth0]'), normalizeIpv6Literal('fe80:0000:0000:0000:0000:0000:0000:0001'), 'zone id is stripped');
 });
 
 // ------------------------------------------------------------------------ CSP

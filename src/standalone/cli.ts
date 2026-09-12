@@ -14,7 +14,8 @@ import {
     seedHostSettingsDocument,
 } from '../services/hostSettings';
 import { DEFAULT_DISPLAY_HOSTNAME, isLoopbackHostname } from '../utils/loopbackHostname';
-import { detectTailnetAddress, resolveMagicDnsNames } from '../utils/tailnetDetect';
+import { detectTailnetAddress, resolveMagicDnsNames, readCertDomains, detectServeConfigMapping } from '../utils/tailnetDetect';
+import { resolveTailnetOrigin } from '../utils/tailnetOrigin';
 import { detectWsl } from '../utils/wslDetect';
 import { isPortFree, resolvePreferredPort, PORT_BASE, PORT_SPAN } from '../utils/portResolver';
 import { BANNER_ART_TRUECOLOR, BANNER_ART_256, BANNER_ART_ASCII } from '../generated/bannerArt';
@@ -203,6 +204,46 @@ function resolveHostname(input: string | undefined, tailnetAcceptable: string[] 
         console.error('  e.g. --hostname switchboard.localhost');
     }
     process.exit(1);
+}
+
+/**
+ * Resolve the single tailnet URL to print, preferring a secure origin when the
+ * tailnet offers one (plan: the-tailnet-url-never-offers-a-secure-origin).
+ *
+ * An explicit `--hostname` bypasses the resolver entirely (Edge Case 7): the
+ * operator's choice outranks the default, so no probe runs and no advisory is
+ * emitted — today's IP-based URL is printed verbatim. Otherwise the resolver
+ * consults the serve config (`detectServeConfigMapping`) and cert capability
+ * (`readCertDomains`) to pick `https://<fqdn>` when available, falling back to
+ * `http://<fqdn>:<port>` then `http://<ip>:<port>`. The IP is always returned as
+ * `ipFallback` so the call site can print it as a secondary line — a Tailscale
+ * hiccup that breaks the resolver-picked name must not force the operator to
+ * re-run the command to find the IP.
+ *
+ * Returns `{ url, secure, isFunnel, ipFallback }`. `secure` is true only when
+ * the scheme is `https://`; the call site emits the advisory line when it is
+ * false. `isFunnel` is true when the chosen origin is internet-public
+ * (Tailscale Funnel) — the call site notes the different security posture.
+ */
+async function resolveTailnetUrl(
+    tailnetAddress: string,
+    magicDnsNames: string[],
+    port: number,
+    hostnameExplicit: boolean
+): Promise<{ url: string; secure: boolean; isFunnel: boolean; ipFallback: string }> {
+    const ipFallback = `http://${tailnetAddress}:${port}/`;
+    if (hostnameExplicit) {
+        return { url: ipFallback, secure: false, isFunnel: false, ipFallback };
+    }
+    // Detection only — never configures `tailscale serve`. Both reads reuse the
+    // tailnetDetect transport (LocalAPI socket first, absolute-path CLI
+    // fallback). Tailscale absent or erroring falls through silently.
+    const [serveConfig, certDomains] = await Promise.all([
+        detectServeConfigMapping(port),
+        readCertDomains(),
+    ]);
+    const result = await resolveTailnetOrigin(tailnetAddress, magicDnsNames, port, serveConfig, certDomains);
+    return { ...result, ipFallback };
 }
 
 /**
@@ -2461,8 +2502,8 @@ async function cmdSetupHost(workspaceRoot: string, argv: string[]): Promise<void
             try {
                 const tailnetAddress = await detectTailnetAddress();
                 if (tailnetAddress) {
-                    const names = await resolveMagicDnsNames();
-                    reachable = names[0] || tailnetAddress;
+                    const namesResult = await resolveMagicDnsNames();
+                    reachable = namesResult.names[0] || tailnetAddress;
                 }
             } catch { /* tailscale not up yet — fall through */ }
             console.log(`\n[switchboard] Board is serving on your tailnet.`);
@@ -4394,7 +4435,21 @@ async function main() {
             console.error('[switchboard] Start Tailscale and retry, or use \'switchboard local\' for loopback-only access.');
             process.exit(1);
         }
-        magicDnsNames = await resolveMagicDnsNames();
+        const magicDnsResult = await resolveMagicDnsNames();
+        if (magicDnsResult.source === 'unavailable') {
+            // The probe was refused (socket missing, 403, parse failure, timeout)
+            // — NOT "this machine has no name". A board on the raw tailnet address
+            // is still useful, so do NOT exit. The defect being fixed is silence,
+            // not the degraded mode. The operator who knows their name can pass
+            // --hostname to widen the Host guard explicitly.
+            console.warn(`[switchboard] Could not read this machine's MagicDNS name from Tailscale (${magicDnsResult.reason}).`);
+            console.warn(`[switchboard] The board is reachable at http://${tailnetAddress}:${args.port} but NOT at its`);
+            console.warn(`[switchboard] tailnet name — a request under that name will be refused. Pass`);
+            console.warn(`[switchboard] --hostname <name> to accept it explicitly.`);
+            magicDnsNames = [];
+        } else {
+            magicDnsNames = magicDnsResult.names;
+        }
         console.log(`[switchboard] Tailnet address: ${tailnetAddress}${magicDnsNames.length ? ` (${magicDnsNames.join(', ')})` : ''}`);
     }
 
@@ -4498,7 +4553,24 @@ async function main() {
         console.log(`  PID:   ${detachPid}`);
         console.log(`  URL:   http://127.0.0.1:${detachPort}`);
         if (tailnetAddress) {
-            console.log(`  Tailnet: http://${tailnetAddress}:${detachPort}/ (no token, on your tailnet only)`);
+            // The parent re-runs the resolver after findRunningInstance confirmed
+            // health, so the printed URL is probed against the live server, not a
+            // guess. An explicit --hostname bypasses the resolver (Edge Case 7).
+            const hostnameExplicit = Boolean(args._explicit?.hostname);
+            const tailnetResolved = await resolveTailnetUrl(tailnetAddress, magicDnsNames, detachPort, hostnameExplicit);
+            console.log(`  Tailnet: ${tailnetResolved.url} (no token, on your tailnet only)`);
+            if (tailnetResolved.url !== tailnetResolved.ipFallback) {
+                console.log(`  Tailnet (IP fallback): ${tailnetResolved.ipFallback}`);
+            }
+            const v6Names = magicDnsNames.filter(n => n.startsWith('['));
+            if (v6Names.length > 0) {
+                console.log(`  Tailnet (IPv6): ${v6Names.map(n => `http://${n}:${detachPort}/`).join(', ')}`);
+            }
+            if (tailnetResolved.secure && tailnetResolved.isFunnel) {
+                console.log('[switchboard] This tailnet URL is internet-public (Tailscale Funnel), not tailnet-only.');
+            } else if (!tailnetResolved.secure && !hostnameExplicit) {
+                console.log('[switchboard] This tailnet URL is not a secure origin. The board cannot be installed to a Home Screen as a standalone app on iOS (Safari treats a plain-http manifest as a bookmark). Run `tailscale serve` with HTTPS to enable this.');
+            }
         }
         console.log(`  Logs:  ${logFile}`);
         console.log(`[switchboard] Use 'npx switchboard token show' for a board URL, 'npx switchboard status' to check, or 'npx switchboard stop' to shut down.`);
@@ -4576,12 +4648,45 @@ async function main() {
     }
     if (tailnetAddress) {
         // Tailnet mode: no token is required on the tailnet listener (decision 4:
-        // tailnet membership is the control). Print the bare tailnet URL so the
-        // operator can hand it to a phone or tablet on the same tailnet.
-        const tailnetUrl = `http://${tailnetAddress}:${instance.port}/`;
-        console.log(`\nTailnet URL (no token needed, on your tailnet only): ${tailnetUrl}`);
-        if (magicDnsNames.length > 0) {
-            console.log(`  MagicDNS: ${magicDnsNames.map(n => `http://${n}:${instance.port}/`).join(', ')}`);
+        // tailnet membership is the control). Print the resolver-picked URL so
+        // the operator can hand it to a phone or tablet on the same tailnet —
+        // preferring a secure origin when the tailnet offers one, so the board
+        // can install to a Home Screen as a standalone app (plain-http remote
+        // origins cannot). An explicit --hostname bypasses the resolver and
+        // honours the operator's choice verbatim (Edge Case 7).
+        const hostnameExplicit = Boolean(args._explicit?.hostname);
+        const tailnetResolved = await resolveTailnetUrl(tailnetAddress, magicDnsNames, instance.port, hostnameExplicit);
+        console.log(`\nTailnet URL (no token needed, on your tailnet only): ${tailnetResolved.url}`);
+        // The raw-IP tailnet URL stays as a fallback line — a Tailscale hiccup
+        // that breaks the resolver-picked name must not force a re-run to find
+        // the IP. The IP is the terminal fallback the resolver would emit last
+        // anyway; printing it here is informational, not a second candidate.
+        if (tailnetResolved.url !== tailnetResolved.ipFallback) {
+            console.log(`  Fallback (IP): ${tailnetResolved.ipFallback}`);
+        }
+        // The v6 tailnet address is carried bracketed inside `magicDnsNames`;
+        // pull it out for a dedicated banner line so a v6-preferring client
+        // (Happy Eyeballs) has a URL to try first.
+        const v6Names = magicDnsNames.filter(n => n.startsWith('['));
+        const dnsNames = magicDnsNames.filter(n => !n.startsWith('['));
+        if (v6Names.length > 0) {
+            console.log(`  Tailnet (IPv6): ${v6Names.map(n => `http://${n}:${instance.port}/`).join(', ')}`);
+        }
+        if (dnsNames.length > 0) {
+            console.log(`  MagicDNS: ${dnsNames.map(n => `http://${n}:${instance.port}/`).join(', ')}`);
+        }
+        if (tailnetResolved.secure && tailnetResolved.isFunnel) {
+            // The chosen origin is internet-public (Tailscale Funnel), not
+            // tailnet-only — the security posture differs and the operator
+            // should know the board is reachable from the open internet.
+            console.log('[switchboard] This tailnet URL is internet-public (Tailscale Funnel), not tailnet-only.');
+        } else if (!tailnetResolved.secure && !hostnameExplicit) {
+            // One advisory line, once, only when the chosen origin is insecure.
+            // Names the concrete cost — Home Screen install will not launch
+            // standalone — rather than lecturing about TLS. Does NOT claim to
+            // fix copy-button reliability (that was a separate, superseded
+            // theory — see the plan's "What this plan is NOT fixing").
+            console.log('[switchboard] This tailnet URL is not a secure origin. The board cannot be installed to a Home Screen as a standalone app on iOS (Safari treats a plain-http manifest as a bookmark). Run `tailscale serve` with HTTPS to enable this.');
         }
     }
     if (displayHost !== '127.0.0.1') {

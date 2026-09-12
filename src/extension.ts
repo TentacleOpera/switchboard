@@ -54,6 +54,8 @@ import { stateFile } from './utils/stateHome';
 import { GlobalIntegrationConfigService } from './services/GlobalIntegrationConfigService';
 import { StandaloneHostSecrets as EncryptedSecretsStore } from './services/encryptedSecretsStore';
 import { resolveDisplayHostname, isTailnetPolicy } from './utils/loopbackHostname';
+import { readCertDomains, detectServeConfigMapping } from './utils/tailnetDetect';
+import { resolveTailnetOrigin } from './utils/tailnetOrigin';
 import { PtyHostSupervisor } from './services/ptyHostSupervisor';
 
 /**
@@ -1361,13 +1363,32 @@ export async function activate(context: vscode.ExtensionContext) {
         // worse than the loopback one.
         const bindPolicy = activeTaskViewerProvider.getLocalApiBindPolicy();
         if (isTailnetPolicy(bindPolicy)) {
-            const tailnetUrl = `http://${bindPolicy.tailnetAddress}:${port}/`;
+            // Shared resolver with the standalone CLI (plan:
+            // the-tailnet-url-never-offers-a-secure-origin) — prefer a secure
+            // origin when the tailnet offers one, so the board can install to a
+            // Home Screen as a standalone app. Detection only: this never
+            // configures `tailscale serve`. Both reads reuse the tailnetDetect
+            // transport (LocalAPI socket first, absolute-path CLI fallback);
+            // Tailscale down or erroring falls through silently to the IP.
+            const [serveConfig, certDomains] = await Promise.all([
+                detectServeConfigMapping(port),
+                readCertDomains(),
+            ]);
+            const tailnetResolved = await resolveTailnetOrigin(
+                bindPolicy.tailnetAddress, bindPolicy.magicDnsNames, port, serveConfig, certDomains
+            );
+            const tailnetUrl = tailnetResolved.url;
             outputChannel?.appendLine(
                 `[Switchboard] Tailnet board URL (no token needed, on your tailnet only): ${tailnetUrl}`
                 + (bindPolicy.magicDnsNames.length
                     ? `  MagicDNS: ${bindPolicy.magicDnsNames.map(n => `http://${n}:${port}/`).join(', ')}`
                     : '')
             );
+            if (tailnetResolved.secure && tailnetResolved.isFunnel) {
+                outputChannel?.appendLine('[Switchboard] This tailnet URL is internet-public (Tailscale Funnel), not tailnet-only.');
+            } else if (!tailnetResolved.secure) {
+                outputChannel?.appendLine('[Switchboard] This tailnet URL is not a secure origin. The board cannot be installed to a Home Screen as a standalone app on iOS (Safari treats a plain-http manifest as a bookmark). Run `tailscale serve` with HTTPS to enable this.');
+            }
             await vscode.env.openExternal(vscode.Uri.parse(tailnetUrl));
             return;
         }

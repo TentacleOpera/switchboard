@@ -5407,6 +5407,10 @@ Each plan file must include:
     log(opts, `Local API server listening on ${bindUrl}${url === bindUrl ? '' : ` (serving as ${url})`}`);
     if (isTailnetPolicy(bindPolicy)) {
         log(opts, `Tailnet listener on http://${bindPolicy.tailnetAddress}:${port} (no token, on your tailnet only)`);
+        const v6Names = bindPolicy.magicDnsNames.filter(n => n.startsWith('['));
+        if (v6Names.length > 0) {
+            log(opts, `Tailnet (IPv6) listener on ${v6Names.map(n => `http://${n}:${port}/`).join(', ')}`);
+        }
     }
 
     // ── Delegate-children import at startup ──────────────────────────

@@ -56,7 +56,7 @@ import {
 import { WsHub } from './wsHub';
 import { PLANNING_VERBS, SETUP_VERBS, TASKVIEWER_VERBS, TICKETS_VERBS } from '../generated/verbAllowlist';
 import { validateVerbPayload } from './verbSchemas';
-import { isAllowedHostFor, isAllowedOriginFor, isTailnetPolicy, LOOPBACK_ONLY_POLICY, type BindPolicy } from '../utils/loopbackHostname';
+import { isAllowedHostFor, isAllowedOriginFor, isTailnetPolicy, LOOPBACK_ONLY_POLICY, normalizeIpv6Literal, type BindPolicy } from '../utils/loopbackHostname';
 import { listIconPalette } from './iconPalette';
 import { isSafeId as isSafeQueueId, listQueue, enqueueItem, deleteItem, reorderQueue, MAX_QUEUE_ITEM_BODY } from './TeamQueueService';
 import { composeCompletedTurnEndBody, composeCompletionEvidence, TURN_END_VERIFY_INSTRUCTION, TURN_END_VERIFY_INSTRUCTION_STANDALONE } from './PlanIngestionEngine';
@@ -1133,12 +1133,25 @@ export class LocalApiServer {
      * keeps working the moment the operator goes remote.
      */
     private _tailnetServer: http.Server | null = null;
+    /**
+     * The IPv6 tailnet listener — a third `http.Server` sharing `_handleRequest`
+     * with the loopback and v4 tailnet listeners. Present only when the bind
+     * policy carries a bracketed IPv6 address in `magicDnsNames`. A v6-preferring
+     * client (Happy Eyeballs / RFC 8305) attempts the AAAA record first; without
+     * this listener it gets ECONNREFUSED at the TCP layer and never reaches the
+     * Host guard. A v6 bind failure (no v6 address on the host, Tailscale down
+     * for v6) DEGRADES to v4-only — it does not tear down the v4 and loopback
+     * listeners, because a v4-capable host that lacks v6 should still serve.
+     */
+    private _tailnetServerV6: http.Server | null = null;
     private _port: number;
     private _options: LocalApiServerOptions;
     private _allRoots: string[];
     private _bindPolicy: BindPolicy;
     /** The bound tailnet address (v4), or null under loopback-only. */
     private _tailnetAddress: string | null = null;
+    /** The bound tailnet address (v6, unbracketed), or null when none was discovered. */
+    private _tailnetAddressV6: string | null = null;
     /**
      * Re-entrancy guard for POST /shutdown (plan: go-launcher-static-binary).
      * Latched true after the first accepted shutdown request. A second POST
@@ -1249,6 +1262,17 @@ export class LocalApiServer {
         this._bindPolicy = options.bindPolicy ?? LOOPBACK_ONLY_POLICY;
         if (isTailnetPolicy(this._bindPolicy)) {
             this._tailnetAddress = this._bindPolicy.tailnetAddress;
+            // The v6 tailnet address is carried bracketed inside `magicDnsNames`
+            // (Option B1) so the allowlist and the CSRF guard pick it up without a
+            // new field. Strip the brackets here to get the raw literal `listen()`
+            // needs. A bracketed entry that is not a valid v6 literal is ignored
+            // rather than crashing the boot — the allowlist still accepts it via
+            // `isAllowedHostFor`'s normaliser, but no v6 listener is opened.
+            const v6Entry = this._bindPolicy.magicDnsNames.find(n => n.startsWith('['));
+            if (v6Entry) {
+                const inner = v6Entry.slice(1, -1);
+                if (inner.includes(':')) { this._tailnetAddressV6 = inner; }
+            }
         }
     }
 
@@ -1337,6 +1361,10 @@ export class LocalApiServer {
         const listenPromise = new Promise<number>((resolve, reject) => {
             let loopbackUp = false;
             let tailnetUp = !this._tailnetAddress; // no tailnet listener required under loopback-only
+            // The v6 gate starts satisfied when there is no v6 address to bind.
+            // A v6 bind failure sets this true (degrade to v4-only) rather than
+            // rejecting — see `startTailnetV6Listener`'s error handler.
+            let tailnetV6Up = !this._tailnetAddressV6;
             let settled = false;
             const settle = (err?: Error) => {
                 if (settled) { return; }
@@ -1344,7 +1372,33 @@ export class LocalApiServer {
                 if (err) { reject(err); } else { resolve(this._port); }
             };
             const tryResolve = () => {
-                if (loopbackUp && tailnetUp) { settle(); }
+                if (loopbackUp && tailnetUp && tailnetV6Up) { settle(); }
+            };
+
+            // Opens the v6 tailnet listener on the ALREADY-RESOLVED `this._port`,
+            // after the v4 tailnet listener is up. A v6 bind failure DEGRADES to
+            // v4-only: it logs and satisfies the v6 gate, but does NOT tear down
+            // the v4 and loopback listeners. Only a v4 tailnet failure tears down
+            // the whole start (the existing behaviour) — a v4-capable host that
+            // lacks v6 (or has Tailscale down for v6 only) should still serve.
+            const startTailnetV6Listener = (): void => {
+                if (!this._tailnetAddressV6) { return; }
+                this._tailnetServerV6 = http.createServer(requestHandler);
+                this._tailnetServerV6.listen(this._port, this._tailnetAddressV6, () => {
+                    console.log(`[LocalApiServer] Tailnet (IPv6) listener on [${this._tailnetAddressV6}]:${this._port}`);
+                    this._tailnetServerV6!.on('upgrade', upgradeRouter);
+                    tailnetV6Up = true;
+                    tryResolve();
+                });
+                this._tailnetServerV6.on('error', (err: Error) => {
+                    console.warn(`[LocalApiServer] Tailnet (IPv6) listener error (degrading to IPv4-only): ${err.message}`);
+                    // Drop the failed server and satisfy the gate so start()
+                    // resolves on v4 + loopback. Do NOT close the v4/loopback
+                    // listeners — a v6-only failure is recoverable, not fatal.
+                    this._tailnetServerV6 = null;
+                    tailnetV6Up = true;
+                    tryResolve();
+                });
             };
 
             // Opens the tailnet listener on the ALREADY-RESOLVED `this._port`.
@@ -1358,6 +1412,10 @@ export class LocalApiServer {
                     console.log(`[LocalApiServer] Tailnet listener on ${this._tailnetAddress}:${this._port}`);
                     this._tailnetServer!.on('upgrade', upgradeRouter);
                     tailnetUp = true;
+                    // Chain the v6 listener after v4 is up, so all three listeners
+                    // share the one resolved port. tryResolve() below will not
+                    // settle until the v6 gate is also satisfied.
+                    startTailnetV6Listener();
                     tryResolve();
                 });
                 this._tailnetServer.on('error', (err: Error) => {
@@ -1373,6 +1431,8 @@ export class LocalApiServer {
                     // failed start leaves nothing listening.
                     this._isListening = false;
                     try { this._server?.close(); } catch { /* already closing */ }
+                    try { this._tailnetServerV6?.close(); } catch { /* not up yet */ }
+                    this._tailnetServerV6 = null;
                     try { this._wsHub?.close(); } catch { /* not attached yet */ }
                     this._wsHub = null;
                     settle(new Error(msg));
@@ -1507,9 +1567,11 @@ export class LocalApiServer {
                 srv.close(() => resolve());
             });
         };
-        // Close both listeners. The tailnet listener is closed first so a peer
-        // mid-request on it does not race the loopback teardown the local agent
-        // clients still depend on.
+        // Close all listeners. The tailnet listeners are closed first (v6, then
+        // v4) so a peer mid-request on either does not race the loopback
+        // teardown the local agent clients still depend on.
+        await closeAll(this._tailnetServerV6);
+        this._tailnetServerV6 = null;
         await closeAll(this._tailnetServer);
         this._tailnetServer = null;
         if (this._server) {
@@ -1561,12 +1623,20 @@ export class LocalApiServer {
      * nowhere else).
      */
     private _isTailnetSocket(req: http.IncomingMessage): boolean {
-        if (!this._tailnetAddress) { return false; }
+        if (!this._tailnetAddress && !this._tailnetAddressV6) { return false; }
         const local = (req.socket as any)?.localAddress;
         if (!local) { return false; }
         // Node may report the v4-mapped v6 form `::ffff:100.110.206.86`.
         const stripped = local.replace(/^::ffff:/i, '');
-        return stripped === this._tailnetAddress;
+        if (this._tailnetAddress && stripped === this._tailnetAddress) { return true; }
+        // A genuine v6 local address (the v6 tailnet listener) is compared via
+        // the canonical normaliser — the kernel and Tailscale may report the
+        // same address with different `::` compression.
+        if (this._tailnetAddressV6 && stripped.includes(':')
+            && normalizeIpv6Literal(stripped) === normalizeIpv6Literal(this._tailnetAddressV6)) {
+            return true;
+        }
+        return false;
     }
 
     /**
@@ -2456,9 +2526,25 @@ export class LocalApiServer {
                 // with stale, cached scripts, so fixes appeared not to land. Code must
                 // revalidate every load; static art can still be cached hard.
                 const isCode = prefix === 'webview';
+                const stat = fsSync.statSync(candidate);
+                // `no-cache` means "revalidate before use", so without a validator it is a
+                // full re-download on every load. Derive an ETag from size + mtime (both
+                // already in hand from the isFile() stat above) and answer If-None-Match
+                // with 304, so a repeat load with an unchanged build transfers ~nothing.
+                const etag = `"${stat.size}-${stat.mtimeMs}"`;
+                if (req.headers['if-none-match'] === etag) {
+                    res.writeHead(304, {
+                        'ETag': etag,
+                        'Cache-Control': isCode ? 'no-cache' : 'public, max-age=3600',
+                    });
+                    res.end();
+                    return;
+                }
                 res.writeHead(200, {
                     'Content-Type': this._serveStaticMimeType(candidate),
                     'Cache-Control': isCode ? 'no-cache' : 'public, max-age=3600',
+                    'ETag': etag,
+                    'Last-Modified': stat.mtime.toUTCString(),
                 });
                 res.end(fsSync.readFileSync(candidate));
                 return;
@@ -12690,6 +12776,7 @@ export class LocalApiServer {
                         roots: { value: this._getKnownRoots(), source: 'launch' },
                         loopbackOnly: !tailnet,
                         tailnetAddress: this._tailnetAddress,
+                        tailnetAddressV6: this._tailnetAddressV6,
                         readOnly: false,
                         writeSupported: !!this._options.writeHostSettings,
                     }));
@@ -12705,6 +12792,7 @@ export class LocalApiServer {
                         roots: { value: this._getKnownRoots(), source: 'launch' },
                         loopbackOnly: !tailnet,
                         tailnetAddress: this._tailnetAddress,
+                        tailnetAddressV6: this._tailnetAddressV6,
                         readOnly: true,
                         note: 'Host-settings reader not wired. Serve mode and port are set at launch; re-launch with `switchboard local` or `switchboard tailnet`, or edit /etc/switchboard/switchboard.env and restart the service.'
                     }));

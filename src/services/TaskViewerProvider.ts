@@ -4064,7 +4064,19 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 console.warn('[TaskViewerProvider] switchboard.remote.tailnet is on but Tailscale is not running — falling back to loopback-only.');
                 return LOOPBACK_ONLY_POLICY;
             }
-            const magicDnsNames = await resolveMagicDnsNames();
+            const magicDnsResult = await resolveMagicDnsNames();
+            if (magicDnsResult.source === 'unavailable') {
+                // The probe was refused (socket missing, 403, parse failure, timeout)
+                // — NOT "this machine has no name". Surface the reason so the
+                // extension host and the standalone host do not disagree about
+                // whether a name exists: the standalone CLI prints a warning
+                // banner, and this log line is the extension's equivalent. The
+                // board still starts on the raw tailnet address; the MagicDNS
+                // URL block simply lists nothing, which is now an honest empty
+                // rather than a silent wrong answer.
+                console.warn(`[TaskViewerProvider] Could not read this machine's MagicDNS name from Tailscale (${magicDnsResult.reason}). The board is reachable at the tailnet address but NOT at its tailnet name — requests under that name will be refused.`);
+            }
+            const magicDnsNames = magicDnsResult.names;
             console.log(`[TaskViewerProvider] Tailnet mode: ${addr}${magicDnsNames.length ? ` (${magicDnsNames.join(', ')})` : ''}`);
             return { tailnetAddress: addr, magicDnsNames };
         } catch (e) {

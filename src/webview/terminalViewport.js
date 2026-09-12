@@ -390,15 +390,45 @@
         return !!(window.WebglAddon && window.WebglAddon.WebglAddon);
     }
 
+    // The canvas addon is the WebGL-unavailable fallback renderer. It used to be
+    // an eager <script defer> in terminals.html / dock.html, fetched and parsed on
+    // every load even though WebGL is the normal case. Now it is fetched only
+    // when WebGL is known absent. `attachCanvasRenderer` stays synchronous: if the
+    // script has not landed yet it falls through to the DOM renderer (its existing
+    // null-return path at the catch below), so the worst case is a slower renderer
+    // for the FIRST terminal on a WebGL-less machine until the script lands — never
+    // a missing one. The URI is injected server-side as a `data-canvas-addon-uri`
+    // body attribute (headlessPanelHtml.ts) so the runtime uses the resolved URL.
+    let canvasAddonKickoff = false;
+    function ensureCanvasAddonKickedOff() {
+        if (canvasAddonKickoff) { return; }
+        if (webglAvailable()) { return; }
+        const uri = document.body && document.body.dataset && document.body.dataset.canvasAddonUri;
+        if (!uri) { return; }
+        canvasAddonKickoff = true;
+        const s = document.createElement('script');
+        s.src = uri;
+        document.head.appendChild(s);
+    }
+    ensureCanvasAddonKickedOff();
+
     function attachCanvasRenderer(term) {
-        if (window.CanvasAddon && window.CanvasAddon.CanvasAddon) {
-            try {
-                const canvas = new window.CanvasAddon.CanvasAddon();
-                term.loadAddon(canvas);
-                return canvas;
-            } catch (err) {
-                console.warn('[Terminals] Canvas renderer unavailable, using DOM renderer:', err);
-            }
+        if (!(window.CanvasAddon && window.CanvasAddon.CanvasAddon)) {
+            // Addon not loaded yet. Two paths land here: (1) WebGL addon absent,
+            // already kicked off at module init; (2) WebGL addon present but context
+            // creation threw / a live context was lost — the canvas fetch was never
+            // started because webglAvailable() was true. Kick it off now so the
+            // NEXT attach gets canvas; THIS one falls through to the DOM renderer,
+            // which is the existing designed failure mode (slower, not missing).
+            ensureCanvasAddonKickedOff();
+            return null;
+        }
+        try {
+            const canvas = new window.CanvasAddon.CanvasAddon();
+            term.loadAddon(canvas);
+            return canvas;
+        } catch (err) {
+            console.warn('[Terminals] Canvas renderer unavailable, using DOM renderer:', err);
         }
         return null;
     }

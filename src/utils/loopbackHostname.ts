@@ -30,6 +30,42 @@ import * as http from 'http';
 const DOT_LOCALHOST_RE = /^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+localhost$/;
 
 /**
+ * Canonicalise an IPv6 literal for comparison.
+ *
+ * Strips brackets and a zone id, lowercases, expands `::` to the right number
+ * of zero hextets, and zero-pads each hextet to four digits. Two addresses that
+ * differ only in compression (`fd7a:115c:a1e0::1001:cec3` vs an expanded form)
+ * compare equal. A non-IPv6 input (no colon after stripping) is returned
+ * lowercased unchanged — this is a normaliser, not a validator, and the caller
+ * has already classified the value.
+ *
+ * Used by `isAllowedHostFor` (the bracketed `magicDnsNames` entry vs the `Host`
+ * header) and by `LocalApiServer._isTailnetSocket` (the bound v6 address vs
+ * `socket.localAddress`), so a compression mismatch between Tailscale's
+ * reported form and the kernel's reported form does not 403 a v6 client or
+ * misclassify a v6 socket as non-tailnet.
+ */
+export function normalizeIpv6Literal(input: string): string {
+    let s = input.trim().toLowerCase();
+    if (s.startsWith('[') && s.endsWith(']')) { s = s.slice(1, -1); }
+    const zone = s.indexOf('%');
+    if (zone >= 0) { s = s.slice(0, zone); }
+    if (!s.includes(':')) { return s; }
+    let hextets: string[];
+    if (s.includes('::')) {
+        // At most one `::` in a valid IPv6 literal; split on it.
+        const [headRaw, tailRaw = ''] = s.split('::');
+        const head = headRaw === '' ? [] : headRaw.split(':');
+        const tail = tailRaw === '' ? [] : tailRaw.split(':');
+        const missing = 8 - head.length - tail.length;
+        hextets = [...head, ...Array(Math.max(0, missing)).fill('0'), ...tail];
+    } else {
+        hextets = s.split(':');
+    }
+    return hextets.map(h => h.padStart(4, '0')).join(':');
+}
+
+/**
  * Split a `Host` header into its hostname, dropping the port.
  *
  * Returns null for anything malformed rather than guessing — a caller that
@@ -138,6 +174,20 @@ export function isAllowedHostFor(policy: BindPolicy, host: string | undefined): 
     const lower = name.toLowerCase();
     for (const dns of policy.magicDnsNames) {
         const d = dns.toLowerCase();
+        // A bracketed `magicDnsNames` entry is an IPv6 tailnet address (stored
+        // bracketed by `resolveMagicDnsNames`). The `Host` header for a v6
+        // literal arrives bracketed from `hostnameFromHostHeader`, so compare
+        // via the canonical normaliser — Tailscale and the kernel may report the
+        // same address with different `::` compression.
+        if (d.startsWith('[')) {
+            // Only a bracketed IPv6 literal (a colon inside the brackets) is an
+            // allowlist entry. A malformed bracketed value is ignored rather
+            // than matched — it contributes nothing, mirroring the
+            // constructor's v6 extraction which only binds a real v6 literal.
+            if (!d.slice(1, -1).includes(':')) { continue; }
+            if (normalizeIpv6Literal(name) === normalizeIpv6Literal(d)) { return true; }
+            continue;
+        }
         if (lower === d) { return true; }
         // Bare first label: exact match only. `foo.bar.ts.net` → bare label `foo`.
         // `foo.evil.example` must NOT match `foo`.

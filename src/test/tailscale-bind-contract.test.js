@@ -179,6 +179,116 @@ check('stop() closes both the loopback and tailnet listeners', () => {
     assert.ok(/closeAll\(this\._server\)/.test(src), 'stop() must close the loopback server');
 });
 
+// ------------------------------------------------- tailnet origin resolver (secure-origin plan)
+check('resolveTailnetOrigin exists and is imported by both composition roots', () => {
+    const resolverPath = path.join(REPO_ROOT, 'src', 'utils', 'tailnetOrigin.ts');
+    assert.ok(fs.existsSync(resolverPath), 'src/utils/tailnetOrigin.ts must exist (the shared resolver module)');
+    const resolver = fs.readFileSync(resolverPath, 'utf8');
+    assert.ok(/export async function resolveTailnetOrigin/.test(resolver), 'resolveTailnetOrigin must be exported');
+    assert.ok(/export interface TailnetOriginResult/.test(resolver), 'TailnetOriginResult must be exported');
+    assert.ok(/secure:\s*boolean/.test(resolver), 'the result must carry a `secure` flag');
+
+    const cliSrc = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'cli.ts'), 'utf8');
+    assert.ok(/from '\.\.\/utils\/tailnetOrigin'/.test(cliSrc), 'cli.ts must import the shared resolver');
+    assert.ok(/resolveTailnetOrigin|resolveTailnetUrl/.test(cliSrc), 'cli.ts must consume the resolver');
+
+    const extSrc = fs.readFileSync(path.join(REPO_ROOT, 'src', 'extension.ts'), 'utf8');
+    assert.ok(/from '\.\/utils\/tailnetOrigin'/.test(extSrc), 'extension.ts must import the shared resolver');
+    assert.ok(/resolveTailnetOrigin/.test(extSrc), 'extension.ts must consume the resolver');
+});
+
+check('the raw-IP tailnet URL interpolation is absent from the primary emission path in both roots', () => {
+    // The hardcoded `http://${tailnetAddress}` (or `bindPolicy.tailnetAddress`)
+    // string must be gone from the primary URL construction in both roots —
+    // replaced by a call to the shared resolver. The IP survives only as the
+    // resolver's terminal fallback and as an explicit `ipFallback` line.
+    const cliSrc = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'cli.ts'), 'utf8');
+    // The resolver helper builds the IP fallback; the emission sites must go
+    // through resolveTailnetUrl/resolveTailnetOrigin, not interpolate directly.
+    assert.ok(!/const tailnetUrl = `http:\/\/\$\{tailnetAddress\}:\$\{instance\.port\}\/`/.test(cliSrc),
+        'the foreground tailnet URL must not be hardcoded as http://${tailnetAddress}:${instance.port}/');
+
+    const extSrc = fs.readFileSync(path.join(REPO_ROOT, 'src', 'extension.ts'), 'utf8');
+    assert.ok(!/const tailnetUrl = `http:\/\/\$\{bindPolicy\.tailnetAddress\}:\$\{port\}\/`/.test(extSrc),
+        'the extension tailnet URL must not be hardcoded as http://${bindPolicy.tailnetAddress}:${port}/');
+});
+
+check('an HTTPS-capable probe (https.get, not http.get) exists for the cert-liveness check', () => {
+    const resolver = fs.readFileSync(path.join(REPO_ROOT, 'src', 'utils', 'tailnetOrigin.ts'), 'utf8');
+    assert.ok(/import \* as https from 'https'/.test(resolver), 'the resolver must import the https module');
+    assert.ok(/export async function isHttpsOriginReachable/.test(resolver), 'isHttpsOriginReachable must be exported');
+    assert.ok(/https\.get/.test(resolver), 'the TLS probe must use https.get, not http.get — a TLS handshake is the cert-liveness check (Edge Case 2)');
+    // The HTTP probe is reused from loopbackHostname (http.get); the resolver
+    // itself must not perform an http.get for the HTTPS candidate.
+    assert.ok(!/\bhttp\.get\(/.test(resolver), 'the resolver must not call http.get directly — the HTTP candidate reuses isHostnameReachable');
+});
+
+check('the probe target is /health, never /?token= — the one-time token must not be burned', () => {
+    const resolver = fs.readFileSync(path.join(REPO_ROOT, 'src', 'utils', 'tailnetOrigin.ts'), 'utf8');
+    assert.ok(resolver.includes('/health'), 'the probe path must include /health');
+    assert.ok(!/\?token=/.test(resolver), 'no probe path may include ?token= — consumeOneTimeToken succeeds exactly once');
+});
+
+check('the serve-config parser reads /localapi/v0/serve-config (primary) with the CLI as fallback, never a bare spawn', () => {
+    const src = fs.readFileSync(path.join(REPO_ROOT, 'src', 'utils', 'tailnetDetect.ts'), 'utf8');
+    assert.ok(src.includes('/localapi/v0/serve-config'), 'the primary transport must hit /localapi/v0/serve-config');
+    assert.ok(/serve',\s*'status',\s*'--json'/.test(src), 'the CLI fallback must run `tailscale serve status --json` via the absolute-path probe');
+    assert.ok(/detectServeConfigMapping/.test(src), 'detectServeConfigMapping must be exported');
+    assert.ok(/readCertDomains/.test(src), 'readCertDomains must be exported');
+    // The Host header constant is shared so the serve-config probe cannot drift
+    // on the value Subtask 0 fixed.
+    assert.ok(src.includes('LOCALAPI_HOST_HEADER'), 'the serve-config probe must reuse the shared Host header constant');
+});
+
+check('the HTTPS candidate is skipped when CertDomains is empty or null (pre-flight check)', () => {
+    const resolver = fs.readFileSync(path.join(REPO_ROOT, 'src', 'utils', 'tailnetOrigin.ts'), 'utf8');
+    assert.ok(/certDomains && certDomains\.length > 0/.test(resolver),
+        'the HTTPS candidate must be gated on certDomains being non-null AND non-empty — cert generation disabled short-circuits the TLS probe');
+});
+
+check('the serve-config parser degrades to null on any parse failure or schema mismatch', () => {
+    const src = fs.readFileSync(path.join(REPO_ROOT, 'src', 'utils', 'tailnetDetect.ts'), 'utf8');
+    // The parser must never throw — every shape mismatch returns null.
+    const parserIdx = src.indexOf('function parseWebKey');
+    assert.ok(parserIdx > 0, 'parseWebKey must exist');
+    const parser = src.slice(parserIdx, parserIdx + 1000);
+    assert.ok(/return null/.test(parser), 'parseWebKey must return null on shape mismatch, not throw');
+    const proxyIdx = src.indexOf('function proxyMatchesBoardPort');
+    assert.ok(proxyIdx > 0, 'proxyMatchesBoardPort must exist');
+    const proxy = src.slice(proxyIdx, proxyIdx + 1000);
+    assert.ok(/return false/.test(proxy) && !/throw/.test(proxy), 'proxyMatchesBoardPort must return false on mismatch, not throw');
+    // The top-level detectServeConfigMapping must catch and return null.
+    const detectIdx = src.indexOf('export async function detectServeConfigMapping');
+    assert.ok(detectIdx > 0, 'detectServeConfigMapping must exist');
+    const detect = src.slice(detectIdx, detectIdx + 1600);
+    assert.ok(/return null/.test(detect), 'detectServeConfigMapping must return null when no mapping is found');
+    assert.ok(/\} catch \{/.test(detect), 'detectServeConfigMapping must catch any parse failure and return null');
+});
+
+check('the advisory line fires only when the chosen origin is insecure', () => {
+    const cliSrc = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'cli.ts'), 'utf8');
+    // The advisory names the concrete cost (Home Screen install), not generic
+    // TLS advice, and does NOT claim to fix copy-button reliability.
+    assert.ok(/Home Screen/.test(cliSrc), 'the advisory must name the Home Screen install cost');
+    assert.ok(!/clipboard.*reliab/i.test(cliSrc) || !/fix.*clipboard/i.test(cliSrc),
+        'the advisory must not claim to fix copy-button reliability');
+    // The advisory is gated on `!secure` — it must not fire when the scheme is https.
+    assert.ok(/!tailnetResolved\.secure/.test(cliSrc), 'the advisory must be gated on the chosen origin being insecure');
+    assert.ok(/tailnetResolved\.secure && tailnetResolved\.isFunnel/.test(cliSrc),
+        'the funnel note must fire only when the chosen origin is secure AND a funnel endpoint');
+
+    const extSrc = fs.readFileSync(path.join(REPO_ROOT, 'src', 'extension.ts'), 'utf8');
+    assert.ok(/!tailnetResolved\.secure/.test(extSrc), 'the extension advisory must be gated on insecure');
+});
+
+check('an explicit --hostname bypasses the resolver (Edge Case 7)', () => {
+    const cliSrc = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'cli.ts'), 'utf8');
+    assert.ok(/hostnameExplicit/.test(cliSrc), 'cli.ts must compute a hostnameExplicit flag');
+    assert.ok(/if \(hostnameExplicit\)/.test(cliSrc), 'the resolver helper must short-circuit on an explicit --hostname');
+    // The advisory must also be suppressed when --hostname is explicit.
+    assert.ok(/!hostnameExplicit/.test(cliSrc), 'the advisory must be suppressed when --hostname is explicit');
+});
+
 // ------------------------------------------------- Run
 console.log('\nTailscale bind-policy contract tests:');
 console.log(`  ${passed} passed, ${failed} failed`);
