@@ -673,6 +673,15 @@ function apiRequest(
         if (token) {
             headers['Authorization'] = `Bearer ${token}`;
         }
+        // Positive client marker for the CSRF guard (plan:
+        // browser-board-csrf-cross-site-rejection). The guard rejects a request
+        // with no `Origin`, no `Sec-Fetch-Site`, and no marker — a local CLI
+        // caller sends none of the browser signals, so it MUST send the marker
+        // or it 403s. A browser cannot set a custom header on a cross-site
+        // request without a CORS preflight, and the preflight mirrors
+        // `Access-Control-Allow-Origin` only for an origin the bind policy
+        // already allows — so a hostile page cannot forge it.
+        headers['X-Switchboard-Client'] = 'switchboard-cli';
         const req = http.request(url, { method: upperMethod, headers }, (res) => {
             let body = '';
             res.on('data', (c: Buffer) => body += c.toString());
@@ -3443,6 +3452,9 @@ async function main() {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${trimmed}`,
+                    // Positive client marker for the CSRF guard (plan:
+                    // browser-board-csrf-cross-site-rejection).
+                    'X-Switchboard-Client': 'switchboard-cli',
                     'Content-Length': 0,
                 },
                 timeout: 5000,
@@ -4646,6 +4658,18 @@ async function main() {
         console.log(`Board URL (one-time token): ${boardUrl}`);
         console.log(`For a token that survives restarts and can enrol a second device: npx switchboard token rotate`);
     }
+    // In tailnet mode the browser must be handed the tailnet URL — the one that
+    // needs no credential and cannot be spent — instead of the loopback URL with
+    // a single-use token that is routinely consumed by a browser prefetch before
+    // the page loads. `tailnetUrl` is the resolver's output (HTTPS FQDN, HTTP
+    // FQDN, or HTTP IP — in that trust order), computed inside the tailnet branch
+    // below and hoisted here so `openBrowser` can select it. Without this the
+    // banner advertises the credential-free URL and the browser launches the
+    // credentialed one, which then fails with a spent-token error. Do NOT fall
+    // back to `boardUrl` if the tailnet open appears to fail — the mode already
+    // refuses to start without a live Tailscale, so reintroducing the token URL
+    // restores the reported bug under a condition nobody will notice.
+    let launchUrl = boardUrl;
     if (tailnetAddress) {
         // Tailnet mode: no token is required on the tailnet listener (decision 4:
         // tailnet membership is the control). Print the resolver-picked URL so
@@ -4656,6 +4680,7 @@ async function main() {
         // honours the operator's choice verbatim (Edge Case 7).
         const hostnameExplicit = Boolean(args._explicit?.hostname);
         const tailnetResolved = await resolveTailnetUrl(tailnetAddress, magicDnsNames, instance.port, hostnameExplicit);
+        launchUrl = tailnetResolved.url;
         console.log(`\nTailnet URL (no token needed, on your tailnet only): ${tailnetResolved.url}`);
         // The raw-IP tailnet URL stays as a fallback line — a Tailscale hiccup
         // that breaks the resolver-picked name must not force a re-run to find
@@ -4707,7 +4732,10 @@ async function main() {
     }
 
     if (!args.noOpen) {
-        await openBrowser(boardUrl);
+        // `launchUrl` is the tailnet URL in tailnet mode (no credential, cannot
+        // be spent) and the loopback token URL otherwise. See the comment at the
+        // declaration for why this is not `boardUrl` unconditionally.
+        await openBrowser(launchUrl);
     }
 
     // Discovery hint (Part 3, Phase 3). tmux does not exist on native Windows,

@@ -149,6 +149,15 @@ func (t *Transport) apiRequest(method, pathname string, payload any, query map[s
 	if t.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+t.Token)
 	}
+	// Positive client marker for the CSRF guard (plan:
+	// browser-board-csrf-cross-site-rejection). The guard rejects a request
+	// with no Origin, no Sec-Fetch-Site, and no marker — a local CLI caller
+	// sends none of the browser signals, so it MUST send the marker or it
+	// 403s. A browser cannot set a custom header on a cross-site request
+	// without a CORS preflight, and the preflight mirrors
+	// Access-Control-Allow-Origin only for an origin the bind policy already
+	// allows — so a hostile page cannot forge it.
+	req.Header.Set("X-Switchboard-Client", "switchboard-cli")
 
 	client := t.HTTP
 	if timeoutMs != defaultTimeoutMs {
@@ -209,6 +218,15 @@ func (t *Transport) GetHealth(timeoutMs int) (*HealthJSON, error) {
 	if t.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+t.Token)
 	}
+	// Positive client marker for the CSRF guard (plan:
+	// browser-board-csrf-cross-site-rejection). The guard rejects a request
+	// with no Origin, no Sec-Fetch-Site, and no marker — a local CLI caller
+	// sends none of the browser signals, so it MUST send the marker or it
+	// 403s. A browser cannot set a custom header on a cross-site request
+	// without a CORS preflight, and the preflight mirrors
+	// Access-Control-Allow-Origin only for an origin the bind policy already
+	// allows — so a hostile page cannot forge it.
+	req.Header.Set("X-Switchboard-Client", "switchboard-cli")
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err

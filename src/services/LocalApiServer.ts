@@ -1743,12 +1743,48 @@ export class LocalApiServer {
     // lacks a valid Bearer header or sb_session cookie — the opt-in credential
     // path. bootstrap.ts trims the stored value and treats whitespace-only as
     // "no token" (loopback trust) rather than a silently-blank credential.
+    //
+    // Trust model (post browser-board-csrf-cross-site-rejection): the extension
+    // board is loopback-trusted AND CSRF-guarded (the cross-site rejection
+    // guard in `_handleRequest` rejects hostile-page requests via
+    // `Sec-Fetch-Site`/`Origin`/`X-Switchboard-Client`), NOT authenticated —
+    // `getAuthToken()` is always '' there, so no session cookie is set. The
+    // standalone host is both: a durable token opts back into credential
+    // enforcement, and the CSRF guard runs unconditionally regardless.
     private _sendUnauthorized(res: http.ServerResponse): void {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
             error: 'Unauthorized',
             detail: 'Invalid or missing session. Open the board URL from a fresh `npx switchboard` launch to obtain a session cookie.'
         }));
+    }
+
+    /**
+     * Body for a spent / invalid one-time token response.
+     *
+     * The one-time token is single-use and consumed server-side, so anything
+     * that touches the URL before the real page load spends it — a browser
+     * prefetch, a redirect, a reload, or the URL having been opened once
+     * already. The bare `Invalid or expired one-time token` string gave the
+     * operator no route forward; this names the consequence (single-use, already
+     * consumed) and, when a tailnet listener is active, points at the
+     * credential-free tailnet URL — the bind policy's tailnet address, which is
+     * always reachable on the tailnet even when the resolver picked the FQDN.
+     * The server does not run the resolver; the raw tailnet address is the
+     * always-reachable name it does know.
+     */
+    private _spentTokenBody(): string {
+        const lines = [
+            'Invalid or expired one-time token.',
+            'The one-time token is single-use and was already consumed (a browser prefetch, redirect, or reload spends it).',
+        ];
+        if (this._tailnetAddress) {
+            const tailnetUrl = `http://${this._tailnetAddress}:${this._port}/`;
+            lines.push(`This board is also reachable without a credential on your tailnet: ${tailnetUrl}`);
+        } else {
+            lines.push('Re-launch `npx switchboard` to mint a fresh one-time token.');
+        }
+        return lines.join('\n');
     }
 
     /**
@@ -1819,17 +1855,23 @@ export class LocalApiServer {
         if (token) {
             if (this._options.consumeOneTimeToken && this._options.consumeOneTimeToken(token)) {
                 const expected = await this._options.getAuthToken();
-                const expires = new Date(Date.now() + 8 * 60 * 60 * 1000).toUTCString(); // 8 hours
-                res.writeHead(303, {
+                // Skip Set-Cookie when `expected` is empty — an empty
+                // `sb_session=` cookie is meaningless and misleads readers
+                // (plan: browser-board-csrf-cross-site-rejection, step 7).
+                const redirectHeaders: Record<string, string> = {
                     'Location': '/',
-                    'Set-Cookie': `sb_session=${expected}; Path=/; HttpOnly; SameSite=Strict; Expires=${expires}`,
                     'Cache-Control': 'no-store',
-                });
+                };
+                if (expected) {
+                    const expires = new Date(Date.now() + 8 * 60 * 60 * 1000).toUTCString(); // 8 hours
+                    redirectHeaders['Set-Cookie'] = `sb_session=${expected}; Path=/; HttpOnly; SameSite=Strict; Expires=${expires}`;
+                }
+                res.writeHead(303, redirectHeaders);
                 res.end();
                 return;
             }
             res.writeHead(401, { 'Content-Type': 'text/plain' });
-            res.end('Invalid or expired one-time token');
+            res.end(this._spentTokenBody());
             return;
         }
 
@@ -1871,17 +1913,22 @@ export class LocalApiServer {
         if (token) {
             if (this._options.consumeOneTimeToken && this._options.consumeOneTimeToken(token)) {
                 const expected = await this._options.getAuthToken();
-                const expires = new Date(Date.now() + 8 * 60 * 60 * 1000).toUTCString();
-                res.writeHead(303, {
+                // Skip Set-Cookie when `expected` is empty (plan:
+                // browser-board-csrf-cross-site-rejection, step 7).
+                const redirectHeaders: Record<string, string> = {
                     'Location': '/project',
-                    'Set-Cookie': `sb_session=${expected}; Path=/; HttpOnly; SameSite=Strict; Expires=${expires}`,
                     'Cache-Control': 'no-store',
-                });
+                };
+                if (expected) {
+                    const expires = new Date(Date.now() + 8 * 60 * 60 * 1000).toUTCString();
+                    redirectHeaders['Set-Cookie'] = `sb_session=${expected}; Path=/; HttpOnly; SameSite=Strict; Expires=${expires}`;
+                }
+                res.writeHead(303, redirectHeaders);
                 res.end();
                 return;
             }
             res.writeHead(401, { 'Content-Type': 'text/plain' });
-            res.end('Invalid or expired one-time token');
+            res.end(this._spentTokenBody());
             return;
         }
 
@@ -1925,17 +1972,22 @@ export class LocalApiServer {
         if (token) {
             if (this._options.consumeOneTimeToken && this._options.consumeOneTimeToken(token)) {
                 const expected = await this._options.getAuthToken();
-                const expires = new Date(Date.now() + 8 * 60 * 60 * 1000).toUTCString();
-                res.writeHead(303, {
+                // Skip Set-Cookie when `expected` is empty (plan:
+                // browser-board-csrf-cross-site-rejection, step 7).
+                const redirectHeaders: Record<string, string> = {
                     'Location': '/',
-                    'Set-Cookie': `sb_session=${expected}; Path=/; HttpOnly; SameSite=Strict; Expires=${expires}`,
                     'Cache-Control': 'no-store',
-                });
+                };
+                if (expected) {
+                    const expires = new Date(Date.now() + 8 * 60 * 60 * 1000).toUTCString();
+                    redirectHeaders['Set-Cookie'] = `sb_session=${expected}; Path=/; HttpOnly; SameSite=Strict; Expires=${expires}`;
+                }
+                res.writeHead(303, redirectHeaders);
                 res.end();
                 return;
             }
             res.writeHead(401, { 'Content-Type': 'text/plain' });
-            res.end('Invalid or expired one-time token');
+            res.end(this._spentTokenBody());
             return;
         }
 
@@ -12197,6 +12249,55 @@ export class LocalApiServer {
     }
 
     /**
+     * Cross-site request (CSRF) guard predicate — plan
+     * `browser-board-csrf-cross-site-rejection.md`. Returns true when the
+     * request may proceed, false when it must be 403'd. Uses request metadata
+     * (`Sec-Fetch-Site`, `Origin`) and a positive client marker
+     * (`X-Switchboard-Client`), never a credential:
+     *   - `Sec-Fetch-Site: cross-site`/`same-site` → REJECT (browser signal
+     *     always wins; marker is NOT an override; same-site is rejected
+     *     because different localhost ports are not same-origin).
+     *   - `Sec-Fetch-Site: none`/`same-origin` → ALLOW.
+     *   - `Origin` present → ALLOW iff `isAllowedOriginFor` trusts it.
+     *   - Neither present → ALLOW iff `X-Switchboard-Client` is set
+     *     (2026-09-10 correction: header absence no longer allows).
+     * `/health` is exempt — port discovery works before a client knows
+     * anything about the server.
+     */
+    private _isAllowedCrossSiteRequest(req: http.IncomingMessage): boolean {
+        // `/health` exemption — strip the query to compare the pathname.
+        const rawUrl = req.url || '';
+        const pathOnly = rawUrl.indexOf('?') >= 0 ? rawUrl.slice(0, rawUrl.indexOf('?')) : rawUrl;
+        if (pathOnly === '/health') { return true; }
+
+        const fetchSite = req.headers['sec-fetch-site'];
+        if (typeof fetchSite === 'string') {
+            // Browser signal always wins; marker is not an override.
+            if (fetchSite === 'cross-site' || fetchSite === 'same-site') {
+                return false;
+            }
+            if (fetchSite === 'none' || fetchSite === 'same-origin') {
+                return true;
+            }
+            // Unknown value: fall through to the Origin check.
+        }
+
+        const origin = req.headers['origin'];
+        if (typeof origin === 'string' && origin.length > 0) {
+            // Trusted-origin set decides — same predicate as the Host guard
+            // and the WS upgrade auth, so one list, three guards.
+            return this._isLocalhostOrigin(origin);
+        }
+
+        // Neither signal present: non-browser case. A supported local client
+        // sends `X-Switchboard-Client`; a request with none of the three is
+        // rejected (2026-09-10 correction). A browser cannot forge the marker
+        // — a custom header on a cross-site request requires a CORS preflight.
+        const marker = req.headers['x-switchboard-client'];
+        return typeof marker === 'string' && marker.length > 0;
+    }
+
+    /**
      * Compression configuration — see plan
      * `the-board-ships-2-8mb-of-uncompressed-json-so-a-remote-device-waits-minutes.md`
      * change 2. The board ships ~2.8 MB of uncompressed JSON; gzip takes the
@@ -12509,10 +12610,65 @@ export class LocalApiServer {
         // unconditional session secret, assuming it did would be actively wrong.
         // The planned Sec-Fetch-Site/Origin metadata guard
         // (browser-board-csrf-cross-site-rejection.md) must likewise be
-        // credential-independent when it lands.
+        // credential-independent when it lands. The CSRF guard (Guard 3b below)
+        // IS credential-independent — it runs unconditionally, before any auth.
         if (this._options.serveStatic && !this._isAllowedHost(req.headers['host'])) {
             res.writeHead(403, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'Access denied: invalid Host header' }));
+            return;
+        }
+
+        // Guard 3b: cross-site rejection (CSRF). The board is served
+        // unauthenticated by both hosts when no durable token is configured
+        // (the extension host ALWAYS, the standalone host since bootstrap.ts
+        // stopped minting a random secret). Authentication was the board's only
+        // defence against a hostile page, and one of the two hosts had none —
+        // so every state-changing route (42 POSTs, the verb rails, PUT, DELETE)
+        // was reachable from any page the operator visited while a board was
+        // open. The request-metadata signals that distinguish "the board's own
+        // fetch" from "some other page's fetch" — `Sec-Fetch-Site` and `Origin`
+        // — are available on every browser request and were checked nowhere.
+        //
+        // This guard is UNCONDITIONAL (not gated on `serveStatic`): the
+        // extension host is precisely the host that needs it, and local
+        // scripts send no `Origin` so they are unaffected. It runs BEFORE any
+        // route handler — after the Host guard, before CORS mirroring — so no
+        // state-changing route is reachable without passing it. It applies to
+        // GET as well as the mutating methods: a side-effecting GET reached via
+        // `<img src>` or a navigation carries no preflight, and
+        // `Sec-Fetch-Site: cross-site` is present on those requests. (Audit
+        // 2026-09-13 confirmed no side-effecting GET endpoint exists today;
+        // the guard covers the class regardless.)
+        //
+        // `/health` is exempt: it is the port-discovery probe used by
+        // `cli-call.js`, the `kanban_operations` scripts and `cli.ts`'s
+        // `probeHealth`/`waitForHealth`. Those callers send no `Origin`, so
+        // they pass the marker check anyway — but exempting it explicitly keeps
+        // discovery working even from a browser context and documents the
+        // intent.
+        //
+        // The trusted-origin set is loopback plus the tailnet bind policy's
+        // hosts — NOT loopback alone. A page served at the machine's MagicDNS
+        // name sends that name as its `Origin` on every `fetch`; an
+        // loopback-only rule would 403 every verb the operator triggers from
+        // the one remote surface that works, and fail invisibly (a verb POST
+        // has no timeout). The set reuses `isAllowedOriginFor` — the SAME
+        // predicate the Host guard and the WS upgrade auth use — so one list,
+        // three guards, no second copy to drift.
+        //
+        // Header-absence rule (2026-09-10 correction): absence of both
+        // `Origin` and `Sec-Fetch-Site` is NO LONGER allowed. curl is not a
+        // supported client, and an allow-rule keyed on header absence cannot
+        // tell a supported caller from any other process on the box. A
+        // supported non-browser caller sends an explicit `X-Switchboard-Client`
+        // marker; a request with none of the three is rejected. A browser
+        // cannot add a custom header to a cross-site request without a CORS
+        // preflight, and the preflight mirrors `Access-Control-Allow-Origin`
+        // only for an origin the bind policy already allows — so a hostile
+        // page cannot set the marker at all.
+        if (!this._isAllowedCrossSiteRequest(req)) {
+            res.writeHead(403, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Access denied: cross-site request rejected' }));
             return;
         }
 
@@ -12524,7 +12680,7 @@ export class LocalApiServer {
             res.setHeader('Access-Control-Allow-Origin', origin);
         }
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Switchboard-Client');
 
         if (req.method === 'OPTIONS') {
             res.writeHead(204);

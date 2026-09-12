@@ -9293,13 +9293,20 @@ Each plan file must include:
         commands: Record<string, string>;
         planIngestionFolder: string;
         visibleAgents: Record<string, boolean>;
+        machines?: any[];
+        machineId?: string;
     }> {
-        const [commands, planIngestionFolder, visibleAgents] = await Promise.all([
+        const [commands, planIngestionFolder, visibleAgents, machines] = await Promise.all([
             this.getStartupCommands(workspaceRoot),
             this.getPlanIngestionFolder(workspaceRoot),
-            this.getVisibleAgents(workspaceRoot)
+            this.getVisibleAgents(workspaceRoot),
+            GlobalIntegrationConfigService.getMachines(),
         ]);
-        return { commands, planIngestionFolder, visibleAgents };
+        // The UI defaults to the `local` machine on first load; the command map
+        // returned here is the local machine's (the legacy flat map, which the
+        // migration copied into `machineStartupCommands.local`). See the plan
+        // `agents-are-saved-per-machine-and-a-team-picks-one`.
+        return { commands, planIngestionFolder, visibleAgents, machines, machineId: 'local' };
     }
 
     public handleGetAccurateCodingSetting(): boolean {
@@ -13990,8 +13997,20 @@ Each plan file must include:
             // are shared across every workspace AND every IDE (the authoritative source
             // read by getStartupCommands). The updateState() write above keeps the legacy
             // globalState/DB copies in sync for older code paths.
+            //
+            // Machine threading (plan: agents-are-saved-per-machine-and-a-team-picks-one):
+            // when `data.machineId` is present, write to the per-machine command map;
+            // otherwise fall back to the legacy flat key (callers not yet threaded).
             if (data.commands) {
-                await GlobalIntegrationConfigService.setAgentStartupCommands(data.commands);
+                if (typeof data.machineId === 'string' && data.machineId) {
+                    await GlobalIntegrationConfigService.setMachineStartupCommands(data.machineId, data.commands);
+                    // Mirror local to the legacy flat key so unthreaded callers stay in sync.
+                    if (data.machineId === 'local') {
+                        await GlobalIntegrationConfigService.setAgentStartupCommands(data.commands);
+                    }
+                } else {
+                    await GlobalIntegrationConfigService.setAgentStartupCommands(data.commands);
+                }
             }
 
             // Persist visibleAgents and customAgents to the machine-global, cross-IDE store
@@ -14415,6 +14434,10 @@ Each plan file must include:
                 cwd: spec.cwd,
                 delegates: spec.delegates,
                 teamName: spec.teamName,
+                // Thread the team's machine to the pty host — the head AND every
+                // delegate resolve from this machine. See the plan
+                // `agents-are-saved-per-machine-and-a-team-picks-one`.
+                machineId: spec.machineId,
                 // Bypassing handlePtyVerb also bypasses its host-side resolution of
                 // this setting, and the pty child cannot read configuration — so
                 // without this line an agent-group head (and, by inheritance, its
@@ -16028,6 +16051,114 @@ Each plan file must include:
                         const startupState = await this.handleGetStartupCommands();
                         this.postMessage({ type: 'startupCommands', ...startupState });
                         return { success: true, ...startupState };
+                    }
+                    case 'getStartupCommandsForMachine': {
+                        // Per-machine command map (plan:
+                        // agents-are-saved-per-machine-and-a-team-picks-one).
+                        const machineId = typeof data.machineId === 'string' ? data.machineId : 'local';
+                        const commands = (await GlobalIntegrationConfigService.getAgentStartupCommands(machineId)) || {};
+                        this.postMessage({ type: 'startupCommandsForMachine', machineId, commands });
+                        return { success: true, machineId, commands };
+                    }
+                    case 'getMachines': {
+                        const machines = await GlobalIntegrationConfigService.getMachines();
+                        this.postMessage({ type: 'machinesList', machines });
+                        return { success: true, machines };
+                    }
+                    case 'saveMachine': {
+                        const machine = data.machine;
+                        const mode = data.mode === 'edit' ? 'edit' : 'add';
+                        if (!machine || typeof machine.id !== 'string' || !machine.id) {
+                            return { success: false, error: 'Machine id is required' };
+                        }
+                        const machines = await GlobalIntegrationConfigService.getMachines();
+                        const exists = machines.some(m => m.id === machine.id);
+                        if (mode === 'add' && exists) {
+                            return { success: false, error: `Machine id '${machine.id}' already exists` };
+                        }
+                        const normalized = {
+                            id: machine.id,
+                            name: machine.name || machine.id,
+                            transport: machine.transport === 'ssh' || machine.transport === 'mosh' ? machine.transport : 'local',
+                            transportPrefix: machine.transport === 'local' ? '' : (machine.transportPrefix || ''),
+                        };
+                        const next = exists
+                            ? machines.map(m => m.id === normalized.id ? normalized : m)
+                            : [...machines, normalized];
+                        await GlobalIntegrationConfigService.setMachines(next);
+                        const finalMachines = await GlobalIntegrationConfigService.getMachines();
+                        this.postMessage({ type: 'saveMachineResult', machines: finalMachines, selectedMachineId: normalized.id });
+                        this.postMessage({ type: 'machinesList', machines: finalMachines });
+                        return { success: true, machines: finalMachines, selectedMachineId: normalized.id };
+                    }
+                    case 'deleteMachine': {
+                        const machineId = typeof data.machineId === 'string' ? data.machineId : '';
+                        if (!machineId || machineId === 'local') {
+                            return { success: false, error: 'The local machine cannot be deleted' };
+                        }
+                        // Refuse to delete a machine pinned by any team — orphaning
+                        // a team's machine is the fallback-indistinguishable-from-a-value
+                        // trap. See the plan
+                        // `agents-are-saved-per-machine-and-a-team-picks-one`.
+                        const wsRoot = this._getWorkspaceRoot();
+                        if (wsRoot) {
+                            try {
+                                const db = await this._getKanbanDb(wsRoot);
+                                if (db) {
+                                    const groups = await db.getConfigJson?.('terminals.agentGroups', []) as any[];
+                                    if (Array.isArray(groups)) {
+                                        const pinned = groups.filter(g => g && g.machine === machineId);
+                                        if (pinned.length > 0) {
+                                            const names = pinned.map(g => g.name || g.id).join(', ');
+                                            const error = `Machine '${machineId}' is used by team(s): ${names}. Remove or re-pin them first.`;
+                                            this.postMessage({ type: 'deleteMachineResult', error });
+                                            return { success: false, error };
+                                        }
+                                    }
+                                }
+                            } catch { /* best-effort — refuse-on-failure is safer */ }
+                        }
+                        const machines = await GlobalIntegrationConfigService.getMachines();
+                        const next = machines.filter(m => m.id !== machineId);
+                        await GlobalIntegrationConfigService.setMachines(next);
+                        const finalMachines = await GlobalIntegrationConfigService.getMachines();
+                        this.postMessage({ type: 'deleteMachineResult', machines: finalMachines, selectedMachineId: 'local' });
+                        this.postMessage({ type: 'machinesList', machines: finalMachines });
+                        return { success: true, machines: finalMachines, selectedMachineId: 'local' };
+                    }
+                    case 'probeMachine': {
+                        const machineId = typeof data.machineId === 'string' ? data.machineId : 'local';
+                        const machine = await GlobalIntegrationConfigService.getMachineSync(machineId);
+                        if (!machine) {
+                            this.postMessage({ type: 'probeMachineResult', machineId, reachable: false, error: 'Machine not found' });
+                            return { success: false, error: 'Machine not found' };
+                        }
+                        // Probe the transport WITHOUT spawning an agent. Local is
+                        // always reachable (it is this host). ssh/mosh run a
+                        // zero-side-effect command (`true`) to test reachability.
+                        try {
+                            if (machine.transport === 'local' || !machine.transportPrefix) {
+                                this.postMessage({ type: 'probeMachineResult', machineId, reachable: true });
+                                return { success: true, reachable: true };
+                            }
+                            const probeCmd = machine.transport === 'ssh'
+                                ? `ssh ${machine.transportPrefix} true`
+                                : machine.transport === 'mosh'
+                                    ? `mosh ${machine.transportPrefix} -- true`
+                                    : `true`;
+                            const { exec } = require('child_process');
+                            await new Promise<void>((resolve, reject) => {
+                                exec(probeCmd, { timeout: 15000 }, (err: any) => {
+                                    if (err) { reject(err); } else { resolve(); }
+                                });
+                            });
+                            this.postMessage({ type: 'probeMachineResult', machineId, reachable: true });
+                            return { success: true, reachable: true };
+                        } catch (err: any) {
+                            const error = err instanceof Error ? err.message : String(err);
+                            this.postMessage({ type: 'probeMachineResult', machineId, reachable: false, error });
+                            return { success: false, reachable: false, error };
+                        }
                     }
                     case 'getVisibleAgents': {
                         const vis = await this.getVisibleAgents();
@@ -23172,6 +23303,9 @@ Each plan file must include:
                             method: 'POST',
                             headers: {
                                 'Content-Type': 'application/json',
+                                // Positive client marker for the CSRF guard
+                                // (plan: browser-board-csrf-cross-site-rejection).
+                                'X-Switchboard-Client': 'extension-host',
                                 ...(preCheckToken ? { 'Authorization': `Bearer ${preCheckToken}` } : {}),
                             },
                         }, (res: any) => {
