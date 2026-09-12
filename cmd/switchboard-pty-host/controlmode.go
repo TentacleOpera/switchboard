@@ -161,18 +161,31 @@ func ParseControlMode(chunk string, state *ParseState) []ControlMessage {
 	// The stream opens with a DCS sequence, not a `%` line. It can arrive
 	// split across the first chunk boundary, so we wait until we have enough
 	// bytes to decide.
-	if !state.entryConsumed {
-		if len(buf) < len(dcsEntry) && strings.HasPrefix(dcsEntry, buf) {
-			// A prefix of the DCS — wait for the rest.
-			state.pending = buf
-			return nil
-		}
-		if strings.HasPrefix(buf, dcsEntry) {
-			buf = buf[len(dcsEntry):]
+	// SCAN for the DCS on EVERY chunk; do not require it at offset 0 and do not
+	// give up after the first one. A seat's pty does not open on `tmux -CC`: it
+	// opens on a LOGIN SHELL that echoes the whole
+	// `tmux has-session … ; exec tmux -u -CC attach` chain first, so the DCS
+	// arrives well into the stream. The old prefix-only, one-shot check left
+	// dcsSeen false forever, so controlActive never flipped and every keystroke
+	// was written raw into a control-mode stdin, where tmux parses it as a
+	// command and discards it — typed input vanished while the write reported
+	// success. The captured fixtures attach `-CC` directly, so they DO start
+	// with the DCS and every test passed against a stream shape production never
+	// produces.
+	//
+	// Scanning `buf` (pending + chunk) also handles a DCS split across a chunk
+	// boundary: the partial has no newline, so it is carried in `pending` and the
+	// whole sequence is present here on a later call.
+	//
+	// Everything else is unchanged: pre-DCS shell lines do not start with `%`, so
+	// they fall through to the KindIgnored arm and reach the operator as output.
+	if !state.dcsSeen {
+		if i := strings.Index(buf, dcsEntry); i >= 0 {
+			buf = buf[:i] + buf[i+len(dcsEntry):]
 			state.dcsSeen = true
 		}
-		state.entryConsumed = true
 	}
+	state.entryConsumed = true
 
 	// Strip the DCS string terminator (ESC \) if tmux emits it on detach.
 	// Safe because raw ESC never appears inside an escaped `%output` payload.

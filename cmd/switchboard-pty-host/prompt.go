@@ -70,6 +70,59 @@ func clearReadinessWindows(family string) (ceiling, quiet time.Duration, detect 
 	}
 }
 
+// clearStrategy is the DECLARED per-family context-reset mechanism, never
+// inferred from observed behaviour. "in-process" keeps the /clear input-box
+// path (cheap and correct for CLIs that empty an input buffer). "respawn"
+// kills the CLI in the pty and starts a fresh login shell, then re-injects the
+// seat's startup command — used where /clear is already a session restart
+// (Devin), so driving it through the composer pays the full delivery
+// machinery to reach a process that is about to be replaced anyway.
+//
+// Defaults to "in-process": an unrecognised family keeps today's behaviour
+// rather than being respawned on a guessed argv shape.
+func clearStrategy(family string) string {
+	switch family {
+	case "devin":
+		return "respawn"
+	default:
+		return "in-process"
+	}
+}
+
+// respawnArgvSuffix is the DECLARED per-family argv template — where the
+// prompt goes relative to the startup command. Applied by the Go host when
+// it re-injects the startup command after a respawn. The shapes differ in a
+// way that fails silently if guessed: claude takes a positional prompt,
+// devin takes a prompt only after `--` (a bare string before `--` is read as
+// a PATH, so a mis-shaped call does not error; it treats the prompt as a
+// directory).
+//
+// The prompt is shell-quoted so a prompt containing metacharacters is passed
+// as a single argument, not interpreted by the shell.
+func respawnArgvSuffix(family, prompt string) string {
+	if prompt == "" {
+		return ""
+	}
+	quoted := shellQuote(prompt)
+	switch family {
+	case "claude":
+		return " " + quoted
+	case "devin":
+		return " -- " + quoted
+	default:
+		return " -- " + quoted
+	}
+}
+
+// shellQuote wraps a string in single quotes for safe shell consumption,
+// escaping embedded single quotes as '\'' (the standard POSIX-safe idiom).
+// A multi-line prompt inside single quotes is literal to the shell — the
+// newlines are part of the argument, not command separators — so a composed
+// prompt (seat block + standing orders + task) survives as one argv entry.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 func devinReady(buf string) bool {
 	disabledAt := strings.LastIndex(buf, "\x1b[?2004l")
 	enabledAt := strings.LastIndex(buf, "\x1b[?2004h")
@@ -191,6 +244,34 @@ func (f *fleet) deliverPrompt(name, text string, clearBefore bool, delayMs int, 
 		}
 	}
 	if effectiveClear {
+		// Respawn families: replace the CLI with a fresh login shell and
+		// re-inject the startup command with the prompt in the family's argv
+		// shape. The prompt is delivered AS the argv argument, so the
+		// bracketed-paste path below is skipped entirely — no text is typed
+		// into a composer, no completion menu opens, no blind CR is sent, and
+		// the declared --model is re-applied because the startup command is
+		// re-read. See
+		// a-seats-clear-strategy-is-declared-per-cli-family-not-assumed.md.
+		if clearStrategy(family) == "respawn" {
+			t.mu.Lock()
+			res := f.respawnAndReinject(t, family, text)
+			t.mu.Unlock()
+			if res["success"] == false {
+				return res
+			}
+			cleared = true
+			readiness = map[string]any{"reason": "respawn", "elapsedMs": time.Since(start).Milliseconds()}
+			deliveredAt := time.Now().UnixMilli()
+			out := map[string]any{
+				"success": true, "bytesWritten": len(text), "deliveredAt": deliveredAt,
+				"promptSeq": t.promptCount, "bootPhase": bootPhase, "cleared": cleared,
+				"respawned": true, "pid": res["pid"],
+			}
+			out["deliveryReason"] = readiness["reason"]
+			out["readiness"] = readiness
+			f.logPrompt(name, text)
+			return out
+		}
 		ceiling, quiet, detect := clearReadinessWindows(family)
 		if !detect {
 			if err := writeSlashLocked(t, "/clear"); err != nil {

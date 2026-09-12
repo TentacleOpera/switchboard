@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -433,5 +434,63 @@ func TestDecodeCaptureC(t *testing.T) {
 	}
 	if got := string(decodeCaptureC("plain")); got != "plain" {
 		t.Fatalf("passthrough: got %q want %q", got, "plain")
+	}
+}
+
+// TestDcsArrivesMidStream: a seat's pty opens on a LOGIN SHELL that echoes the
+// tmux setup chain, so the DCS arrives well into the stream, never at offset 0.
+// A prefix-only check left dcsSeen false forever and every keystroke was written
+// raw into control-mode stdin and discarded. The fixtures attach -CC directly so
+// they start with the DCS — this is the shape production actually produces.
+func TestDcsArrivesMidStream(t *testing.T) {
+	shell := "patrick@host:~/switchboard$ tmux has-session -t lc-x || tmux new-session -d\r\n"
+	in := shell + dcsEntry + "%output %7 hi\\015\\012\r\n"
+	var st ParseState
+	msgs := ParseControlMode(in, &st)
+	if !st.dcsSeen {
+		t.Fatalf("dcsSeen must be true when the DCS arrives mid-stream")
+	}
+	// The shell preamble arrives as KindIgnored (no leading '%'), which main.go
+	// already surfaces to the operator as output — that path is unchanged. What
+	// matters here is that the DCS was FOUND mid-stream and the protocol after it
+	// parses, because dcsSeen is what flips controlActive and routes input
+	// through send-keys instead of raw writes.
+	last := msgs[len(msgs)-1]
+	if last.Kind != KindOutput {
+		t.Fatalf("last msg kind=%v want KindOutput: %+v", last.Kind, msgs)
+	}
+	if string(last.Data) != "hi\r\n" {
+		t.Fatalf("pane output=%q want %q", last.Data, "hi\r\n")
+	}
+	if last.PaneID != "7" {
+		t.Fatalf("pane=%q want 7", last.PaneID)
+	}
+}
+
+// TestDcsSplitAcrossChunks: the DCS may straddle a chunk boundary mid-stream.
+func TestDcsSplitAcrossChunks(t *testing.T) {
+	full := "shell output\r\n" + dcsEntry + "%output %3 x\r\n"
+	for i := 1; i < len(full); i++ {
+		var st ParseState
+		ParseControlMode(full[:i], &st)
+		ParseControlMode(full[i:], &st)
+		if !st.dcsSeen {
+			t.Fatalf("dcsSeen false when split at offset %d", i)
+		}
+	}
+}
+
+// TestSendKeysLiteralFlagForm: `-lt -t` is accepted by tmux and delivers
+// NOTHING — `-lt` is `-l` plus `-t`, so the following `-t` is consumed as the
+// target and the pane id becomes a keystroke. Ordinary typed text is all
+// literal-safe, so this path carries almost every keystroke.
+func TestSendKeysLiteralFlagForm(t *testing.T) {
+	cmds := encodeSendKeys("7", "hello")
+	joined := strings.Join(cmds, "\n")
+	if strings.Contains(joined, "-lt -t") {
+		t.Fatalf("send-keys must use `-l -t`, not `-lt -t`: %q", joined)
+	}
+	if joined != "send-keys -l -t %7 hello" {
+		t.Fatalf("want `send-keys -l -t %%7 hello`, got %q", joined)
 	}
 }

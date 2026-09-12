@@ -43,6 +43,12 @@ type terminal struct {
 	cliFamily             string
 	startupCommand        string
 	startupCommandSource  string
+	// env is the environment slice the terminal was spawned with, retained so
+	// a respawn can start a fresh login shell under the SAME identity env
+	// (SWITCHBOARD_TERMINAL, SWITCHBOARD_AGENT_INSTANCE_ID, SWITCHBOARD_API_TOKEN,
+	// CLAUDE_CODE_*). Without it a respawned devin seat would lose its seat
+	// identity and its board API token.
+	env []string
 	claudeInlineRendering bool
 	isTeamMember          bool
 	listenersMu           sync.Mutex
@@ -224,6 +230,15 @@ func (f *fleet) create(payload map[string]any) (map[string]any, error) {
 		isTeamMember: boolField(payload, "_isTeamMember"),
 		listeners:    make(map[chan string]struct{}),
 		controlMode:  controlMode,
+		// Recorded at create so a respawn (clearStrategy "respawn") can
+		// re-inject the seat's startup command verbatim — the only way a
+		// declared --model holds across a reset, since /clear restarts
+		// Devin's session internally and never re-reads the startup command.
+		// The Go host replays this string into a fresh login shell; it never
+		// re-derives or parses it. See
+		// a-seats-clear-strategy-is-declared-per-cli-family-not-assumed.md.
+		startupCommand: strField(payload, "startupCommand"),
+		env:            env,
 	}
 	if controlMode {
 		t.parseState = &ParseState{}
@@ -603,6 +618,112 @@ func (f *fleet) dispose() {
 	}
 }
 
+// respawnTerminal replaces the CLI running inside an existing pty with a fresh
+// login shell, reusing the terminal name, listeners, ring, WebSocket clients
+// and fleet registry row. The underlying pty fd is replaced (a new process
+// needs a new pty pair), but everything keyed by name survives — readOutput
+// emits to t.emit(chunk) and f.publish(name, chunk), both keyed by name, not
+// by fd. This is the clearStrategy "respawn" mechanism: instead of typing
+// /clear into a TUI composer (which on Devin restarts the session internally
+// and never re-applies the startup command's --model), the CLI is killed and
+// a fresh shell is started, into which the startup command is re-injected.
+//
+// Caller MUST hold t.mu (the per-terminal lock) so the fd replacement is
+// atomic against every other writer. The new readOutput goroutine is started
+// before the lock is released so the first bytes reach subscribers.
+//
+// Returns the new pid and an error if the fresh shell could not be started.
+// A respawn with no startup command is a seat that should never have been
+// created (only the shell role is legitimately CLI-less, and it is not a
+// respawn family) — fail loudly here and name the role; do not substitute
+// /clear to paper over it.
+func (f *fleet) respawnTerminal(t *terminal) (int, error) {
+	if t.startupCommand == "" {
+		return 0, fmt.Errorf("respawn requires a startup command for role %q (none recorded at create)", t.role)
+	}
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "/bin/sh"
+	}
+	cmd := exec.Command(shell, "-l")
+	cmd.Dir = t.cwd
+	cmd.Env = t.env
+	applySession(cmd)
+	// Kill the old process tree and close the old master fd BEFORE starting
+	// the new pty pair. killProcessTree waits up to 500ms for SIGTERM then
+	// SIGKILLs, so the old fd is released by the time the new one opens.
+	killProcessTree(t)
+	_ = t.file.Close()
+	file, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: 80, Rows: 24})
+	if err != nil {
+		t.status = "exited"
+		return 0, err
+	}
+	// Update the terminal struct in place — name, listeners, ring, clients
+	// and registry row all stay. Reset the per-delivery and control-mode
+	// state so the fresh shell starts clean.
+	t.cmd = cmd
+	t.file = file
+	t.pid = cmd.Process.Pid
+	t.status = "active"
+	t.promptCount = 0
+	t.lastDataAt = time.Now().UnixMilli()
+	t.controlActive = false
+	t.paneID = ""
+	t.copyModeActive = false
+	t.pendingInput = nil
+	t.pendingCols = 0
+	t.pendingRows = 0
+	t.parseState = &ParseState{}
+	t.pendingBlocks = nil
+	t.sessionTarget = ""
+	t.historyFetched = false
+	go f.readOutput(t.name, file)
+	return t.pid, nil
+}
+
+// respawnAndReinject is the full clearStrategy "respawn" sequence: replace the
+// CLI with a fresh login shell, wait for the shell to produce output (so the
+// re-injected startup command lands in a shell that is reading stdin), then
+// write startupCommand + argv-suffix + \r. The argv suffix carries the prompt
+// in the family's declared shape (e.g. ` -- "prompt"` for devin); an empty
+// prompt (the clear button) re-injects the bare startup command, restarting
+// the CLI idle — exactly as at initial spawn.
+//
+// Returns a delivery-shaped map so the clear verbs and deliverPrompt's clear
+// branch can report the same fields (cleared, respawned, pid, error) callers
+// already read. A child that exits immediately is reported as cleared=false
+// with the error — unlike the old /clear path, which returned {cleared: true}
+// even on failure.
+func (f *fleet) respawnAndReinject(t *terminal, family, prompt string) map[string]any {
+	pid, err := f.respawnTerminal(t)
+	if err != nil {
+		return map[string]any{"success": false, "cleared": false, "respawned": true, "error": err.Error()}
+	}
+	// Wait for the fresh login shell to produce output before re-injecting,
+	// reusing the cold-boot first-readiness gate. Readiness here is the shell
+	// coming up (it prints its prompt), not a signal scraped from post-clear
+	// output — respawn is a cold boot.
+	ceiling, quiet := firstReadinessWindows(family)
+	reason, _, waitErr := f.waitReadiness(t, ceiling, quiet, false, nil, nil)
+	if waitErr != nil {
+		return map[string]any{"success": false, "cleared": false, "respawned": true, "error": waitErr.Error(), "pid": pid}
+	}
+	if reason == "exit" {
+		return map[string]any{"success": false, "cleared": false, "respawned": true, "error": "terminal exited during respawn boot", "pid": pid}
+	}
+	// Re-inject the startup command with the prompt appended in the family's
+	// argv shape. The shell is fresh — no completion menu, no leftover
+	// buffer, no running TUI composer — so a single write + \r starts the
+	// CLI with the prompt as an argument, exactly as at initial spawn.
+	line := t.startupCommand + respawnArgvSuffix(family, prompt) + "\r"
+	if err := writeToPty(t, line); err != nil {
+		return map[string]any{"success": false, "cleared": false, "respawned": true, "error": err.Error(), "pid": pid}
+	}
+	t.promptCount = 1
+	return map[string]any{"success": true, "cleared": true, "respawned": true, "pid": pid}
+}
+
 func (t *terminal) subscribe() (<-chan string, func()) {
 	ch := make(chan string, 256)
 	t.listenersMu.Lock()
@@ -727,20 +848,52 @@ func (f *fleet) handleVerb(verb string, payload map[string]any) (any, error) {
 			}
 		}
 		f.mu.RUnlock()
+		clearedCount := 0
 		for _, t := range active {
-			_ = writeSlashLocked(t, "/clear")
+			// Consult the declared per-family strategy. Respawn families get
+			// a fresh login shell + startup-command re-inject (the operator-
+			// facing clear button respawns a Devin seat instead of driving a
+			// hidden restart through its composer). in-process families keep
+			// the /clear input-box path. The per-terminal lock serializes the
+			// respawn against any in-flight deliverPrompt paste on the same
+			// seat — the clear button bypasses the Node-side withTerminalLock,
+			// so t.mu is the only serialization here.
+			if clearStrategy(t.cliFamily) == "respawn" {
+				t.mu.Lock()
+				res := f.respawnAndReinject(t, t.cliFamily, "")
+				t.mu.Unlock()
+				if res["success"] == true {
+					clearedCount++
+				}
+				continue
+			}
+			if err := writeSlashLocked(t, "/clear"); err == nil {
+				clearedCount++
+			}
 		}
-		return map[string]any{"success": true, "cleared": len(active)}, nil
+		return map[string]any{"success": true, "cleared": clearedCount}, nil
 	case "ptyClearTerminal":
 		name, _ := payload["name"].(string)
 		t, ok := f.get(name)
 		if !ok {
 			return map[string]any{"success": false, "error": "No such terminal: " + name}, nil
 		}
-		if t.status == "active" {
-			if err := writeSlashLocked(t, "/clear"); err != nil {
-				return nil, err
-			}
+		if t.status != "active" {
+			return map[string]any{"success": true}, nil
+		}
+		// Consult the declared per-family strategy. Respawn families get a
+		// fresh login shell + startup-command re-inject; in-process families
+		// keep /clear. The per-terminal lock (t.mu) serializes the respawn
+		// against an in-flight deliverPrompt paste — the clear button bypasses
+		// the Node-side withTerminalLock, so t.mu is the only serialization.
+		if clearStrategy(t.cliFamily) == "respawn" {
+			t.mu.Lock()
+			res := f.respawnAndReinject(t, t.cliFamily, "")
+			t.mu.Unlock()
+			return res
+		}
+		if err := writeSlashLocked(t, "/clear"); err != nil {
+			return nil, err
 		}
 		return map[string]any{"success": true}, nil
 	case "ptySendModel":

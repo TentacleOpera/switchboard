@@ -34,12 +34,26 @@ const (
 // newline in `cmd`) to the pty stdin, appending the terminator. An empty
 // command is skipped: a bare newline detaches the control client. Caller
 // holds t.mu.
-func writeControlCommandLocked(t *terminal, cmd string) error {
+// EVERY command sent to control-mode stdin produces exactly one %begin/%end
+// reply block, so every command MUST push its kind onto the FIFO that publish()
+// pops. Taking the kind here — rather than leaving callers to remember a
+// separate append — is what keeps the two aligned by construction.
+//
+// They were not aligned: 8 commands were written and only 3 pushed. Flow control
+// (`refresh-client -f`) is sent BEFORE `list-panes`, so its reply popped the
+// blockPaneID entry, parsePaneIDFromBlock read an empty block, and t.paneID was
+// never learned. writeControlModeInputLocked then buffered every keystroke
+// waiting for a pane id that could not arrive, while ptyWrite returned success —
+// typed input vanished on every seat. Each send-keys desynced it further.
+func writeControlCommandLocked(t *terminal, cmd string, kind blockKind) error {
 	if cmd == "" {
 		return nil
 	}
-	_, err := t.file.WriteString(cmd + "\n")
-	return err
+	if _, err := t.file.WriteString(cmd + "\n"); err != nil {
+		return err
+	}
+	t.pendingBlocks = append(t.pendingBlocks, kind)
+	return nil
 }
 
 // isLiteralSafeRune reports whether a rune may travel via `send-keys -lt`
@@ -135,8 +149,23 @@ func encodeSendKeys(paneID string, data string) []string {
 					end = j
 				}
 				var b strings.Builder
-				b.WriteString("send-keys -lt -t ")
+				// `-l -t`, NOT `-lt -t`. tmux parses `-lt` as `-l` plus `-t`, and `-t`
+				// takes an argument — so it swallowed the following `-t` as the
+				// target and treated `%<pane> <text>` as the keys. tmux ACCEPTS it
+				// and exits 0 while delivering nothing, which is why ordinary typed
+				// text (all literal-safe, so it takes this path) vanished on every
+				// seat with the write reporting success. Verified against a live
+				// pane: `-lt -t` delivers 0, `-l -t` delivers 1.
+				b.WriteString("send-keys -l -t ")
 				b.WriteString(target)
+				// The separating space is REQUIRED and was missing: the hex and
+				// code-point branches prefix each argument with " ", this one wrote
+				// the text flush against the target, so the command read
+				// `send-keys -l -t %7hello` and tmux resolved a pane named
+				// "%7hello". Unquoted is safe because isLiteralSafeRune admits only
+				// alphanumerics and `+ / ) : , _` — never a space or a shell
+				// metacharacter, so a literal run is always a single bare word.
+				b.WriteString(" ")
 				for k := start; k < end; k++ {
 					b.WriteRune(runes[k])
 				}
@@ -210,13 +239,13 @@ func flushPendingInputLocked(t *terminal) error {
 // modes before the pane). Caller holds t.mu.
 func sendKeysLocked(t *terminal, data string) error {
 	if t.copyModeActive {
-		if err := writeControlCommandLocked(t, "send-keys -t %"+t.paneID+" -X cancel"); err != nil {
+		if err := writeControlCommandLocked(t, "send-keys -t %"+t.paneID+" -X cancel", blockNone); err != nil {
 			return err
 		}
 		t.copyModeActive = false
 	}
 	for _, cmd := range encodeSendKeys(t.paneID, data) {
-		if err := writeControlCommandLocked(t, cmd); err != nil {
+		if err := writeControlCommandLocked(t, cmd, blockNone); err != nil {
 			return err
 		}
 	}
@@ -230,14 +259,14 @@ func sendKeysLocked(t *terminal, data string) error {
 // `refresh-client -A '%n:continue'`. `no-detach-on-destroy` keeps the control
 // client attached when a session is destroyed. Caller holds t.mu.
 func sendFlowControlLocked(t *terminal) error {
-	return writeControlCommandLocked(t, "refresh-client -f no-detach-on-destroy,pause-after=30")
+	return writeControlCommandLocked(t, "refresh-client -f no-detach-on-destroy,pause-after=30", blockNone)
 }
 
 // sendListPanesLocked queries the pane id for a session. The reply arrives as
 // a %begin/%end block; the caller must push blockPaneID onto pendingBlocks so
 // publish() parses it instead of routing it to the browser. Caller holds t.mu.
 func sendListPanesLocked(t *terminal, target string) error {
-	return writeControlCommandLocked(t, fmt.Sprintf("list-panes -t %s -F \"#{pane_id}\"", target))
+	return writeControlCommandLocked(t, fmt.Sprintf("list-panes -t %s -F \"#{pane_id}\"", target), blockPaneID)
 }
 
 // sendHistoryFetchLocked issues the two capture-pane calls that fill a freshly
@@ -250,10 +279,10 @@ func sendListPanesLocked(t *terminal, target string) error {
 // holds t.mu.
 func sendHistoryFetchLocked(t *terminal) error {
 	pane := "%" + t.paneID
-	if err := writeControlCommandLocked(t, fmt.Sprintf("capture-pane -t %s -peqJN -S -50000", pane)); err != nil {
+	if err := writeControlCommandLocked(t, fmt.Sprintf("capture-pane -t %s -peqJN -S -50000", pane), blockScrollback); err != nil {
 		return err
 	}
-	return writeControlCommandLocked(t, fmt.Sprintf("capture-pane -t %s -p -P -C", pane))
+	return writeControlCommandLocked(t, fmt.Sprintf("capture-pane -t %s -p -P -C", pane), blockPending)
 }
 
 // parsePaneIDFromBlock extracts the first pane id from a list-panes reply

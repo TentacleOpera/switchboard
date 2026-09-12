@@ -195,5 +195,5 @@ func ptyResize(t *terminal, cols, rows uint16) error {
 		t.pendingRows = rows
 		return nil
 	}
-	return writeControlCommandLocked(t, fmt.Sprintf("refresh-client -C %dx%d", cols, rows))
+	return writeControlCommandLocked(t, fmt.Sprintf("refresh-client -C %dx%d", cols, rows), blockNone)
 }
