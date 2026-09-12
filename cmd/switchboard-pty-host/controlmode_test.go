@@ -494,3 +494,49 @@ func TestSendKeysLiteralFlagForm(t *testing.T) {
 		t.Fatalf("want `send-keys -l -t %%7 hello`, got %q", joined)
 	}
 }
+
+// TestSeatingChainEchoIsSuppressed: a seat's pty opens on a login shell that
+// echoes the whole seating chain before `exec tmux -CC` takes over. Rendering it
+// put the tmux start commands in the operator's pane. It must be held back, and
+// the protocol after the DCS must still parse.
+func TestSeatingChainEchoIsSuppressed(t *testing.T) {
+	shell := "patrick@host:~/sb$ tmux has-session -t lc-x || tmux new-session -d -s lc-x\r\n"
+	in := shell + dcsEntry + "%output %7 hi\\015\\012\r\n"
+	var st ParseState
+	msgs := ParseControlMode(in, &st)
+	for _, m := range msgs {
+		if strings.Contains(string(m.Data), "has-session") || (len(m.Fields) > 0 && strings.Contains(m.Fields[0], "has-session")) {
+			t.Fatalf("seating chain echo reached the pane: %+v", m)
+		}
+	}
+	if len(msgs) != 1 || msgs[0].Kind != KindOutput || string(msgs[0].Data) != "hi\r\n" {
+		t.Fatalf("want the pane output only, got %+v", msgs)
+	}
+}
+
+// TestPreambleSurfacesWhenControlModeNeverStarts: if tmux never starts the held
+// preamble is the ONLY diagnostic, so it must be flushed, not dropped.
+func TestPreambleSurfacesWhenControlModeNeverStarts(t *testing.T) {
+	var st ParseState
+	if msgs := ParseControlMode("bash: tmux: command not found\r\n", &st); len(msgs) != 0 {
+		t.Fatalf("expected the error to be held pending a DCS, got %+v", msgs)
+	}
+	out := FlushPreamble(&st)
+	if !strings.Contains(string(out), "command not found") {
+		t.Fatalf("FlushPreamble must surface the held error, got %q", out)
+	}
+}
+
+// TestPreambleCapGivesUp: past the cap, control mode is not coming — stop
+// suppressing so output reaches the operator.
+func TestPreambleCapGivesUp(t *testing.T) {
+	var st ParseState
+	big := strings.Repeat("x", preambleCapBytes+10) + "\r\n"
+	msgs := ParseControlMode(big, &st)
+	if len(msgs) == 0 {
+		t.Fatalf("past the cap the parser must emit, not keep holding")
+	}
+	if !st.preambleGaveUp {
+		t.Fatalf("preambleGaveUp must latch so later chunks are not suppressed")
+	}
+}

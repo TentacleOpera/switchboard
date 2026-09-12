@@ -105,10 +105,36 @@ type blockState struct {
 // owned by the caller (one per seat stream); the parser mutates it in place but
 // performs no I/O.
 type ParseState struct {
-	pending       string // partial line awaiting a terminator
-	entryConsumed bool   // the leading DCS sequence has been stripped
-	dcsSeen       bool   // the DCS entry was actually matched (not just skipped)
-	block         *blockState
+	pending string // partial line awaiting a terminator
+	// preamble holds bytes seen BEFORE the DCS. A seat's pty opens on a login
+	// shell that echoes the whole `tmux has-session … ; exec tmux -u -CC attach`
+	// chain, and rendering that put the seating commands in the operator's pane.
+	// It is held rather than dropped: if tmux never starts (not installed, chain
+	// failed) this is the ONLY diagnostic, so it is flushed on the byte cap or at
+	// EOF instead of being silently discarded.
+	preamble       []byte
+	preambleGaveUp bool // cap exceeded — stop suppressing, this is not control mode
+	entryConsumed  bool // the leading DCS sequence has been stripped
+	dcsSeen        bool // the DCS entry was actually matched (not just skipped)
+	block          *blockState
+}
+
+// preambleCapBytes bounds how much pre-DCS output is held back. The seating
+// chain echo is a few hundred bytes and the DCS follows it immediately, so
+// anything beyond this is not a chain waiting on tmux — it is a terminal that
+// will never enter control mode, and its output must reach the operator.
+const preambleCapBytes = 8192
+
+// FlushPreamble returns any held pre-DCS bytes and clears them. The caller
+// invokes it at EOF so a seat whose tmux never started shows why instead of a
+// blank pane.
+func FlushPreamble(state *ParseState) []byte {
+	if state == nil || len(state.preamble) == 0 {
+		return nil
+	}
+	out := state.preamble
+	state.preamble = nil
+	return out
 }
 
 // dcsEntry is the control-mode opening sequence: ESC P 1000 p.
@@ -181,8 +207,43 @@ func ParseControlMode(chunk string, state *ParseState) []ControlMessage {
 	// they fall through to the KindIgnored arm and reach the operator as output.
 	if !state.dcsSeen {
 		if i := strings.Index(buf, dcsEntry); i >= 0 {
-			buf = buf[:i] + buf[i+len(dcsEntry):]
+			// The DCS arrived: everything before it was the shell echoing the
+			// seating chain. Drop it — tmux is about to repaint the pane anyway,
+			// and the history replay supplies the real scrollback.
+			state.preamble = nil
+			buf = buf[i+len(dcsEntry):]
 			state.dcsSeen = true
+		} else if !state.preambleGaveUp && !strings.HasPrefix(strings.TrimLeft(buf, "\r\n"), "%") {
+			// Only suppress what is plainly NOT protocol. A buffer already
+			// starting with `%` is control output whose DCS we missed (or a
+			// synthetic stream); parse it rather than holding it, so a missed
+			// entry sequence degrades to "renders correctly" instead of "renders
+			// nothing". The shell's seating-chain echo starts with `tmux`/a
+			// prompt, never `%`.
+			// No DCS yet. Hold these bytes instead of rendering the chain — but
+			// keep any trailing PREFIX of the DCS in `pending`, or a DCS split
+			// across a chunk boundary is swallowed into the preamble and control
+			// mode never starts. (Found by TestChunkBoundarySafety at offset 1,
+			// where the first chunk is the bare ESC.)
+			keep := 0
+			for k := len(dcsEntry) - 1; k > 0; k-- {
+				if strings.HasSuffix(buf, dcsEntry[:k]) {
+					keep = k
+					break
+				}
+			}
+			state.preamble = append(state.preamble, buf[:len(buf)-keep]...)
+			state.pending = buf[len(buf)-keep:]
+			if len(state.preamble) > preambleCapBytes {
+				// Too much to be a seating chain — control mode is not coming.
+				// Surface what we held so a broken tmux is visible, then stop
+				// suppressing.
+				out := state.preamble
+				state.preamble = nil
+				state.preambleGaveUp = true
+				return []ControlMessage{{Kind: KindOutput, Data: out}}
+			}
+			return nil
 		}
 	}
 	state.entryConsumed = true

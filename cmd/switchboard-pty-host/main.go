@@ -321,6 +321,17 @@ func (f *fleet) readOutput(name string, file *os.File) {
 			f.publish(name, chunk)
 		}
 		if err != nil {
+			// A seat whose tmux never started holds its shell output in the
+			// preamble (suppressed so the seating chain does not render). At EOF
+			// that held text is the ONLY explanation for the dead pane —
+			// `tmux: command not found`, a chain error — so surface it before
+			// tearing down rather than losing it with the terminal.
+			if t := f.terminals[name]; t != nil && t.controlMode {
+				if held := FlushPreamble(t.parseState); len(held) > 0 {
+					t.emit(string(held))
+					f.routeOutput(name, string(held))
+				}
+			}
 			f.mu.Lock()
 			if t := f.terminals[name]; t != nil {
 				t.status = "exited"
