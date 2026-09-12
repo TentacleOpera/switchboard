@@ -6,15 +6,15 @@ import (
 )
 
 const (
-	chunkSize            = 256
-	chunkDelay           = 8 * time.Millisecond
-	submitSettle         = 40 * time.Millisecond
-	confirmEnterDelay    = 200 * time.Millisecond
-	clearInputSettle     = 30 * time.Millisecond
-	defaultClearSettle   = 600 * time.Millisecond
-	clearInputLine       = "\x15"
-	bracketedPasteOpen   = "\x1b[200~"
-	bracketedPasteClose  = "\x1b[201~"
+	chunkSize           = 256
+	chunkDelay          = 8 * time.Millisecond
+	submitSettle        = 40 * time.Millisecond
+	confirmEnterDelay   = 200 * time.Millisecond
+	clearInputSettle    = 30 * time.Millisecond
+	defaultClearSettle  = 600 * time.Millisecond
+	clearInputLine      = "\x15"
+	bracketedPasteOpen  = "\x1b[200~"
+	bracketedPasteClose = "\x1b[201~"
 )
 
 func sleep(d time.Duration) { time.Sleep(d) }

@@ -53,20 +53,20 @@ func serveLauncherUI(workspaceRoot string, preferredPort int) {
 		// raw state. Go's json.Marshal only serializes fields, not methods, so
 		// the action list is projected here.
 		emitJSONTo(w, map[string]any{
-			"state":            state.State,
-			"availableActions": state.AvailableActions(),
-			"workspaceRoot":    workspaceRoot,
-			"runningHost":      state.RunningHost,
-			"runningPort":      state.RunningPort,
-			"runningSource":    state.RunningSource,
-			"shutdownCapability": state.ShutdownCap,
-			"hostInstalled":    state.HostInstalled,
-			"hostEntry":        state.HostEntry,
-			"hostSource":       state.HostSource,
-			"workspaces":       state.Workspaces,
-			"dependencies":     state.Dependencies,
+			"state":                 state.State,
+			"availableActions":      state.AvailableActions(),
+			"workspaceRoot":         workspaceRoot,
+			"runningHost":           state.RunningHost,
+			"runningPort":           state.RunningPort,
+			"runningSource":         state.RunningSource,
+			"shutdownCapability":    state.ShutdownCap,
+			"hostInstalled":         state.HostInstalled,
+			"hostEntry":             state.HostEntry,
+			"hostSource":            state.HostSource,
+			"workspaces":            state.Workspaces,
+			"dependencies":          state.Dependencies,
 			"selectedWorkspaceRoot": state.SelectedRoot,
-			"servedRoots":      state.ServedRoots,
+			"servedRoots":           state.ServedRoots,
 		})
 	})
 

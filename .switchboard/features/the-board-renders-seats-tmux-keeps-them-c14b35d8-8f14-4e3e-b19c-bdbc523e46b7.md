@@ -104,7 +104,7 @@ identically at 49e2f7ca. **Go verification ran in full (toolchain at `/home/patr
 
 ## Deferred Findings
 
-- NIT: `log.go` and `prompt.go` are not gofmt-clean. Pre-existing (unformatted before 234a9060) and untouched by this review, so left alone to avoid diff noise. `cmd/switchboard-pty-host/log.go:1`
+- MAJOR: `./internal` is not gofmt-clean (9 files) and is excluded from the new CI gofmt gate. gofmt would restructure `i++; x = args[i]` statements there, not merely realign, so it needs its own commit before the gate widens. `internal/client/verbs.go:1`
 - MAJOR: The global `ESC \` (ST) and CR strips run over block content too, which with `-e` contains RAW ESC — a captured OSC sequence ending in ST would be silently eaten. Fixing needs the strips moved out of the whole-buffer path. `cmd/switchboard-pty-host/controlmode.go:181`
 - MAJOR: No automated check exercises a real seat rendering through control mode end-to-end. The Go tests cover the parser and `pty-host-blackbox` covers the WS/input/resize/logging path against the real binary, but no gate attaches to a live tmux seat. `cmd/switchboard-pty-host/controlmode_test.go:1`
 - NIT: `%pause` now auto-resumes, which defeats the backpressure `pause-after=30` requests; correct for restoring seat liveness but the flow-control intent is now vestigial. `cmd/switchboard-pty-host/main.go:396`

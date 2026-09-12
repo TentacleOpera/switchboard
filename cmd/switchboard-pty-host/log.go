@@ -17,10 +17,10 @@ const (
 var ansiRE = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[P_^X][^\x1b]*(?:\x1b\\|\x9c)|\x1b[()*+].|\x1b[@-Z\\-_]|\x9b[ -/]*[@-~]|\x9c`)
 
 type sessionLog struct {
-	path     string
-	open     bool
-	size     int
-	session  string
+	path    string
+	open    bool
+	size    int
+	session string
 }
 
 func stripAnsi(text string) string { return ansiRE.ReplaceAllString(text, "") }

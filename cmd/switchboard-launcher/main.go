@@ -281,11 +281,11 @@ func cmdInstall(workspaceRoot string, jsonFlag bool) {
 	state := resolveState(workspaceRoot)
 	if jsonFlag {
 		emitJSON(map[string]any{
-			"success":              false,
-			"error":                "automatic installation is disabled pending research",
-			"source":               "launcher-install-cmd",
-			"detectedState":        state,
-			"manualInstallHint":    "Install Node.js 22+ and the switchboard package, then re-run `switchboard-launcher doctor`.",
+			"success":                  false,
+			"error":                    "automatic installation is disabled pending research",
+			"source":                   "launcher-install-cmd",
+			"detectedState":            state,
+			"manualInstallHint":        "Install Node.js 22+ and the switchboard package, then re-run `switchboard-launcher doctor`.",
 			"automaticInstallDisabled": true,
 		})
 		return
