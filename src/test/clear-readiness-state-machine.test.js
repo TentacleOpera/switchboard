@@ -367,6 +367,41 @@ function createMockHandle(overrides = {}) {
         assert.strictEqual(handle.exitListenerCount(), 0);
     });
 
+    await test('No family\'s post-clear quiet window sits below the calibrated floor', () => {
+        // All three families shipped at 100 ms. claude and antigravity were raised to
+        // 300 when 100 was measured to be shorter than the /clear re-render burst —
+        // the first post-submit chunk arms the quiet timer and a gap mid-re-render
+        // resolves "ready" before the input editor has repainted. DEVIN was left at
+        // 100 for months, which is the family every team seat in this repo runs: a
+        // prompt pasted into a still-repainting editor is lost, the receipt still says
+        // success: true, and the lead blocks on a callback that never comes (observed
+        // 2026-09-12 on Coding-coder-1 — ~55 minutes stalled, lead routed around it).
+        //
+        // This asserts the floor across ALL families at once rather than pinning three
+        // separate numbers, because the defect was never a wrong value — it was one
+        // family silently not getting a fix the other two got. A new family added at
+        // the old default fails here on day one.
+        const readiness = require(READINESS_FILE);
+        const CALIBRATED_FLOOR_MS = 300;
+        const windows = {
+            devin: readiness.DEVIN_DEFAULT_QUIET_MS,
+            claude: readiness.CLAUDE_DEFAULT_QUIET_MS,
+            antigravity: readiness.ANTIGRAVITY_DEFAULT_QUIET_MS,
+        };
+        for (const [family, ms] of Object.entries(windows)) {
+            assert.strictEqual(
+                typeof ms, 'number',
+                `${family} quiet window must be a number, got ${typeof ms}`
+            );
+            assert.ok(
+                ms >= CALIBRATED_FLOOR_MS,
+                `${family} post-clear quiet window is ${ms} ms, below the ${CALIBRATED_FLOOR_MS} ms calibrated floor — ` +
+                'a window shorter than the CLI\'s re-render burst resolves "ready" early and the next prompt is pasted into a repainting editor. ' +
+                'Raising a family above the floor is fine; dropping one below it is the bug this pins.'
+            );
+        }
+    });
+
     if (failures > 0) {
         console.error(`\n${failures} check(s) failed.\n`);
         process.exit(1);

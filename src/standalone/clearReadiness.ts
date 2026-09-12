@@ -33,7 +33,34 @@ export interface ClearReadinessTerminalTarget {
 }
 
 export const DEVIN_DEFAULT_TIMEOUT_MS = 15000;
-export const DEVIN_DEFAULT_QUIET_MS = 100;
+/**
+ * Quiet window for the POST-CLEAR readiness path (devin profile).
+ *
+ * Was 100 ms. All three families started at 100; claude and antigravity were
+ * raised to 300 when 100 was measured to be shorter than the CLI's /clear
+ * re-render burst (see CLAUDE_DEFAULT_QUIET_MS below for the full reasoning).
+ * Devin was left behind at 100 and never revisited — the same defect, in the
+ * family that every team seat in this repo actually runs.
+ *
+ * Devin's re-render is HEAVIER than the two families that were calibrated: it
+ * repaints a status bar, a model line, a context-usage line and a spinner where
+ * Claude Code repaints a prompt row. A window proven too short for the lighter
+ * TUI cannot be right for the heavier one.
+ *
+ * The failure is not symmetric, which is why this errs long: resolving early
+ * pastes a prompt into an input editor that has not finished repainting, and
+ * the prompt is lost with a `success: true` receipt the lead then blocks on —
+ * observed 2026-09-12 on `Coding-coder-1`, which sat with an unsubmitted prompt
+ * on screen for ~55 minutes until the lead routed around it. Resolving late
+ * costs 200 ms. Per the repo's own rule, guessing short breaks delivery and
+ * guessing long costs seconds.
+ *
+ * CALIBRATION SOURCE: scripts/capture-cli-modes.js clear streams on the target
+ * host. 300 matches the two measured families; it is a floor, not a measurement
+ * of devin specifically — re-measure devin's own re-render gap and raise this if
+ * it is longer. Re-measure when the CLI version changes.
+ */
+export const DEVIN_DEFAULT_QUIET_MS = 300;
 export const CLAUDE_DEFAULT_TIMEOUT_MS = 3000;
 /**
  * Quiet window for the POST-CLEAR readiness path (claude/antigravity profile).
