@@ -3614,12 +3614,24 @@
     </div>
 
     <!-- SHARED_DEFAULTS_SCRIPT -->
-    <script nonce="{{NONCE}}" src="{{XTERM_JS_URI}}"></script>
-    <script nonce="{{NONCE}}" src="{{XTERM_ADDON_FIT_URI}}"></script>
-    <script nonce="{{NONCE}}" src="{{XTERM_ADDON_WEBGL_URI}}"></script>
-    <script nonce="{{NONCE}}" src="{{XTERM_ADDON_CANVAS_URI}}"></script>
-    <script nonce="{{NONCE}}" src="{{SHARED_UTILS_URI}}"></script>
-    <script nonce="{{NONCE}}" src="{{TERMINAL_VIEWPORT_JS_URI}}"></script>
-    <script nonce="{{NONCE}}" src="{{TERMINALS_JS_URI}}"></script>
+    <!-- `defer` on all seven: without it these are parser-blocking and the browser
+         fetches and compiles them STRICTLY IN SERIES — ~1.3 MB (xterm 289 KB, the two
+         renderer addons 196 KB, terminalViewport 119 KB, terminals.js 681 KB) before
+         the panel wires a single button, which is why this panel took far longer to
+         become ready than the 104 KB board. `defer` lets them download in parallel
+         while preserving execution order, and they already ran after parse (they sit
+         at the end of <body>), so nothing changes about WHEN they execute relative to
+         each other. Verified safe: the one inline script in this document is the mode
+         parser at the top of <body> and it touches none of these globals, and no
+         inline script follows this block. The shared shim (sharedDefaults/transport)
+         is deliberately NOT deferred — it is injected into kanban.html and setup.html
+         too, whose inline scripts do depend on it. -->
+    <script defer nonce="{{NONCE}}" src="{{XTERM_JS_URI}}"></script>
+    <script defer nonce="{{NONCE}}" src="{{XTERM_ADDON_FIT_URI}}"></script>
+    <script defer nonce="{{NONCE}}" src="{{XTERM_ADDON_WEBGL_URI}}"></script>
+    <script defer nonce="{{NONCE}}" src="{{XTERM_ADDON_CANVAS_URI}}"></script>
+    <script defer nonce="{{NONCE}}" src="{{SHARED_UTILS_URI}}"></script>
+    <script defer nonce="{{NONCE}}" src="{{TERMINAL_VIEWPORT_JS_URI}}"></script>
+    <script defer nonce="{{NONCE}}" src="{{TERMINALS_JS_URI}}"></script>
 </body>
 </html>
