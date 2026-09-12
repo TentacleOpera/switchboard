@@ -4230,7 +4230,16 @@ export class LocalApiServer {
         } else if (!acceptedCodingSeat) {
             cleared = false;
             if (dispatchedSeat === from) {
-                clearReason = `Lead '${from}' is never cleared as a coding seat`;
+                // The poster IS the dispatched seat — a self-report, not a lead
+                // accepting someone else's work. This branch used to call that
+                // seat a "Lead", which is false for every coder that posts its
+                // own completion (the dispatch prompt tells it to), and sends
+                // anyone reading the receipt looking for a lead that was never
+                // involved. No clear happens here by design: the proactive clear
+                // is owed to a LEAD's acceptance post, and that post has not
+                // arrived. Say that, so "why was this seat never cleared?" is
+                // answerable from the receipt.
+                clearReason = `Seat '${from}' posted its own completion — a self-report does not clear context; the proactive clear runs when a lead posts acceptance for this seat`;
             } else {
                 clearReason = 'No coding seat attributed to plan';
             }
@@ -4418,8 +4427,10 @@ export class LocalApiServer {
             }
         } else if (!acceptedCodingSeat) {
             cleared = false;
+            // Same correction as the complete path above: the poster being the
+            // dispatched seat means self-report, not lead.
             clearReason = dispatchedSeat === from
-                ? `Lead '${from}' is never cleared as a coding seat`
+                ? `Seat '${from}' posted its own release — a self-report does not clear context; the proactive clear runs when a lead posts acceptance for this seat`
                 : 'No coding seat attributed to plan';
         }
 
