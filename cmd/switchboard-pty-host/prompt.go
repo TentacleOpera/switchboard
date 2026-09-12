@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"time"
 )
@@ -59,12 +60,29 @@ func firstReadinessWindows(family string) (ceiling, quiet time.Duration) {
 	}
 }
 
+// clearReadinessWindows is the POST-CLEAR readiness policy. It is the live one:
+// delivery runs here, in the pty host, not in src/standalone/ptyPromptDelivery.ts
+// (whose sendPromptToPty has no production caller). A timing fix applied only to
+// the TypeScript copy reaches no seat.
+//
+// Devin's quiet window was 100ms while claude and antigravity were raised to
+// 300ms, and 100ms is the wrong shape for devin regardless: devin emits ~12
+// content-free redraw frames per second — a frame every ~82ms — so a window near
+// that interval fires in an ordinary gap between two redraws and calls a
+// repainting editor ready. 1500ms is ~18 frames of margin, which means the quiet
+// branch effectively does not fire on a live seat and the ceiling becomes the
+// real timer: a predictable wait instead of a race against the paint loop.
+//
+// Erring long is deliberate. Resolving early pastes into an editor that has not
+// finished repainting; the prompt is lost, the receipt still says success, and
+// the lead blocks on a callback that never comes — ~55 minutes on
+// Coding-coder-1, 2026-09-12. Resolving late costs seconds.
 func clearReadinessWindows(family string) (ceiling, quiet time.Duration, detect bool) {
 	switch family {
 	case "claude", "antigravity":
 		return 3 * time.Second, 300 * time.Millisecond, true
 	case "devin":
-		return 15 * time.Second, 100 * time.Millisecond, true
+		return 15 * time.Second, 1500 * time.Millisecond, true
 	default:
 		return 15 * time.Second, 0, false
 	}
@@ -309,7 +327,11 @@ func (f *fleet) deliverPrompt(name, text string, clearBefore bool, delayMs int, 
 		}
 	}
 	if text != "" {
-		floor := familyFloor(family)
+		// attended is not yet plumbed from the verb payload — that is the
+		// caller-declaration half of this change and belongs with the card that
+		// owns the dispatch path. Until it is, every send takes the unattended
+		// cap, which is the safe direction: too long, never too short.
+		floor := deliveryFloor(family, false)
 		if elapsed := time.Since(start); elapsed < floor {
 			sleep(floor - elapsed)
 		}
@@ -354,6 +376,43 @@ func (f *fleet) deliverPrompt(name, text string, clearBefore bool, delayMs int, 
 		return map[string]any{"success": false, "cleared": cleared, "error": err.Error()}
 	}
 	t.mu.Unlock()
+	// Change 4: verify the delivery reached the seat's own window — one
+	// display-message query, no polling. A control-mode seat's pty is a tmux
+	// client; tmux forwards input to the view session's CURRENT window. If that
+	// is not the seat's own window (captured at spawn from the pane id), the
+	// prompt was delivered to a previous generation's agent and this send must
+	// NOT report success. This is the check whose absence let bytesWritten stand
+	// in for evidence it never had. The seat's own window id is captured at spawn
+	// (onPaneIDLearned); if that goroutine has not landed yet it is resolved here
+	// from the pane id. A failure to query (no tmux, no view, no pane id) is NOT
+	// a misroute — it is "cannot verify", and the send proceeds: the chain's own
+	// select-window (Change 2) is the correctness mechanism, this is the
+	// backstop that catches it drifting.
+	t.mu.Lock()
+	own := t.tmuxWindowId
+	paneID := t.paneID
+	view := t.tmuxViewSession
+	controlMode := t.controlMode
+	t.mu.Unlock()
+	if controlMode && view != "" {
+		if own == "" && paneID != "" {
+			own = tmuxPaneWindowID(paneID)
+			t.mu.Lock()
+			t.tmuxWindowId = own
+			t.mu.Unlock()
+		}
+		if own != "" {
+			current := tmuxViewWindowID(view)
+			if current != "" && current != own {
+				return map[string]any{
+					"success":      false,
+					"error":        fmt.Sprintf("prompt misrouted: view %s current window %s != seat own window %s", view, current, own),
+					"bytesWritten": len(text), "deliveredAt": time.Now().UnixMilli(),
+					"bootPhase": bootPhase, "cleared": cleared, "misrouted": true,
+				}
+			}
+		}
+	}
 	t.promptCount++
 	deliveredAt := time.Now().UnixMilli()
 	out := map[string]any{
@@ -367,6 +426,23 @@ func (f *fleet) deliverPrompt(name, text string, clearBefore bool, delayMs int, 
 	return out
 }
 
+// Floor caps by attendance. attended is true only when a person made this send
+// and is watching the terminal (a UI button, a drag-to-terminal drop). The
+// caller declares it; anything that is not an explicit true takes the longer
+// unattended cap, so a call site that forgets costs seconds and is visible
+// rather than silently shortening automated delivery.
+const (
+	attendedFloorCap   = 5 * time.Second
+	unattendedFloorCap = 10 * time.Second
+)
+
+// familyFloor is the minimum elapsed time from the start of delivery to the
+// first paste byte, before any attendance cap is applied.
+//
+// The default arm used to be 0. An unrecognised CLI is the seat to be most
+// careful with, not the least — guessing short breaks delivery and guessing
+// long costs seconds — so it takes the devin floor, matching the patient
+// default the TypeScript copy already used.
 func familyFloor(family string) time.Duration {
 	switch family {
 	case "claude", "antigravity":
@@ -374,7 +450,19 @@ func familyFloor(family string) time.Duration {
 	case "devin":
 		return 15 * time.Second
 	default:
-		// Bare shells and unknown CLIs have no composer to wait for.
-		return 0
+		return 15 * time.Second
 	}
+}
+
+// deliveryFloor is familyFloor capped by attendance. The cap only ever shortens:
+// claude and antigravity sit below both caps and are unchanged in either mode.
+func deliveryFloor(family string, attended bool) time.Duration {
+	cap := unattendedFloorCap
+	if attended {
+		cap = attendedFloorCap
+	}
+	if f := familyFloor(family); f < cap {
+		return f
+	}
+	return cap
 }

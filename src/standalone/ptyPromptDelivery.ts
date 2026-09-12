@@ -1,6 +1,6 @@
 import type { ExtendedTerminalHandle } from './ptyFleetService';
 import type { CliFamily } from '../services/cliIdentity';
-import { deriveCliFamily } from '../services/cliIdentity';
+import { deriveCliFamily, clearStrategyForFamily } from '../services/cliIdentity';
 import { createClearReadinessTracker, awaitFirstReadiness, type ClearReadinessResult, type ClearReadinessMode, type ClearReadinessTimeouts, DEVIN_DEFAULT_TIMEOUT_MS, CLAUDE_DEFAULT_TIMEOUT_MS, ANTIGRAVITY_DEFAULT_TIMEOUT_MS } from './clearReadiness';
 
 const CHUNK_SIZE = 256;
@@ -36,7 +36,48 @@ const sendLocks = new Map<string, Promise<void>>();
  *
  * `unknown` resolves to the devin floor (patient default) — see
  * prompt-delivery-should-be-patient-not-precise.md.
+ *
+ * The family value is then CAPPED by attendance (see ATTENDED_FLOOR_CAP_MS /
+ * UNATTENDED_FLOOR_CAP_MS). The cap only ever shortens: a family whose floor is
+ * already below the cap is unchanged, so this cannot make claude or antigravity
+ * slower than they are today.
  */
+/**
+ * Floor caps by attendance.
+ *
+ * The floor was one number for every send: the family's full readiness ceiling,
+ * 15s on devin. That is the right budget for an unattended automation where a
+ * swallowed prompt stalls a run until someone notices, and too long for a send
+ * an operator just made and is watching.
+ *
+ * `attended` DEFAULTS TO FALSE, so a call site that forgets to declare itself
+ * gets the longer wait. A missed flag then costs seconds and is visible; the
+ * opposite default would silently shorten automated delivery, which is the
+ * failure that cost ~55 minutes on Coding-coder-1.
+ *
+ * These are caps, not replacements. `min(familyFloor, cap)` leaves claude and
+ * antigravity (3000) untouched in both modes and only shortens devin/unknown.
+ */
+export const ATTENDED_FLOOR_CAP_MS = 5000;
+export const UNATTENDED_FLOOR_CAP_MS = 10000;
+
+/**
+ * The delivery floor actually used: the family's floor, capped by attendance.
+ *
+ * Exported and pure so the cap relationship can be asserted without running a
+ * delivery — the wall-clock version of that test held the terminal lock for the
+ * length of the floor it was measuring, which is a slow test that also breaks
+ * the next one.
+ */
+export function resolveDeliveryFloorMs(
+    family: CliFamily | undefined,
+    attended: boolean,
+    timeouts?: ClearReadinessTimeouts
+): number {
+    const cap = attended ? ATTENDED_FLOOR_CAP_MS : UNATTENDED_FLOOR_CAP_MS;
+    return Math.min(familyFloorMs(family, timeouts), cap);
+}
+
 function familyFloorMs(family: CliFamily | undefined, timeouts?: ClearReadinessTimeouts): number {
     const devin = timeouts?.devinTimeoutMs ?? DEVIN_DEFAULT_TIMEOUT_MS;
     if (family === 'devin') { return devin; }
@@ -108,6 +149,15 @@ export async function writeSlashCommandLocked(handle: ExtendedTerminalHandle, co
  * OLD session's bracketed-paste disable, which is the transition Devin's state
  * machine anchors on. Caller must already hold the terminal lock.
  *
+ * SKIPPED for respawn families: a clearStrategy "respawn" seat (Devin) is
+ * reset by the Go host killing the CLI and starting a fresh login shell, not
+ * by typing /clear into the composer. The Go host owns the respawn and reports
+ * readiness from the fresh child's output/exit. Running the in-process
+ * readiness tracker here would scrape post-/clear signals off a session that
+ * is about to be replaced — the very fragile framing the plan exists to
+ * remove. The caller (deliverPrompt's clear branch) routes respawn families
+ * through the Go host's strategy-aware clear verb instead of this function.
+ *
  * Returns the readiness result so callers can report the REAL reason
  * (signal / fallback / manual / exit) instead of assuming one.
  */
@@ -115,10 +165,19 @@ async function clearAndAwaitReadinessLocked(
     handle: ExtendedTerminalHandle,
     opts?: PromptDeliveryOptions
 ): Promise<ClearReadinessResult> {
+    const family = opts?.cliFamily || handle.cliFamily;
+    if (clearStrategyForFamily(family) === 'respawn') {
+        // Unreachable in production: deliverPrompt's clear branch routes
+        // respawn families through the Go host's strategy-aware clear verb
+        // before reaching this function. Returned as a defensive sentinel so
+        // a future caller that bypasses the routing does not silently fall
+        // back to the /clear slash path.
+        return { reason: 'fallback', elapsedMs: 0 };
+    }
     const tracker = createClearReadinessTracker(handle, {
         mode: opts?.clearReadinessMode,
         fallbackDelayMs: Math.min(10000, Math.max(0, opts?.clearBeforePromptDelayMs ?? DEFAULT_CLEAR_SETTLE_MS)),
-        cliFamily: opts?.cliFamily || handle.cliFamily,
+        cliFamily: family,
         timeouts: opts?.readinessTimeouts,
     });
     try {
@@ -131,6 +190,14 @@ async function clearAndAwaitReadinessLocked(
 
 export interface PromptDeliveryOptions {
     clearBeforePrompt?: boolean;
+    /**
+     * True when a person made this send and is watching the terminal — a UI
+     * button, a drag-to-terminal drop. Caps the delivery floor at
+     * ATTENDED_FLOOR_CAP_MS instead of UNATTENDED_FLOOR_CAP_MS. Defaults to
+     * false (the longer wait) so an undeclared caller is never shortened by
+     * accident.
+     */
+    attended?: boolean;
     clearBeforePromptDelayMs?: number;
     clearReadinessMode?: ClearReadinessMode;
     cliFamily?: CliFamily;
@@ -316,7 +383,9 @@ export async function sendPromptToPty(
         // full family floor to every `queue/done` pop for a write that carries
         // nothing.
         const deliveryFamily = opts?.cliFamily || handle.cliFamily;
-        const floor = text.length > 0 ? familyFloorMs(deliveryFamily, opts?.readinessTimeouts) : 0;
+        const floor = text.length > 0
+            ? resolveDeliveryFloorMs(deliveryFamily, opts?.attended === true, opts?.readinessTimeouts)
+            : 0;
         const elapsedMs = Date.now() - deliveryStartAt;
         if (elapsedMs < floor) {
             await new Promise(r => setTimeout(r, floor - elapsedMs));

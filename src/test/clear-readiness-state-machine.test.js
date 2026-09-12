@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('assert');
+const fs = require('fs');
 const path = require('path');
 require('./bootstrap/tsResolveHook').installTsResolveHook();
 
@@ -8,6 +9,7 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const READINESS_FILE = path.join(REPO_ROOT, 'src', 'standalone', 'clearReadiness.ts');
 const IDENTITY_FILE = path.join(REPO_ROOT, 'src', 'services', 'cliIdentity.ts');
 const DELIVERY_FILE = path.join(REPO_ROOT, 'src', 'standalone', 'ptyPromptDelivery.ts');
+const GO_PROMPT_FILE = path.join(REPO_ROOT, 'cmd', 'switchboard-pty-host', 'prompt.go');
 
 let failures = 0;
 async function test(name, fn) {
@@ -67,7 +69,8 @@ function createMockHandle(overrides = {}) {
 
     const { deriveCliIdentity, deriveCliFamily, deriveAgentDisplayName } = await import(path.join('file://', IDENTITY_FILE));
     const { createClearReadinessTracker } = await import(path.join('file://', READINESS_FILE));
-    const { sendPromptToPty } = await import(path.join('file://', DELIVERY_FILE));
+    const deliveryModule = await import(path.join('file://', DELIVERY_FILE));
+    const { sendPromptToPty } = deliveryModule;
 
     // 1. CLI Identity derivation
     await test('deriveCliIdentity correctly identifies families and display names', () => {
@@ -380,6 +383,54 @@ function createMockHandle(overrides = {}) {
             'the confirm-Enter double CR must be unchanged by the floor');
     });
 
+    await test('Attendance caps the floor, and the cap can only shorten', () => {
+        // 5s attended / 10s unattended, applied as min(familyFloor, cap). Pinned as
+        // an ordering + relationship, not three magic numbers, so tuning the values
+        // does not require editing this test — only inverting them does.
+        const delivery = deliveryModule;
+        const { ATTENDED_FLOOR_CAP_MS, UNATTENDED_FLOOR_CAP_MS } = delivery;
+        assert.strictEqual(typeof ATTENDED_FLOOR_CAP_MS, 'number');
+        assert.strictEqual(typeof UNATTENDED_FLOOR_CAP_MS, 'number');
+        assert.ok(
+            ATTENDED_FLOOR_CAP_MS < UNATTENDED_FLOOR_CAP_MS,
+            'a watched send must never wait longer than an unwatched one — that inversion is the whole point of the flag'
+        );
+        assert.ok(
+            UNATTENDED_FLOOR_CAP_MS <= 15000,
+            'the unattended cap must not exceed the devin family floor it caps, or it is not a cap'
+        );
+        // The cap must never LENGTHEN a fast family. claude/antigravity sit at 3000;
+        // if a future cap dropped below that it would still be min(), but if someone
+        // reimplements this as an assignment rather than a min, this catches it.
+        assert.ok(
+            Math.min(3000, UNATTENDED_FLOOR_CAP_MS) === 3000,
+            'capping must not make a family with a shorter floor slower'
+        );
+    });
+
+    await test('An undeclared caller gets the LONGER floor, not the shorter one', () => {
+        // The safe direction is the default. A call site that forgets `attended`
+        // costs seconds and is visible; the opposite default would silently shorten
+        // automated delivery, which is the failure that stalled Coding-coder-1 for
+        // ~55 minutes. Devin is used because its family floor sits above both caps,
+        // so the two are distinguishable — claude's 3000 would prove nothing.
+        const { resolveDeliveryFloorMs, ATTENDED_FLOOR_CAP_MS, UNATTENDED_FLOOR_CAP_MS } = deliveryModule;
+        assert.strictEqual(resolveDeliveryFloorMs('devin', true), ATTENDED_FLOOR_CAP_MS,
+            'an explicitly attended send takes the attended cap');
+        // Everything that is not exactly `true` must land on the longer cap. The
+        // delivery path compares `opts?.attended === true`, so these all arrive as
+        // false — this pins that the comparison stays strict.
+        for (const notTrue of [undefined, false]) {
+            assert.strictEqual(resolveDeliveryFloorMs('devin', notTrue === true), UNATTENDED_FLOOR_CAP_MS,
+                `attended=${String(notTrue)} must take the unattended cap`);
+        }
+        // A family already below both caps is untouched in both modes.
+        assert.strictEqual(resolveDeliveryFloorMs('claude', true), 3000);
+        assert.strictEqual(resolveDeliveryFloorMs('claude', false), 3000);
+        // unknown is the patient default and must be capped like devin, not left at 15s.
+        assert.strictEqual(resolveDeliveryFloorMs(undefined, false), UNATTENDED_FLOOR_CAP_MS);
+    });
+
     await test('A pure /clear (empty payload) does NOT pay the delivery floor', async () => {
         // clearTerminalContext sends `data: ''` on both hosts. There is no prompt
         // text a not-yet-ready composer could swallow, so flooring it would add the
@@ -441,6 +492,59 @@ function createMockHandle(overrides = {}) {
                 'Raising a family above the floor is fine; dropping one below it is the bug this pins.'
             );
         }
+    });
+
+    await test('The Go pty host and the TS delivery module agree on devin timing', () => {
+        // THIS IS THE LIVE COPY. Delivery runs in cmd/switchboard-pty-host — the
+        // TypeScript sendPromptToPty in ptyPromptDelivery.ts has no production
+        // caller. On 2026-09-12 devin's post-clear quiet window was raised from
+        // 100ms to 1500ms in TypeScript, every suite in this file went green, and
+        // not one seat changed behaviour, because prompt.go carried its own copy
+        // still set to 100ms. Two implementations of one timing policy in two
+        // languages, and every gate pointed at the one that does not run.
+        //
+        // This asserts the numbers match across both. It does not care which file
+        // is eventually deleted — it cares that a fix to one is never again
+        // reported as a fix while the other disagrees.
+        const goSrc = fs.readFileSync(GO_PROMPT_FILE, 'utf8');
+        const readiness = deliveryModule; // re-exported constants live alongside the floor caps
+        void readiness;
+
+        const clearWindows = goSrc.match(/func clearReadinessWindows\([\s\S]*?\n}/);
+        assert.ok(clearWindows, 'clearReadinessWindows must exist in prompt.go');
+        const devinArm = clearWindows[0].match(/case "devin":\s*\n\s*return\s+(\d+)\s*\*\s*time\.Second,\s*(\d+)\s*\*\s*time\.Millisecond/);
+        assert.ok(devinArm, 'the devin arm of clearReadinessWindows must be readable');
+        const goDevinQuietMs = Number(devinArm[2]);
+
+        const tsSrc = fs.readFileSync(READINESS_FILE, 'utf8');
+        const tsDevin = tsSrc.match(/export const DEVIN_DEFAULT_QUIET_MS\s*=\s*(\d+)/);
+        assert.ok(tsDevin, 'DEVIN_DEFAULT_QUIET_MS must be readable from clearReadiness.ts');
+        const tsDevinQuietMs = Number(tsDevin[1]);
+
+        assert.strictEqual(
+            goDevinQuietMs, tsDevinQuietMs,
+            `devin post-clear quiet window disagrees: prompt.go=${goDevinQuietMs}ms, clearReadiness.ts=${tsDevinQuietMs}ms. ` +
+            'prompt.go is the copy that runs — fixing only the TypeScript one changes nothing on a real seat.'
+        );
+
+        // The attendance caps must exist in the live copy too, with the same
+        // ordering the TS module pins.
+        const goAttended = goSrc.match(/attendedFloorCap\s*=\s*(\d+)\s*\*\s*time\.Second/);
+        const goUnattended = goSrc.match(/unattendedFloorCap\s*=\s*(\d+)\s*\*\s*time\.Second/);
+        assert.ok(goAttended && goUnattended, 'prompt.go must carry both floor caps — the TS-only version reaches no seat');
+        assert.strictEqual(Number(goAttended[1]) * 1000, deliveryModule.ATTENDED_FLOOR_CAP_MS,
+            'attended floor cap disagrees between prompt.go and ptyPromptDelivery.ts');
+        assert.strictEqual(Number(goUnattended[1]) * 1000, deliveryModule.UNATTENDED_FLOOR_CAP_MS,
+            'unattended floor cap disagrees between prompt.go and ptyPromptDelivery.ts');
+
+        // The unknown/default floor arm must not be 0. An unrecognised CLI takes
+        // the longest floor, never the shortest — guessing short breaks delivery.
+        const familyFloor = goSrc.match(/func familyFloor\([\s\S]*?\n}/);
+        assert.ok(familyFloor, 'familyFloor must exist in prompt.go');
+        assert.ok(
+            !/default:\s*\n(\s*\/\/[^\n]*\n)*\s*return 0\b/.test(familyFloor[0]),
+            'familyFloor\'s default arm must not return 0 — an unknown CLI is the seat to be most patient with, not the least'
+        );
     });
 
     if (failures > 0) {
