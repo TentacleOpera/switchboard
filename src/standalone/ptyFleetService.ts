@@ -97,6 +97,16 @@ export interface FleetTerminalInfo {
      * `ptyListTerminals` projection.
      */
     startupCommandSource?: string;
+    /**
+     * The BASE tmux session name (`lc-<team>-team` or `lc-<seat>`) for a
+     * control-mode tmux seat, or undefined for a raw PTY. Persisted in the
+     * `runtime.terminals` registry so the boot reaper can tell an orphan
+     * `lc-*` session (no live seat claims it) from one a restarted host still
+     * owns — the in-memory fleet cache is empty at boot, so the registry is
+     * the only ownership signal that survives a restart (see the
+     * tmux-windows-duplicate-on-re-seat plan, change 3).
+     */
+    tmuxSession?: string;
 }
 
 export interface ExtendedTerminalHandle extends TerminalHandle {
@@ -129,6 +139,13 @@ export interface ExtendedTerminalHandle extends TerminalHandle {
      * injection). Logged at spawn and surfaced in `ptyListTerminals`.
      */
     startupCommandSource?: string;
+    /**
+     * The BASE tmux session name for a control-mode tmux seat (undefined for a
+     * raw PTY). Persisted in `runtime.terminals` so the boot reaper has an
+     * ownership signal that survives a restart — the in-memory cache is empty
+     * at boot. See the tmux-windows-duplicate-on-re-seat plan, change 3.
+     */
+    tmuxSession?: string;
     /**
      * True once the PTY has emitted ANY byte of output (shell banner, command
      * output, error text). Liveness only — it is TRUE for every seat by the

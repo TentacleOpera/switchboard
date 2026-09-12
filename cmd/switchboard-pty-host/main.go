@@ -61,6 +61,48 @@ type terminal struct {
 	// tmux's UI" — a fallback here would make a control-mode seat look
 	// identical to a raw one, so it is an explicit flag, never inferred.
 	controlMode bool
+	// tmuxViewSession is the per-seat VIEW tmux session name (e.g.
+	// `lc-coding-team-coder-1`), set once at create time from the
+	// ptyCreateTerminal payload under f.mu and never modified after. This is
+	// the target fleet.close() kills when a control-mode terminal is closed —
+	// it is NOT sessionTarget (main.go:78), which is publish-only (written on
+	// the read goroutine in publish() with no lock) and would race close().
+	// The standalone host derives the view name in goPtyFleetProjection.ts and
+	// passes it here; the extension host never sets controlMode, so this field
+	// is empty for extension terminals and close() skips the kill-session.
+	// Write-once under f.mu at create, read under f.mu in close() — no race.
+	tmuxViewSession string
+	// tmuxSession + tmuxWindow name the BASE tmux session and the window
+	// inside it that this seat's agent runs in (e.g. `lc-coding-team` +
+	// `Coding-coder-1`). fleet.close() kills the window
+	// (`tmux kill-window -t =<session>:<window>`) to end the agent itself
+	// — closing a terminal closes it, not just the pane's view onto it.
+	// After the window-reuse fix in goPtyFleetProjection.ts window names are
+	// unique within a session, so `=<session>:<window>` is unambiguous. The
+	// `=` prefix forces exact session-name match so `lc-coding-team` cannot
+	// match `lc-coding-team-coder-1`. Empty for non-control-mode seats;
+	// close() skips the kill-window. Write-once under f.mu at create, read
+	// under f.mu in close() — no race.
+	tmuxSession string
+	tmuxWindow  string
+	// tmuxWindowId is the seat's OWN window id (e.g. `@7`), the stable,
+	// unambiguous handle for the window this seat's agent runs in. Captured
+	// after the seating chain completes (controlActive flips + pane id is
+	// learned) by querying the window containing the seat's pane — the pane
+	// id is the source of truth for "the seat's own window", independent of
+	// the name-based ambiguity across generations. Empty until the chain
+	// completes or when tmux is unavailable; deliverPrompt falls back to
+	// capturing it on the first send if the spawn-time capture has not
+	// landed yet. mu-protected (written by onPaneIDLearned's verifier
+	// goroutine and by deliverPrompt, read by deliverPrompt).
+	tmuxWindowId string
+	// tmuxMisrouted is set when the spawn-time verification found the view
+	// session's current window was NOT the seat's own window — i.e. the
+	// seating chain's select-window never ran or targeted a previous
+	// generation. A seat in this state forwards every prompt to the wrong
+	// agent; the flag names it so the failure is observable instead of
+	// silent for hours. mu-protected. Reset on respawn (the chain re-runs).
+	tmuxMisrouted bool
 	// controlActive is the runtime gate: it flips true only when tmux's DCS
 	// entry is actually seen in the stream, i.e. `exec tmux -u -CC attach` has
 	// taken over the pty. Before that the pty runs the login shell and the
@@ -94,7 +136,7 @@ type fleet struct {
 	token          string
 	mu             sync.RWMutex
 	terminals      map[string]*terminal
-	clients        map[string]map[*websocket.Conn]struct{}
+	clients        map[string]map[*wsClient]struct{}
 	rings          map[string][]outputEvent
 	nextSeq        map[string]uint64
 	logMu          sync.Mutex
@@ -230,6 +272,20 @@ func (f *fleet) create(payload map[string]any) (map[string]any, error) {
 		isTeamMember: boolField(payload, "_isTeamMember"),
 		listeners:    make(map[chan string]struct{}),
 		controlMode:  controlMode,
+		// The per-seat VIEW tmux session name, set once at create time under
+		// f.mu (this constructor runs under f.mu). fleet.close() reads it to
+		// issue `tmux kill-session -t =<view>` for a control-mode terminal.
+		// Empty for extension terminals (controlMode is false there) and for
+		// any create payload that predates this field — close() skips the
+		// kill-session when it is empty.
+		tmuxViewSession: strField(payload, "tmuxViewSession"),
+		// The BASE tmux session + window name, set once at create time under
+		// f.mu. fleet.close() reads them to issue
+		// `tmux kill-window -t =<session>:<window>` and end the agent itself.
+		// Empty for extension terminals and any payload that predates these
+		// fields — close() skips the kill-window when either is empty.
+		tmuxSession: strField(payload, "tmuxSession"),
+		tmuxWindow:  strField(payload, "tmuxWindow"),
 		// Recorded at create so a respawn (clearStrategy "respawn") can
 		// re-inject the seat's startup command verbatim — the only way a
 		// declared --model holds across a reset, since /clear restarts
@@ -244,7 +300,7 @@ func (f *fleet) create(payload map[string]any) (map[string]any, error) {
 		t.parseState = &ParseState{}
 	}
 	f.terminals[name] = t
-	f.clients[name] = make(map[*websocket.Conn]struct{})
+	f.clients[name] = make(map[*wsClient]struct{})
 	f.rings[name] = nil
 	f.nextSeq[name] = 0
 	go f.readOutput(name, file)
@@ -273,8 +329,8 @@ func (f *fleet) readOutput(name string, file *os.File) {
 			delete(f.clients, name)
 			f.mu.Unlock()
 			for client := range clients {
-				_ = client.WriteJSON(map[string]any{"t": "exit", "code": 0})
-				_ = client.Close()
+				_ = client.writeJSON(map[string]any{"t": "exit", "code": 0})
+				_ = client.conn.Close()
 			}
 			f.logClose(name)
 			return
@@ -432,14 +488,87 @@ func (f *fleet) publish(name, data string) {
 // onPaneIDLearned fires the first time the pane id becomes known. It flushes
 // any resize that was issued before the pane id existed (a control client is
 // invisible to sizing until its first `refresh-client -C`).
+//
+// It also arms the spawn-time routing verification (Change 3): the seating
+// chain has completed by now (controlActive flipped, select-window ran), so
+// the view session's current window must be the seat's own — the one this pane
+// belongs to. A mismatch means select-window never ran or targeted a previous
+// generation, and every prompt would be forwarded to the wrong agent. The
+// check runs in a goroutine so the read goroutine never blocks on tmux; the
+// seat's own window id is captured here so delivery can verify with one query
+// instead of two.
 func (f *fleet) onPaneIDLearned(name string, t *terminal) {
 	t.mu.Lock()
 	cols, rows := t.pendingCols, t.pendingRows
 	t.pendingCols, t.pendingRows = 0, 0
+	paneID := t.paneID
+	view := t.tmuxViewSession
 	t.mu.Unlock()
 	if cols > 0 && rows > 0 {
 		_ = ptyResize(t, cols, rows)
 	}
+	if paneID == "" || view == "" {
+		return
+	}
+	go verifyTmuxRouting(name, t, paneID, view)
+}
+
+// verifyTmuxRouting captures the seat's own window id (from its pane) and
+// checks the view session's current window matches it. The pane id is the
+// source of truth for "the seat's own window" — it is learned from the control
+// stream and is independent of the name-based ambiguity across generations.
+// On a mismatch the seat is marked misrouted and the failure is logged; the
+// delivery path (Change 4) independently re-checks on every send, so a flag
+// set here is the early observable, not the gate.
+func verifyTmuxRouting(name string, t *terminal, paneID, view string) {
+	own := tmuxPaneWindowID(paneID)
+	current := tmuxViewWindowID(view)
+	t.mu.Lock()
+	t.tmuxWindowId = own
+	misrouted := own != "" && current != "" && own != current
+	if misrouted {
+		t.tmuxMisrouted = true
+	}
+	t.mu.Unlock()
+	if misrouted {
+		log.Printf("[pty-host] seat %s misrouted at spawn: view %s current window %s != seat own window %s", name, view, current, own)
+	}
+}
+
+// tmuxQuery runs a tmux format query and returns the trimmed stdout, or "" on
+// any failure. exec.Command uses an argv array — no shell, no interpolation —
+// so a pane/session id reaching -t is never re-parsed as a command. A failure
+// (no tmux, no such session/pane) returns "" rather than propagating: the
+// callers treat "" as "cannot verify" and fall through, never as a positive
+// result.
+func tmuxQuery(args ...string) string {
+	out, err := exec.Command("tmux", args...).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimRight(string(out), "\n")
+}
+
+// tmuxPaneWindowID returns the window id containing the seat's own pane. The
+// pane id is the stable handle learned from the control stream; its window is
+// the seat's own, regardless of how many duplicate-named windows a previous
+// generation left behind. Empty when the pane id is unknown or tmux is
+// unavailable.
+func tmuxPaneWindowID(paneID string) string {
+	if paneID == "" {
+		return ""
+	}
+	return tmuxQuery("display-message", "-p", "-t", "%"+paneID, "#{window_id}")
+}
+
+// tmuxViewWindowID returns the view session's CURRENT window id — the window
+// tmux forwards input to. This is what a delivered prompt actually reaches.
+// Empty when the view does not exist or tmux is unavailable.
+func tmuxViewWindowID(view string) string {
+	if view == "" {
+		return ""
+	}
+	return tmuxQuery("display-message", "-p", "-t", view, "#{window_id}")
 }
 
 // handleControlEvent routes a tmux notification to the browser as a JSON WS
@@ -521,7 +650,7 @@ func (f *fleet) handleControlEvent(name string, t *terminal, msg ControlMessage)
 // protocol already handles JSON (hello, resize, ack); this is additive.
 func (f *fleet) broadcastControl(name, event string, fields []string) {
 	f.mu.Lock()
-	clients := make([]*websocket.Conn, 0, len(f.clients[name]))
+	clients := make([]*wsClient, 0, len(f.clients[name]))
 	for client := range f.clients[name] {
 		clients = append(clients, client)
 	}
@@ -531,8 +660,8 @@ func (f *fleet) broadcastControl(name, event string, fields []string) {
 		msg["fields"] = fields
 	}
 	for _, client := range clients {
-		if err := client.WriteJSON(msg); err != nil {
-			_ = client.Close()
+		if err := client.writeJSON(msg); err != nil {
+			_ = client.conn.Close()
 			f.removeClient(name, client)
 		}
 	}
@@ -560,7 +689,7 @@ func (f *fleet) routeOutput(name, data string) {
 	if start > 0 {
 		f.rings[name] = append([]outputEvent(nil), f.rings[name][start:]...)
 	}
-	clients := make([]*websocket.Conn, 0, len(f.clients[name]))
+	clients := make([]*wsClient, 0, len(f.clients[name]))
 	for client := range f.clients[name] {
 		clients = append(clients, client)
 	}
@@ -570,14 +699,14 @@ func (f *fleet) routeOutput(name, data string) {
 		// the note in ws.go. The client's binary branch is the one that tracks seq,
 		// handles the replay boundary and suppresses answerback; the JSON `out`
 		// path is a legacy fallback that does none of that.
-		if err := client.WriteMessage(websocket.BinaryMessage, encodeOutputFrame(event.Seq, event.Data)); err != nil {
-			_ = client.Close()
+		if err := client.writeMessage(websocket.BinaryMessage, encodeOutputFrame(event.Seq, event.Data)); err != nil {
+			_ = client.conn.Close()
 			f.removeClient(name, client)
 		}
 	}
 }
 
-func (f *fleet) removeClient(name string, client *websocket.Conn) {
+func (f *fleet) removeClient(name string, client *wsClient) {
 	f.mu.Lock()
 	if clients := f.clients[name]; clients != nil {
 		delete(clients, client)
@@ -585,7 +714,7 @@ func (f *fleet) removeClient(name string, client *websocket.Conn) {
 	f.mu.Unlock()
 }
 
-func (f *fleet) close(name string) bool {
+func (f *fleet) close(name string, killTmuxView bool) bool {
 	f.mu.Lock()
 	t := f.terminals[name]
 	clients := f.clients[name]
@@ -595,13 +724,58 @@ func (f *fleet) close(name string) bool {
 	delete(f.nextSeq, name)
 	f.mu.Unlock()
 	for client := range clients {
-		_ = client.WriteJSON(map[string]any{"t": "exit", "code": 0})
-		_ = client.Close()
+		_ = client.writeJSON(map[string]any{"t": "exit", "code": 0})
+		_ = client.conn.Close()
 	}
 	if t == nil {
 		return false
 	}
 	killProcessTree(t)
+	// Per-seat close: kill the seat's VIEW tmux session. The view is the
+	// per-seat control-mode session the operator's close action should end —
+	// the BASE session is a shared team resource killed only by an explicit
+	// team close or the tmux tab close control, never as a side-effect of a
+	// per-seat close (the plan's invariant: nothing closes itself).
+	//
+	// Gated by killTmuxView: only the explicit ptyCloseTerminal verb passes
+	// true. dispose() (process shutdown) passes false so the view session
+	// survives a full exit — the plan's invariant says "process exit must
+	// not automatically kill tmux sessions." A restart never reaches close()
+	// at all (disposeAll is gated by !surviveBoard in bootstrap.ts), so the
+	// view also survives a restart. The existing kill-window below is NOT
+	// gated because it kills a window (not a session) and the session
+	// survives — only kill-session takes the whole view.
+	//
+	// t.tmuxViewSession is write-once (set at create under f.mu, never
+	// modified) so reading it here is race-free — unlike sessionTarget, which
+	// is publish-only on the read goroutine. The `=` prefix forces exact-match
+	// targeting so `lc-coding-team` cannot match `lc-coding-team-coder-1`.
+	// exec.Command uses an argv array — no shell, no interpolation. The error
+	// is swallowed: the session may already be gone (the agent exited and tmux
+	// cleaned up) or this may be a non-tmux terminal whose field is empty.
+	if killTmuxView && t.controlMode && t.tmuxViewSession != "" {
+		_ = exec.Command("tmux", "kill-session", "-t", "="+t.tmuxViewSession).Run()
+	}
+	// Per-seat close: kill the seat's WINDOW in the base session, ending the
+	// agent itself — "closing a terminal closes it", not just the pane's view
+	// onto a still-running agent (change 2 of the
+	// tmux-windows-duplicate-on-re-seat plan). The window lives in the shared
+	// base session; `kill-window -t =<session>:<window>` removes it from the
+	// shared list, and tmux destroys the base session (and its grouped views)
+	// automatically when this was the last window — so the "kill-session when
+	// the last window goes" case needs no separate code. After the window-reuse
+	// fix window names are unique within a session, so the target is
+	// unambiguous; the `=` prefix forces exact session-name match. The view
+	// kill above already took the seat's pane; this takes the agent. Both are
+	// best-effort: the window may already be gone (agent exited naturally) or
+	// this may be a non-tmux terminal whose fields are empty. Crash survival
+	// on a board RESTART is preserved because the standalone host gates
+	// disposeAll() behind `!surviveBoard` (bootstrap.ts:5366) — a restart never
+	// reaches this close(), so the window survives the PTY dying, which is the
+	// durability property the seating design is built on.
+	if t.controlMode && t.tmuxSession != "" && t.tmuxWindow != "" {
+		_ = exec.Command("tmux", "kill-window", "-t", "="+t.tmuxSession+":"+t.tmuxWindow).Run()
+	}
 	_ = t.file.Close()
 	return true
 }
@@ -614,7 +788,12 @@ func (f *fleet) dispose() {
 	}
 	f.mu.RUnlock()
 	for _, n := range names {
-		f.close(n)
+		// dispose() passes killTmuxView=false: the plan's invariant says
+		// "process exit must not automatically kill tmux sessions." The view
+		// sessions survive a full exit and become seatless — the operator can
+		// re-attach or close them from the tmux tab. A restart never reaches
+		// here (disposeAll is gated by !surviveBoard in bootstrap.ts).
+		f.close(n, false)
 	}
 }
 
@@ -670,6 +849,13 @@ func (f *fleet) respawnTerminal(t *terminal) (int, error) {
 	t.lastDataAt = time.Now().UnixMilli()
 	t.controlActive = false
 	t.paneID = ""
+	// The respawn re-runs the seating chain (the startup command IS the
+	// chain), so the routing state is re-derived afterwards: controlActive
+	// flips again, the pane id is re-learned, and onPaneIDLearned re-captures
+	// tmuxWindowId and re-runs the routing verification. Clear both so a
+	// stale id/flag from the previous incarnation does not survive the reset.
+	t.tmuxWindowId = ""
+	t.tmuxMisrouted = false
 	t.copyModeActive = false
 	t.pendingInput = nil
 	t.pendingCols = 0
@@ -838,7 +1024,11 @@ func (f *fleet) handleVerb(verb string, payload map[string]any) (any, error) {
 		}, nil
 	case "ptyCloseTerminal":
 		name, _ := payload["name"].(string)
-		return map[string]any{"success": f.close(name)}, nil
+		// Explicit operator close — pass killTmuxView=true so the seat's VIEW
+		// tmux session is killed (the plan: "closing a terminal closes its
+		// tmux session"). dispose() passes false (the invariant: "process
+		// exit must not automatically kill tmux sessions").
+		return map[string]any{"success": f.close(name, true)}, nil
 	case "ptyClearAllTerminals":
 		f.mu.RLock()
 		active := make([]*terminal, 0, len(f.terminals))
@@ -985,7 +1175,7 @@ func main() {
 		}
 	}
 	root, _ = filepath.Abs(root)
-	f := &fleet{root: root, token: randomToken(), terminals: map[string]*terminal{}, clients: map[string]map[*websocket.Conn]struct{}{}, rings: map[string][]outputEvent{}, nextSeq: map[string]uint64{}, logDir: filepath.Join(root, ".switchboard", "logs"), logState: map[string]*sessionLog{}}
+	f := &fleet{root: root, token: randomToken(), terminals: map[string]*terminal{}, clients: map[string]map[*wsClient]struct{}{}, rings: map[string][]outputEvent{}, nextSeq: map[string]uint64{}, logDir: filepath.Join(root, ".switchboard", "logs"), logState: map[string]*sessionLog{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws/terminal", f.handleWebSocket)
 	mux.HandleFunc("/api/pty/", func(w http.ResponseWriter, r *http.Request) {

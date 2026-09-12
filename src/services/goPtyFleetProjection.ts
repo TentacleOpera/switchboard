@@ -47,6 +47,8 @@ interface ProjectedTerminal {
     hidden?: boolean;
     claudeInlineRendering?: boolean;
     _isTeamMember?: boolean;
+    /** BASE tmux session name for a control-mode seat (undefined for raw PTY). */
+    tmuxSession?: string;
 }
 
 /**
@@ -235,6 +237,17 @@ export class GoPtyFleetProjection {
         // control-mode seat indistinguishable from a raw one, so it is an explicit
         // flag, never inferred from the stream.
         const usesControlMode = !!effectiveStartupCommand && this._tmuxSeatingEnabled();
+        // Hoisted out of the `if (usesControlMode)` block so the create
+        // payload below can pass them to the Go host even on the non-control-
+        // mode path (where they stay '' and the host skips the teardown). The
+        // Go host stores them write-once at create time. `tmuxViewSession` is
+        // the per-seat view the operator's close ends; `tmuxSession` +
+        // `tmuxWindow` name the BASE session and the window inside it, which
+        // fleet.close() kills to end the agent itself (close closes it — see
+        // change 2 of the tmux-windows-duplicate-on-re-seat plan).
+        let view = '';
+        let tmuxSessionName = '';
+        let tmuxWindowName = '';
         if (usesControlMode) {
             const session = deriveTmuxSessionName(opts?.tmuxSession || name || role);
             const win = String(name || role).replace(/[^A-Za-z0-9_.-]/g, '-');
@@ -260,25 +273,85 @@ export class GoPtyFleetProjection {
             // strips to nothing and falls back to its role.
             const winSlug = win.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/-+/g, '-');
             const teamSlug = session.replace(/^lc-/, '').replace(/-team$/, '');
-            const suffix = winSlug.replace(new RegExp(`^${teamSlug}-?`), '') || role.toLowerCase();
-            const view = `${session}-${suffix}`;
+            const strippedSuffix = winSlug.replace(new RegExp(`^${teamSlug}-?`), '');
+            // A SOLO seat (no `tmuxSession` — a standalone terminal, not a team
+            // head or member) has no siblings to isolate a current-window
+            // pointer from, so it attaches to its session directly and gets NO
+            // grouped view session. The empty-stripped-suffix case is exactly
+            // "this window IS the session"; the previous fallback to the role
+            // fired for EVERY standalone terminal (lc-planner-1-planner) and
+            // doubled the session count for nothing — observed 14 sessions for
+            // 9 panes, four of them inert base sessions no client ever attached
+            // to. A genuine team head keeps the role fallback: its session also
+            // holds its siblings' windows, so it needs its own view pinned to
+            // its own window.
+            const isSoloSeat = !opts?.tmuxSession;
+            const suffix = isSoloSeat ? '' : (strippedSuffix || role.toLowerCase());
+            view = isSoloSeat ? session : `${session}-${suffix}`;
+            tmuxSessionName = session;
+            tmuxWindowName = win;
             effectiveStartupCommand =
                 // Reuse the seat's window if it is already there. `has-session`
                 // only answers "does the TEAM session exist?", so on a restart
-                // it was true and `new-window` then added a SECOND window with
-                // the same name — tmux permits duplicate window names, so four
-                // more windows accumulated on every team start (observed: 15
-                // windows for 4 seats, three generations deep). The `-A` on the
-                // view line below deduped the view SESSION, which is why the
-                // session count looked stable while the windows multiplied out
-                // of sight. `grep -Fqx` matches the whole name literally, so
-                // `Coding` cannot match `Coding-coder-1`. This also makes the
-                // `select-window` below deterministic: with duplicates present
-                // it picked one of them arbitrarily.
-                `tmux has-session -t ${session} 2>/dev/null `
-                + `&& { tmux list-windows -t ${session} -F '#{window_name}' 2>/dev/null | grep -Fqx ${win} `
-                + `|| tmux new-window -d -t ${session} -n ${win} ${inner}; } `
-                + `|| tmux new-session -d -s ${session} -n ${win} ${inner}; `
+                // an unconditional `new-window` added a SECOND window with the
+                // same name — tmux permits duplicate window names, so four more
+                // windows accumulated on every team start (observed: 12 windows
+                // for 4 seats, three generations deep). The name test below
+                // (`grep -Fxq -- "${win}"`: fixed-string `-F`, exact-line `-x`,
+                // quiet `-q`, `--` end-of-options) makes the three-branch
+                // decision explicit: no session → create it with this window;
+                // session but no window → add the window; session AND window →
+                // reuse, and the startup command does NOT run again (the agent
+                // is already alive in that window — the behaviour the comment
+                // at :227 always claimed and never delivered). `grep -Fxq --
+                // "${win}"` matches the whole name literally so `Coding` cannot
+                // match `Coding-coder-1`, and the `--` + quotes stop a window
+                // name beginning with `-` being read as a flag.
+                //
+                // `if`/`elif`/`else`, NOT `&&`/`||` chaining. The old chain was
+                // `has-session && new-window || new-session`, and in shell
+                // `A && B || C` runs C when B fails — so a `new-window` failure
+                // fell through to `new-session` on a session that already existed
+                // (which failed too), and the seat was left attaching to a
+                // window nothing created. Keeping the chain shape while adding a
+                // third branch would preserve that trap.
+                //
+                // `flock` on a per-session lockfile serializes the test-and-
+                // create: two concurrent starts of the same team (a double
+                // press, or a re-seat while a start is in flight) cannot both
+                // find no session and both `new-session`, and cannot both miss
+                // the window test and both `new-window`. A race-created
+                // duplicate does NOT collapse on the next re-seat — the
+                // existence test is satisfied by EITHER copy — so the race is
+                // prevented, not tolerated. The lock is released before
+                // `exec tmux` so the attached client never holds it. `flock`
+                // failing (absent, or the lockfile unwritable) degrades to
+                // unlocked, never to a blocked seat.
+                `exec 9>\"\${TMPDIR:-/tmp}/switchboard-tmux-${session}.lock\" 2>/dev/null; flock 9 2>/dev/null || true; `
+                // Capture the window id at creation (`-P -F '#{window_id}'`) into
+                // $wid. A name is not unique across generations — the failure this
+                // card fixes — so the id is resolved once and every later target
+                // (set-window-option, select-window) uses the id, never the name.
+                // The reuse branch (session AND window exist) leaves $wid empty;
+                // the name-lookup fallback below resolves it. $wid is a shell
+                // variable, not a JS interpolation — `$wid` has no braces, so the
+                // template literal passes it through literally.
+                + `wid=''; `
+                + `if ! tmux has-session -t ${session} 2>/dev/null; then `
+                + `wid=$(tmux new-session -d -P -F '#{window_id}' -s ${session} -n ${win} ${inner} 2>/dev/null); `
+                + `elif ! tmux list-windows -t ${session} -F '#{window_name}' 2>/dev/null | grep -Fxq -- "${win}"; then `
+                + `wid=$(tmux new-window -d -P -F '#{window_id}' -t ${session} -n ${win} ${inner} 2>/dev/null); `
+                + `fi; `
+                + `flock -u 9 2>/dev/null || true; exec 9>&- 2>/dev/null; `
+                // Resolve $wid by name when creation captured nothing — the reuse
+                // path, or a creation whose -P output was empty. list-windows -F
+                // prints 'name id' per line; awk picks the id of the first window
+                // whose name matches the seat's own. This fallback is the path
+                // that remains ambiguous across duplicate generations; reaping
+                // the previous generation (the sibling card) removes the
+                // ambiguity. Until then the creation path above — which captures
+                // the id directly — is the one a fresh start takes.
+                + `if [ -z \"$wid\" ]; then wid=$(tmux list-windows -t ${session} -F '#{window_name} #{window_id}' 2>/dev/null | awk -v w=\"${win}\" '$1==w{print $2; exit}'); fi; `
                 // `has-session || new-session -d`, NOT `new-session -A -d`. Under
                 // `-A` new-session behaves as attach-session, and `-d` is not
                 // attach-session's detach flag (`-D` is) — so on a RE-SEAT, where
@@ -288,7 +361,10 @@ export class GoPtyFleetProjection {
                 // is delivered to the old agent while the API reports success.
                 // Invisible outside a pty, which is why it survived. The explicit
                 // form states the intent — ensure the view exists, attach nothing.
-                + `tmux has-session -t ${view} 2>/dev/null || tmux new-session -d -t ${session} -s ${view}; `
+                // A SOLO seat skips this entirely: `view === session`, so there
+                // is no grouped view to create, and the pane attaches to the
+                // session itself.
+                + (isSoloSeat ? '' : `tmux has-session -t ${view} 2>/dev/null || tmux new-session -d -t ${session} -s ${view}; `)
                 // Control mode (`-CC`) makes tmux stop drawing the pane and emit
                 // line-oriented notifications instead; the board renders the agent
                 // as a plain terminal. That removes the need for the per-view
@@ -296,7 +372,9 @@ export class GoPtyFleetProjection {
                 // status line, no longer interprets a prefix key, and no longer
                 // arbitrates window size between competing clients. The base
                 // session an operator attaches to over SSH keeps all of its own
-                // options — these are per-view, never `-g`.
+                // options — these are per-view, never `-g`. For a solo seat
+                // `view === session`, so they apply to the session the pane
+                // attaches to (the strip must move with the pane or it returns).
                 //
                 // `window-size manual` gives the browser panel deterministic
                 // authority over pane geometry — under the default `latest`, a
@@ -307,9 +385,18 @@ export class GoPtyFleetProjection {
                 // `refresh-client -C`. `automatic-rename off` stops
                 // `%window-renamed` from firing on every command the agent runs,
                 // which would otherwise thrash any board re-render on rename.
+                //
+                // `set-window-option` and `select-window` target $wid — the stable
+                // window id — not `${view}:${win}`. A name resolves to the
+                // lowest-index window carrying it, so with a previous generation's
+                // duplicate still present `select-window -t ${view}:${win}` picked
+                // the OLD window even after the block above was fixed. The id is
+                // unambiguous. `select-window -t ${view}:${wid}` pins the VIEW
+                // session's current window (grouped sessions each keep their own);
+                // `set-window-option -t ${wid}` targets the window directly.
                 + `tmux set-option -t ${view} window-size manual 2>/dev/null; `
-                + `tmux set-window-option -t ${view}:${win} automatic-rename off 2>/dev/null; `
-                + `tmux select-window -t ${view}:${win}; `
+                + `tmux set-window-option -t ${wid} automatic-rename off 2>/dev/null; `
+                + `tmux select-window -t ${view}:${wid}; `
                 // `-u` forces UTF-8 mode so `utf8_sanitize` does not replace
                 // non-ASCII bytes with `_` in format output (window names, pane
                 // titles, `list-panes`/`capture-pane` format strings) on a headless
@@ -329,6 +416,23 @@ export class GoPtyFleetProjection {
             apiToken: this.apiToken,
             _isTeamMember: opts?._isTeamMember === true,
             controlMode: usesControlMode,
+            // The per-seat VIEW tmux session name, derived above as
+            // `${session}-${suffix}` (or `session` for a solo seat). The Go host
+            // stores it write-once at create time and fleet.close() reads it to
+            // issue `tmux kill-session -t =<view>` when the operator closes the
+            // seat. Empty for non-control-mode seats (view stays '' above) so
+            // the Go host's close() skips the kill-session — matching the
+            // extension host, which never sets controlMode.
+            tmuxViewSession: view,
+            // The BASE tmux session + the window name inside it. fleet.close()
+            // kills the window (`tmux kill-window -t =<session>:<window>`) to
+            // end the agent itself — closing a terminal closes it, not just the
+            // pane's view onto it (change 2 of the
+            // tmux-windows-duplicate-on-re-seat plan). After change 1 window
+            // names are unique within a session, so the target is unambiguous.
+            // Empty for non-control-mode seats; close() skips the kill-window.
+            tmuxSession: tmuxSessionName,
+            tmuxWindow: tmuxWindowName,
             // Recorded by the Go host so a clearStrategy "respawn" clear can
             // re-inject the seat's startup command verbatim — the only way a
             // declared --model holds across a reset, since /clear restarts
@@ -355,6 +459,11 @@ export class GoPtyFleetProjection {
             startupCommand: effectiveStartupCommand,
             startupCommandSource: effectiveStartupSource,
             cliFamily: deriveCliFamily(effectiveStartupCommand),
+            // Persisted in `runtime.terminals` so the boot reaper has an
+            // ownership signal that survives a restart — the in-memory cache
+            // is empty at boot. Empty (not undefined) for non-control-mode
+            // seats; the reaper treats an empty `tmuxSession` as "no claim".
+            tmuxSession: tmuxSessionName || undefined,
         });
         this.cache.set(handle.friendlyName, handle);
         this.updateRegistryState();
@@ -772,6 +881,7 @@ export class GoPtyFleetProjection {
             cliFamily: row.cliFamily || deriveCliFamily(row.startupCommand),
             startupCommand: row.startupCommand,
             startupCommandSource: row.startupCommandSource,
+            tmuxSession: row.tmuxSession,
             startedAtMs,
             lastDataAt: row.lastDataAt || startedAtMs,
             promptCount: row.promptCount || 0,
@@ -831,6 +941,12 @@ export class GoPtyFleetProjection {
                     agentInstanceId: t.agentInstanceId,
                     parentInstanceId: t.parentInstanceId,
                     cliFamily: t.cliFamily,
+                    // Persisted so the boot reaper has an ownership signal
+                    // that survives a restart — the in-memory cache is empty
+                    // at boot. Undefined for raw PTYs; the reaper treats an
+                    // absent `tmuxSession` as "no claim" and will reap the
+                    // session if no other live seat claims it.
+                    tmuxSession: t.tmuxSession,
                 } satisfies FleetTerminalInfo;
             }
             await db.setConfigJson('runtime.terminals', terminalMap);

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 var wsUpgrader = websocket.Upgrader{
@@ -49,6 +50,27 @@ type wsMessage struct {
 	Rows uint16 `json:"rows"`
 }
 
+// One concurrent writer per connection is gorilla/websocket's documented contract.
+// With EnableCompression the writers share one flate compressor, so violating it is
+// not interleaved frames but a panic inside compress/flate — see the 2026-09-12
+// deflateFast.matchLen crash. This mutex is the only thing enforcing the contract.
+type wsClient struct {
+	conn    *websocket.Conn
+	writeMu sync.Mutex
+}
+
+func (c *wsClient) writeMessage(messageType int, data []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return c.conn.WriteMessage(messageType, data)
+}
+
+func (c *wsClient) writeJSON(v any) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return c.conn.WriteJSON(v)
+}
+
 func (f *fleet) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Query().Get("token") != f.token || f.token == "" {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
@@ -64,14 +86,15 @@ func (f *fleet) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	client := &wsClient{conn: conn}
 	f.mu.Lock()
 	if f.clients[name] == nil {
-		f.clients[name] = make(map[*websocket.Conn]struct{})
+		f.clients[name] = make(map[*wsClient]struct{})
 	}
-	f.clients[name][conn] = struct{}{}
+	f.clients[name][client] = struct{}{}
 	replay := append([]outputEvent(nil), f.rings[name]...)
 	f.mu.Unlock()
-	defer func() { f.removeClient(name, conn); _ = conn.Close() }()
+	defer func() { f.removeClient(name, client); _ = conn.Close() }()
 	// hello + ONE coalesced binary replay frame — the shape terminals.js is built
 	// for (see setupClient in terminalWsGateway.ts, the reference implementation).
 	//
@@ -96,6 +119,13 @@ func (f *fleet) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	replayText := replayBuf.String()
+	// hello + the ONE coalesced replay frame must reach the client back-to-back: the
+	// client arms awaitingReplayFrame from hello.replayChars and treats the NEXT binary
+	// frame as the replay. A publish landing between them is parsed as scrollback.
+	// The lock is taken explicitly (not via client.writeJSON/writeMessage) because the
+	// mutex is non-reentrant and is already held here — this is the one place in the
+	// host that takes the lock by hand, and the comment says why.
+	client.writeMu.Lock()
 	_ = conn.WriteJSON(map[string]any{
 		"t": "hello", "name": name, "seq": f.next(name),
 		"replayChars": utf16Len(replayText),
@@ -103,6 +133,7 @@ func (f *fleet) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	if replayText != "" {
 		_ = conn.WriteMessage(websocket.BinaryMessage, encodeOutputFrame(replaySeq, replayText))
 	}
+	client.writeMu.Unlock()
 	for {
 		// Read the raw message, not ReadJSON.
 		//

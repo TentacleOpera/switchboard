@@ -190,6 +190,16 @@ jobs:
       - name: tmux view session chrome contract (control-mode chain, no per-view suppressions)
         run: npm run test:contract:tmux-view-chrome
 
+      # Closing a terminal closes its tmux session, and nothing ever closes
+      # itself. The invariant: no code path may close a tmux session except an
+      # operator action in the Terminals panel. This pins that kill-session is
+      # reachable only from fleet.close() (Go host, per-seat close) and
+      # killTmuxSession() (tmuxBackend.ts, the tmuxKillSession verb) — no timer,
+      # sweep, interval, or startup reconciliation may call either. Also pins
+      # the attached indicator, the close control, and the team-close base kill.
+      - name: tmux session close contract (per-seat close, invariant, attached indicator)
+        run: npm run test:contract:tmux-session-close
+
       # WSL detection decides which binary opens the board's browser. Getting it
       # wrong on native Linux would call cmd.exe; getting it wrong inside WSL calls
       # an xdg-open that minimal installs do not ship.

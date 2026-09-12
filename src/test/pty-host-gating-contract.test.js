@@ -140,6 +140,66 @@ check('Go host implements the required verbs', () => {
     assert.ok(main.includes('payload["data"]') || main.includes('strField(payload, "data")'), 'ptySendPrompt must accept data payload');
 });
 
+check('Go host declares a clearStrategy for every recognised family and an argv template for every respawn family', () => {
+    const prompt = fs.readFileSync(path.join(REPO_ROOT, 'cmd', 'switchboard-pty-host', 'prompt.go'), 'utf8');
+    assert.ok(/func clearStrategy\(family string\) string/.test(prompt), 'Go host missing clearStrategy declaration');
+    assert.ok(/func respawnArgvSuffix\(family, prompt string\) string/.test(prompt), 'Go host missing respawnArgvSuffix declaration');
+    assert.ok(/func shellQuote\(s string\) string/.test(prompt), 'Go host missing shellQuote helper');
+    // Every family the readiness table recognises must be covered by
+    // clearStrategy. A family added to readiness but not to clearStrategy
+    // would silently fall back to in-process on a guess.
+    const recognisedFamilies = ['claude', 'antigravity', 'devin'];
+    for (const fam of recognisedFamilies) {
+        const re = new RegExp(`case "${fam}"`);
+        assert.ok(re.test(prompt), `clearStrategy table missing family ${fam}`);
+    }
+    // Respawn families (devin) must have an argv template branch in
+    // respawnArgvSuffix — a respawn family without a template would inject
+    // the prompt in the wrong shape.
+    assert.ok(/case "devin":\s*return " -- " \+ quoted/.test(prompt), 'devin respawn argv template missing or mis-shaped (must be ` -- ` + quoted)');
+    // Unknown families default to in-process, never respawn — a guess.
+    assert.ok(/default:\s*return "in-process"/.test(prompt), 'clearStrategy must default unknown families to in-process, not respawn');
+});
+
+check('Go host respawn path never calls writeSlashLocked and in-process path still does', () => {
+    const prompt = fs.readFileSync(path.join(REPO_ROOT, 'cmd', 'switchboard-pty-host', 'prompt.go'), 'utf8');
+    const main = fs.readFileSync(path.join(REPO_ROOT, 'cmd', 'switchboard-pty-host', 'main.go'), 'utf8');
+    // The respawn branch in deliverPrompt must not type /clear.
+    const respawnBranch = prompt.slice(prompt.indexOf('clearStrategy(family) == "respawn"'));
+    assert.ok(!respawnBranch.includes('writeSlashLocked'), 'respawn branch must not call writeSlashLocked');
+    // The in-process branch must still call writeSlashLocked(t, "/clear").
+    const inProcessBranch = prompt.slice(prompt.indexOf('clearReadinessWindows(family)'));
+    assert.ok(inProcessBranch.includes('writeSlashLocked'), 'in-process branch must still call writeSlashLocked');
+    // ptyClearTerminal and ptyClearAllTerminals must consult clearStrategy.
+    assert.ok(/ptyClearAllTerminals[\s\S]*?clearStrategy\(t\.cliFamily\) == "respawn"/.test(main), 'ptyClearAllTerminals must consult clearStrategy');
+    assert.ok(/ptyClearTerminal[\s\S]*?clearStrategy\(t\.cliFamily\) == "respawn"/.test(main), 'ptyClearTerminal must consult clearStrategy');
+});
+
+check('Go host respawn requires a startup command and fails loudly without one', () => {
+    const main = fs.readFileSync(path.join(REPO_ROOT, 'cmd', 'switchboard-pty-host', 'main.go'), 'utf8');
+    assert.ok(/respawn requires a startup command for role/.test(main), 'respawnTerminal must fail loudly when startupCommand is empty, naming the role');
+    // The startup command must be recorded at create so respawn can re-inject it.
+    assert.ok(/startupCommand:\s*strField\(payload, "startupCommand"\)/.test(main), 'terminal create must record startupCommand from payload');
+    // The env slice must be retained so a respawn starts under the same identity.
+    assert.ok(/env:\s*env,/.test(main), 'terminal create must retain env slice for respawn identity');
+});
+
+check('Node mirror of clearStrategy agrees with the Go host', () => {
+    const cliIdentity = fs.readFileSync(path.join(SRC, 'services', 'cliIdentity.ts'), 'utf8');
+    assert.ok(/export type ClearStrategy = 'in-process' \| 'respawn'/.test(cliIdentity), 'cliIdentity.ts missing ClearStrategy type');
+    assert.ok(/export function clearStrategyForFamily/.test(cliIdentity), 'cliIdentity.ts missing clearStrategyForFamily');
+    // devin must be respawn in both trees; everything else in-process.
+    assert.ok(/case 'devin':\s*return 'respawn'/.test(cliIdentity), 'Node clearStrategy must declare devin as respawn');
+    assert.ok(/default:\s*return 'in-process'/.test(cliIdentity), 'Node clearStrategy must default to in-process');
+});
+
+check('ptyPromptDelivery skips the in-process readiness tracker for respawn families', () => {
+    const delivery = fs.readFileSync(path.join(SRC, 'standalone', 'ptyPromptDelivery.ts'), 'utf8');
+    assert.ok(/clearStrategyForFamily\(family\) === 'respawn'/.test(delivery), 'ptyPromptDelivery must skip readiness for respawn families');
+    // The slash path must still be present for in-process families.
+    assert.ok(/writeSlashCommandLocked\(handle, '\/clear'/.test(delivery), 'in-process slash path must remain for in-process families');
+});
+
 if (failures > 0) {
     process.exit(1);
 }

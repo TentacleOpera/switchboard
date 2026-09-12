@@ -343,6 +343,11 @@
     // timer or frame id of their own.
     const terminalsMap = new Map();
     let fleetList = [];
+    // Cached tmux team sessions (from tmuxListSessions), refreshed alongside
+    // the fleet list so renderSidebarList can show seatless sessions without
+    // an async fetch on every render. Empty array when tmux is off/unavailable
+    // or the fetch has not run yet — never null.
+    let tmuxSessionsCache = [];
     // The last ptyListTerminals poll did not produce a usable fleet. fleetList is
     // deliberately left STALE on failure (see fetchTerminalList's tail), which is
     // right for the sidebar — a dark list during a transient blip is worse than a
@@ -490,6 +495,38 @@
     }
 
 
+    // ── tmux session name derivation ─────────────────────────────────────
+    // Mirrors `deriveTmuxSessionName` (teamWiring.ts:268) so the webview can
+    // resolve a team's tmux base session name for the team-close kill path
+    // without a round-trip. `lc-` prefix, lowercase, collapse non-alnum to
+    // hyphens, cap at 50 chars after the prefix.
+    function deriveTmuxSessionName(teamName) {
+        return 'lc-' + String(teamName || 'team')
+            .toLowerCase()
+            .replace(/[^a-z0-9_-]/g, '-')
+            .replace(/-+/g, '-')
+            .slice(0, 50);
+    }
+
+    // Fetch the board's tmux team sessions and cache them for the sidebar's
+    // seatless-session rows. Non-blocking: a failure leaves the stale cache
+    // (or the initial empty array) and re-renders so the sidebar does not
+    // hang on a tmux read. Called from fetchTerminalList alongside the fleet.
+    async function refreshTmuxSessionsCache() {
+        try {
+            const data = await fetchTmuxSessions();
+            if (data && data.success && Array.isArray(data.teams)) {
+                tmuxSessionsCache = data.teams;
+            } else {
+                tmuxSessionsCache = [];
+            }
+        } catch {
+            tmuxSessionsCache = [];
+        }
+        renderSidebarList();
+    }
+
+
     // ── tmux tab ──────────────────────────────────────────────────────────
     // Fetched from `tmuxListSessions` (a tmux-derived, registry-free read —
     // the registry records what the board believes; the point is what is true).
@@ -560,8 +597,13 @@
             const base = team.baseSession || team.group;
             const hasBase = !!base;
             const attachCmd = hasBase ? `tmux attach -t ${base}` : '';
+            // The kill command stays as a copyable string for the operator's
+            // own shell, but the executable close control is the button below
+            // (tmuxKillSession verb). Killing the base takes every grouped view
+            // with it, so the label warns.
             const killCmd = hasBase ? `tmux kill-session -t ${base}` : '';
             const seatCount = typeof team.windowCount === 'number' ? team.windowCount : (Array.isArray(team.windows) ? team.windows.length : 0);
+            const attached = !!team.attached;
             const baseNote = !hasBase
                 ? '<div class="tmux-hint">Base session could not be identified (session predates grouping). Attach by team name at your own judgement.</div>'
                 : '';
@@ -575,13 +617,19 @@
                     <code class="tmux-cmd" title="${escapeHtml(killCmd)}">${escapeHtml(killCmd)}</code>
                     <button type="button" class="tmux-copy-btn" data-copy="${escapeHtml(killCmd)}">Copy</button>
                 </div>` : '';
+            const attachedBadge = attached
+                ? '<span class="tmux-attached-badge" title="A client is attached to this session (base or a view) — a human may be inside">attached</span>'
+                : '';
             return `
             <div class="tmux-team-row">
-                <div class="tmux-team-name">${escapeHtml(team.group)}</div>
+                <div class="tmux-team-name">${escapeHtml(team.group)} ${attachedBadge}</div>
                 <div class="tmux-team-meta">${seatCount} window${seatCount === 1 ? '' : 's'}${hasBase ? '' : ' · no base session'}</div>
                 ${baseNote}
                 ${attachRow}
                 ${killRow}
+                <div class="tmux-close-row">
+                    <button type="button" class="tmux-close-btn" data-close-session="${escapeHtml(base || '')}" ${hasBase ? '' : 'disabled'}>Close session (kills all views)</button>
+                </div>
                 <button type="button" class="tmux-grid-btn" data-grid-team="${escapeHtml(team.group)}" data-grid-base="${escapeHtml(base || '')}" ${hasBase ? '' : 'disabled'}>Build 4-up grid</button>
             </div>`;
         });
@@ -594,6 +642,36 @@
                 const orig = btn.textContent;
                 btn.textContent = 'Copied';
                 setTimeout(() => { btn.textContent = orig; }, 900);
+            });
+        });
+        // Wire the close button — the executable close control. Calls the
+        // tmuxKillSession verb (validated, `=` exact-match), then refreshes.
+        list.querySelectorAll('.tmux-close-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                if (btn.disabled) { return; }
+                const target = btn.getAttribute('data-close-session') || '';
+                if (!target) { return; }
+                btn.disabled = true;
+                const orig = btn.textContent;
+                btn.textContent = 'Closing…';
+                try {
+                    const res = await fetch('/terminals/verb/tmuxKillSession', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ target })
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (data && data.success) {
+                        showPaneToast('Session closed.');
+                    } else {
+                        showPaneToast('Close failed: ' + (data && data.error ? data.error : 'unknown'));
+                    }
+                } catch (err) {
+                    showPaneToast('Close failed: ' + (err instanceof Error ? err.message : String(err)));
+                } finally {
+                    renderTmuxSessions(await fetchTmuxSessions());
+                    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 900);
+                }
             });
         });
         list.querySelectorAll('.tmux-grid-btn').forEach(btn => {
@@ -1189,6 +1267,9 @@
 
         const btnLinkUp = document.getElementById('btn-link-up');
         if (btnLinkUp) { btnLinkUp.addEventListener('click', openLinkModal); }
+
+        const btnComposer = document.getElementById('btn-composer');
+        if (btnComposer) { btnComposer.addEventListener('click', openComposerModal); }
 
         const btnKanbanToolbar = document.getElementById('btn-kanban-toolbar');
         if (btnKanbanToolbar) {
@@ -2428,6 +2509,10 @@
                     sanitizePaneAssignments();
                     renderSidebarList();
                     renderPaneGrid();
+                    // Refresh the tmux sessions cache for the sidebar's
+                    // seatless-session rows. Non-blocking — the sidebar
+                    // re-renders when the fetch resolves.
+                    void refreshTmuxSessionsCache();
                     // First paint is also the first chance to measure the grid, so the
                     // floor is evaluated here rather than only on a later resize.
                     applyLayoutFloor();
@@ -5711,6 +5796,87 @@
             listEl.appendChild(parentDiv);
         }
 
+        // ── Seatless tmux sessions ──────────────────────────────────────
+        // A session with no live seat is invisible in the sidebar above
+        // (which renders from fleetList). Show it here so the operator sees
+        // the full sprawl without opening the tmux tab. A team session is
+        // "seatless" when NONE of its base windows match a live fleet seat by
+        // friendlyName. The close button calls the same tmuxKillSession verb
+        // as the tmux tab close control.
+        const liveSeatNames = new Set(fleetList
+            .filter(t => t.status !== 'exited')
+            .map(t => t.friendlyName));
+        const seatlessTeams = tmuxSessionsCache.filter(team => {
+            const wins = Array.isArray(team.windows) ? team.windows : [];
+            if (wins.length === 0) { return true; } // no windows = no seats
+            return !wins.some(w => liveSeatNames.has(w));
+        });
+        // Update the sidebar header count: show total tmux sessions alongside
+        // the seat count so sprawl is visible at a glance.
+        const sessionCountEl = document.getElementById('sidebar-session-count');
+        if (sessionCountEl) {
+            const totalSessions = tmuxSessionsCache.length;
+            if (totalSessions > 0) {
+                sessionCountEl.textContent = `${totalSessions} session${totalSessions === 1 ? '' : 's'}`;
+                sessionCountEl.hidden = false;
+            } else {
+                sessionCountEl.hidden = true;
+            }
+        }
+        if (seatlessTeams.length > 0) {
+            const section = document.createElement('div');
+            section.className = 'sidebar-seatless-section';
+            const header = document.createElement('div');
+            header.className = 'sidebar-seatless-header';
+            header.textContent = `Seatless sessions (${seatlessTeams.length})`;
+            section.appendChild(header);
+            for (const team of seatlessTeams) {
+                const base = team.baseSession || team.group;
+                const row = document.createElement('div');
+                row.className = 'sidebar-seatless-row';
+                const name = document.createElement('span');
+                name.className = 'sidebar-seatless-name';
+                name.textContent = base || team.group;
+                name.title = `tmux group ${team.group} — no live seat`;
+                const badge = document.createElement('span');
+                badge.className = 'sidebar-seatless-badge';
+                badge.textContent = 'no seat';
+                const closeBtn = document.createElement('button');
+                closeBtn.className = 'sidebar-seatless-close';
+                closeBtn.textContent = 'Close';
+                closeBtn.title = `Kill tmux session ${base || team.group} (kills all views)`;
+                closeBtn.addEventListener('click', async () => {
+                    if (!base) { return; }
+                    closeBtn.disabled = true;
+                    const orig = closeBtn.textContent;
+                    closeBtn.textContent = '…';
+                    try {
+                        const res = await fetch('/terminals/verb/tmuxKillSession', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ target: base })
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (data && data.success) {
+                            showPaneToast('Session closed.');
+                        } else {
+                            showPaneToast('Close failed: ' + (data && data.error ? data.error : 'unknown'));
+                        }
+                    } catch (err) {
+                        showPaneToast('Close failed: ' + (err instanceof Error ? err.message : String(err)));
+                    } finally {
+                        void refreshTmuxSessionsCache();
+                        setTimeout(() => { closeBtn.textContent = orig; closeBtn.disabled = false; }, 900);
+                    }
+                });
+                row.appendChild(name);
+                row.appendChild(badge);
+                row.appendChild(closeBtn);
+                section.appendChild(row);
+            }
+            listEl.appendChild(section);
+        }
+
         // The group that owned the open picker is gone (mapping removed, worktree
         // pruned). Clearing here keeps the next `+` click from toggling a picker
         // nobody can see. AFTER the loop, not inside it: inside, the first group
@@ -6649,6 +6815,11 @@
                                 // HTTP-boundary strip exists to prevent.
                                 kind: 'dispatch',
                                 clearBeforePromptFromConfig: true,
+                                // A person dropped this and is watching the pane, so
+                                // the delivery floor takes the attended cap. Only an
+                                // explicit true shortens it — automations omit the
+                                // field and keep the longer wait.
+                                attended: true,
                                 operationId: opId
                             })
                         });
@@ -10445,6 +10616,21 @@
         });
         saveLayoutSettings();
         await fetchTerminalList();
+        // Kill the team's tmux session GROUP by session ID after the per-member
+        // fan-out. The fan-out's ptyCloseTerminal kills each seat's VIEW session
+        // (via the Go host's fleet.close()); the BASE session and any seatless
+        // views remain. The `tmuxKillSessionGroup` verb enumerates the group's
+        // members by `$N` session ID and kills each one — session IDs are
+        // stable even after the base is gone (the group name can outlive the
+        // founding session). Operator action only — the plan's invariant.
+        const tmuxGroup = deriveTmuxSessionName(snap.name);
+        try {
+            await fetch('/terminals/verb/tmuxKillSessionGroup', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ group: tmuxGroup })
+            });
+        } catch { /* best-effort — the session may already be gone */ }
         const ok = results.filter(r => r.ok).length;
         const total = results.length;
         const teamDefId = snap.definitionId;
@@ -11862,6 +12048,8 @@
                     body: JSON.stringify({
                         name: parentName,
                         data: buildLinkPrompt(parentName, childName, message),
+                        // Operator-initiated from the panel — attended cap.
+                        attended: true,
                         // EXPLICIT false. The omitted-field default is now false
                         // in BOTH hosts (TaskViewerProvider and bootstrap), so
                         // omitting would be safe — but explicit beats inherited
@@ -11974,6 +12162,202 @@
             const modal = document.getElementById('link-modal');
             if (!modal || modal.hidden) { return; }
             if (e.key === 'Escape') { e.stopPropagation(); closeModal(); }
+        }, true);
+    })();
+
+    // Composer: compose a prompt locally and deliver it to ANY active terminal
+    // via the host-routed sendToTerminal verb, without switching the active pane
+    // (which forces an xterm.js rerender). Mirrors the link-modal pattern
+    // (static HTML, `hidden` toggle, sidebar-level) — NOT the paste dialog's
+    // pane-level dynamic overlay. Delivery goes through fetch on
+    // /terminals/verb/sendToTerminal, the same route every other verb call in
+    // this file uses (no postMessage, no acquireVsCodeApi — terminals.js has
+    // neither).
+    //
+    // standingOrders:false is REQUIRED: sendToTerminal hardcodes kind:'dispatch'
+    // in the extension handler (TaskViewerProvider.ts) and applies standing
+    // orders by default in the standalone handler (bootstrap.ts). The composer
+    // is a user-typed prompt, not a system dispatch — appending standing orders
+    // would silently corrupt the user's intent.
+    function setComposerStatus(msg, isError) {
+        const statusEl = document.getElementById('composer-status');
+        if (!statusEl) { return; }
+        statusEl.textContent = msg || '';
+        statusEl.classList.toggle('is-error', !!isError);
+    }
+
+    function updateComposerSendButton() {
+        const selectEl = document.getElementById('composer-terminal-select');
+        const inputEl = document.getElementById('composer-input');
+        const sendBtn = document.getElementById('composer-send');
+        if (!sendBtn) { return; }
+        const hasTarget = !!(selectEl && selectEl.value && !selectEl.disabled);
+        const hasText = !!(inputEl && inputEl.value.length > 0);
+        sendBtn.disabled = !(hasTarget && hasText);
+    }
+
+    function closeComposerModal() {
+        const modal = document.getElementById('composer-modal');
+        if (modal) { modal.hidden = true; }
+    }
+
+    async function openComposerModal() {
+        const modal = document.getElementById('composer-modal');
+        const selectEl = document.getElementById('composer-terminal-select');
+        const inputEl = document.getElementById('composer-input');
+        if (!modal || !selectEl || !inputEl) { return; }
+
+        // Fetch a fresh fleet so the dropdown is current at open time. The
+        // modal is shown synchronously first (below) so a slow fetch never
+        // looks like a dead button; the dropdown is repopulated when the
+        // fetch resolves. fleetList may also be polled by fetchTerminalList
+        // in the background, but a fresh read here is the source of truth for
+        // the dropdown.
+        const live = fleetList.filter(t => t.status === 'active');
+        selectEl.innerHTML = '';
+        if (live.length === 0) {
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = 'No active terminals';
+            placeholder.disabled = true;
+            placeholder.selected = true;
+            selectEl.appendChild(placeholder);
+            selectEl.disabled = true;
+            setComposerStatus('No active terminals available.', false);
+        } else {
+            selectEl.disabled = false;
+            for (const t of live) {
+                const opt = document.createElement('option');
+                opt.value = t.friendlyName;
+                opt.textContent = t.friendlyName;
+                selectEl.appendChild(opt);
+            }
+            setComposerStatus('', false);
+        }
+
+        inputEl.value = '';
+        updateComposerSendButton();
+
+        modal.hidden = false;
+        // Focus the textarea so the user can type immediately. The select is
+        // pre-populated with the first active terminal.
+        setTimeout(() => { try { inputEl.focus(); } catch { /* ignore */ } }, 50);
+
+        // Refresh the dropdown from a live fetch in the background; the modal
+        // is already visible with the cached fleet, so this only corrects
+        // staleness from a long-idle panel.
+        try {
+            const res = await fetch('/terminals/verb/ptyListTerminals', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({})
+            });
+            if (res.ok) {
+                const data = await res.json();
+                if (data && Array.isArray(data.terminals)) {
+                    fleetList = data.terminals;
+                    const fresh = fleetList.filter(t => t.status === 'active');
+                    const current = selectEl.value;
+                    selectEl.innerHTML = '';
+                    if (fresh.length === 0) {
+                        const placeholder = document.createElement('option');
+                        placeholder.value = '';
+                        placeholder.textContent = 'No active terminals';
+                        placeholder.disabled = true;
+                        placeholder.selected = true;
+                        selectEl.appendChild(placeholder);
+                        selectEl.disabled = true;
+                        setComposerStatus('No active terminals available.', false);
+                    } else {
+                        selectEl.disabled = false;
+                        for (const t of fresh) {
+                            const opt = document.createElement('option');
+                            opt.value = t.friendlyName;
+                            opt.textContent = t.friendlyName;
+                            selectEl.appendChild(opt);
+                        }
+                        // Preserve the prior selection if still live.
+                        if (current && fresh.some(t => t.friendlyName === current)) {
+                            selectEl.value = current;
+                        }
+                        setComposerStatus('', false);
+                    }
+                    updateComposerSendButton();
+                }
+            }
+        } catch { /* stale fleet is acceptable; the cached list stands */ }
+    }
+
+    async function deliverComposerPrompt() {
+        const selectEl = document.getElementById('composer-terminal-select');
+        const inputEl = document.getElementById('composer-input');
+        const sendBtn = document.getElementById('composer-send');
+        if (!selectEl || !inputEl) { return; }
+        const name = selectEl.value;
+        const input = inputEl.value;
+        if (!name) { setComposerStatus('No terminal selected.', true); return; }
+        if (!input) { setComposerStatus('Nothing to send.', true); return; }
+
+        setComposerStatus('Sending…', false);
+        if (sendBtn) { sendBtn.disabled = true; }
+        try {
+            const res = await fetch('/terminals/verb/sendToTerminal', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name,
+                    input,
+                    paced: true,
+                    standingOrders: false
+                })
+            });
+            const data = await res.json().catch(() => null);
+            if (data && data.success) {
+                // Close first, THEN toast: the modal out-stacks .toast-container
+                // (z 200 vs 100), so a toast raised while it is open would be
+                // painted behind it.
+                closeComposerModal();
+                showPaneToast('Sent to ' + name);
+            } else {
+                setComposerStatus('Send failed: ' + ((data && data.error) || 'unknown'), true);
+                updateComposerSendButton();
+            }
+        } catch (err) {
+            setComposerStatus('Send failed: ' + (err.message || String(err)), true);
+            updateComposerSendButton();
+        }
+    }
+
+    // Wire composer modal controls. Bound once at init; the elements are
+    // static in the HTML. Escape is bound at document level in the CAPTURE
+    // phase for the same reason as wireLinkModal (an element-scoped Escape
+    // dies once focus leaves the modal subtree).
+    (function wireComposerModal() {
+        const closeBtn = document.getElementById('composer-modal-close');
+        const cancelBtn = document.getElementById('composer-cancel');
+        const sendBtn = document.getElementById('composer-send');
+        const selectEl = document.getElementById('composer-terminal-select');
+        const inputEl = document.getElementById('composer-input');
+        if (closeBtn) { closeBtn.addEventListener('click', closeComposerModal); }
+        if (cancelBtn) { cancelBtn.addEventListener('click', closeComposerModal); }
+        if (sendBtn) { sendBtn.addEventListener('click', () => void deliverComposerPrompt()); }
+        if (selectEl) { selectEl.addEventListener('change', updateComposerSendButton); }
+        if (inputEl) {
+            inputEl.addEventListener('input', updateComposerSendButton);
+            // Stop keydown propagation so xterm does not claim keys while the
+            // textarea is focused (same reason as the link modal).
+            inputEl.addEventListener('keydown', (e) => {
+                e.stopPropagation();
+                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                    e.preventDefault();
+                    void deliverComposerPrompt();
+                }
+            });
+        }
+        document.addEventListener('keydown', (e) => {
+            const modal = document.getElementById('composer-modal');
+            if (!modal || modal.hidden) { return; }
+            if (e.key === 'Escape') { e.stopPropagation(); closeComposerModal(); }
         }, true);
     })();
 
@@ -12279,7 +12663,9 @@
                         // append-bearing kind available here.
                         kind: 'dispatch',
                         data: '[OPERATOR NOTICE] Standing orders updated for team.',
-                        clearBeforePrompt: false
+                        clearBeforePrompt: false,
+                        // Operator pressed the button — attended cap.
+                        attended: true
                     })
                 });
             } catch (err) {

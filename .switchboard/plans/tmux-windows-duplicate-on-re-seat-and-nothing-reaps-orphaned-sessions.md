@@ -329,3 +329,9 @@ Key risks: (1) the reaper's ownership anchor was specified against the in-memory
   running"; showing only `lc-*` keeps it scoped to what the board created. — proceeding on the
   assumption that the tab shows `lc-*` only, matching the reaper's scope, until the user decides
   otherwise.
+
+---
+
+## Implementation Summary
+
+All six changes implemented in the working tree (no commit, no compile, no test run — per user directive). Change 1: seating command in `goPtyFleetProjection.ts` refactored from `&&`/`||` chain to explicit `if`/`elif`/`else` with `grep -Fxq -- "${win}"` (fixed-string, whole-line, `--` end-of-options) and a per-session `flock` to serialize concurrent starts. Change 6: solo seats (no `tmuxSession` opts) set `view = session` and skip the grouped-view `new-session`, eliminating the inert base session. Change 2: `tmuxSession` + `tmuxWindow` added to the `ptyCreateTerminal` payload, the Go `terminal` struct, and `fleet.close()` now issues `tmux kill-window -t =<session>:<window>` (plus the sibling plan's `kill-session -t =<view>`); natural PTY exit in `readOutput()` still does NOT call `close()`, preserving crash survival. Change 3: boot reaper in `bootstrap.ts` runs after `tmuxFleetService.reconcile()`, reads the persisted `runtime.terminals` registry (not the empty in-memory cache), builds the owned set from `ideName === PTY_IDE_NAME && status !== 'exited' && tmuxSession` rows, and `killTmuxSession()` every unowned `lc-*` session via the resolved `tmuxSocket`. Change 5: idempotence is the consequence of change 1's `elif` gate. Contract tests added to `src/test/tmux-backend-contract.test.js` (source-text inspection) with npm script aliases `test:contract:tmux-seat-reuse`, `test:contract:tmux-team-start-idempotent`, `test:contract:tmux-solo-seat-single-session`.

@@ -48,7 +48,7 @@ import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExtern
 // them and persists the result. Importing them back would re-open the
 // four-site-convention hole the loader closed.
 import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, loadEffectiveStandingOrders, resolveTeamScopedRoleTerminal, resolveTeamMembersForHead, resolveTeamPacingForHead, resolveDefinitionForGroup, plausibleOriginTerminal, terminalsShareTeam, resolveHeadForTerminal, resolveLiveGroupHeads, listTeamsInRoots, resolveTeamByIdInRoots, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, teamHeadName, type TerminalGroupsSettingsAccessor } from './teamWiring';
-import { isTmuxAvailable, listTmuxSessions, buildTmuxGrid, validateTmuxSessionName } from '../standalone/tmuxBackend';
+import { isTmuxAvailable, listTmuxSessions, buildTmuxGrid, validateTmuxSessionName, killTmuxSession, killTmuxSessionGroup } from '../standalone/tmuxBackend';
 import { installReviewerCallbackOrder, removeReviewerCallbackOrder } from './standingOrders';
 import { resolveWorkContext, resolveTeamGroupForTerminal, computeRosterClearTargets, dropDeferredClear, renameDeferredClear } from './workContextResolver';
 import { ORIENTATION_PREAMBLE, waitForSeatQuiescence } from './startupOrientation';
@@ -1829,8 +1829,45 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     windows: t.windows,
                     windowCount: t.windows.length,
                     members: t.members,
+                    attached: t.attached,
                 })),
             };
+        }
+        if (verb === 'tmuxKillSession') {
+            // Operator close control — the tmux tab close button and the team
+            // close fan-out. The plan's invariant: no automatic close path
+            // may call this. killTmuxSession validates a name target against
+            // TMUX_SESSION_NAME_RE and applies the `=` exact-match prefix; a
+            // `$N` session ID passes through (the safe form for team close).
+            const target = payload?.target ?? payload?.name;
+            if (typeof target !== 'string' || !target.trim()) {
+                return { success: false, error: 'invalid target: must be a non-empty session name or $N id' };
+            }
+            try {
+                const killed = await killTmuxSession(target);
+                return { success: true, killed };
+            } catch (err) {
+                return { success: false, error: err instanceof Error ? err.message : String(err) };
+            }
+        }
+        if (verb === 'tmuxKillSessionGroup') {
+            // Team close — kills every session in the group by session ID.
+            // The plan's team-close path: after the per-seat fan-out (which
+            // kills each seat's VIEW session via the Go host), the BASE session
+            // and any seatless views remain. This enumerates the group's
+            // members by `$N` session ID and kills each one — session IDs are
+            // stable even after the base is gone (the group name can outlive
+            // the founding session). Operator action only — no automatic path.
+            const group = payload?.group ?? payload?.target ?? payload?.name;
+            if (typeof group !== 'string' || !group.trim()) {
+                return { success: false, error: 'invalid group: must be a non-empty session group name' };
+            }
+            try {
+                const killed = await killTmuxSessionGroup(group);
+                return { success: true, killed };
+            } catch (err) {
+                return { success: false, error: err instanceof Error ? err.message : String(err) };
+            }
         }
         if (verb === 'tmuxBuildGrid') {
             const team = payload?.team;
@@ -4286,7 +4323,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             // verb and would create the asymmetry the parity rule forbids).
             // Wired before the ptyHostReady() guard so a host with no PTY binary
             // but a live tmux server still serves them, matching standalone.
-            if (verb === 'tmuxListSessions' || verb === 'tmuxBuildGrid') {
+            if (verb === 'tmuxListSessions' || verb === 'tmuxBuildGrid' || verb === 'tmuxKillSession' || verb === 'tmuxKillSessionGroup') {
                 return await this._handleTmuxVerb(verb, payload);
             }
             if (!ptyHostReady()) {

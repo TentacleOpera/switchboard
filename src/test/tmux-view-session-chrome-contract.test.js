@@ -95,18 +95,44 @@ test('a restart reuses the seat window instead of stacking a duplicate', () => {
     // session count looked stable while windows multiplied unwatched. Nothing in
     // this suite covered the window half of the chain, which is how it shipped.
     assert.ok(
-        /list-windows -t \$\{session\} -F '#\{window_name\}'[^|]*\| grep -Fqx \$\{win\}/.test(src),
+        /list-windows -t \$\{session\} -F '#\{window_name\}'[^|]*\| grep -Fxq -- "\$\{win\}"/.test(src),
         'the chain must check for an existing window by name before creating one'
     );
     assert.ok(
         !/&& tmux new-window -d -t \$\{session\}/.test(src),
         'new-window must be guarded by the existing-window check, not run unconditionally on has-session'
     );
-    // -F (fixed string) and -x (whole line) together: without -x, `Coding` would
+    // -F (fixed string) and -x (exact line) together: without -x, `Coding` would
     // match `Coding-coder-1` and the head would never get its own window.
     assert.ok(
-        /grep -Fqx/.test(src),
-        'the window-name check must be a fixed-string whole-line match (grep -Fqx)'
+        /grep -Fxq/.test(src),
+        'the window-name check must be a fixed-string whole-line match (grep -Fxq)'
+    );
+});
+
+test('the chain captures the window id at creation and targets by id', () => {
+    // A window NAME is not unique across generations — `select-window -t
+    // ${view}:${win}` resolved to the lowest-index window carrying the name,
+    // i.e. a previous generation's duplicate, so every prompt was forwarded to
+    // the old agent. The id is captured at creation with `-P -F '#{window_id}'`
+    // and used for `select-window` and `set-window-option` thereafter. See
+    // a-tmux-seat-gets-a-blind-two-second-clear-and-loses-the-first-dispatch.md
+    // (Change 2).
+    assert.ok(
+        /new-session -d -P -F '#\{window_id\}'/.test(src),
+        'new-session must capture the window id at creation (-P -F \'#{window_id}\')'
+    );
+    assert.ok(
+        /new-window -d -P -F '#\{window_id\}'/.test(src),
+        'new-window must capture the window id at creation (-P -F \'#{window_id}\')'
+    );
+    assert.ok(
+        /tmux select-window -t \$\{view\}:\$\{wid\}/.test(src),
+        'select-window must target the view and the captured window id (${view}:${wid}), not the name'
+    );
+    assert.ok(
+        !/tmux select-window -t \$\{view\}:\$\{win\}/.test(src),
+        'select-window must not target the window by name (${view}:${win}) — a name is not unique across generations'
     );
 });
 
@@ -120,11 +146,23 @@ test('the view session uses manual window sizing', () => {
 });
 
 test('the view window disables automatic rename', () => {
+    // The window is targeted by its stable id ($wid), not by name. A name is
+    // not unique across generations — `select-window -t ${view}:${win}` picked
+    // the lowest-index window carrying the name, i.e. a previous generation's
+    // duplicate. The id is captured at creation (`new-window -P -F '#{window_id}'`)
+    // and used for every later target. See
+    // a-tmux-seat-gets-a-blind-two-second-clear-and-loses-the-first-dispatch.md
+    // (Change 2).
     assert.ok(
-        /tmux set-window-option -t \$\{view\}:\$\{win\} automatic-rename off/.test(src),
-        'goPtyFleetProjection.ts must set `automatic-rename off` on the view window — '
+        /tmux set-window-option -t \$\{wid\} automatic-rename off/.test(src),
+        'goPtyFleetProjection.ts must set `automatic-rename off` on the seat window by id ($wid) — '
         + 'without it `%window-renamed` fires on every command the agent runs and thrashes '
         + 'any board re-render on rename',
+    );
+    assert.ok(
+        !/tmux set-window-option -t \$\{view\}:\$\{win\} automatic-rename off/.test(src),
+        'automatic-rename must target the window id ($wid), not the name (${view}:${win}) — '
+        + 'a name is not unique across generations and resolves to the wrong window',
     );
 });
 

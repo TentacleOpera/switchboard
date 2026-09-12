@@ -711,6 +711,227 @@ async function test(name, fn) {
         validateTmuxSessionName('lc-coding-team');
     });
 
+    // ─── tmux-seat-reuse: re-seating reuses the window, does not stack ─────
+    // (tmux-windows-duplicate-on-re-seat plan, change 1)
+    //
+    // The seating command is built inside GoPtyFleetProjection.create() and
+    // passed to the Go host as `startupCommand` in the ptyCreateTerminal
+    // payload. Source-text inspection pins its shape without instantiating
+    // the projection (which needs a live supervisor + db).
+    const PROJECTION_PATH = path.join(REPO_ROOT, 'src', 'services', 'goPtyFleetProjection.ts');
+    const projectionSource = fs.readFileSync(PROJECTION_PATH, 'utf8');
+    const BOOTSTRAP_PATH = path.join(REPO_ROOT, 'src', 'standalone', 'bootstrap.ts');
+    const bootstrapSource = fs.readFileSync(BOOTSTRAP_PATH, 'utf8');
+    const GO_HOST_PATH = path.join(REPO_ROOT, 'cmd', 'switchboard-pty-host', 'main.go');
+    const goHostSource = fs.readFileSync(GO_HOST_PATH, 'utf8');
+
+    await test('tmux-seat-reuse: seating command uses if/elif/else, not &&/|| chain', async () => {
+        // The old `has-session && new-window || new-session` chain falls
+        // through to new-session when new-window fails (shell `A && B || C`
+        // runs C when B fails). The fix is an explicit if/elif/else.
+        assert.ok(/\bif\s+!\s*tmux has-session/.test(projectionSource),
+            'seating must branch on `if ! tmux has-session`');
+        assert.ok(/\belif\s+!\s*tmux list-windows/.test(projectionSource),
+            'seating must `elif` on the window-name test');
+        assert.ok(/grep -Fxq -- "\$\{win\}"/.test(projectionSource),
+            'window name test must be `grep -Fxq -- "${win}"` (fixed-string, exact-line, quiet, end-of-options)');
+    });
+
+    await test('tmux-seat-reuse: existing window → no new-window in the command', async () => {
+        // The three-branch decision: no session → new-session; session but no
+        // window → new-window; session AND window → reuse (no new-window, no
+        // new-session). The `elif` branch is the new-window branch; the `if`
+        // branch is the new-session branch. There is NO third tmux creation
+        // command — the `fi` ends the branch, and the reuse case is the
+        // implicit else.
+        const seatingBlock = projectionSource.match(/effectiveStartupCommand\s*=\s*[\s\S]*?exec tmux -u -CC attach/);
+        assert.ok(seatingBlock, 'seating command block must end with `exec tmux -u -CC attach`');
+        const block = seatingBlock[0];
+        // The block must contain exactly one `new-session` (the if-branch) and
+        // exactly one `new-window` (the elif-branch). The reuse case (else) is
+        // implicit — neither runs.
+        assert.strictEqual((block.match(/tmux new-session/g) || []).length, 1,
+            'exactly one `tmux new-session` (the no-session branch)');
+        assert.strictEqual((block.match(/tmux new-window/g) || []).length, 1,
+            'exactly one `tmux new-window` (the no-window branch)');
+    });
+
+    await test('tmux-seat-reuse: name test uses fixed-string whole-line grep with --', async () => {
+        // `grep -Fxq -- "${win}"`: -F (fixed-string, so `Coding` does not match
+        // `Coding-coder-1` via regex), -x (whole-line, so `Coding` does not
+        // match `Coding-coder-1` as a substring), -q (quiet), -- (end-of-
+        // options, so a window name beginning with `-` is not read as a flag).
+        assert.ok(/grep -Fxq -- "\$\{win\}"/.test(projectionSource),
+            'must use `grep -Fxq -- "${win}"` — fixed-string, whole-line, quiet, end-of-options');
+        // Must NOT use the old bare `grep -Fqx ${win}` (no --, no quotes).
+        assert.ok(!/grep -Fqx \$\{win\}[^"']/.test(projectionSource),
+            'must not use the old bare `grep -Fqx ${win}` without `--` and quotes');
+    });
+
+    await test('tmux-seat-reuse: flock serializes the test-and-create', async () => {
+        // Two concurrent starts of the same team cannot both find no session
+        // and both new-session. flock on a per-session lockfile prevents the
+        // race; a race-created duplicate does not collapse on re-seat.
+        assert.ok(/flock 9/.test(projectionSource),
+            'seating must hold a per-session flock during test-and-create');
+        assert.ok(/flock -u 9/.test(projectionSource),
+            'seating must release the flock before `exec tmux` so the client never holds it');
+    });
+
+    // ─── tmux-solo-seat-single-session: solo seat uses one session ────────
+    // (tmux-windows-duplicate-on-re-seat plan, change 6)
+    await test('tmux-solo-seat-single-session: solo seat sets view = session, skips view creation', async () => {
+        // A solo seat (no `tmuxSession` opts) has `view === session` and skips
+        // the `new-session -t ${session} -s ${view}` view-creation line. A
+        // team member gets a separate view session.
+        assert.ok(/isSoloSeat\s*=\s*!opts\?\.tmuxSession/.test(projectionSource),
+            'solo seat is derived from `!opts?.tmuxSession`');
+        assert.ok(/view\s*=\s*isSoloSeat\s*\?\s*session\s*:/.test(projectionSource),
+            'solo seat sets `view = session`; team member sets `view = ${session}-${suffix}`');
+        // The view-creation line must be conditional on `!isSoloSeat`.
+        assert.ok(/isSoloSeat\s*\?\s*''\s*:/.test(projectionSource),
+            'view-creation line must be skipped (`\'\'`) for a solo seat');
+    });
+
+    // ─── tmux-team-start-idempotent: starting twice produces four windows ──
+    // (tmux-windows-duplicate-on-re-seat plan, change 5)
+    await test('tmux-team-start-idempotent: seating is idempotent (no unconditional new-window)', async () => {
+        // The old code unconditionally ran `new-window` when `has-session` was
+        // true, stacking a duplicate on every re-seat. The fix gates
+        // `new-window` behind the `elif` (window-name test fails), so a re-seat
+        // of an existing window hits the implicit else and creates nothing.
+        // This is what makes `tmux list-windows -t lc-<team> | wc -l` stay at
+        // the roster size across two starts.
+        const seatingBlock = projectionSource.match(/effectiveStartupCommand\s*=\s*[\s\S]*?exec tmux -u -CC attach/);
+        assert.ok(seatingBlock, 'seating command block found');
+        const block = seatingBlock[0];
+        // `new-window` must be inside the `elif` branch, not at the top level
+        // of the command. The `elif` gate is the window-name test.
+        const elifIdx = block.indexOf('elif');
+        const newWindowIdx = block.indexOf('tmux new-window');
+        assert.ok(elifIdx >= 0 && newWindowIdx > elifIdx,
+            '`new-window` must be inside the `elif` (window-missing) branch, not unconditional');
+        // There must be no `new-window` before the `if` — the old chain had
+        // `new-window` right after `has-session &&`.
+        const ifIdx = block.indexOf('if !');
+        const newWindowBeforeIf = block.slice(0, ifIdx).indexOf('new-window');
+        assert.strictEqual(newWindowBeforeIf, -1,
+            'no `new-window` before the `if` branch — the old unconditional new-window is gone');
+    });
+
+    // ─── operator-close kills window; natural exit preserves it ───────────
+    // (tmux-windows-duplicate-on-re-seat plan, change 2)
+    await test('operator-close kills the tmux window: Go host fleet.close() issues kill-window', async () => {
+        // fleet.close() must kill the seat's window in the base session,
+        // ending the agent. The `=` prefix forces exact session match.
+        assert.ok(/tmux.*kill-window.*-t.*=\$\{?t\.tmuxSession/.test(goHostSource) ||
+                  /exec\.Command\("tmux",\s*"kill-window",\s*"-t",\s*"="\s*\+\s*t\.tmuxSession/.test(goHostSource),
+            'fleet.close() must issue `tmux kill-window -t =<session>:<window>`');
+        assert.ok(/t\.controlMode\s*&&\s*t\.tmuxSession\s*!=\s*""\s*&&\s*t\.tmuxWindow\s*!=\s*""/.test(goHostSource),
+            'kill-window must be gated on controlMode && tmuxSession != "" && tmuxWindow != ""');
+    });
+
+    await test('operator-close kills the view session too: Go host fleet.close() issues kill-session for the view', async () => {
+        assert.ok(/exec\.Command\("tmux",\s*"kill-session",\s*"-t",\s*"="\s*\+\s*t\.tmuxViewSession/.test(goHostSource),
+            'fleet.close() must issue `tmux kill-session -t =<view>` for the per-seat view');
+    });
+
+    await test('natural PTY exit does NOT call fleet.close(): readOutput() returns without close()', async () => {
+        // Crash survival: a natural PTY exit (agent died) must NOT tear down
+        // the tmux window — the window survives so the operator can re-seat.
+        // readOutput() marks status='exited', closes clients, logs, returns.
+        // It must not call f.close(name).
+        const readOutputBlock = goHostSource.match(/func \(f \*fleet\) readOutput\([\s\S]*?\n\}/);
+        assert.ok(readOutputBlock, 'readOutput() found');
+        const block = readOutputBlock[0];
+        assert.ok(!/f\.close\(/.test(block),
+            'readOutput() must NOT call f.close() — natural exit preserves the tmux window');
+        assert.ok(/status\s*=\s*"exited"/.test(block) || /status:\s*"exited"/.test(block),
+            'readOutput() must mark the terminal status exited');
+    });
+
+    await test('ptyCreateTerminal payload carries tmuxSession, tmuxWindow, tmuxViewSession', async () => {
+        // The Go host reads these from the payload at create time. Without
+        // them, fleet.close() has no target and cannot kill the window/view.
+        assert.ok(/tmuxViewSession:\s*view/.test(projectionSource),
+            'payload must include `tmuxViewSession: view`');
+        assert.ok(/tmuxSession:\s*tmuxSessionName/.test(projectionSource),
+            'payload must include `tmuxSession: tmuxSessionName`');
+        assert.ok(/tmuxWindow:\s*tmuxWindowName/.test(projectionSource),
+            'payload must include `tmuxWindow: tmuxWindowName`');
+    });
+
+    await test('Go terminal struct stores tmuxSession, tmuxWindow, tmuxViewSession', async () => {
+        assert.ok(/tmuxViewSession\s+string/.test(goHostSource),
+            'terminal struct must have `tmuxViewSession string`');
+        assert.ok(/tmuxSession\s+string/.test(goHostSource),
+            'terminal struct must have `tmuxSession string`');
+        assert.ok(/tmuxWindow\s+string/.test(goHostSource),
+            'terminal struct must have `tmuxWindow string`');
+    });
+
+    // ─── startup orphan reaper ────────────────────────────────────────────
+    // (tmux-windows-duplicate-on-re-seat plan, change 3)
+    await test('startup reaper runs after reconcile and reads runtime.terminals from db', async () => {
+        // The reaper must run after tmuxFleetService.reconcile() (so dead
+        // panes are marked exited) and must read the persisted registry from
+        // db — NOT the in-memory fleet cache, which is empty at boot.
+        const reaperIdx = bootstrapSource.indexOf('tmux-reaper');
+        assert.ok(reaperIdx >= 0, 'bootstrap must contain a tmux-reaper block');
+        const reconcileIdx = bootstrapSource.indexOf('tmuxFleetService.reconcile()');
+        assert.ok(reconcileIdx >= 0, 'bootstrap must call tmuxFleetService.reconcile()');
+        assert.ok(reaperIdx > reconcileIdx,
+            'reaper must run AFTER reconcile so dead panes are marked exited first');
+        // Must read from db.getConfigJsonSync('runtime.terminals'), not from
+        // the in-memory cache.
+        const reaperBlock = bootstrapSource.slice(reaperIdx - 200, reaperIdx + 1500);
+        assert.ok(/getConfigJsonSync.*runtime\.terminals/.test(reaperBlock),
+            'reaper must read `runtime.terminals` from db (persisted registry), not in-memory cache');
+    });
+
+    await test('startup reaper ownership rule: ideName === PTY_IDE_NAME && status !== exited && tmuxSession present', async () => {
+        const reaperIdx = bootstrapSource.indexOf('tmux-reaper');
+        const reaperBlock = bootstrapSource.slice(reaperIdx - 200, reaperIdx + 2000);
+        assert.ok(/PTY_IDE_NAME/.test(reaperBlock),
+            'reaper must filter registry rows by `ideName === PTY_IDE_NAME`');
+        assert.ok(/status\s*===\s*['"]exited['"]/.test(reaperBlock),
+            'reaper must skip rows with `status === "exited"`');
+        assert.ok(/entry\.tmuxSession/.test(reaperBlock),
+            'reaper must read `entry.tmuxSession` as the ownership signal');
+    });
+
+    await test('startup reaper kills lc-* sessions not in owned set, passes tmuxSocket', async () => {
+        const reaperIdx = bootstrapSource.indexOf('tmux-reaper');
+        const reaperBlock = bootstrapSource.slice(reaperIdx - 200, reaperIdx + 2000);
+        assert.ok(/killTmuxSession\(name,\s*tmuxSocket\)/.test(reaperBlock),
+            'reaper must call killTmuxSession(name, tmuxSocket) — socket-aware, not bare tmux');
+        assert.ok(/n\.startsWith\(['"]lc-['"]\)/.test(reaperBlock),
+            'reaper must scope to `lc-*` session names only');
+        assert.ok(/orphans\.filter|orphans\s*=.*\.filter/.test(reaperBlock),
+            'reaper must filter to orphans (lc-* not in owned set)');
+    });
+
+    await test('startup reaper does not use the in-memory fleet cache', async () => {
+        // The in-memory cache (ptyFleetService.cache / GoPtyFleetProjection
+        // cache) is empty at boot. Using it as the ownership source would reap
+        // EVERY surviving session — the opposite of crash survival. The
+        // reaper must read the persisted registry.
+        const reaperIdx = bootstrapSource.indexOf('tmux-reaper');
+        const reaperBlock = bootstrapSource.slice(reaperIdx - 200, reaperIdx + 2000);
+        assert.ok(!/ptyFleetService\.cache/.test(reaperBlock) && !/this\.cache/.test(reaperBlock),
+            'reaper must NOT read from the in-memory fleet cache — only the persisted registry');
+    });
+
+    await test('FleetTerminalInfo + ExtendedTerminalHandle carry tmuxSession for the registry', async () => {
+        const ptyFleetPath = path.join(REPO_ROOT, 'src', 'standalone', 'ptyFleetService.ts');
+        const ptyFleetSource = fs.readFileSync(ptyFleetPath, 'utf8');
+        assert.ok(/tmuxSession\?:\s*string/.test(ptyFleetSource),
+            'FleetTerminalInfo must declare `tmuxSession?: string`');
+        // The projection's updateRegistryState must persist it.
+        assert.ok(/tmuxSession:\s*t\.tmuxSession/.test(projectionSource),
+            'updateRegistryState must persist `tmuxSession: t.tmuxSession` into runtime.terminals');
+    });
+
     if (failures > 0) {
         console.error(`\n${failures} check(s) failed.\n`);
         process.exit(1);

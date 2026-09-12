@@ -43,6 +43,14 @@ export interface TmuxPane {
      *  session list can identify the base session (the member whose name
      *  equals its group) without pattern-matching name suffixes. */
     sessionGroup: string;
+    /** `#{session_attached}` — decimal string ("0", "1", "2", …) counting
+     *  clients attached to the session this pane's row reports. Empty when
+     *  no session is in scope (treat empty and "0" as equivalent per
+     *  research). `list-panes -a` emits one row per pane per group member, so
+     *  the same pane appears multiple times with different counts (the base
+     *  row shows the base's count, a view row shows the view's count). The
+     *  session list aggregates this across group members. */
+    sessionAttached: string;
     /** Derived friendly name — see `deriveFriendlyName`. */
     friendlyName: string;
 }
@@ -238,6 +246,7 @@ const PANE_FORMAT = [
     '#{pane_id}', '#{session_name}', '#{window_index}', '#{window_name}',
     '#{pane_index}', '#{pane_title}', '#{pane_current_command}',
     '#{pane_current_path}', '#{pane_pid}', '#{session_group}',
+    '#{session_attached}',
 ].join('\x1f');
 
 /**
@@ -279,7 +288,7 @@ export async function listTmuxPanes(socket?: TmuxSocket): Promise<TmuxPane[]> {
     const panes: TmuxPane[] = [];
     for (const line of lines) {
         const fields = splitPaneFields(line);
-        if (fields.length < 9) { continue; }
+        if (fields.length < 11) { continue; }
         const base: Omit<TmuxPane, 'friendlyName'> = {
             paneId: fields[0],
             sessionName: fields[1],
@@ -291,6 +300,7 @@ export async function listTmuxPanes(socket?: TmuxSocket): Promise<TmuxPane[]> {
             paneCurrentPath: fields[7],
             panePid: fields[8],
             sessionGroup: fields[9] || '',
+            sessionAttached: fields[10] || '',
         };
         panes.push({ ...base, friendlyName: deriveFriendlyName(base) });
     }
@@ -318,6 +328,11 @@ export interface TmuxTeamSession {
     windows: string[];
     /** Member session names in the group (base + per-seat views). */
     members: string[];
+    /** True if ANY member session (base or a view) has at least one attached
+     *  client — `#{session_attached}` non-empty and not "0". The one fact
+     *  that tells an operator a human is inside a session before they close
+     *  the base (which kills all grouped views). */
+    attached: boolean;
 }
 
 /**
@@ -333,6 +348,13 @@ export async function listTmuxSessions(socket?: TmuxSocket): Promise<TmuxTeamSes
     // are keyed by their own sessionName so a lone `lc-` session still lists.
     const groupMembers = new Map<string, Set<string>>();
     const groupBaseWindows = new Map<string, Set<string>>();
+    // groupAttached: true if ANY member session of the group has at least one
+    // attached client. `list-panes -a` emits one row per pane per group member,
+    // so the same pane appears with different `session_attached` values (the
+    // base row shows the base's count, a view row shows the view's count).
+    // Aggregating across members is the correct approach — a human attached to
+    // any view or the base means the team is occupied.
+    const groupAttached = new Map<string, boolean>();
     for (const p of panes) {
         const group = p.sessionGroup || p.sessionName;
         if (!group.startsWith('lc-')) { continue; }
@@ -347,6 +369,12 @@ export async function listTmuxSessions(socket?: TmuxSocket): Promise<TmuxTeamSes
             if (!wins) { wins = new Set(); groupBaseWindows.set(group, wins); }
             wins.add(p.windowName);
         }
+        // sessionAttached is a decimal string ("0", "1", …) or empty (treat
+        // empty and "0" as equivalent per research). A non-zero count on any
+        // member row means a client is attached to that member's session.
+        if (p.sessionAttached !== '' && p.sessionAttached !== '0') {
+            groupAttached.set(group, true);
+        }
     }
 
     const teams: TmuxTeamSession[] = [];
@@ -358,6 +386,7 @@ export async function listTmuxSessions(socket?: TmuxSocket): Promise<TmuxTeamSes
             baseSession: hasBase ? group : '',
             windows,
             members: Array.from(members),
+            attached: groupAttached.get(group) === true,
         });
     }
     // Stable order by group name.
@@ -383,6 +412,133 @@ export function validateTmuxSessionName(name: string): void {
     if (typeof name !== 'string' || !TMUX_SESSION_NAME_RE.test(name) || name.length > TMUX_SESSION_NAME_MAX) {
         throw new Error(`invalid tmux session name: ${JSON.stringify(name)}`);
     }
+}
+
+// ─── Session kill (operator close control) ───────────────────────────────
+// The SOLE TS-side path that issues `tmux kill-session`. Reached only from the
+// `tmuxKillSession` verb (wired in both composition roots), which is itself
+// reached only from operator actions: the tmux tab close button and the team
+// close fan-out. The plan's invariant is that NO automatic close path exists —
+// no timer, sweep, interval, or startup reconciliation may call this. The
+// contract test pins that reachability.
+//
+// SECURITY: the target reaches tmux argv. Two forms are accepted:
+//   - a session NAME (`lc-...`): validated against TMUX_SESSION_NAME_RE, then
+//     targeted with the `=` exact-match prefix so `lc-coding-team` cannot match
+//     `lc-coding-team-coder-1` (research confirmed `target-session` tries
+//     prefix matching by default).
+//   - a session ID (`$N`): passed through without validation — tmux assigns it
+//     and it is the safe form for team close (the group name outlives the
+//     founding session, so name-based targeting fails after the base is gone).
+// `run()` uses an argv array — no shell, no interpolation.
+
+/**
+ * Kill a tmux session by name or session ID. Returns true on success (or when
+ * the session was already gone — "can't find session" / "no such session" is
+ * swallowed, since the operator's intent is "this session should not exist").
+ * Throws on any other tmux error.
+ *
+ * `target` is either a session name (validated, then `=name` exact-match) or a
+ * session ID (`$N`, passed through). The `=` prefix for names forces
+ * exact-match targeting — research confirmed bare prefix matching can kill
+ * the wrong session.
+ */
+export async function killTmuxSession(target: string, socket?: TmuxSocket): Promise<boolean> {
+    if (typeof target !== 'string' || target === '') {
+        throw new Error('killTmuxSession requires a non-empty target (session name or $N id)');
+    }
+    // Build the argv, then run it. The array literal is kept inline (not a
+    // pre-bound variable) so the contract test can pin `run(['kill-session',
+    // ...])` as the executable call site — the invariant that no other path
+    // issues kill-session.
+    let argv: string[];
+    if (target.startsWith('$')) {
+        // Session ID — tmux assigns it; pass through without name validation.
+        argv = ['kill-session', '-t', target];
+    } else {
+        validateTmuxSessionName(target);
+        // `=` forces exact-match targeting so a bare prefix cannot match a
+        // sibling session (e.g. `lc-coding-team` matching `lc-coding-team-coder-1`).
+        argv = ['kill-session', '-t', '=' + target];
+    }
+    try {
+        await run(argv, socket);
+        return true;
+    } catch (err) {
+        // Swallow "can't find session" / "no such session" — the session may
+        // already be gone (the agent exited and tmux cleaned up, or a prior
+        // kill in the team-close loop already removed it). Issue 5180
+        // (pre-3.8) can transiently block sibling targeting during sequential
+        // group kills, so a "can't find" on a sibling is expected and the
+        // caller may retry.
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/can't find session|no such session|can't find or/i.test(msg)) {
+            return false;
+        }
+        throw err;
+    }
+}
+
+/**
+ * Kill every session in a tmux session group by session ID. The plan's team-
+ * close path: after the per-seat fan-out (which kills each seat's VIEW session
+ * via the Go host), the BASE session and any seatless views remain. Killing
+ * the base takes the grouped views with it (research confirmed), but the
+ * group NAME can outlive the founding session — after the base is gone, a
+ * name-based kill of a sibling fails. Session IDs (`$N`) are stable, so this
+ * function enumerates the group's members by ID and kills each one.
+ *
+ * `group` is the session group name (e.g. `lc-coding-team`), validated against
+ * TMUX_SESSION_NAME_RE. Returns the number of sessions killed (best-effort —
+ * already-gone sessions are tolerated, per the plan's "tolerate already-gone
+ * sessions and pre-3.8 grouped-session targeting issues" note).
+ *
+ * THE INVARIANT: this is the SOLE path that kills multiple sessions at once.
+ * Reached only from the `tmuxKillSessionGroup` verb, which is reached only
+ * from `closeTeam()` — an operator action. No automatic path may call this.
+ */
+export async function killTmuxSessionGroup(group: string, socket?: TmuxSocket): Promise<number> {
+    validateTmuxSessionName(group);
+    // Enumerate the group's members by session ID. `list-sessions -F` emits
+    // one row per session; `#{session_group}` is empty for an ungrouped
+    // session. Filter rows whose group matches. Issue 5180 (pre-3.8) can
+    // transiently block sibling targeting during sequential group kills, so
+    // each kill is best-effort and "can't find session" is tolerated.
+    let out: string;
+    try {
+        out = await run(['list-sessions', '-F', '#{session_group}\x1f#{session_id}'], socket);
+    } catch {
+        // No tmux server or no sessions — nothing to kill.
+        return 0;
+    }
+    const lines = out.split('\n').filter(l => l.length > 0);
+    const ids: string[] = [];
+    for (const line of lines) {
+        const parts = line.split('\x1f');
+        if (parts.length < 2) { continue; }
+        const [groupName, sessionId] = parts;
+        if (groupName === group && sessionId) {
+            ids.push(sessionId);
+        }
+    }
+    let killed = 0;
+    for (const id of ids) {
+        try {
+            await run(['kill-session', '-t', id], socket);
+            killed++;
+        } catch (err) {
+            // Swallow "can't find session" — the session may already be gone
+            // (the per-seat fan-out killed a view, or a prior kill in this
+            // loop already removed it). Issue 5180 (pre-3.8) can transiently
+            // block sibling targeting during sequential group kills.
+            const msg = err instanceof Error ? err.message : String(err);
+            if (!/can't find session|no such session|can't find or/i.test(msg)) {
+                // A real error stops the loop — the operator should know.
+                throw err;
+            }
+        }
+    }
+    return killed;
 }
 
 /**

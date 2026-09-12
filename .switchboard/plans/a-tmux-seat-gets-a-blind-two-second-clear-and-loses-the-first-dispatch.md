@@ -198,3 +198,8 @@ obviously right and it is not a decision to take on the operator's behalf.
   operator attachments or leaked clients from earlier seatings is unresolved. They do not misroute
   (clients on one session share its current window) but they suggest the same chain is leaving
   clients behind on every run.
+
+## Completion Summary
+
+Changes 1-4 implemented; Change 5 (reap previous generation) deferred to the sibling plan as the plan itself directs. Change 1 (non-blocking `has-session || new-session -d`) landed in commit `f9e7c6ed`. Change 2 captures the window id at creation (`new-session`/`new-window -P -F '#{window_id}'` into `$wid`) and targets `set-window-option`/`select-window` by id, not by duplicate-prone name; a name-lookup fallback resolves `$wid` on the reuse path. Change 3 adds `verifyTmuxRouting` in the Go host — fired from `onPaneIDLearned`, it captures the seat's own window id from its pane and compares the view session's current window, setting `tmuxMisrouted` and logging on mismatch. Change 4 adds a post-send `display-message -p '#{window_id}'` check in `deliverPrompt` that returns `success: false` with `misrouted: true` when the view's current window is not the seat's own. Extension parity holds: the extension host never sets `controlMode`, so the Go host's new verification paths are inert there (standalone-only tmux seating is a standalone-only feature). Contract tests in `tmux-view-session-chrome-contract.test.js` updated to assert id-based targeting. Compilation and automated tests skipped per directive.
+

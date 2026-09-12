@@ -344,6 +344,47 @@ function run() {
             'fleet.project must emit agentInstanceId — the rename match in refresh() reads it');
     });
 
+    test('standalone clearTerminalContext routes through ptyClearTerminal (strategy-aware respawn), not a blind /clear write', () => {
+        // The standalone clear callback must go through the Go host's
+        // ptyClearTerminal verb, which now consults clearStrategy and respawns
+        // Devin seats. A direct /clear write would bypass the strategy.
+        const clearCb = bootstrapSource.slice(
+            bootstrapSource.indexOf('clearTerminalContext:'),
+            bootstrapSource.indexOf('clearTerminalContext:') + 800,
+        );
+        assert.match(clearCb, /await clearPty\(handle\)/,
+            'standalone clearTerminalContext must call clearPty (which routes through ptyClearTerminal)');
+        const clearPtyDef = bootstrapSource.slice(
+            bootstrapSource.indexOf('const clearPty ='),
+            bootstrapSource.indexOf('const clearPty =') + 200,
+        );
+        assert.match(clearPtyDef, /ptyClearTerminal/,
+            'clearPty must route through the ptyClearTerminal verb (strategy-aware)');
+    });
+
+    test('standalone clearTerminalContext reports failure on a dead child, not stale {cleared: true}', () => {
+        // The clear callback must surface a respawn failure as {cleared: false}.
+        // The Go host's respawnAndReinject returns {success: false, cleared: false}
+        // on a dead child; the standalone wrapper must propagate it, not swallow it.
+        const clearCb = bootstrapSource.slice(
+            bootstrapSource.indexOf('clearTerminalContext:'),
+            bootstrapSource.indexOf('clearTerminalContext:') + 800,
+        );
+        assert.match(clearCb, /cleared: false/,
+            'standalone clearTerminalContext must return {cleared: false} on failure');
+    });
+
+    test('goPtyFleetProjection passes startupCommand in the ptyCreateTerminal payload so respawn can re-inject it', () => {
+        // The Go host records the startup command at create; respawn reads it
+        // back to re-apply a declared --model. The projection must send it.
+        const createCall = projectionSource.slice(
+            projectionSource.indexOf("this.supervisor.request('ptyCreateTerminal'"),
+            projectionSource.indexOf("this.supervisor.request('ptyCreateTerminal'") + 600,
+        );
+        assert.match(createCall, /startupCommand:\s*effectiveStartupCommand/,
+            'ptyCreateTerminal payload must include startupCommand for respawn re-injection');
+    });
+
     console.log(`\nResults: ${passed} passed, ${failed} failed\n`);
     if (failed > 0) {
         process.exit(1);

@@ -209,6 +209,16 @@
     const btnDispatchView = document.getElementById('btn-dispatch-view');
     const btnDispatch = document.getElementById('btn-dispatch');
 
+    // Composer Elements (command view panel's first sendToTerminal caller)
+    const btnComposer = document.getElementById('btn-composer');
+    const composerModal = document.getElementById('composer-modal');
+    const composerTerminalSelect = document.getElementById('composer-terminal-select');
+    const composerInput = document.getElementById('composer-input');
+    const composerStatus = document.getElementById('composer-status');
+    const composerSendBtn = document.getElementById('composer-send');
+    const composerCancelBtn = document.getElementById('composer-cancel');
+    const composerCloseBtn = document.getElementById('composer-modal-close');
+
     // Move Elements
     const moveSourceColSelect = document.getElementById('move-source-column-select');
     const moveTargetColSelect = document.getElementById('move-target-column-select');
@@ -397,6 +407,25 @@
         });
 
         btnDispatch?.addEventListener('click', executeDispatch);
+
+        // Composer events — same delivery path as the terminals panel
+        // (fetch on /terminals/verb/sendToTerminal with standingOrders:false).
+        btnComposer?.addEventListener('click', () => void openComposerDialog());
+        composerCloseBtn?.addEventListener('click', closeComposerDialog);
+        composerCancelBtn?.addEventListener('click', closeComposerDialog);
+        composerSendBtn?.addEventListener('click', () => void deliverComposerPrompt());
+        composerTerminalSelect?.addEventListener('change', updateComposerSendButton);
+        composerInput?.addEventListener('input', updateComposerSendButton);
+        composerInput?.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                void deliverComposerPrompt();
+            }
+        });
+        document.addEventListener('keydown', (e) => {
+            if (!composerModal || composerModal.hidden) { return; }
+            if (e.key === 'Escape') { e.stopPropagation(); closeComposerDialog(); }
+        }, true);
 
         // Move events
         moveStarToggle?.addEventListener('click', () => {
@@ -674,6 +703,132 @@
             }
         } catch (err) {
             console.warn('[Command] Failed to fetch teams state:', err);
+        }
+    }
+
+    // Composer: compose a prompt locally and deliver it to ANY active
+    // terminal via the host-routed sendToTerminal verb, without switching
+    // panes. Mirrors the terminals panel's composer (terminals.js). Delivery
+    // goes through fetch on /terminals/verb/sendToTerminal — the command view
+    // panel's first sendToTerminal caller; the route already exists on both
+    // hosts.
+    //
+    // standingOrders:false is REQUIRED: sendToTerminal hardcodes
+    // kind:'dispatch' in the extension handler and applies standing orders by
+    // default in the standalone handler. The composer is a user-typed prompt,
+    // not a system dispatch — appending standing orders would silently
+    // corrupt the user's intent.
+    function setComposerStatus(msg, isError) {
+        if (!composerStatus) { return; }
+        composerStatus.textContent = msg || '';
+        composerStatus.classList.toggle('is-error', !!isError);
+    }
+
+    function updateComposerSendButton() {
+        if (!composerSendBtn) { return; }
+        const hasTarget = !!(composerTerminalSelect && composerTerminalSelect.value && !composerTerminalSelect.disabled);
+        const hasText = !!(composerInput && composerInput.value.length > 0);
+        composerSendBtn.disabled = !(hasTarget && hasText);
+    }
+
+    function closeComposerDialog() {
+        if (composerModal) { composerModal.hidden = true; }
+    }
+
+    async function openComposerDialog() {
+        if (!composerModal || !composerTerminalSelect || !composerInput) { return; }
+
+        // Populate the dropdown from the cached liveFleet first so the modal
+        // appears instantly, then refresh from a live fetch in the background.
+        const fillSelect = (fleet) => {
+            const live = fleet.filter(t => t && t.status === 'active');
+            const current = composerTerminalSelect.value;
+            composerTerminalSelect.innerHTML = '';
+            if (live.length === 0) {
+                const placeholder = document.createElement('option');
+                placeholder.value = '';
+                placeholder.textContent = 'No active terminals';
+                placeholder.disabled = true;
+                placeholder.selected = true;
+                composerTerminalSelect.appendChild(placeholder);
+                composerTerminalSelect.disabled = true;
+                setComposerStatus('No active terminals available.', false);
+            } else {
+                composerTerminalSelect.disabled = false;
+                for (const t of live) {
+                    const opt = document.createElement('option');
+                    opt.value = t.friendlyName;
+                    opt.textContent = t.friendlyName;
+                    composerTerminalSelect.appendChild(opt);
+                }
+                if (current && live.some(t => t.friendlyName === current)) {
+                    composerTerminalSelect.value = current;
+                }
+                setComposerStatus('', false);
+            }
+            updateComposerSendButton();
+        };
+
+        fillSelect(liveFleet);
+        composerInput.value = '';
+        updateComposerSendButton();
+
+        composerModal.hidden = false;
+        setTimeout(() => { try { composerInput.focus(); } catch { /* ignore */ } }, 50);
+
+        // Refresh the fleet from a live fetch; the modal is already visible
+        // with the cached list, so this only corrects staleness.
+        try {
+            const res = await fetch('/terminals/verb/ptyListTerminals', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ workspaceRoot: currentWorkspaceRoot })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                if (data && Array.isArray(data.terminals)) {
+                    liveFleet = data.terminals;
+                    fillSelect(liveFleet);
+                }
+            }
+        } catch { /* stale fleet is acceptable; the cached list stands */ }
+    }
+
+    async function deliverComposerPrompt() {
+        if (!composerTerminalSelect || !composerInput) { return; }
+        const name = composerTerminalSelect.value;
+        const input = composerInput.value;
+        if (!name) { setComposerStatus('No terminal selected.', true); return; }
+        if (!input) { setComposerStatus('Nothing to send.', true); return; }
+
+        setComposerStatus('Sending…', false);
+        if (composerSendBtn) { composerSendBtn.disabled = true; }
+        try {
+            const res = await fetch('/terminals/verb/sendToTerminal', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name,
+                    input,
+                    paced: true,
+                    standingOrders: false
+                })
+            });
+            const data = await res.json().catch(() => null);
+            if (data && data.success) {
+                closeComposerDialog();
+                if (dispatchStatusChip) {
+                    dispatchStatusChip.textContent = 'Sent to ' + name;
+                    dispatchStatusChip.className = 'status-chip unknown';
+                    dispatchStatusChip.classList.remove('hidden');
+                }
+            } else {
+                setComposerStatus('Send failed: ' + ((data && data.error) || 'unknown'), true);
+                updateComposerSendButton();
+            }
+        } catch (err) {
+            setComposerStatus('Send failed: ' + (err.message || String(err)), true);
+            updateComposerSendButton();
         }
     }
 

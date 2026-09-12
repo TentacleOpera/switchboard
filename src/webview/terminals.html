@@ -122,6 +122,69 @@
             text-transform: uppercase;
             color: var(--text-secondary);
         }
+        .sidebar-session-count {
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1px 7px;
+        }
+        .sidebar-seatless-section {
+            padding: 8px 12px 4px;
+            border-top: 1px solid var(--border-color);
+        }
+        .sidebar-seatless-header {
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+        }
+        .sidebar-seatless-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 8px;
+            margin-bottom: 4px;
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            background: var(--panel-bg);
+        }
+        .sidebar-seatless-name {
+            flex: 1;
+            min-width: 0;
+            font-size: 11px;
+            font-family: var(--font-code);
+            color: var(--text-primary);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .sidebar-seatless-badge {
+            font-size: 9px;
+            font-weight: 700;
+            text-transform: uppercase;
+            color: var(--state-readonly);
+            border: 1px solid var(--state-readonly);
+            border-radius: 3px;
+            padding: 1px 4px;
+            flex-shrink: 0;
+        }
+        .sidebar-seatless-close {
+            background: none;
+            border: 1px solid var(--state-readonly);
+            color: var(--state-readonly);
+            font-size: 9px;
+            text-transform: uppercase;
+            border-radius: 2px;
+            padding: 2px 6px;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        .sidebar-seatless-close:hover { background: color-mix(in srgb, var(--state-readonly) 14%, transparent); }
         /* Terminal-ops block. Ports .secondary-btn / .w-full from the extension
            sidebar's Terminals sub-tab (implementation.html) so the browser page
            presents the same full-width stacked controls rather than a row of
@@ -2154,6 +2217,76 @@
         }
         .link-standing-item .delete-btn:hover { color: var(--state-readonly, #e06c75); }
 
+        /* Composer modal. Mirrors .link-modal (same z-index: 200, same
+           position: fixed; inset: 0 overlay, same [hidden] override) so the
+           composer dialog lands on the same palette and stacking as the
+           panel's first modal. Scoped as .composer-modal so nothing leaks
+           into the pane grid. Send failures render inline in
+           #composer-status (same reason as .link-error: a toast raised from
+           here would be painted behind this overlay). */
+        .composer-modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 200;
+        }
+        /* MANDATORY. The UA `[hidden] { display: none }` rule is a plain
+           author-level default and loses to the `display: flex` above;
+           without this the modal is permanently visible. */
+        .composer-modal[hidden] { display: none; }
+        .composer-modal .modal-content {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            max-width: 480px; width: 90%; max-height: 80vh;
+            display: flex; flex-direction: column;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+        }
+        .composer-modal .modal-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 14px 18px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .composer-modal .modal-header h3 {
+            margin: 0; font-size: 13px; font-weight: 600;
+            color: var(--text-primary);
+            text-transform: uppercase; letter-spacing: 0.5px;
+        }
+        .composer-modal .modal-close-btn {
+            background: transparent; border: none; color: var(--text-secondary);
+            font-size: 22px; cursor: pointer;
+            width: 28px; height: 28px; border-radius: 4px;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .composer-modal .modal-close-btn:hover { color: var(--text-primary); }
+        .composer-modal .modal-body { padding: 18px; overflow-y: auto; flex: 1; }
+        .composer-modal .modal-footer {
+            display: flex; gap: 8px; justify-content: flex-end;
+            padding: 12px 18px;
+            border-top: 1px solid var(--border-color);
+        }
+        .composer-select, .composer-input {
+            width: 100%;
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            font-family: inherit; font-size: 11px;
+            padding: 6px; border-radius: 3px;
+        }
+        .composer-input { min-height: 96px; resize: vertical; }
+        .composer-status {
+            margin-top: 10px; padding: 6px 8px; border-radius: 3px;
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+        .composer-status.is-error {
+            color: var(--state-readonly, #e06c75);
+            background: color-mix(in srgb, var(--state-readonly, #e06c75) 12%, transparent);
+        }
+
         /* Team Standing Orders Modal */
         .team-orders-modal {
             position: fixed; inset: 0;
@@ -2384,7 +2517,8 @@
         body.is-team-scoped #btn-start-team,
         body.is-team-scoped #start-team-form,
         body.is-team-scoped #btn-clear-all,
-        body.is-team-scoped #btn-link-up {
+        body.is-team-scoped #btn-link-up,
+        body.is-team-scoped #btn-composer {
             display: none !important;
         }
         /* Controller-scoped mode: hide general-purpose sidebar buttons
@@ -2401,6 +2535,7 @@
         body.is-controller-scoped #start-team-form,
         body.is-controller-scoped #btn-clear-all,
         body.is-controller-scoped #btn-link-up,
+        body.is-controller-scoped #btn-composer,
         body.is-controller-scoped #btn-team-orders,
         body.is-controller-scoped #btn-team-automations,
         body.is-controller-scoped #btn-team-clear,
@@ -2961,6 +3096,37 @@
         }
         .tmux-grid-btn:hover { background: color-mix(in srgb, var(--accent-teal) 12%, transparent); }
         .tmux-grid-btn:disabled { opacity: 0.45; cursor: default; }
+        .tmux-attached-badge {
+            display: inline-block;
+            background: color-mix(in srgb, var(--accent-teal) 22%, transparent);
+            color: var(--accent-teal);
+            border: 1px solid var(--accent-teal);
+            border-radius: 8px;
+            padding: 1px 7px;
+            font-size: 9px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            margin-left: 6px;
+            vertical-align: middle;
+        }
+        .tmux-close-row {
+            margin-top: 8px;
+        }
+        .tmux-close-btn {
+            background: var(--panel-bg2);
+            border: 1px solid var(--state-readonly);
+            color: var(--state-readonly);
+            padding: 6px 10px;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            border-radius: 2px;
+            cursor: pointer;
+            width: 100%;
+        }
+        .tmux-close-btn:hover { background: color-mix(in srgb, var(--state-readonly) 14%, transparent); }
+        .tmux-close-btn:disabled { opacity: 0.45; cursor: default; }
         .tmux-refresh-btn {
             background: var(--panel-bg2);
             border: 1px solid var(--border-color);
@@ -3035,6 +3201,7 @@
     <div class="terminals-sidebar">
         <div class="sidebar-header">
             <span class="sidebar-title">Agents</span>
+            <span id="sidebar-session-count" class="sidebar-session-count" hidden></span>
         </div>
         <!-- The role picker is NOT declared here any more. It is built per group by
              buildRolePicker() and rendered directly under the workspace or worktree
@@ -3084,6 +3251,8 @@
                     title="Send /clear to every active terminal">CLEAR ALL TERMINALS</button>
             <button type="button" id="btn-link-up" class="secondary-btn w-full"
                     title="Instruct one agent terminal to send a message to another">LINK UP</button>
+            <button type="button" id="btn-composer" class="secondary-btn w-full"
+                    title="Compose a prompt and send it to any terminal without switching panes">COMPOSER</button>
             <button type="button" id="btn-team-orders" class="secondary-btn w-full"
                     title="View and edit standing orders for this team" hidden>STANDING ORDERS</button>
             <button type="button" id="btn-team-automations" class="secondary-btn w-full"
@@ -3284,6 +3453,36 @@
             <div class="modal-footer">
                 <button type="button" id="link-cancel" class="secondary-btn">CANCEL</button>
                 <button type="button" id="link-send" class="secondary-btn is-teal" disabled>SEND</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Composer modal. Mirrors #link-modal's static-HTML pattern (sidebar-
+         level, position: fixed; inset: 0; z-index: 200, toggled with the
+         `hidden` attribute) rather than the paste dialog's pane-level dynamic
+         overlay. The composer is opened from a sidebar button, so the modal
+         belongs at the panel level. NOT dismissed by a backdrop click — it
+         holds typed text and there is no discard gate (per CLAUDE.md there
+         never will be one). -->
+    <div id="composer-modal" class="composer-modal" hidden>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Composer</h3>
+                <button type="button" class="modal-close-btn" id="composer-modal-close" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <label class="link-field-label" for="composer-terminal-select">Target terminal</label>
+                <select id="composer-terminal-select" class="composer-select"></select>
+
+                <label class="link-field-label" for="composer-input">Prompt</label>
+                <textarea id="composer-input" class="composer-input"
+                          placeholder="Type a prompt or command. Multi-line input is delivered as a bracketed-paste block; a single line starting with / is sent as a control string."></textarea>
+
+                <div id="composer-status" class="composer-status"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" id="composer-cancel" class="secondary-btn">CANCEL</button>
+                <button type="button" id="composer-send" class="secondary-btn is-teal" disabled>SEND</button>
             </div>
         </div>
     </div>

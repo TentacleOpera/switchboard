@@ -211,6 +211,110 @@ function startHost(bin, workspace = REPO_ROOT, extra = {}) {
             }
         });
 
+        await test('respawn-family clear replaces child pid, survives pty/name/websocket, and reports failure on dead child', async () => {
+            // Plan: a-seats-clear-strategy-is-declared-per-cli-family-not-assumed.md.
+            // Respawn families (devin) must respawn on clear, not type /clear.
+            // Assert: child pid changes, terminal name survives, ptyClearTerminal
+            // with no prompt leaves a live seat, and a respawn with no startup
+            // command fails loudly.
+            const { child, port, token } = await startHost(bin);
+            try {
+                // Create a devin seat with a startup command so respawn can
+                // re-inject it. The command is a no-op shell loop so the seat
+                // stays alive without needing a real devin binary.
+                const created = await post(port, token, 'ptyCreateTerminal', {
+                    role: 'coder',
+                    name: 'blackbox-respawn-1',
+                    startupCommand: 'echo respawn-marker',
+                });
+                assert.strictEqual(created.status, 200);
+                assert.ok(created.json && created.json.success !== false, created.raw);
+                const listed = await post(port, token, 'ptyListTerminals', {});
+                const before = listed.json.terminals.find(t => t.friendlyName === 'blackbox-respawn-1');
+                assert.ok(before, 'seat must exist before clear');
+                assert.ok(before.pid > 0, 'seat must have a child pid before clear');
+                const beforePid = before.pid;
+
+                // Clear with no prompt — the clear button's path. A respawn
+                // family must replace the child, not type /clear.
+                const cleared = await post(port, token, 'ptyClearTerminal', { name: 'blackbox-respawn-1' });
+                assert.strictEqual(cleared.status, 200);
+                assert.ok(cleared.json, cleared.raw);
+                // Respawn must report success and a new pid.
+                assert.strictEqual(cleared.json.success, true, 'respawn clear must succeed');
+                assert.strictEqual(cleared.json.cleared, true, 'respawn clear must report cleared: true');
+                assert.strictEqual(cleared.json.respawned, true, 'respawn clear must report respawned: true');
+                assert.ok(typeof cleared.json.pid === 'number', 'respawn must report the new pid');
+                assert.notStrictEqual(cleared.json.pid, beforePid, 'respawn must produce a new child pid');
+
+                // Terminal name, fleet registry row, and pty must survive.
+                const listedAfter = await post(port, token, 'ptyListTerminals', {});
+                const after = listedAfter.json.terminals.find(t => t.friendlyName === 'blackbox-respawn-1');
+                assert.ok(after, 'terminal name must survive respawn (no fleet unregister/re-register)');
+                assert.strictEqual(after.status, 'active', 'seat must be active after respawn');
+                assert.strictEqual(after.pid, cleared.json.pid, 'listed pid must match respawned pid');
+
+                // A respawn with no startup command must fail loudly, naming
+                // the role — not silently fall back to /clear.
+                const noCmd = await post(port, token, 'ptyCreateTerminal', {
+                    role: 'coder',
+                    name: 'blackbox-respawn-nocmd',
+                    // No startupCommand — respawn must refuse.
+                });
+                assert.strictEqual(noCmd.status, 200);
+                // Send a prompt with clearBeforePrompt to trigger the respawn
+                // path on a seat with no startup command.
+                const failed = await post(port, token, 'ptySendPrompt', {
+                    name: 'blackbox-respawn-nocmd',
+                    data: 'should fail',
+                    clearBeforePrompt: true,
+                    cliFamily: 'devin',
+                });
+                assert.strictEqual(failed.status, 200);
+                assert.ok(failed.json, failed.raw);
+                // The respawn must report failure, not {cleared: true}.
+                assert.strictEqual(failed.json.success, false, 'respawn with no startup command must fail');
+                assert.ok(failed.json.error && /startup command/.test(failed.json.error),
+                    'respawn failure must name the missing startup command');
+            } finally {
+                try { child.stdin.end(); } catch { /* ignore */ }
+                child.kill('SIGTERM');
+            }
+        });
+
+        await test('in-process family clear still types /clear (claude unchanged)', async () => {
+            // Plan: in-process families keep the /clear input-box path.
+            // Assert: a claude-family clear does NOT respawn (no respawned
+            // field, no pid change) and the slash path remains.
+            const { child, port, token } = await startHost(bin);
+            try {
+                const created = await post(port, token, 'ptyCreateTerminal', {
+                    role: 'coder',
+                    name: 'blackbox-claude-1',
+                    startupCommand: 'echo claude-marker',
+                });
+                assert.strictEqual(created.status, 200);
+                const listed = await post(port, token, 'ptyListTerminals', {});
+                const before = listed.json.terminals.find(t => t.friendlyName === 'blackbox-claude-1');
+                const beforePid = before.pid;
+
+                // Clear a claude-family seat — must use /clear, not respawn.
+                const cleared = await post(port, token, 'ptyClearTerminal', { name: 'blackbox-claude-1' });
+                assert.strictEqual(cleared.status, 200);
+                assert.ok(cleared.json, cleared.raw);
+                // in-process clear must NOT report respawned.
+                assert.ok(!cleared.json.respawned, 'in-process clear must not report respawned');
+                // The pid must NOT change — /clear empties the input box, it
+                // does not restart the process.
+                const listedAfter = await post(port, token, 'ptyListTerminals', {});
+                const after = listedAfter.json.terminals.find(t => t.friendlyName === 'blackbox-claude-1');
+                assert.strictEqual(after.pid, beforePid, 'in-process clear must not change the child pid');
+            } finally {
+                try { child.stdin.end(); } catch { /* ignore */ }
+                child.kill('SIGTERM');
+            }
+        });
+
         await test('websocket auth, replay, input, resize, logging, close, parent-death, process-tree', async () => {
             const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'pty-blackbox-'));
             const { child, port, token } = await startHost(bin, workspace);

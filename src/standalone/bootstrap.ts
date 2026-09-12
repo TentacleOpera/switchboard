@@ -134,6 +134,8 @@ import {
     listTmuxSessions,
     buildTmuxGrid,
     validateTmuxSessionName,
+    killTmuxSession,
+    killTmuxSessionGroup,
     TmuxTerminalBackend,
     TMUX_IDE_NAME,
     type TmuxSocket,
@@ -733,6 +735,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                 clearBeforePrompt: opts?.clearBeforePrompt === true,
                 clearBeforePromptDelayMs: opts?.clearBeforePromptDelayMs,
                 clearReadinessMode: opts?.clearReadinessMode,
+                attended: opts?.attended === true,
                 cliFamily: opts?.cliFamily || handle.cliFamily,
             });
             if (receipt && typeof receipt.promptSeq === 'number') {
@@ -3043,6 +3046,11 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                     ? payload.clearBeforePromptDelayMs
                                     : deliveryDefaults.clearBeforePromptDelayMs,
                                 clearReadinessMode: payload.clearReadinessMode || deliveryDefaults.clearReadinessMode,
+                                // Attendance caps the delivery floor. Only an explicit
+                                // `true` from a UI call site shortens it; anything else —
+                                // absent, malformed, an automation — takes the longer
+                                // unattended cap. The safe direction is the default.
+                                attended: payload.attended === true,
                                 operationId: payload.operationId,
                             },
                             // applyOrders: the caller's explicit opt-out ONLY — see
@@ -3788,8 +3796,54 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             windows: t.windows,
                             windowCount: t.windows.length,
                             members: t.members,
+                            attached: t.attached,
                         })),
                     };
+                }
+
+                case 'tmuxKillSession': {
+                    // Operator close control — the tmux tab close button and
+                    // the team close fan-out. The plan's invariant: no
+                    // automatic close path may call this. killTmuxSession
+                    // validates a name target against TMUX_SESSION_NAME_RE and
+                    // applies the `=` exact-match prefix; a `$N` session ID
+                    // passes through (the safe form for team close).
+                    if (!tmuxReady) {
+                        return { success: false, error: 'tmux bridge is not available' };
+                    }
+                    const target = payload?.target ?? payload?.name;
+                    if (typeof target !== 'string' || !target.trim()) {
+                        return { success: false, error: 'invalid target: must be a non-empty session name or $N id' };
+                    }
+                    try {
+                        const killed = await killTmuxSession(target, tmuxSocket);
+                        return { success: true, killed };
+                    } catch (err) {
+                        return { success: false, error: err instanceof Error ? err.message : String(err) };
+                    }
+                }
+
+                case 'tmuxKillSessionGroup': {
+                    // Team close — kills every session in the group by session
+                    // ID. The plan's team-close path: after the per-seat fan-out
+                    // (which kills each seat's VIEW session via the Go host),
+                    // the BASE session and any seatless views remain. This
+                    // enumerates the group's members by `$N` session ID and
+                    // kills each one — session IDs are stable even after the
+                    // base is gone. Operator action only — no automatic path.
+                    if (!tmuxReady) {
+                        return { success: false, error: 'tmux bridge is not available' };
+                    }
+                    const group = payload?.group ?? payload?.target ?? payload?.name;
+                    if (typeof group !== 'string' || !group.trim()) {
+                        return { success: false, error: 'invalid group: must be a non-empty session group name' };
+                    }
+                    try {
+                        const killed = await killTmuxSessionGroup(group, tmuxSocket);
+                        return { success: true, killed };
+                    } catch (err) {
+                        return { success: false, error: err instanceof Error ? err.message : String(err) };
+                    }
                 }
 
                 case 'tmuxBuildGrid': {
@@ -4475,6 +4529,68 @@ Each plan file must include:
                 // no fleet rather than a fleet of ghosts.
                 tmuxReady = false;
                 tmuxFleetService = undefined;
+            }
+            // Boot reaper — kill orphaned `lc-*` tmux sessions. Runs AFTER
+            // `tmuxFleetService.reconcile()` so dead panes are already marked
+            // `exited` in `runtime.terminals`; the reaper then reads the
+            // persisted registry (NOT the in-memory fleet cache, which is empty
+            // at boot) to decide which sessions the host still claims.
+            //
+            // Ownership rule (plan, change 3): a `lc-*` session is owned iff
+            // its name appears as `tmuxSession` on a registry row with
+            // `ideName === PTY_IDE_NAME` and `status !== 'exited'`. Sessions in
+            // `tmux ls` but absent from the registry (or present only on
+            // `exited` rows) are orphans — leftovers from a crashed host, a
+            // force-killed board, or a seat whose agent died without the
+            // liveness poll catching it. Killing them is what makes "what the
+            // operator sees" the whole truth about what is running.
+            //
+            // The reaper is gated on `tmuxReady` (tmux is in play on this
+            // socket) and uses `tmuxSocket` for every command — an
+            // unparameterised `tmux ls` inspects the DEFAULT socket and would
+            // either find nothing (no orphans, no-op) or, worse, find a
+            // sibling install's sessions and reap those. `run()` from
+            // tmuxBackend builds the `-L`/`-S` argv; `killTmuxSession()` does
+            // the same and adds the `=` exact-match prefix.
+            try {
+                const sessions = await listTmuxSessions(tmuxSocket);
+                const lcSessions = sessions
+                    .map(s => s.sessionName)
+                    .filter(n => typeof n === 'string' && n.startsWith('lc-'));
+                if (lcSessions.length === 0) {
+                    // No `lc-*` sessions at all — nothing to reap. Logged at
+                    // debug level only; a clean boot is the common case and a
+                    // line per boot would be noise.
+                } else {
+                    const registry = db.getConfigJsonSync<Record<string, any>>('runtime.terminals', {}) || {};
+                    const owned = new Set<string>();
+                    for (const [, entry] of Object.entries(registry)) {
+                        if (!entry || entry.ideName !== PTY_IDE_NAME) { continue; }
+                        if (entry.status === 'exited') { continue; }
+                        const s = entry.tmuxSession;
+                        if (typeof s === 'string' && s.startsWith('lc-') && s.length > 0) {
+                            owned.add(s);
+                        }
+                    }
+                    const orphans = lcSessions.filter(n => !owned.has(n));
+                    if (orphans.length > 0) {
+                        log(opts, `[tmux-reaper] reaping ${orphans.length} orphaned lc-* session(s): ${orphans.join(', ')}`);
+                        for (const name of orphans) {
+                            try {
+                                await killTmuxSession(name, tmuxSocket);
+                            } catch (err) {
+                                log(opts, `[tmux-reaper] failed to kill ${name}: ${err instanceof Error ? err.message : String(err)}`);
+                            }
+                        }
+                    } else {
+                        log(opts, `[tmux-reaper] ${lcSessions.length} lc-* session(s) present, all owned — no reaping`);
+                    }
+                }
+            } catch (err) {
+                // A failed reaper is a failed cleanup, not a failed boot —
+                // log and continue. The orphaned sessions will be reaped on
+                // the next boot that reaches this point.
+                log(opts, `[tmux-reaper] sweep failed: ${err instanceof Error ? err.message : String(err)}`);
             }
         } else {
             log(opts, '[tmux-bridge] enabled but tmux is unavailable (binary missing or no server running)');

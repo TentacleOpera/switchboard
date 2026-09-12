@@ -63,3 +63,35 @@ export function deriveCliFamily(startupCommand?: string | null): CliFamily {
 export function deriveAgentDisplayName(startupCommand?: string | null): string {
     return deriveCliIdentity(startupCommand).displayName;
 }
+
+/**
+ * The DECLARED per-family context-reset mechanism. Mirrors the Go host's
+ * `clearStrategy` in cmd/switchboard-pty-host/prompt.go — the two MUST agree,
+ * because the Go host owns the actual respawn and the Node side decides
+ * whether to skip the in-process readiness tracker after a clear.
+ *
+ * - 'in-process': the CLI empties an input buffer on /clear (claude,
+ *   antigravity). The slash path is cheap and correct.
+ * - 'respawn': /clear restarts the CLI's session internally and never
+ *   re-applies the startup command's --model, so the Go host kills the CLI
+ *   and starts a fresh login shell, re-injecting the startup command
+ *   (devin).
+ *
+ * Defaults to 'in-process': an unrecognised family keeps today's behaviour
+ * rather than being respawned on a guessed argv shape. See
+ * a-seats-clear-strategy-is-declared-per-cli-family-not-assumed.md.
+ */
+export type ClearStrategy = 'in-process' | 'respawn';
+
+export function clearStrategyForFamily(family: CliFamily): ClearStrategy {
+    switch (family) {
+        case 'devin':
+            return 'respawn';
+        default:
+            return 'in-process';
+    }
+}
+
+export function clearStrategyForStartupCommand(startupCommand?: string | null): ClearStrategy {
+    return clearStrategyForFamily(deriveCliFamily(startupCommand));
+}

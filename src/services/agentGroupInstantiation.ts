@@ -86,6 +86,27 @@ export interface InstantiateAgentGroupResult {
     commandlessRoles?: string[];
 }
 
+
+/**
+ * A team's definition name, reduced to something usable as a seat name.
+ *
+ * Seat names travel into tmux session, view and window names, so they must carry
+ * only `[A-Za-z0-9_.-]`. A trailing "team" is dropped because the session is
+ * already `<name>-team`, and keeping it yields `Coding-team-team`.
+ *
+ * Returns undefined for an empty or fully-stripped name so the caller falls back
+ * rather than passing "" as a seat name.
+ */
+function seatNameFromTeamName(teamName?: string): string | undefined {
+    if (!teamName || typeof teamName !== 'string') { return undefined; }
+    const base = teamName.replace(/\s*teams?\s*$/i, '').trim();
+    const slug = base
+        .replace(/[^A-Za-z0-9_.-]+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-+|-+$/g, '');
+    return slug || undefined;
+}
+
 export async function instantiateAgentGroupCore(
     opts: InstantiateAgentGroupOptions
 ): Promise<InstantiateAgentGroupResult> {
@@ -137,15 +158,25 @@ export async function instantiateAgentGroupCore(
     }
     const commandlessRoles = [...candidates].filter(r => !hasCommand(r));
 
-    // The head's seat name is derived from its role (e.g. `planner-1`), NOT the
-    // definition's name. Passing `group?.name` here made a terminal called "Lead
-    // team" (a definition name sitting in a list of seat names) and a phantom
-    // `team_Lead_team`; the definition name is a definition name, not a seat name.
-    // `name` is omitted so each fleet derives `${role}-1` with its own collision
-    // handling — the standalone PtyFleetService and the Go pty host both do this.
+    // The head's seat name is the TEAM's name, sanitised into a seat name — not
+    // the role. Deriving it from the role gave a head called `lead-1`, members
+    // `lead-1-coder-1`, a tmux session `lc-coding-team-lead-1` and views
+    // `lc-coding-team-lead-1-coder-1`: a second team's worth of sessions stacked
+    // on the first, every start, because a name that changes each time can never
+    // match the has-session / has-window reuse predicates. Stable names are what
+    // make the reuse work, so the naming bug and the session sprawl are one bug.
+    //
+    // Omitting `name` is what caused it: the fleets derive `${role}-1` when no
+    // name is given. The earlier objection — that passing `group?.name` produced
+    // a terminal literally called "Lead team" — is real but is an argument for
+    // SANITISING the definition name into a seat name, not for discarding it.
+    // `seatNameFromTeamName` strips a trailing "team" and anything a seat name
+    // cannot carry, so "Coding" stays `Coding` and "Lead team" becomes `Lead`.
     const headRole = group?.headRole || 'lead';
+    const headSeatName = seatNameFromTeamName(group?.name);
     const result = await createHeadWithDelegates({
         role: headRole,
+        name: headSeatName,
         cwd,
         delegates: members,
         teamName: group?.name,
@@ -154,7 +185,10 @@ export async function instantiateAgentGroupCore(
         return { success: false, error: result?.error || 'Failed to create head terminal' };
     }
 
-    const headName = result.terminal?.friendlyName || `${headRole}-1`;
+    // Prefer the name the fleet actually assigned; fall back to the name we asked
+    // for, and only then to the role form. Each step is a real value, never an
+    // invented one.
+    const headName = result.terminal?.friendlyName || headSeatName || `${headRole}-1`;
     const workers: any[] = Array.isArray(result.delegates) ? result.delegates : [];
     // `created` lists only seats actually created on this call — the head
     // (always created) plus delegates that were spawned, not reused. A shared
