@@ -28,6 +28,16 @@ export interface StandingOrder {
      * `instruction` copy and work as before.
      */
     definitionId?: string;
+    /**
+     * Optional schema-version stamp on a SYSTEM-installed standing order
+     * (one whose `id` carries a system prefix like `context-aware-completion:`).
+     * When present, {@link migrateCodingTeamOrders} rewrites the row to the
+     * current body on `version < CONTEXT_AWARE_COMPLETION_ORDER_VERSION`
+     * instead of matching frozen instruction text — so a body revision needs
+     * a version bump, not a new text recogniser. Absent on operator-authored
+     * rows and on rows written before the stamp existed (read as 0).
+     */
+    version?: number;
 }
 
 /**

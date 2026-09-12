@@ -742,12 +742,12 @@ export async function activate(context: vscode.ExtensionContext) {
     // ── Delegate-children import at activation ───────────────────────
     // Run importDelegatesIntoTeams once at activation, BEFORE any terminal
     // can be spawned. The import inside _loadAgentGroups is only reachable
-    // via the UI path (ptyListAgentGroups), but auto-start resolves teams
-    // via findTeamForHeadRoleInRoots which does NOT run the import — so
-    // without this activation pass, an upgraded install with
-    // addons.delegates on a role that no team claims would silently lose
-    // its delegates until a UI surface happens to call _loadAgentGroups.
-    // The import is idempotent (never overwrites an existing team), so the
+    // via the UI path (ptyListAgentGroups), but team resolution via
+    // findTeamForHeadRoleInRoots does NOT run the import — so without
+    // this activation pass, an upgraded install with addons.delegates on
+    // a role that no team claims would silently lose its delegates until
+    // a UI surface happens to call _loadAgentGroups. The import is
+    // idempotent (never overwrites an existing team), so the
     // _loadAgentGroups call is a harmless second run. Awaited so the
     // import completes before activation returns and any terminal can be
     // spawned; a failure is caught so it never takes activation down.
@@ -1240,16 +1240,6 @@ export async function activate(context: vscode.ExtensionContext) {
     taskViewerProvider.setSetupPanelProvider(setupPanelProvider);
     kanbanProvider!.setTaskViewerProvider(taskViewerProvider);
     setupPanelProvider.setTaskViewerProvider(taskViewerProvider);
-    // Boot-time team autostart. Fire-and-forget, exactly as the standalone host
-    // treats restoreAutobanOnStartup (bootstrap.ts): starting agent CLIs must
-    // never extend activation, and a failure must never take it down. Placed
-    // after the delegate import (above) and after the provider exists and is
-    // wired to the kanban provider, so a team assembled by that import is
-    // eligible on the very first launch after an upgrade.
-    if (workspaceRoot) {
-        void taskViewerProvider.startTeamsOnLoad(workspaceRoot)
-            .catch(err => console.warn('[Switchboard] Team autostart failed:', err));
-    }
     setupPanelProvider.setKanbanProvider(kanbanProvider!);
     const resolveEffectiveStateRoot = (candidateWorkspaceRoot?: string): string | null => {
         const selectedWorkspaceRoot = candidateWorkspaceRoot || kanbanProvider!.getCurrentWorkspaceRoot();

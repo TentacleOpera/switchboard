@@ -378,76 +378,19 @@ export function CONTEXT_AWARE_HEAD_COMPLETION_ORDER_BODY(groupId: string): strin
 }
 
 /**
- * The pre-exclusivity body — the exact text `CONTEXT_AWARE_COMPLETION_ORDER_BODY`
- * produced before routing was made exclusive and `machineOrigin` was added to the
- * step-3 fallback. Used ONLY by {@link migrateCodingTeamOrders} to recognise
- * system-installed context-aware completion orders whose frozen instruction text
- * predates the change, so they can be rewritten to the current body on read.
+ * Schema-version stamp for system-installed context-aware completion orders
+ * (id prefix `context-aware-completion:`). `wireSpawnedTeam` stamps this on
+ * the row at install time; {@link migrateCodingTeamOrders} rewrites any row
+ * whose `version` is below this to the current body and bumps the stamp,
+ * instead of matching frozen instruction text.
  *
- * This is a recogniser for a system-generated order (id prefix
- * `context-aware-completion:`), not a frozen prompt snapshot — the same pattern
- * `migrateCodingTeamOrders` already uses to match reviewer preset text.
+ * History: 1 = pre-exclusivity body, 2 = exclusive-routing + `machineOrigin`
+ * body (both retired — their text recognisers were the frozen-string pile
+ * this stamp replaces). 3 = current body (head scope takes its own body, the
+ * board-position "hand the feature to review" paragraph removed). A future
+ * body revision bumps this number and needs no new text recogniser.
  */
-function LEGACY_CONTEXT_AWARE_COMPLETION_ORDER_BODY(groupId: string, headName: string): string {
-    return 'When you finish a task, route your completion report based on where the work came from:\n\n'
-        + '1. If you have a PLAN_ID from your dispatch, call GET /kanban/plan?planId=<your planId>\n'
-        + '   against the port in .switchboard/api-server-port.txt.\n'
-        + '   - If the response shows kanbanColumn is "LEAD CODED", "CODER CODED", or "INTERN CODED",\n'
-        + '     POST /kanban/queue/done with {"from":"<your terminal name>"}.\n'
-        + '     The system will clear your terminal and dispatch the next staged card.\n'
-        + '     A response of {"dispatched":null,"reason":"queue empty"} means the run is over — say so and stop.\n'
-        + '     If you cannot complete it, POST /kanban/queue/done with\n'
-        + '     {"from":"<your terminal name>","outcome":"failed"} and a one-line reason.\n'
-        + '   - If the response shows any other column, report to your head (step 3).\n\n'
-        + '2. If you do not have a PLAN_ID (ad-hoc prompt, file-based queue item),\n'
-        + '   POST /terminals/teams/' + groupId + '/queue/done with {"from":"<your terminal name>"}.\n'
-        + '   The system will relay your report to your team lead, clear your terminal,\n'
-        + '   and dispatch the next queued item.\n'
-        + '   If the POST fails, report to your head directly (step 3).\n\n'
-        + '3. Fallback: report to your head ' + headName + ' via POST /terminals/verb/ptySendPrompt with\n'
-        + '   {"name":"' + headName + '","data":"<your report>","clearBeforePrompt":false} — naming what\n'
-        + '   you changed and what to review. Do not wait to be asked.\n\n'
-        + 'Before reporting, if you have a featureId, check GET /kanban/plans?featureId=<your feature id> —\n'
-        + 'if all subtasks are in LEAD CODED, POST /kanban/dispatch with\n'
-        + '{"plan":"<featurePlanId>","targetColumn":"CODE REVIEWED","from":"<your terminal name>"}\n'
-        + 'instead of any of the above. The feature is complete — hand it to review.';
-}
-
-/**
- * The second superseded body: exclusive routing and `machineOrigin` had landed,
- * but it still ended with the board-position paragraph that told a seat to
- * dispatch a feature to review once "all subtasks are in LEAD CODED" — an
- * inference the release contract forbids, since a column advances when work
- * STARTS. Recognised alongside {@link LEGACY_CONTEXT_AWARE_COMPLETION_ORDER_BODY}
- * so an install carrying either stale form heals on its next prompt.
- */
-function LEGACY_CONTEXT_AWARE_COMPLETION_ORDER_BODY_V2(groupId: string, headName: string): string {
-    return 'When you finish a task, route your completion report based on where the work came from.\n'
-        + 'These routes are EXCLUSIVE: the first one that succeeds ends your report. Do NOT also take\n'
-        + 'the other routes — reporting twice sends duplicate prompts to your lead.\n\n'
-        + '1. If you have a PLAN_ID from your dispatch, call GET /kanban/plan?planId=<your planId>\n'
-        + '   against the port in .switchboard/api-server-port.txt.\n'
-        + '   - If the response shows kanbanColumn is "LEAD CODED", "CODER CODED", or "INTERN CODED",\n'
-        + '     POST /kanban/queue/done with {"from":"<your terminal name>"}.\n'
-        + '     The system will clear your terminal and dispatch the next staged card.\n'
-        + '     A response of {"dispatched":null,"reason":"queue empty"} means the run is over — say so and stop.\n'
-        + '     If you cannot complete it, POST /kanban/queue/done with\n'
-        + '     {"from":"<your terminal name>","outcome":"failed"} and a one-line reason.\n'
-        + '   - If the response shows any other column, report to your head (step 3).\n\n'
-        + '2. If you do not have a PLAN_ID (ad-hoc prompt, file-based queue item),\n'
-        + '   POST /terminals/teams/' + groupId + '/queue/done with {"from":"<your terminal name>"}.\n'
-        + '   The system will relay your report to your team lead, clear your terminal,\n'
-        + '   and dispatch the next queued item.\n'
-        + '   If the POST fails, report to your head directly (step 3).\n\n'
-        + '3. Fallback (only when steps 1 and 2 did not apply or failed): report to your head ' + headName + '\n'
-        + '   via POST /terminals/verb/ptySendPrompt with\n'
-        + '   {"name":"' + headName + '","data":"<your report>","clearBeforePrompt":false,"machineOrigin":true} —\n'
-        + '   naming what you changed and what to review. Do not wait to be asked.\n\n'
-        + 'Before reporting, if you have a featureId, check GET /kanban/plans?featureId=<your feature id> —\n'
-        + 'if all subtasks are in LEAD CODED, POST /kanban/dispatch with\n'
-        + '{"plan":"<featurePlanId>","targetColumn":"CODE REVIEWED","from":"<your terminal name>"}\n'
-        + 'instead of any of the above. The feature is complete — hand it to review.';
-}
+export const CONTEXT_AWARE_COMPLETION_ORDER_VERSION = 3;
 
 /**
  * The queue/done instruction appended to the team-scoped standing order for
@@ -840,18 +783,6 @@ export const TEAM_HEAD_COMMIT_INSTRUCTION = ` ${TEAM_HEAD_COMMIT_FRAGMENT_BODY}`
  * Byte-identical to the shipped `headPrompt` in `kanban.html`'s Coding entry
  * and `terminals.js`'s `NEW_CODING_HEAD_PROMPT_CLIENT`.
  */
-/**
- * The V2 fragment — a substitution-independent clause unique to the
- * feature-level head prompt that told the lead to hand the next subtask back to
- * the coder that just reported. That sticky-assignment rule is the reason a lead
- * ran one seat to its context limit while its siblings idled, so the clause is
- * gone from the current text and this fragment is safe to match on.
- *
- * MUST NOT appear in NEW_CODING_HEAD_PROMPT — a recogniser that matches its own
- * replacement rewrites forever (pinned by stage-marker-commit-contract).
- */
-export const OLD_HEADPROMPT_V2_FRAGMENT = 'note it and give that coder the next subtask';
-
 export const NEW_CODING_HEAD_PROMPT =
     'You lead this team. Your coders work the subtasks of one feature. '
     + 'PLAN FILES ARE THE SOURCE OF TRUTH. Do not rewrite, edit, restructure, or replace plan content. '
@@ -942,6 +873,17 @@ export function migrateAgentGroups(groups: any[]): any[] | null {
         }
 
         let g = { ...group };
+
+        // Retire the `startOnLoad` field (clear-on-read). Auto-start is gone —
+        // a stored `startOnLoad: true` that does nothing is the
+        // fallback-indistinguishable-from-a-value anti-pattern, so strip it on
+        // read and persist the cleaned shape. All other keys (icon, pacing,
+        // headPrompt, members, startWorktree) are preserved — only `startOnLoad`
+        // is cleared.
+        if (g.startOnLoad !== undefined) {
+            delete g.startOnLoad;
+            changed = true;
+        }
 
         // A missing or non-array `members` is a REPAIR, so flag it here: the
         // `.map` below always produces a new array, which means a later
@@ -1814,12 +1756,18 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
             if (firstCoder) {
                 replacedText = replacedText.replace(/\{coder\}/g, firstCoder);
             } else if (headPromptText.includes('{coder}')) {
-                // No coder child was found for this team, but the
-                // head prompt references {coder}. The placeholder
-                // survives into the installed standing order, so
-                // the head would ptySendPrompt a terminal literally
-                // named "{coder}" every round and fail silently.
-                console.warn(`[teamWiring] team-head standing order for teamId=${groupId} (head=${headName}) contains {coder} placeholder but no coder child was found; placeholder left unsubstituted.`);
+                // No coder child was found for this team, but the head prompt
+                // references {coder}. Fail the spawn loudly: leaving the
+                // placeholder unsubstituted would install a standing order
+                // that ptySendPrompts a terminal literally named "{coder}"
+                // every round and fails silently. A fallback that behaves
+                // like a real value (a head prompt that looks complete but
+                // addresses a non-existent seat) is the codebase's named
+                // failure mode — refuse the spawn instead.
+                return {
+                    ok: false,
+                    error: `Team "${groupId}" head prompt references {coder} but no coder seat is on the team (head=${headName}). Add a coder member or change the head prompt.`,
+                };
             }
             headInstruction = replacedText;
         }
@@ -1845,7 +1793,10 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
                 const teamOrder = teamPromptInstruction
                     ? makeStandingOrder(headName, '', teamPromptInstruction, 'team', groupId)
                     : makeFragmentStandingOrder(headName, '', teamFragments, 'team', groupId);
-                next.push({ ...teamOrder, id: `context-aware-completion:${groupId}:team` });
+                // Stamp the schema version so a future body revision migrates on
+                // `version < CONTEXT_AWARE_COMPLETION_ORDER_VERSION`, not on a new
+                // text recogniser. See migrateCodingTeamOrders.
+                next.push({ ...teamOrder, id: `context-aware-completion:${groupId}:team`, version: CONTEXT_AWARE_COMPLETION_ORDER_VERSION });
             }
 
             // Head-facing order (skipped for external heads — no head terminal).
@@ -2134,55 +2085,33 @@ export function migrateCodingTeamOrders(orders: StandingOrder[]): StandingOrder[
         }
 
         // Context-aware completion order: system-installed (id prefix
-        // `context-aware-completion:`), frozen at install time. The body has
-        // been revised twice — exclusive routing plus `machineOrigin`, then the
-        // removal of the board-position "hand the feature to review" paragraph —
-        // and the head scope now takes a body of its own. Rewrite orders whose
-        // instruction still carries a superseded text so existing installs heal
-        // on their next message; the install path skips rows that already exist,
-        // so without this a re-spawn never updates the text.
+        // `context-aware-completion:`). The body has been revised twice; each
+        // revision previously needed a frozen-text recogniser here, which is the
+        // pile this branch retired. The row now carries a `version` stamp
+        // (CONTEXT_AWARE_COMPLETION_ORDER_VERSION), and migration fires on
+        // `version < current` — a body revision bumps the version constant and
+        // needs no new text recogniser. The install path skips rows that
+        // already exist, so without this a re-spawn never updates the text.
         //
-        // The team-head order's instruction IS the raw body; the team order's
-        // instruction is the body + '\n' + GIT_SAFETY_DIRECTIVE (default
-        // prompt only — a custom-prompt team order is left alone because its
-        // instruction will not match the legacy default). Matching by exact
-        // text, not by id alone, preserves operator customisations.
+        // Only body-based rows are rewritten: a fragment-based row (the current
+        // default install) carries no `instruction` and is left to its
+        // fragments. The rewrite target is the current body — the head body for
+        // `team-head` scope, the member body + GIT_SAFETY_DIRECTIVE for `team`
+        // scope — and the version stamp is bumped so the next read is a no-op.
         if (typeof o.id === 'string' && o.id.startsWith('context-aware-completion:')) {
-            const gid = o.teamId || '';
-            const head = o.parent || '';
-            const staleBodies = [
-                LEGACY_CONTEXT_AWARE_COMPLETION_ORDER_BODY(gid, head),
-                LEGACY_CONTEXT_AWARE_COMPLETION_ORDER_BODY_V2(gid, head),
-            ];
-            if (scope === 'team-head') {
-                // Every stale form on a head row is a MEMBER body: the head-scope
-                // install handed out the member text until the head body existed.
-                // The current member body is stale here too, for the same reason —
-                // its fallback tells the head to prompt itself.
-                const memberBodies = [...staleBodies, CONTEXT_AWARE_COMPLETION_ORDER_BODY(gid, head)];
-                if (typeof o.instruction === 'string' && memberBodies.includes(o.instruction)) {
+            const stampedVersion = typeof o.version === 'number' && o.version >= 0 ? o.version : 0;
+            if (stampedVersion < CONTEXT_AWARE_COMPLETION_ORDER_VERSION && typeof o.instruction === 'string') {
+                const gid = o.teamId || '';
+                const head = o.parent || '';
+                if (scope === 'team-head') {
+                    // A head-scope row carrying a member body is a legacy install
+                    // from before the head body existed — rewrite to the head body.
                     rewrite.set(o.id, CONTEXT_AWARE_HEAD_COMPLETION_ORDER_BODY(gid));
                     touched = true;
-                }
-            } else if (scope === 'team') {
-                const currentBody = CONTEXT_AWARE_COMPLETION_ORDER_BODY(gid, head);
-                if (staleBodies.some(b => o.instruction === b + '\n' + GIT_SAFETY_DIRECTIVE)) {
-                    rewrite.set(o.id, currentBody + '\n' + GIT_SAFETY_DIRECTIVE);
+                } else if (scope === 'team') {
+                    rewrite.set(o.id, CONTEXT_AWARE_COMPLETION_ORDER_BODY(gid, head) + '\n' + GIT_SAFETY_DIRECTIVE);
                     touched = true;
                 }
-            }
-        }
-
-        // Stale V2 team-head row: the feature-level headPrompt whose assignment rule
-        // was "give that coder the next subtask". Same indexOf-on-a-fragment
-        // recognition as the V1 branch (never a constructed RegExp — the
-        // substituted head name may carry regex metacharacters), same rewrite target.
-        if (scope === 'team-head' && typeof o.instruction === 'string') {
-            if (o.instruction.indexOf(OLD_HEADPROMPT_V2_FRAGMENT) !== -1) {
-                const newInstruction = NEW_CODING_HEAD_PROMPT.replace(/\{head\}/g, o.parent || '');
-                rewrite.set(o.id, newInstruction);
-                touched = true;
-                continue;
             }
         }
     }
@@ -2193,7 +2122,10 @@ export function migrateCodingTeamOrders(orders: StandingOrder[]): StandingOrder[
         .filter(o => !drop.has(o.id))
         .map(o => {
             const replacement = o && typeof o.id === 'string' ? rewrite.get(o.id) : undefined;
-            return replacement ? { ...o, instruction: replacement } : o;
+            // Bump the version stamp on rewritten rows so the next read is a
+            // no-op (the persisting pass in loadEffectiveStandingOrders writes
+            // this back to disk).
+            return replacement ? { ...o, instruction: replacement, version: CONTEXT_AWARE_COMPLETION_ORDER_VERSION } : o;
         });
 }
 
@@ -2677,41 +2609,71 @@ export async function resolveTeamMembersForHead(opts: {
     } catch { return null; }
     if (!Array.isArray(groups) || groups.length === 0) { return null; }
 
-    const rosterOf = (g: any): string[] => {
-        const roster: any[] = Array.isArray(g?.order) && g.order.length
-            ? g.order
-            : (Array.isArray(g?.members) ? g.members : []);
-        const names: string[] = [];
-        for (const n of roster) {
-            if (typeof n === 'string' && n.length > 0) { names.push(n); }
-        }
-        return names;
-    };
-
     // Preferred: the group the origin HEADS (same id derivation as
     // resolveTeamScopedRoleTerminal and wireSpawnedTeam).
     const headId = 'team_' + encodeURIComponent(originName).replace(/[^a-zA-Z0-9_]/g, '_');
     const headGroup = groups.find(g => g && g.id === headId);
     if (headGroup) {
-        const roster = rosterOf(headGroup);
+        const roster = rosterOfGroup(headGroup);
         if (roster.length) { return roster; }
     }
     // Otherwise: first group (in stored order) that contains the origin.
     for (const g of groups) {
-        if (!g || !Array.isArray(g.members) || !g.members.includes(originName)) { continue; }
-        const roster = rosterOf(g);
+        if (!g) { continue; }
+        const roster = rosterOfGroup(g);
+        if (!roster.includes(originName)) { continue; }
         if (roster.length) { return roster; }
     }
     return null;
 }
 
 /**
+ * Extract a roster of terminal-name strings from a registered group.
+ *
+ * Prefers `order`, falls back to `members`. Member entries may be either
+ * plain name strings (the shape `wireSpawnedTeam` persists) OR objects
+ * carrying a `friendlyName`/`name` field (the gallery seed shape, before
+ * `migrateAgentGroups` converts them on its own read sites). Object members
+ * are resolved to their `friendlyName` (then `name`) — NOT dropped — so a
+ * roster that parsed but contained objects is not silently emptied.
+ *
+ * Dropping object members was the change-4 defect: `terminalsShareTeam` would
+ * see an empty roster for an object-member group, fall through to
+ * `roster.has(a) && roster.has(b)` === false, and return `false` — the
+ * OPPOSITE of its own conservative `return true` direction on uncertainty,
+ * silently disabling reviewer delegation. Resolving the names instead yields
+ * the same answer the equivalent string roster would.
+ *
+ * Pure and exported so the roster-resolution contract is unit-testable
+ * without driving the UI (change 8).
+ */
+export function rosterOfGroup(g: any): string[] {
+    const roster: any[] = Array.isArray(g?.order) && g.order.length
+        ? g.order
+        : (Array.isArray(g?.members) ? g.members : []);
+    const names: string[] = [];
+    for (const n of roster) {
+        if (typeof n === 'string') {
+            if (n.length > 0) { names.push(n); }
+            continue;
+        }
+        if (n && typeof n === 'object') {
+            const resolved = typeof n.friendlyName === 'string' ? n.friendlyName
+                : (typeof n.name === 'string' ? n.name : '');
+            if (resolved.length > 0) { names.push(resolved); }
+        }
+    }
+    return names;
+}
+
+/**
  * Check whether two terminals share any registered team.
  *
  * Reads `terminals.groups` with the same bare-key merge as
- * `resolveTeamMembersForHead`, extracts rosters consistently via the same
- * `rosterOf` logic (prefers `order`, falls back to `members`), and returns
- * true if ANY group contains both `a` and `b`.
+ * `resolveTeamMembersForHead`, extracts rosters consistently via
+ * {@link rosterOfGroup} (prefers `order`, falls back to `members`, resolves
+ * object members to their `friendlyName`), and returns true if ANY group
+ * contains both `a` and `b`.
  *
  * Returns `true` (do NOT drop) when data is unavailable, reads fail, or no
  * groups exist — the conservative direction. The caller drops `originLead`
@@ -2758,22 +2720,137 @@ export async function terminalsShareTeam(opts: {
     } catch { return true; }
     if (!Array.isArray(groups) || groups.length === 0) { return true; }
 
-    const rosterOf = (g: any): string[] => {
-        const roster: any[] = Array.isArray(g?.order) && g.order.length
-            ? g.order
-            : (Array.isArray(g?.members) ? g.members : []);
-        const names: string[] = [];
-        for (const n of roster) {
-            if (typeof n === 'string' && n.length > 0) { names.push(n); }
-        }
-        return names;
-    };
-
     for (const g of groups) {
-        const roster = new Set(rosterOf(g));
+        const roster = new Set(rosterOfGroup(g));
         if (roster.has(a) && roster.has(b)) { return true; }
     }
     return false;
+}
+
+/**
+ * Resolve the head (lead) terminal of the team a given terminal belongs to.
+ *
+ * Reads the SAME merged group set as {@link terminalsShareTeam} and
+ * {@link resolveTeamMembersForHead}. For each group whose roster (resolved via
+ * {@link rosterOfGroup}) contains `terminal`, returns the group's `head` field
+ * (the live head seat name `wireSpawnedTeam` stamps). The first matching group
+ * in stored order wins; a group with no `head` field is skipped (a head-less
+ * row cannot delegate). Returns `null` when the terminal is on no registered
+ * team, the data is unavailable, or no containing group carries a `head`.
+ *
+ * This is the reviewer-callback fix: when a cross-team guard drops an
+ * `originLead` (the card's last dispatch target is on another team), the
+ * reviewer still needs a lead to delegate to. Resolving the reviewer's OWN
+ * lead — the head of the team the reviewer is a member of — keeps delegation
+ * live for a shared reviewer with a same-team coder, instead of falling back
+ * to fix-it-yourself.
+ */
+export async function resolveHeadForTerminal(opts: {
+    db?: any;
+    settings?: TerminalGroupsSettingsAccessor;
+    terminal: string;
+}): Promise<string | null> {
+    const { db, settings, terminal } = opts;
+    if ((!db && !settings) || !terminal) { return null; }
+
+    let groups: any[] = [];
+    try {
+        if (settings) {
+            const raw = await settings.get(TERMINALS_GROUPS_KEY, []);
+            groups = Array.isArray(raw) ? [...raw] : [];
+        } else if (db) {
+            const raw = await db.getConfigJson(TERMINALS_GROUPS_KEY, []) as any[];
+            groups = Array.isArray(raw) ? [...raw] : [];
+        }
+        if (db) {
+            try {
+                const bare = await db.getConfigJson('terminals.groups', []) as any[];
+                if (Array.isArray(bare) && bare.length > 0) {
+                    const existingIds = new Set(groups.map((g: any) => g && g.id).filter(Boolean));
+                    for (const g of bare) {
+                        if (g && typeof g.id === 'string' && !existingIds.has(g.id)) {
+                            groups.push(g);
+                            existingIds.add(g.id);
+                        }
+                    }
+                }
+            } catch { /* best effort */ }
+        }
+    } catch { return null; }
+    if (!Array.isArray(groups) || groups.length === 0) { return null; }
+
+    for (const g of groups) {
+        if (!g) { continue; }
+        const roster = rosterOfGroup(g);
+        if (!roster.includes(terminal)) { continue; }
+        const head = typeof g.head === 'string' && g.head.length > 0 ? g.head : '';
+        if (head && head !== terminal) { return head; }
+    }
+    return null;
+}
+
+/**
+ * Read the live registered groups (`switchboard.prompts.terminals.groups`
+ * merged with the legacy `terminals.groups` bare key) and return a map from
+ * each live group's identity link to its live `head` seat name.
+ *
+ * The map is keyed on BOTH the live group's `definitionId` (the
+ * `terminals.agentGroups` row id it was spawned from) AND its `id`
+ * (the deterministic `team_<headName>` group id), so a caller serving
+ * team definitions can attach the live `head` to each definition row by
+ * either link. Two teams sharing a `headRole` are then distinguishable on
+ * the wire by their live head seat name, not by claim order alone.
+ *
+ * Returns an empty map when the data is unavailable or no live groups
+ * carry a `head` — the caller leaves the definition's `head` unset, which
+ * is the pre-change shape (no `head` key). Never throws.
+ */
+export async function resolveLiveGroupHeads(opts: {
+    db?: any;
+    settings?: TerminalGroupsSettingsAccessor;
+}): Promise<Map<string, string>> {
+    const { db, settings } = opts;
+    const out = new Map<string, string>();
+    if (!db && !settings) { return out; }
+
+    let groups: any[] = [];
+    try {
+        if (settings) {
+            const raw = await settings.get(TERMINALS_GROUPS_KEY, []);
+            groups = Array.isArray(raw) ? [...raw] : [];
+        } else if (db) {
+            const raw = await db.getConfigJson(TERMINALS_GROUPS_KEY, []) as any[];
+            groups = Array.isArray(raw) ? [...raw] : [];
+        }
+        if (db) {
+            try {
+                const bare = await db.getConfigJson('terminals.groups', []) as any[];
+                if (Array.isArray(bare) && bare.length > 0) {
+                    const existingIds = new Set(groups.map((g: any) => g && g.id).filter(Boolean));
+                    for (const g of bare) {
+                        if (g && typeof g.id === 'string' && !existingIds.has(g.id)) {
+                            groups.push(g);
+                            existingIds.add(g.id);
+                        }
+                    }
+                }
+            } catch { /* best effort */ }
+        }
+    } catch { return out; }
+    if (!Array.isArray(groups) || groups.length === 0) { return out; }
+
+    for (const g of groups) {
+        if (!g) { continue; }
+        const head = typeof g.head === 'string' && g.head.length > 0 ? g.head : '';
+        if (!head) { continue; }
+        if (typeof g.definitionId === 'string' && g.definitionId.length > 0) {
+            out.set(g.definitionId, head);
+        }
+        if (typeof g.id === 'string' && g.id.length > 0) {
+            out.set(g.id, head);
+        }
+    }
+    return out;
 }
 
 /**

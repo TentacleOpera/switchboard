@@ -52,7 +52,8 @@ export interface InstantiateAgentGroupOptions {
     /** Create the head with its delegate members, BELOW the handlePtyVerb wrapper. */
     createHeadWithDelegates: (spec: {
         role: string;
-        name: string;
+        /** Optional seat name. Omit to let the fleet derive `${role}-1` (with collision handling) — do NOT pass the definition name, which would name the seat after the team. */
+        name?: string;
         cwd: string;
         delegates: any[];
         teamName?: string;
@@ -136,9 +137,15 @@ export async function instantiateAgentGroupCore(
     }
     const commandlessRoles = [...candidates].filter(r => !hasCommand(r));
 
+    // The head's seat name is derived from its role (e.g. `planner-1`), NOT the
+    // definition's name. Passing `group?.name` here made a terminal called "Lead
+    // team" (a definition name sitting in a list of seat names) and a phantom
+    // `team_Lead_team`; the definition name is a definition name, not a seat name.
+    // `name` is omitted so each fleet derives `${role}-1` with its own collision
+    // handling — the standalone PtyFleetService and the Go pty host both do this.
+    const headRole = group?.headRole || 'lead';
     const result = await createHeadWithDelegates({
-        role: group?.headRole || 'lead',
-        name: group?.name,
+        role: headRole,
         cwd,
         delegates: members,
         teamName: group?.name,
@@ -147,7 +154,7 @@ export async function instantiateAgentGroupCore(
         return { success: false, error: result?.error || 'Failed to create head terminal' };
     }
 
-    const headName = result.terminal?.friendlyName || group?.name;
+    const headName = result.terminal?.friendlyName || `${headRole}-1`;
     const workers: any[] = Array.isArray(result.delegates) ? result.delegates : [];
     // `created` lists only seats actually created on this call — the head
     // (always created) plus delegates that were spawned, not reused. A shared

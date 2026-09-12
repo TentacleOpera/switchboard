@@ -3016,6 +3016,12 @@ export class LocalApiServer {
                 if (targetTerm) {
                     this.markSeatActive(workspaceRoot, String(targetTerm).trim());
                 }
+                // V76: stamp the dispatching team group id onto the runtime row
+                // AFTER triggerAction has written dispatched_terminal, so the
+                // completion-time clear decision can trust the dispatch record
+                // even when the config read later races, fails, or returns empty.
+                // Best-effort; never aborts the dispatch on failure.
+                void this._stampDispatchedTeamGroup(workspaceRoot, record.planId, targetTerm);
             }
             return {
                 status: success ? 200 : 502,
@@ -3171,6 +3177,41 @@ export class LocalApiServer {
     }
 
     /**
+     * V76: stamp the dispatching team group id onto the plan's runtime row.
+     * Called by `performKanbanDispatch` (after a successful dispatch) and
+     * `performKanbanDispatchAcked` (after the delivery promise resolves) — the
+     * two shared dispatch chokepoints both roots route through, so the write
+     * lands in one place with no composition-root wiring (the AGENTS.md
+     * standalone/extension divergence trap).
+     *
+     * Resolves the registered team group whose roster holds `seat` AT DISPATCH
+     * TIME — the moment `wireSpawnedTeam` has just written the config, so the
+     * read is reliable (the race this card closes is at COMPLETION, when the
+     * config may have changed). `''` is written for a standalone dispatch (no
+     * team, or the seat is on no roster), which resets any stale value from a
+     * prior team dispatch of the same plan.
+     *
+     * Best-effort: a failure logs and never aborts the dispatch. The
+     * completion-time clear decision degrades to the pre-V76 config-resolution
+     * path (the parent card's fix), not a regression.
+     */
+    private async _stampDispatchedTeamGroup(workspaceRoot: string, planId: string, seat: string | null | undefined): Promise<void> {
+        try {
+            const db = await this._options.getKanbanDatabase?.(workspaceRoot);
+            if (!db || !planId) { return; }
+            let groupId = '';
+            const resolvedSeat = (seat || '').trim();
+            if (resolvedSeat) {
+                const { group } = await this._resolveTeamGroupForSeat(workspaceRoot, resolvedSeat);
+                groupId = (group && typeof group.id === 'string') ? group.id : '';
+            }
+            await db.setDispatchedTeamGroup?.(planId, groupId);
+        } catch (err) {
+            console.warn('[LocalApiServer] _stampDispatchedTeamGroup failed:', err);
+        }
+    }
+
+    /**
      * The acked variant of `performKanbanDispatch` for the command surface. Runs
      * the same gate pre-flight (so 400/409 refusals still arrive immediately and
      * loudly — the ack is NEVER sent for a dispatch that is about to fail), then
@@ -3240,6 +3281,13 @@ export class LocalApiServer {
             // first action (a DB write, milliseconds); the prompt delivery is the
             // slow part this whole split exists to hide from the UI.
             const delivery = kanbanVerb('triggerAction', { sessionId, targetColumn, workspaceRoot, bypassTriggerGate: true, unattended: !!dispatchOptions?.unattended, targetTerminalOverride: teamOverride, originTerminal: dispatchOptions?.originTerminal, skipClear: !!dispatchOptions?.skipClear, clearBeforePrompt: dispatchOptions?.clearBeforePrompt }, workspaceRoot);
+            // V76: after the delivery lands (triggerAction has written
+            // dispatched_terminal), stamp the dispatching team group id. Chained
+            // on resolve — the ack returns immediately, the stamp is best-effort
+            // and never blocks the UI. A rejection is recorded below.
+            void delivery.then(() => {
+                void this._stampDispatchedTeamGroup(workspaceRoot, planId, seat);
+            });
             // Retain the promise so a rejection is recorded, never unhandled. A
             // rejection (e.g. terminal closed mid-chunk) leaves dispatchedAt
             // unchanged, so the poll times out to `unknown` at the deadline — the
@@ -3435,6 +3483,18 @@ export class LocalApiServer {
      * has its holder released (`releaseDispatchHolder`), which is what keeps
      * the escalation ladder from deadlocking on the card it just re-staged.
      *
+     * V77 INVERTS the "no release valve" rule above — deliberately, and only
+     * because `completeCardInternal` now requires a non-empty `outcome`, so a
+     * completion means "finished, with a statement" and cannot be used as a
+     * silent unlock. The release valve (`POST /kanban/card/release`,
+     * `POST /kanban/team/release`) writes `released_at` (NOT `completed_at`)
+     * and clears the holder, freeing the team without claiming the work is
+     * done. The 409 below names the release door. The inversion is safe ONLY
+     * because the forced-outcome gate makes completion meaningful — without
+     * it, the valve is exactly the "second signal under a new name" the
+     * original comment feared. See
+     * `completion-is-the-only-way-to-release-a-team-so-it-gets-posted-early.md`.
+     *
      * Completion is an asserted event, not a trace derived from board
      * position, so no plan-file `mtime` side effect and no staleness sweep can
      * corrupt it. The seat-paced path does not skip this scan — the skip
@@ -3587,7 +3647,7 @@ export class LocalApiServer {
             if (isTeamDispatch) {
                 const inFlightCheck = await resolveTeamInFlight(db, Array.from(teamSet));
                 if (inFlightCheck.inFlight) {
-                    return fail(409, `Team already in flight: card '${inFlightCheck.planId}' is in '${inFlightCheck.kanbanColumn}' held by '${inFlightCheck.dispatchedTerminal}' with no completion post. Post /kanban/task/complete before asking for the next card.`, {
+                    return fail(409, `Team already in flight: card '${inFlightCheck.planId}' is in '${inFlightCheck.kanbanColumn}' held by '${inFlightCheck.dispatchedTerminal}' with no completion post. Completion is for FINISHED work — POST /kanban/task/complete with a non-empty outcome when the work is done. To free the team WITHOUT claiming the work is done, POST /kanban/card/release with { from, planId: '${inFlightCheck.planId}' } (or POST /kanban/team/release with { from } to release every held card).`, {
                         inFlight: {
                             planId: inFlightCheck.planId,
                             kanbanColumn: inFlightCheck.kanbanColumn,
@@ -4038,6 +4098,7 @@ export class LocalApiServer {
         dispatchedTerminal?: string;
         idempotent?: boolean;
         notFound?: boolean;
+        badRequest?: boolean;
         error?: string;
     }> {
         const workspaceRoot = opts.workspaceRoot;
@@ -4054,6 +4115,23 @@ export class LocalApiServer {
         const isStaleCompletedAt = !!existing.completedAt && !!existing.dispatchedAt &&
             Date.parse(existing.completedAt) < Date.parse(existing.dispatchedAt);
         const isIdempotent = !!existing.completedAt && !isStaleCompletedAt;
+
+        // V77: a completion must carry a non-empty outcome. Scoped to NEW posts —
+        // the idempotent path (already completed) returns the existing record
+        // without re-writing, so a pre-V77 completion with empty outcome is
+        // returned as-is, never rejected (193 of 201 historical rows have empty
+        // outcome; a retroactive invariant would fail or force a lie). The
+        // release path does NOT go through `completeCardInternal` — it has its
+        // own `releaseCardInternal` that writes `released_at`, not
+        // `completed_at` — so this gate is completions-only.
+        if (!isIdempotent && !outcome) {
+            return {
+                success: false,
+                planId,
+                badRequest: true,
+                error: 'Missing required field: outcome (a non-empty statement of what was done). POST /kanban/card/release instead if you are freeing the team without claiming the work is done.'
+            };
+        }
 
         // 2. Resolve the accepted coding seat from HOST evidence only — never from
         // the request body, and never `from` (the lead posting the acceptance).
@@ -4089,6 +4167,11 @@ export class LocalApiServer {
             if (!updated) {
                 return { success: false, notFound: true, planId, error: `Plan not found: ${planId}` };
             }
+
+            // V77: stamp outcome/workflow onto the plans row so consumers read what
+            // happened without going to plan_events. Best-effort — the event log
+            // still holds the record if this write fails.
+            await db.setPlanOutcomeWorkflow?.(planId, outcome, workflow);
 
             // 4. Record to plan_events for queryability.
             await db.appendPlanEventByPlanId?.(planId, {
@@ -4165,6 +4248,191 @@ export class LocalApiServer {
             ...(acceptedCodingSeat ? { acceptedCodingSeat } : {}),
             ...(existing.dispatchedTerminal ? { dispatchedTerminal: existing.dispatchedTerminal } : {}),
             ...(isIdempotent ? { idempotent: true } : {})
+        };
+    }
+
+    /**
+     * V77 release valve — the door that frees a team WITHOUT claiming the work
+     * is done. The mirror image of `completeCardInternal`: writes `released_at`
+     * (NOT `completed_at`), records a `workflow='operator-release'` event, clears
+     * the dispatch holder so the in-flight predicate (`heldByTeam`) returns false
+     * (the team is free for `POST /kanban/queue/next`), and clears the coding
+     * seat. A released card does NOT read as completed anywhere — `completed_at`
+     * stays NULL, the column is unchanged, and the next agent that picks it up
+     * sees an unfinished card.
+     *
+     * Idempotency: a repeat release returns the existing `released_at` without
+     * re-writing. A release of an ALREADY COMPLETED card is a no-op (the card is
+     * done; the team is already free via `completed_at`) — returns idempotent.
+     * This is the "already released" guard the plan requires: a
+     * release-then-complete sequence cannot leave a card both released and
+     * completable, because a completed card refuses the release and a released
+     * card refuses a second release.
+     *
+     * Called by `POST /kanban/card/release` (per-card) and `POST /kanban/team/release`
+     * (bulk) — the two release verbs share this one helper, the same way the two
+     * completion verbs share `completeCardInternal`.
+     */
+    public async releaseCardInternal(
+        db: any,
+        planId: string,
+        from: string,
+        opts: {
+            workspaceRoot: string;
+            note?: string;
+        }
+    ): Promise<{
+        success: boolean;
+        planId: string;
+        released_at?: string;
+        note?: string;
+        cleared?: boolean;
+        clearError?: string;
+        clearReason?: string;
+        acceptedCodingSeat?: string;
+        dispatchedTerminal?: string;
+        idempotent?: boolean;
+        alreadyCompleted?: boolean;
+        notFound?: boolean;
+        error?: string;
+    }> {
+        const workspaceRoot = opts.workspaceRoot;
+        const note = typeof opts.note === 'string' ? opts.note.trim() : '';
+        const workflow = 'operator-release';
+
+        // 1. Read the canonical plan row.
+        const existing = await db.getPlanByPlanId?.(planId);
+        if (!existing) {
+            return { success: false, notFound: true, planId, error: `Plan not found: ${planId}` };
+        }
+
+        // Already completed → release is a no-op. The team is already free via
+        // `completed_at` (the in-flight predicate keys on it), and writing
+        // `released_at` on a completed row would make a finished card read as
+        // "released, not finished" — the exact conflation this valve exists to
+        // remove. Return idempotent so a release-then-complete sequence never
+        // leaves a card both released and completable.
+        if (existing.completedAt) {
+            return {
+                success: true,
+                planId,
+                idempotent: true,
+                alreadyCompleted: true,
+                released_at: undefined,
+                note,
+            };
+        }
+
+        // Already released → idempotent. Return the existing stamp without
+        // re-writing (the release is a one-shot, like completion).
+        if (existing.releasedAt) {
+            return {
+                success: true,
+                planId,
+                idempotent: true,
+                released_at: existing.releasedAt,
+                note,
+                ...(existing.dispatchedTerminal ? { dispatchedTerminal: existing.dispatchedTerminal } : {}),
+            };
+        }
+
+        // 2. Resolve the accepted coding seat (same HOST-evidence path as
+        // completeCardInternal — never from the request body, never `from`).
+        const CODING_ROLES = new Set(['coder', 'intern']);
+        let acceptedCodingSeat: string | undefined;
+        const dispatchedSeat = String(existing.dispatchedTerminal || '').trim();
+        const rowRole = String(existing.routedTo || '').toLowerCase();
+        if (dispatchedSeat && CODING_ROLES.has(rowRole)) {
+            acceptedCodingSeat = dispatchedSeat;
+        } else if (dispatchedSeat && this._options.terminalVerb) {
+            try {
+                const listed = await this._options.terminalVerb('ptyListTerminals', {}, workspaceRoot);
+                const seat = (listed?.terminals || []).find((t: any) => t && t.friendlyName === dispatchedSeat);
+                if (seat && CODING_ROLES.has(String(seat.role || '').toLowerCase())) {
+                    acceptedCodingSeat = dispatchedSeat;
+                }
+            } catch (roleErr) {
+                console.warn('[LocalApiServer] releaseCardInternal seat role lookup failed:', roleErr);
+            }
+        }
+        if (acceptedCodingSeat === from) {
+            acceptedCodingSeat = undefined;
+        }
+
+        // 3. Write released_at (NOT completed_at). Idempotent setter — a
+        // concurrent release racing this one loses the UPDATE (WHERE
+        // released_at IS NULL) and the loser reads the winner's stamp.
+        const timestamp = new Date().toISOString();
+        const stamped = await db.setReleasedAt?.(planId, timestamp);
+        if (!stamped) {
+            // A concurrent release won the race OR the row vanished. Re-read to
+            // distinguish; treat a now-released row as idempotent success.
+            const fresh = await db.getPlanByPlanId?.(planId);
+            if (fresh?.releasedAt) {
+                return { success: true, planId, idempotent: true, released_at: fresh.releasedAt, note };
+            }
+            return { success: false, notFound: true, planId, error: `Plan not found: ${planId}` };
+        }
+
+        // 4. Stamp workflow/outcome onto the row + record the event. The
+        // operator is not made to type an outcome — the release verb sets its
+        // own ('Released by <from>'), the same way round/feature-complete do.
+        await db.setPlanOutcomeWorkflow?.(planId, `Released by ${from}`, workflow);
+        await db.appendPlanEventByPlanId?.(planId, {
+            eventType: 'released',
+            workflow,
+            payload: JSON.stringify({ from, note, acceptedCodingSeat })
+        });
+
+        // 5. Clear the dispatch holder so `heldByTeam` returns false — this is
+        // what frees the team for POST /kanban/queue/next. `completed_at` stays
+        // NULL (a release is not a completion), so the holder clear is the
+        // release signal the in-flight predicate reads.
+        if (existing.planFile && existing.workspaceId) {
+            try { await db.releaseDispatchHolder?.(existing.planFile, existing.workspaceId); }
+            catch (err) { console.warn('[LocalApiServer] releaseCardInternal releaseDispatchHolder failed:', err); }
+        }
+
+        // 6. Clear the accepted coding seat (same path as completeCardInternal).
+        let cleared = false;
+        let clearError: string | undefined;
+        let clearReason: string | undefined;
+        if (acceptedCodingSeat && this._options.clearTerminalContext) {
+            try {
+                const clr = await this._options.clearTerminalContext(workspaceRoot, acceptedCodingSeat);
+                cleared = !!clr?.cleared;
+                if (clr && clr.cleared === false && clr.error) {
+                    clearError = clr.error;
+                    clearReason = clr.error;
+                }
+                if (cleared) {
+                    this.markSeatAtRest(workspaceRoot, acceptedCodingSeat, planId);
+                    if (this._options.onTerminalContextCleared) {
+                        try { this._options.onTerminalContextCleared(acceptedCodingSeat); } catch { /* log writer must never crash the release */ }
+                    }
+                }
+            } catch (clrErr) {
+                clearError = clrErr instanceof Error ? clrErr.message : String(clrErr);
+                clearReason = clearError;
+                console.warn(`[LocalApiServer] clearTerminalContext failed for released seat '${acceptedCodingSeat}':`, clrErr);
+            }
+        } else if (!acceptedCodingSeat) {
+            cleared = false;
+            clearReason = dispatchedSeat === from
+                ? `Lead '${from}' is never cleared as a coding seat`
+                : 'No coding seat attributed to plan';
+        }
+
+        return {
+            success: true,
+            planId,
+            released_at: timestamp,
+            note,
+            cleared,
+            ...(clearError ? { clearError } : {}),
+            ...(clearReason ? { clearReason } : {}),
+            ...(acceptedCodingSeat ? { acceptedCodingSeat } : {}),
+            ...(existing.dispatchedTerminal ? { dispatchedTerminal: existing.dispatchedTerminal } : {}),
         };
     }
 
@@ -4273,7 +4541,7 @@ export class LocalApiServer {
             });
 
             if (!result.success) {
-                const status = result.notFound ? 404 : 500;
+                const status = result.notFound ? 404 : result.badRequest ? 400 : 500;
                 res.writeHead(status, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ success: false, error: result.error || 'Completion failed' }));
                 return;
@@ -4434,6 +4702,7 @@ export class LocalApiServer {
                     const result = await this.completeCardInternal(db, planId, from, {
                         workspaceRoot,
                         workflow: 'round-complete',
+                        outcome: `Round closed by ${from}`,
                     });
                     if (result.success) {
                         completed.push({ planId, seat });
@@ -4555,6 +4824,7 @@ export class LocalApiServer {
                 const result = await this.completeCardInternal(db, planId, from, {
                     workspaceRoot,
                     workflow: 'round-complete',
+                    outcome: `Round ${currentRound.ordinal} closed by ${from}`,
                 });
                 if (result.success) {
                     completed.push({ planId, seat });
@@ -5498,6 +5768,7 @@ export class LocalApiServer {
             const result = await this.completeCardInternal(db, subPlanId, from, {
                 workspaceRoot,
                 workflow: 'feature-complete',
+                outcome: `Feature ${featureId} completed by ${from}`,
             });
             if (result.success) {
                 completed.push({ planId: subPlanId, seat });
@@ -5555,6 +5826,109 @@ export class LocalApiServer {
         }
 
         return { success: true, completed, cleared };
+    }
+
+    /**
+     * POST /kanban/card/release — the per-card release valve (V77). Frees the
+     * team holding THIS card WITHOUT claiming the work is done. The door the
+     * 409 from `POST /kanban/queue/next` names instead of `task/complete`: an
+     * agent blocked by an un-posted card releases it here, not by completing it.
+     *
+     * Body: `{ from, planId, workspaceRoot?, note? }`.
+     * - `from` — the releaser's terminal name (lead or operator).
+     * - `planId` — the card to release. Validated shape-only (no path
+     *   separators), same as `task/complete` — the plan does not add auth.
+     * - `workspaceRoot` — defaults to the server's primary root.
+     * - `note` — optional, recorded in the release event.
+     *
+     * Contract:
+     * - Writes `released_at`, NOT `completed_at`. A released card does NOT read
+     *   as completed anywhere.
+     * - Clears the dispatch holder so `heldByTeam` returns false → the team is
+     *   free for `POST /kanban/queue/next`.
+     * - Idempotent: a repeat release returns the existing `released_at`. A
+     *   release of an already-completed card is a no-op (`alreadyCompleted: true`).
+     * - Derives the held set server-side via `releaseCardInternal` (reads the
+     *   row's `dispatchedTerminal`); the caller does not supply a seat.
+     */
+    private async _handleKanbanCardRelease(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
+        }
+        try {
+            const body = await this._parseJsonBody(req);
+            const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
+            const from = String(body?.from || '').trim();
+            const planId = String(body?.planId || '').trim();
+            const note = typeof body?.note === 'string' ? body.note.trim() : '';
+
+            if (!workspaceRoot) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Missing required field: workspaceRoot' }));
+                return;
+            }
+            if (!from) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: "Missing required field: from (the releaser's terminal name)" }));
+                return;
+            }
+            if (!planId) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Missing required field: planId' }));
+                return;
+            }
+            if (planId.includes('/') || planId.includes('\\') || planId.includes('..')) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Invalid planId: path separators not allowed' }));
+                return;
+            }
+
+            const db = await this._options.getKanbanDatabase?.(workspaceRoot);
+            if (!db) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Kanban database not available' }));
+                return;
+            }
+
+            const result = await this.releaseCardInternal(db, planId, from, { workspaceRoot, note });
+
+            if (!result.success) {
+                const status = result.notFound ? 404 : 500;
+                res.writeHead(status, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: result.error || 'Release failed' }));
+                return;
+            }
+
+            // Trigger advance-when-ready hook if the team is now free — same
+            // path as task/complete. A release frees the team exactly as a
+            // completion does; the hook fires on either.
+            if (result.success && this._options.onTeamReleased) {
+                const terminal = result.dispatchedTerminal || from;
+                void (async () => {
+                    try {
+                        let roster: string[] | null = null;
+                        if (this._options.resolveTeamMembers && terminal) {
+                            roster = await this._options.resolveTeamMembers(workspaceRoot, terminal);
+                        }
+                        const teamMembers = (roster && roster.length > 0) ? roster : (terminal ? [terminal] : [from]);
+                        const inFlightCheck = await resolveTeamInFlight(db, teamMembers);
+                        if (!inFlightCheck.inFlight) {
+                            await this._options.onTeamReleased!(workspaceRoot, teamMembers);
+                        }
+                    } catch (releaseErr) {
+                        console.warn('[LocalApiServer] onTeamReleased hook error (card/release):', releaseErr);
+                    }
+                })();
+            }
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(result));
+        } catch (err) {
+            console.error('[LocalApiServer] kanbanCardRelease error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'kanbanCardRelease failed' }));
+        }
     }
 
     /**
@@ -5633,9 +6007,8 @@ export class LocalApiServer {
                 }
 
                 try {
-                    const result = await this.completeCardInternal(db, targetCard.planId, from, {
+                    const result = await this.releaseCardInternal(db, targetCard.planId, from, {
                         workspaceRoot,
-                        workflow: 'operator-release'
                     });
                     if (result.success) {
                         released.push(targetCard.planId);
@@ -5644,7 +6017,7 @@ export class LocalApiServer {
                             releasedSeats.push(seat);
                         }
                     } else {
-                        failed.push({ planId: targetCard.planId, error: result.error || 'Completion failed' });
+                        failed.push({ planId: targetCard.planId, error: result.error || 'Release failed' });
                     }
                 } catch (err) {
                     failed.push({
@@ -6029,7 +6402,7 @@ export class LocalApiServer {
                     let relayHead: string | undefined;
                     if (outcome === 'finished') {
                         try {
-                            const group = await this._resolveTeamGroupForSeat(workspaceRoot, from);
+                            const { group } = await this._resolveTeamGroupForSeat(workspaceRoot, from);
                             const headName = group ? teamHeadName(group) : undefined;
                             const externalHead = !!(group && group.externalHead === true);
                             if (headName && headName !== from && !externalHead) {
@@ -6130,7 +6503,45 @@ export class LocalApiServer {
                     // decision must agree. Two independent resolutions of the same
                     // question can disagree — and then the lead is told context was
                     // preserved while the seat was in fact wiped.
-                    const isTeamMember = !!(relayHead || (await this._resolveTeamGroupForSeat(workspaceRoot, from)));
+                    //
+                    // V76 hardens the RESOLUTION that feeds this invariant. The
+                    // parent card made the relay text and the clear decision agree
+                    // on a single `isTeamMember`; this card makes that value
+                    // trustworthy when the completion-time config read races, fails,
+                    // or returns empty. Two signals, in precedence order:
+                    //
+                    //   1. The DISPATCH RECORD (`held.dispatchedTeamGroup`, V76) —
+                    //      the team group id stamped at dispatch time, when
+                    //      `wireSpawnedTeam` had just written the config. A non-empty
+                    //      value means the seat WAS dispatched as a team member, so it
+                    //      is preserved REGARDLESS of what the config reads now. This
+                    //      is the AGENTS.md fallback rule applied at the resolution
+                    //      layer: a seat we KNOW was on a team is not cleared on
+                    //      uncertainty. (Negative invariant: a seat whose dispatch
+                    //      record carries a team group id is never cleared here.)
+                    //
+                    //   2. The COMPLETION-TIME CONFIG READ, tagged with its source
+                    //      so "no teams" is distinguishable from "couldn't read
+                    //      teams." A genuine standalone (no dispatch record) clears
+                    //      only when the read succeeded and the seat is on no roster
+                    //      (source 'config'/'empty', group null). On a read FAILURE
+                    //      (source 'read-failed') the seat is preserved — the safe
+                    //      asymmetric choice, since a preserved standalone is cleared
+                    //      on its next dispatch but a cleared team member loses its
+                    //      review. (Paired positive: a seat with no dispatch record
+                    //      AND a clean empty read IS cleared.)
+                    let isTeamMember: boolean;
+                    const dispatchedTeamGroup = (held.dispatchedTeamGroup || '').trim();
+                    if (dispatchedTeamGroup) {
+                        isTeamMember = true;
+                    } else {
+                        const { group, source } = await this._resolveTeamGroupForSeat(workspaceRoot, from);
+                        if (source === 'read-failed') {
+                            isTeamMember = true;
+                        } else {
+                            isTeamMember = !!(relayHead || group);
+                        }
+                    }
 
                     if (relayHead && this._options.terminalVerb) {
                         // held.planId, not the request's optional planId: every
@@ -7431,7 +7842,7 @@ export class LocalApiServer {
                 }
             } else if (hasTeam) {
                 const teamArg = body.team.trim();
-                const groups = await this._readRegisteredTeamGroups(workspaceRoot || '');
+                const { groups } = await this._readRegisteredTeamGroups(workspaceRoot || '');
                 const group = groups.find(g =>
                     g && (g.id === teamArg || g.head === teamArg || g.name === teamArg ||
                           (Array.isArray(g.order) && g.order.includes(teamArg)) ||
@@ -7490,7 +7901,7 @@ export class LocalApiServer {
                         skipped.push({ name: seat, reason: 'not active' });
                     } else if (busySet.has(seat)) {
                         deferred.push(seat);
-                        const group = await this._resolveTeamGroupForSeat(workspaceRoot || '', seat);
+                        const { group } = await this._resolveTeamGroupForSeat(workspaceRoot || '', seat);
                         if (group?.id) {
                             this._options.recordDeferredClears?.(group.id, [seat]);
                         }
@@ -8311,20 +8722,26 @@ export class LocalApiServer {
     }
 
     /**
-     * Every registered terminal group for a workspace, read from the current
-     * TERMINALS_GROUPS_KEY and the legacy 'terminals.groups' key and
-     * deduplicated by id (current key wins — it is read first). Best effort:
-     * an unreadable key contributes nothing rather than failing the read.
+     * Tagged source for a team-group config read. Distinguishes "no teams
+     * registered" from "could not read teams" — the AGENTS.md fallback rule: a
+     * null resolution that behaves exactly like "not a team member" turns a loud
+     * failure (config missing or unreadable) into a quiet wrong answer (team
+     * member cleared). `queue/done` reads this to choose "preserve" over
+     * "clear" on uncertainty.
      *
-     * The single reader for both group lookups below (`_resolveRegisteredTeamGroup`
-     * by id, `_resolveTeamGroupForSeat` by roster membership) — two hand-copied
-     * loops over the same two config keys is exactly how one of them ends up
-     * reading a key the other does not.
+     *   'config'      — at least one group was read successfully (the happy path).
+     *   'empty'        — both keys read cleanly but held no groups (genuine
+     *                    "no teams" — a standalone seat clears under this).
+     *   'read-failed'  — a key threw on read (corrupt blob, transient db lock) OR
+     *                    the db itself was unavailable. Indistinguishable from
+     *                    'empty' without the tag; the safe consumer preserves
+     *                    rather than clears on this source.
      */
-    private async _readRegisteredTeamGroups(workspaceRoot: string): Promise<any[]> {
+    private async _readRegisteredTeamGroups(workspaceRoot: string): Promise<{ groups: any[]; source: 'config' | 'empty' | 'read-failed' }> {
         const db = await this._options.getKanbanDatabase?.(workspaceRoot);
-        if (!db) { return []; }
+        if (!db) { return { groups: [], source: 'read-failed' }; }
         const groups: any[] = [];
+        let readFailed = false;
         for (const key of [TERMINALS_GROUPS_KEY, 'terminals.groups']) {
             try {
                 const raw = await db.getConfigJson(key, []);
@@ -8334,13 +8751,15 @@ export class LocalApiServer {
                         groups.push(group);
                     }
                 }
-            } catch { /* best effort */ }
+            } catch { readFailed = true; /* best effort, but record the failure */ }
         }
-        return groups;
+        const source: 'config' | 'empty' | 'read-failed' =
+            groups.length > 0 ? 'config' : (readFailed ? 'read-failed' : 'empty');
+        return { groups, source };
     }
 
     private async _resolveRegisteredTeamGroup(workspaceRoot: string, groupId: string): Promise<any | null> {
-        const groups = await this._readRegisteredTeamGroups(workspaceRoot);
+        const { groups } = await this._readRegisteredTeamGroups(workspaceRoot);
         return groups.find(group => group.id === groupId) || null;
     }
 
@@ -8350,24 +8769,27 @@ export class LocalApiServer {
      * non-empty, else `members` — the same precedence `_handleTeamQueueDone`
      * uses to validate its `from`.
      *
-     * Returns the group object, or null when the seat is not on any team
-     * (a standalone agent — no head to relay to). A seat listed in more than
-     * one group resolves to the first match; a seat belongs to one team by
-     * construction (`wireSpawnedTeam` replaces rosters rather than unioning).
+     * Returns `{ group, source }`: the group object (or null when the seat is
+     * not on any team — a standalone agent with no head to relay to) plus the
+     * tagged read source so callers can distinguish "not on a team" from
+     * "couldn't read teams." A seat listed in more than one group resolves to
+     * the first match; a seat belongs to one team by construction
+     * (`wireSpawnedTeam` replaces rosters rather than unioning).
      */
     private async _resolveTeamGroupForSeat(
         workspaceRoot: string,
         seatName: string
-    ): Promise<any | null> {
-        if (!seatName) { return null; }
-        const groups = await this._readRegisteredTeamGroups(workspaceRoot);
-        return groups.find(g => {
+    ): Promise<{ group: any | null; source: 'config' | 'empty' | 'read-failed' }> {
+        if (!seatName) { return { group: null, source: 'empty' }; }
+        const { groups, source } = await this._readRegisteredTeamGroups(workspaceRoot);
+        const group = groups.find(g => {
             if (!g || typeof g !== 'object') { return false; }
             const roster: string[] = Array.isArray(g.order) && g.order.length
                 ? g.order
                 : (Array.isArray(g.members) ? g.members : []);
             return roster.includes(seatName);
         }) || null;
+        return { group, source };
     }
 
     /**
@@ -12449,6 +12871,8 @@ export class LocalApiServer {
                 await this._handleKanbanFeatureComplete(req, res);
             } else if (pathname === '/kanban/team/release' && req.method === 'POST') {
                 await this._handleKanbanTeamRelease(req, res);
+            } else if (pathname === '/kanban/card/release' && req.method === 'POST') {
+                await this._handleKanbanCardRelease(req, res);
             } else if (pathname === '/kanban/move' && req.method === 'POST') {
                 await this._handleKanbanMove(req, res);
             } else if (pathname === '/kanban/feature' && req.method === 'POST') {

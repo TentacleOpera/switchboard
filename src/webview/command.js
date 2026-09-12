@@ -6,6 +6,61 @@
 (function () {
     'use strict';
 
+    // ── Pure functions (extracted for unit testing) ───────────────────
+    // These have NO closure or DOM dependencies. Defined first so a Node
+    // require can export them and return BEFORE the DOM-bound initialisation
+    // below throws on the missing `document` global. The browser path falls
+    // through to the full init.
+
+    // Pure: filter cards by a project selector. See `filterByProject` below
+    // for the closure-bound wrapper the UI calls.
+    function filterByProjectFor(cards, project) {
+        if (!project || project === '__all__') return cards;
+        if (project === '__unassigned__') {
+            return cards.filter(c => !c.project || c.project === '__unassigned__');
+        }
+        return cards.filter(c => c.project === project);
+    }
+
+    // Pure: resolve live fleet seats to teams in claim order. `team.head`
+    // (the live head seat name) takes precedence over `headRole` matching.
+    function resolveTeamSeats(teams, fleet) {
+        const pool = fleet.filter(t => t && t.status !== 'exited');
+        const result = new Map();
+        for (const team of teams) {
+            const role = team.headRole || '';
+            let head = null;
+            if (team.head) {
+                const idx = pool.findIndex(t => t.friendlyName === team.head);
+                if (idx !== -1) {
+                    head = pool[idx];
+                    pool.splice(idx, 1);
+                }
+            }
+            if (!head && role) {
+                const idx = pool.findIndex(t => t.role === role);
+                if (idx !== -1) {
+                    head = pool[idx];
+                    pool.splice(idx, 1);
+                }
+            }
+            let members = [];
+            if (head && head.agentInstanceId) {
+                members = pool.filter(t => t.parentInstanceId === head.agentInstanceId);
+            }
+            result.set(team.id, { head, members });
+        }
+        return result;
+    }
+
+    // Node test harness: export the pure functions and stop here so the
+    // DOM-bound initialisation below does not throw on the missing
+    // `document` global. The browser ignores this guard.
+    if (typeof module !== 'undefined' && module.exports) {
+        module.exports = { resolveTeamSeats, filterByProjectFor };
+        return;
+    }
+
     // Host capability contract — parsed once at module init, following
     // mission-control.js:6-9. An unparseable OR missing attribute degrades to
     // {} (every view available), never to a blank surface. Matches
@@ -703,11 +758,7 @@
     //                      which writer last touched the row
     //   otherwise        → exact project match
     function filterByProject(cards) {
-        if (!currentProject || currentProject === '__all__') return cards;
-        if (currentProject === '__unassigned__') {
-            return cards.filter(c => !c.project || c.project === '__unassigned__');
-        }
-        return cards.filter(c => c.project === currentProject);
+        return filterByProjectFor(cards, currentProject);
     }
 
     // ── 1. Dispatch View Rendering ─────────────────────────────────────
@@ -1235,15 +1286,16 @@
      * the TEAMS-tab save literal in `kanban.html` — emits
      * `{id, name, headRole, members, prompt?, headPrompt?, icon?, …}` and NO
      * `head`. `head` is stamped by `wireSpawnedTeam` into a DIFFERENT key,
-     * `switchboard.prompts.terminals.groups`, which no webview verb exposes.
-     * So in practice every head resolves through arm 2, and WHICH team wins a
+     * `switchboard.prompts.terminals.groups`, which `ptyListAgentGroups` now
+     * attaches to each definition row (see `resolveLiveGroupHeads`), so arm 1
+     * is reachable when a team is live. So in practice every head resolves
+     * through arm 1 when live, arm 2 when dormant; and WHICH team wins a
      * shared headRole is decided by the order this function is handed (see
-     * `renderTeamsView`'s claimOrder). Making head attribution genuinely
-     * membership-based needs the live-groups key on the wire.
+     * `renderTeamsView`'s claimOrder).
      *
      * Resolution order per team:
-     *   1. A live seat whose `friendlyName` equals `team.head` — defensive
-     *      only; `team.head` is absent from this data source (see above).
+     *   1. A live seat whose `friendlyName` equals `team.head` — the live head
+     *      seat name `ptyListAgentGroups` now serves.
      *   2. A live seat of `team.headRole` not already claimed by an earlier team.
      *
      * Claimed seats are removed from the pool as the pass proceeds, so no seat
@@ -1254,38 +1306,8 @@
      * @param fleet  The live fleet from ptyListTerminals.
      * @returns Map<teamId, { head: fleetEntry|null, members: fleetEntry[] }>
      */
-    function resolveTeamSeats(teams, fleet) {
-        // Work on a copy so claiming (splicing) does not mutate the caller's array.
-        const pool = fleet.filter(t => t && t.status !== 'exited');
-        const result = new Map();
-        for (const team of teams) {
-            const role = team.headRole || '';
-            // 1. Explicit head name match.
-            let head = null;
-            if (team.head) {
-                const idx = pool.findIndex(t => t.friendlyName === team.head);
-                if (idx !== -1) {
-                    head = pool[idx];
-                    pool.splice(idx, 1);
-                }
-            }
-            // 2. First live seat of headRole not already claimed.
-            if (!head && role) {
-                const idx = pool.findIndex(t => t.role === role);
-                if (idx !== -1) {
-                    head = pool[idx];
-                    pool.splice(idx, 1);
-                }
-            }
-            // Members: live seats whose parentInstanceId matches the head's agentInstanceId.
-            let members = [];
-            if (head && head.agentInstanceId) {
-                members = pool.filter(t => t.parentInstanceId === head.agentInstanceId);
-            }
-            result.set(team.id, { head, members });
-        }
-        return result;
-    }
+    // `resolveTeamSeats` is defined at the top of this IIFE (pure, exported for
+    // unit tests). The docblock above documents its contract.
 
     function declaredSeatCount(team) {
         const members = Array.isArray(team.members) ? team.members : [];
@@ -2241,10 +2263,13 @@
         });
     }
 
-    // Bootstrap
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', init);
-    } else {
-        init();
+    // Bootstrap — guarded so a Node require (unit tests) does not throw on
+    // the missing `document` global. The browser always has `document`.
+    if (typeof document !== 'undefined') {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', init);
+        } else {
+            init();
+        }
     }
 })();

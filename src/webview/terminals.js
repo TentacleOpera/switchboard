@@ -11520,16 +11520,10 @@
     }
 
     /**
-     * Stale V2 fragment — mirror of OLD_HEADPROMPT_V2_FRAGMENT in teamWiring.ts.
-     */
-    var OLD_HEADPROMPT_V2_FRAGMENT = 'note it and give that coder the next subtask';
-
-    /**
      * Client-side mirror of migrateCodingTeamOrders from teamWiring.ts.
      *
      * Drops the stale reviewer pair row (instruction equals the resolved
-     * reviewer preset text for this parent/child pair). Rewrites stale V2
-     * team-head rows to NEW_CODING_HEAD_PROMPT_CLIENT. Unrecognised rows
+     * reviewer preset text for this parent/child pair). Unrecognised rows
      * are left untouched.
      *
      * Applied INSIDE applyStandingOrdersClient at render time, composed
@@ -11541,7 +11535,6 @@
         if (!Array.isArray(orders) || orders.length === 0) { return orders; }
 
         var drop = {};       // order id → true
-        var rewrite = {};    // order id → replacement instruction
         var touched = false;
 
         for (var i = 0; i < orders.length; i++) {
@@ -11559,17 +11552,6 @@
                     continue;
                 }
             }
-
-            // Stale V2 team-head row: the feature-level headPrompt whose assignment rule
-            // was "give that coder the next subtask".
-            if (scope === 'team-head' && typeof o.instruction === 'string') {
-                if (o.instruction.indexOf(OLD_HEADPROMPT_V2_FRAGMENT) !== -1) {
-                    var newInstruction = NEW_CODING_HEAD_PROMPT_CLIENT.replace(/\{head\}/g, o.parent || '');
-                    rewrite[o.id] = newInstruction;
-                    touched = true;
-                    continue;
-                }
-            }
         }
 
         if (!touched) { return orders; }
@@ -11578,8 +11560,7 @@
         for (var j = 0; j < orders.length; j++) {
             var ord = orders[j];
             if (!drop[ord.id]) {
-                var repl = typeof ord.id === 'string' ? rewrite[ord.id] : undefined;
-                kept.push(repl ? Object.assign({}, ord, { instruction: repl }) : ord);
+                kept.push(ord);
             }
         }
         return kept;

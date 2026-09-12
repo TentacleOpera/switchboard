@@ -94,6 +94,20 @@ export interface KanbanPlanRecord {
      *  before V57 and for hosts that don't record it — consumers must treat empty as "unknown"
      *  and fall back to a role+worktree fleet match, never assume a name is present. */
     dispatchedTerminal?: string;
+    /**
+     * V76: id of the registered terminal group whose roster held the seat at the
+     * moment this card was dispatched to it. '' (or absent) means the seat was
+     * dispatched as a standalone agent (no team), or the host predates V76.
+     *
+     * Carried on `plan_runtime_state` (machine-local runtime tier) so it survives
+     * a standalone restart and is readable by both composition roots through the
+     * shared `LocalApiServer`. `queue/done` reads it to decide whether a seat
+     * that can no longer resolve its team from config was *dispatched* as a team
+     * member — the dispatch record is authoritative when the completion-time
+     * config read races, fails, or returns empty (AGENTS.md fallback rule: a
+     * null resolution must not behave like "not a team member").
+     */
+    dispatchedTeamGroup?: string;
     dispatchedAt?: string | null; // ISO timestamp the card was dispatched; NULL = not working. Activity-light source.
     /**
      * ISO timestamp of the most recent PTY-fleet output heartbeat persisted by the
@@ -177,6 +191,33 @@ export interface KanbanPlanRecord {
      * (binary override) — this field describes, the star directs.
      */
     priority?: number | null;
+    /**
+     * V77: free-text outcome the lead supplied when it posted completion. The
+     * completion contract now requires a non-empty outcome (POST /kanban/task/complete
+     * rejects without one), so a row with a `completed_at` and an empty `outcome`
+     * is a pre-V77 completion backfilled best-effort from `plan_events`, NOT a
+     * going-forward completion. Read this column instead of re-reading
+     * `plan_events` for any consumer that needs to know what happened.
+     */
+    outcome?: string;
+    /**
+     * V77: the workflow that produced the `outcome`/`completed_at`/`released_at`
+     * — `'task-complete'`, `'round-complete'`, `'feature-complete'`, or
+     * `'operator-release'`. Distinguishes a genuine finish from an operator
+     * release on the row itself, not just in the event log.
+     */
+    workflow?: string;
+    /**
+     * V77: asserted release timestamp. Written by the release valve
+     * (POST /kanban/card/release, POST /kanban/team/release) when a team is freed
+     * WITHOUT claiming the work is done. Deliberately distinct from `completed_at`
+     * — a released card does NOT read as completed anywhere (board, rollups,
+     * next pickup). `completed_at` stays NULL on a release; `released_at` stays
+     * NULL on a completion. The in-flight predicate treats a released card as
+     * not-held (the holder is cleared), so a release frees the team for
+     * POST /kanban/queue/next.
+     */
+    releasedAt?: string | null;
 }
 
 export interface ImportedDocEntry {
@@ -378,7 +419,10 @@ CREATE TABLE IF NOT EXISTS plans (
     priority_starred  INTEGER DEFAULT 0,
     column_order      INTEGER DEFAULT NULL,
     map_fingerprint   TEXT DEFAULT NULL,
-    priority          INTEGER DEFAULT NULL
+    priority          INTEGER DEFAULT NULL,
+    outcome           TEXT DEFAULT '',
+    workflow          TEXT DEFAULT '',
+    released_at       TEXT DEFAULT NULL
 );
 CREATE TABLE IF NOT EXISTS plan_runtime_state (
     plan_id             TEXT NOT NULL,
@@ -387,6 +431,7 @@ CREATE TABLE IF NOT EXISTS plan_runtime_state (
     dispatched_agent    TEXT DEFAULT '',
     dispatched_ide      TEXT DEFAULT '',
     dispatched_terminal TEXT DEFAULT '',
+    dispatched_team_group TEXT DEFAULT '',
     dispatched_at       TEXT DEFAULT NULL,
     last_liveness_at    TEXT DEFAULT NULL,
     blocked_at          TEXT DEFAULT NULL,
@@ -1057,6 +1102,7 @@ const MIGRATION_V74_SQL = [
         dispatched_agent    TEXT DEFAULT '',
         dispatched_ide      TEXT DEFAULT '',
         dispatched_terminal TEXT DEFAULT '',
+        dispatched_team_group TEXT DEFAULT '',
         dispatched_at       TEXT DEFAULT NULL,
         last_liveness_at    TEXT DEFAULT NULL,
         blocked_at          TEXT DEFAULT NULL,
@@ -1114,6 +1160,34 @@ const MIGRATION_V75_SQL = [
     `CREATE INDEX IF NOT EXISTS idx_plan_tickets_workspace ON plan_tickets(workspace_id)`,
     `CREATE INDEX IF NOT EXISTS idx_plan_tickets_external ON plan_tickets(workspace_id, provider, external_id)`,
     `CREATE INDEX IF NOT EXISTS idx_plan_tickets_plan ON plan_tickets(plan_id)`,
+];
+
+// V76: plan_runtime_state.dispatched_team_group — the id of the registered
+// terminal group whose roster held the seat at dispatch time. Lets queue/done
+// distinguish "was dispatched as a team member" from "is a standalone seat" when
+// the completion-time config read races, fails, or returns empty (the AGENTS.md
+// fallback rule: a null resolution must not behave like "not a team member").
+// Additive ALTER; fresh DBs already get the column from SCHEMA_TABLES_SQL.
+// Idempotent under the version gate; the try/catch covers a stale restore where
+// the column already exists but the version wasn't stamped.
+const MIGRATION_V76_SQL = [
+    `ALTER TABLE plan_runtime_state ADD COLUMN dispatched_team_group TEXT DEFAULT ''`,
+];
+
+// V77: plans.outcome + plans.workflow + plans.released_at — separates "this
+// team no longer holds the card" (release) from "this work is finished"
+// (completion). `outcome`/`workflow` carry what happened on the row itself
+// (previously only in plan_events); `released_at` is the release valve's own
+// timestamp, distinct from `completed_at` so a released card does NOT read as
+// completed. Additive ALTERs; fresh DBs already get the columns from
+// SCHEMA_TABLES_SQL. Idempotent under the version gate; the try/catch covers a
+// stale restore where a column already exists but the version wasn't stamped.
+// Backfill of `outcome`/`workflow` from `plan_events` runs in the runner after
+// the ALTERs (best-effort — 193 of 201 historical events have empty outcome).
+const MIGRATION_V77_SQL = [
+    `ALTER TABLE plans ADD COLUMN outcome TEXT DEFAULT ''`,
+    `ALTER TABLE plans ADD COLUMN workflow TEXT DEFAULT ''`,
+    `ALTER TABLE plans ADD COLUMN released_at TEXT DEFAULT NULL`,
 ];
 
 const MIGRATION_V13_SQL = [
@@ -1557,7 +1631,8 @@ const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, stat
                        brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
                        clickup_task_id, linear_issue_id, notion_page_id, worktree_id, worktree_status, is_feature, feature_id,
                        workspace_name, project_id, queue_position, column_entered_at, completed_at,
-                       priority_starred, column_order, map_fingerprint, priority`;
+                       priority_starred, column_order, map_fingerprint, priority,
+                       outcome, workflow, released_at`;
 
 // Parse column definitions from SCHEMA_SQL's plans table for schema reconciliation.
 // This ensures that databases created before a column was added to SCHEMA_SQL
@@ -3565,6 +3640,73 @@ export class KanbanDatabase {
             return affected > 0;
         } catch (error) {
             console.error('[KanbanDatabase] setCompletedAt failed:', error);
+            return false;
+        }
+    }
+
+    /**
+     * V77: stamp the `outcome` and `workflow` of a completion onto the plans row.
+     * Called by `completeCardInternal` alongside `setCompletedAt` so the row
+     * carries what happened, not just when — consumers read the column instead of
+     * re-reading `plan_events`. `workflow` is `'task-complete'` |
+     * `'round-complete'` | `'feature-complete'` | `'operator-release'`. Best-effort
+     * write; a failure logs and never aborts the completion (the event log still
+     * holds the record).
+     */
+    public async setPlanOutcomeWorkflow(planId: string, outcome: string, workflow: string): Promise<void> {
+        if (!(await this.ensureReady()) || !this._db || !planId) return;
+        try {
+            this._db.run(
+                'UPDATE plans SET outcome = ?, workflow = ?, updated_at = ? WHERE plan_id = ?',
+                [outcome || '', workflow || '', new Date().toISOString(), planId]
+            );
+            await this._persist();
+        } catch (error) {
+            console.error('[KanbanDatabase] setPlanOutcomeWorkflow failed:', error);
+        }
+    }
+
+    /**
+     * V77: stamp the release timestamp onto the plans row. Called by the release
+     * valve (`releaseCardInternal`) — a release frees the team WITHOUT claiming
+     * the work is done, so it writes `released_at` and leaves `completed_at`
+     * NULL. Idempotent: a repeat call with the same planId returns true without
+     * re-writing (the release is a one-shot, like completion). Returns false when
+     * the row is missing or already released.
+     */
+    public async setReleasedAt(planId: string, timestamp: string): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db || !planId) return false;
+        try {
+            this._db.run(
+                'UPDATE plans SET released_at = ?, updated_at = ? WHERE plan_id = ? AND released_at IS NULL',
+                [timestamp, timestamp, planId]
+            );
+            const affected = this._db.getRowsModified();
+            await this._persist();
+            return affected > 0;
+        } catch (error) {
+            console.error('[KanbanDatabase] setReleasedAt failed:', error);
+            return false;
+        }
+    }
+
+    /**
+     * V77: clear the release timestamp on a plan (e.g. on re-dispatch, alongside
+     * `clearCompletedAt`). A re-dispatched card is neither released nor
+     * completed, so both stamps reset together.
+     */
+    public async clearReleasedAt(planId: string): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db || !planId) return false;
+        try {
+            this._db.run(
+                'UPDATE plans SET released_at = NULL, updated_at = ? WHERE plan_id = ?',
+                [new Date().toISOString(), planId]
+            );
+            const affected = this._db.getRowsModified();
+            await this._persist();
+            return affected > 0;
+        } catch (error) {
+            console.error('[KanbanDatabase] clearReleasedAt failed:', error);
             return false;
         }
     }
@@ -10830,6 +10972,38 @@ export class KanbanDatabase {
             console.log('[KanbanDatabase] V75 migration completed: plan_tickets table added and backfilled');
         }
 
+        // V76: plan_runtime_state.dispatched_team_group (dispatch-time team-group
+        // cache for the queue/done clear decision). Additive ALTER; fresh DBs
+        // already get the column from SCHEMA_TABLES_SQL. Idempotent under the
+        // version gate; the try/catch covers a stale restore where the column
+        // already exists but the version wasn't stamped.
+        const v76 = await this.getMigrationVersion();
+        if (v76 < 76) {
+            for (const sql of MIGRATION_V76_SQL) {
+                try { this._db.exec(sql); } catch { /* column already exists */ }
+            }
+            await this.setMigrationVersion(76);
+            console.log('[KanbanDatabase] V76 migration completed: dispatched_team_group column added to plan_runtime_state');
+        }
+
+        // V77: plans.outcome + plans.workflow + plans.released_at. Additive ALTERs;
+        // fresh DBs already get the columns from SCHEMA_TABLES_SQL. After the ALTERs,
+        // backfill `outcome`/`workflow` from the most recent `completed`/`operator-release`
+        // event in plan_events for rows that already have a `completed_at` (best-effort
+        // — 193 of 201 historical events have empty outcome, so most rows stay empty;
+        // the column is for going-forward enforcement). `released_at` is left NULL on
+        // existing rows — a historical release wrote `completed_at` (the pre-V77
+        // conflation), and synthesising a `released_at` would be a lie.
+        const v77 = await this.getMigrationVersion();
+        if (v77 < 77) {
+            for (const sql of MIGRATION_V77_SQL) {
+                try { this._db.exec(sql); } catch { /* column already exists */ }
+            }
+            await this._backfillOutcomeWorkflowFromEvents();
+            await this.setMigrationVersion(77);
+            console.log('[KanbanDatabase] V77 migration completed: outcome + workflow + released_at columns added to plans and backfilled from plan_events');
+        }
+
         // Runtime-tier orphan sweep, once per open. Not version-gated: orphans accrue
         // continuously (a plan deleted or archived elsewhere leaves this machine's
         // runtime row behind), so this is maintenance rather than a migration step.
@@ -11953,6 +12127,65 @@ export class KanbanDatabase {
         }
 
         console.log(`[KanbanDatabase] V75 backfill: ${linked.length} plan↔ticket link(s) read from the plans id columns`);
+    }
+
+    /**
+     * V77 backfill: populate `plans.outcome` and `plans.workflow` from the most
+     * recent `completed` event in `plan_events` for rows that already have a
+     * `completed_at`. Best-effort — the event payload is a JSON string
+     * `{ from, outcome, note, acceptedCodingSeat }` and 193 of 201 historical
+     * events carry an empty `outcome`, so most rows stay empty (the column is
+     * for going-forward enforcement, and the empty-after-backfill state is the
+     * honest record of a pre-V77 completion). Never throws — a malformed
+     * payload or a missing `plan_events` table skips the row.
+     */
+    private async _backfillOutcomeWorkflowFromEvents(): Promise<void> {
+        if (!this._db) return;
+        const existingTables = this._getExistingTableNames();
+        if (!existingTables.has('plans') || !existingTables.has('plan_events')) return;
+        try {
+            // One row per plan_id: the most recent completed event. `completed_at`
+            // on the plans row is the completion this backfill is attributing, so
+            // we only touch rows that have one and have not already been stamped.
+            const stmt = this._db.prepare(
+                `SELECT p.plan_id AS plan_id, e.workflow AS workflow, e.payload AS payload
+                 FROM plans p
+                 JOIN (
+                    SELECT plan_id, workflow, payload, MAX(timestamp) AS ts
+                    FROM plan_events
+                    WHERE event_type = 'completed'
+                      AND plan_id IS NOT NULL
+                    GROUP BY plan_id
+                 ) e ON e.plan_id = p.plan_id
+                 WHERE p.completed_at IS NOT NULL
+                   AND (p.outcome IS NULL OR p.outcome = '')
+                   AND (p.workflow IS NULL OR p.workflow = '')`
+            );
+            const update = this._db.prepare(
+                `UPDATE plans SET outcome = ?, workflow = ?, updated_at = ? WHERE plan_id = ?`
+            );
+            const now = new Date().toISOString();
+            try {
+                while (stmt.step()) {
+                    const r = stmt.getAsObject();
+                    const planId = String(r.plan_id ?? '');
+                    if (!planId) continue;
+                    const workflow = String(r.workflow ?? '') || 'task-complete';
+                    let outcome = '';
+                    try {
+                        const payload = JSON.parse(String(r.payload ?? '{}') || '{}');
+                        outcome = typeof payload?.outcome === 'string' ? payload.outcome.trim() : '';
+                    } catch { /* malformed payload — leave outcome empty */ }
+                    update.run([outcome, workflow, now, planId]);
+                }
+            } finally {
+                stmt.free();
+                update.free();
+            }
+            await this._persist();
+        } catch (err) {
+            console.warn('[KanbanDatabase] V77 outcome/workflow backfill failed:', err);
+        }
     }
 
     /**
@@ -13407,6 +13640,7 @@ FROM plans
                             dispatched_agent = excluded.dispatched_agent,
                             dispatched_ide = excluded.dispatched_ide,
                             dispatched_terminal = excluded.dispatched_terminal,
+                            dispatched_team_group = '',
                             dispatched_at = excluded.dispatched_at,
                             last_liveness_at = NULL,
                             blocked_at = NULL,
@@ -13487,6 +13721,7 @@ FROM plans
                         ON CONFLICT(plan_id, device_id) DO UPDATE SET
                             dispatched_agent = excluded.dispatched_agent,
                             dispatched_terminal = excluded.dispatched_terminal,
+                            dispatched_team_group = '',
                             dispatched_at = excluded.dispatched_at,
                             last_liveness_at = NULL,
                             blocked_at = NULL,
@@ -13500,6 +13735,34 @@ FROM plans
             }
         }
         return ok;
+    }
+
+    /**
+     * V76 writer for `plan_runtime_state.dispatched_team_group` — the id of the
+     * registered terminal group whose roster held the seat at dispatch time.
+     * Called by `LocalApiServer.performKanbanDispatch` / `performKanbanDispatchAcked`
+     * AFTER the dispatch upsert (`updateDispatchInfoByPlanFile`) has created the
+     * runtime row, so this UPDATE always has a row to touch. `groupId` is '' for a
+     * standalone dispatch (no team), which resets any stale value from a prior
+     * team dispatch of the same plan.
+     *
+     * Best-effort: a failure logs and never aborts the dispatch — the
+     * completion-time clear decision degrades to the pre-V76 config-resolution
+     * path, which is the parent card's fix, not a regression.
+     */
+    public async setDispatchedTeamGroup(planId: string, groupId: string): Promise<void> {
+        if (!(await this.ensureReady()) || !this._db) return;
+        if (!planId) return;
+        try {
+            const machineId = getMachineId();
+            this._db.run(
+                `UPDATE plan_runtime_state SET dispatched_team_group = ?, updated_at = ? WHERE plan_id = ? AND device_id = ?`,
+                [groupId || '', new Date().toISOString(), planId, machineId]
+            );
+            await this._persist();
+        } catch (err) {
+            console.warn('[KanbanDatabase] setDispatchedTeamGroup failed:', err);
+        }
     }
 
     /**
@@ -13543,7 +13806,7 @@ FROM plans
             if (planId) {
                 const machineId = getMachineId();
                 this._db.run(
-                    'UPDATE plan_runtime_state SET dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL, updated_at = ? ' +
+                    'UPDATE plan_runtime_state SET dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL, dispatched_team_group = \'\', updated_at = ? ' +
                     'WHERE plan_id = ? AND device_id = ? AND dispatched_at IS NOT NULL',
                     [new Date().toISOString(), planId, machineId]
                 );
@@ -13595,7 +13858,7 @@ FROM plans
             if (planId) {
                 const machineId = getMachineId();
                 this._db.run(
-                    'UPDATE plan_runtime_state SET dispatched_terminal = \'\', dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL, updated_at = ? ' +
+                    'UPDATE plan_runtime_state SET dispatched_terminal = \'\', dispatched_at = NULL, last_liveness_at = NULL, blocked_at = NULL, dispatched_team_group = \'\', updated_at = ? ' +
                     'WHERE plan_id = ? AND device_id = ?',
                     [now, planId, machineId]
                 );
@@ -14432,6 +14695,11 @@ FROM plans
                     dispatchedIde: String(row.dispatched_ide || ""),
                     // Absent from SELECT lists that predate V57 → undefined → "" (unknown).
                     dispatchedTerminal: String(row.dispatched_terminal || ""),
+                    // V76: lives on plan_runtime_state, not plans — overlaid by the
+                    // runtime merge below. '' here means "no team dispatch record"
+                    // (standalone, or a host that predates V76), the safe default a
+                    // genuine standalone seat clears under.
+                    dispatchedTeamGroup: '',
                     dispatchedAt: row.dispatched_at !== null && row.dispatched_at !== undefined ? String(row.dispatched_at) : null,
                     // Absent from SELECT lists that predate V58 → undefined → null.
                     lastLivenessAt: row.last_liveness_at !== null && row.last_liveness_at !== undefined ? String(row.last_liveness_at) : null,
@@ -14458,7 +14726,13 @@ FROM plans
                     // Absent from SELECT lists that predate V64 → undefined → null.
                     mapFingerprint: row.map_fingerprint !== null && row.map_fingerprint !== undefined ? String(row.map_fingerprint) : null,
                     // Absent from SELECT lists that predate V67 → undefined → null (no priority).
-                    priority: row.priority !== null && row.priority !== undefined ? Number(row.priority) : null
+                    priority: row.priority !== null && row.priority !== undefined ? Number(row.priority) : null,
+                    // V77: outcome/workflow/released_at. Absent from SELECT lists
+                    // that predate V77 → undefined → ''/''/null (the safe defaults:
+                    // a pre-V77 row has no recorded outcome and was never released).
+                    outcome: row.outcome !== null && row.outcome !== undefined ? String(row.outcome) : '',
+                    workflow: row.workflow !== null && row.workflow !== undefined ? String(row.workflow) : '',
+                    releasedAt: row.released_at !== null && row.released_at !== undefined ? String(row.released_at) : null
                 });
             }
         } finally {
@@ -14475,7 +14749,7 @@ FROM plans
                 if (planIds.length > 0) {
                     const placeholders = planIds.map(() => '?').join(', ');
                     const rStmt = this._db.prepare(
-                        `SELECT plan_id, dispatched_agent, dispatched_ide, dispatched_terminal, dispatched_at, last_liveness_at, blocked_at ` +
+                        `SELECT plan_id, dispatched_agent, dispatched_ide, dispatched_terminal, dispatched_team_group, dispatched_at, last_liveness_at, blocked_at ` +
                         `FROM plan_runtime_state WHERE device_id = ? AND plan_id IN (${placeholders})`,
                         [machineId, ...planIds]
                     );
@@ -14490,6 +14764,9 @@ FROM plans
                             if (rt) {
                                 if (rt.dispatched_terminal !== undefined && rt.dispatched_terminal !== null && rt.dispatched_terminal !== '') {
                                     row.dispatchedTerminal = String(rt.dispatched_terminal);
+                                }
+                                if (rt.dispatched_team_group !== undefined && rt.dispatched_team_group !== null && rt.dispatched_team_group !== '') {
+                                    row.dispatchedTeamGroup = String(rt.dispatched_team_group);
                                 }
                                 if (rt.dispatched_agent !== undefined && rt.dispatched_agent !== null && rt.dispatched_agent !== '') {
                                     row.dispatchedAgent = String(rt.dispatched_agent);

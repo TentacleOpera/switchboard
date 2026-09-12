@@ -264,7 +264,20 @@ export class LinearAutomationService {
         const targetGroupId = 'team_' + encodeURIComponent(teamName).replace(/[^a-zA-Z0-9_]/g, '_');
         const liveGroup = rawGroups.find((g: any) => {
             if (!g) return false;
+            // Address by the live group's own name/id (the head seat name) or
+            // by the deterministic group id derived from that name.
             if (g.name === teamName || g.id === teamName || g.id === targetGroupId) return true;
+            // Address by the stamped identity link directly: a pty-spawned team
+            // carries `definitionId` (and `templateId`) = the agentGroups row
+            // id it was spawned from. Matching these against `teamName` lets a
+            // rule address the team by its definition id without an indirect
+            // `matchedDef` lookup, and keeps working when the definition row
+            // was renamed (the link is by id, not by name).
+            if (typeof g.definitionId === 'string' && g.definitionId === teamName) return true;
+            if (typeof g.templateId === 'string' && g.templateId === teamName) return true;
+            // Address by the definition name: resolve the agentGroups row whose
+            // id/name matches `teamName`, then match the live group whose
+            // `definitionId`/`templateId`/`name` links back to it.
             if (matchedDef && (g.definitionId === matchedDef.id || g.templateId === matchedDef.id || g.name === matchedDef.name)) return true;
             return false;
         });

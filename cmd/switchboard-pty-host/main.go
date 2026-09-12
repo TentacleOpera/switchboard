@@ -14,7 +14,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -145,13 +144,20 @@ func (f *fleet) create(payload map[string]any) (map[string]any, error) {
 	if runtime.GOOS == "windows" {
 		return map[string]any{"success": false, "error": "PTY host unsupported on windows until a verified ConPTY adapter exists"}, nil
 	}
-	name := strField(payload, "name")
-	if name == "" {
-		name = "terminal-" + strconv.FormatInt(time.Now().UnixNano(), 10)
-	}
 	role := strField(payload, "role")
 	if role == "" {
 		role = "coder"
+	}
+	name := strField(payload, "name")
+	autoName := name == ""
+	if autoName {
+		// Auto-derive from the role, matching PtyFleetService.create's
+		// `${role}-1` default. Previously this fell back to
+		// `terminal-<nanos>`, which diverged from the standalone fleet's
+		// role-based naming and produced unreadable seat names on the
+		// extension host (e.g. a team head named after its definition).
+		// Collision handling rolls forward to `${role}-2`, ... below.
+		name = role + "-1"
 	}
 	cwd := strField(payload, "cwd")
 	if cwd == "" {
@@ -163,7 +169,20 @@ func (f *fleet) create(payload map[string]any) (map[string]any, error) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if _, exists := f.terminals[name]; exists {
+	// Auto-derived names roll forward to the next free slot, matching
+	// PtyFleetService.create's collision counter. An explicitly-supplied
+	// name that already exists is still a hard error (the caller asked for
+	// that exact name); only the auto-derived `${role}-N` rolls forward.
+	if autoName {
+		counter := 1
+		for {
+			if _, exists := f.terminals[name]; !exists {
+				break
+			}
+			counter++
+			name = fmt.Sprintf("%s-%d", role, counter)
+		}
+	} else if _, exists := f.terminals[name]; exists {
 		return map[string]any{"success": false, "error": "terminal name already exists"}, nil
 	}
 	shell := os.Getenv("SHELL")

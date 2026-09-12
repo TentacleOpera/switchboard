@@ -341,61 +341,64 @@ const LEAD_TEAM = { id: 'feature-implementation', name: 'Lead team', headRole: '
         assert.ok(!/listAgentGroups/.test(arm), 'the verb arm must NOT call listAgentGroups (it seeds)');
     });
 
-    console.log('\n--- teams start themselves on load: autostart contracts ---');
+    console.log('\n--- auto-start deletion contracts ---');
 
-    // 19. The autostart method exists and carries the one-shot latch. The latch
-    //     is the second guard against re-entrancy (the primary guard is
-    //     placement outside _startLocalApiServer). Without it a watchdog
-    //     re-tick after a provider-state glitch would re-spawn teams.
-    await test('startTeamsOnLoad exists and is gated by _teamAutostartDone', async () => {
-        const methodIdx = taskViewerTs.indexOf('startTeamsOnLoad(');
-        assert.ok(methodIdx > 0, 'startTeamsOnLoad method not found');
-        const method = taskViewerTs.slice(methodIdx, methodIdx + 400);
-        assert.ok(/_teamAutostartDone/.test(method), 'startTeamsOnLoad must check _teamAutostartDone');
-        assert.ok(taskViewerTs.indexOf('_teamAutostartDone = false') > 0,
-            '_teamAutostartDone latch field must be declared');
+    // 19. Auto-start is gone: startTeamsOnLoad must NOT exist in
+    //     TaskViewerProvider.ts. The boot sweep was deleted; a host coming up
+    //     must spawn nothing. This is the regression guard on the deletion.
+    await test('startTeamsOnLoad is removed from TaskViewerProvider', async () => {
+        assert.ok(!/startTeamsOnLoad/.test(taskViewerTs),
+            'startTeamsOnLoad must be removed — auto-start is deleted');
+        assert.ok(!/_teamAutostartDone/.test(taskViewerTs),
+            '_teamAutostartDone latch must be removed with the sweep');
     });
 
-    // 20. Re-entrancy guard: the hook must NOT live inside _startLocalApiServer
-    //     (which the liveness watchdog re-invokes on every check). A
-    //     startTeamsOnLoad call inside that body would re-spawn a team every
-    //     time the operator closed its head.
-    await test('startTeamsOnLoad is NOT called from _startLocalApiServer', async () => {
-        const startIdx = taskViewerTs.indexOf('private async _startLocalApiServer');
-        assert.ok(startIdx > 0, '_startLocalApiServer not found');
-        // Slice from the method declaration to the next private/public method.
-        const nextMethod = taskViewerTs.indexOf('\n    private ', startIdx + 1);
-        const body = taskViewerTs.slice(startIdx, nextMethod > 0 ? nextMethod : startIdx + 6000);
-        assert.ok(!/startTeamsOnLoad/.test(body),
-            '_startLocalApiServer body must NOT contain startTeamsOnLoad (re-entrant)');
+    // 20. Neither host calls startTeamsOnLoad at boot — the both-hosts rule
+    //     works in both directions: the deletion must touch both call sites.
+    await test('neither host calls startTeamsOnLoad at boot', async () => {
+        assert.ok(!/startTeamsOnLoad/.test(extensionTs),
+            'extension.ts must NOT call startTeamsOnLoad');
+        assert.ok(!/startTeamsOnLoad/.test(bootstrapTs),
+            'bootstrap.ts must NOT call startTeamsOnLoad');
     });
 
-    // 21. Both hosts call startTeamsOnLoad at boot — the both-hosts rule. The
-    //     extension host calls it from activation; the standalone host calls
-    //     it beside restoreAutobanOnStartup.
-    await test('both hosts call startTeamsOnLoad at boot', async () => {
-        assert.ok(/startTeamsOnLoad\(/.test(extensionTs),
-            'extension.ts must call startTeamsOnLoad');
-        assert.ok(/startTeamsOnLoad\(/.test(bootstrapTs),
-            'bootstrap.ts must call startTeamsOnLoad');
+    // 21. migrateAgentGroups strips startOnLoad on read (clear-on-read
+    //     migration). A stored startOnLoad: true that does nothing is the
+    //     fallback-indistinguishable-from-a-value anti-pattern, so the
+    //     converter must remove it and flag changed so the cleaned shape
+    //     is persisted. All other keys are preserved.
+    await test('migrateAgentGroups strips startOnLoad (clear-on-read)', async () => {
+        const withStartOnLoad = { id: 't1', name: 'Team 1', headRole: 'lead', members: [], startOnLoad: true, icon: 'jet' };
+        const migrated = migrateAgentGroups([withStartOnLoad]);
+        assert.ok(migrated !== null, 'migrateAgentGroups must flag changed when startOnLoad is present');
+        assert.ok(migrated[0].startOnLoad === undefined,
+            'startOnLoad must be stripped from the migrated group');
+        assert.strictEqual(migrated[0].icon, 'jet',
+            'other keys (icon) must be preserved');
+        assert.strictEqual(migrated[0].name, 'Team 1',
+            'other keys (name) must be preserved');
     });
 
-    // 22. Field-carry guard (root cause 1): teamsTabSaveAgentGroup's object
-    //     literal must name startOnLoad explicitly. The literal rebuilds the
-    //     group from scratch and drops every field it does not name, so without
-    //     this carry an EDIT+SAVE silently wipes the operator's START ON LOAD.
-    await test("kanban.html teamsTabSaveAgentGroup literal carries startOnLoad", async () => {
+    // 22. migrateAgentGroups is idempotent: a group without startOnLoad
+    //     returns null (no change), so the clear-on-read does not loop.
+    await test('migrateAgentGroups is idempotent after startOnLoad strip', async () => {
+        const clean = { id: 't1', name: 'Team 1', headRole: 'lead', members: [] };
+        assert.strictEqual(migrateAgentGroups([clean]), null,
+            'a group without startOnLoad must not be re-flagged');
+    });
+
+    // 23. Field-carry guard: teamsTabSaveAgentGroup must still carry
+    //     startWorktree (load-bearing for manual starts) but must NOT carry
+    //     startOnLoad (retired).
+    await test("kanban.html teamsTabSaveAgentGroup carries startWorktree but NOT startOnLoad", async () => {
         const saveIdx = kanbanHtml.indexOf('function teamsTabSaveAgentGroup');
         assert.ok(saveIdx > 0, 'teamsTabSaveAgentGroup not found');
-        // Slice to the next top-level function, not a fixed char window. The
-        // member-row loop pushes the group literal past 1600 chars, so the old
-        // window ended before the carry this test exists to assert.
         const nextFnIdx = kanbanHtml.indexOf('\n        function ', saveIdx + 10);
         const save = kanbanHtml.slice(saveIdx, nextFnIdx > saveIdx ? nextFnIdx : saveIdx + 6000);
-        assert.ok(/prevGroup\?\.startOnLoad/.test(save),
-            'teamsTabSaveAgentGroup must carry startOnLoad from prevGroup');
         assert.ok(/prevGroup\?\.startWorktree/.test(save),
             'teamsTabSaveAgentGroup must carry startWorktree from prevGroup');
+        assert.ok(!/prevGroup\?\.startOnLoad/.test(save),
+            'teamsTabSaveAgentGroup must NOT carry startOnLoad (retired)');
     });
 
     console.log(`\n${passed} passed, ${failed} failed`);

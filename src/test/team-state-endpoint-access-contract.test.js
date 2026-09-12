@@ -160,10 +160,8 @@ function run() {
         ];
 
         const ALLOWED_PATTERNS = [
-            // teamWiring.ts: legacy recogniser constants for migration matching (multi-line)
+            // teamWiring.ts: legacy recogniser constant for migration matching (multi-line)
             /export const PRE_REWRITE_CALLBACK_INSTRUCTION =[\s\S]*?;\s*$/m,
-            /function LEGACY_CONTEXT_AWARE_COMPLETION_ORDER_BODY\([\s\S]*?^}\s*$/m,
-            /function LEGACY_CONTEXT_AWARE_COMPLETION_ORDER_BODY_V2\([\s\S]*?^}\s*$/m,
             // agentGroupInstantiation.ts: explicit negative prohibition for external head
             /Do not read `\.switchboard\/api-server-port\.txt`\./,
             // agentPromptBuilder.ts: documentation comments explaining the migration

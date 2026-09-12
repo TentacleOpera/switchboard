@@ -91,7 +91,7 @@ import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExtern
 // The pure migrators are deliberately NOT imported here — see the note at the
 // matching import in TaskViewerProvider.ts. `loadEffectiveStandingOrders` is the
 // only server-side reader of `terminals.standingOrders` in either host.
-import { wireSpawnedTeam, loadEffectiveStandingOrders, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, type TerminalGroupsSettingsAccessor } from '../services/teamWiring';
+import { wireSpawnedTeam, loadEffectiveStandingOrders, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, resolveLiveGroupHeads, type TerminalGroupsSettingsAccessor } from '../services/teamWiring';
 import { setStandingOrdersApplier } from '../services/standingOrdersDelivery';
 import { ORIENTATION_PREAMBLE, waitForSeatQuiescence } from '../services/startupOrientation';
 import { resolveWorkContext, resolveTeamGroupForTerminal, computeRosterClearTargets, dropDeferredClear, renameDeferredClear } from '../services/workContextResolver';
@@ -2244,7 +2244,21 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // not re-run importDelegatesIntoTeams on every picker open (that is the
                     // boot pass's job, above at :2188-2192).
                     const groups = await kanbanProvider.peekAgentGroups(root);
-                    return { success: true, groups, sourceRoot: root };
+                    // Attach the live `head` seat name to each definition row so two teams
+                    // sharing a headRole are distinguishable on the wire by their live head,
+                    // not by claim order alone. Mirrors the extension-host ptyListAgentGroups
+                    // arm — both roots serve the same /command wire shape.
+                    const headMap = await resolveLiveGroupHeads({ db });
+                    const groupsWithHead = headMap.size > 0
+                        ? groups.map((g: any) => {
+                            if (!g || typeof g !== 'object') { return g; }
+                            const head = (typeof g.id === 'string' && headMap.has(g.id)) ? headMap.get(g.id)
+                                : (typeof g.definitionId === 'string' && headMap.has(g.definitionId)) ? headMap.get(g.definitionId)
+                                : '';
+                            return head ? { ...g, head } : g;
+                        })
+                        : groups;
+                    return { success: true, groups: groupsWithHead, sourceRoot: root };
                 }
 
                 case 'getHopState':
@@ -2316,8 +2330,8 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     if (result && result.success !== false) {
                         // Push a refresh so open panels reload terminals.groups
                         // before their next whole-array save can clobber the
-                        // backend-registered group — the auto-start path does
-                        // the same after wireSpawnedTeam.
+                        // backend-registered group — the ptyCreateTerminal
+                        // path does the same after wireSpawnedTeam.
                         try { server.broadcastWs('terminalsGroupsChanged', { type: 'terminalsGroupsChanged' }, SURFACES.terminals); } catch { /* broadcast failure must not fail the start */ }
                     }
                     return result;
@@ -2368,33 +2382,39 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     const spawned = rawDelegates.length > 0
                         ? await ptyFleetService.spawnDelegates(terminal, rawDelegates, { teamName: payload.teamName })
                         : { children: [], createdNames: [], error: undefined as string | undefined };
-                    // Wire the team (standing orders + group registration) when
-                    // children were created. Runs in the host that holds the DB,
-                    // not in spawnDelegates — the standalone twin of the
-                    // extension host's post-create hook. Awaited so the create
-                    // response implies wiring is done.
+                    // Wire the team (standing orders + group registration). Runs in
+                    // the host that holds the DB, not in spawnDelegates — the
+                    // standalone twin of the extension host's post-create hook.
+                    // Awaited so the create response implies wiring is done.
+                    //
+                    // No `children.length` guard here: wireSpawnedTeam self-guards
+                    // at the single chokepoint (teamWiring.ts — `if (!headName ||
+                    // children.length === 0) return { ok: true }`), returning before
+                    // any group write. A duplicate guard here is the
+                    // two-copies-disagreeing trap (see the 2026-08
+                    // PlanIngestionEngine precedent); the broadcast below is gated
+                    // on `wired.groupId`, which is set only when a team was
+                    // actually registered, so a member-less start is a no-op.
+                    const settings: TerminalGroupsSettingsAccessor | undefined = kanbanProvider
+                        ? {
+                            get: (k, d) => kanbanProvider._getScopedSetting(k, d),
+                            set: (k, v) => kanbanProvider._updateScopedSetting(k, v),
+                        }
+                        : undefined;
+                    // In standalone mode, there is exactly one workspace root, so
+                    // the fleet root and spawn root are identical by construction.
+                    // (In the extension host, standing orders write to the latched
+                    // _apiServerWorkspaceRoot rather than the spawn or definition root.)
+                    const wired = await wireSpawnedTeam({ db, settings, headName: terminal.friendlyName, children: spawned.children, members: rawDelegates, workspaceRoot });
                     let wiringError: string | undefined;
                     let teamGroupId: string | undefined;
-                    if (spawned.children.length > 0) {
-                        const settings: TerminalGroupsSettingsAccessor | undefined = kanbanProvider
-                            ? {
-                                get: (k, d) => kanbanProvider._getScopedSetting(k, d),
-                                set: (k, v) => kanbanProvider._updateScopedSetting(k, v),
-                            }
-                            : undefined;
-                        // In standalone mode, there is exactly one workspace root, so
-                        // the fleet root and spawn root are identical by construction.
-                        // (In the extension host, standing orders write to the latched
-                        // _apiServerWorkspaceRoot rather than the spawn or definition root.)
-                        const wired = await wireSpawnedTeam({ db, settings, headName: terminal.friendlyName, children: spawned.children, members: rawDelegates, workspaceRoot });
-                        if (!wired.ok) {
-                            wiringError = wired.error;
-                        } else {
-                            teamGroupId = wired.groupId;
-                            // Push a refresh so open panels reload terminals.groups
-                            // before their next whole-array save can clobber it.
-                            try { server.broadcastWs('terminalsGroupsChanged', { type: 'terminalsGroupsChanged' }, SURFACES.terminals); } catch { /* broadcast failure must not fail the create */ }
-                        }
+                    if (!wired.ok) {
+                        wiringError = wired.error;
+                    } else if (wired.groupId) {
+                        teamGroupId = wired.groupId;
+                        // Push a refresh so open panels reload terminals.groups
+                        // before their next whole-array save can clobber it.
+                        try { server.broadcastWs('terminalsGroupsChanged', { type: 'terminalsGroupsChanged' }, SURFACES.terminals); } catch { /* broadcast failure must not fail the create */ }
                     }
                     if (!suppressStartupOrientation) {
                         void relayStartupOrientation([terminal.friendlyName, ...spawned.children.map(c => c.friendlyName)]);
@@ -5241,8 +5261,8 @@ Each plan file must include:
     // Run importDelegatesIntoTeams once at boot, BEFORE any terminal can be
     // spawned (a survivor scheduler job can fire on the first tick below). The import
     // inside _loadAgentGroups is only reachable via the UI path
-    // (ptyListAgentGroups), but auto-start resolves teams via
-    // findTeamForHeadRole which does NOT run the import — so without this
+    // (ptyListAgentGroups), but team resolution via
+    // findTeamForHeadRole does NOT run the import — so without this
     // boot-time pass, an upgraded install with addons.delegates on a role
     // that no team claims would silently lose its delegates until a UI
     // surface happens to call _loadAgentGroups. The import is idempotent
@@ -5291,23 +5311,6 @@ Each plan file must include:
     // Fire-and-forget — a restore failure must never take down the server.
     void taskViewerProvider.restoreAutobanOnStartup()
         .catch(err => log(opts, `Mission Control restore failed: ${err}`));
-
-    // Boot-time team autostart. Same fire-and-forget shape as the Mission Control
-    // restore above. This host is single-root and runs with
-    // suppressLocalApiServer, so startTeamsOnLoad routes through
-    // kanbanProvider.startAgentGroupById (using the instantiator registered
-    // above) rather than startTeamForWorkspace — exactly as this host's
-    // ptyStartTeam verb does. The liveTerminals callback reads the in-process
-    // fleet directly, since _ptyHostVerb is unavailable on this host.
-    void taskViewerProvider.startTeamsOnLoad(workspaceRoot, {
-        liveTerminals: async () => ptyFleetService.listActive().map(t => ({
-            role: t.role,
-            friendlyName: t.friendlyName,
-            parentInstanceId: t.parentInstanceId,
-            status: t.status,
-        })),
-    })
-        .catch(err => log(opts, `team autostart failed: ${err}`));
 
     const instance = {
         server,
