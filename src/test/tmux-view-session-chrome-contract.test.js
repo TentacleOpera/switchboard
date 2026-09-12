@@ -35,9 +35,11 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const PROJECTION_FILE = path.join(REPO_ROOT, 'src', 'services', 'goPtyFleetProjection.ts');
 
 let failures = 0;
+let passes = 0;
 function test(name, fn) {
     try {
         fn();
+        passes++;
         console.log(`  ✅ ${name}`);
     } catch (err) {
         failures++;
@@ -84,6 +86,30 @@ test('the chain no longer sets aggressive-resize on the view window', () => {
     );
 });
 
+test('a restart reuses the seat window instead of stacking a duplicate', () => {
+    // `has-session` only answers "does the TEAM session exist?". On a restart it
+    // is true, so a bare `new-window` added a SECOND window with the same name —
+    // tmux permits duplicate window names, so every team start added four more.
+    // Observed before the fix: 15 windows for 4 seats, three generations deep.
+    // The `-A` on the view line deduped the view SESSION, which is why the
+    // session count looked stable while windows multiplied unwatched. Nothing in
+    // this suite covered the window half of the chain, which is how it shipped.
+    assert.ok(
+        /list-windows -t \$\{session\} -F '#\{window_name\}'[^|]*\| grep -Fqx \$\{win\}/.test(src),
+        'the chain must check for an existing window by name before creating one'
+    );
+    assert.ok(
+        !/&& tmux new-window -d -t \$\{session\}/.test(src),
+        'new-window must be guarded by the existing-window check, not run unconditionally on has-session'
+    );
+    // -F (fixed string) and -x (whole line) together: without -x, `Coding` would
+    // match `Coding-coder-1` and the head would never get its own window.
+    assert.ok(
+        /grep -Fqx/.test(src),
+        'the window-name check must be a fixed-string whole-line match (grep -Fqx)'
+    );
+});
+
 test('the view session uses manual window sizing', () => {
     assert.ok(
         /tmux set-option -t \$\{view\} window-size manual/.test(src),
@@ -126,4 +152,8 @@ if (failures > 0) {
     console.error(`\n${failures} failure(s)`);
     process.exit(1);
 }
-console.log('\nResults: 8 passed, 0 failed.');
+// Counted, not hardcoded. This line read `Results: 8 passed, 0 failed.` as a
+// literal — it printed "8 passed" whatever happened, so adding a test showed 9
+// ticks above an unchanged summary, and a reviewer could quote the summary as
+// evidence. The exit code was always honest; only this line was not.
+console.log(`\nResults: ${passes} passed, ${failures} failed.`);

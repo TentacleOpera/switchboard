@@ -263,8 +263,21 @@ export class GoPtyFleetProjection {
             const suffix = winSlug.replace(new RegExp(`^${teamSlug}-?`), '') || role.toLowerCase();
             const view = `${session}-${suffix}`;
             effectiveStartupCommand =
+                // Reuse the seat's window if it is already there. `has-session`
+                // only answers "does the TEAM session exist?", so on a restart
+                // it was true and `new-window` then added a SECOND window with
+                // the same name — tmux permits duplicate window names, so four
+                // more windows accumulated on every team start (observed: 15
+                // windows for 4 seats, three generations deep). The `-A` on the
+                // view line below deduped the view SESSION, which is why the
+                // session count looked stable while the windows multiplied out
+                // of sight. `grep -Fqx` matches the whole name literally, so
+                // `Coding` cannot match `Coding-coder-1`. This also makes the
+                // `select-window` below deterministic: with duplicates present
+                // it picked one of them arbitrarily.
                 `tmux has-session -t ${session} 2>/dev/null `
-                + `&& tmux new-window -d -t ${session} -n ${win} ${inner} `
+                + `&& { tmux list-windows -t ${session} -F '#{window_name}' 2>/dev/null | grep -Fqx ${win} `
+                + `|| tmux new-window -d -t ${session} -n ${win} ${inner}; } `
                 + `|| tmux new-session -d -s ${session} -n ${win} ${inner}; `
                 + `tmux new-session -A -d -t ${session} -s ${view} 2>/dev/null; `
                 // Control mode (`-CC`) makes tmux stop drawing the pane and emit
