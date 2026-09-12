@@ -211,12 +211,20 @@ func ptyResize(t *terminal, cols, rows uint16) error {
 	if !t.controlMode || !t.controlActive {
 		return pty.Setsize(t.file, &pty.Winsize{Cols: cols, Rows: rows})
 	}
-	// Control mode: a pty ioctl does not resize the agent's pane. A control
-	// client is invisible to sizing until it issues its first `refresh-client
-	// -C` (`ignore_client_size` in resize.c); after that, `window-size manual`
-	// (set in the seat chain) gives the browser panel deterministic authority
-	// over geometry instead of ping-ponging with a second attached client.
-	// `refresh-client -C` is written to the pty stdin as a control command.
+	// Control mode: a pty ioctl does not resize the agent's pane.
+	//
+	// `resize-window`, NOT `refresh-client -C`. The seat chain sets
+	// `window-size manual`, and under `manual` a window takes its size from
+	// `resize-window` and IGNORES client size entirely — so `refresh-client -C`,
+	// which only sets the CLIENT's size, was a no-op on every seat. The two
+	// settings contradict each other and the pane stayed frozen at whatever it
+	// started as however large the browser pane was. Measured on tmux 3.4
+	// against a live 30x21 seat: `refresh-client -C 160x48` left it 30x21;
+	// `resize-window -x 160 -y 48` made it 160x48.
+	//
+	// `manual` is still the right choice — it is what gives the browser panel
+	// deterministic authority instead of ping-ponging with a second attached
+	// client — so the fix is to drive it with the command `manual` listens to.
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.paneID == "" {
@@ -226,5 +234,5 @@ func ptyResize(t *terminal, cols, rows uint16) error {
 		t.pendingRows = rows
 		return nil
 	}
-	return writeControlCommandLocked(t, fmt.Sprintf("refresh-client -C %dx%d", cols, rows), blockNone)
+	return writeControlCommandLocked(t, fmt.Sprintf("resize-window -t %%%s -x %d -y %d", t.paneID, cols, rows), blockNone)
 }
