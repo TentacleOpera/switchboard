@@ -55,12 +55,22 @@ export const DEVIN_DEFAULT_TIMEOUT_MS = 15000;
  * costs 200 ms. Per the repo's own rule, guessing short breaks delivery and
  * guessing long costs seconds.
  *
- * CALIBRATION SOURCE: scripts/capture-cli-modes.js clear streams on the target
- * host. 300 matches the two measured families; it is a floor, not a measurement
- * of devin specifically — re-measure devin's own re-render gap and raise this if
- * it is longer. Re-measure when the CLI version changes.
+ * SIZED AGAINST DEVIN'S REDRAW LOOP, NOT AGAINST A RE-RENDER GAP. Devin emits
+ * roughly 12 content-free redraw frames per second — measured at 183 frames /
+ * 6,475 bytes / 0 printable characters in 15 s
+ * (`an-idle-heartbeat-eats-two-thirds-of-the-scrollback`), i.e. a frame every
+ * ~82 ms. Any quiet window near that interval can fire in an ordinary gap
+ * between two redraws and call a repainting editor "ready". 300 ms is only ~3.6
+ * frames of margin. 1500 ms is ~18, which on a live devin seat means the quiet
+ * branch effectively does not fire at all and the 15 s ceiling becomes the real
+ * timer — a predictable wait instead of a race against the paint loop.
+ *
+ * That is the intended trade and it is the operator's explicit instruction:
+ * a send that always takes its full ceiling is strictly better than one that
+ * occasionally resolves early and hangs the lead forever on a prompt that was
+ * never accepted. Slow is recoverable; lost is not.
  */
-export const DEVIN_DEFAULT_QUIET_MS = 300;
+export const DEVIN_DEFAULT_QUIET_MS = 1500;
 export const CLAUDE_DEFAULT_TIMEOUT_MS = 3000;
 /**
  * Quiet window for the POST-CLEAR readiness path (claude/antigravity profile).
@@ -196,7 +206,13 @@ export function createClearReadinessTracker(
         // does not resolve before the configured delay has elapsed. Exit is
         // exempt — a dead CLI must abort immediately. See
         // a-delay-setting-must-not-be-able-to-defeat-known-cli-readiness.md.
-        if (mode === 'manual' && family !== 'unknown' && elapsed < fallbackDelay && reason !== 'exit') {
+        // The floor is NOT manual-only. It used to be, which left `auto` — the
+        // default mode for every dispatch — with no floor at all: a signal
+        // resolved the instant the state machine matched, bypassing every
+        // patience mechanism the delivery path adds above it. Patience that a
+        // signal can short-circuit is not patience. Exit stays exempt: a dead
+        // CLI must abort immediately, never wait out a floor.
+        if (family !== 'unknown' && elapsed < fallbackDelay && reason !== 'exit') {
             pendingReason = reason;
             // Stop listening — the decision is made, we are just waiting for
             // the floor. Dispose the data subscription so late chunks do not

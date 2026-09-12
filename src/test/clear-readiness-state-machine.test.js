@@ -266,6 +266,47 @@ function createMockHandle(overrides = {}) {
         assert.ok(res.elapsedMs >= 60, `floor must be enforced (elapsed=${res.elapsedMs}ms)`);
     });
 
+    await test('AUTO mode (devin): a signal cannot resolve faster than the floor', async () => {
+        // The floor used to be gated on mode === 'manual'. `auto` is the default
+        // mode for every dispatch, so the default path had NO floor: the instant
+        // the state machine matched, the tracker resolved and the prompt was
+        // pasted. Every patience mechanism above it was bypassed by the one case
+        // it most needed to cover. Patience a signal can short-circuit is not
+        // patience — this pins the floor on the default path, not just the
+        // opt-in one.
+        const handle = createMockHandle({ cliFamily: 'devin' });
+        const tracker = createClearReadinessTracker(handle, {
+            mode: 'auto',
+            fallbackDelayMs: 80,
+            timeouts: { devinQuietMs: 10, devinTimeoutMs: 2000 },
+        });
+
+        handle.emitData('\x1b[?2004l\x1b[?2004h\x1b[?25h\x1b[?2026l');
+
+        const res = await tracker.promise;
+        assert.strictEqual(res.reason, 'signal', 'the signal must still be detected and reported honestly');
+        assert.ok(res.elapsedMs >= 80, `auto-mode floor must be enforced (elapsed=${res.elapsedMs}ms)`);
+    });
+
+    await test('A dead CLI is exempt from the floor and aborts immediately', async () => {
+        // The floor must never delay an abort. A seat that exited has nothing to
+        // be patient for, and making the lead wait out a floor to learn the CLI
+        // is dead is the opposite of the fix.
+        const handle = createMockHandle({ cliFamily: 'devin' });
+        const tracker = createClearReadinessTracker(handle, {
+            mode: 'auto',
+            fallbackDelayMs: 5000,
+            timeouts: { devinQuietMs: 10, devinTimeoutMs: 10000 },
+        });
+
+        const startedAt = Date.now();
+        handle.emitExit(1);
+
+        const res = await tracker.promise;
+        assert.strictEqual(res.reason, 'exit');
+        assert.ok(Date.now() - startedAt < 2000, 'exit must not wait out the floor');
+    });
+
     // 7. Exit handling & Prompt blocking
     await test('Tracker constructed on an ALREADY-exited target resolves exit (no ReferenceError)', async () => {
         // Regression: finish() reads `mode`, `family` and `fallbackDelay` for the
