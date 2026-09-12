@@ -784,7 +784,22 @@ func (f *fleet) close(name string, killTmuxView bool) bool {
 	// disposeAll() behind `!surviveBoard` (bootstrap.ts:5366) — a restart never
 	// reaches this close(), so the window survives the PTY dying, which is the
 	// durability property the seating design is built on.
-	if t.controlMode && t.tmuxSession != "" && t.tmuxWindow != "" {
+	// Gated by killTmuxView for the SAME reason as the session kill above: this
+	// line kills the AGENT, and a board shutdown must not. The old comment here
+	// claimed "a restart never reaches this close(), because disposeAll is gated
+	// behind !surviveBoard" — that reads the gate backwards. surviveBoard is
+	// false by default, so !surviveBoard is TRUE and disposeAll runs on every
+	// restart, reaching this line for every seat.
+	//
+	// Observed 2026-09-12: with only the session kill gated, a board restart
+	// still destroyed seats. kill-window removes the window from the SHARED base
+	// session, and tmux destroys the base (and its grouped views) when the last
+	// window goes — so one ungated line took a coder and the team's base session
+	// with it while the other views survived.
+	//
+	// Both kills now answer to the same question: is this an operator closing a
+	// seat, or the board shutting down? Only the former ends an agent.
+	if killTmuxView && t.controlMode && t.tmuxSession != "" && t.tmuxWindow != "" {
 		_ = exec.Command("tmux", "kill-window", "-t", "="+t.tmuxSession+":"+t.tmuxWindow).Run()
 	}
 	_ = t.file.Close()
@@ -1035,11 +1050,26 @@ func (f *fleet) handleVerb(verb string, payload map[string]any) (any, error) {
 		}, nil
 	case "ptyCloseTerminal":
 		name, _ := payload["name"].(string)
-		// Explicit operator close — pass killTmuxView=true so the seat's VIEW
-		// tmux session is killed (the plan: "closing a terminal closes its
-		// tmux session"). dispose() passes false (the invariant: "process
-		// exit must not automatically kill tmux sessions").
-		return map[string]any{"success": f.close(name, true)}, nil
+		// killTmuxView is true ONLY for an operator close. A `teardown: true`
+		// caller is the board shutting the fleet down, and must leave tmux alone.
+		//
+		// This verb is not reached only by operator clicks: `disposeAll()`
+		// (bootstrap.ts `stop()`, run whenever `!surviveBoard` — which is the
+		// DEFAULT) kills every seat through `handle.pty.kill()`, and that is
+		// wired to this same verb (goPtyFleetProjection.ts:893). So every board
+		// restart was arriving here with killTmuxView=true and destroying the
+		// whole fleet's tmux sessions — agents included.
+		//
+		// The old comment here claimed "a restart never reaches close() at all
+		// (disposeAll is gated by !surviveBoard)". That reads the gate backwards:
+		// !surviveBoard is TRUE by default, so disposeAll runs on every restart.
+		// Observed 2026-09-12: a restart for an unrelated fix took a running
+		// coding team with it, leaving one orphaned view session behind.
+		//
+		// This restores the plan's invariant: "A board restart closes nothing —
+		// session count and agent pids are identical across it."
+		teardown, _ := payload["teardown"].(bool)
+		return map[string]any{"success": f.close(name, !teardown)}, nil
 	case "ptyClearAllTerminals":
 		f.mu.RLock()
 		active := make([]*terminal, 0, len(f.terminals))

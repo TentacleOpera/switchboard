@@ -890,7 +890,11 @@ export class GoPtyFleetProjection {
             _isTeamMember: row._isTeamMember === true,
             pty: {
                 pid: row.pid || 0,
-                kill: (signal?: string) => { void this.supervisor.request('ptyCloseTerminal', { name, signal }).catch(() => { /* ignore */ }); },
+                // `teardown: true` — this is the shutdown path (disposeAll on
+                // board stop), NOT an operator closing a seat. Without it the Go
+                // host treats it as an operator close and kills the seat's tmux
+                // session, so every board restart destroyed the whole fleet.
+                kill: (signal?: string) => { void this.supervisor.request('ptyCloseTerminal', { name, signal, teardown: true }).catch(() => { /* ignore */ }); },
             },
             sendText: (text: string, addNewLine?: boolean) => {
                 void this.supervisor.request('ptyWrite', { name, data: addNewLine ? `${text}\r` : text }).catch(() => { /* ignore */ });
