@@ -1112,7 +1112,10 @@ func (f *fleet) handleVerb(verb string, payload map[string]any) (any, error) {
 		if v, ok := payload["clearBeforePromptDelayMs"].(float64); ok {
 			delayMs = int(v)
 		}
-		return f.deliverPrompt(name, prompt, clearBefore, delayMs, strField(payload, "cliFamily")), nil
+		// Only an explicit true shortens the delivery floor; absent or malformed
+		// takes the longer unattended cap. The safe direction is the default.
+		attended, _ := payload["attended"].(bool)
+		return f.deliverPrompt(name, prompt, clearBefore, delayMs, strField(payload, "cliFamily"), attended), nil
 	case "ptyWrite":
 		name, _ := payload["name"].(string)
 		data, _ := payload["data"].(string)

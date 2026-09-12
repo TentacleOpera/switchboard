@@ -223,7 +223,7 @@ func (f *fleet) waitReadiness(t *terminal, timeout, quiet time.Duration, already
 	}
 }
 
-func (f *fleet) deliverPrompt(name, text string, clearBefore bool, delayMs int, family string) map[string]any {
+func (f *fleet) deliverPrompt(name, text string, clearBefore bool, delayMs int, family string, attended bool) map[string]any {
 	t, ok := f.get(name)
 	if !ok {
 		return map[string]any{"success": false, "error": "No such terminal: " + name}
@@ -327,11 +327,7 @@ func (f *fleet) deliverPrompt(name, text string, clearBefore bool, delayMs int, 
 		}
 	}
 	if text != "" {
-		// attended is not yet plumbed from the verb payload — that is the
-		// caller-declaration half of this change and belongs with the card that
-		// owns the dispatch path. Until it is, every send takes the unattended
-		// cap, which is the safe direction: too long, never too short.
-		floor := deliveryFloor(family, false)
+		floor := deliveryFloor(family, attended)
 		if elapsed := time.Since(start); elapsed < floor {
 			sleep(floor - elapsed)
 		}
