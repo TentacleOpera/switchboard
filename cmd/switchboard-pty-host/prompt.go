@@ -384,28 +384,28 @@ func (f *fleet) deliverPrompt(name, text string, clearBefore bool, delayMs int, 
 	// a misroute — it is "cannot verify", and the send proceeds: the chain's own
 	// select-window (Change 2) is the correctness mechanism, this is the
 	// backstop that catches it drifting.
+	//
+	// NOT gated on controlMode. A non-control seat's pty is a `tmux attach`
+	// client exactly as a control-mode seat's is, so it has the identical
+	// hazard — and with control mode off the pane id is never learned, so the
+	// old `controlMode &&` guard disabled this check precisely where nothing
+	// else could catch it. Observed 2026-09-13: `lc-coding-team-coder-1`'s view
+	// had `Coding-coder-2` current, so coder-1's prompts were typed into
+	// coder-2's agent and every send reported success.
+	//
+	// ensureTmuxRouting repairs first and re-queries, so a drifted view is
+	// corrected rather than left to fail every send forever; the refusal below
+	// fires only when the correction did not take.
 	t.mu.Lock()
-	own := t.tmuxWindowId
-	paneID := t.paneID
 	view := t.tmuxViewSession
-	controlMode := t.controlMode
 	t.mu.Unlock()
-	if controlMode && view != "" {
-		if own == "" && paneID != "" {
-			own = tmuxPaneWindowID(paneID)
-			t.mu.Lock()
-			t.tmuxWindowId = own
-			t.mu.Unlock()
-		}
-		if own != "" {
-			current := tmuxViewWindowID(view)
-			if current != "" && current != own {
-				return map[string]any{
-					"success":      false,
-					"error":        fmt.Sprintf("prompt misrouted: view %s current window %s != seat own window %s", view, current, own),
-					"bytesWritten": len(text), "deliveredAt": time.Now().UnixMilli(),
-					"bootPhase": bootPhase, "cleared": cleared, "misrouted": true,
-				}
+	if view != "" {
+		if own, ok := ensureTmuxRouting(t); !ok {
+			return map[string]any{
+				"success":      false,
+				"error":        fmt.Sprintf("prompt misrouted: view %s could not be pointed at seat own window %s", view, own),
+				"bytesWritten": len(text), "deliveredAt": time.Now().UnixMilli(),
+				"bootPhase": bootPhase, "cleared": cleared, "misrouted": true,
 			}
 		}
 	}

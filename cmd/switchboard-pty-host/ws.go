@@ -8,7 +8,6 @@ import (
 	"github.com/gorilla/websocket"
 	"net/http"
 	"net/url"
-	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -257,6 +256,12 @@ func ptyResize(t *terminal, cols, rows uint16) error {
 // panel would fork a tmux process per frame. A failed resize clears the cache
 // so a transient failure is retried rather than latched.
 func resizeTmuxWindow(t *terminal, cols, rows uint16) {
+	// Whole sequence under tmuxMu. Without it two resizes interleave as
+	// cache(A) cache(B) exec(B) exec(A): the window ends at A's size, the cache
+	// claims B's, and every later frame is suppressed as a cache hit — the
+	// window is then stuck at a size nothing asked for.
+	t.tmuxMu.Lock()
+	defer t.tmuxMu.Unlock()
 	t.mu.Lock()
 	session, window := t.tmuxSession, t.tmuxWindow
 	if session == "" || window == "" || (t.tmuxSizedCols == cols && t.tmuxSizedRows == rows) {
@@ -267,8 +272,8 @@ func resizeTmuxWindow(t *terminal, cols, rows uint16) {
 	t.mu.Unlock()
 	// Run OUTSIDE t.mu — a fork+exec must never be held under the lock the
 	// read/write paths take on every chunk.
-	if err := exec.Command("tmux", "resize-window", "-t", "="+session+":"+window,
-		"-x", strconv.Itoa(int(cols)), "-y", strconv.Itoa(int(rows))).Run(); err != nil {
+	if err := tmuxRun("resize-window", "-t", "="+session+":"+window,
+		"-x", strconv.Itoa(int(cols)), "-y", strconv.Itoa(int(rows))); err != nil {
 		t.mu.Lock()
 		t.tmuxSizedCols, t.tmuxSizedRows = 0, 0
 		t.mu.Unlock()

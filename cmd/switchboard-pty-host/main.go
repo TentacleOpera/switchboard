@@ -95,6 +95,18 @@ type terminal struct {
 	// under f.mu in close() — no race.
 	tmuxSession string
 	tmuxWindow  string
+	// tmuxMu serializes SEQUENCES of tmux commands for this seat — the
+	// check-correct-verify in ensureTmuxRouting and the cache-then-resize in
+	// resizeTmuxWindow. Both are read-modify-write against tmux, and both can
+	// run concurrently: the spawn-time routing goroutine overlaps a first
+	// prompt delivery, and resize frames arrive per fit pass.
+	//
+	// Deliberately NOT t.mu. t.mu is taken on every chunk by the read and write
+	// paths, so holding it across a fork+exec would stall output for the length
+	// of a tmux round trip. This lock is only ever held by tmux sequences, and
+	// t.mu is taken and released INSIDE it for the field reads — never the
+	// reverse, so the two cannot deadlock.
+	tmuxMu sync.Mutex
 	// tmuxSizedCols/Rows are the last size actually pushed to the seat's tmux
 	// WINDOW by resizeTmuxWindow, so a stationary panel does not fork a tmux
 	// process per resize frame. mu-protected. Zeroed on respawn: the seating
@@ -324,8 +336,32 @@ func (f *fleet) create(payload map[string]any) (map[string]any, error) {
 	f.rings[name] = nil
 	f.nextSeq[name] = 0
 	go f.readOutput(name, file)
+	// Spawn-time routing verification for a seat with NO control stream. A
+	// control-mode seat arms this from onPaneIDLearned; with control mode off
+	// the pane id never arrives, so that hook never fires and nothing checks
+	// where the view is pointed until the first prompt. The browser renders the
+	// view immediately, so an unchecked seat shows a sibling's window in the
+	// grid — two panes of one agent and none of another.
+	//
+	// Delayed because the seating chain is still running: the pty was just
+	// handed `tmux ... select-window ...; exec tmux attach`, and querying
+	// before that lands would read a view that legitimately has no window yet.
+	// A miss here is not fatal — the delivery path re-checks and repairs on
+	// every send — so this is the early fix, not the gate.
+	if t.tmuxViewSession != "" && !t.controlMode {
+		go func() {
+			time.Sleep(tmuxRoutingSettleDelay)
+			_, _ = ensureTmuxRouting(t)
+		}()
+	}
 	return map[string]any{"success": true, "terminal": f.project(t)}, nil
 }
+
+// tmuxRoutingSettleDelay is how long the spawn-time routing check waits for the
+// seating chain to finish before asking where the view points. It only has to
+// outlast `select-window` + `exec tmux attach` on a local socket; the delivery
+// path is the backstop if it is ever short.
+const tmuxRoutingSettleDelay = 2 * time.Second
 
 func (f *fleet) readOutput(name string, file *os.File) {
 	buf := make([]byte, 4096)
@@ -539,7 +575,7 @@ func (f *fleet) publish(name, data string) {
 // check runs in a goroutine so the read goroutine never blocks on tmux; the
 // seat's own window id is captured here so delivery can verify with one query
 // instead of two.
-func (f *fleet) onPaneIDLearned(name string, t *terminal) {
+func (f *fleet) onPaneIDLearned(_ string, t *terminal) {
 	t.mu.Lock()
 	cols, rows := t.pendingCols, t.pendingRows
 	t.pendingCols, t.pendingRows = 0, 0
@@ -552,29 +588,12 @@ func (f *fleet) onPaneIDLearned(name string, t *terminal) {
 	if paneID == "" || view == "" {
 		return
 	}
-	go verifyTmuxRouting(name, t, paneID, view)
-}
-
-// verifyTmuxRouting captures the seat's own window id (from its pane) and
-// checks the view session's current window matches it. The pane id is the
-// source of truth for "the seat's own window" — it is learned from the control
-// stream and is independent of the name-based ambiguity across generations.
-// On a mismatch the seat is marked misrouted and the failure is logged; the
-// delivery path (Change 4) independently re-checks on every send, so a flag
-// set here is the early observable, not the gate.
-func verifyTmuxRouting(name string, t *terminal, paneID, view string) {
-	own := tmuxPaneWindowID(paneID)
-	current := tmuxViewWindowID(view)
-	t.mu.Lock()
-	t.tmuxWindowId = own
-	misrouted := own != "" && current != "" && own != current
-	if misrouted {
-		t.tmuxMisrouted = true
-	}
-	t.mu.Unlock()
-	if misrouted {
-		log.Printf("[pty-host] seat %s misrouted at spawn: view %s current window %s != seat own window %s", name, view, current, own)
-	}
+	// One routing path, shared with the non-control spawn check and the
+	// delivery check. It previously had its own verify-and-flag twin here,
+	// which logged a misroute and left the seat misrouted; a seat that repairs
+	// itself is strictly better, and two paths that disagree about what to do
+	// on a mismatch is how one of them rots.
+	go func() { _, _ = ensureTmuxRouting(t) }()
 }
 
 // tmuxQuery runs a tmux format query and returns the trimmed stdout, or "" on
@@ -589,6 +608,20 @@ func tmuxQuery(args ...string) string {
 		return ""
 	}
 	return strings.TrimRight(string(out), "\n")
+}
+
+// tmuxRun executes a side-effecting tmux command. It is a package var, not a
+// direct exec, so a test can substitute a fake and observe ORDER — the hazard
+// these sequences carry is a lost update, not a data race, and the race
+// detector cannot see it (every field access is already under t.mu). Without a
+// seam here, a test of "are these serialised" passes whether or not the lock
+// exists, which is worse than no test.
+//
+// Failures are returned, never logged here: each caller decides whether a
+// failed tmux command is fatal (a misroute that could not be corrected) or
+// simply "cannot act" (a resize against a window that has gone away).
+var tmuxRun = func(args ...string) error {
+	return exec.Command("tmux", args...).Run()
 }
 
 // tmuxPaneWindowID returns the window id containing the seat's own pane. The
@@ -611,6 +644,119 @@ func tmuxViewWindowID(view string) string {
 		return ""
 	}
 	return tmuxQuery("display-message", "-p", "-t", view, "#{window_id}")
+}
+
+// tmuxNamedWindowID resolves the seat's own window id from its BASE session and
+// window NAME, with no control stream involved. This is the non-control-mode
+// twin of tmuxPaneWindowID: a pane id is learned only from `%output` and the
+// `list-panes` reply, both of which exist solely in control mode, so with
+// control mode off `t.paneID` is permanently "" and every pane-id-based lookup
+// returns "" — taking the routing checks with it.
+//
+// Names are unambiguous here: the window-reuse fix in goPtyFleetProjection.ts
+// makes window names unique within a session (it is the same guarantee that
+// lets fleet.close() target `=<session>:<window>` for kill-window). `=` forces
+// an exact session-name match so `lc-coding-team` cannot match
+// `lc-coding-team-coder-1`.
+func tmuxNamedWindowID(session, window string) string {
+	if session == "" || window == "" {
+		return ""
+	}
+	out := tmuxQuery("list-windows", "-t", "="+session, "-F", "#{window_name} #{window_id}")
+	if out == "" {
+		return ""
+	}
+	for _, line := range strings.Split(out, "\n") {
+		name, id, ok := strings.Cut(line, " ")
+		if ok && name == window {
+			return id
+		}
+	}
+	return ""
+}
+
+// tmuxOwnWindowID returns the window this seat's agent actually runs in,
+// preferring what is already cached, then the control stream's pane id, then
+// the seat's own session+window names. Empty means "cannot determine" — never
+// a positive answer, so every caller treats it as "cannot verify" rather than
+// as a mismatch.
+func tmuxOwnWindowID(t *terminal) string {
+	t.mu.Lock()
+	own, paneID, session, window := t.tmuxWindowId, t.paneID, t.tmuxSession, t.tmuxWindow
+	t.mu.Unlock()
+	if own != "" {
+		return own
+	}
+	if paneID != "" {
+		own = tmuxPaneWindowID(paneID)
+	}
+	if own == "" {
+		own = tmuxNamedWindowID(session, window)
+	}
+	if own != "" {
+		t.mu.Lock()
+		t.tmuxWindowId = own
+		t.mu.Unlock()
+	}
+	return own
+}
+
+// ensureTmuxRouting points the seat's VIEW session at the seat's OWN window and
+// reports whether it is now correct. It returns ("", true) for "cannot verify"
+// — no tmux, no view, unknown window — which is never treated as a misroute.
+//
+// Grouped sessions share one window LIST but each keeps its own CURRENT window,
+// and the seat's pty is a `tmux attach` client, so tmux forwards every byte to
+// whatever that view currently shows. A view pointed at a sibling's window
+// therefore renders the sibling in the browser AND types this seat's prompts
+// into the sibling's agent, while the send reports success.
+//
+// Observed 2026-09-13 on a live team: `lc-coding-team-coder-1` had
+// `Coding-coder-2` current, so the 2x2 grid showed coder-2 twice and coder-1
+// never — and coder-1's prompts were reaching coder-2.
+//
+// This CORRECTS rather than only flagging. The seating chain's select-window is
+// the intended state; re-asserting it is idempotent, and a seat that repairs
+// itself beats one that reports a misroute forever. The re-query after the
+// correction is what makes the return value evidence instead of an assumption:
+// if the seat is still misrouted after select-window, the caller must not
+// pretend otherwise.
+func ensureTmuxRouting(t *terminal) (own string, ok bool) {
+	// Whole sequence under tmuxMu: without it two callers can both observe the
+	// mismatch, both issue select-window, and each re-query the OTHER's result
+	// — so a verdict would describe a state neither of them established.
+	t.tmuxMu.Lock()
+	defer t.tmuxMu.Unlock()
+	t.mu.Lock()
+	view := t.tmuxViewSession
+	t.mu.Unlock()
+	if view == "" {
+		return "", true
+	}
+	own = tmuxOwnWindowID(t)
+	if own == "" {
+		return "", true
+	}
+	current := tmuxViewWindowID(view)
+	if current == "" || current == own {
+		if current == own {
+			t.mu.Lock()
+			t.tmuxMisrouted = false
+			t.mu.Unlock()
+		}
+		return own, true
+	}
+	_ = tmuxRun("select-window", "-t", "="+view+":"+own)
+	current = tmuxViewWindowID(view)
+	misrouted := current != "" && current != own
+	t.mu.Lock()
+	t.tmuxMisrouted = misrouted
+	t.mu.Unlock()
+	if misrouted {
+		log.Printf("[pty-host] view %s still on window %s after select-window to %s", view, current, own)
+		return own, false
+	}
+	return own, true
 }
 
 // handleControlEvent routes a tmux notification to the browser as a JSON WS
