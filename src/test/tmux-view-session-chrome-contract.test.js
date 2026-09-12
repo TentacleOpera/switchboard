@@ -52,12 +52,36 @@ console.log('\n── tmux view session chrome contract ──');
 
 const src = fs.readFileSync(PROJECTION_FILE, 'utf8');
 
-test('the view attaches in control mode with UTF-8 forced', () => {
+test('the view attaches WITHOUT control mode, UTF-8 forced', () => {
+    // Control mode is OFF. `-CC` puts a protocol parser between the agent and the
+    // screen, and twelve distinct defects came out of that parser in one day —
+    // every one reporting success while delivering nothing (dropped
+    // %extended-output, a double-pushed block FIFO, `send-keys -lt -t` exiting 0
+    // and delivering nothing, `capture-pane -t %` before the pane id was known,
+    // the seating chain echoed into the pane, and more). A plain attach has no
+    // interpretation in the path, so a bug there cannot put protocol text on the
+    // operator's screen or silently eat their keystrokes.
+    //
+    // `-u` stays: it forces UTF-8 so non-ASCII is not replaced with `_`.
+    //
+    // This assertion is the gate against control mode being switched back on
+    // without a plan carrying a LIVE-SEAT acceptance test — which is precisely
+    // what was missing the first time.
     assert.ok(
-        /exec tmux -u -CC attach -t \$\{view\}/.test(src),
-        'goPtyFleetProjection.ts must end the seat chain with `exec tmux -u -CC attach -t ${view}` '
-        + '— a bare `tmux attach` makes the board pane a tmux client again (the state this '
-        + 'feature reverts), and `-u` prevents utf8_sanitize replacing non-ASCII with `_`',
+        /exec tmux -u attach -t \$\{view\}/.test(src),
+        'the chain must end with `exec tmux -u attach -t ${view}` — plain attach, not -CC'
+    );
+    // Strip `//` comments before this check: the source explains WHY control mode
+    // is off, and that prose names `-CC`. Asserting over raw text makes the
+    // explanation trip its own guard.
+    const code = src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
+    assert.ok(
+        !/-CC attach/.test(code),
+        'control mode (-CC) must not be reintroduced without a live-seat acceptance gate'
+    );
+    assert.ok(
+        /const usesControlMode = false/.test(src),
+        'the controlMode flag handed to the Go host must be false'
     );
 });
 
@@ -127,7 +151,11 @@ test('the chain captures the window id at creation and targets by id', () => {
         'new-window must capture the window id at creation (-P -F \'#{window_id}\')'
     );
     assert.ok(
-        /tmux select-window -t \$\{view\}:\$\{wid\}/.test(src),
+        // `$wid` is a SHELL variable holding the id captured by `-P -F '#{window_id}'`,
+        // NOT a JS interpolation — `${wid}` would interpolate a JS binding that does
+        // not exist. f093f446 fixed the code; this assertion was left pinning the
+        // broken form and had been red since.
+        /tmux select-window -t \$\{view\}:\$wid/.test(src),
         'select-window must target the view and the captured window id (${view}:${wid}), not the name'
     );
     assert.ok(
@@ -154,7 +182,7 @@ test('the view window disables automatic rename', () => {
     // a-tmux-seat-gets-a-blind-two-second-clear-and-loses-the-first-dispatch.md
     // (Change 2).
     assert.ok(
-        /tmux set-window-option -t \$\{wid\} automatic-rename off/.test(src),
+        /tmux set-window-option -t \$wid automatic-rename off/.test(src),
         'goPtyFleetProjection.ts must set `automatic-rename off` on the seat window by id ($wid) — '
         + 'without it `%window-renamed` fires on every command the agent runs and thrashes '
         + 'any board re-render on rename',

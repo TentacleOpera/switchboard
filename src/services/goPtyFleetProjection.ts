@@ -236,7 +236,11 @@ export class GoPtyFleetProjection {
         // and to encode input as `send-keys` — a fallback here would make a
         // control-mode seat indistinguishable from a raw one, so it is an explicit
         // flag, never inferred from the stream.
-        const usesControlMode = !!effectiveStartupCommand && this._tmuxSeatingEnabled();
+        // Control mode is OFF — see the chain below for why. Hard false rather
+        // than deleting the plumbing: the Go host still branches on `controlMode`
+        // (publish/writeToPty), so flipping this one value is the whole switch,
+        // and a half-removed protocol is worse than a disabled one.
+        const usesControlMode = false;
         // Hoisted out of the `if (usesControlMode)` block so the create
         // payload below can pass them to the Go host even on the non-control-
         // mode path (where they stay '' and the host skips the teardown). The
@@ -402,7 +406,31 @@ export class GoPtyFleetProjection {
                 // titles, `list-panes`/`capture-pane` format strings) on a headless
                 // Pi where `LANG` may be unset. `%output` and `capture-pane -p`
                 // bypass that path and are byte-exact regardless.
-                + `exec tmux -u -CC attach -t ${view}`;
+                // CONTROL MODE IS OFF. `exec tmux -u attach`, not `-u -CC attach`.
+                //
+                // Control mode puts a protocol parser between the agent and the
+                // screen: tmux stops drawing and emits `%output`/`%begin` lines the
+                // host must decode. Twelve distinct defects came out of that parser
+                // in a single day — %extended-output dropped, block content wrongly
+                // octal-decoded, no pane filter so seats crossed streams, %pause
+                // armed with no resume, the DCS only matched at offset 0, 5 of 8
+                // commands never pushed the block FIFO, `send-keys -lt -t`
+                // delivering nothing while exiting 0, a missing space making the
+                // target `%7hello`, the replay duplicating the visible screen, the
+                // seating chain echoed into the pane, the FIFO double-pushed, and
+                // `capture-pane -t %` issued before the pane id was known.
+                //
+                // The count is not the argument; the failure SHAPE is. A plain
+                // attach has no interpretation in the path, so a bug cannot put
+                // protocol text on the operator's screen or silently eat their
+                // keystrokes. Every one of those twelve reported success while
+                // delivering nothing.
+                //
+                // The parser and its fixes stay in the Go host, unreferenced at
+                // runtime once `controlMode` is false. Re-enabling is this line plus
+                // `usesControlMode` above, and should happen against a plan with a
+                // live-seat acceptance gate — which is what was missing.
+                + `exec tmux -u attach -t ${view}`;
         }
 
         const result = await this.supervisor.request('ptyCreateTerminal', {
