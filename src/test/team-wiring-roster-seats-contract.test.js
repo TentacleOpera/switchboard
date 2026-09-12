@@ -14,12 +14,19 @@
  */
 
 const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
 const {
     rosterOfGroup,
     terminalsShareTeam,
     resolveHeadForTerminal,
     resolveLiveGroupHeads,
+    wireSpawnedTeam,
+    migrateCodingTeamOrders,
+    CONTEXT_AWARE_COMPLETION_ORDER_VERSION,
+    TERMINALS_GROUPS_KEY,
 } = require('../../out/services/teamWiring');
+const { STANDING_ORDERS_CONFIG_KEY } = require('../../out/services/standingOrders');
 const { resolveTeamSeats, filterByProjectFor } = require('../webview/command');
 
 let passed = 0;
@@ -323,6 +330,154 @@ test('filterByProjectFor: exact project match', () => {
 test('filterByProjectFor: no matching project returns empty', () => {
     const cards = [{ project: 'a' }, { project: 'b' }];
     assert.deepStrictEqual(filterByProjectFor(cards, 'c'), []);
+});
+
+// ── no team without delegates (subtask 3's named regression guard) ────────
+//
+// `wireSpawnedTeam` self-guards member-less starts out of group registration at
+// its entry (`if (!headName || children.length === 0) return { ok: true }`),
+// BEFORE the groupId derivation and the group write. That guard is the single
+// chokepoint both composition roots pass through — the standalone host's
+// duplicate `children.length > 0` call-site guard was removed on its authority —
+// so it is the thing that must not silently rot. Neither host has a second
+// guard to catch it if it does.
+
+function makeGroupsDb(seed) {
+    const store = Object.assign({}, seed || {});
+    return {
+        getConfigJson: async (key, fallback) =>
+            (key in store ? JSON.parse(JSON.stringify(store[key])) : fallback),
+        setConfigJson: async (key, value) => { store[key] = JSON.parse(JSON.stringify(value)); return true; },
+        ensureReady: async () => true,
+        _store: store,
+    };
+}
+
+testAsync('no team without delegates: members: [] registers NO team_ row', async () => {
+    const db = makeGroupsDb();
+    const result = await wireSpawnedTeam({
+        db, headName: 'planner-1', children: [], members: [],
+    });
+    assert.strictEqual(result.ok, true, result.error);
+    const scoped = await db.getConfigJson(TERMINALS_GROUPS_KEY, []);
+    assert.deepStrictEqual(scoped, [],
+        'a head-only start must add no row to switchboard.prompts.terminals.groups');
+    assert.ok(!result.groupId,
+        'a member-less start must not report a groupId — the standalone broadcast gates on it');
+});
+
+testAsync('no team without delegates: one delegate registers EXACTLY one team_ row', async () => {
+    const db = makeGroupsDb();
+    const result = await wireSpawnedTeam({
+        db, headName: 'lead-1', children: [{ friendlyName: 'lead-1-coder-1', role: 'coder' }],
+        members: [{ role: 'coder', count: 1 }],
+    });
+    assert.strictEqual(result.ok, true, result.error);
+    const scoped = await db.getConfigJson(TERMINALS_GROUPS_KEY, []);
+    const teamRows = scoped.filter(g => g && typeof g.id === 'string' && g.id.startsWith('team_'));
+    assert.strictEqual(teamRows.length, 1, 'exactly one team_ row for a team with one delegate');
+    assert.strictEqual(teamRows[0].id, result.groupId);
+    assert.ok(teamRows[0].members.length >= 2,
+        'every team_ row carries at least two members (head + delegate)');
+});
+
+testAsync('no team without delegates: a head-only start is a no-op even on a board that already has teams', async () => {
+    const db = makeGroupsDb();
+    await wireSpawnedTeam({
+        db, headName: 'lead-1', children: [{ friendlyName: 'lead-1-coder-1', role: 'coder' }],
+        members: [{ role: 'coder', count: 1 }],
+    });
+    const before = await db.getConfigJson(TERMINALS_GROUPS_KEY, []);
+    await wireSpawnedTeam({ db, headName: 'planner-1', children: [], members: [] });
+    const after = await db.getConfigJson(TERMINALS_GROUPS_KEY, []);
+    assert.deepStrictEqual(after, before,
+        'a member-less start must leave the registered groups byte-identical');
+});
+
+// ── the version stamp must not become a licence to overwrite ─────────────
+//
+// The frozen-body recognisers were deleted in favour of a `version` stamp. The
+// trap that replaces them: an OPERATOR-authored team prompt (a definition's
+// `prompt`) is persisted under the SAME `context-aware-completion:<gid>:team`
+// id, with its text in `instruction`. Keying the rewrite on "has an instruction
+// and is not at the current version" therefore clobbers the operator's words —
+// which is exactly why the retired matchers compared exact bodies. The stamp is
+// written only on the system-default install, and the migrator rewrites only
+// what carries it.
+
+testAsync('a definition-authored team prompt is installed UNSTAMPED and survives migration', async () => {
+    const db = makeGroupsDb();
+    await wireSpawnedTeam({
+        db, headName: 'lead-1', children: [{ friendlyName: 'lead-1-coder-1', role: 'coder' }],
+        members: [{ role: 'coder', count: 1 }],
+        prompt: 'OPERATOR TEAM PROMPT for {child} — do not rewrite me',
+    });
+    const orders = await db.getConfigJson(STANDING_ORDERS_CONFIG_KEY, []);
+    const teamOrder = orders.find(o => o.scope === 'team');
+    assert.ok(teamOrder, 'a team-scoped order must be installed');
+    assert.ok(typeof teamOrder.instruction === 'string' && teamOrder.instruction.includes('OPERATOR TEAM PROMPT'),
+        'the definition prompt is carried as the order instruction');
+    assert.strictEqual(teamOrder.version, undefined,
+        'an operator-authored row must NOT carry the system version stamp');
+
+    const migrated = migrateCodingTeamOrders(orders);
+    const after = migrated.find(o => o.scope === 'team');
+    assert.strictEqual(after.instruction, teamOrder.instruction,
+        'migrateCodingTeamOrders must never rewrite an operator-authored team prompt');
+});
+
+testAsync('the system default install IS stamped, so a future body revision can migrate it', async () => {
+    const db = makeGroupsDb();
+    await wireSpawnedTeam({
+        db, headName: 'lead-2', children: [{ friendlyName: 'lead-2-coder-1', role: 'coder' }],
+        members: [{ role: 'coder', count: 1 }],
+    });
+    const orders = await db.getConfigJson(STANDING_ORDERS_CONFIG_KEY, []);
+    const teamOrder = orders.find(o => o.scope === 'team');
+    assert.strictEqual(teamOrder.version, CONTEXT_AWARE_COMPLETION_ORDER_VERSION,
+        'the default install carries the current version stamp');
+});
+
+test('an unstamped legacy body that names the port file still heals', () => {
+    const legacy = {
+        id: 'context-aware-completion:team_x:team',
+        parent: 'lead-1', child: '', scope: 'team', teamId: 'team_x',
+        instruction: 'Route your report. Read the port in .switchboard/api-server-port.txt and POST there.',
+    };
+    const out = migrateCodingTeamOrders([legacy]);
+    assert.ok(!out[0].instruction.includes('api-server-port.txt'),
+        'the port-file body is the one legacy shape that must still be rewritten');
+    assert.strictEqual(out[0].version, CONTEXT_AWARE_COMPLETION_ORDER_VERSION,
+        'a healed row is stamped so the next read is a no-op');
+    assert.deepStrictEqual(migrateCodingTeamOrders(out), out,
+        'second pass must return the input by reference (idempotent)');
+});
+
+// ── a head seat is never named after its definition ──────────────────────
+//
+// `result.terminal?.friendlyName || group?.name` is how a definition name became
+// a terminal name: starting `feature-implementation` ("Lead team") produced a
+// seat called "Lead team" and a group id derived from it. The head's name comes
+// from its ROLE. Source-level because `instantiateAgentGroupCore` takes six host
+// callbacks and the defect is in what it PASSES, not in what it returns.
+
+test('instantiateAgentGroupCore never passes the definition name as the head seat name', () => {
+    const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'agentGroupInstantiation.ts'), 'utf8');
+    const start = src.indexOf('const result = await createHeadWithDelegates({');
+    assert.ok(start > 0, 'the createHeadWithDelegates call was not found');
+    const spec = src.slice(start, src.indexOf('});', start));
+    assert.ok(!/\bname:\s*group\?\.name/.test(spec),
+        'the head spec must not pass group?.name — that names the seat after the team');
+    assert.ok(/teamName:\s*group\?\.name/.test(spec),
+        'the definition name belongs on teamName, where it is a team name');
+
+    const fallbackIdx = src.indexOf('const headName =');
+    assert.ok(fallbackIdx > 0, 'the headName binding was not found');
+    const fallback = src.slice(fallbackIdx, src.indexOf('\n', fallbackIdx));
+    assert.ok(!/group\?\.name/.test(fallback),
+        'the headName fallback must not be the definition name');
+    assert.ok(/headRole/.test(fallback),
+        'the headName fallback must derive from the head ROLE (e.g. `${headRole}-1`)');
 });
 
 // ── runner ────────────────────────────────────────────────────────────────

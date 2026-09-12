@@ -16,6 +16,17 @@ The parent card ("Three Clear-Path Defects Wiped Agent Context That Had Just Bee
 
 **The knowledge existed at dispatch and was discarded.** The dispatch path (`performKanbanDispatch` / `_dispatchRoundCore`) resolved the team to assign the seat. By completion, that resolution is gone — `queue/done` re-derives it from config. The seat's dispatched record (`dispatchedTerminal` on the plan row) does not carry the team membership that dispatched it.
 
+> **Verified this session (line drift):** the resolution path is accurate against HEAD, with line
+> numbers shifted ~95-110. `relayHead` resolves at `LocalApiServer.ts:6029-6041` (plan cited
+> `:5948`); `isTeamMember` at `:6133` (cited `:6049`); the clear branch the fix targets is around
+> `:6117+` (cited `:6117`, now the relay block). `_readRegisteredTeamGroups` is at `:8324` (cited
+> `:8228`) with the `catch { /* best effort */ }` swallow at `:8337` (cited `:8241`);
+> `_resolveTeamGroupForSeat` at `:8358` (cited `:8262`). The `held` record carries
+> `dispatchedTerminal` (`:6086`) — the runtime dispatch record the cache approach would extend.
+> The `plans` table itself has no `dispatched_terminal` column (it lives in `plan_runtime_state`,
+> `KanbanDatabase.ts:389`); the plan's "plan row" wording means the dispatch record keyed by
+> `planId`, whichever table holds it.
+
 ## Metadata
 
 - **Complexity:** 5
@@ -24,6 +35,18 @@ The parent card ("Three Clear-Path Defects Wiped Agent Context That Had Just Bee
 ## User Review Required
 
 Yes — the fix direction (cache-at-dispatch vs. fail-loudly-at-completion) is a design choice with a trade-off. See Outstanding Questions.
+
+> **Resolved (user, this session):**
+> - **Cache location: DB only, not in-memory.** The team-group id that dispatched the seat is
+>   written to the plan row (or a side table keyed by `planId`/`seat`) — survives restart, readable
+>   by both hosts. An in-memory record is rejected (lost on standalone restart, invisible to the
+>   extension host).
+> - **Operator disbands team mid-session: preserve.** A seat whose team group was removed keeps its
+>   scrollback until its next dispatch (which clears it). The operator can bulk-clear via
+>   `/terminals/clear` if disband was intentional. A silent clear on a disbanded team is the same
+>   class of bug this card exists to remove.
+>
+> Both match the plan's stated assumptions; the coder may proceed.
 
 ## Complexity Audit
 
@@ -91,7 +114,27 @@ The principle: **on uncertainty about team membership, preserve, don't clear.** 
 - **Negative invariant:** assert `queue/done` does NOT clear a seat whose dispatch record carries a team group id, regardless of config resolution outcome.
 - **Paired positive:** assert `queue/done` DOES clear a seat whose dispatch record carries no team group id (genuine standalone), when config resolution returns empty.
 
-## Outstanding Questions
+## Resolved Questions
 
-- **[user]** Cache-at-dispatch (carry team group id on the plan row) vs. fail-loudly-at-completion (refuse to clear on resolution uncertainty). These are coupled: failing loudly requires knowing the seat *was* a team member, which is the cache. The real question is the surface: is extending the plan row (or a side table) at every dispatch site in both hosts acceptable, or should the team membership be resolved once at dispatch and stored on the seat's runtime record (in-memory, lost on restart)? Proceeding on the assumption that the plan-row approach is correct — it survives restarts and is readable by both hosts, where an in-memory record is lost on standalone restart and invisible to the extension host.
-- **[user]** Should a team group removed by an operator mid-session preserve the seat's context, or clear it? Preserving is safe (clear on next dispatch); clearing is what the operator may have intended by disbanding the team. Proceeding on the assumption that preserve is correct — the operator can always bulk-clear via `/terminals/clear`, and a silent clear on a disbanded team is the same class of bug this card exists to remove.
+- **Cache location: DB only, not in-memory** (user, this session). The team-group id that
+  dispatched the seat is written to the plan row (or a side table keyed by `planId`/`seat`) —
+  survives restart, readable by both hosts. An in-memory record was rejected: lost on standalone
+  restart, invisible to the extension host.
+- **Operator disbands team mid-session: preserve** (user, this session). A seat whose team group
+  was removed keeps its scrollback until its next dispatch (which clears it). The operator can
+  bulk-clear via `/terminals/clear` if disband was intentional. A silent clear on a disbanded team
+  is the same class of bug this card exists to remove.
+
+## Implementation Summary
+
+Implemented all three proposed changes. (1) `_readRegisteredTeamGroups` and `_resolveTeamGroupForSeat` (LocalApiServer, shared) now return a tagged `{ groups, source }` / `{ group, source }` where `source` is `'config' | 'empty' | 'read-failed'`; the former silent `catch { /* best effort */ }` now records the failure in the tag instead of swallowing it as an empty array. (2) Added a V76 `dispatched_team_group` column to `plan_runtime_state` (schema + ALTER migration + read-back merge into board rows), written at dispatch time by a new shared `_stampDispatchedTeamGroup` helper called from `performKanbanDispatch` (after success) and `performKanbanDispatchAcked` (chained on the delivery promise) — the two shared dispatch chokepoints both composition roots route through, so no composition-root wiring and no standalone/extension divergence. The dispatch upserts reset the column to `''` on every dispatch write and the off-switches (`clearWorkingState`, `releaseDispatchHolder`) clear it, so a re-dispatch as standalone inherits no stale team id. (3) `queue/done`'s `isTeamMember` now resolves in precedence: a non-empty `held.dispatchedTeamGroup` (the dispatch record) → preserve regardless of the current config read; else the tagged config read, where a `'read-failed'` source → preserve (uncertain) and a clean `'config'/'empty'` read falls back to the parent card's `relayHead || group` check. The failure-asymmetric choice is preserve: a preserved standalone is cleared on its next dispatch, a cleared team member loses its review. Per run instructions, compilation and automated tests were skipped; the written verification plan (incl. both-hosts dispatch-site coverage and the negative/paired-positive invariants) remains for the reviewer to execute.
+
+## Review Findings
+
+Reviewed all three changes; the tagged `{ groups, source }` read and `queue/done`'s preserve-on-uncertainty precedence are correct as written, and the inbound field check passed — `dispatchedTeamGroup` is set in `_readRows` and overlaid by the `plan_runtime_state` merge, so `held.dispatchedTeamGroup` really exists on the `getBoard` rows the handler reads. The dispatch-time stamp did NOT meet the plan's "every dispatch site in both composition roots" invariant: it lived in `performKanbanDispatch`/`performKanbanDispatchAcked`, and the kanban webview drag posts `triggerAction` directly, so the operator's own dispatch path stamped `''`. Moved the resolution into `KanbanDatabase.updateDispatchInfoByPlanFile` and `attributePasteDispatch` — the one writer the HTTP door, the queue pop, the drag and the paste all converge on in both roots — and deleted `_stampDispatchedTeamGroup` and `setDispatchedTeamGroup`, which were a second writer that could clobber a good id with `''` when its own read failed. Also reverted the edit to the shipped `MIGRATION_V74_SQL` body (the file's own rule at `KanbanDatabase.ts:873`); V76's ALTER plus `SCHEMA_TABLES_SQL` already cover both fresh and migrated databases, confirmed by `test:contract:schema-workspace-id`. Files changed: `src/services/KanbanDatabase.ts`, `src/services/LocalApiServer.ts`; `npx tsc --noEmit` clean and the schema/migration suite passes.
+
+## Deferred Findings
+
+- MAJOR `src/services/LocalApiServer.ts:6545` — the preserve-on-uncertainty branch itself has NO automated check. No suite constructs a `read-failed` source or a dispatch record with a team group id, so the plan's negative and paired-positive invariants are verified only by reading. The verdict on this mechanism is provisional: passing the unrelated suites is not evidence it works.
+- NIT `src/services/LocalApiServer.ts:8751` — `_readRegisteredTeamGroups` reports `source: 'config'` whenever `groups.length > 0`, even if the OTHER key threw. A partial read failure therefore reads as a clean read; only a total failure tags `read-failed`.
+- NIT — a re-dispatch of the same plan while a prior dispatch's write is still in flight can interleave the two `dispatched_team_group` values. Narrow, and both writes now happen inside the same upsert rather than as a follow-up UPDATE, which shrinks the window rather than closing it.

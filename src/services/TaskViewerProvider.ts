@@ -4209,7 +4209,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 // lives in `switchboard.prompts.terminals.groups`, which no other
                 // webview verb exposes; without this the /command Teams view
                 // cannot tell which team a running head belongs to.
-                const headMap = await resolveLiveGroupHeads({ db: this._getKanbanDbIfPresent(sourceRoot) });
+                // `_getKanbanDbIfPresent` is async — it MUST be awaited. Passing the
+                // Promise through `db?: any` type-checks, throws inside
+                // `resolveLiveGroupHeads`' own try, and returns an empty map, so the
+                // head key silently never reaches the wire on this host while the
+                // standalone arm serves it. That is the composition-root divergence
+                // this change exists to close, not to re-create.
+                const headDb = sourceRoot ? await this._getKanbanDbIfPresent(sourceRoot) : undefined;
+                const headMap = headDb ? await resolveLiveGroupHeads({ db: headDb }) : new Map<string, string>();
                 const groupsWithHead = headMap.size > 0
                     ? teams.map((g: any) => {
                         if (!g || typeof g !== 'object') { return g; }

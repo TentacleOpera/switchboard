@@ -1347,6 +1347,16 @@ jobs:
       - name: Team auto-start workspace scope contract (multi-root resolution, legibility)
         run: npm run test:contract:team-autostart-scope
 
+      # The pure team-wiring helpers changes 4-8 of the team-wiring plan touch:
+      # rosterOfGroup (object members resolve to friendlyName instead of being
+      # dropped, which is what silently disabled reviewer delegation),
+      # terminalsShareTeam's object-roster vs string-roster vs read-failure
+      # answers, resolveHeadForTerminal, resolveLiveGroupHeads, and command.js's
+      # resolveTeamSeats/filterByProjectFor — 2,000 lines of webview that had no
+      # test file at all.
+      - name: Team wiring roster/seat resolution contract (object rosters, live heads, pure webview fns)
+        run: npm run test:contract:team-wiring-roster-seats
+
       # The TEAMS tab is a tab of the BOARD webview — no terminal grid, no pane
       # assignments, no layout — so a team started from it spawned off-screen and
       # the operator saw a STARTING… button go quiet. Starting a team is the

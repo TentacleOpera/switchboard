@@ -1045,6 +1045,7 @@
     "test:contract:terminal-operations-no-periodic-reopen": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-operations-no-periodic-reopen.test.js",
     "test:contract:multi-parent-terminals": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/multi-parent-terminals-contract.test.js",
     "test:contract:team-autostart-scope": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/team-autostart-workspace-scope.test.js",
+    "test:contract:team-wiring-roster-seats": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/team-wiring-roster-seats-contract.test.js",
     "test:contract:teams-tab-no-start": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/teams-tab-no-start-contract.test.js",
     "test:contract:standalone-agent-isolation": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/standalone-agent-team-isolation-contract.test.js",
     "test:contract:autoban-state": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/autoban-state-regression.test.js",
@@ -1100,7 +1101,8 @@
     "test:contract:mobile-command-route": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/mobile-command-route-contract.test.js",
     "test:contract:workspace-mappings": "mocha --ui tdd --require ./src/test/bootstrap/sandboxStateHome.js --require ./src/test/bootstrap/vscodeStub.js out/test/workspace-identity-precedence.test.js",
     "test:contract:resident-memory": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/resident-memory-budget-contract.test.js",
-    "test:contract:inotify-watch-topology": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/inotify-watch-topology-contract.test.js"
+    "test:contract:inotify-watch-topology": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/inotify-watch-topology-contract.test.js",
+    "test:contract:composer": "node src/test/composer-contract.test.js"
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.0.0",

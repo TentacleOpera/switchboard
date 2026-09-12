@@ -1796,7 +1796,15 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
                 // Stamp the schema version so a future body revision migrates on
                 // `version < CONTEXT_AWARE_COMPLETION_ORDER_VERSION`, not on a new
                 // text recogniser. See migrateCodingTeamOrders.
-                next.push({ ...teamOrder, id: `context-aware-completion:${groupId}:team`, version: CONTEXT_AWARE_COMPLETION_ORDER_VERSION });
+                //
+                // The stamp is the SYSTEM-AUTHORED marker, so it goes only on the
+                // default install. An operator-authored team prompt lands under
+                // the same id with its text in `instruction`; stamping it would
+                // hand the migrator licence to overwrite the operator's words at
+                // the next version bump. Unstamped means "not ours to rewrite".
+                next.push(teamPromptInstruction
+                    ? { ...teamOrder, id: `context-aware-completion:${groupId}:team` }
+                    : { ...teamOrder, id: `context-aware-completion:${groupId}:team`, version: CONTEXT_AWARE_COMPLETION_ORDER_VERSION });
             }
 
             // Head-facing order (skipped for external heads — no head terminal).
@@ -2093,14 +2101,40 @@ export function migrateCodingTeamOrders(orders: StandingOrder[]): StandingOrder[
         // needs no new text recogniser. The install path skips rows that
         // already exist, so without this a re-spawn never updates the text.
         //
+        // TWO rewrite triggers, deliberately separate — `instruction` alone is
+        // NOT one of them. An operator-authored team prompt (`teamPromptInstruction`,
+        // from a team definition's `prompt`) is persisted under this exact id with
+        // its text in `instruction`, which is why the retired text matchers compared
+        // exact bodies rather than keying on the id (see the note on
+        // `reconcileSystemFragmentRows`). Rewriting every instruction row would
+        // destroy that prompt on the next read — a default behaving exactly like a
+        // configured value.
+        //
+        //   (1) VERSION-DRIVEN, the going-forward mechanism. `wireSpawnedTeam`
+        //       stamps `version` only on a SYSTEM-authored row, so the stamp IS the
+        //       "ours to rewrite" marker; a body revision bumps the constant and
+        //       needs no new text recogniser. An unstamped row is never version-
+        //       migrated.
+        //   (2) LEGACY HEAL, narrow and terminal. Pre-stamp installs carry a body
+        //       that names `.switchboard/api-server-port.txt`, which
+        //       team-state-endpoint-access-contract forbids reaching an agent. That
+        //       one semantic marker — not a frozen copy of the body — is the
+        //       recogniser, and it cannot match an operator prompt unless the
+        //       operator wrote the forbidden reference themselves, in which case
+        //       rewriting is still the contract-correct answer.
+        //
         // Only body-based rows are rewritten: a fragment-based row (the current
-        // default install) carries no `instruction` and is left to its
-        // fragments. The rewrite target is the current body — the head body for
-        // `team-head` scope, the member body + GIT_SAFETY_DIRECTIVE for `team`
-        // scope — and the version stamp is bumped so the next read is a no-op.
+        // default install) carries no `instruction` and is left to its fragments
+        // — which resolve their text live, so a body revision reaches them with
+        // no migration at all. The rewrite target is the current body — the head
+        // body for `team-head` scope, the member body + GIT_SAFETY_DIRECTIVE for
+        // `team` scope — and the stamp is bumped so the next read is a no-op.
         if (typeof o.id === 'string' && o.id.startsWith('context-aware-completion:')) {
-            const stampedVersion = typeof o.version === 'number' && o.version >= 0 ? o.version : 0;
-            if (stampedVersion < CONTEXT_AWARE_COMPLETION_ORDER_VERSION && typeof o.instruction === 'string') {
+            const isStamped = typeof o.version === 'number' && o.version >= 0;
+            const versionStale = isStamped && (o.version as number) < CONTEXT_AWARE_COMPLETION_ORDER_VERSION;
+            const legacyPortFileBody = !isStamped && typeof o.instruction === 'string'
+                && o.instruction.includes('.switchboard/api-server-port.txt');
+            if ((versionStale || legacyPortFileBody) && typeof o.instruction === 'string') {
                 const gid = o.teamId || '';
                 const head = o.parent || '';
                 if (scope === 'team-head') {

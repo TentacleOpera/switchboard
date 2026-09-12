@@ -3016,12 +3016,6 @@ export class LocalApiServer {
                 if (targetTerm) {
                     this.markSeatActive(workspaceRoot, String(targetTerm).trim());
                 }
-                // V76: stamp the dispatching team group id onto the runtime row
-                // AFTER triggerAction has written dispatched_terminal, so the
-                // completion-time clear decision can trust the dispatch record
-                // even when the config read later races, fails, or returns empty.
-                // Best-effort; never aborts the dispatch on failure.
-                void this._stampDispatchedTeamGroup(workspaceRoot, record.planId, targetTerm);
             }
             return {
                 status: success ? 200 : 502,
@@ -3177,41 +3171,6 @@ export class LocalApiServer {
     }
 
     /**
-     * V76: stamp the dispatching team group id onto the plan's runtime row.
-     * Called by `performKanbanDispatch` (after a successful dispatch) and
-     * `performKanbanDispatchAcked` (after the delivery promise resolves) — the
-     * two shared dispatch chokepoints both roots route through, so the write
-     * lands in one place with no composition-root wiring (the AGENTS.md
-     * standalone/extension divergence trap).
-     *
-     * Resolves the registered team group whose roster holds `seat` AT DISPATCH
-     * TIME — the moment `wireSpawnedTeam` has just written the config, so the
-     * read is reliable (the race this card closes is at COMPLETION, when the
-     * config may have changed). `''` is written for a standalone dispatch (no
-     * team, or the seat is on no roster), which resets any stale value from a
-     * prior team dispatch of the same plan.
-     *
-     * Best-effort: a failure logs and never aborts the dispatch. The
-     * completion-time clear decision degrades to the pre-V76 config-resolution
-     * path (the parent card's fix), not a regression.
-     */
-    private async _stampDispatchedTeamGroup(workspaceRoot: string, planId: string, seat: string | null | undefined): Promise<void> {
-        try {
-            const db = await this._options.getKanbanDatabase?.(workspaceRoot);
-            if (!db || !planId) { return; }
-            let groupId = '';
-            const resolvedSeat = (seat || '').trim();
-            if (resolvedSeat) {
-                const { group } = await this._resolveTeamGroupForSeat(workspaceRoot, resolvedSeat);
-                groupId = (group && typeof group.id === 'string') ? group.id : '';
-            }
-            await db.setDispatchedTeamGroup?.(planId, groupId);
-        } catch (err) {
-            console.warn('[LocalApiServer] _stampDispatchedTeamGroup failed:', err);
-        }
-    }
-
-    /**
      * The acked variant of `performKanbanDispatch` for the command surface. Runs
      * the same gate pre-flight (so 400/409 refusals still arrive immediately and
      * loudly — the ack is NEVER sent for a dispatch that is about to fail), then
@@ -3281,13 +3240,6 @@ export class LocalApiServer {
             // first action (a DB write, milliseconds); the prompt delivery is the
             // slow part this whole split exists to hide from the UI.
             const delivery = kanbanVerb('triggerAction', { sessionId, targetColumn, workspaceRoot, bypassTriggerGate: true, unattended: !!dispatchOptions?.unattended, targetTerminalOverride: teamOverride, originTerminal: dispatchOptions?.originTerminal, skipClear: !!dispatchOptions?.skipClear, clearBeforePrompt: dispatchOptions?.clearBeforePrompt }, workspaceRoot);
-            // V76: after the delivery lands (triggerAction has written
-            // dispatched_terminal), stamp the dispatching team group id. Chained
-            // on resolve — the ack returns immediately, the stamp is best-effort
-            // and never blocks the UI. A rejection is recorded below.
-            void delivery.then(() => {
-                void this._stampDispatchedTeamGroup(workspaceRoot, planId, seat);
-            });
             // Retain the promise so a rejection is recorded, never unhandled. A
             // rejection (e.g. terminal closed mid-chunk) leaves dispatchedAt
             // unchanged, so the poll times out to `unknown` at the deadline — the
@@ -4273,10 +4225,11 @@ export class LocalApiServer {
      * Idempotency: a repeat release returns the existing `released_at` without
      * re-writing. A release of an ALREADY COMPLETED card is a no-op (the card is
      * done; the team is already free via `completed_at`) — returns idempotent.
-     * This is the "already released" guard the plan requires: a
-     * release-then-complete sequence cannot leave a card both released and
-     * completable, because a completed card refuses the release and a released
-     * card refuses a second release.
+     * This is the "already released" guard the plan requires. Note the guard is
+     * one-directional by design: a completed card refuses a release, and a
+     * released card refuses a SECOND release, but a released card remains
+     * completable — releasing says "not finished yet", so finishing it later is
+     * the expected sequel, and the row then carries both stamps truthfully.
      *
      * Called by `POST /kanban/card/release` (per-card) and `POST /kanban/team/release`
      * (bulk) — the two release verbs share this one helper, the same way the two
@@ -4295,6 +4248,12 @@ export class LocalApiServer {
         planId: string;
         released_at?: string;
         note?: string;
+        /** True when the dispatch holder was actually cleared — i.e. the team is
+         *  genuinely unblocked. False (with `freeError`) when the clear was
+         *  skipped or threw: the row carries `released_at` but the team is still
+         *  in flight, which must not read as an unqualified success. */
+        freed?: boolean;
+        freeError?: string;
         cleared?: boolean;
         clearError?: string;
         clearReason?: string;
@@ -4395,11 +4354,27 @@ export class LocalApiServer {
 
         // 5. Clear the dispatch holder so `heldByTeam` returns false — this is
         // what frees the team for POST /kanban/queue/next. `completed_at` stays
-        // NULL (a release is not a completion), so the holder clear is the
+        // NULL (a release is not a completion), so the holder clear is the ONLY
         // release signal the in-flight predicate reads.
+        //
+        // Because it is the only signal, a skipped or failed clear means the
+        // release did nothing — the card is stamped `released_at` and the team
+        // is still blocked. That must not be reported as plain success: the
+        // caller is an agent staring at a 409 it was told this verb would clear.
+        // `freed` carries the answer and `freeError` the reason.
+        let freed = false;
+        let freeError: string | undefined;
         if (existing.planFile && existing.workspaceId) {
-            try { await db.releaseDispatchHolder?.(existing.planFile, existing.workspaceId); }
-            catch (err) { console.warn('[LocalApiServer] releaseCardInternal releaseDispatchHolder failed:', err); }
+            try {
+                await db.releaseDispatchHolder?.(existing.planFile, existing.workspaceId);
+                freed = true;
+            } catch (err) {
+                freeError = err instanceof Error ? err.message : String(err);
+                console.warn('[LocalApiServer] releaseCardInternal releaseDispatchHolder failed:', err);
+            }
+        } else {
+            freeError = `Card '${planId}' has no planFile/workspaceId on its row, so its dispatch holder could not be cleared — the team is NOT freed.`;
+            console.warn(`[LocalApiServer] releaseCardInternal: ${freeError}`);
         }
 
         // 6. Clear the accepted coding seat (same path as completeCardInternal).
@@ -4439,6 +4414,12 @@ export class LocalApiServer {
             planId,
             released_at: timestamp,
             note,
+            // `freed` is the answer to the question the caller actually asked —
+            // "is my team unblocked?" — and is false when the holder clear was
+            // skipped or threw. Never omitted, so a reader cannot mistake its
+            // absence for a yes.
+            freed,
+            ...(freeError ? { freeError } : {}),
             cleared,
             ...(clearError ? { clearError } : {}),
             ...(clearReason ? { clearReason } : {}),
@@ -6021,7 +6002,12 @@ export class LocalApiServer {
                     const result = await this.releaseCardInternal(db, targetCard.planId, from, {
                         workspaceRoot,
                     });
-                    if (result.success) {
+                    if (result.success && result.freed === false) {
+                        // Stamped but not unblocked — report it as a failure, not
+                        // as a release, or the operator reads "released" for a
+                        // team that is still in flight.
+                        failed.push({ planId: targetCard.planId, error: result.freeError || 'Release did not clear the dispatch holder' });
+                    } else if (result.success) {
                         released.push(targetCard.planId);
                         const seat = result.acceptedCodingSeat || targetCard.dispatchedTerminal;
                         if (seat && !releasedSeats.includes(seat)) {

@@ -1102,7 +1102,6 @@ const MIGRATION_V74_SQL = [
         dispatched_agent    TEXT DEFAULT '',
         dispatched_ide      TEXT DEFAULT '',
         dispatched_terminal TEXT DEFAULT '',
-        dispatched_team_group TEXT DEFAULT '',
         dispatched_at       TEXT DEFAULT NULL,
         last_liveness_at    TEXT DEFAULT NULL,
         blocked_at          TEXT DEFAULT NULL,
@@ -13625,6 +13624,17 @@ FROM plans
             );
         }
 
+        // V76: resolve the dispatching team group HERE, in the one writer every
+        // dispatch path reaches — the HTTP door (`performKanbanDispatch`), the
+        // queue pop, and the board drag (`triggerAction` →
+        // `_recordDispatchIdentity` → `updateDispatchInfo`) all land on this
+        // method, in both composition roots. Resolving it at a caller covers only
+        // that caller's door and leaves the drag path stamping ''. Reads the same
+        // two config keys `LocalApiServer._readRegisteredTeamGroups` does; '' when
+        // the seat is on no roster (a genuine standalone dispatch), which also
+        // resets any stale id from a prior team dispatch of this plan.
+        const teamGroupId = await this._resolveDispatchedTeamGroupId(terminalName);
+
         // 2. Machine-local runtime tier update: upsert into plan_runtime_state
         if (this._db) {
             try {
@@ -13634,18 +13644,18 @@ FROM plans
                     this._db.run(
                         `INSERT INTO plan_runtime_state (
                             plan_id, device_id, workspace_id, dispatched_agent, dispatched_ide,
-                            dispatched_terminal, dispatched_at, last_liveness_at, blocked_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
+                            dispatched_terminal, dispatched_team_group, dispatched_at, last_liveness_at, blocked_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
                         ON CONFLICT(plan_id, device_id) DO UPDATE SET
                             dispatched_agent = excluded.dispatched_agent,
                             dispatched_ide = excluded.dispatched_ide,
                             dispatched_terminal = excluded.dispatched_terminal,
-                            dispatched_team_group = '',
+                            dispatched_team_group = excluded.dispatched_team_group,
                             dispatched_at = excluded.dispatched_at,
                             last_liveness_at = NULL,
                             blocked_at = NULL,
                             updated_at = excluded.updated_at`,
-                        [planId, machineId, workspaceId, info.dispatchedAgent, info.dispatchedIde, terminalName, now, now]
+                        [planId, machineId, workspaceId, info.dispatchedAgent, info.dispatchedIde, terminalName, teamGroupId, now, now]
                     );
                     await this._persist();
                 }
@@ -13707,6 +13717,11 @@ FROM plans
             );
         }
 
+        // V76: same shared resolution as updateDispatchInfoByPlanFile — a paste
+        // into a team seat is a dispatch to that team, and '' here would read at
+        // completion time as "was never on a team".
+        const teamGroupId = await this._resolveDispatchedTeamGroupId(terminalName);
+
         // Machine-local runtime tier update
         if (this._db) {
             try {
@@ -13716,17 +13731,17 @@ FROM plans
                     this._db.run(
                         `INSERT INTO plan_runtime_state (
                             plan_id, device_id, workspace_id, dispatched_agent, dispatched_ide,
-                            dispatched_terminal, dispatched_at, last_liveness_at, blocked_at, updated_at
-                        ) VALUES (?, ?, ?, ?, '', ?, ?, NULL, NULL, ?)
+                            dispatched_terminal, dispatched_team_group, dispatched_at, last_liveness_at, blocked_at, updated_at
+                        ) VALUES (?, ?, ?, ?, '', ?, ?, ?, NULL, NULL, ?)
                         ON CONFLICT(plan_id, device_id) DO UPDATE SET
                             dispatched_agent = excluded.dispatched_agent,
                             dispatched_terminal = excluded.dispatched_terminal,
-                            dispatched_team_group = '',
+                            dispatched_team_group = excluded.dispatched_team_group,
                             dispatched_at = excluded.dispatched_at,
                             last_liveness_at = NULL,
                             blocked_at = NULL,
                             updated_at = excluded.updated_at`,
-                        [planId, machineId, workspaceId, info.dispatchedAgent, terminalName, stamp, now]
+                        [planId, machineId, workspaceId, info.dispatchedAgent, terminalName, teamGroupId, stamp, now]
                     );
                     await this._persist();
                 }
@@ -13738,31 +13753,62 @@ FROM plans
     }
 
     /**
-     * V76 writer for `plan_runtime_state.dispatched_team_group` — the id of the
-     * registered terminal group whose roster held the seat at dispatch time.
-     * Called by `LocalApiServer.performKanbanDispatch` / `performKanbanDispatchAcked`
-     * AFTER the dispatch upsert (`updateDispatchInfoByPlanFile`) has created the
-     * runtime row, so this UPDATE always has a row to touch. `groupId` is '' for a
-     * standalone dispatch (no team), which resets any stale value from a prior
-     * team dispatch of the same plan.
+     * V76: resolve the id of the registered terminal group whose roster holds
+     * `seatName` RIGHT NOW, for stamping onto `plan_runtime_state.dispatched_team_group`
+     * as part of the dispatch write. Returns `''` when the seat is on no roster
+     * (a genuine standalone dispatch) or when the groups cannot be read.
      *
-     * Best-effort: a failure logs and never aborts the dispatch — the
-     * completion-time clear decision degrades to the pre-V76 config-resolution
-     * path, which is the parent card's fix, not a regression.
+     * Lives here, not at a caller, because this is the one place every dispatch
+     * path in both composition roots converges: the HTTP door
+     * (`performKanbanDispatch`), the queue pop, the board drag
+     * (`triggerAction` → `_recordDispatchIdentity` → `updateDispatchInfo`) and
+     * the paste attribution all end at `updateDispatchInfoByPlanFile` /
+     * `attributePasteDispatch`. Resolving at a caller covers that caller's door
+     * only — which is how the drag path ends up stamping '' and a team seat reads
+     * as standalone at completion.
+     *
+     * Reads the same two keys `LocalApiServer._readRegisteredTeamGroups` does:
+     * `switchboard.prompts.terminals.groups` (the value of `TERMINALS_GROUPS_KEY`,
+     * pinned to that exact string by terminal-groups-key-unification-contract —
+     * not imported here, to keep the DB module off the teamWiring import chain)
+     * and the legacy bare `terminals.groups`. Roster precedence matches
+     * `rosterOfGroup`: `order` when non-empty, else `members`, with object members
+     * resolved to `friendlyName`/`name` rather than dropped.
+     *
+     * A `''` on failure is deliberate and safe HERE: the completion-time decision
+     * treats an absent dispatch record as "fall back to the tagged config read",
+     * which is the pre-V76 path, not a silent clear.
      */
-    public async setDispatchedTeamGroup(planId: string, groupId: string): Promise<void> {
-        if (!(await this.ensureReady()) || !this._db) return;
-        if (!planId) return;
-        try {
-            const machineId = getMachineId();
-            this._db.run(
-                `UPDATE plan_runtime_state SET dispatched_team_group = ?, updated_at = ? WHERE plan_id = ? AND device_id = ?`,
-                [groupId || '', new Date().toISOString(), planId, machineId]
-            );
-            await this._persist();
-        } catch (err) {
-            console.warn('[KanbanDatabase] setDispatchedTeamGroup failed:', err);
+    private async _resolveDispatchedTeamGroupId(seatName: string): Promise<string> {
+        const seat = (seatName || '').trim();
+        if (!seat) { return ''; }
+        const groups: any[] = [];
+        for (const key of ['switchboard.prompts.terminals.groups', 'terminals.groups']) {
+            try {
+                const raw = await this.getConfigJson(key, [] as any[]) as any[];
+                if (Array.isArray(raw)) {
+                    for (const g of raw) {
+                        if (g && typeof g === 'object' && !groups.some(x => x.id === g.id)) { groups.push(g); }
+                    }
+                }
+            } catch { /* an unreadable key contributes nothing */ }
         }
+        for (const g of groups) {
+            const raw: any[] = Array.isArray(g?.order) && g.order.length
+                ? g.order
+                : (Array.isArray(g?.members) ? g.members : []);
+            for (const n of raw) {
+                const name = typeof n === 'string'
+                    ? n
+                    : (n && typeof n === 'object'
+                        ? (typeof n.friendlyName === 'string' ? n.friendlyName : (typeof n.name === 'string' ? n.name : ''))
+                        : '');
+                if (name === seat) {
+                    return typeof g.id === 'string' ? g.id : '';
+                }
+            }
+        }
+        return '';
     }
 
     /**
