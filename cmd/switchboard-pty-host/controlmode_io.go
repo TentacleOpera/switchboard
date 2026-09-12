@@ -269,6 +269,14 @@ func sendListPanesLocked(t *terminal, target string) error {
 	return writeControlCommandLocked(t, fmt.Sprintf("list-panes -t %s -F \"#{pane_id}\"", target), blockPaneID)
 }
 
+// `-E -1` bounds the capture ONE LINE ABOVE the visible screen. Without it
+// `-S -50000` runs to the end of the pane, so the replay carried the CURRENT
+// screen as well as the scrollback above it — the client rendered the agent's
+// prompt from the replay and the live agent then redrew it, which is the
+// doubled input area. Verified on tmux 3.4: the unbounded capture and the
+// visible screen both contain the same prompt line. The live pane draws itself;
+// history's job is only the part that has scrolled off.
+//
 // sendHistoryFetchLocked issues the two capture-pane calls that fill a freshly
 // opened panel: the scrollback (`-peqJN -S -50000`) and the pending incomplete
 // escape fragment (`-p -P -C`). The caller must push blockScrollback then
@@ -279,7 +287,7 @@ func sendListPanesLocked(t *terminal, target string) error {
 // holds t.mu.
 func sendHistoryFetchLocked(t *terminal) error {
 	pane := "%" + t.paneID
-	if err := writeControlCommandLocked(t, fmt.Sprintf("capture-pane -t %s -peqJN -S -50000", pane), blockScrollback); err != nil {
+	if err := writeControlCommandLocked(t, fmt.Sprintf("capture-pane -t %s -peqJN -S -50000 -E -1", pane), blockScrollback); err != nil {
 		return err
 	}
 	return writeControlCommandLocked(t, fmt.Sprintf("capture-pane -t %s -p -P -C", pane), blockPending)
