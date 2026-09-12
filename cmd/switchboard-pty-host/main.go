@@ -777,7 +777,14 @@ func (f *fleet) close(name string, killTmuxView bool) bool {
 	// exec.Command uses an argv array — no shell, no interpolation. The error
 	// is swallowed: the session may already be gone (the agent exited and tmux
 	// cleaned up) or this may be a non-tmux terminal whose field is empty.
-	if killTmuxView && t.controlMode && t.tmuxViewSession != "" {
+	// NOT gated on t.controlMode. controlMode says who DRAWS the pane; it says
+	// nothing about whether tmux owns the session. Gating the kill on it meant
+	// that turning control mode off silently turned "closing a terminal closes
+	// its tmux session" back off too, and sessions leaked on every close — the
+	// exact behaviour the close-on-close work fixed. tmuxViewSession being
+	// non-empty is the honest test: it is set at create time only for a
+	// tmux-backed seat, and is empty for extension terminals and non-tmux ptys.
+	if killTmuxView && t.tmuxViewSession != "" {
 		_ = exec.Command("tmux", "kill-session", "-t", "="+t.tmuxViewSession).Run()
 	}
 	// Per-seat close: kill the seat's WINDOW in the base session, ending the
@@ -812,7 +819,8 @@ func (f *fleet) close(name string, killTmuxView bool) bool {
 	//
 	// Both kills now answer to the same question: is this an operator closing a
 	// seat, or the board shutting down? Only the former ends an agent.
-	if killTmuxView && t.controlMode && t.tmuxSession != "" && t.tmuxWindow != "" {
+	// Also not gated on t.controlMode — same reasoning as the session kill above.
+	if killTmuxView && t.tmuxSession != "" && t.tmuxWindow != "" {
 		_ = exec.Command("tmux", "kill-window", "-t", "="+t.tmuxSession+":"+t.tmuxWindow).Run()
 	}
 	_ = t.file.Close()
