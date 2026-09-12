@@ -1205,7 +1205,16 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // a plan is ingested — mirrors the extension's KanbanProvider subscription.
     // Done here (after pushFullState is defined) so the callback can broadcast.
     ingestionEngine.onPlanDiscovered((_root, _filePath) => {
-        try { void pushFullState(); } catch (e) { console.error('[bootstrap] ingestion-driven pushFullState failed:', e); }
+        // Coalesced, NOT a bare `void pushFullState()`. This callback's rate is set
+        // by whoever fires it — the plan watcher AND the activity-light sweep, via
+        // `PlanIngestionEngine._firePlanDiscovered`. Un-serialised, a misfiring event
+        // source turns every tick into a full board rebuild (2658 cards here) with
+        // nothing bounding concurrency: that is what rode the 2026-09-12 sweep
+        // miscount (a NULL-over-NULL UPDATE counted as modified) for 13 hours until
+        // the host died on V8's 4288MB heap ceiling.
+        // `schedulePushFullState` chains pushes so they never overlap and collapses a
+        // burst into one, which is the whole reason it exists.
+        schedulePushFullState();
     });
     // Completion push. Fires from the explicit-completion clear site — POST
     // /kanban/queue/done (`LocalApiServer._runQueueDone`, wired below as
@@ -4587,7 +4596,10 @@ Each plan file must include:
             // same tick; the API path clears the DB with nothing watching the
             // file, so without this the card keeps its lit activity light until
             // an unrelated event pushes state.
-            try { void pushFullState(); } catch (e) { console.error('[bootstrap] queue/done pushFullState failed:', e); }
+            // Coalesced — see the onPlanDiscovered subscription above for why. A
+            // seat reporting done over HTTP must not be able to drive un-serialised
+            // full board rebuilds at whatever rate it posts.
+            schedulePushFullState();
         },
         onTurnEndNotify: (info: any) => {
             handleTurnEndNotify(info);
