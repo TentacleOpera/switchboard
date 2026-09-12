@@ -279,7 +279,16 @@ export class GoPtyFleetProjection {
                 + `&& { tmux list-windows -t ${session} -F '#{window_name}' 2>/dev/null | grep -Fqx ${win} `
                 + `|| tmux new-window -d -t ${session} -n ${win} ${inner}; } `
                 + `|| tmux new-session -d -s ${session} -n ${win} ${inner}; `
-                + `tmux new-session -A -d -t ${session} -s ${view} 2>/dev/null; `
+                // `has-session || new-session -d`, NOT `new-session -A -d`. Under
+                // `-A` new-session behaves as attach-session, and `-d` is not
+                // attach-session's detach flag (`-D` is) — so on a RE-SEAT, where
+                // the view already exists, it ATTACHES and never returns. The rest
+                // of the chain never runs: `select-window` never fires, the seat
+                // stays pointed at a previous generation's window, and every prompt
+                // is delivered to the old agent while the API reports success.
+                // Invisible outside a pty, which is why it survived. The explicit
+                // form states the intent — ensure the view exists, attach nothing.
+                + `tmux has-session -t ${view} 2>/dev/null || tmux new-session -d -t ${session} -s ${view}; `
                 // Control mode (`-CC`) makes tmux stop drawing the pane and emit
                 // line-oriented notifications instead; the board renders the agent
                 // as a plain terminal. That removes the need for the per-view
@@ -320,6 +329,14 @@ export class GoPtyFleetProjection {
             apiToken: this.apiToken,
             _isTeamMember: opts?._isTeamMember === true,
             controlMode: usesControlMode,
+            // Recorded by the Go host so a clearStrategy "respawn" clear can
+            // re-inject the seat's startup command verbatim — the only way a
+            // declared --model holds across a reset, since /clear restarts
+            // Devin's session internally and never re-reads the startup
+            // command. The Go host replays this string into a fresh login
+            // shell; it never re-derives or parses it. See
+            // a-seats-clear-strategy-is-declared-per-cli-family-not-assumed.md.
+            startupCommand: effectiveStartupCommand,
         });
         if (!result || result.success === false) {
             throw new Error(result?.error || `PTY create failed (state: ${this.supervisor.getState()})`);
