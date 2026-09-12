@@ -400,12 +400,11 @@ seat onto the wrong pane permanently. Separately `%pause` had no handler and the
 it now resumes. Files changed: `cmd/switchboard-pty-host/main.go`,
 `.github/workflows/integration-tests.yml` (the plan's own acceptance gate
 `test:contract:tmux-view-chrome` was defined at `package.json:1012` and invoked by nothing).
-Validation: `tmux-view-chrome` 8/8, `tmux-backend`, `pty-host-gating`, `compile-tests` green;
-`pty-route-surface` 7-red is pre-existing and unrelated.
+Validation: `tmux-view-chrome` 8/8, `tmux-backend`, `pty-host-gating`, `compile-tests` green; `go vet`/`go build`/`go test` clean; the pty-host binaries were rebuilt and `pty-host-blackbox` passes against the rebuilt binary; `pty-route-surface` 7-red is pre-existing and unrelated.
 
 ## Deferred Findings
 
-- MAJOR: Go changes not compile-verified locally (no Go toolchain on this host). `cmd/switchboard-pty-host/main.go:1`
+- NIT: No gate runs `gofmt`; `log.go`/`prompt.go` remain unformatted and new Go files shipped unformatted in 234a9060. `cmd/switchboard-pty-host/log.go:1`
 - MAJOR: No automated check exercises the live control-mode attach path; the acceptance items "typed hello/world arrives exactly", "`/` does not clear the line", "unicode input", "window-size manual holds" and "board restart leaves pids unchanged" were NOT executed in this pass. Passing the unit and source-text suites is not evidence the core mechanism works. `switch-seats-to-control-mode-and-repoint-the-three-consumers.md:1`
 - MAJOR: Pane-id filtering does not apply before the id is learned, so the first bytes after attach are unfiltered in a grouped session. `cmd/switchboard-pty-host/main.go:303`
 - NIT: `%pause` auto-resume makes the requested backpressure vestigial. `cmd/switchboard-pty-host/main.go:396`

@@ -75,9 +75,9 @@ const (
 // ControlMessage is one parsed control-mode event.
 type ControlMessage struct {
 	Kind   MessageKind
-	Type   string  // type token, e.g. "%output", "%exit", "%future-thing"
-	PaneID string  // KindOutput: pane id with sigil stripped (e.g. "16")
-	Data   []byte  // KindOutput: octal-decoded payload bytes
+	Type   string   // type token, e.g. "%output", "%exit", "%future-thing"
+	PaneID string   // KindOutput: pane id with sigil stripped (e.g. "16")
+	Data   []byte   // KindOutput: octal-decoded payload bytes
 	Fields []string // KindControl/KindIgnored: raw tokens after the type
 	Block  *Block   // KindBlock: the completed block contents
 	Exit   bool     // KindControl: this is a %exit (terminal)
@@ -123,29 +123,29 @@ const stTerminator = "\x1b\\"
 // `%exit`). Anything not in this set, and not `%output` or a block guard, is
 // reported as KindIgnored so a future tmux cannot break rendering.
 var knownControlTypes = map[string]bool{
-	"%layout-change":             true,
-	"%window-add":                true,
-	"%unlinked-window-add":       true,
-	"%window-close":              true,
-	"%unlinked-window-close":     true,
-	"%window-renamed":            true,
-	"%unlinked-window-renamed":   true,
-	"%window-pane-changed":       true,
-	"%pane-mode-changed":         true,
-	"%session-changed":           true,
-	"%client-session-changed":    true,
-	"%session-renamed":           true,
-	"%session-window-changed":    true,
-	"%sessions-changed":          true,
-	"%client-detached":           true,
-	"%paste-buffer-changed":       true,
-	"%paste-buffer-deleted":       true,
-	"%pause":                     true,
-	"%continue":                  true,
-	"%subscription-changed":       true,
-	"%message":                   true,
-	"%config-error":              true,
-	"%exit":                      true,
+	"%layout-change":           true,
+	"%window-add":              true,
+	"%unlinked-window-add":     true,
+	"%window-close":            true,
+	"%unlinked-window-close":   true,
+	"%window-renamed":          true,
+	"%unlinked-window-renamed": true,
+	"%window-pane-changed":     true,
+	"%pane-mode-changed":       true,
+	"%session-changed":         true,
+	"%client-session-changed":  true,
+	"%session-renamed":         true,
+	"%session-window-changed":  true,
+	"%sessions-changed":        true,
+	"%client-detached":         true,
+	"%paste-buffer-changed":    true,
+	"%paste-buffer-deleted":    true,
+	"%pause":                   true,
+	"%continue":                true,
+	"%subscription-changed":    true,
+	"%message":                 true,
+	"%config-error":            true,
+	"%exit":                    true,
 }
 
 // ParseControlMode consumes one chunk of control-mode output and returns the

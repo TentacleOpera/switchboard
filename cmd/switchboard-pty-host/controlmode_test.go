@@ -14,7 +14,7 @@ import (
 // feed bytes and assert decoded output.
 
 type fixtureFile struct {
-	ProtocolVersion int            `json:"protocolVersion"`
+	ProtocolVersion int `json:"protocolVersion"`
 	Captures        map[string]struct {
 		Description string `json:"description"`
 		Raw         string `json:"raw"`
@@ -250,8 +250,8 @@ func TestPayloadNeverParsed(t *testing.T) {
 	cases := map[string]string{
 		"contains %output": "%output %5 x\\033%output y\r\n",
 		"contains %begin":  "%output %5 x\\033%begin z\r\n",
-		"contains %exit":    "%output %5 x\\033%exit z\r\n",
-		"embedded newline":  "%output %5 line1\\012line2\r\n",
+		"contains %exit":   "%output %5 x\\033%exit z\r\n",
+		"embedded newline": "%output %5 line1\\012line2\r\n",
 	}
 	for name, in := range cases {
 		var st ParseState

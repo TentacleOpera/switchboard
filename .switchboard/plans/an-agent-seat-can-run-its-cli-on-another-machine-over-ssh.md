@@ -4,6 +4,29 @@ kanbanColumn: CREATED
 
 ## Goal
 
+> **Superseded:** This plan in its entirety — a per-agent (per-seat) host field, and every change
+> built on it.
+> **Reason:** *Agents Are Saved Per Machine, and a Team Picks One*
+> (`1a494f45-98c6-4575-8860-5e16a676abd5`,
+> `.switchboard/plans/agents-are-saved-per-machine-and-a-team-picks-one.md`, written 2026-09-10,
+> five days after this card) rejects the per-seat design outright at its line 33: *"One machine per
+> team removes most of the design. **No per-agent host, no per-seat host**, no head special case:
+> the team's machine covers every seat in it."* It is also correct on three points this plan is not:
+> it builds the invocation per transport (`ssh user@host '<cli>'` quote-wraps, `mosh user@host --
+> <cli>` does not, and a single concat breaks one of them), it threads the machine through
+> `instantiateAgentGroupCore` → `createHeadWithDelegates` so the **head** does not silently spawn
+> locally — this plan never mentions the head at all — and it makes remote plan-path resolution a
+> dependency (*Mapping state stops leaking one machine's folders into every other*,
+> `81a3c869-24ca-4e74-80a8-8e68f3a27192`, "lands first") instead of absorbing it as change 2b.
+> **Replaced with:** nothing here. Build `1a494f45` and its dependency; this file is history. It was
+> never implemented — a reviewer pass on 2026-09-12 confirmed zero implementation in the tree (see
+> Review Findings), which is the correct outcome for a superseded design, not a gap to close. The
+> deferred findings below enumerate what this plan would have built and are retained only as a record
+> of that scope; **do not work them.** The one idea worth carrying across is Edge-case 1 — the
+> composed command must feed the *inner* CLI binary to `deriveCliFamily`, not the transport wrapper,
+> or every remote seat is classified `unknown` forever. `1a494f45` inherits that hazard and does not
+> currently name it.
+
 A per-agent host setting in the Agents tab. When it is set, that seat's CLI runs on the named machine over SSH instead of locally. The PTY, the board and the database stay where they are.
 
 ### Problem analysis
@@ -227,6 +250,10 @@ to a hard requirement of the architecture, which is a reason to depend on
 **Nothing was implemented — there is no diff to review.** A repo-wide search finds zero occurrences of `remoteHost`, `sshHost`, `remoteCwd`, or `ssh -tt` in `src/`; `src/services/agentConfig.ts` (598 lines) contains no `host`/`ssh`/`remote` token at all; `ExtendedTerminalHandle` (`src/standalone/ptyFleetService.ts:102-130`) has no `host` field; `PtyFleetService.create` composes no SSH invocation; and `buildPromptDispatchContext` still emits the bare local `Plan File: <absolutePath>` line. No files changed, so no validation was applicable to this card (the suites run below belong to the other two plans in this batch). The card was dispatched as "implementation complete" and is not — it needs a coder, not a reviewer.
 
 ## Deferred Findings
+
+**Not work items.** This plan is superseded in full (see the block under `## Goal`); the list below
+records what it *would* have built, so the scope is legible to anyone reading `1a494f45`. Do not
+implement any of it here.
 
 - CRITICAL — Change 1 (host field in the three config stores) unimplemented: no `host` field in `agents.startupCommands`, `customAgents[]`, or `DelegateDefinition`. `src/services/agentConfig.ts:1`
 - CRITICAL — Change 1 (SSH composition) unimplemented: `PtyFleetService.create` passes the bare command through; no `ssh -tt` composition exists. `src/standalone/ptyFleetService.ts:548`

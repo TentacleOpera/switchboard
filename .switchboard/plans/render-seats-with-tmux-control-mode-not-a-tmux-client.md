@@ -218,12 +218,10 @@ armed (measured 6707 vs 14 `%output`), so the pane rendered blank; it now parses
 raw `\`,`0`,`3`,`3`, so decoding injected live escape sequences into the pane, ring and log;
 block data is now verbatim and the `-C` reply is decoded by the caller via the new
 `decodeCaptureC` (tmux `-C` doubles the backslash, a third scheme the plan did not name). Files
-changed: `controlmode.go`, `controlmode_test.go` (3 regression tests). Validation: the pre-existing
-block tests still hold (their fixtures are escape-free); Go tests could not be executed — no Go
-toolchain on this host.
+changed: `controlmode.go`, `controlmode_test.go` (3 regression tests). Validation: Go verification ran in full (toolchain at `/home/patrick/.local/share/go1.26.5/bin`, not on PATH): `go vet ./cmd/...` clean, `go build ./...` clean, `go test ./cmd/switchboard-pty-host/` green, all four pty-host targets rebuilt via `scripts/build-pty-host.sh`, and `test:contract:pty-host-blackbox` green against the REBUILT binary. The three new tests were proven discriminating by replaying them against the pre-fix code in a scratch copy: `TestExtendedOutputIsPaneOutput` fails with `kind=1` (KindControl) and `TestBlockDataIsNotOctalDecoded` fails with `block data="LIT:\x1b[31m TAIL:\\"` — the literal `\033` decoded into a live ESC, the corruption demonstrated rather than argued.
 
 ## Deferred Findings
 
-- MAJOR: Go changes not compile-verified locally (no toolchain); CI `go test ./...` is the first check. `cmd/switchboard-pty-host/controlmode.go:1`
+- NIT: `controlmode.go` and `controlmode_test.go` shipped un-gofmt-ed in 234a9060; formatted in this pass. `go vet` alone does not catch it, and no gate runs gofmt. `cmd/switchboard-pty-host/controlmode.go:1`
 - MAJOR: Whole-buffer `ESC \` and CR stripping also rewrites block content, which carries raw ESC under `-e`. `cmd/switchboard-pty-host/controlmode.go:181`
 - NIT: The plan's "17 notification shapes" inventory listed `%extended-output` as a notification; it is output. The inventory should not be re-cited as authoritative. `render-seats-with-tmux-control-mode-not-a-tmux-client.md:1`

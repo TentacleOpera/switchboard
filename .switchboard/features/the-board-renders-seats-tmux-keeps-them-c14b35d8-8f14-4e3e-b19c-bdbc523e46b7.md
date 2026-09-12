@@ -100,12 +100,11 @@ grouped team rendered and logged all four agents; and `%pause` had no handler an
 `.github/workflows/integration-tests.yml`. Validation: `tmux-view-chrome` 8/8, `tmux-backend`,
 `pty-host-gating` and `compile-tests` all green; `pty-route-surface` is 7-red but PRE-EXISTING —
 it reads none of the files this commit materially changed and its `terminals.js` assertion fails
-identically at 49e2f7ca. **Principal remaining risk: no Go toolchain exists on this host, so none
-of the Go fixes are compile-verified locally — CI's `go test ./...` is the first real check.**
+identically at 49e2f7ca. **Go verification ran in full (toolchain at `/home/patrick/.local/share/go1.26.5/bin`, not on PATH): `go vet ./cmd/...` clean, `go build ./...` clean, `go test ./cmd/switchboard-pty-host/` green, all four pty-host targets rebuilt via `scripts/build-pty-host.sh`, and `test:contract:pty-host-blackbox` green against the REBUILT binary. The three new tests were proven discriminating by replaying them against the pre-fix code in a scratch copy: `TestExtendedOutputIsPaneOutput` fails with `kind=1` (KindControl) and `TestBlockDataIsNotOctalDecoded` fails with `block data="LIT:\x1b[31m TAIL:\\"` — the literal `\033` decoded into a live ESC, the corruption demonstrated rather than argued.**
 
 ## Deferred Findings
 
-- MAJOR: Go fixes are not compile-verified — no Go toolchain on this host; `go test`/`go vet`/`gofmt` could not run. `cmd/switchboard-pty-host/controlmode.go:1`
+- NIT: `log.go` and `prompt.go` are not gofmt-clean. Pre-existing (unformatted before 234a9060) and untouched by this review, so left alone to avoid diff noise. `cmd/switchboard-pty-host/log.go:1`
 - MAJOR: The global `ESC \` (ST) and CR strips run over block content too, which with `-e` contains RAW ESC — a captured OSC sequence ending in ST would be silently eaten. Fixing needs the strips moved out of the whole-buffer path. `cmd/switchboard-pty-host/controlmode.go:181`
-- MAJOR: No automated check discriminates the core mechanism end-to-end (a real seat rendering through control mode). The new Go tests cover the parser; nothing covers the live attach path. `cmd/switchboard-pty-host/controlmode_test.go:1`
+- MAJOR: No automated check exercises a real seat rendering through control mode end-to-end. The Go tests cover the parser and `pty-host-blackbox` covers the WS/input/resize/logging path against the real binary, but no gate attaches to a live tmux seat. `cmd/switchboard-pty-host/controlmode_test.go:1`
 - NIT: `%pause` now auto-resumes, which defeats the backpressure `pause-after=30` requests; correct for restoring seat liveness but the flow-control intent is now vestigial. `cmd/switchboard-pty-host/main.go:396`
