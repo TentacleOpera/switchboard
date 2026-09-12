@@ -50,7 +50,7 @@ And two controls are fine when they do the *identical* thing. The drift pattern 
 
 **Two rail affordances for Mission Control, deliberately.** The UI spec adds a fighter-jet panel icon; this plan adds a bottom-cluster dock toggle. That is defensible — the panel is missions and schedules, the dock is the persona's terminal — but it should be a decision rather than an accident, and the two must not look like duplicates of each other in the rail.
 
-**The intro link is the resident docs URL, not `AGENTS.md`.** `AGENTS.md` is being emptied to a handful of rules by `shrink-the-injected-agent-protocol-block.md`, so it is no longer an intro. The surviving pointer is the docs line — `https://switchboard.dev/docs` — and it should come from the single constant `consolidate-the-docs-url-in-the-extension.md` establishes, not a second literal here.
+**The intro link is the resident docs URL, not `AGENTS.md`.** `AGENTS.md` is being emptied to a handful of rules by `shrink-the-injected-agent-protocol-block.md`, so it is no longer an intro. The surviving pointer is the docs line — `https://labcom.dev/docs` — and it should come from the single constant `consolidate-the-docs-url-in-the-extension.md` establishes, not a second literal here.
 
 ### Scope change from the original plan: Mission Control, not a general agent dock
 

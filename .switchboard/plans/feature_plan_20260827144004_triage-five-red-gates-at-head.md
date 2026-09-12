@@ -1,10 +1,12 @@
 # Triage five red gates at HEAD
 
+> **RESCOPED 2026-09-12.** Gate 1 of the five is not a gate to repair — it is a gate being **deleted**. *Delete the Claude mirror generator and commit the eight skill files as ordinary bundle assets* (PLAN REVIEWED) removes `npm run mirror:check`, `generateClaudeMirror` and `scripts/check-claude-mirror.js`, and drops the CI step at `.github/workflows/integration-tests.yml:71` / `package.json:967`, replacing it in the same commit with a **drift test** asserting each `.claude/skills/<name>/SKILL.md` body matches its `.agents/` counterpart modulo frontmatter. Do not regenerate the mirror to go green. **This plan now triages four gates**; gate 1 closes when the deletion lands, and the only work left here is to confirm the drift test is green against the committed skill files.
+
 ## Goal
 
 Five gates are red at HEAD independent of any current work and should be triaged:
 
-1. **`npm run mirror:check`** — `.claude/skills/switchboard-remote/SKILL.md` content drift (the checked-in mirror file doesn't match what `generateClaudeMirror` would produce from the current `.agents/` source).
+1. ~~**`npm run mirror:check`**~~ — **superseded, not triaged here.** The gate is deleted with the mirror generator (see the callout above). The drift it reports on `.claude/skills/switchboard-remote/SKILL.md` stops being drift the moment that file becomes committed source rather than generated output.
 2. **`test:contract:claude-protocol-block`** — packaged AGENTS.md drifted from `RESIDENT_PROTOCOL_BODY`, and "Plan Authoring" is back in the resident block.
 3. **`test:contract:skill-preconditions`** — `kanban_operations` and `query-kanban` SKILL.md missing/incomplete Preconditions sections.
 4. **`src/test/control-plane-migration.test.js:324`** — `importPlanFiles()` count assertion fails (expects 2, gets a different number).
@@ -21,7 +23,7 @@ The first three look like fallout from commit `5cd79357` "Restore control plane 
 ## Complexity Audit
 
 **Routine:**
-- `mirror:check` is a content regeneration: run `generateClaudeMirror` and commit the output, or fix the source `.agents/` file that drifted.
+- `mirror:check` needs no work: the gate is deleted with the generator, so there is nothing to regenerate and nothing to align.
 - `claude-protocol-block` is a content alignment: update `RESIDENT_PROTOCOL_BODY` or the packaged AGENTS.md to match.
 - `skill-preconditions` is adding missing `## Preconditions` sections to two SKILL.md files.
 - The two test failures (items 4–5) require running the tests, reading the assertion failures, and fixing either the test expectations or the code.
@@ -33,22 +35,23 @@ The first three look like fallout from commit `5cd79357` "Restore control plane 
 ## Edge-Case & Dependency Audit
 
 - **`5cd79357` context:** The revert restored the control plane to its pre-sync state. If the contract tests were updated to expect the post-sync state, the revert would break them. The fix is either to update the tests to match the reverted state, or to re-apply the sync changes that the tests depend on.
-- **`mirror:check` script:** `scripts/check-claude-mirror.js` compares the checked-in `.claude/skills/` against a fresh generation. The fix is to regenerate and commit, or fix the source.
+- **`mirror:check` script:** `scripts/check-claude-mirror.js` is deleted along with the generator. Its successor drift test compares the committed `.claude/skills/<name>/SKILL.md` body against its `.agents/` counterpart modulo frontmatter — a content check with no generation step.
 - **`RESIDENT_PROTOCOL_BODY`:** Defined in `ClaudeCodeMirrorService.ts`. If the packaged AGENTS.md was reverted but `RESIDENT_PROTOCOL_BODY` was not (or vice versa), they drift. Must align both.
 - **"Plan Authoring" in resident block:** The AGENTS.md protocol block should not contain the "Plan Authoring & Problem Analysis Protocol" section — it was moved out. The revert may have put it back.
 - **Test isolation:** Items 4–5 may share a root cause if both depend on the same import/scoping logic that the revert changed.
 
 ## Proposed Changes
 
-### 1. Fix `mirror:check` (`.claude/skills/switchboard-remote/SKILL.md`)
+### 1. ~~Fix `mirror:check`~~ — no change; the gate is deleted
 
-Run the mirror check to identify the drift:
-```bash
-npm run mirror:check
-```
-Then either:
-- Regenerate the mirror: `node -e "require('./out/services/ClaudeCodeMirrorService').generateClaudeMirror(process.cwd(), '1.0.0')"` and commit the output.
-- Or fix the source `.agents/skills/switchboard-remote.md` if it drifted from the intended content.
+Nothing to do in this plan. `npm run mirror:check` and the generator behind it are removed by
+*Delete the Claude mirror generator and commit the eight skill files as ordinary bundle assets*.
+**Do not regenerate the mirror** — that writes generated output over what is becoming committed
+source, and re-introduces exactly the coupling the deletion removes.
+
+After that plan lands, the only check here is that the successor drift test is green:
+`.claude/skills/switchboard-remote/SKILL.md` must match `.agents/skills/switchboard-remote.md`
+modulo the frontmatter block. If it does not, **edit the two files to agree** — both are source.
 
 ### 2. Fix `test:contract:claude-protocol-block`
 

@@ -82,4 +82,4 @@ The probe sandboxes `HOME` to guarantee an untrusted baseline. To test whether
 1. Read `docs/AGENT_CLI_CONSENT_FLAGS.md` — assert the caveat is prominent and the re-probe instructions are clear.
 2. Verify the footnote markers match the table rows.
 3. Verify the `--keep-env` flag names match the `TRUST_ENV_LEAKS` list in `scripts/probe-cli-consent.js` (line 172–177).
-4. Run `npm run mirror:check` — assert no drift (the docs file is not mirrored, so this should be unaffected).
+4. Run the control-plane drift test that replaces `mirror:check` — assert no drift. (The docs file is not a control-plane skill, so this is unaffected either way; `npm run mirror:check` itself is being deleted with the mirror generator.)

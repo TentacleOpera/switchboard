@@ -1,8 +1,10 @@
 # The Sidebar Becomes a Launcher and a Status Board, Not a Cramped Column of Everything
 
+> **RESCOPED 2026-09-12.** *VS Code Becomes a Sidebar, and Stops Being a Second Host* (feature, PLAN REVIEWED) is authoritative here: **the extension keeps its sidebar and loses everything else — no editor panels, no board of its own.** Two consequences. (1) **Stage 1 — The Panels Leave the Editor** deletes the 7 `createWebviewPanel` sites that have browser equivalents and redirects their commands to open the browser, so "reach every VS Code editor-tab panel" is a launcher pointed at surfaces that are being removed — the launcher's targets are **the browser**. (2) **Stage 3 — The Sidebar Becomes a Host Client** (`sidebar-becomes-a-host-client.md`) is the successor to this plan's restructure and defines the end state: host status, fleet liveness, open-in-browser, **read-only — it must not become a second board.** Before coding this, reconcile it against Stage 3; the sidebar-as-launcher-and-status-board premise survives, the editor-tab half does not.
+
 ## Goal
 
-Restructure the Switchboard sidebar (`src/webview/implementation.html`) into four named sections — **Launch**, **Terminals**, **Status**, **Memo** — so that the narrow column does two things well (launch full-width surfaces, report live state) instead of trying to be a workspace. Complete the launcher so every VS Code editor-tab panel that exists is reachable from it.
+Restructure the Switchboard sidebar (`src/webview/implementation.html`) into four named sections — **Launch**, **Terminals**, **Status**, **Memo** — so that the narrow column does two things well (launch full-width surfaces, report live state) instead of trying to be a workspace. Complete the launcher so every full-width surface is reachable from it — **in the browser**, not as a VS Code editor tab (Stage 1 of *VS Code Becomes a Sidebar* deletes those panels).
 
 ### Problem Analysis
 

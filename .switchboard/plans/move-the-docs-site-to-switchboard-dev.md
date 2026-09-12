@@ -1,8 +1,10 @@
-# Move the docs site to switchboard.dev
+# Move the docs site to labcom.dev
+
+> **RENAMED 2026-09-12.** The site is **labcom.dev**, not switchboard.dev — this follows *One Name End to End: Switchboard Becomes LABCOM, and the CLI Becomes `lc`* (PLAN REVIEWED), which does not itself name a domain. Every `switchboard.dev` reference in the body below has been updated. The plan's **title and filename deliberately still say `switchboard-dev`**: renaming the file would purge this card and re-import it as a new one, losing its column and history. Read the title as the card's identity, not as the target domain.
 
 ## Goal
 
-Serve the Switchboard docs from `https://switchboard.dev/docs` instead of `https://tentacleopera.github.io/switchboard-site/docs`, so the product has a stable URL that can be named in resident agent instructions and printed in the UI without encoding the hosting arrangement.
+Serve the Switchboard docs from `https://labcom.dev/docs` instead of `https://tentacleopera.github.io/switchboard-site/docs`, so the product has a stable URL that can be named in resident agent instructions and printed in the UI without encoding the hosting arrangement.
 
 ### Problem Analysis
 
@@ -31,7 +33,7 @@ Every docs URL therefore carries both the account name and the repo name. Two co
 
 ## User Review Required
 
-- **Confirmed scope: same site, same hosting, custom domain only.** Nothing about the build, the content structure, or the deployment changes. `switchboard.dev` points at the existing GitHub Pages deployment of this repo. That settles what were three open questions in an earlier revision.
+- **Confirmed scope: same site, same hosting, custom domain only.** Nothing about the build, the content structure, or the deployment changes. `labcom.dev` points at the existing GitHub Pages deployment of this repo. That settles what were three open questions in an earlier revision.
 - **DNS and domain ownership are yours, not this plan's.** The plan covers repo changes: `astro.config.mjs`, `public/CNAME`, `robots.txt`, and the 233 literals. Registering the domain, adding DNS records, and enabling the custom domain in repo settings are manual steps outside the diff. For an apex domain that means A/AAAA records to GitHub's Pages IPs (or an ALIAS/ANAME if the registrar supports it); a `www` host would be a CNAME to `tentacleopera.github.io`.
 - **`deploy.yml` needs no change** — verified: it is `withastro/action@v6` with `path: .` and does not pin a base or artifact path. The base lives only in `astro.config.mjs`.
 
@@ -39,8 +41,8 @@ Every docs URL therefore carries both the account name and the repo name. Two co
 
 ### Routine
 
-- `astro.config.mjs`: `site: 'https://switchboard.dev'`, `base: '/'`.
-- `public/CNAME` containing `switchboard.dev` — the file does not exist yet and GitHub Pages requires it, or the custom domain resets on each deploy.
+- `astro.config.mjs`: `site: 'https://labcom.dev'`, `base: '/'`.
+- `public/CNAME` containing `labcom.dev` — the file does not exist yet and GitHub Pages requires it, or the custom domain resets on each deploy.
 - `public/robots.txt`: the `Sitemap:` line currently names `https://tentacleopera.github.io/switchboard-site/sitemap-index.xml`.
 
 ### Complex / Risky
@@ -48,7 +50,7 @@ Every docs URL therefore carries both the account name and the repo name. Two co
 - **233 hardcoded `/switchboard-site/` literals.** A blind find-and-replace to `/` is wrong in at least two ways: it would rewrite prose mentions of the repo name (the repo is still called `switchboard-site`), and any `//`-producing replacement yields a protocol-relative URL that resolves to a different host entirely. Replace `/switchboard-site/` → `/` only in link position, and enumerate the prose exclusions rather than trusting a regex.
 - **`base: '/'` changes what `BASE_URL` expands to**, so the 46 interpolated usages silently start producing correct output while the 233 literals silently start producing 404s. Both look the same in source. The only reliable check is crawling the built output, not reading the diff.
 - **A 404 after this migration is invisible without a link checker.** The site has no link-checking gate today. Adding one is in scope for this plan, because otherwise the verification is "someone clicked around".
-- **The site root already exists**, so no new landing page is needed: `src/pages/index.astro` serves `/`, and `src/pages/docs/index.astro` serves `/docs`. With `base: '/'` the resident instruction's `switchboard.dev/docs` resolves without any content change — which is what makes this a config-and-links migration rather than a restructure.
+- **The site root already exists**, so no new landing page is needed: `src/pages/index.astro` serves `/`, and `src/pages/docs/index.astro` serves `/docs`. With `base: '/'` the resident instruction's `labcom.dev/docs` resolves without any content change — which is what makes this a config-and-links migration rather than a restructure.
 - **The extension names the old URL in three places** (`setup.html:2223`, `TaskViewerProvider.ts:14809`, `SetupPanelProvider.ts:1470`). Those are handled by `consolidate-the-docs-url-in-the-extension.md`, not here, but the two must not ship far apart: the extension pointing at a dead domain is the same failure as the docs pointing at a dead path.
 
 ## Edge-Case & Dependency Audit
@@ -59,7 +61,7 @@ Every docs URL therefore carries both the account name and the repo name. Two co
 
 **Side effects.** Search rankings and any existing external links point at the old URL. The redirect is what preserves them.
 
-**Ordering.** Strict prerequisite for both dependents. Nothing downstream may name `switchboard.dev` until it serves the docs over HTTPS.
+**Ordering.** Strict prerequisite for both dependents. Nothing downstream may name `labcom.dev` until it serves the docs over HTTPS.
 
 ## Dependencies
 
@@ -76,9 +78,9 @@ Every docs URL therefore carries both the account name and the repo name. Two co
 
 ## Proposed Changes
 
-1. **`astro.config.mjs`** → `site: 'https://switchboard.dev'`, `base: '/'`.
-2. **Add `public/CNAME`** containing `switchboard.dev`.
-3. **`public/robots.txt`** → sitemap at `https://switchboard.dev/sitemap-index.xml`.
+1. **`astro.config.mjs`** → `site: 'https://labcom.dev'`, `base: '/'`.
+2. **Add `public/CNAME`** containing `labcom.dev`.
+3. **`public/robots.txt`** → sitemap at `https://labcom.dev/sitemap-index.xml`.
 4. **Rewrite the 233 `/switchboard-site/` literals** in link position to `/`, enumerating and excluding prose references to the repo name.
 5. **No `deploy.yml` change** — recorded as a deliberate no-op so a reviewer does not go looking. `withastro/action@v6` with `path: .` reads the base from `astro.config.mjs`.
 6. **Add a link-checking gate** over the built output, failing on any internal 404. This is the change that makes items 1–4 verifiable rather than hopeful, and it also catches the pre-existing breakage found earlier: the bare directory `/docs/getting-started/` has no index page — no docs section does — so that URL 404s today.
@@ -92,7 +94,7 @@ The old project-pages URL must keep resolving because three shipped extension ve
 
 ### Goal Invariants
 
-- `https://switchboard.dev/docs/getting-started/installation` serves the installation page over HTTPS.
+- `https://labcom.dev/docs/getting-started/installation` serves the installation page over HTTPS.
 - No internal link in the built output 404s.
 - No `/switchboard-site/` string remains in link position anywhere in `src/`.
 - The old URL still reaches the docs.
@@ -113,6 +115,6 @@ The old project-pages URL must keep resolving because three shipped extension ve
 ## Outstanding Questions
 
 - **Resolved — same site, same Pages hosting, custom domain only.** Items 1–4 are unaffected; item 5 is a confirmed no-op.
-- **Resolved — the structure already fits.** `src/pages/index.astro` serves the root and `src/pages/docs/index.astro` serves `/docs`, so with `base: '/'` the string `https://switchboard.dev/docs` in the shrink plan's resident rule is correct as written. No content restructure, and no second decision about where docs live.
-- ~~Is `switchboard.dev` registered?~~ **Settled:** it is registered before this ships to users, so nothing downstream needs a fallback.
+- **Resolved — the structure already fits.** `src/pages/index.astro` serves the root and `src/pages/docs/index.astro` serves `/docs`, so with `base: '/'` the string `https://labcom.dev/docs` in the shrink plan's resident rule is correct as written. No content restructure, and no second decision about where docs live.
+- ~~Is `labcom.dev` registered?~~ **Settled:** it is registered before this ships to users, so nothing downstream needs a fallback.
 - Does the Pages old-path redirect actually fire once the custom domain is set? Documented behaviour, but the migration argument above rests on it and it can only be checked live.

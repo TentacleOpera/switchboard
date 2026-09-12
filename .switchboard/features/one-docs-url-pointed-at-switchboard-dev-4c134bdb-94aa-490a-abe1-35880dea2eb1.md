@@ -1,20 +1,22 @@
-# One docs URL, pointed at switchboard.dev
+# One docs URL, pointed at labcom.dev
+
+> **RENAMED 2026-09-12.** The site is **labcom.dev**, not switchboard.dev — this follows *One Name End to End: Switchboard Becomes LABCOM, and the CLI Becomes `lc`* (PLAN REVIEWED), which does not itself name a domain. Every `switchboard.dev` reference in the body below has been updated. The plan's **title and filename deliberately still say `switchboard-dev`**: renaming the file would purge this card and re-import it as a new one, losing its column and history. Read the title as the card's identity, not as the target domain.
 
 **Complexity:** 4
 
 ## Goal
 
-Consolidate the extension's docs URL into a single constant and retire the tutorial prompt, then move the docs site to switchboard.dev. Order matters: consolidating first means the domain move is a one-line change, where doing it the other way round edits every call site twice.
+Consolidate the extension's docs URL into a single constant and retire the tutorial prompt, then move the docs site to labcom.dev. Order matters: consolidating first means the domain move is a one-line change, where doing it the other way round edits every call site twice.
 
 ## How the Subtasks Achieve This
 
 - **Consolidate the extension's docs URL and retire the tutorial prompt**: collapses the scattered docs links into a single constant and drops the tutorial prompt that duplicates them.
-- **Move the docs site to switchboard.dev**: repoints that constant at the new domain.
+- **Move the docs site to labcom.dev**: repoints that constant at the new domain.
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
 - [ ] [Consolidate the extension's docs URL and retire the tutorial prompt](../plans/consolidate-the-docs-url-in-the-extension.md) — **CREATED** — ID: 31dc334a-cd8f-4420-babb-65da087a7dab
-- [ ] [Move the docs site to switchboard.dev](../plans/move-the-docs-site-to-switchboard-dev.md) — **CREATED** — ID: e5c23780-8e2e-4384-b3ab-a4382bf62cdf
+- [ ] [Move the docs site to labcom.dev](../plans/move-the-docs-site-to-switchboard-dev.md) — **CREATED** — ID: e5c23780-8e2e-4384-b3ab-a4382bf62cdf
 - [ ] [The Docs Site Has Two Pages for One Feature, No Link Check, and No Release Surface](../plans/memo-the-docs-site-has-two-pages-for-one-feature-and-no-link-check.md) — **CREATED** — ID: 29c27ed7-c615-4ecc-a82b-f6008464663a
 <!-- END SUBTASKS -->
 

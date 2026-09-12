@@ -2,7 +2,7 @@
 
 ## Goal
 
-Replace three hardcoded docs URLs with one exported constant pointing at `https://switchboard.dev/docs`, and delete the COPY TUTORIAL PROMPT button, whose job is taken over by a resident one-line docs pointer.
+Replace three hardcoded docs URLs with one exported constant pointing at `https://labcom.dev/docs`, and delete the COPY TUTORIAL PROMPT button, whose job is taken over by a resident one-line docs pointer.
 
 ### Problem Analysis
 
@@ -50,7 +50,7 @@ The tutorial prompt was the only mechanism available for getting docs guidance t
 
 ### Complex / Risky
 
-- **Do not ship this before the domain is live.** Pointing all three sites at `switchboard.dev` while it 404s converts two working buttons into broken ones. The dependency is strict and the change is small enough to look safe out of order.
+- **Do not ship this before the domain is live.** Pointing all three sites at `labcom.dev` while it 404s converts two working buttons into broken ones. The dependency is strict and the change is small enough to look safe out of order.
 - **`setup.html` is a webview**, so the constant cannot be imported directly. Either pass it in with the existing panel state or keep the URL solely on the provider side and have the webview post a message — the pattern `btn-open-docs` already uses (`setup.html:2244` posts `openDocs`, the provider owns the URL). Prefer extending that pattern to inventing a second one.
 - **Deleting the button changes a shipped UI affordance.** No state migration is needed, but the "Switchboard guide" section becomes a single button and should be re-laid out rather than left with a stray flex child.
 
@@ -79,7 +79,7 @@ The tutorial prompt was the only mechanism available for getting docs guidance t
 
 ## Proposed Changes
 
-1. **Export one constant**, e.g. `SWITCHBOARD_DOCS_URL = 'https://switchboard.dev/docs'`, in a module both providers already import.
+1. **Export one constant**, e.g. `SWITCHBOARD_DOCS_URL = 'https://labcom.dev/docs'`, in a module both providers already import.
 2. **Point `SetupPanelProvider.ts:1470` and `TaskViewerProvider.ts:14809` at it**, appending the specific page each needs rather than restating the origin.
 3. **Delete the COPY TUTORIAL PROMPT button**, its handler, and its hint text; keep OPEN DOCS and re-lay out the section for a single button.
 4. **Route OPEN DOCS through the existing `openDocs` message** so the webview never holds the URL.
@@ -93,7 +93,7 @@ None.
 
 ### Goal Invariants
 
-- Exactly one docs-origin literal exists in `src/`, and it is `https://switchboard.dev/docs`.
+- Exactly one docs-origin literal exists in `src/`, and it is `https://labcom.dev/docs`.
 - No `github.io` string remains in `src/`.
 - No `src/` file contains the words "COPY TUTORIAL PROMPT".
 - OPEN DOCS opens a page that resolves.

@@ -86,7 +86,7 @@ On an established workspace that sweep never runs. A plan file removed while not
 ### Dependencies & Conflicts
 
 * **`.agents/skills/improve-feature/SKILL.md`** — `:19` (the false claim) and `:67` (High/Low mode step 4, which repeats `git rm the original subtask files`). Line numbers verified at time of writing.
-* **`.claude/skills/improve-feature/SKILL.md`** — generated mirror; same bullet at `:25`. The mirror is the `.agents` body prefixed with six lines of YAML frontmatter and nothing else. There is **no npm regeneration script** (`generateClaudeMirror` runs only from the extension's scaffold path), so edit both files in lockstep.
+* **`.claude/skills/improve-feature/SKILL.md`** — a committed source file, same bullet at `:25`. Its body is the `.agents` body prefixed with six lines of YAML frontmatter and nothing else. It is **not generated**: the mirror generator is deleted (*Delete the Claude mirror generator…*, PLAN REVIEWED), so there is no regeneration path at all. **Edit both files in lockstep**; the control-plane drift test is what catches a one-sided edit.
 * **`rearrange-feature`, `group-into-features`** — checked; neither mentions `git rm` or any deletion mechanism. Nothing to fix there.
 * Read-only references: `PlanIngestionEngine.ts` (`:543`, `:612`, `:720`, `:1074`), `KanbanDatabase.ts` (`:3219`, `:3227`, `:4119`, `:5871`), `LocalApiServer.ts:3050-3095`, `TaskViewerProvider.ts:4540`/`:4600-4618`. **No source change in this plan.**
 

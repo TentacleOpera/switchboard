@@ -143,7 +143,7 @@ Roughly twenty. Each maps to a route or verb that already exists; this is naming
 
 **3c. Schemas ride along.** The 277 payload shapes in `verbSchemas.ts` are rendered into the docs page per command rather than exposed through a new `--schema` flag. A `--schema` flag is more TUI surface, which is what this change avoids; the page is where someone looks anyway.
 
-**3d. One docs URL.** The extension currently carries two bases — `https://switchboard.dev/docs` (`ClaudeCodeMirrorService.ts:156`) and `https://tentacleopera.github.io/switchboard-site/docs/…` (`SetupPanelProvider.ts:1532`, `TaskViewerProvider.ts:14940`). The CLI must not add a third. It reads the canonical base from wherever `4c134bdb` puts it, and this plan depends on that card landing first or alongside.
+**3d. One docs URL.** The extension currently carries two bases — `https://labcom.dev/docs` (`ClaudeCodeMirrorService.ts:156`) and `https://tentacleopera.github.io/switchboard-site/docs/…` (`SetupPanelProvider.ts:1532`, `TaskViewerProvider.ts:14940`). The CLI must not add a third. It reads the canonical base from wherever `4c134bdb` puts it, and this plan depends on that card landing first or alongside.
 
 **4. Keep `verb` and `api` as the escape hatches they are, and say so.** `verb` for the two verb routes, `switchboard api` (shipped, `cli.ts:1601`) for arbitrary REST. Both stay, both are documented as escape hatches rather than as the interface. An agent reaching for either should know it has left the supported set.
 

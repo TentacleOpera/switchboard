@@ -75,7 +75,7 @@ Deliberately **not** a new automation mode and **not** a confirmation dialog. Th
 - **`verbSchemas.ts` already has `createWorktreeForFeature`** (`:475`: `featureId` required, `featureTopic` / `repoName` / `workspaceRoot` optional). The message case stays a validated verb and its schema is unchanged by the extraction — the new HTTP route is a raw route, not a verb, so it validates its own body.
 - **No migrations needed.** `feature_worktree_mode` already exists in shipped versions; no new persisted state is introduced. The endpoint is additive.
 - **`/catalog`** (`_handleGetCatalog`, `LocalApiServer.ts:2760`, routed at `:4019`) advertises the HTTP surface to fleet agents — a new route that is not listed there is invisible to them.
-- **No `.claude` mirror on this skill.** `.agents/skills/dispatch-analysis/SKILL.md` has no generated copy and `npm run mirror:check` does not cover it (verified: `.claude/skills/dispatch-analysis/` does not exist). `.agents/skills/switchboard-orchestration/SKILL.md` — edited in change 6 — **does** have a `.claude` mirror and is covered, so that edit must be mirrored or CI goes red. The two skills this plan touches have opposite mirror status; do not treat them the same.
+- **No `.claude` copy of this skill.** `.agents/skills/dispatch-analysis/SKILL.md` has no `.claude` counterpart (verified: `.claude/skills/dispatch-analysis/` does not exist), so nothing gates it. `.agents/skills/switchboard-orchestration/SKILL.md` — edited in change 6 — **does** have one, so that edit must land in **both** files. Since the mirror generator is deleted (*Delete the Claude mirror generator…*, PLAN REVIEWED), the `.claude/` copy is committed source, not generated: there is nothing to regenerate, and the successor **drift test** — not `npm run mirror:check`, which is deleted — is what goes red if the two bodies diverge. The two skills this plan touches have opposite status; do not treat them the same.
 
 ## Dependencies
 
@@ -213,7 +213,7 @@ No change to `switchboard.triggerBatchAgentFromKanban`'s positional signature.
 
 Document `POST /worktree/feature` in the HTTP surface table (request/response shape, the already-has-a-worktree rejection) so fleet agents see it. `.agents/.switchboard-bundled.json:37` already lists `skills/dispatch-analysis/SKILL.md`, so no manifest change is needed; `dispatch-analysis` is extension-read-by-path and has no `.claude/skills` mirror, so no mirror edit either.
 
-**`switchboard-orchestration` is the opposite case.** It *does* have a generated `.claude/skills/switchboard-orchestration/SKILL.md` and `npm run mirror:check` gates it in CI. Edit `.agents/` and regenerate the mirror in the same change, or the gate goes red. This is the one file in this plan with that requirement — do not generalise the dispatch-analysis "no mirror" note to it.
+**`switchboard-orchestration` is the opposite case.** It has a committed `.claude/skills/switchboard-orchestration/SKILL.md` and the control-plane drift test gates it in CI. **Edit both files in the same change** — do not regenerate; the generator is deleted and the `.claude/` copy is source. This is the one file in this plan with that requirement — do not generalise the dispatch-analysis "no counterpart" note to it.
 
 ### 7. `src/test/dispatch-analysis-scope-contract.test.js`
 
@@ -234,7 +234,7 @@ Extend `src/test/dispatch-analysis-scope-contract.test.js` (see change 7):
 * The prompt byte layout is `WORKSPACE_ROOT` / `API_PORT` / `PROJECT` / `FEATURE_WORKTREE_MODE` / blank / `PLANS TO PROCESS:` — **this plan updates the existing layout assertions**, which currently pin `API_PORT=…\nPROJECT=…\n\nPLANS TO PROCESS:`.
 * `switchboard.triggerBatchAgentFromKanban`'s positional arity is unchanged, and `analysisScope` is still the seventh (guards the `targetTerminalOverride` hazard).
 * `SKILL.md` mentions both mode spellings and `POST /worktree/feature`.
-* `switchboard-orchestration` SKILL.md documents `POST /worktree/feature`, and `npm run mirror:check` passes (that skill *is* mirrored).
+* `switchboard-orchestration` SKILL.md documents `POST /worktree/feature` in **both** its `.agents/` and `.claude/` copies, and the control-plane drift test passes.
 
 Run them with `npm run compile-tests && node out/test/…`. Note the known set of red tests at HEAD — stash-verify before attributing any failure to this change.
 

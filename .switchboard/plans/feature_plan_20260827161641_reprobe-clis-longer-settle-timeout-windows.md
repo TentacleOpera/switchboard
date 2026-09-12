@@ -64,4 +64,4 @@ If any of the three CLIs change verdict under the longer window, re-probe all CL
 2. Compare the new verdicts to the old ones in the docs table.
 3. Update the docs table rows for any CLI whose verdict changed.
 4. If all three verdicts are unchanged, add a note to each row: "Verified with `--settle 6000 --timeout 40000` — no change from default-window measurement."
-5. Run `npm run mirror:check` — assert no drift (docs file is not mirrored).
+5. Run the control-plane drift test that replaces `mirror:check` — assert no drift. (The docs file is not a control-plane skill, so this step is a no-op guard either way; `npm run mirror:check` itself is being deleted with the mirror generator.)

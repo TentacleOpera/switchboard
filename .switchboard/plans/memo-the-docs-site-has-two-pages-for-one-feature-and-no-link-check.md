@@ -6,7 +6,7 @@ The documentation site must have one canonical page per feature, a gate that cat
 
 ### Problem analysis
 
-Four reviewer findings from `.switchboard/memo.md`, triaged 2026-09-04 and verified against the `switchboard-site` repository. They sit naturally with the active *One docs URL, pointed at switchboard.dev* feature, which moves the site and consolidates its URL but does not touch its content or its gates.
+Four reviewer findings from `.switchboard/memo.md`, triaged 2026-09-04 and verified against the `switchboard-site` repository. They sit naturally with the active *One docs URL, pointed at labcom.dev* feature, which moves the site and consolidates its URL but does not touch its content or its gates.
 
 ## Metadata
 

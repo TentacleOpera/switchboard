@@ -25,7 +25,7 @@ The same pass treats a declared dependency as a clustering hint rather than a ru
 
 These are siblings — same skill, same pass, same root cause: grouping reads bodies to decide and then works from titles. One governs what a feature is **called**, the other what it **contains**. Land them together; splitting them leaves the shared root half-fixed.
 
-Both require a mirror step. `.claude/skills/manage-features/` is generated from `.agents/skills/manage-features/`, and `npm run mirror:check` gates the two being in step, so an edit to one copy without the other is a red gate. `improve-feature` is **not** mirrored and carries no `mirror:check` coverage — but it does have a two-copy divergence of its own, so a coder must edit both copies or delete the alias first.
+Both require a two-copy edit. `.claude/skills/manage-features/SKILL.md` and `.agents/skills/manage-features/SKILL.md` must stay in step — **edit both**. Since *Delete the Claude mirror generator and commit the eight skill files as ordinary bundle assets* (PLAN REVIEWED), the `.claude/` copy is committed source rather than generated output, and there is no regeneration step: `npm run mirror:check` and `generateClaudeMirror` are deleted, and a **drift test** asserting the two bodies match modulo frontmatter takes over as the gate. Editing one copy without the other is still a red gate. `improve-feature` has a two-copy divergence of its own, so a coder must edit both copies or delete the alias first.
 
 That alias deletion is the one cross-feature coupling: `protocol-paths-in-agent-instructions-point-nowhere.md` (outside this feature) conflicts on file if it deletes the alias. Sequence, do not parallelise.
 

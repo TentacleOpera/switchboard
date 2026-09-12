@@ -1,5 +1,7 @@
 # A standalone-only install is never scaffolded, and the in-browser Setup button that would fix it is a no-op
 
+> **RESCOPED 2026-09-12.** The Claude mirror generator is being deleted (*Delete the Claude mirror generator and commit the eight skill files as ordinary bundle assets*, PLAN REVIEWED). Consequences for this plan: `npm run mirror:check`, `generateClaudeMirror` and `scripts/check-claude-mirror.js` **will not exist**. The generator's CI step (`.github/workflows/integration-tests.yml:71`, `package.json:967`) is removed in the same commit that adds the **drift test** replacing it, which asserts each `.claude/skills/<name>/SKILL.md` body matches its `.agents/` counterpart modulo the frontmatter block. From then on `.claude/skills/**/SKILL.md` is ordinary committed source: **edit it directly alongside its `.agents/` source, never regenerate it.**
+
 ## Goal
 
 Make `npx switchboard` self-sufficient for a user who never opens the VS Code extension and never types
@@ -28,7 +30,7 @@ Everything `init` produces and start does not (`ControlPlaneMigrationService._bo
 - `.switchboard/plans/`, `.switchboard/inbox/`, `.switchboard/archive/` (`:686`)
 - `worktrees/` (`:686`)
 - `AGENTS.md` (`:713`)
-- the `CLAUDE.md` managed block (`:731`) and the `.claude/` skills mirror (`generateClaudeMirror`, `:743`)
+- the `CLAUDE.md` managed block (`:731`) and the `.claude/` skill files (`:743`) — scaffolded as ordinary bundle assets once the mirror generator is deleted, not produced by `generateClaudeMirror`
 - `.switchboard/.agent_version.json` — the stamp that gates every future refresh
 - the `workspace_id` config row (`ensureWorkspaceIdentity`)
 
