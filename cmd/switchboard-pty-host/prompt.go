@@ -115,7 +115,7 @@ func respawnArgvSuffix(family, prompt string) string {
 }
 
 // shellQuote wraps a string in single quotes for safe shell consumption,
-// escaping embedded single quotes as '\'' (the standard POSIX-safe idiom).
+// escaping embedded single quotes as '\” (the standard POSIX-safe idiom).
 // A multi-line prompt inside single quotes is literal to the shell — the
 // newlines are part of the argument, not command separators — so a composed
 // prompt (seat block + standing orders + task) survives as one argv entry.
