@@ -337,3 +337,27 @@ deletion (change 3) are the load-bearing work; change 2 is a decoupling refineme
 confirm first (Outstanding Questions). Land changes 1 and 2 before change 3 — the at-rest path must
 be reliable and the barrier decoupled before the dispatch-time clears are removed, or a busy seat is
 stranded with no clear left.
+
+## Review Findings
+
+**The implementation does not exist** — no commit carries this plan's ID and the working tree has no
+change to `bootstrap.ts`, `TaskViewerProvider.ts`, `LocalApiServer.ts` or `KanbanProvider.ts`; every
+site changes 1–3 name is present unchanged (three dispatch-time `clearBeforePrompt` overrides per
+host, both round-complete clear loops, the full `deferredClearsByTeam` plumbing, no `clearSeatAtRest`).
+The plan's own discriminator confirms it: verification item 8 requires `test:contract:host-auto-clear`
+to FAIL after change 3's deletion, and it passes green. One file was changed in this pass —
+`src/test/proactive-terminal-rest-clear-contract.test.js`, whose `return block.join` extraction anchor
+was broken by `17cbc519` (the return is now `return substituteCliPath(block.join('\n'))`), so this
+CI-wired gate threw at module load and all six of its assertions had been unreachable. All five named
+clear suites now pass (`terminal-rest-clear`, `host-auto-clear`, `clear-readiness`, `pty-clear-policy`,
+`roster-clear-mid-turn`) after `npm run compile-tests`, and all five are confirmed invoked by CI.
+
+## Deferred Findings
+
+- CRITICAL — Changes 1, 2, 3 and 5 are entirely unimplemented; this card needs coding, not review. `src/standalone/bootstrap.ts:2888` (deferred-clear intercept), `:3010` (team-branch destination), `:3035` (non-team destination) all still set `payload.clearBeforePrompt = true`.
+- CRITICAL — Extension twins equally unimplemented: `src/services/TaskViewerProvider.ts:980`, `:1122`, `:1150` still set `clearBeforePrompt: true` on the dispatch payload.
+- CRITICAL — `_handleKanbanRoundComplete` still clears the roster twice: `src/services/LocalApiServer.ts:4840` and `src/services/LocalApiServer.ts:4962`.
+- CRITICAL — No `clearSeatAtRest` exists; rows 4–8 remain five independent deciders. `src/services/LocalApiServer.ts:4168`
+- MAJOR — Change 3 names one instruction line to correct, but two carry the now-false "the host overrides it to true automatically when the plan changes": `src/services/KanbanProvider.ts:5926` and `src/services/KanbanProvider.ts:5986`. A single-site edit leaves the false instruction live.
+- NIT — Plan line numbers are stale by 30–110 lines (measured 2026-09-12). Symbols are correct; numbers are not: `completeCardInternal` is at `src/services/LocalApiServer.ts:4168` (plan says 4212), `releaseCardInternal` `:4374` (4411), round clears `:4840`/`:4962` (4727/4849), `_completeFeatureCore` `:5852` (5820).
+- NIT — Change 4's "already shipped" claim verified TRUE, but the path is `src/standalone/ptyPromptDelivery.ts:61`, not `src/services/`. Caps and `min(familyFloor, cap)` are intact; the regression guard holds.

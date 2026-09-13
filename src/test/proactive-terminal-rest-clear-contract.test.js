@@ -31,8 +31,12 @@ const ORCH = 'switchboard-mission-control-http';
 // Extract the _buildDrivePrefix method body from the source text.
 const drivePrefixStart = KANBAN_PROVIDER.indexOf('_buildDrivePrefix');
 assert.ok(drivePrefixStart > 0, '_buildDrivePrefix method must exist in KanbanProvider.ts');
-const drivePrefixEnd = KANBAN_PROVIDER.indexOf('return block.join', drivePrefixStart);
-assert.ok(drivePrefixEnd > 0, '_buildDrivePrefix must have a return block.join statement');
+// The return was `return block.join('\n')` and is now
+// `return substituteCliPath(block.join('\n'))` (17cbc519). Anchor on the
+// `block.join(` call itself, which both forms share, so a wrapper added
+// around the return does not silently unanchor this whole contract.
+const drivePrefixEnd = KANBAN_PROVIDER.indexOf('block.join(', drivePrefixStart);
+assert.ok(drivePrefixEnd > 0, '_buildDrivePrefix must end in a block.join() return');
 const DRIVE_PREFIX_SRC = KANBAN_PROVIDER.slice(drivePrefixStart, drivePrefixEnd);
 
 let failures = 0;
