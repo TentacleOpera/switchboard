@@ -1042,8 +1042,7 @@ function composeAcceptanceInstruction(
 ): string {
     const idPart = planId ? JSON.stringify(planId) : '"<this subtask\'s planId>"';
     return ' When you are done with this subtask, commit, then POST /kanban/task/complete with '
-        + `{"from":${JSON.stringify(leadName)},"planId":${idPart},"workspaceRoot":${JSON.stringify(workspaceRoot)},`
-        + '"outcome":"<one line stating what was done>"} '
+        + `{"from":${JSON.stringify(leadName)},"planId":${idPart},"workspaceRoot":${JSON.stringify(workspaceRoot)}} `
         + 'against the API base named in your SWITCHBOARD STATUS line. Post every time — you reject by sending '
         + `a fix round first, not by withholding the post. Until you post, the seat is not cleared and you `
         + 'cannot be handed the next subtask.';
@@ -4207,22 +4206,20 @@ export class LocalApiServer {
             Date.parse(existing.completedAt) < Date.parse(existing.dispatchedAt);
         const isIdempotent = !!existing.completedAt && !isStaleCompletedAt;
 
-        // V77: a completion must carry a non-empty outcome. Scoped to NEW posts —
-        // the idempotent path (already completed) returns the existing record
-        // without re-writing, so a pre-V77 completion with empty outcome is
-        // returned as-is, never rejected (193 of 201 historical rows have empty
-        // outcome; a retroactive invariant would fail or force a lie). The
-        // release path does NOT go through `completeCardInternal` — it has its
-        // own `releaseCardInternal` that writes `released_at`, not
-        // `completed_at` — so this gate is completions-only.
-        if (!isIdempotent && !outcome) {
-            return {
-                success: false,
-                planId,
-                badRequest: true,
-                error: 'Missing required field: outcome (a non-empty statement of what was done). POST /kanban/card/release instead if you are freeing the team without claiming the work is done.'
-            };
-        }
+        // NO agent is asked to write a summary. `outcome` is accepted and stored
+        // when a caller supplies one, and is NEVER required.
+        //
+        // V77 made it mandatory and rejected any post without it. Nothing that
+        // instructs an agent how to call this endpoint was updated to match, so
+        // every documented payload described a call the endpoint refused — and
+        // because the same instructions say "until you post, the seat is not
+        // cleared", a lead that obeyed them deadlocked its team. Measured
+        // 2026-09-13: seven refusals over an hour, three coders idle behind them.
+        //
+        // Adding the field to the instructions was the wrong repair: it made
+        // every close-out a writing task. Completion is ASSERTED by the post
+        // itself — the fact that a responsible agent called this endpoint for
+        // this planId. Prose is not the signal and must not gate the signal.
 
         // 2. Resolve the accepted coding seat from HOST evidence only — never from
         // the request body, and never `from` (the lead posting the acceptance).

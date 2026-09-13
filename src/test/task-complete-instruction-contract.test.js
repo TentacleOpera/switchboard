@@ -1,21 +1,26 @@
 // task-complete-instruction-contract.test.js
 //
-// `POST /kanban/task/complete` rejects any call without a non-empty `outcome`
-// (LocalApiServer: "Missing required field: outcome"). That requirement landed
-// in 307078f3 and NOT ONE of the five places that tell an agent how to call the
-// endpoint was updated, so every instruction in the codebase described a call
-// the endpoint refuses.
+// NO agent is asked to write a summary to complete work. Not a coder, not a
+// lead, not anyone. Completion is ASSERTED by the post itself — a responsible
+// agent calling the endpoint for that planId. Prose is not the signal and must
+// never gate the signal.
 //
-// The cost was not a visible error. The same instructions end with "Until you
-// post, the seat is not cleared and you cannot be handed the next subtask", so
-// a lead that obeyed them deadlocked its whole team: measured 2026-09-13, a
-// Coding lead retried the documented payload seven times over an hour, was
-// refused every time, and three coders sat idle behind it.
+// This suite exists because both halves of that were broken at once:
 //
-// No existing gate compares instruction TEXT against handler VALIDATION — they
-// live in different files and neither imports the other — which is why a
-// one-sided change to the contract shipped silently. This test is that
-// comparison.
+//  - V77 (307078f3) made `outcome` MANDATORY and rejected any post without it,
+//    while updating none of the five places that tell an agent how to call the
+//    endpoint. Every documented payload described a call the endpoint refused.
+//    Because those instructions also say "until you post, the seat is not
+//    cleared", a lead that obeyed them deadlocked its team: measured
+//    2026-09-13, seven refusals over an hour with three coders idle behind it.
+//
+//  - The repair attempted first was to add the field to all five instructions,
+//    which turned every close-out into a writing task. That was the wrong side
+//    to change and is the thing these assertions now forbid.
+//
+// The gate is removed and the instructions are back to {from, planId,
+// workspaceRoot}. `outcome` is still accepted and stored when a caller offers
+// one; it is never required and never requested.
 
 const fs = require('fs');
 const path = require('path');
@@ -40,38 +45,33 @@ const SOURCES = [
     'src/services/KanbanProvider.ts',
 ];
 
-check('the endpoint still requires a non-empty outcome', () => {
+check('the endpoint does not require an outcome', () => {
     const src = fs.readFileSync(path.join(REPO_ROOT, 'src/services/LocalApiServer.ts'), 'utf8');
     assert.ok(
-        /Missing required field: outcome/.test(src),
-        'the handler no longer demands `outcome` — if that requirement was deliberately dropped, '
-        + 'delete this suite rather than leaving it asserting a contract that no longer exists',
+        !/Missing required field: outcome/.test(src),
+        'the completion endpoint must not reject a post for lacking an outcome — that gate '
+        + 'deadlocked a whole team for an hour and its only remedy is making agents write prose',
     );
 });
 
-check('every task/complete instruction supplies outcome', () => {
+check('no instruction asks an agent to supply an outcome', () => {
     // Source is joined without newlines because these payloads are built by
-    // string concatenation across several lines; matching per-line reports a
-    // false miss on a payload whose `outcome` sits on the next `+` fragment.
+    // string concatenation across several lines; a per-line scan misses a field
+    // that sits on the next `+` fragment.
     const offenders = [];
     for (const rel of SOURCES) {
         const flat = fs.readFileSync(path.join(REPO_ROOT, rel), 'utf8').replace(/\n/g, ' ');
-        // Each occurrence of the documented payload, and the window after it in
-        // which its own closing brace must appear alongside `outcome`.
         const re = /task\/complete with \{"from"/g;
         let m;
         while ((m = re.exec(flat)) !== null) {
             const window = flat.slice(m.index, m.index + 400);
-            if (!/outcome/.test(window)) {
-                offenders.push(`${rel} @ ${m.index}`);
-            }
+            if (/outcome/.test(window)) { offenders.push(`${rel} @ ${m.index}`); }
         }
     }
     assert.deepStrictEqual(
         offenders, [],
-        'these instructions describe a call the endpoint refuses — an agent that obeys them '
-        + 'deadlocks its team, because the same text says the seat is not cleared until the post '
-        + 'succeeds:\n       ' + offenders.join('\n       '),
+        'these instructions ask an agent to write a summary to close work out. Completion is '
+        + 'asserted by the post, not by prose:\n       ' + offenders.join('\n       '),
     );
 });
 
