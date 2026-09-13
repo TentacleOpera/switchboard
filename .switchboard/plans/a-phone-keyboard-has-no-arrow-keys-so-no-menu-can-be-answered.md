@@ -1,9 +1,10 @@
-# A Phone Cannot Answer a Terminal — the Command View Is Read-Only and No Surface Has Arrow Keys
+# The Mobile Command View Cannot Answer a Terminal
 
 ## Goal
 
-A phone can drive any CLI in the fleet: see the real screen, type into it, navigate a menu with
-arrows, and interrupt a run. On every surface the board offers, not one of them.
+The mobile command view can drive any CLI in the fleet: see the real screen, type into it,
+navigate a menu with arrows, and interrupt a run. It is the surface an operator reaches for on a
+phone, and today it can do none of those things.
 
 ### Why this is the last thing holding tmux up
 
@@ -24,9 +25,8 @@ reach the seat.
 **2. No surface has the keys a menu needs.** iOS and Android soft keyboards expose letters,
 digits and punctuation and have **no arrow keys, no Esc, no Tab and no Ctrl.** Every agent CLI
 uses arrows to move through a menu, Enter to choose, Esc to back out and Ctrl-C to interrupt.
-Verified absent: no key bar and no synthesised control sequence anywhere in `terminals.js`,
-`terminals.html` or `command.js` — nothing in the codebase sends a control sequence that was
-not typed on hardware.
+Verified absent: no key bar and no synthesised control sequence anywhere in `command.js` —
+nothing on this surface sends a control sequence that was not typed on hardware.
 
 So even after the command view renders a real terminal, a phone still cannot answer a menu. Both
 have to land for the surface to be usable, which is why they are one plan.
@@ -42,6 +42,9 @@ different things on the same screen.
 
 ### Non-goals
 
+- **The terminals panel.** That is the desktop surface and is not what an operator opens on a
+  phone. If it ever wants the same key bar, that is its own plan — building for two surfaces here
+  is how this plan drifts off the one that is actually broken.
 - **Text entry for the command surface's own controls.** Dispatch, card moves and seat selection
   stay taps and dropdowns. This plan touches the terminal viewer only.
 - **A configurable or rebindable key bar.** One fixed key set, no picker.
@@ -76,7 +79,7 @@ already carries exactly what the viewport expects.
 Keystrokes go out as `encodeInputFrame(data)` on the same socket, which is the one thing
 `command.js` has never done. Without this the viewer stays read-only however well it renders.
 
-### 3. A key bar, on both surfaces
+### 3. A key bar in the command view
 
 One fixed row pinned below the focused terminal:
 
@@ -84,10 +87,11 @@ One fixed row pinned below the focused terminal:
   ←   ↓   ↑   →   esc   tab   ctrl   ⏎
 ```
 
-Shown when the viewport is narrow or the device reports coarse pointer input
-(`matchMedia('(pointer: coarse)')`). A desktop already has these keys and the bar would be
-clutter. Built once and used by both the terminals panel and the command view — two copies
-would drift, and this is the surface where a drift is invisible until someone is on a train.
+Shown when the device reports coarse pointer input (`matchMedia('(pointer: coarse)')`) — a
+desktop already has these keys and the bar would be clutter.
+
+Built as its own module rather than inline, so a later plan can mount it elsewhere without a
+second copy — but mounted in one place here.
 
 ### 4. Arrows follow the cursor-key mode
 
@@ -128,15 +132,13 @@ press — worse than nothing for a menu that mixes typing and navigation.
    `ws.send` calls, so this pins the input path against silently reverting to a read-only view.
 3. Assert the command view's terminal renders through the shared viewport module, not a second
    hand-rolled client, and that no `textContent +=` stream box remains.
-4. Assert the bar is absent on a fine-pointer wide viewport and present on a coarse-pointer
-   narrow one.
+4. Assert the bar is absent on a fine-pointer viewport and present on a coarse-pointer one.
 
 ### Goal Invariants
 
-- On a real phone, in the command view: the agent's actual screen is visible, typing reaches it,
+- On a real phone: the agent's actual screen is visible, typing reaches it,
   a menu can be opened and moved through with the arrows and chosen with Enter. Verified by doing
   it against a live seat.
 - Ctrl-C interrupts a running agent from the phone.
 - Pressing an arrow does not dismiss the soft keyboard.
-- The same is true in the terminals panel on a phone.
-- A desktop session is visually unchanged on both surfaces.
+- A desktop session is visually unchanged.
