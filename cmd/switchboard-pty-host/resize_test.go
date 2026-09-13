@@ -220,3 +220,44 @@ func TestTmuxNamedWindowIDMatchesWholeNames(t *testing.T) {
 		t.Fatal("a prefix name matched a longer window — the sibling-window trap")
 	}
 }
+
+// TestAutomatedSendIsNeverCappedBelowItsFamilyFloor pins the delivery floor.
+//
+// `familyFloor("devin")` is 15s — the measured time that CLI needs before a
+// paste will land. `deliveryFloor` used to cap it at 10s for an automated send
+// and 5s for a composer send, and the cap only ever shortened: claude and
+// antigravity sit below both caps, so cutting devin was its entire effect.
+//
+// The cost is not seconds. A paste that lands before the seat is ready is
+// swallowed by a busy composer while the receipt still reports success — it is
+// built from bytesWritten, which counts bytes pushed into the pty and proves
+// nothing about consumption. The sender records a delivered prompt, ends its
+// turn, and waits forever. Measured twice on one team: ~55 minutes on
+// Coding-coder-1 (2026-09-12), and a full stall on Coding-intern (2026-09-13,
+// promptSeq 4 — success:true, bytesWritten:1023, never processed).
+//
+// Nobody is watching an automated send, which is why it must be allowed to wait
+// as long as its family declares. An attended send keeps its cap: a person sees
+// nothing happen and sends again.
+func TestAutomatedSendIsNeverCappedBelowItsFamilyFloor(t *testing.T) {
+	for _, family := range []string{"devin", "unknown-cli", ""} {
+		want := familyFloor(family)
+		if got := deliveryFloor(family, false); got != want {
+			t.Fatalf("automated send for %q floored at %v, want its full family floor %v", family, got, want)
+		}
+	}
+}
+
+func TestAttendedSendKeepsItsCap(t *testing.T) {
+	if got := deliveryFloor("devin", true); got != attendedFloorCap {
+		t.Fatalf("attended devin send floored at %v, want the %v cap", got, attendedFloorCap)
+	}
+	// A family whose floor is already under the cap is unchanged in both modes —
+	// the cap must never LENGTHEN a wait.
+	for _, attended := range []bool{true, false} {
+		if got := deliveryFloor("claude", attended); got != familyFloor("claude") {
+			t.Fatalf("claude (attended=%v) floored at %v, want %v — the cap must never lengthen a wait",
+				attended, got, familyFloor("claude"))
+		}
+	}
+}

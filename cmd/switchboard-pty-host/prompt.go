@@ -450,15 +450,36 @@ func familyFloor(family string) time.Duration {
 	}
 }
 
-// deliveryFloor is familyFloor capped by attendance. The cap only ever shortens:
-// claude and antigravity sit below both caps and are unchanged in either mode.
+// deliveryFloor is familyFloor, capped ONLY when a person is watching.
+//
+// An automated send is never capped. The cap only ever shortens, and the
+// comment it replaces admitted it does nothing else: "claude and antigravity
+// sit below both caps and are unchanged in either mode." Its entire effect was
+// to cut devin's measured 15s down to 10s for an agent-to-agent send and 5s for
+// a composer send — so the one family that needs a long floor was the only one
+// that never got it.
+//
+// What that costs is not seconds. A paste that lands before the seat is ready is
+// swallowed by a busy composer, and the receipt still reports success because it
+// is assembled from bytesWritten. The sender records a delivered prompt, ends its
+// turn, and waits on a reply that can never come. Measured twice on this team:
+// ~55 minutes on Coding-coder-1 (2026-09-12) and a full stall on Coding-intern
+// (2026-09-13, promptSeq 4 — success:true, bytesWritten:1023, never processed).
+//
+// An attended send keeps its cap: a person is watching, will see nothing happen,
+// and can send again. Nobody is watching an automated one, which is exactly why
+// it must be allowed to wait as long as the family actually needs.
+//
+// This remains a blind timer and is not the real fix — readiness should be
+// observed, not slept through (see the plan on the blind five-second floor).
+// Waiting the full declared floor is the honest version of the wrong mechanism.
 func deliveryFloor(family string, attended bool) time.Duration {
-	cap := unattendedFloorCap
-	if attended {
-		cap = attendedFloorCap
+	floor := familyFloor(family)
+	if !attended {
+		return floor
 	}
-	if f := familyFloor(family); f < cap {
-		return f
+	if floor < attendedFloorCap {
+		return floor
 	}
-	return cap
+	return attendedFloorCap
 }
