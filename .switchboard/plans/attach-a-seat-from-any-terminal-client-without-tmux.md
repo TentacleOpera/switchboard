@@ -128,13 +128,38 @@ print the detach key in the hello banner so it is discoverable without documenta
 `golang.org/x/term` is added for raw mode and size; it is the standard library-adjacent
 answer and already an indirect dependency of the module graph.
 
-### 2. `switchboard seats` — the list you attach from
+### 2. Suppress answerback across the replay, or every attach types garbage
+
+The replay frame is raw agent output, so it carries whatever device queries the CLI emitted
+during the session — OSC colour queries, `ESC[c` (DA), `ESC[6n` (DSR). Writing those to a
+terminal makes it **answer** them, and the answer arrives on stdin, which this client
+forwards to the agent. Every attach would inject a burst of `ESC[?62;...c` into the seat as
+though the operator had typed it.
+
+This is not hypothetical and it is already solved once: `terminalViewport.js:994` sets
+`suppressAnswerback` for the duration of the replay parse and drops matching input, against
+
+```js
+const ANSWERBACK_RE = /^(?:\x1b\][\s\S]*|\x1bP[\s\S]*|\x1b\[[?>]?[0-9;]*(?:[cnR]|\$y))$/;
+```
+
+A raw terminal is **more** exposed than xterm.js, not less: it is a real emulator and will
+certainly reply. Port that exact regex to Go and apply it to stdin from connect until the
+replay has been written plus a short settle, closing the window early on the first input
+that does not match. Suppress on the INPUT side, as the browser does — do not try to strip
+query sequences out of the replay, which mangles legitimate output and cannot be tested
+against a fixture of real agent bytes.
+
+Pin it with a test that feeds a replay containing a DA query and asserts nothing is written
+back to the host.
+
+### 3. `switchboard seats` — the list you attach from
 
 `ptyListTerminals` already returns names, roles and status. Surface it as a plain table so
 `switchboard seats` then `switchboard attach <name>` is the whole workflow over SSH. `--json`
 for scripting, consistent with the existing CLI verbs.
 
-### 3. tmux seating becomes opt-in
+### 4. tmux seating becomes opt-in
 
 Flip `switchboard.terminal.tmux.enabled` to `false` by default and rewrite its description
 to say what it is now for — a multiplexer for people who want one — rather than implying it
@@ -144,7 +169,7 @@ This is a clean break: teams have never shipped, and a seat created without tmux
 an empty `tmuxSession`/`tmuxWindow`, which every tmux path already treats as "not
 tmux-backed" (`close()`, `resizeTmuxWindow`, `ensureTmuxRouting` all test exactly that).
 
-### 4. `switchboard history <seat>` — reach the deep log
+### 5. `switchboard history <seat>` — reach the deep log
 
 The per-session logs already exist and nothing surfaces them. Add a verb that resolves the
 seat's current session log and pages it (honouring `$PAGER`, defaulting to plain stdout so
@@ -153,7 +178,7 @@ it pipes), with `--session <n>` to reach a rolled predecessor and `--follow` to 
 This is the tier tmux never had, and it is the answer to "scroll back further than the
 ring": not a bigger buffer, a file that was already on disk.
 
-### 5. Say where the seat can be reached
+### 6. Say where the seat can be reached
 
 The board's startup banner already prints its URL. Add the attach hint — `switchboard
 attach <seat>` — next to it, so the terminal path is discoverable from the thing an operator
@@ -185,6 +210,9 @@ already reads on boot.
   <name>` shows the live seat and accepts typing. Verified by doing it, not by reasoning
   about it.
 - Ctrl-C typed into an attached seat interrupts the **agent**, not the attach client.
+- Attaching to a seat whose ring contains a device query sends **zero** bytes to the agent.
+  Verified by attaching to a seat with a real CLI banner in its ring and watching the host's
+  write path, not by reasoning about which queries a CLI emits.
 - Detaching leaves the agent running and the seat unchanged — no session, no window, nothing
   to clean up afterwards. `tmux ls` is unchanged by an attach/detach cycle.
 - Arriving at a busy seat paints its recent screen from the ring, and scrolling up in the
