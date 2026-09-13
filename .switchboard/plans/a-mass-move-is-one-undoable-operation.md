@@ -124,20 +124,23 @@ next stage (triggers CLI if enabled)"* — an accidental press fires prompts at 
 restoring the columns while twenty seats keep working on prompts nobody meant to send is not a
 recovery. Undo must reach the terminals.
 
-So the operation records **which seats it delivered to**, and undo sends each of them ESC.
+So the operation records **which seats it delivered to**, and undo sends **ESC to every one of
+them**. One key, every family, no table and no per-CLI branch.
 
-Two constraints, and nothing beyond them:
+The one constraint: **only the seats this operation delivered to**, recorded at delivery — never
+every terminal, and never inferred afterwards from liveness. A seat busy on unrelated work is not
+part of this undo.
 
-- **Only the seats this operation delivered to**, recorded at delivery — never every terminal, and
-  never inferred afterwards from liveness. A seat busy on unrelated work is not part of this undo.
-- **The interrupt key must not default.** ESC interrupts Claude (demonstrated 2026-09-14). What
-  interrupts the other families is not established, and one measurement that does exist cuts the
-  other way: copilot echoes ESC as a literal `^[` rather than acting on it. So a seat whose family
-  is not known to take ESC is reported by name and left alone. A family→key table pretending to be
-  a runtime probe is the mistake `CLI_AGENT_REGEX` was deleted for.
+Nothing else is checked. Not whether the seat has finished its turn, not which CLI it is running.
+ESC interrupts Claude (demonstrated 2026-09-14), which is the case that matters, and an ESC that
+does nothing costs nothing.
 
-Whether the seat has already finished its turn is **not** checked. An ESC into a settled Claude seat
-costs nothing, and a liveness probe on the delivery path is a subsystem this does not need.
+**Recorded, so it is not rediscovered as a bug:** copilot echoes ESC as a literal `^[` into its
+input box rather than acting on it (measured 2026-08-23). That is a known and accepted limit of
+sending one key everywhere, and if copilot needs a different key later it goes in then. A coder
+must **not** pre-empt that by building a family→key table — a static list pretending to be a runtime
+probe is the mistake `CLI_AGENT_REGEX` was deleted for, and this plan deliberately ships without
+one.
 
 ### 7. Both composition roots
 
@@ -166,8 +169,8 @@ on one host and absent on the other is the divergence `CLAUDE.md` names, and it 
    `showStatusBarMessage` timeout, while an ordinary status message still clears at 5000 ms.
 7. Assert undo sends ESC only to seats this operation delivered to — a seat busy on unrelated work
    receives nothing.
-8. Assert a family not known to take ESC is reported and sent nothing, and that no family→key
-   default exists.
+8. Assert every delivered seat gets ESC regardless of CLI family, and that no family→key table
+   exists on this path.
 9. Assert no `confirm()`, `window.confirm()` or modal gate exists on the move path, on either host.
 
 ### Goal Invariants
@@ -179,6 +182,5 @@ on one host and absent on the other is the divergence `CLAUDE.md` names, and it 
 - No confirmation dialog exists anywhere on this path.
 - The undo button is still on screen a minute after the move that created it, in the same place
   every time.
-- Undoing a move stops the agents that move set working, and says which ones it could not stop.
-- No seat is ever sent an interrupt key chosen by a default.
+- Undoing a move sends ESC to every seat that move dispatched to, and to no other seat.
 - No seat outside the undone operation is touched.
