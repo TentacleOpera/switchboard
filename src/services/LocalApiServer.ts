@@ -12335,7 +12335,19 @@ export class LocalApiServer {
                 if (typeof sameSiteOrigin === 'string' && sameSiteOrigin.length > 0) {
                     return this._isLocalhostOrigin(sameSiteOrigin);
                 }
-                return true;
+                // No Origin. Split on the METHOD, exactly as the no-signal
+                // branch below does — allowing every method here reopened the
+                // hole this guard exists for. A browser sends `Origin` on every
+                // state-changing request, so a `same-site` POST that carries
+                // none is not the navigation the lockout fix was about; it is
+                // an unidentified caller, and it must identify itself with the
+                // marker like any other non-browser client. GET/HEAD stays
+                // allowed: that IS the navigation (and the home-screen/PWA
+                // launch) the 2026-09-13 fix restored, and Guard 3 has already
+                // validated its Host against the bind policy.
+                if (req.method === 'GET' || req.method === 'HEAD') { return true; }
+                const sameSiteMarker = req.headers['x-switchboard-client'];
+                return typeof sameSiteMarker === 'string' && sameSiteMarker.length > 0;
             }
             // Unknown value: fall through to the Origin check.
         }

@@ -105,7 +105,14 @@ check('/health is exempt from the guard — port discovery works before a client
 
 check('the X-Switchboard-Client marker is checked when neither Origin nor Sec-Fetch-Site is present', () => {
     const fnStart = SERVER_SRC.indexOf('_isAllowedCrossSiteRequest(req: http.IncomingMessage)');
-    const fnBody = SERVER_SRC.slice(fnStart, fnStart + 1600);
+    assert.ok(fnStart > 0, 'the guard predicate body must exist');
+    // Slice to the NEXT member's docblock, not a fixed byte count. A magic
+    // window (this was `fnStart + 1600`) silently stops covering the code it
+    // asserts on as soon as the function grows — the 2026-09-13 same-site and
+    // GET/HEAD amendments pushed the marker check past 1600 chars and this
+    // assertion started failing against correct code.
+    const nextMember = SERVER_SRC.indexOf('\n    /**', fnStart);
+    const fnBody = SERVER_SRC.slice(fnStart, nextMember > fnStart ? nextMember : undefined);
     assert.ok(/x-switchboard-client/.test(fnBody),
         'the guard must check X-Switchboard-Client when no browser signal is present (2026-09-10 correction)');
     // A request with none of the three is REJECTED, not allowed.
@@ -208,13 +215,27 @@ async function behavioural() {
             assert.strictEqual(res.status, 403, `cross-site POST must be rejected (got ${res.status})`);
         });
 
-        // Sec-Fetch-Site: same-site POST → 403 (same-site is NOT same-origin).
+        // Sec-Fetch-Site: same-site POST with no Origin and no marker → 403.
+        // `same-site` is not a blanket reject (a tailnet is ONE site — `ts.net`
+        // is on the Public Suffix List — so blanket-rejecting locked the
+        // operator out of their own board, observed 2026-09-13). But a
+        // state-changing request still has to identify itself: a browser sends
+        // `Origin` on every POST, so a same-site POST carrying none is an
+        // unidentified caller and needs the marker like any other.
         await checkAsync('Sec-Fetch-Site: same-site POST → 403', async () => {
             const res = await request(port, 'POST', '/kanban/move', {
                 'Sec-Fetch-Site': 'same-site',
                 'Content-Type': 'application/json',
             });
-            assert.strictEqual(res.status, 403, `same-site POST must be rejected — localhost:8080 is not same-origin with localhost:7777 (got ${res.status})`);
+            assert.strictEqual(res.status, 403, `same-site POST with no Origin and no marker must be rejected (got ${res.status})`);
+        });
+
+        // The lockout fix itself: a same-site NAVIGATION (GET, no Origin) must
+        // still load. This is the home-screen/PWA launch and the hop between
+        // the board's own host forms that the blanket reject broke.
+        await checkAsync('Sec-Fetch-Site: same-site GET navigation → allowed (the 2026-09-13 lockout fix)', async () => {
+            const res = await request(port, 'GET', '/kanban/plans', { 'Sec-Fetch-Site': 'same-site' });
+            assert.ok(res.status !== 403, `a same-site navigation must not be rejected — this was the operator lockout (got ${res.status})`);
         });
 
         // Sec-Fetch-Site: cross-site PLUS a valid marker → 403 (browser signal wins).

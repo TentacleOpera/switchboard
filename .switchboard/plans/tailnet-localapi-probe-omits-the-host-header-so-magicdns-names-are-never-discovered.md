@@ -182,3 +182,11 @@ Each step is a measurement, and the before-values are recorded above from this m
 ## Implementation Summary
 
 Added the `Host: local-tailscaled.sock` header (via a shared exported `LOCALAPI_HOST_HEADER` constant) to both LocalAPI probes in `src/utils/tailnetDetect.ts` — `probeLocalApiSocket` and `resolveMagicDnsNames` — fixing the silent 403 that left `magicDnsNames` empty. Changed `resolveMagicDnsNames`'s return type from `string[]` to a `MagicDnsResult` tagged union (`{ names, source: 'localapi' } | { names: [], source: 'unavailable', reason }`) so a refused probe is distinguishable from a machine with no MagicDNS name; `BindPolicy.magicDnsNames` stays `string[]` with unwrapping at the call sites. Both composition roots surface the `unavailable` reason: the standalone CLI (`cli.ts`) prints a four-line warning naming the consequence and the `--hostname` escape hatch (without exiting), and the extension host (`TaskViewerProvider.ts`) logs the reason via `console.warn`. Added a regression test (`src/test/tailnet-localapi-host-header-contract.test.js`) that stands up a mock unix-socket server mirroring the real 403-then-200 behaviour, wired into `package.json` and the integration workflow.
+
+## Review Findings
+
+Reviewed 2026-09-13. No code changes were needed for this subtask — the implementation matches the plan. `LOCALAPI_HOST_HEADER` is a single exported constant referenced by all four LocalAPI probes (`probeLocalApiSocket`, `resolveMagicDnsNames`, `readCertDomains`, `readServeConfigViaSocket`), so the two-site drift the plan warned about cannot recur; `MagicDnsResult` is a proper tagged union and `BindPolicy.magicDnsNames` stays `string[]` with unwrapping at both call sites. Composition-root parity verified by hand: `cli.ts:4507` prints the four-line warning without exiting and `TaskViewerProvider.ts:4068` logs the equivalent `console.warn`, so the two hosts cannot disagree about whether a name exists. Validation: `npm run compile-tests` clean; `test:contract:tailnet-localapi-host-header` 8/8. The suite is wired into `.github/workflows/integration-tests.yml`.
+
+## Deferred Findings
+
+None.

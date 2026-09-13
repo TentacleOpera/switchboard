@@ -590,6 +590,15 @@ jobs:
       - name: Tailnet LocalAPI Host-header contract (Host header sent, unavailable distinguished from empty)
         run: npm run test:contract:tailnet-localapi-host-header
 
+      # The board is served unauthenticated by the extension host, so the CSRF
+      # guard in _handleRequest is the ONLY thing standing between a hostile
+      # page and 42 state-changing POSTs. This suite was defined in package.json
+      # and invoked by no gate for its whole life — it was RED at HEAD (two
+      # assertions) and nothing reported it. An unwired security suite is the
+      # "green while incomplete" hole in its purest form.
+      - name: Board CSRF guard contract (cross-site rejection, client marker, /health exemption)
+        run: npm run test:contract:board-csrf-guard
+
       # Cross-file mismatches that are invisible file-by-file, and each one shipped:
       # terminals.js called term.onFocus (an INTERNAL xterm emitter) and the throw took
       # the WebSocket with it — panes read "connecting" forever; tickets.html shipped a
