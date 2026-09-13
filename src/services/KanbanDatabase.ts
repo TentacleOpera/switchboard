@@ -12996,10 +12996,13 @@ FROM plans
      * the directory walk + frontmatter parse that 190 files required.
      *
      * `kind` filters by `action` (`finished` | `blocked`); absent returns both.
-     * `plan_id` is the plan's RELATIVE path (the board's stored shape), never
-     * the absolute one the files carried. A row whose `plan_id` no longer joins
-     * to `plans` (the card was deleted) still returns, with `kanbanColumn:
-     * null` — the join is a LEFT JOIN so the record survives its card.
+     * `plan_id` is the plan's UUID — `recordTurnEndEvent` resolves the relative
+     * plan file to `plans.plan_id` before insert, because that is what this
+     * JOIN and every other `plan_events` writer key on. It is never the
+     * ABSOLUTE path the retired report files carried. A row whose `plan_id` no
+     * longer joins to `plans` (the card was deleted, or the path never
+     * resolved) still returns, with `kanbanColumn: null` — the join is a LEFT
+     * JOIN so the record survives its card.
      *
      * Ordered by timestamp DESC (most recent first), capped at `limit` (default
      * 100) so an unbounded history never floods a terminal.

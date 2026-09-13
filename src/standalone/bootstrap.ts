@@ -1149,9 +1149,20 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         // the connection's declared project, threaded from wsHub's getFullState
         // callback. Replaces hand-built literals with live state.
         const baseState = await kanbanProvider.getFullStateMessages(workspaceRoot, scope, surfaces);
-        if (!baseState || baseState.length === 0) { return []; }
+        // The empty-snapshot bail applies ONLY to a board-building connection.
+        // `_buildCommonOnlySnapshot()` legitimately returns [] when no autoban
+        // state has been received yet, and bailing on that would drop the theme
+        // entry appended below — which the provider never produces and which
+        // every non-kanban panel (setup, memo, design, terminals, tickets,
+        // planning, connections, mission-control, linear, database — ten of the
+        // fourteen) would then never receive on connect. Before the surface
+        // threading the full build always returned at least updateColumns, so
+        // this guard could not fire on that path; it can now.
+        const needsKanban = !surfaces || surfaces.has(SURFACES.kanban);
+        if (needsKanban && (!baseState || baseState.length === 0)) { return []; }
+        const entries = Array.isArray(baseState) ? baseState : [];
         // Prime _lastCards from the updateBoard entry (same as pushFullState).
-        const boardMsg = baseState.find((m: any) => m.type === 'updateBoard');
+        const boardMsg = entries.find((m: any) => m.type === 'updateBoard');
         if (boardMsg && Array.isArray((boardMsg as any).cards)) {
             (kanbanProvider as any)._lastCards = (boardMsg as any).cards;
         }
@@ -1165,7 +1176,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         // terminalCreateAvailable (defaults true in the webview; false here — see the
         // broadcast site above for why pty readiness is not the right signal for it).
         return [
-            ...baseState.map(msg => msg.type === 'updateBoard'
+            ...entries.map(msg => msg.type === 'updateBoard'
                 ? { ...msg, dispatchAnalyzeAvailable: ptyReady, terminalCreateAvailable: false }
                 : msg),
             themeEntry,
@@ -4187,7 +4198,9 @@ Each plan file must include:
             // fire-and-forget file mirror to `.switchboard/mission-control/
             // reports/` — a gitignored directory no reader could reach. The
             // row is indexed, joined to `plans` by `plan_id` (the plan's
-            // RELATIVE path), and pruned by `RetentionService`, so the
+            // UUID — `recordTurnEndEvent` resolves the relative plan file to
+            // it, never the absolute path the files carried), and pruned by
+            // `RetentionService`, so the
             // accumulation that 190 files became cannot recur. Same
             // outcome→action mapping as the extension host twin.
             void (async () => {

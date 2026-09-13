@@ -452,46 +452,21 @@ If the API server is down you can still communicate via the filesystem (Mission 
 - **Session file:** `.switchboard/mission-control/session.md` — the current session file (Rules + append-only Log); read it to see Mission Control's decisions. The legacy `.switchboard/mission-control/session-log.md` is still honoured as a fallback by `GET /mission-control/session-log` on installs that have one.
 - **Progress:** `.switchboard/mission-control/progress.json` — Mission Control's per-plan stall state.
 
-### Reports channel — `.switchboard/mission-control/reports/`
+### Reports channel — `switchboard reports`
 
-A **report is a message *to* Mission Control**; the session file is Mission Control's own record. Do not write your update into the session file, and do not write it into the plan file — plan files are write-once-at-the-end, so a mid-work edit breaks completion detection for that card.
+A **report is a host-recorded turn-end event** stored in the `plan_events` table (event_type `turn_end`), not a file. The host writes a row on every turn-end (finished, blocked, stalled), joined to the card's current kanban column. This is **not an HTTP surface** — there is no `GET /mission-control/reports` endpoint. Read reports via the CLI:
 
-This is a directory convention, **not an HTTP surface**. There is no endpoint. Post a file; Mission Control lists the directory on its next wake.
-
-**Write one file per report, never rewritten:**
-
-```
-.switchboard/mission-control/reports/report-<UTC-compact>-<kind>-<5 digits>.md
+```bash
+switchboard reports [--kind blocked|finished] [--limit N] [--json]
 ```
 
-`<UTC-compact>` is an ISO timestamp with `-` and `:` stripped and the milliseconds dropped (`20260817T031403Z`). The 5-digit random tail is what keeps two agents posting in the same second from colliding — pick a fresh one and retry if the name is taken.
-
-```markdown
----
-from: Coding-lead
-kind: blocked          # finished | blocked | question | status
-planId: <planId>       # or feature: <featureId>
-created: 2026-08-17T03:14:03Z
----
-
-Subtask 3 needs a decision on the migration key before I can continue.
-```
-
-- Every frontmatter value is a single line. A value containing a newline is flattened on write — this is deliberate, so a message body cannot forge a `kind:` or `from:` key.
-- `from: system` marks a report the extension wrote itself: each `[switchboard:turn-end]` notice is mirrored here (`finished` when a seat completed, `blocked` when it went quiet or a feature stalled) so a non-pty Mission Control sees the same notices a pty one is sent.
-- An unrecognised `kind` reads as `status`. Mis-binning a message beats dropping it.
-
-**Claiming.** Mission Control marks what it has acted on by writing `reports/claimed/<report-filename>.claim`:
-
-```
-claimed_ts: 2026-08-17T03:15:11Z
-agent: mission-control
-```
-
-A claim older than the staleness window (**24 hours** by default) reads as unclaimed again, so a long-running session can legitimately re-surface a report it already handled. Claims are a de-duplication record across ticks of one agent — Mission Control is a singleton — **not** a mutual-exclusion lock between agents. Do not rely on them for exclusion.
-
-This sits alongside `ptySendPrompt`, it does not replace it: a pty-hosted lead reporting to a pty-hosted head keeps working exactly as it does now.
-
+- `--kind blocked` filters to blocked turn-ends (a seat went quiet or a feature stalled).
+- `--kind finished` filters to finished turn-ends (a seat completed its turn).
+- The output includes each card's **current kanban column**, so you can tell whether a formerly blocked card is still blocked.
+- A row whose card was deleted or archived still appears, with `[no card]` — the record survives its card.
+- Rows are pruned by the retention service; the accumulation that 1900+ files became cannot recur.
+- Every row on this channel is host-written; the row carries no `from` field. Agent-authored reports are a separate path (team reports via `GET /teams/<id>/reports`), not this channel.
+- The old file-based channel (`.switchboard/mission-control/reports/`) is retired. Existing files remain as archival evidence; no code reads or writes them.
 ## Notes
 - localhost only (127.0.0.1) — never a public interface.
 - Reads wrap payloads in `.data`; mutations return `{ success, ...fields }`.

@@ -332,6 +332,14 @@ jobs:
       - name: Standing-orders marker mirror (standingOrders.ts ≡ terminals.js literal)
         run: npm run test:contract:standing-orders-marker
 
+      # Ratchet: no generated agent prompt contains curl, $BASE, or
+      # api-server-port.txt. The earlier curl-to-CLI migration swept the 38
+      # agent-facing files and passed while seven curls sat in src/ as
+      # runtime-generated prompt text. This test asserts the property over
+      # generated text, not a file list.
+      - name: No curl in generated prompts
+        run: npm run test:contract:no-curl-in-generated-prompts
+
       # Standing orders are written to, and read from, ONE root per extension-host
       # lifetime. This divergence is INVISIBLE at runtime in a single-root
       # workspace — which is the only kind of workspace this CI has — so it is

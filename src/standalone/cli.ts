@@ -4480,6 +4480,23 @@ async function main() {
         }
     }
 
+    // Which address, if any, the startup output names. The operator's four rules
+    // key on the SUBCOMMAND: `tailnet` prints the tailnet address, `local` prints
+    // the loopback address, a bare `switchboard` prints neither.
+    //
+    // `service` is none of those three. It is the packaged systemd entrypoint —
+    // the Pi appliance's actual launch path — whose mode comes from the durable
+    // host-settings rather than a subcommand, and whose only output channel is
+    // the journal. Keying it on `firstArg` alone printed nothing at all, leaving
+    // an appliance install with no way to learn its own address from its own log.
+    // It prints the address for the mode it RESOLVED to, which is the same rule
+    // the three subcommands follow, applied to the mode the operator configured.
+    const addressMode: 'tailnet' | 'local' | 'none' =
+        firstArg === 'tailnet' ? 'tailnet'
+            : firstArg === 'local' ? 'local'
+                : isServiceCommand ? serveMode
+                    : 'none';
+
     if (serveMode === 'tailnet') {
         tailnetAddress = await detectTailnetAddress();
         if (!tailnetAddress) {
@@ -4603,7 +4620,7 @@ async function main() {
 
         console.log(`[switchboard] Server started in background.`);
         console.log(`  PID:   ${detachPid}`);
-        if (firstArg === 'tailnet') {
+        if (addressMode === 'tailnet') {
             const hostnameExplicit = Boolean(args._explicit?.hostname);
             const tailnetResolved = await resolveTailnetUrl(tailnetAddress!, magicDnsNames, detachPort, hostnameExplicit);
             console.log(`  Tailnet: ${tailnetResolved.url} (no token, on your tailnet only)`);
@@ -4619,7 +4636,7 @@ async function main() {
             } else if (!tailnetResolved.secure && !hostnameExplicit) {
                 console.log('[switchboard] This tailnet URL is not a secure origin. The board cannot be installed to a Home Screen as a standalone app on iOS (Safari treats a plain-http manifest as a bookmark). Run `tailscale serve` with HTTPS to enable this.');
             }
-        } else if (firstArg === 'local') {
+        } else if (addressMode === 'local') {
             console.log(`  URL:   http://127.0.0.1:${detachPort}`);
         }
         // Bare `switchboard --detach` prints no address.
@@ -4689,10 +4706,11 @@ async function main() {
     //   `switchboard tailnet` → the tailnet address
     //   `switchboard local`   → the loopback address
     //   `switchboard`         → no address
-    // `firstArg` is captured before the subcommand is spliced out of argv, so
-    // it still distinguishes explicit `local` from a bare invocation that
-    // defaulted to local mode.
-    if (firstArg === 'tailnet') {
+    //   `switchboard service`  → the address for its resolved durable mode
+    // `addressMode` is computed from `firstArg`, which is captured before the
+    // subcommand is spliced out of argv, so it still distinguishes explicit
+    // `local` from a bare invocation that defaulted to local mode.
+    if (addressMode === 'tailnet') {
         // Tailnet mode: the tailnet URL block below prints the address. No
         // loopback URL is printed — the subcommand asked for the tailnet.
         const hostnameExplicit = Boolean(args._explicit?.hostname);
@@ -4714,7 +4732,7 @@ async function main() {
         } else if (!tailnetResolved.secure && !hostnameExplicit) {
             console.log('[switchboard] This tailnet URL is not a secure origin. The board cannot be installed to a Home Screen as a standalone app on iOS (Safari treats a plain-http manifest as a bookmark). Run `tailscale serve` with HTTPS to enable this.');
         }
-    } else if (firstArg === 'local') {
+    } else if (addressMode === 'local') {
         console.log(`\nSwitchboard is running at ${instance.url}`);
     }
     // Bare `switchboard` prints no address — the operator did not name a mode.

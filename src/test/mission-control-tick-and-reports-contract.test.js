@@ -664,12 +664,23 @@ async function run() {
                 `${file} does not wire resolveRoutedRole — recommendedRole would be absent on this host only`
             );
         }
-        for (const file of ['src/services/teamWiring.ts', 'src/webview/terminals.js', 'src/webview/kanban.html']) {
+        // `src/webview/terminals.js` is NOT in this list. Its client mirror of the
+        // head prompt (`NEW_CODING_HEAD_PROMPT_CLIENT`) was retired in cb3da221 when
+        // system-protocol composition moved to delivery-time fragment composition —
+        // see the note on NEW_CODING_HEAD_PROMPT in teamWiring.ts. terminals.js no
+        // longer builds a head prompt at all, so asserting the line there pinned a
+        // copy that is gone by design, not a prompt that lost a line. The two files
+        // that DO still carry a head prompt are still pinned.
+        for (const file of ['src/services/teamWiring.ts', 'src/webview/kanban.html']) {
             assert.ok(
                 read(file).includes('a recommendedRole; dispatch it to a seat of that role'),
                 `${file}'s head prompt lost the seat-routing line`
             );
         }
+        assert.ok(
+            !/NEW_CODING_HEAD_PROMPT_CLIENT/.test(read('src/webview/terminals.js')),
+            'terminals.js reintroduced a client head-prompt mirror — put the line back in the list above, or delete the mirror again'
+        );
     });
 
     // ─── 8. Start seats, confirm arms — the two doors behave identically ─────

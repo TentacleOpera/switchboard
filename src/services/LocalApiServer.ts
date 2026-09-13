@@ -10124,10 +10124,29 @@ export class LocalApiServer {
         await this._handleReadEndpoint(req, res, async () => {
             const db = await this._requireReadableStore(req);
             const url = new URL(req.url || '', `http://localhost:${this._port}`);
+            // An unrecognised `kind` must not silently widen to "no filter" —
+            // `?kind=blockd` would then answer with every finished turn-end too
+            // and look like a board where nothing is blocked. Reject it.
             const kindRaw = url.searchParams.get('kind') || undefined;
-            const kind = (kindRaw === 'finished' || kindRaw === 'blocked') ? kindRaw : undefined;
+            if (kindRaw !== undefined && kindRaw !== 'finished' && kindRaw !== 'blocked') {
+                throw Object.assign(new Error(`kind must be 'blocked' or 'finished' (got '${kindRaw}')`), { statusCode: 400 });
+            }
+            const kind = kindRaw as 'finished' | 'blocked' | undefined;
+            // A non-numeric `?limit=` must not become NaN. `getTurnEndReports`
+            // clamps with Math.min/Math.max, which propagate NaN into the SQL
+            // `LIMIT`, the statement throws, and its catch returns [] — a
+            // cross-site-shaped "success: true, data: []" that reads exactly
+            // like "there are no reports". Reject the input instead of
+            // answering an emptier board than the one that exists.
             const limitRaw = url.searchParams.get('limit');
-            const limit = limitRaw ? Number(limitRaw) : undefined;
+            let limit: number | undefined;
+            if (limitRaw !== null && limitRaw !== '') {
+                const parsed = Number(limitRaw);
+                if (!Number.isInteger(parsed) || parsed <= 0) {
+                    throw Object.assign(new Error(`limit must be a positive integer (got '${limitRaw}')`), { statusCode: 400 });
+                }
+                limit = parsed;
+            }
             const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
             return db.getTurnEndReports?.(wsId, { kind, limit }) ?? [];
         });

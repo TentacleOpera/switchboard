@@ -2578,7 +2578,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             // fire-and-forget file mirror to `.switchboard/mission-control/
             // reports/` — a gitignored directory no reader could reach. The
             // row is indexed, joined to `plans` by `plan_id` (the plan's
-            // RELATIVE path), and pruned by `RetentionService`, so the
+            // UUID — `recordTurnEndEvent` resolves the relative plan file to
+            // it, never the absolute path the files carried), and pruned by
+            // `RetentionService`, so the
             // accumulation that 190 files became cannot recur. Never awaited
             // ahead of the pty send, never able to suppress it.
             //
