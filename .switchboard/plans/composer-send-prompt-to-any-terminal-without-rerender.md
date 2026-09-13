@@ -259,3 +259,29 @@ The existing per-pane paste dialog (`openTerminalPasteDialog`) and the composer 
 
 Implemented the Composer feature in both composition roots. The terminals panel (`terminals.html`/`terminals.js`) gained a `#btn-composer` sidebar button (placed under LINK UP, hidden in team-scoped and controller-scoped modes) and a static `#composer-modal` mirroring the `#link-modal` pattern (position: fixed, z-index: 200, `hidden` toggle). The command view panel (`command.html`/`command.js`) gained a matching COMPOSER button in the dispatch view header and its own `#composer-modal`. Both modals populate a terminal-selector dropdown from the active fleet (cached list shown instantly, then refreshed via a background `ptyListTerminals` fetch), accept a textarea prompt, and deliver via `fetch('/terminals/verb/sendToTerminal', ...)` with `{ paced: true, standingOrders: false }` — the explicit `standingOrders: false` suppresses standing-orders appending since `sendToTerminal` hardcodes `kind: 'dispatch'`. No `postMessage`, `term.paste`, `ws.send`, `navigator.clipboard`, or `confirm()` gates are used. A 19-assertion contract test (`src/test/composer-contract.test.js`, wired as `test:contract:composer`) verifies the structural and delivery invariants across all four files; all 19 assertions pass.
 
+
+## Review Findings
+
+Changed `src/test/composer-contract.test.js` — two of its assertions read `.composer-modal` CSS
+and the `#btn-composer` hide rules out of `terminals.html`, but the terminals-payload plan
+extracted that CSS into `src/webview/terminals.css`, so the suite was RED (17/19) at review time
+despite the Implementation Summary's "all 19 assertions pass"; they now read the stylesheet, plus
+a new assertion pins that the document actually links it. Changed `src/webview/terminals.js` and
+`src/webview/command.js` — the background fleet refresh reassigned the module-level `fleetList` /
+`liveFleet`, which `fetchTerminalList` and `fetchTeamsState` set together with `parentsList` /
+`heldUnposted` / `teamRoster` from the same response, so the composer could leave the sidebar
+rendering a fleet newer than the roster it groups by; the dropdown now fills from a local list.
+Wired `test:contract:composer` into `.github/workflows/integration-tests.yml` — it was defined at
+`package.json:1115` and invoked by no gate, which is exactly the hole that let the red suite sit
+unnoticed. Validation: `test:contract:composer` 20/20, `node --check` clean on both webview files,
+`compile-tests` clean; verified `standingOrders` is a declared field in `verbSchemas.ts:1461` and
+is honoured by both hosts (`bootstrap.ts:3610` `payload.standingOrders !== false`,
+`TaskViewerProvider.ts:16552` `data.standingOrders === false`), and that `friendlyName`/`status`
+are in the pty host's persisted `project()` literal (`main.go:210`).
+
+## Deferred Findings
+
+- MAJOR `src/standalone/bootstrap.ts:3639` — the Edge-Case audit's claim that a terminal exiting mid-compose yields an error is wrong for the standalone host: when neither a PTY nor a tmux handle resolves, `sendToTerminal` **auto-creates** a PTY with that name and delivers the prompt into a fresh shell. Manual verification step 7 will therefore not reproduce as written. Fixing it means adding a no-create flag to a verb four other callers share, which is a contract change beyond this plan's scope.
+- NIT `src/webview/command.html:1116` — the composer puts a `<textarea>` on `GET /command`, the phone command route whose original plan specified taps and dropdowns only. `#agent-control-input` (line 1072) already put a text field there under a later plan, so this follows the surface's current direction rather than contradicting it; flagged so the decision is explicit rather than inherited.
+- NIT `src/webview/terminals.js:12146` — reopening the composer clears the textarea rather than being a no-op as the Edge Cases section states. Unreachable in practice: the modal is `position: fixed; inset: 0; z-index: 200` and covers the sidebar button that would trigger it.
+- NIT `src/webview/terminals.js:12183` — the background `ptyListTerminals` refresh is not cancelled on close, so a close-then-reopen inside one round trip can repopulate the dropdown from the earlier fetch. The prior selection is preserved, so the worst case is a briefly stale option list.

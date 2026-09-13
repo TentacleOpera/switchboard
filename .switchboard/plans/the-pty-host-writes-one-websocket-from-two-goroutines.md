@@ -370,3 +370,25 @@ handler with `EnableCompression: true`. The assertion is that the run completes 
 ## Completion Summary
 
 Implemented the per-connection write lock: added a `wsClient` wrapper (conn + `sync.Mutex`) with `writeMessage`/`writeJSON` helpers in `ws.go`, and changed `fleet.clients` from `map[*websocket.Conn]struct{}` to `map[*wsClient]struct{}` so the compiler rejects any missed write site. All six write sites (`readOutput` EOF, `broadcastControl`, `routeOutput`, `close`, and the `handleWebSocket` hello+replay) now route through the wrapper; `handleWebSocket` takes the lock explicitly across hello+replay as one critical section so a live `routeOutput` frame cannot land in the replay slot. Added `ws_race_test.go` (real upgrade handler + real `publish` fan-out, `EnableCompression` on both sides, 16 concurrent subscribers × 25 iters) and wired it as `test:contract:pty-host-race`. `go build`, `go vet`, and `gofmt -l` are clean; the goal-invariant grep returns only the two wrapper helpers and the two critical-section calls.
+
+## Review Findings
+
+No code change was needed in the Go host — the implementation is correct and the goal-invariant
+grep returns only the two `wsClient` helpers and the two critical-section calls. The gap was a
+gate: `test:contract:pty-host-race` was defined in `package.json:903` but invoked nowhere in CI,
+so the plan's own discriminating check gated nothing (the existing `Go unit tests` step runs
+`go test ./...` without `-race`, which cannot see this defect). Wired it into
+`.github/workflows/integration-tests.yml` ahead of the black-box suite. Validation: with the
+`writeMu` locks temporarily removed the suite reports `WARNING: DATA RACE` naming
+`routeOutput`→`writeMessage` against `handleWebSocket`→`WriteJSON` — the exact production pair —
+and passes with them restored, so the test genuinely discriminates; `gofmt -l`, `go vet ./...`,
+`go build ./...`, `scripts/build-pty-host.sh`, `test:contract:pty-host-gating` (all green),
+`test:contract:pty-clear-policy` 9/9, `test:contract:pty-prompt-delivery-framing` green.
+Remaining risk: `test:contract:pty-host-blackbox` has one red assertion and
+`test:contract:pty-route-surface` seven, both verified red before this review's edits and both
+unrelated to the write lock.
+
+## Deferred Findings
+
+- NIT `cmd/switchboard-pty-host/ws.go:125` — the hello/replay critical section calls `f.next(name)`, which takes `f.mu.RLock()`, while `client.writeMu` is held. That inverts the plan's stated one-directional rule (`f.mu` released before a write lock, never the reverse). No deadlock is possible because nothing takes a write lock while holding `f.mu`, so this is a documentation/invariant deviation, not a live hazard; hoisting the call would change the seq reported in `hello`, which is not a review-time decision.
+- NIT `cmd/switchboard-pty-host/main.go:927` — `close()` now blocks briefly behind an in-flight `routeOutput` write per client, serially across clients. The plan anticipated this and calls it correct; noted only because it is a new bounded stall on the close path.

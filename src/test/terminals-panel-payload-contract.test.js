@@ -208,10 +208,25 @@ async function main() {
     await test('terminalViewport.js kicks off the canvas fetch when WebGL is absent', () => {
         assert.ok(/function ensureCanvasAddonKickedOff\(\)/.test(TERMINALS_VP),
             'terminalViewport.js must define ensureCanvasAddonKickedOff — the lazy-load kickoff.');
-        assert.ok(/ensureCanvasAddonKickedOff\(\)/.test(TERMINALS_VP),
-            'the kickoff must be invoked at module load (after xterm + webgl addon have run).');
+        assert.ok(/if \(!webglAvailable\(\)\) \{ ensureCanvasAddonKickedOff\(\); \}/.test(TERMINALS_VP),
+            'the module-init kickoff must be gated on !webglAvailable() AT THE CALL SITE — '
+            + 'that gate is what saves the 95 KB on a WebGL machine.');
         assert.ok(/document\.body\.dataset\.canvasAddonUri/.test(TERMINALS_VP),
             'the kickoff must read the URI from document.body.dataset.canvasAddonUri.');
+    });
+
+    await test('ensureCanvasAddonKickedOff does NOT gate itself on webglAvailable()', () => {
+        // The bug this pins: a `if (webglAvailable()) { return; }` INSIDE the helper
+        // makes the second kickoff path (attachCanvasRenderer, the WebGL-context-
+        // creation-failed case) dead — webglAvailable() is TRUE there, so the guard
+        // returns before fetching and that machine gets the DOM renderer forever.
+        // The gate belongs at the module-init call site, never in the helper.
+        const fn = TERMINALS_VP.match(/function ensureCanvasAddonKickedOff\(\)[\s\S]{0,900}?\n    }/);
+        assert.ok(fn, 'ensureCanvasAddonKickedOff not found');
+        assert.ok(!/webglAvailable\(\)/.test(fn[0]),
+            'ensureCanvasAddonKickedOff must not call webglAvailable() — an internal WebGL '
+            + 'guard silently kills the attachCanvasRenderer kickoff, which fires precisely '
+            + 'when WebGL IS available but its context creation threw.');
     });
 
     await test('attachCanvasRenderer stays synchronous and kicks off the fetch if the addon is missing', () => {

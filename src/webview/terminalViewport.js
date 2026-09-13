@@ -399,10 +399,16 @@
     // for the FIRST terminal on a WebGL-less machine until the script lands — never
     // a missing one. The URI is injected server-side as a `data-canvas-addon-uri`
     // body attribute (headlessPanelHtml.ts) so the runtime uses the resolved URL.
+    //
+    // The WebGL gate lives at the INIT CALL SITE below, never inside this helper.
+    // It used to be the helper's second line (`if (webglAvailable()) return`), which
+    // made the whole second kickoff path dead: attachCanvasRenderer's call fires
+    // precisely when WebGL *is* present but its context creation threw, so the guard
+    // returned before fetching and that machine got the DOM renderer forever — the
+    // exact failure the second kickoff exists to prevent.
     let canvasAddonKickoff = false;
     function ensureCanvasAddonKickedOff() {
         if (canvasAddonKickoff) { return; }
-        if (webglAvailable()) { return; }
         const uri = document.body && document.body.dataset && document.body.dataset.canvasAddonUri;
         if (!uri) { return; }
         canvasAddonKickoff = true;
@@ -410,7 +416,10 @@
         s.src = uri;
         document.head.appendChild(s);
     }
-    ensureCanvasAddonKickedOff();
+    // Init kickoff: only when WebGL is known absent. With WebGL present the fetch
+    // is skipped entirely — that is the 95 KB this plan is saving — and the
+    // attachCanvasRenderer kickoff covers the context-failure case.
+    if (!webglAvailable()) { ensureCanvasAddonKickedOff(); }
 
     function attachCanvasRenderer(term) {
         if (!(window.CanvasAddon && window.CanvasAddon.CanvasAddon)) {

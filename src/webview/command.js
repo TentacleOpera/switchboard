@@ -787,8 +787,11 @@
             if (res.ok) {
                 const data = await res.json();
                 if (data && Array.isArray(data.terminals)) {
-                    liveFleet = data.terminals;
-                    fillSelect(liveFleet);
+                    // A LOCAL list, never the module-level `liveFleet`. fetchTeamsState
+                    // sets liveFleet and teamRoster from two fetches read together by
+                    // resolveTeamSeats; writing liveFleet from here would pair a fresh
+                    // fleet with a stale roster.
+                    fillSelect(data.terminals);
                 }
             }
         } catch { /* stale fleet is acceptable; the cached list stands */ }

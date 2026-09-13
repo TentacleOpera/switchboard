@@ -420,3 +420,29 @@ fallback. A new contract `test:contract:terminals-payload` asserts an uncompress
 budget (1500 KB, materially below the 1517 KB baseline), the lazy canvas, the ETag/304
 behaviour, the `defer` regression, and the CSS-extraction/ETag coupling; it is wired in
 `package.json` and invoked from `.github/workflows/integration-tests.yml`.
+
+## Review Findings
+
+Changed `src/webview/terminalViewport.js` (the `webglAvailable()` guard moved out of
+`ensureCanvasAddonKickedOff` to the module-init call site — inside the helper it made the
+second kickoff path documented in Proposed Changes item 1 dead, since that path fires exactly
+when `webglAvailable()` is true), `src/services/LocalApiServer.ts` (the redundant third
+`statSync` is gone; one stat now answers `.isFile()` and feeds the ETag, which is what the
+superseded callout asked a future cleanup to do), `src/webview/terminals.html` (a comment still
+pointed at a `<style>` block that moved to terminals.css), and
+`src/test/terminals-panel-payload-contract.test.js` (a new assertion forbids `webglAvailable()`
+inside the helper, so the dead-kickoff shape cannot return). Validation: `test:contract:terminals-payload`
+17/17 (cold load 1428 KB against the 1500 KB budget and the 1477 KB materiality gate),
+`test:contract:tmux-view-chrome` 14/14, `compile-tests` clean; `test:contract:pty-route-surface`
+(7 red) and `test:contract:pty-dispatch-focus` (1 red, `allowPtyFleet` threading) were verified
+red before these edits too and are unrelated. Remaining risk: the panel is still ~13× the board
+and dominated by `terminals.js` parse cost, so the Goal's "not the slowest surface" is not met
+until item 4 lands as its own plan — items 1-3 are complete and gated.
+
+## Deferred Findings
+
+- NIT `src/services/LocalApiServer.ts:2589` — `Last-Modified` is sent but `If-Modified-Since` is never read; only `If-None-Match` short-circuits. Browsers prefer the ETag, so this is unreachable in practice, but the plan's item 3 named both.
+- NIT `src/services/LocalApiServer.ts:2586` — `If-None-Match` is compared by exact string equality, so a client sending a list (`"a", "b"`) or a weak tag (`W/"a"`) re-downloads instead of 304ing. No shipped client does this.
+- NIT `src/services/LocalApiServer.ts:2590` — one ETag covers both the identity and the gzip representation. `Vary: Accept-Encoding` is set on the 200 by `_wrapForCompression`, so browser caches key correctly; a strict intermediary could still mismatch.
+- NIT `src/services/LocalApiServer.ts:2582` — the 304 carries `ETag` and `Cache-Control` but not `Vary: Accept-Encoding`, which RFC 7232 recommends echoing.
+- NIT — Goal Invariant "on a machine with WebGL, addon-canvas.js is never requested" now holds only until the 16-context WebGL budget is exhausted; past that `attachCanvasRenderer` correctly kicks off the fetch. That is the intended behaviour, not a regression, but the invariant as written reads absolute.

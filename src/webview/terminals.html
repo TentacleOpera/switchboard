@@ -32,7 +32,7 @@
          body, so the browser had every opportunity to paint the full-panel chrome
          while those scripts were still fetching and compiling — which is the sidebar
          flash the dock's operator reported. Applying the class here means the
-         chrome-hiding rules (body.is-solo / body.is-kanban in the <style> above) are
+         chrome-hiding rules (body.is-solo / body.is-kanban in terminals.css) are
          already matching when the sidebar markup is parsed.
          ONE parser: this is the only read of the mode parameters. terminals.js reads
          the object published here rather than re-parsing location.search, so the two

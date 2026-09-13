@@ -162,6 +162,16 @@ jobs:
       - name: PTY host gating contract (single load site, probe exported, no bundled binary)
         run: npm run test:contract:pty-host-gating
 
+      # Go race detector over the pty host's WebSocket fan-out. gorilla/websocket
+      # allows at most ONE concurrent writer per connection; with EnableCompression
+      # the writers share one flate compressor, so violating it is not interleaved
+      # frames but a panic inside compress/flate that kills the whole host process
+      # (measured 2026-09-12: deflateFast.matchLen, slice bounds out of range).
+      # Only `-race` can discriminate here — the pre-fix code passes every
+      # functional suite — so this must be a CI gate, not a script nobody calls.
+      - name: PTY host WebSocket write-serialisation (go test -race)
+        run: npm run test:contract:pty-host-race
+
       # The gating contract is static; this one starts the real Go host and
       # exercises the wire. It is the only check that can discriminate on whether
       # the terminal runtime actually works, so it must run in CI — a suite that
@@ -1224,6 +1234,17 @@ jobs:
       # not compressed transfer — compression is already covered by the test above.
       - name: Terminals panel payload contract (byte budget, lazy canvas, ETag/304)
         run: npm run test:contract:terminals-payload
+
+      # Composer: compose a prompt locally and deliver it to ANY active terminal
+      # without switching panes. The load-bearing assertion is `standingOrders:
+      # false` on the delivery payload — sendToTerminal hardcodes kind:'dispatch'
+      # and both hosts append standing orders unless the caller opts out, so
+      # losing that one field silently pastes a standing-orders block into every
+      # user-typed prompt and no other gate notices. Also pins the delivery route
+      # (fetch, never postMessage — terminals.js has no acquireVsCodeApi) and the
+      # absence of any confirm() gate, which is a silent no-op in a webview.
+      - name: Composer contract (sendToTerminal delivery, standingOrders opt-out, no confirm gate)
+        run: npm run test:contract:composer
 
       # GPU renderer lifecycle. The failure mode is SILENT SUCCESS: WebglAddon.dispose()
       # leaves the live WebGL2 context to the garbage collector, and the browser charges

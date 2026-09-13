@@ -20,6 +20,11 @@ const path = require('path');
 
 const TERMINALS_JS = fs.readFileSync(path.join(__dirname, '../webview/terminals.js'), 'utf8');
 const TERMINALS_HTML = fs.readFileSync(path.join(__dirname, '../webview/terminals.html'), 'utf8');
+// The panel's bulk CSS was extracted out of terminals.html into a linked, cacheable
+// terminals.css (the-terminals-panel-costs-a-megabyte-and-a-half plan, item 2). Style
+// assertions must read the stylesheet, not the document, or they go red on an unrelated
+// payload change while the composer itself is untouched.
+const TERMINALS_CSS = fs.readFileSync(path.join(__dirname, '../webview/terminals.css'), 'utf8');
 const COMMAND_JS = fs.readFileSync(path.join(__dirname, '../webview/command.js'), 'utf8');
 const COMMAND_HTML = fs.readFileSync(path.join(__dirname, '../webview/command.html'), 'utf8');
 
@@ -79,19 +84,27 @@ test('terminals.html: #composer-modal exists with a terminal selector and a text
         '#composer-input textarea must exist inside the composer modal');
 });
 
-test('terminals.html: .composer-modal CSS uses position: fixed', () => {
-    const cssMatch = TERMINALS_HTML.match(/\.composer-modal\s*\{([^}]*)\}/);
+test('terminals.css: .composer-modal CSS uses position: fixed', () => {
+    const cssMatch = TERMINALS_CSS.match(/\.composer-modal\s*\{([^}]*)\}/);
     assert.ok(cssMatch, '.composer-modal CSS rule must exist');
     assert.ok(cssMatch[1].includes('position: fixed'),
         '.composer-modal must use position: fixed (sidebar-level modal)');
-    assert.ok(TERMINALS_HTML.includes('.composer-modal[hidden] { display: none; }'),
+    assert.ok(TERMINALS_CSS.includes('.composer-modal[hidden] { display: none; }'),
         '.composer-modal[hidden] override is mandatory (display:flex beats UA hidden)');
 });
 
-test('terminals.html: #btn-composer is in the team-scoped and controller-scoped hide rules', () => {
-    assert.ok(TERMINALS_HTML.includes('body.is-team-scoped #btn-composer'),
+test('terminals.html: terminals.css is the linked stylesheet carrying the composer rules', () => {
+    // The style assertions above read terminals.css; this pins that the document
+    // actually LINKS it, so a stylesheet that stopped being served could not leave
+    // those assertions passing against a file no browser loads.
+    assert.ok(/<link[^>]+href="\/static\/webview\/terminals\.css"/.test(TERMINALS_HTML),
+        'terminals.html must link /static/webview/terminals.css');
+});
+
+test('terminals.css: #btn-composer is in the team-scoped and controller-scoped hide rules', () => {
+    assert.ok(TERMINALS_CSS.includes('body.is-team-scoped #btn-composer'),
         '#btn-composer must be hidden in team-scoped mode (alongside #btn-link-up)');
-    assert.ok(TERMINALS_HTML.includes('body.is-controller-scoped #btn-composer'),
+    assert.ok(TERMINALS_CSS.includes('body.is-controller-scoped #btn-composer'),
         '#btn-composer must be hidden in controller-scoped mode (alongside #btn-link-up)');
 });
 

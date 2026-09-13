@@ -2565,7 +2565,10 @@ export class LocalApiServer {
         for (const root of roots) {
             const candidate = path.resolve(root, safeRest);
             if (!candidate.startsWith(path.resolve(root))) { continue; }
-            if (fsSync.existsSync(candidate) && fsSync.statSync(candidate).isFile()) {
+            if (!fsSync.existsSync(candidate)) { continue; }
+            // ONE stat per candidate: it answers `.isFile()` AND feeds the ETag below.
+            const stat = fsSync.statSync(candidate);
+            if (stat.isFile()) {
                 // The panel HTML is served `no-store`, but its scripts live at unversioned
                 // URLs (`/static/webview/planning.js`). A long max-age therefore pinned an
                 // open cockpit tab to the PREVIOUS extension build's JS for an hour after a
@@ -2573,11 +2576,11 @@ export class LocalApiServer {
                 // with stale, cached scripts, so fixes appeared not to land. Code must
                 // revalidate every load; static art can still be cached hard.
                 const isCode = prefix === 'webview';
-                const stat = fsSync.statSync(candidate);
                 // `no-cache` means "revalidate before use", so without a validator it is a
-                // full re-download on every load. Derive an ETag from size + mtime (both
-                // already in hand from the isFile() stat above) and answer If-None-Match
-                // with 304, so a repeat load with an unchanged build transfers ~nothing.
+                // full re-download on every load. Derive an ETag from stat.size + stat.mtimeMs
+                // — the SINGLE statSync above that already answered `.isFile()`, so the
+                // validator costs no extra syscall — and answer If-None-Match with 304, so a
+                // repeat load with an unchanged build transfers ~nothing.
                 const etag = `"${stat.size}-${stat.mtimeMs}"`;
                 if (req.headers['if-none-match'] === etag) {
                     res.writeHead(304, {

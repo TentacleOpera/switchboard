@@ -12197,8 +12197,11 @@
             if (res.ok) {
                 const data = await res.json();
                 if (data && Array.isArray(data.terminals)) {
-                    fleetList = data.terminals;
-                    const fresh = fleetList.filter(t => t.status === 'active');
+                    // A LOCAL list, never the module-level `fleetList`. fetchTerminalList
+                    // sets fleetList together with parentsList/heldUnposted/hasFetchedList
+                    // from the SAME response; writing fleetList from here would leave the
+                    // sidebar rendering a fleet newer than the parents it groups by.
+                    const fresh = data.terminals.filter(t => t && t.status === 'active');
                     const current = selectEl.value;
                     selectEl.innerHTML = '';
                     if (fresh.length === 0) {
