@@ -156,7 +156,10 @@ async function postComplete(server, body) {
     const req = {
         method: 'POST',
         url: '/kanban/task/complete',
-        headers: { 'content-type': 'application/json', 'authorization': 'Bearer test-token' },
+        // Guard 4 (cross-site) admits a non-browser caller only when it carries
+        // the client marker; without it every state-changing POST is refused 403
+        // before the handler runs.
+        headers: { 'content-type': 'application/json', 'authorization': 'Bearer test-token', 'x-switchboard-client': 'contract-test' },
         on: (event, cb) => {
             if (event === 'data') cb(Buffer.from(JSON.stringify(body)));
             else if (event === 'end') cb();
@@ -186,7 +189,10 @@ async function postRelease(server, body) {
     const req = {
         method: 'POST',
         url: '/kanban/card/release',
-        headers: { 'content-type': 'application/json', 'authorization': 'Bearer test-token' },
+        // Guard 4 (cross-site) admits a non-browser caller only when it carries
+        // the client marker; without it every state-changing POST is refused 403
+        // before the handler runs.
+        headers: { 'content-type': 'application/json', 'authorization': 'Bearer test-token', 'x-switchboard-client': 'contract-test' },
         on: (event, cb) => {
             if (event === 'data') cb(Buffer.from(JSON.stringify(body)));
             else if (event === 'end') cb();
@@ -328,13 +334,17 @@ async function run() {
         assert.strictEqual(clearCalls.length, 0, 'lead in from must never be cleared');
     });
 
-    // 5b. V77: a completion must carry a non-empty outcome. This is the gate
-    //     that makes the release valve safe — without it, `task/complete` is
-    //     still usable as a silent unlock and the valve is just a second
-    //     signal under a new name. Scoped to NEW posts: an idempotent repeat
-    //     of a pre-V77 row returns its record untouched rather than being
-    //     rejected (193 of 201 historical completions carry no outcome).
-    await check('task/complete without an outcome is refused with 400', async () => {
+    // 5b. NO agent is asked to write a summary to close work out. V77 made
+    //     `outcome` mandatory and rejected any post without it; nothing that
+    //     instructs an agent how to call the endpoint was updated to match, so
+    //     every documented payload described a call the endpoint refused — and
+    //     because the same instructions say "until you post, the seat is not
+    //     cleared", a lead that obeyed them deadlocked its team. The gate was
+    //     removed rather than the instructions grown a sixth copy of the field.
+    //     This assertion is the inverse of the one it replaces, and it is the
+    //     one that pins the removal: completion is ASSERTED by the post itself,
+    //     and prose is not the signal.
+    await check('task/complete with no outcome is ACCEPTED — completion is asserted, not written', async () => {
         const board = [
             card('needs-outcome', 'LEAD CODED', {
                 dispatchedTerminal: 'Coding',
@@ -342,26 +352,21 @@ async function run() {
                 featureId: 'feat-1',
             }),
         ];
-        const { server, calls } = makeServer(board, {
+        const { server } = makeServer(board, {
             groups: [group('Coding', ['Coder 1'])],
             resolveTeamMembers: async () => ['Coding', 'Coder 1'],
         });
 
         const missing = await postComplete(server, { from: 'Coding', planId: 'needs-outcome' });
-        assert.strictEqual(missing.status, 400, 'a completion with no outcome must be refused');
-        assert.strictEqual(missing.body.success, false);
-        assert.ok(/outcome/i.test(missing.body.error || ''), 'the error must name the missing field');
-        assert.ok(/card\/release/.test(missing.body.error || ''),
-            'the refusal must point at the release door — that is the whole point of the gate');
-        assert.strictEqual(board[0].completedAt, null, 'a refused completion must write nothing');
-        assert.strictEqual(calls.filter(c => c.kind === 'clear').length, 0,
-            'a refused completion must clear no seat');
+        assert.strictEqual(missing.status, 200, 'a completion with no outcome must be accepted');
+        assert.strictEqual(missing.body.success, true);
+        assert.ok(!/outcome/i.test(missing.body.error || ''), 'no refusal names a missing outcome');
+        assert.ok(board[0].completedAt, 'the completion is recorded');
 
-        const blank = await postComplete(server, { from: 'Coding', planId: 'needs-outcome', outcome: '   ' });
-        assert.strictEqual(blank.status, 400, 'whitespace is not an outcome');
-
-        const ok = await postComplete(server, { from: 'Coding', planId: 'needs-outcome', outcome: 'built and reviewed' });
-        assert.strictEqual(ok.status, 200, 'the same post with an outcome is accepted');
+        // `outcome` stays ACCEPTED and stored when a caller supplies one — the
+        // removal is of the requirement, not of the field.
+        const withOutcome = await postComplete(server, { from: 'Coding', planId: 'needs-outcome', outcome: 'built and reviewed' });
+        assert.strictEqual(withOutcome.status, 200, 'the same post with an outcome is still accepted');
     });
 
     // 5c. V77: the release valve. The plan's load-bearing negative invariant —

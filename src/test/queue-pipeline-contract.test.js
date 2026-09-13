@@ -427,8 +427,18 @@ async function run() {
             },
         });
         const out = await server.reportQueueDone({ workspaceRoot: WS, from: 'Coder 1', planId: 'held-inflight' });
-        assert.strictEqual(out.status, 409, 'the in-flight refusal status is passed through');
-        assert.ok(out.payload.inFlight, 'the in-flight refusal names the held card');
+        // The `done` call SUCCEEDED — the working-state latch cleared and the
+        // relay fired — so it answers 200 even though the pop behind it was
+        // refused. Forwarding the pop's 409 produced a response carrying both
+        // `released: <planId>` and a conflict status, which a caller cannot act
+        // on: it has neither a success it can record nor a failure it can
+        // retry. The pop's refusal is a fact about the NEXT dispatch and lives
+        // under `next`.
+        assert.strictEqual(out.status, 200, 'done succeeded — the pop\'s refusal is not the done call\'s status');
+        assert.strictEqual(out.payload.success, true, 'a released card is a success, never a conflict');
+        assert.strictEqual(out.payload.next?.status, 409, 'the pop\'s in-flight refusal is reported under next');
+        assert.ok(out.payload.next?.inFlight, 'the in-flight refusal names the held card');
+        assert.strictEqual(out.payload.reason, 'team in flight', 'the refusal names its own kind');
         assert.strictEqual(out.payload.released, 'held-inflight', 'the release still happened');
         assert.deepStrictEqual(arms, [], 'an in-flight team must not arm (or rebind) the queue watch');
     });
@@ -507,7 +517,15 @@ async function run() {
             return { status: 409, payload: { success: false, error: 'lead unavailable' } };
         };
         const failedAttempt = await server.reportQueueDone({ workspaceRoot: WS, from: 'Coder 1', outcome: 'failed', planId: 'failed' });
-        assert.strictEqual(failedAttempt.status, 409);
+        // 200: the done call did its job. The dispatch failure is the NEXT
+        // dispatch's problem and is reported under `next` — and it is labelled
+        // as a dispatch refusal, NOT borrowed from the team-in-flight case,
+        // which is not what happened here (no seat held a card; the lead was
+        // unavailable).
+        assert.strictEqual(failedAttempt.status, 200);
+        assert.strictEqual(failedAttempt.payload.next?.status, 409);
+        assert.strictEqual(failedAttempt.payload.next?.inFlight, undefined, 'no team was in flight — do not invent one');
+        assert.strictEqual(failedAttempt.payload.reason, 'next dispatch refused');
         server.performKanbanDispatch = async (_workspaceRoot, planId, targetColumn) => {
             attemptedColumns.push(targetColumn);
             const row = board.find(p => p.planId === planId);
@@ -925,8 +943,8 @@ async function run() {
         const mode = webview.slice(modeStart, webview.indexOf('\n    /**', modeStart + 10));
         assert.ok(/_queueMode = mode/.test(mode));
         assert.ok(/!res\.ok \|\| !data\?\.success/.test(mode), 'a failed mode write must be surfaced');
-        const wiring = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'teamWiring.ts'), 'utf8');
-        assert.ok(/export function CONTEXT_AWARE_COMPLETION_ORDER_BODY/.test(wiring));
+        const wiring = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'standingOrderFragments.ts'), 'utf8');
+        assert.ok(/export function buildMemberCompletionFragment/.test(wiring));
     });
 
     // ── Standalone host: the four queue seams + armQueueWatch ─────────────

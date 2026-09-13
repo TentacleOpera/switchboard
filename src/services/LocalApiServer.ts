@@ -3732,7 +3732,7 @@ export class LocalApiServer {
             if (isTeamDispatch) {
                 const inFlightCheck = await resolveTeamInFlight(db, Array.from(teamSet));
                 if (inFlightCheck.inFlight) {
-                    return fail(409, `Team already in flight: card '${inFlightCheck.planId}' is in '${inFlightCheck.kanbanColumn}' held by '${inFlightCheck.dispatchedTerminal}' with no completion post. Completion is for FINISHED work — POST /kanban/task/complete with a non-empty outcome when the work is done. To free the team WITHOUT claiming the work is done, POST /kanban/card/release with { from, planId: '${inFlightCheck.planId}' } (or POST /kanban/team/release with { from } to release every held card).`, {
+                    return fail(409, `Team already in flight: card '${inFlightCheck.planId}' is in '${inFlightCheck.kanbanColumn}' held by '${inFlightCheck.dispatchedTerminal}' with no completion post. Completion is for FINISHED work — POST /kanban/task/complete. To free the team WITHOUT claiming the work is done, POST /kanban/card/release with { from, planId: '${inFlightCheck.planId}' } (or POST /kanban/team/release with { from } to release every held card).`, {
                         inFlight: {
                             planId: inFlightCheck.planId,
                             kanbanColumn: inFlightCheck.kanbanColumn,
@@ -4195,6 +4195,49 @@ export class LocalApiServer {
     }
 
     /**
+     * Resolve the accepted coding seat from HOST evidence only — never from the
+     * request body, and never `from` (the poster). Shared by
+     * `completeCardInternal` and `releaseCardInternal` so the two at-rest clear
+     * paths cannot resolve a coding seat differently (the verbatim duplication
+     * of this block was the drift seam; extracting it is what prevents the two
+     * paths from diverging).
+     *
+     * The `CODING_ROLES` gate (`coder`/`intern`) is the entire protection
+     * against clearing a non-coding seat: a lead/planner/reviewer's
+     * `dispatchedTerminal` can never equal a coding seat resolved here, so a
+     * name-based guard comparing the resolved seat to `from` on top of it is provably
+     * redundant for its stated intent and provably harmful for the self-report
+     * case (the only case it can ever fire on), which it suppresses. That guard
+     * was deleted from both call sites; this helper is the one place that
+     * enforces "host evidence only, never `from`, never the request body".
+     *
+     * Returns the seat name when the dispatched terminal resolves to a coding
+     * role, `undefined` otherwise. The caller keeps its own `dispatchedSeat`
+     * local for the no-seat diagnostic branch (`dispatchedSeat === from` →
+     * self-report), which is why this helper does not return it.
+     */
+    private async _resolveAcceptedCodingSeat(existing: any, workspaceRoot: string): Promise<string | undefined> {
+        const CODING_ROLES = new Set(['coder', 'intern']);
+        const dispatchedSeat = String(existing.dispatchedTerminal || '').trim();
+        const rowRole = String(existing.routedTo || '').toLowerCase();
+        if (dispatchedSeat && CODING_ROLES.has(rowRole)) {
+            return dispatchedSeat;
+        }
+        if (dispatchedSeat && this._options.terminalVerb) {
+            try {
+                const listed = await this._options.terminalVerb('ptyListTerminals', {}, workspaceRoot);
+                const seat = (listed?.terminals || []).find((t: any) => t && t.friendlyName === dispatchedSeat);
+                if (seat && CODING_ROLES.has(String(seat.role || '').toLowerCase())) {
+                    return dispatchedSeat;
+                }
+            } catch (roleErr) {
+                console.warn('[LocalApiServer] _resolveAcceptedCodingSeat role lookup failed:', roleErr);
+            }
+        }
+        return undefined;
+    }
+
+    /**
      * Shared completion helper for both POST /kanban/task/complete and POST /kanban/team/release.
      * Performs:
      *   1. Idempotency check via getPlanByPlanId.
@@ -4261,28 +4304,15 @@ export class LocalApiServer {
 
         // 2. Resolve the accepted coding seat from HOST evidence only — never from
         // the request body, and never `from` (the lead posting the acceptance).
-        const CODING_ROLES = new Set(['coder', 'intern']);
-        let acceptedCodingSeat: string | undefined;
+        // The shared `_resolveAcceptedCodingSeat` helper enforces the
+        // `CODING_ROLES` gate and the `ptyListTerminals` fallback; the
+        // name-based guard comparing the resolved seat to `from` that used to sit below
+        // it is deleted (it was provably redundant for its stated intent — a
+        // non-coding `from` can never equal a coding seat the gate just
+        // confirmed — and provably harmful for the self-report case, the only
+        // case it could ever fire on, which it suppressed).
         const dispatchedSeat = String(existing.dispatchedTerminal || '').trim();
-        const rowRole = String(existing.routedTo || '').toLowerCase();
-        if (dispatchedSeat && CODING_ROLES.has(rowRole)) {
-            acceptedCodingSeat = dispatchedSeat;
-        } else if (dispatchedSeat && this._options.terminalVerb) {
-            try {
-                const listed = await this._options.terminalVerb('ptyListTerminals', {}, workspaceRoot);
-                const seat = (listed?.terminals || []).find((t: any) => t && t.friendlyName === dispatchedSeat);
-                if (seat && CODING_ROLES.has(String(seat.role || '').toLowerCase())) {
-                    acceptedCodingSeat = dispatchedSeat;
-                }
-            } catch (roleErr) {
-                console.warn('[LocalApiServer] completeCardInternal seat role lookup failed:', roleErr);
-            }
-        }
-
-        // Never clear the lead in `from`, planner, or reviewer
-        if (acceptedCodingSeat === from) {
-            acceptedCodingSeat = undefined;
-        }
+        const acceptedCodingSeat = await this._resolveAcceptedCodingSeat(existing, workspaceRoot);
 
         // 3. Write completed_at timestamp (only on first write).
         let timestamp = existing.completedAt;
@@ -4466,26 +4496,14 @@ export class LocalApiServer {
 
         // 2. Resolve the accepted coding seat (same HOST-evidence path as
         // completeCardInternal — never from the request body, never `from`).
-        const CODING_ROLES = new Set(['coder', 'intern']);
-        let acceptedCodingSeat: string | undefined;
+        // The shared `_resolveAcceptedCodingSeat` helper enforces the
+        // `CODING_ROLES` gate and the `ptyListTerminals` fallback; the
+        // name-based guard comparing the resolved seat to `from` that used to sit below
+        // it is deleted (same reasoning as completeCardInternal — provably
+        // redundant for its stated intent, provably harmful for the
+        // self-report case it suppressed).
         const dispatchedSeat = String(existing.dispatchedTerminal || '').trim();
-        const rowRole = String(existing.routedTo || '').toLowerCase();
-        if (dispatchedSeat && CODING_ROLES.has(rowRole)) {
-            acceptedCodingSeat = dispatchedSeat;
-        } else if (dispatchedSeat && this._options.terminalVerb) {
-            try {
-                const listed = await this._options.terminalVerb('ptyListTerminals', {}, workspaceRoot);
-                const seat = (listed?.terminals || []).find((t: any) => t && t.friendlyName === dispatchedSeat);
-                if (seat && CODING_ROLES.has(String(seat.role || '').toLowerCase())) {
-                    acceptedCodingSeat = dispatchedSeat;
-                }
-            } catch (roleErr) {
-                console.warn('[LocalApiServer] releaseCardInternal seat role lookup failed:', roleErr);
-            }
-        }
-        if (acceptedCodingSeat === from) {
-            acceptedCodingSeat = undefined;
-        }
+        const acceptedCodingSeat = await this._resolveAcceptedCodingSeat(existing, workspaceRoot);
 
         // 3. Write released_at (NOT completed_at). Idempotent setter — a
         // concurrent release racing this one loses the UPDATE (WHERE
@@ -6920,25 +6938,67 @@ export class LocalApiServer {
                     }
 
                     // Forward the pop result, annotating with the release
-                    // metadata. Preserve the pop's `reason` ("queue empty" on
-                    // exhaustion) so a seat can tell empty from duplicate.
+                    // metadata. The `done` call has already SUCCEEDED by the
+                    // time the pop runs — the working-state latch cleared
+                    // (`transitioned`, gated at :6495) and the relay fired — so
+                    // the response resolves 200 regardless of the pop's
+                    // status. The pop's own refusal (team still in flight
+                    // because `completed_at` is the lead's separate
+                    // `task/complete` post, NOT something `done` writes) is
+                    // nested under `next` for diagnostics, NOT forwarded as
+                    // the `done` call's own failure. Forwarding `pop.status`
+                    // here produced a 409 carrying `released: <planId>` — a
+                    // contradiction a caller cannot act on (the seat that hit
+                    // this in production read non-zero exit + the 409 body and
+                    // concluded its `done` had failed, then spent its
+                    // remaining turns reading source to work out what to send).
+                    // Preserve `dispatched`/`reason` from the pop so the CLI's
+                    // "Next card popped" / "Queue empty" render branches
+                    // (cli.ts:2043-2049) still fire on a 200.
+                    const popFailed = pop.status < 200 || pop.status >= 300;
+                    const popPayload = pop.payload || {};
+                    // A refused pop has three distinct causes and they are NOT
+                    // interchangeable: the team still holds an uncompleted card
+                    // (`inFlight`), the next staged card's dependency predecessor
+                    // has not completed (`dependencyBlocked`), or the dispatch
+                    // itself failed (neither field set — no live seat, delivery
+                    // error). Labelling all three 'team in flight' would be a
+                    // default that reads exactly like a measured value: the
+                    // caller would wait on a blocker that is not there, and the
+                    // real one would never be named. Each refusal reports its own
+                    // kind, and the pop's own diagnostic objects ride under
+                    // `next` so "which refusal was it?" is answerable after the
+                    // fact rather than guessed from one borrowed label.
+                    const nextReason = popPayload.inFlight
+                        ? 'team in flight'
+                        : popPayload.dependencyBlocked
+                            ? 'dependency blocked'
+                            : 'next dispatch refused';
                     const payload: any = {
-                        ...pop.payload,
+                        success: true,
                         released: held.planId,
                         cleared,
                         outcome,
                         escalated,
+                        dispatched: popPayload.dispatched ?? null,
+                        reason: popPayload.reason ?? (popFailed ? nextReason : undefined),
                         ...(clearError ? { clearError } : {}),
                         ...(clearSkipped ? { clearSkipped } : {}),
                         ...(parkReason ? { parkReason } : {}),
+                        ...(popFailed ? { next: {
+                            status: pop.status,
+                            error: popPayload.error,
+                            ...(popPayload.inFlight ? { inFlight: popPayload.inFlight } : {}),
+                            ...(popPayload.dependencyBlocked ? { dependencyBlocked: popPayload.dependencyBlocked } : {}),
+                        } } : {}),
                     };
                     // If the pop succeeded with a dispatch, label the reason
                     // so the body is self-describing (distinct from
                     // "duplicate" / "queue empty").
-                    if (pop.status >= 200 && pop.status < 300 && payload.dispatched && !payload.reason) {
+                    if (!popFailed && payload.dispatched && !payload.reason) {
                         payload.reason = 'dispatched';
                     }
-                    resolve({ status: pop.status, payload });
+                    resolve({ status: 200, payload });
                 } catch (err) {
                     console.error('[LocalApiServer] _runQueueDone error:', err);
                     resolve(fail(500, err instanceof Error ? err.message : 'kanbanQueueDone failed'));

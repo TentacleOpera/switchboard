@@ -37,6 +37,12 @@ function card(planId, kanbanColumn, extra = {}) {
         sessionId: planId,
         topic: planId,
         kanbanColumn,
+        // releaseCardInternal clears the dispatch holder by (planFile,
+        // workspaceId); a row missing them reports freed:false, which the
+        // endpoint correctly counts as a failure rather than a release.
+        planFile: `/tmp/${planId}.md`,
+        workspaceId: 'ws1',
+        releasedAt: null,
         featureId: '',
         dispatchedAt: null,
         dispatchedTerminal: '',
@@ -69,6 +75,31 @@ function makeServer(opts = {}) {
             p.completedAt = timestamp;
             p.updatedAt = timestamp;
             plans.set(planId, p);
+            return true;
+        },
+        // POST /kanban/team/release routes through releaseCardInternal, which
+        // writes `released_at` (NOT `completed_at`) and then clears the dispatch
+        // holder — the holder clear is the ONLY signal heldByTeam reads, so a
+        // stub missing these two makes every release report "not found" and the
+        // suite reads as a behaviour regression.
+        setReleasedAt: async (planId, timestamp) => {
+            if (opts.failSetReleasedAt && opts.failSetReleasedAt.has(planId)) {
+                return false;
+            }
+            const p = plans.get(planId);
+            if (!p || p.releasedAt) return false;
+            p.releasedAt = timestamp;
+            plans.set(planId, p);
+            return true;
+        },
+        setPlanOutcomeWorkflow: async () => true,
+        releaseDispatchHolder: async (planFile, workspaceId) => {
+            for (const p of plans.values()) {
+                if (p.planFile === planFile && p.workspaceId === workspaceId) {
+                    p.dispatchedTerminal = '';
+                    p.dispatchedAt = null;
+                }
+            }
             return true;
         },
         appendPlanEventByPlanId: async (planId, event) => {
@@ -120,7 +151,11 @@ function makeServer(opts = {}) {
 }
 
 async function postRelease(server, body, authToken = 'test-token') {
-    const headers = { 'content-type': 'application/json' };
+    // Guard 4 (cross-site) admits a non-browser caller only when it identifies
+    // itself with the client marker; without it every state-changing POST is
+    // refused 403 before the handler runs, and the whole suite reads as a
+    // behaviour regression rather than a stub that predates the guard.
+    const headers = { 'content-type': 'application/json', 'x-switchboard-client': 'contract-test' };
     if (authToken !== undefined) {
         headers['authorization'] = `Bearer ${authToken}`;
     }
@@ -141,7 +176,14 @@ async function postRelease(server, body, authToken = 'test-token') {
     let responseBody = null;
     const res = {
         writeHead: (code) => { status = code; },
+        // _wrapForCompression reads headers set before writeHead back off the
+        // response via res.getHeaders(). A stub without it throws before any
+        // handler runs, which reads as "every assertion in this suite failed"
+        // rather than "the harness is missing a method".
         setHeader: () => {},
+        getHeader: () => undefined,
+        getHeaders: () => ({}),
+        removeHeader: () => {},
         end: (data) => { responseBody = data ? JSON.parse(data) : null; },
     };
     await server._handleRequest(req, res);
@@ -149,7 +191,11 @@ async function postRelease(server, body, authToken = 'test-token') {
 }
 
 async function postTaskComplete(server, body, authToken = 'test-token') {
-    const headers = { 'content-type': 'application/json' };
+    // Guard 4 (cross-site) admits a non-browser caller only when it identifies
+    // itself with the client marker; without it every state-changing POST is
+    // refused 403 before the handler runs, and the whole suite reads as a
+    // behaviour regression rather than a stub that predates the guard.
+    const headers = { 'content-type': 'application/json', 'x-switchboard-client': 'contract-test' };
     if (authToken !== undefined) {
         headers['authorization'] = `Bearer ${authToken}`;
     }
@@ -170,7 +216,14 @@ async function postTaskComplete(server, body, authToken = 'test-token') {
     let responseBody = null;
     const res = {
         writeHead: (code) => { status = code; },
+        // _wrapForCompression reads headers set before writeHead back off the
+        // response via res.getHeaders(). A stub without it throws before any
+        // handler runs, which reads as "every assertion in this suite failed"
+        // rather than "the harness is missing a method".
         setHeader: () => {},
+        getHeader: () => undefined,
+        getHeaders: () => ({}),
+        removeHeader: () => {},
         end: (data) => { responseBody = data ? JSON.parse(data) : null; },
     };
     await server._handleRequest(req, res);
@@ -178,7 +231,11 @@ async function postTaskComplete(server, body, authToken = 'test-token') {
 }
 
 async function postTerminalVerb(server, verb, body, authToken = 'test-token') {
-    const headers = { 'content-type': 'application/json' };
+    // Guard 4 (cross-site) admits a non-browser caller only when it identifies
+    // itself with the client marker; without it every state-changing POST is
+    // refused 403 before the handler runs, and the whole suite reads as a
+    // behaviour regression rather than a stub that predates the guard.
+    const headers = { 'content-type': 'application/json', 'x-switchboard-client': 'contract-test' };
     if (authToken !== undefined) {
         headers['authorization'] = `Bearer ${authToken}`;
     }
@@ -199,7 +256,14 @@ async function postTerminalVerb(server, verb, body, authToken = 'test-token') {
     let responseBody = null;
     const res = {
         writeHead: (code) => { status = code; },
+        // _wrapForCompression reads headers set before writeHead back off the
+        // response via res.getHeaders(). A stub without it throws before any
+        // handler runs, which reads as "every assertion in this suite failed"
+        // rather than "the harness is missing a method".
         setHeader: () => {},
+        getHeader: () => undefined,
+        getHeaders: () => ({}),
+        removeHeader: () => {},
         end: (data) => { responseBody = data ? JSON.parse(data) : null; },
     };
     await server._handleRequest(req, res);

@@ -1,0 +1,185 @@
+'use strict';
+
+/**
+ * Contract: `switchboard done`. No arguments.
+ *
+ * A finished seat signals that it is finished; it assembles nothing and states
+ * no fact the host already holds. The host injects the seat's identity into the
+ * seat's OWN environment when it creates the pty — `SWITCHBOARD_TERMINAL`, set
+ * by the Go pty host (cmd/switchboard-pty-host/main.go) and by the Node fleet
+ * (src/standalone/ptyFleetService.ts), so the variable is present under BOTH
+ * composition roots. The CLI never read it, so every completion instruction
+ * made the agent type the name back.
+ *
+ * Measured cost, 2026-09-13 (`Coding-intern`): the seat finished its work
+ * correctly, then spent its remaining turns working out what to send — reading
+ * LocalApiServer.ts, grepping ./src/standalone, assembling a 3389-byte body
+ * into a temp file, and asking the operator which call was correct. None of it
+ * was about the work. It was about the shape of the report.
+ *
+ * Every field an agent must supply is a field it can get wrong and a decision
+ * it has to stop and make. This is the no-summaries rule applied to the fields
+ * instead of the prose.
+ *
+ * The runtime checks below stop short of a live board deliberately: they run
+ * the real built CLI in a scratch cwd with no port file, so resolution order is
+ * observable (the identity check runs BEFORE findRunningInstance) without a
+ * board, a seat or a TTY. "No running Switchboard instance" is the PASS signal
+ * for the resolved cases — it means `from` resolved and the CLI got past the
+ * identity gate.
+ */
+
+const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { spawnSync } = require('child_process');
+
+let failures = 0;
+function check(name, fn) {
+    try {
+        fn();
+        console.log(`  ✅ ${name}`);
+    } catch (err) {
+        failures++;
+        console.log(`  ❌ ${name}`);
+        console.log(`     ${err && err.message ? err.message : err}`);
+    }
+}
+
+const CLI = path.join(process.cwd(), 'out', 'standalone', 'cli.js');
+const SCRATCH = fs.mkdtempSync(path.join(os.tmpdir(), 'bare-completion-'));
+
+/** Run the built CLI in a scratch cwd that holds no .switchboard port file. */
+function runCli(args, env) {
+    const childEnv = { ...process.env };
+    delete childEnv.SWITCHBOARD_TERMINAL;
+    Object.assign(childEnv, env || {});
+    const r = spawnSync(process.execPath, [CLI, ...args], {
+        cwd: SCRATCH,
+        env: childEnv,
+        encoding: 'utf8',
+        timeout: 30000,
+    });
+    return { code: r.status, out: r.stdout || '', err: r.stderr || '' };
+}
+
+console.log('\n── a seat reports done and nothing else ──\n');
+
+check('the built CLI exists (guards the runtime checks below against a stale build)', () => {
+    assert.ok(fs.existsSync(CLI), `${CLI} missing — run npm run compile-tests`);
+});
+
+// ── 1. Bare `done` resolves the seat from the host-injected env ──────────
+
+check('`done` with no arguments and SWITCHBOARD_TERMINAL set resolves the seat', () => {
+    const { code, out } = runCli(['done', '--json'], { SWITCHBOARD_TERMINAL: 'Coding-intern' });
+    const body = JSON.parse(out);
+    // It got PAST the identity gate: the only thing left is that this scratch
+    // cwd has no board behind it.
+    assert.ok(!/SWITCHBOARD_TERMINAL is not set/.test(body.error || ''),
+        'bare `done` inside a seat must not ask for --from');
+    assert.match(String(body.error || ''), /No running Switchboard instance/,
+        'the only remaining failure is the absent board, not a missing field');
+    assert.strictEqual(code, 1, 'the absent-board exit code, not the missing-argument one');
+});
+
+// ── 2. Absent identity fails LOUDLY and names the variable ───────────────
+
+check('SWITCHBOARD_TERMINAL unset completes nothing and names the variable', () => {
+    const { code, out } = runCli(['done', '--json'], {});
+    const body = JSON.parse(out);
+    assert.strictEqual(body.success, false);
+    assert.match(String(body.error || ''), /SWITCHBOARD_TERMINAL/,
+        'the error must NAME the variable — that text is the only thing that '
+        + 'distinguishes "you are not in a seat" from "you typed the command wrong"');
+    assert.match(String(body.error || ''), /--from/, 'and it must name the manual override');
+    assert.notStrictEqual(code, 0, 'a completion that resolved no seat must never exit zero');
+});
+
+check('SWITCHBOARD_TERMINAL unset fails BEFORE reaching the board', () => {
+    // Ordering matters: if the identity gate ran after findRunningInstance, the
+    // absent-board message would mask the real cause, and an agent would go
+    // looking for a dead server instead of a missing variable.
+    const { out } = runCli(['done', '--json'], {});
+    assert.ok(!/No running Switchboard instance/.test(out),
+        'the identity check must run before the instance lookup');
+});
+
+check('an empty SWITCHBOARD_TERMINAL is treated as absent, never as a seat named ""', () => {
+    const { out } = runCli(['done', '--json'], { SWITCHBOARD_TERMINAL: '   ' });
+    const body = JSON.parse(out);
+    assert.match(String(body.error || ''), /SWITCHBOARD_TERMINAL/,
+        'whitespace is not an identity — a completion attributed to the wrong '
+        + 'seat clears the wrong terminal');
+});
+
+// ── 3. `--from` still works and still wins ───────────────────────────────
+
+check('an explicit --from still works with no env var (the human-CLI path)', () => {
+    const { code, out } = runCli(['done', '--from', 'Coder 1', '--json'], {});
+    const body = JSON.parse(out);
+    assert.match(String(body.error || ''), /No running Switchboard instance/);
+    assert.strictEqual(code, 1);
+});
+
+check('an explicit --from OVERRIDES the env default', () => {
+    const { out } = runCli(['done', '--from', 'Coder 1', '--json'],
+        { SWITCHBOARD_TERMINAL: 'Coding-intern' });
+    const body = JSON.parse(out);
+    assert.strictEqual(body.from, 'Coder 1', 'the flag wins over the env');
+    assert.strictEqual(body.fromSource, 'flag');
+});
+
+check('the resolved identity is TAGGED with the source that answered', () => {
+    // CLAUDE.md: on a read of identity, either tag it or fail loudly. `from`
+    // now has two possible sources, and "which one answered?" must be
+    // answerable after the fact — not inferred from the value.
+    const { out } = runCli(['done', '--json'], { SWITCHBOARD_TERMINAL: 'Coding-intern' });
+    const body = JSON.parse(out);
+    assert.strictEqual(body.from, 'Coding-intern');
+    assert.strictEqual(body.fromSource, 'env');
+});
+
+// ── 4. The seat supplies no planId and no workspaceRoot ──────────────────
+
+check('the host resolves the held card from the seat identity — the agent supplies no planId', () => {
+    const server = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'LocalApiServer.ts'), 'utf8');
+    const start = server.indexOf('private _runQueueDone(');
+    assert.ok(start > 0, '_runQueueDone must exist');
+    const held = server.indexOf('const held = board.find(', start);
+    assert.ok(held > start, '_runQueueDone must resolve the held card itself');
+    const window = server.slice(held, held + 400);
+    assert.ok(/p\.dispatchedTerminal === from/.test(window),
+        'the card is resolved by dispatchedTerminal === from, never by an agent-supplied planId');
+
+    const cli = fs.readFileSync(path.join(process.cwd(), 'src', 'standalone', 'cli.ts'), 'utf8');
+    const cmd = cli.indexOf('async function cmdDone(');
+    assert.ok(cmd > 0);
+    const cmdBody = cli.slice(cmd, cli.indexOf('\n/**', cmd));
+    assert.ok(/workspaceRoot,/.test(cmdBody),
+        'the CLI fills workspaceRoot from its own root — the agent never types it');
+    assert.ok(/process\.env\.SWITCHBOARD_TERMINAL/.test(cmdBody),
+        'the CLI reads the host-injected identity');
+});
+
+// ── 5. No placeholder identity, ever ─────────────────────────────────────
+
+check('cmdDone substitutes no placeholder identity', () => {
+    const cli = fs.readFileSync(path.join(process.cwd(), 'src', 'standalone', 'cli.ts'), 'utf8');
+    const cmd = cli.indexOf('async function cmdDone(');
+    const cmdBody = cli.slice(cmd, cli.indexOf('\n/**', cmd))
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*\/\/.*$/gm, '');
+    for (const placeholder of ["'unknown'", '"unknown"', "|| 'seat'", "?? 'seat'"]) {
+        assert.ok(!cmdBody.includes(placeholder),
+            `cmdDone must not fall back to ${placeholder} — a completion attributed to the `
+            + 'wrong seat clears the wrong terminal');
+    }
+});
+
+if (failures > 0) {
+    console.error(`\n${failures} failure(s)`);
+    process.exit(1);
+}
+console.log('\nResults: all passed, 0 failed.');

@@ -106,7 +106,11 @@ function makeServer(opts = {}) {
 
 /** Make an HTTP request to the server's task/complete endpoint. */
 async function postComplete(server, body, authToken) {
-    const headers = { 'content-type': 'application/json' };
+    // Guard 4 (cross-site) admits a non-browser caller only when it identifies
+    // itself with the client marker; without it every state-changing POST is
+    // refused 403 before the handler runs, and the whole suite reads as a
+    // behaviour regression rather than a stub that predates the guard.
+    const headers = { 'content-type': 'application/json', 'x-switchboard-client': 'contract-test' };
     if (authToken !== undefined) {
         headers['authorization'] = `Bearer ${authToken}`;
     }
@@ -127,7 +131,14 @@ async function postComplete(server, body, authToken) {
     let responseBody = null;
     const res = {
         writeHead: (code) => { status = code; },
+        // _wrapForCompression reads headers set before writeHead back off the
+        // response via res.getHeaders(). A stub without it throws before any
+        // handler runs, which reads as "every assertion in this suite failed"
+        // rather than "the harness is missing a method".
         setHeader: () => {},
+        getHeader: () => undefined,
+        getHeaders: () => ({}),
+        removeHeader: () => {},
         end: (data) => { responseBody = data ? JSON.parse(data) : null; },
     };
     await server._handleRequest(req, res);

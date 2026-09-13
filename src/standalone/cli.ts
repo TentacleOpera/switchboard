@@ -2000,16 +2000,44 @@ async function cmdDone(workspaceRoot: string, argv: string[]): Promise<void> {
         if (a.startsWith('--outcome=')) { outcome = a.slice('--outcome='.length); continue; }
     }
 
+    // The host already injected this seat's identity into the seat's OWN
+    // environment when it created the pty: the Go pty host
+    // (cmd/switchboard-pty-host/main.go) and the Node fleet
+    // (src/standalone/ptyFleetService.ts) both set SWITCHBOARD_TERMINAL, so the
+    // variable is present under both composition roots. Making the agent type
+    // that name back is a field it can get wrong and a decision it has to stop
+    // and make — the same rule as no summaries, applied to the fields instead
+    // of the prose. `--from` still wins when passed, for driving the CLI by
+    // hand from outside a seat.
+    let fromSource: 'flag' | 'env' = 'flag';
     if (!from) {
-        if (jsonFlag) { emitJson({ success: false, error: 'Missing required argument: --from <seat>' }); }
-        else { console.error('Usage: npx switchboard done --from <seat> [--plan <planId>] [--outcome failed] [--json]'); }
+        const envSeat = (process.env.SWITCHBOARD_TERMINAL || '').trim();
+        if (envSeat) {
+            from = envSeat;
+            fromSource = 'env';
+        }
+    }
+    if (!from) {
+        // Loud, and it names the variable. NO placeholder, no 'unknown', no
+        // empty string forwarded for the server to 400 with a generic message:
+        // a completion attributed to the wrong seat clears the wrong terminal,
+        // and the error text is the only thing that distinguishes "you are not
+        // in a seat" from "you typed the command wrong".
+        const msg = 'SWITCHBOARD_TERMINAL is not set — `done` with no arguments is run from inside a seat, '
+            + 'which is where the host injects it. If you are driving the CLI by hand, pass --from <seat>.';
+        if (jsonFlag) { emitJson({ success: false, error: msg }); }
+        else { console.error(`[switchboard] ${msg}`); }
         exitFlushed(5);
     }
 
     const port = await findRunningInstance(workspaceRoot);
     if (port === null) {
-        if (jsonFlag) { emitJson({ success: false, error: 'No running Switchboard instance' }); }
-        else { console.error('[switchboard] No running Switchboard instance for this workspace.'); }
+        // Carry the resolved identity and the source that answered it even on
+        // the offline path: "which seat did it think I was?" must be
+        // answerable without a board, or a wrong SWITCHBOARD_TERMINAL is
+        // invisible until it clears somebody else's terminal.
+        if (jsonFlag) { emitJson({ success: false, error: 'No running Switchboard instance', from, fromSource }); }
+        else { console.error(`[switchboard] No running Switchboard instance for this workspace (seat '${from}' via ${fromSource === 'env' ? 'SWITCHBOARD_TERMINAL' : '--from'}).`); }
         exitFlushed(1);
     }
 
@@ -2037,9 +2065,9 @@ async function cmdDone(workspaceRoot: string, argv: string[]): Promise<void> {
     const code = dispatchExitCode(res.status);
     const data = res.json();
     if (jsonFlag) {
-        emitJson({ success: code === 0, status: res.status, exitCode: code, result: data });
+        emitJson({ success: code === 0, status: res.status, exitCode: code, from, fromSource, result: data });
     } else if (code === 0) {
-        console.log(`[switchboard] Done signal recorded for seat '${from}'.`);
+        console.log(`[switchboard] Done signal recorded for seat '${from}' (${fromSource === 'env' ? 'SWITCHBOARD_TERMINAL' : '--from'}).`);
         if (data?.dispatched) {
             console.log(`  Next card popped: ${data.dispatched.title || data.dispatched.planId || 'dispatched'}`);
         } else if (data?.reason === 'queue empty') {

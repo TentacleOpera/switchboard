@@ -577,6 +577,27 @@ jobs:
       - name: task/complete instruction contract (instructions match handler validation)
         run: npm run test:contract:task-complete-instruction
 
+      # The at-rest clear is the ONLY clear between two subtasks — the dispatch
+      # path issues none, deliberately, so no delivery races a context reset.
+      # Both completion paths guarded it with `acceptedCodingSeat === from`,
+      # whose comment stated the intent by ROLE and whose code compared by NAME.
+      # The member instruction tells a seat to run `done --from "<itself>"`, so
+      # the guard fired on exactly the self-report the clear is owed to: three
+      # plans went into one seat with no clear between any of them. Nothing
+      # compared the comment to the code until this gate.
+      - name: self-reported completion clears the seat (both at-rest paths)
+        run: npm run test:contract:self-completion-clear
+
+      # The host injects SWITCHBOARD_TERMINAL into every seat it creates, in
+      # both composition roots, and the CLI never read it — so every completion
+      # instruction made the agent type its own name back. A field an agent must
+      # supply is a field it can get wrong and a decision it has to stop and
+      # make. The absent-variable path must fail LOUDLY naming the variable,
+      # never fall through to a placeholder: a completion attributed to the
+      # wrong seat clears the wrong terminal.
+      - name: bare completion (`done` resolves the seat from the host-injected env)
+        run: npm run test:contract:bare-completion
+
       # A team seats by its registered order with the head in slot 0, holding a
       # slot for a member that has not registered yet. Seating from the
       # liveness-filtered list dropped whatever had not come up and shifted every
