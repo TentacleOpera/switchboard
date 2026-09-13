@@ -82,12 +82,40 @@ and it is the difference between an audit log and a log that agrees with itself.
 One action restores every card in the operation to its recorded prior column, in full or not at
 all. A partial undo is worse than none: the operator cannot see which half came back.
 
-### 5. The button says what it is about to move
+**Where it lives.** The surface already exists: `#status-message` in the kanban sub-bar
+(`kanban.html:3049`, `role="status"`, `aria-live="polite"`), driven by `showStatusBarMessage()`
+(`kanban.html:8264`). A bulk move already has a place to announce itself, and the undo rides the
+same announcement rather than introducing a surface of its own:
 
-`Advance all` becomes `Advance all (172)` — the count of cards the press will actually touch,
-cascaded subtasks included. This is a label, not a gate: it does not interrupt, does not ask, and
-does not require a second click. An operator who knows the number before pressing is the cheapest
-protection available, and the current button hides the 139 entirely.
+```
+Moved 172 cards to LEAD CODED · UNDO
+```
+
+This is not a dialog. It appears **after** the move, interrupts nothing, and is ignorable.
+
+One change to that helper is required. `showStatusBarMessage` clears itself after **5000 ms** —
+correct for a status flash, wrong for a recovery affordance: an operator who looks away loses the
+only cheap way back. An undo offer persists until it is superseded by the next bulk move or
+dismissed. The timeout stays the default for every other caller; this is an opt-out, not a change
+to the shared behaviour.
+
+### 5. The button says what it is about to move — by dropping a gate, not adding a feature
+
+This is already built. `updateCapLabels()` (`kanban.html:9572`) renders a `.cap-label` onto the
+Move All button reading `SEND 5 OF 172`, with the styling (`column-icon-btn-labeled`) and the
+count (`leadBoundCount`) already in place. It is gated behind `isTeamHeadCol && colCount > cap`, so
+every other column shows a bare icon and the operator has no idea whether the press moves three
+cards or three hundred.
+
+Drop the gate: the button states its count wherever a count exists. Do not build a second labelling
+mechanism beside this one.
+
+The count must include **cascaded subtasks**, which is the number the current label would miss —
+`leadBoundCount` counts cards in the column, and the 139 subtasks that moved on 2026-09-14 were not
+in it. A button reading `MOVE 33` for an operation that moves 172 is worse than an unlabelled one.
+
+This is a label, not a gate: it does not interrupt, does not ask, and does not require a second
+click.
 
 ### 6. Both composition roots
 
@@ -109,8 +137,10 @@ on one host and absent on the other is the divergence `CLAUDE.md` names, and it 
 3. Assert undo is all-or-nothing: injected failure part-way leaves every card at its pre-undo
    column.
 4. Assert the advertised count equals the number of cards the operation actually moves, cascaded
-   subtasks included.
-5. Assert no `confirm()`, `window.confirm()` or modal gate exists on the move path, on either host.
+   subtasks included — a feature with subtasks must not advertise only the feature.
+5. Assert the undo offer survives the 5000 ms `showStatusBarMessage` timeout, and that an ordinary
+   status message still clears at 5000 ms.
+6. Assert no `confirm()`, `window.confirm()` or modal gate exists on the move path, on either host.
 
 ### Goal Invariants
 
@@ -119,3 +149,4 @@ on one host and absent on the other is the divergence `CLAUDE.md` names, and it 
 - The event log distinguishes a card the operator moved from a card its feature moved.
 - Pressing "advance all" by accident costs the operator one action, not a rollback of the board.
 - No confirmation dialog exists anywhere on this path.
+- The undo offer is still on screen a minute after the move that created it.
