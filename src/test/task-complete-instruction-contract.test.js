@@ -86,6 +86,26 @@ check('at least one instruction site exists to protect', () => {
     assert.ok(total >= 4, `expected the known instruction sites to still be present, found ${total}`);
 });
 
+check('the drive close-out block is gated to the lead role', () => {
+    // A coder does not assert completion — it reports, and the HEAD posts
+    // /kanban/task/complete (plan: add-a-task-complete-endpoint-for-the-lead).
+    // The feature-dispatch call site admitted ['lead','coder','intern'] into the
+    // prefix builder, so the lead's close-out contract — "CLOSE OUT EVERY
+    // SUBTASK … the coder is not cleared" — was handed to coders and interns,
+    // who were then told to assert their own completion.
+    const src = fs.readFileSync(path.join(REPO_ROOT, 'src/services/KanbanProvider.ts'), 'utf8');
+    assert.ok(
+        /if \(drive && \(role === undefined \|\| role === 'lead'\)\)/.test(src),
+        'the drive block must be gated on the lead role — ungated it hands the head\'s '
+        + 'completion contract to every coding role',
+    );
+    assert.ok(
+        /_buildFeatureDirectivePrefix\(workspaceRoot, await resolveDrive\(\), plans, role\)/.test(src),
+        'the feature-dispatch call site must thread `role` through, or the gate above '
+        + 'defaults open for exactly the path that admits coders and interns',
+    );
+});
+
 if (failures > 0) {
     console.error(`\n${failures} failure(s)`);
     process.exit(1);

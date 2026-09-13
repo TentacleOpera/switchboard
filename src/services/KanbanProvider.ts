@@ -6006,7 +6006,20 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         return block.join('\n');
     }
 
-    private async _buildFeatureDirectivePrefix(workspaceRoot: string, drivePreResolved?: boolean, plans?: BatchPromptPlan[]): Promise<string> {
+    /**
+     * `role` gates the DRIVE block only. `goal` and `ultracode` are for whoever
+     * works the feature and reach every coding role; the drive block is the
+     * lead's operating contract and must not.
+     *
+     * It carries "CLOSE OUT EVERY SUBTASK … POST /kanban/task/complete", which is
+     * the HEAD's assertion — see the plan `add-a-task-complete-endpoint-for-the-lead`
+     * — and its own wording gives it away: "the coder is not cleared and you
+     * cannot be handed the next subtask" is nonsense addressed to a coder. The
+     * call site at the feature-dispatch path admitted `['lead','coder','intern']`,
+     * so a coder was told to assert completion of its own work, which the design
+     * gives to the head alone. A coder reports; the head completes.
+     */
+    private async _buildFeatureDirectivePrefix(workspaceRoot: string, drivePreResolved?: boolean, plans?: BatchPromptPlan[], role?: string): Promise<string> {
         const db = this._getKanbanDb(workspaceRoot);
         if (!db || !(await db.ensureReady())) return '';
         const ultracode = (await db.getConfig('feature_ultracode_enabled')) === 'true';
@@ -6017,7 +6030,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         // /goal must be position-zero for the host to parse it as a slash command.
         if (goal) { prefix += `${GOAL_FEATURE_PREFIX}\n`; }
         if (ultracode) { prefix += `${ULTRACODE_FEATURE_PREFIX}\n\n`; }
-        if (drive) {
+        if (drive && (role === undefined || role === 'lead')) {
             // Build the enriched operational block from injected context (team roster,
             // plan IDs, API port, compact rules). Falls back to the static prefix when
             // no team group is found or plans are absent (backward compat).
@@ -6725,7 +6738,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         const isBatchTeamHead = batchOptions.batchMode === true && !isRealFeature;
 
         if (isRealFeature && ['lead', 'coder', 'intern'].includes(role)) {
-            const prefix = await this._buildFeatureDirectivePrefix(workspaceRoot, await resolveDrive(), plans);
+            const prefix = await this._buildFeatureDirectivePrefix(workspaceRoot, await resolveDrive(), plans, role);
             if (prefix) {
                 return `${prefix}${built}`;
             }
