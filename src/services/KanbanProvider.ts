@@ -5923,7 +5923,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             '- Never issue a git verb (commit, push, branch, merge) to a team seat. The head commits the team\'s work; coders never commit.',
             '- You are unattended when no human is demonstrably reading. When you cannot tell, assume unattended.',
             '- Unattended: never convert uncertainty into a stop. Record a question report and continue in the same turn.',
-            '- clearBeforePrompt stays false on every dispatch — the host overrides it to true automatically when the plan changes.',
+            '- clearBeforePrompt stays false on every dispatch — the host issues no clear at dispatch time. A seat is cleared at rest (when its work is accepted, a round closes, a feature completes, or a queue item pops) or once when a new feature run starts.',
         ];
 
         return substituteCliPath(block.join('\n'));
@@ -5983,7 +5983,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             '- Clear a terminal only when at rest (completion received AND next work goes elsewhere).',
             '- The host auto-clears the full team roster once when a new feature run starts, and clears the accepted coder when you POST /kanban/task/complete. Coder self-report does not clear context — do not manually clear between subtasks or fixes. Manual ptyClearTerminal is for the stand-down case only — a terminal you are putting away without dispatching new work to it.',
             '- You do NOT move cards. A card enters a column when it reaches this team and stays there while the team works it. Column position records nothing about your progress — your completion posts do.',
-            '- clearBeforePrompt stays false on every dispatch — the host overrides it to true automatically when the plan changes. The caller\'s contract is unchanged.',
+            '- clearBeforePrompt stays false on every dispatch — the host issues no clear at dispatch time. The caller\'s contract is unchanged.',
             '- Every new feature run gets a fresh team context. Context is preserved across coder reports, review, fixes, and handoffs until your completion post clears the coder.',
             '- When a seat reports, its context is preserved for review. If standing the terminal down without new work, ptyClearTerminal it.',
             '- One subtask per terminal at a time. Use a second terminal for concurrency.',

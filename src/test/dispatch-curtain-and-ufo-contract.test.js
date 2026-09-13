@@ -97,7 +97,7 @@ function test(name, fn) {
         const handlePtyVerbBody = handlePtyVerbMatch[0];
         assert.ok(!handlePtyVerbBody.includes('shouldArmCurtain'), 'handlePtyVerb must not contain shouldArmCurtain');
         assert.ok(!handlePtyVerbBody.includes('isClearing'), 'handlePtyVerb must not contain isClearing');
-        assert.ok(tvp.includes('const toClear = rawToClear.filter(name => this._lastWorkContextByTerminal.has(name));'), 'Extension roster barrier must filter already-clean seats');
+        assert.ok(tvp.includes('const toClear = rawToClear.filter(name => this._lastWorkContextByTerminal.has(name) && this._lastWorkContextByTerminal.get(name) !== workContextKey);'), 'Extension roster barrier must filter already-clean seats');
     });
 
     test('ptySendPrompt returns cleared boolean in both hosts and delivery receipt', () => {
@@ -109,7 +109,7 @@ function test(name, fn) {
 
         const bootstrap = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'bootstrap.ts'), 'utf8');
         assert.ok(bootstrap.includes('cleared: receipt?.cleared === true'), 'standalone ptySendPrompt must return cleared');
-        assert.ok(bootstrap.includes('const toClear = rawToClear.filter(name => lastWorkContextByTerminal.has(name));'), 'Standalone roster barrier must filter already-clean seats');
+        assert.ok(bootstrap.includes('const toClear = rawToClear.filter(name => lastWorkContextByTerminal.has(name) && lastWorkContextByTerminal.get(name) !== workContextKey);'), 'Standalone roster barrier must filter already-clean seats');
     });
 
     if (failures > 0) {

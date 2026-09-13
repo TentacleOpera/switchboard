@@ -533,11 +533,6 @@ interface LocalApiServerOptions {
      */
     onTerminalContextCleared?: (terminalName: string) => void;
     /**
-     * Record deferred clears for a team when terminals are deferred mid-turn.
-     * Optional — absent in headless/test harnesses.
-     */
-    recordDeferredClears?: (teamId: string, terminalNames: string[]) => void;
-    /**
      * Fired when a team is released after a task completion post.
      * Optional — absent in headless/test harnesses.
      */
@@ -4157,13 +4152,56 @@ export class LocalApiServer {
      * - `queue/done` is untouched — it means "give me the next item", not "done".
      */
     /**
+     * The single seat-at-rest clear. Reached from every completion path
+     * (`completeCardInternal`, `releaseCardInternal`, `_handleKanbanRoundComplete`,
+     * `_completeFeatureCore`, `_runQueueDone`) so "why was this seat cleared?" and
+     * "why was it not?" are answerable from one function. Owns the decision:
+     * calls `clearTerminalContext`, marks the seat at rest, and fires
+     * `onTerminalContextCleared`. The `reason` tag records which caller asked.
+     *
+     * Skip conditions live in the CALLER, not here: the head/lead exemption
+     * (`clearLead` in `_completeFeatureCore`) and the team-member exemption (in
+     * `_runQueueDone`) are applied before this function is reached. A caller
+     * that has already decided to skip does not call this function.
+     */
+    private async clearSeatAtRest(
+        workspaceRoot: string,
+        seat: string,
+        planId: string | undefined,
+        reason: string
+    ): Promise<{ cleared: boolean; error?: string; reason?: string }> {
+        if (!this._options.clearTerminalContext) {
+            return { cleared: false, reason: 'clearTerminalContext not available' };
+        }
+        try {
+            const clr = await this._options.clearTerminalContext(workspaceRoot, seat);
+            const cleared = !!clr?.cleared;
+            if (cleared) {
+                this.markSeatAtRest(workspaceRoot, seat, planId);
+                if (this._options.onTerminalContextCleared) {
+                    try { this._options.onTerminalContextCleared(seat); } catch { /* log writer must never crash the clear */ }
+                }
+            }
+            return {
+                cleared,
+                ...(clr && clr.error ? { error: clr.error } : {}),
+                ...(!cleared && clr && clr.reason ? { reason: clr.reason } : {}),
+            };
+        } catch (clrErr) {
+            const error = clrErr instanceof Error ? clrErr.message : String(clrErr);
+            console.warn(`[LocalApiServer] clearSeatAtRest failed for '${seat}' (${reason}):`, clrErr);
+            return { cleared: false, error, reason: error };
+        }
+    }
+
+    /**
      * Shared completion helper for both POST /kanban/task/complete and POST /kanban/team/release.
      * Performs:
      *   1. Idempotency check via getPlanByPlanId.
      *   2. Coding-seat resolution from HOST evidence (row's dispatchedTerminal + routedTo, then live fleet role).
      *   3. setCompletedAt timestamp write.
      *   4. appendPlanEventByPlanId with the specified workflow ('task-complete' or 'operator-release').
-     *   5. clearTerminalContext for the resolved coding seat (skipping `from`).
+     *   5. clearSeatAtRest for the resolved coding seat (skipping `from`).
      */
     public async completeCardInternal(
         db: any,
@@ -4296,24 +4334,10 @@ export class LocalApiServer {
                 // on to another card, returns shouldClear: false. A seat that is
                 // still holding THIS finished card is cleared, however many
                 // completion reports arrive.
-                try {
-                    const clr = await this._options.clearTerminalContext(workspaceRoot, acceptedCodingSeat);
-                    cleared = !!clr?.cleared;
-                    if (clr && clr.cleared === false && clr.error) {
-                        clearError = clr.error;
-                        clearReason = clr.error;
-                    }
-                    if (cleared) {
-                        this.markSeatAtRest(workspaceRoot, acceptedCodingSeat, planId);
-                        if (this._options.onTerminalContextCleared) {
-                            try { this._options.onTerminalContextCleared(acceptedCodingSeat); } catch { /* log writer must never crash the complete */ }
-                        }
-                    }
-                } catch (clrErr) {
-                    clearError = clrErr instanceof Error ? clrErr.message : String(clrErr);
-                    clearReason = clearError;
-                    console.warn(`[LocalApiServer] clearTerminalContext failed for accepted seat '${acceptedCodingSeat}':`, clrErr);
-                }
+                const clr = await this.clearSeatAtRest(workspaceRoot, acceptedCodingSeat, planId, 'completeCardInternal');
+                cleared = clr.cleared;
+                if (clr.error) { clearError = clr.error; clearReason = clr.error; }
+                else if (clr.reason) { clearReason = clr.reason; }
             }
         } else if (!acceptedCodingSeat) {
             cleared = false;
@@ -4518,24 +4542,10 @@ export class LocalApiServer {
         let clearError: string | undefined;
         let clearReason: string | undefined;
         if (acceptedCodingSeat && this._options.clearTerminalContext) {
-            try {
-                const clr = await this._options.clearTerminalContext(workspaceRoot, acceptedCodingSeat);
-                cleared = !!clr?.cleared;
-                if (clr && clr.cleared === false && clr.error) {
-                    clearError = clr.error;
-                    clearReason = clr.error;
-                }
-                if (cleared) {
-                    this.markSeatAtRest(workspaceRoot, acceptedCodingSeat, planId);
-                    if (this._options.onTerminalContextCleared) {
-                        try { this._options.onTerminalContextCleared(acceptedCodingSeat); } catch { /* log writer must never crash the release */ }
-                    }
-                }
-            } catch (clrErr) {
-                clearError = clrErr instanceof Error ? clrErr.message : String(clrErr);
-                clearReason = clearError;
-                console.warn(`[LocalApiServer] clearTerminalContext failed for released seat '${acceptedCodingSeat}':`, clrErr);
-            }
+            const clr = await this.clearSeatAtRest(workspaceRoot, acceptedCodingSeat, planId, 'releaseCardInternal');
+            cleared = clr.cleared;
+            if (clr.error) { clearError = clr.error; clearReason = clr.error; }
+            else if (clr.reason) { clearReason = clr.reason; }
         } else if (!acceptedCodingSeat) {
             cleared = false;
             // Same correction as the complete path above: the poster being the
@@ -4839,16 +4849,8 @@ export class LocalApiServer {
 
                 // Clear all coder seats (unconditional — a round is a barrier).
                 for (const name of coderSeats) {
-                    if (this._options.clearTerminalContext) {
-                        try {
-                            const clr = await this._options.clearTerminalContext(workspaceRoot, name);
-                            cleared.push({ name, cleared: !!clr?.cleared, ...(clr?.error ? { reason: clr.error } : {}) });
-                        } catch (err: any) {
-                            cleared.push({ name, cleared: false, reason: err instanceof Error ? err.message : String(err) });
-                        }
-                    } else {
-                        cleared.push({ name, cleared: false, reason: 'clearTerminalContext not available' });
-                    }
+                    const clr = await this.clearSeatAtRest(workspaceRoot, name, undefined, 'round-complete');
+                    cleared.push({ name, cleared: clr.cleared, ...(clr.error ? { reason: clr.error } : clr.reason ? { reason: clr.reason } : {}) });
                 }
 
                 // Run the release check once.
@@ -4961,16 +4963,8 @@ export class LocalApiServer {
 
             // Clear all coder seats (unconditional — a round is a barrier).
             for (const name of coderSeats) {
-                if (this._options.clearTerminalContext) {
-                    try {
-                        const clr = await this._options.clearTerminalContext(workspaceRoot, name);
-                        cleared.push({ name, cleared: !!clr?.cleared, ...(clr?.error ? { reason: clr.error } : {}) });
-                    } catch (err: any) {
-                        cleared.push({ name, cleared: false, reason: err instanceof Error ? err.message : String(err) });
-                    }
-                } else {
-                    cleared.push({ name, cleared: false, reason: 'clearTerminalContext not available' });
-                }
+                const clr = await this.clearSeatAtRest(workspaceRoot, name, undefined, 'round-complete');
+                cleared.push({ name, cleared: clr.cleared, ...(clr.error ? { reason: clr.error } : clr.reason ? { reason: clr.reason } : {}) });
             }
 
             // Close the round row.
@@ -5932,16 +5926,8 @@ export class LocalApiServer {
                 cleared.push({ name, cleared: false, reason: `Caller '${from}' is never cleared — it is mid-turn` });
                 continue;
             }
-            if (this._options.clearTerminalContext) {
-                try {
-                    const clr = await this._options.clearTerminalContext(workspaceRoot, name);
-                    cleared.push({ name, cleared: !!clr?.cleared, ...(clr?.error ? { reason: clr.error } : {}) });
-                } catch (err: any) {
-                    cleared.push({ name, cleared: false, reason: err instanceof Error ? err.message : String(err) });
-                }
-            } else {
-                cleared.push({ name, cleared: false, reason: 'clearTerminalContext not available' });
-            }
+            const clr = await this.clearSeatAtRest(workspaceRoot, name, undefined, 'feature-complete');
+            cleared.push({ name, cleared: clr.cleared, ...(clr.error ? { reason: clr.error } : clr.reason ? { reason: clr.reason } : {}) });
         }
 
         // Release the team.
@@ -6745,23 +6731,12 @@ export class LocalApiServer {
                     if (isTeamMember) {
                         clearSkipped = 'team member — context preserved for review and fix requests';
                         this.markSeatAtRest(workspaceRoot, from, held.planId || planId);
-                    } else if (this._options.clearTerminalContext) {
-                        try {
-                            const clr = await this._options.clearTerminalContext(workspaceRoot, from);
-                            cleared = !!clr?.cleared;
-                            clearError = clr?.error;
-                            if (cleared) {
-                                this.markSeatAtRest(workspaceRoot, from, held.planId || planId);
-                            }
-                            // Notify the log writer to roll the session file —
-                            // a cleared terminal starting fresh work is a new
-                            // session to a reader.
-                            if (cleared && this._options.onTerminalContextCleared) {
-                                try { this._options.onTerminalContextCleared(from); } catch { /* log writer must never crash the pop */ }
-                            }
-                        } catch (clrErr) {
-                            clearError = clrErr instanceof Error ? clrErr.message : String(clrErr);
-                            console.warn('[LocalApiServer] clearTerminalContext failed:', clrErr);
+                    } else {
+                        const clr = await this.clearSeatAtRest(workspaceRoot, from, held.planId || planId, 'queue-done');
+                        cleared = clr.cleared;
+                        clearError = clr.error;
+                        if (!cleared && !clearError && clr.reason) {
+                            clearSkipped = clr.reason;
                         }
                     }
 
@@ -8015,9 +7990,6 @@ export class LocalApiServer {
                     for (const name of teamDeferred) {
                         deferred.push(name);
                     }
-                    if (teamId) {
-                        this._options.recordDeferredClears?.(teamId, teamDeferred);
-                    }
                 }
 
                 for (const target of toClear) {
@@ -8034,10 +8006,6 @@ export class LocalApiServer {
                         skipped.push({ name: seat, reason: 'not active' });
                     } else if (busySet.has(seat)) {
                         deferred.push(seat);
-                        const { group } = await this._resolveTeamGroupForSeat(workspaceRoot || '', seat);
-                        if (group?.id) {
-                            this._options.recordDeferredClears?.(group.id, [seat]);
-                        }
                     } else {
                         await executeClear(seat);
                     }

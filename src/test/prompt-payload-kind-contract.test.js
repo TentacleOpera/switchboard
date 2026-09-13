@@ -291,21 +291,25 @@ test('SOURCE: busy-seat deferral reuses the roster barrier helper, not a second 
     const h = /_handleTerminalsClear[\s\S]*?\n    }\n/.exec(LAS)[0];
     assert.ok(/computeRosterClearTargets/.test(h),
         'the team scope must reuse the shared pure helper so both clear paths agree on what "mid-turn" means');
-    assert.ok(/recordDeferredClears/.test(h),
-        'a deferred seat must be RECORDED, or it is skipped permanently rather than cleared when it goes quiet');
+    // The deferred-clear set is gone — a deferred seat gets its clear from the
+    // at-rest path (clearSeatAtRest) or the next feature barrier, never from a
+    // dispatch. The endpoint still REPORTS deferred seats in the response, but
+    // does NOT record them for a dispatch-time intercept.
+    assert.ok(!/recordDeferredClears/.test(h),
+        'the endpoint must NOT record deferred clears — the dispatch-time intercept is gone');
 });
 
 // ── 5. Standalone parity: the seams, not the verbs ─────────────────────
 
-test('PARITY: both composition roots wire clearTerminalContext and recordDeferredClears', () => {
+test('PARITY: both composition roots wire clearTerminalContext', () => {
     // The endpoint is inert in whichever host does not wire the seam, and it
     // fails the same silent way the seam it depends on did. `Promise<void>`
     // seams are where "never wired" and "working" look identical.
     for (const [label, src] of [['TaskViewerProvider.ts', TVP], ['bootstrap.ts', BOOT]]) {
         assert.ok(/clearTerminalContext:\s*(async\s*)?\(/.test(src),
             `${label} must wire clearTerminalContext into LocalApiServerOptions`);
-        assert.ok(/recordDeferredClears:\s*\(/.test(src),
-            `${label} must wire recordDeferredClears, or a deferred seat is never re-cleared`);
+        assert.ok(!/recordDeferredClears:\s*\(/.test(src),
+            `${label} must NOT wire recordDeferredClears — the deferred-clear set is gone`);
     }
 });
 
@@ -350,8 +354,14 @@ test('PARITY: the log session boundary rolls exactly once per clear', () => {
         'bootstrap.ts must not roll the log session inside clearTerminalContext — its callers already fire ' +
         'onTerminalContextCleared, and the extension host does not roll internally either'
     );
+    // The roll must still happen via the callback — but the two hosts reach the
+    // log writer differently and that is not drift: the extension calls
+    // `onSessionBoundary` in-process, while standalone's writer lives in the pty
+    // host CHILD process, so the roll is forwarded as a `ptyRollLogSession`
+    // verb. Pinning only the in-process spelling made this gate red against the
+    // shipped standalone wiring.
     assert.ok(
-        /onTerminalContextCleared:[\s\S]{0,200}?onSessionBoundary/.test(BOOT),
+        /onTerminalContextCleared:[\s\S]{0,240}?(onSessionBoundary|ptyRollLogSession)/.test(BOOT),
         'the roll must still happen, via the onTerminalContextCleared callback'
     );
 });

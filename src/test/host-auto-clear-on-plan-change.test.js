@@ -1,13 +1,15 @@
 'use strict';
 
 /**
- * Contract: Host-enforced auto-clear on WORK-CONTEXT change.
+ * Contract: Host dispatch paths issue NO forced clear.
  *
- * When a ptySendPrompt carrying plan identity references a DIFFERENT work
- * context (featureId ?? planId) than the terminal's last dispatch, the host
- * overrides clearBeforePrompt to true so /clear is written before the prompt.
- * Same-context resends preserve false — that covers both a fix resend of one
- * plan AND the next subtask of the same feature (atomic-team lifecycle).
+ * The dispatch path (ptySendPrompt in both composition roots) must NOT
+ * override clearBeforePrompt to true. A seat is cleared at rest (when its
+ * work is accepted, a round closes, a feature completes, or a queue item
+ * pops) or once when a new feature run starts — never by a dispatch. The
+ * roster barrier still runs on a work-context change, but it is decoupled
+ * from the destination's prompt: it clears siblings concurrently, does not
+ * block delivery, and does not clear the destination.
  *
  * Three things this file exists to pin, each of which was once broken:
  *
@@ -24,9 +26,11 @@
  *      name/data/clearBeforePrompt and nothing else. Gating on `dispatch` alone
  *      left the card-move gesture with no team barrier at all.
  *
- *   3. The destination override honours `terminal.clearBeforePrompt`. The roster
- *      barrier always did; the destination did not, so an operator who disabled
- *      clearing still got the one seat the dispatch was aimed at cleared.
+ *   3. The dispatch path issues no clear. The destination was already cleaned
+ *      by the at-rest path (clearSeatAtRest) or the previous feature barrier.
+ *      Same-context resends preserve false. The manual stand-down clear
+ *      (empty data + clearBeforePrompt: true in TaskViewerProvider) is the
+ *      ONLY host-forced true and is excluded from the negative assertion.
  *
  * Source-level contract tests — read source text, assert on patterns.
  * Mirrors the style of terminal-coder-dispatch-contract.test.js.
@@ -122,41 +126,35 @@ test('the write-only _lastDispatchedPlanByTerminal map stays deleted', () => {
     );
 });
 
-// --- 3. Extension host overrides clearBeforePrompt on work-context change ---
+// --- 3. Extension host dispatch path issues NO forced clear ---
 
-test('extension host overrides clearBeforePrompt on work-context change', () => {
-    // The compare key is the WORK CONTEXT (featureId ?? planId), not planId.
-    // Comparing planId here clears between two subtasks of ONE feature — the
-    // per-subtask reset the atomic-team lifecycle exists to remove. An OR of the
-    // two compares is the same defect wearing the new map's name.
+test('extension host dispatch path does not force clearBeforePrompt true', () => {
+    // The dispatch path (_ptyHostVerb) must NOT override clearBeforePrompt to
+    // true. The destination was already cleaned by the at-rest path or the
+    // previous feature barrier. The manual stand-down clear (empty data +
+    // clearBeforePrompt: true) lives in a DIFFERENT method and is excluded
+    // from this slice by construction — PTY_HOST_VERB_SRC is the _ptyHostVerb
+    // method body only.
     assert.ok(
-        /lastWorkKey\s*&&\s*lastWorkKey\s*!==\s*workContextKey/.test(PTY_HOST_VERB_SRC),
-        '_ptyHostVerb must compare lastWorkKey !== workContextKey before overriding'
+        !/clearBeforePrompt:\s*true/.test(PTY_HOST_VERB_SRC),
+        '_ptyHostVerb must NOT set clearBeforePrompt to true — the dispatch path issues no clear'
     );
     assert.ok(
         !/lastPlanId\s*&&\s*lastPlanId\s*!==\s*planId/.test(PTY_HOST_VERB_SRC),
         'the superseded planId compare must NOT survive alongside the work-context compare'
     );
-    assert.ok(
-        /clearBeforePrompt:\s*true/.test(PTY_HOST_VERB_SRC),
-        '_ptyHostVerb must set clearBeforePrompt to true on work-context change'
-    );
 });
 
-// --- 4. Standalone overrides clearBeforePrompt on work-context change ---
+// --- 4. Standalone dispatch path issues NO forced clear ---
 
-test('standalone overrides clearBeforePrompt on work-context change', () => {
+test('standalone dispatch path does not force clearBeforePrompt true', () => {
     assert.ok(
-        /lastWorkKey\s*&&\s*lastWorkKey\s*!==\s*workContextKey/.test(SEND_PROMPT_SRC),
-        'ptySendPrompt case must compare lastWorkKey !== workContextKey before overriding'
+        !/payload\.clearBeforePrompt\s*=\s*true/.test(SEND_PROMPT_SRC),
+        'ptySendPrompt case must NOT set payload.clearBeforePrompt to true — the dispatch path issues no clear'
     );
     assert.ok(
         !/lastPlanId\s*&&\s*lastPlanId\s*!==\s*parsed\.value\.planId/.test(SEND_PROMPT_SRC),
         'the superseded planId compare must NOT survive alongside the work-context compare'
-    );
-    assert.ok(
-        /payload\.clearBeforePrompt\s*=\s*true/.test(SEND_PROMPT_SRC),
-        'ptySendPrompt case must set payload.clearBeforePrompt to true on work-context change'
     );
 });
 
@@ -199,35 +197,37 @@ test('standalone feeds the lifecycle from the parse-based identity too', () => {
     );
 });
 
-// --- 6. The destination override honours terminal.clearBeforePrompt ---
+// --- 6. The roster barrier still reads terminal.clearBeforePrompt ---
 
-test('extension host destination override honours terminal.clearBeforePrompt', () => {
+test('extension host roster barrier honours terminal.clearBeforePrompt', () => {
     assert.ok(
         /const clearEnabled = vscode\.workspace\.getConfiguration\('switchboard'\)\.get<boolean>\('terminal\.clearBeforePrompt', true\)/.test(PTY_HOST_VERB_SRC),
-        '_ptyHostVerb must read terminal.clearBeforePrompt for the lifecycle decision'
+        '_ptyHostVerb must read terminal.clearBeforePrompt for the roster barrier decision'
+    );
+    // The destination override is GONE. The barrier clears siblings, not the
+    // destination. The dispatch path issues no clear.
+    assert.ok(
+        !/if \(clearEnabled && lastTeamWorkKey && lastTeamWorkKey !== workContextKey\) \{\s*\n\s*payload = \{ \.\.\.payload, clearBeforePrompt: true \};/.test(PTY_HOST_VERB_SRC),
+        'the team-branch destination override must be gone — the dispatch path issues no clear'
     );
     assert.ok(
-        /if \(clearEnabled && lastTeamWorkKey && lastTeamWorkKey !== workContextKey\) \{\s*\n\s*payload = \{ \.\.\.payload, clearBeforePrompt: true \};/.test(PTY_HOST_VERB_SRC),
-        'the team-branch destination override must be gated on clearEnabled and work-context change'
-    );
-    assert.ok(
-        /if \(clearEnabled && lastWorkKey && lastWorkKey !== workContextKey\)/.test(PTY_HOST_VERB_SRC),
-        'the non-team destination override must be gated on clearEnabled'
+        !/if \(clearEnabled && lastWorkKey && lastWorkKey !== workContextKey\)/.test(PTY_HOST_VERB_SRC),
+        'the non-team destination override must be gone — the dispatch path issues no clear'
     );
 });
 
-test('standalone destination override honours terminal.clearBeforePrompt', () => {
+test('standalone roster barrier honours terminal.clearBeforePrompt', () => {
     assert.ok(
         /const clearEnabled = getPromptDeliveryOptions\(\)\.clearBeforePrompt/.test(SEND_PROMPT_SRC),
-        'ptySendPrompt case must read the configured clearBeforePrompt for the lifecycle decision'
+        'ptySendPrompt case must read the configured clearBeforePrompt for the roster barrier decision'
     );
     assert.ok(
-        /if \(clearEnabled && lastTeamWorkKey && lastTeamWorkKey !== workContextKey\) \{\s*\n\s*payload\.clearBeforePrompt = true;/.test(SEND_PROMPT_SRC),
-        'the team-branch destination override must be gated on clearEnabled and work-context change'
+        !/if \(clearEnabled && lastTeamWorkKey && lastTeamWorkKey !== workContextKey\) \{\s*\n\s*payload\.clearBeforePrompt = true;/.test(SEND_PROMPT_SRC),
+        'the team-branch destination override must be gone — the dispatch path issues no clear'
     );
     assert.ok(
-        /if \(clearEnabled && lastWorkKey && lastWorkKey !== workContextKey\)/.test(SEND_PROMPT_SRC),
-        'the non-team destination override must be gated on clearEnabled'
+        !/if \(clearEnabled && lastWorkKey && lastWorkKey !== workContextKey\)/.test(SEND_PROMPT_SRC),
+        'the non-team destination override must be gone — the dispatch path issues no clear'
     );
 });
 
@@ -337,32 +337,37 @@ test('extension host deletes the work-context entry on ptyWrite with /clear', ()
     );
 });
 
-// --- 12. Same-context and first-dispatch cases preserve the caller's false ---
+// --- 12. Same-context dispatch preserves false; first dispatch is not cleared ---
 
-test('both hosts check work-key existence before overriding (first dispatch is not cleared)', () => {
+test('both hosts compare the team work-context key for the same-feature branch', () => {
+    // The same-feature branch comparison still drives the roster barrier
+    // (same-context → no barrier; different-context → barrier clears siblings).
+    // The destination override is gone, so "first dispatch is not cleared" is
+    // now trivially true: the dispatch path issues no clear at all.
     assert.ok(
-        /lastWorkKey && lastWorkKey !== workContextKey/.test(PTY_HOST_VERB_SRC),
-        '_ptyHostVerb must check lastWorkKey existence so a first dispatch does not auto-clear'
+        /lastTeamWorkKey === workContextKey/.test(PTY_HOST_VERB_SRC),
+        '_ptyHostVerb must compare lastTeamWorkKey === workContextKey for the same-feature branch'
     );
     assert.ok(
-        /lastWorkKey && lastWorkKey !== workContextKey/.test(SEND_PROMPT_SRC),
-        'ptySendPrompt case must check lastWorkKey existence so a first dispatch does not auto-clear'
+        /lastTeamWorkKey === workContextKey/.test(SEND_PROMPT_SRC),
+        'ptySendPrompt case must compare lastTeamWorkKey === workContextKey for the same-feature branch'
+    );
+    // The destination override check is GONE — no lastWorkKey/lastTeamWorkKey
+    // gate on a clearBeforePrompt = true override.
+    assert.ok(
+        !/lastWorkKey\s*&&\s*lastWorkKey\s*!==\s*workContextKey/.test(PTY_HOST_VERB_SRC),
+        '_ptyHostVerb must NOT have a lastWorkKey destination-override check — the dispatch path issues no clear'
     );
     assert.ok(
-        /lastTeamWorkKey && lastTeamWorkKey !== workContextKey/.test(PTY_HOST_VERB_SRC),
-        '_ptyHostVerb must check lastTeamWorkKey existence so a first team dispatch does not auto-clear'
-    );
-    assert.ok(
-        /lastTeamWorkKey && lastTeamWorkKey !== workContextKey/.test(SEND_PROMPT_SRC),
-        'ptySendPrompt case must check lastTeamWorkKey existence so a first team dispatch does not auto-clear'
+        !/lastWorkKey\s*&&\s*lastWorkKey\s*!==\s*workContextKey/.test(SEND_PROMPT_SRC),
+        'ptySendPrompt case must NOT have a lastWorkKey destination-override check — the dispatch path issues no clear'
     );
 });
 
 test('both hosts suppress the destination clear for a same-work-context team dispatch', () => {
-    // The same-feature branch acquired the deferred-clear intercept between the
-    // key compare and the suppression, so this is sliced rather than windowed:
-    // a fixed character window silently turns into "the branch got longer" the
-    // next time anything is inserted, and the assertion stops meaning anything.
+    // The same-feature branch sets clearBeforePrompt: false explicitly.
+    // Sliced rather than windowed: a fixed character window silently turns
+    // into "the branch got longer" the next time anything is inserted.
     const extBranch = sliceSameFeatureBranch(PTY_HOST_VERB_SRC, 'TaskViewerProvider.ts');
     assert.ok(
         /clearBeforePrompt: false/.test(extBranch),
@@ -375,21 +380,28 @@ test('both hosts suppress the destination clear for a same-work-context team dis
     );
 });
 
-// The suppression is conditional now: a destination sitting in the team's
-// deferred-clear set is the one case that must OVERRIDE back to true, because
-// its barrier clear was skipped for being mid-turn and the delivery path is
-// where it gets paid. Pin both halves, or "always false" passes the test above
-// while silently dropping every deferred clear.
-test('both hosts override the suppression for a destination in the deferred-clear set', () => {
+// The deferred-clear intercept is GONE. A deferred seat gets its clear from
+// the at-rest path (clearSeatAtRest) or the next feature barrier — never from
+// a dispatch. Pin the absence, or "always false" passes the test above while
+// silently dropping every deferred clear.
+test('both hosts do NOT intercept a deferred-clear set on the same-feature branch', () => {
     const extBranch = sliceSameFeatureBranch(PTY_HOST_VERB_SRC, 'TaskViewerProvider.ts');
     assert.ok(
-        /_deferredClearsByTeam\.get\(teamId\)/.test(extBranch) && /clearBeforePrompt: true/.test(extBranch),
-        '_ptyHostVerb must override to clearBeforePrompt:true for a deferred destination'
+        !/_deferredClearsByTeam\.get\(teamId\)/.test(extBranch),
+        '_ptyHostVerb must NOT check a deferred-clear set on the same-feature branch — the intercept is gone'
+    );
+    assert.ok(
+        !/clearBeforePrompt: true/.test(extBranch),
+        '_ptyHostVerb same-feature branch must NOT set clearBeforePrompt:true — the dispatch path issues no clear'
     );
     const stdBranch = sliceSameFeatureBranch(SEND_PROMPT_SRC, 'bootstrap.ts');
     assert.ok(
-        /deferredClearsByTeam\.get\(teamId\)/.test(stdBranch) && /clearBeforePrompt = true/.test(stdBranch),
-        'ptySendPrompt case must override to clearBeforePrompt=true for a deferred destination'
+        !/deferredClearsByTeam\.get\(teamId\)/.test(stdBranch),
+        'ptySendPrompt case must NOT check a deferred-clear set on the same-feature branch — the intercept is gone'
+    );
+    assert.ok(
+        !/clearBeforePrompt = true/.test(stdBranch),
+        'ptySendPrompt same-feature branch must NOT set clearBeforePrompt=true — the dispatch path issues no clear'
     );
 });
 
@@ -415,11 +427,11 @@ test('the already-clean filter has the write it depends on, in both hosts', () =
     // its last clear". The team branch never wrote that map, so the filter
     // emptied toClear on EVERY team dispatch and the barrier cleared nobody.
     assert.ok(
-        /const toClear = rawToClear\.filter\(name => this\._lastWorkContextByTerminal\.has\(name\)\);/.test(PTY_HOST_VERB_SRC),
+        /const toClear = rawToClear\.filter\(name => this\._lastWorkContextByTerminal\.has\(name\) && this\._lastWorkContextByTerminal\.get\(name\) !== workContextKey\);/.test(PTY_HOST_VERB_SRC),
         'extension barrier must exclude already-clean seats from toClear'
     );
     assert.ok(
-        /const toClear = rawToClear\.filter\(name => lastWorkContextByTerminal\.has\(name\)\);/.test(SEND_PROMPT_SRC),
+        /const toClear = rawToClear\.filter\(name => lastWorkContextByTerminal\.has\(name\) && lastWorkContextByTerminal\.get\(name\) !== workContextKey\);/.test(SEND_PROMPT_SRC),
         'standalone barrier must exclude already-clean seats from toClear'
     );
     const extTeamBranch = PTY_HOST_VERB_SRC.slice(
@@ -440,14 +452,22 @@ test('the already-clean filter has the write it depends on, in both hosts', () =
     );
 });
 
-test('the barrier prunes the deferred set for seats it cleared, in both hosts', () => {
+test('the barrier does NOT prune a deferred set — the set is gone, in both hosts', () => {
     assert.ok(
-        /for \(const name of toClear\) \{\s*\n\s*dropDeferredClear\(this\._deferredClearsByTeam, name\);/.test(PTY_HOST_VERB_SRC),
-        'extension barrier must call dropDeferredClear for each cleared seat — the set was add-only, so the barrier re-fired forever'
+        !/dropDeferredClear\(this\._deferredClearsByTeam/.test(PTY_HOST_VERB_SRC),
+        'extension barrier must NOT call dropDeferredClear — the deferred-clear set is gone'
     );
     assert.ok(
-        /for \(const name of toClear\) \{\s*\n\s*dropDeferredClear\(deferredClearsByTeam, name\);/.test(SEND_PROMPT_SRC),
-        'standalone barrier must call dropDeferredClear for each cleared seat'
+        !/dropDeferredClear\(deferredClearsByTeam/.test(SEND_PROMPT_SRC),
+        'standalone barrier must NOT call dropDeferredClear — the deferred-clear set is gone'
+    );
+    assert.ok(
+        !/_deferredClearsByTeam/.test(PTY_HOST_VERB_SRC),
+        'extension _ptyHostVerb must NOT reference _deferredClearsByTeam — the set is gone'
+    );
+    assert.ok(
+        !/deferredClearsByTeam/.test(SEND_PROMPT_SRC),
+        'standalone ptySendPrompt case must NOT reference deferredClearsByTeam — the set is gone'
     );
 });
 
@@ -553,6 +573,94 @@ test('completion side-effects are not gated on the write transition', () => {
     assert.ok(
         /_isSeatCurrentDispatchedCard/.test(lapi),
         'the clear must be guarded on the seat\'s CURRENT dispatched card, not on the write transition'
+    );
+});
+
+// --- 15. Shared clearSeatAtRest helper centralizes all at-rest clears ---
+
+test('LocalApiServer declares a shared clearSeatAtRest helper', () => {
+    const lapi = read('src/services/LocalApiServer.ts');
+    assert.ok(
+        /private async clearSeatAtRest\(/.test(lapi),
+        'LocalApiServer must declare a private clearSeatAtRest helper'
+    );
+    assert.ok(
+        /this\.markSeatAtRest\(workspaceRoot, seat, planId\)/.test(lapi),
+        'clearSeatAtRest must call markSeatAtRest on a successful clear'
+    );
+    assert.ok(
+        /this\._options\.onTerminalContextCleared/.test(lapi),
+        'clearSeatAtRest must fire onTerminalContextCleared on a successful clear'
+    );
+});
+
+test('all at-rest clear paths route through clearSeatAtRest, not inline clearTerminalContext', () => {
+    const lapi = read('src/services/LocalApiServer.ts');
+    // Each of the five at-rest paths must call clearSeatAtRest, not inline
+    // clearTerminalContext. The reason tag identifies which caller asked.
+    for (const reason of ['completeCardInternal', 'releaseCardInternal', 'round-complete', 'feature-complete', 'queue-done']) {
+        assert.ok(
+            new RegExp(`clearSeatAtRest\\(workspaceRoot, [^,]+, [^,]+, '${reason}'`).test(lapi),
+            `the '${reason}' path must call clearSeatAtRest with its reason tag`
+        );
+    }
+});
+
+test('_handleKanbanRoundComplete clears coder seats through clearSeatAtRest, not inline', () => {
+    const lapi = read('src/services/LocalApiServer.ts');
+    // Anchor on the METHOD DECLARATION, not the first mention: clearSeatAtRest's
+    // own docblock names _handleKanbanRoundComplete as a caller, so a bare
+    // indexOf() slices the docblock and the assertions below read an empty body.
+    const rcStart = lapi.indexOf('private async _handleKanbanRoundComplete');
+    assert.ok(rcStart > 0, '_handleKanbanRoundComplete must exist');
+    const rcEnd = lapi.indexOf('\n    private ', rcStart + 100);
+    const rcSrc = lapi.slice(rcStart, rcEnd > 0 ? rcEnd : undefined);
+    // The handler has TWO coder-seat clear loops, and that is correct: the
+    // stateless fallback (a team with zero registered rounds) returns before
+    // the round-aware path is reached, so they are mutually exclusive branches,
+    // never two clears of one roster. The plan's "twice in one handler" reading
+    // came from a line-number scan, not the control flow. Pin the count so a
+    // THIRD loop — or a merge that makes the two reachable in sequence — fails.
+    const clearCalls = rcSrc.match(/clearSeatAtRest\(workspaceRoot, name, undefined, 'round-complete'\)/g) || [];
+    assert.strictEqual(
+        clearCalls.length, 2,
+        'round-complete must clear coder seats through clearSeatAtRest in exactly its two mutually exclusive branches'
+    );
+    // No inline clearTerminalContext calls in the round-complete handler.
+    assert.ok(
+        !/this\._options\.clearTerminalContext\(workspaceRoot, name\)/.test(rcSrc),
+        'round-complete handler must NOT call clearTerminalContext inline — use clearSeatAtRest'
+    );
+});
+
+// --- 16. Goal invariant: the automatic-clear budget ---
+
+test('the clear seam has exactly two callers: the at-rest helper and the operator clear', () => {
+    // The plan's budget: TWO automatic clear triggers (seat-at-rest and the
+    // feature-receipt roster barrier) plus the operator-initiated ones. Inside
+    // LocalApiServer the at-rest trigger is `clearSeatAtRest` and the
+    // operator-initiated one is `_handleTerminalsClear`. A third CALL of the
+    // seam is a third independent decider — the exact accumulation this plan
+    // reversed — so pin the call count and the two owning methods.
+    const lapi = read('src/services/LocalApiServer.ts');
+    const calls = lapi.match(/this\._options\.clearTerminalContext\(/g) || [];
+    assert.strictEqual(
+        calls.length, 2,
+        `clearTerminalContext must be CALLED exactly twice (clearSeatAtRest + _handleTerminalsClear), found ${calls.length}`
+    );
+    const sliceMethod = (name) => {
+        const i = lapi.indexOf(name);
+        assert.ok(i > 0, `${name} must exist`);
+        const j = lapi.indexOf('\n    private ', i + 100);
+        return lapi.slice(i, j > 0 ? j : undefined);
+    };
+    assert.ok(
+        /this\._options\.clearTerminalContext\(workspaceRoot, seat\)/.test(sliceMethod('private async clearSeatAtRest(')),
+        'clearSeatAtRest must own the automatic at-rest clear'
+    );
+    assert.ok(
+        /this\._options\.clearTerminalContext\(/.test(sliceMethod('private async _handleTerminalsClear(')),
+        '_handleTerminalsClear must own the operator-initiated clear'
     );
 });
 

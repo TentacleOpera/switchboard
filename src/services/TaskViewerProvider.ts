@@ -50,7 +50,7 @@ import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExtern
 import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, loadEffectiveStandingOrders, resolveTeamScopedRoleTerminal, resolveTeamMembersForHead, resolveTeamPacingForHead, resolveDefinitionForGroup, plausibleOriginTerminal, terminalsShareTeam, resolveHeadForTerminal, resolveLiveGroupHeads, listTeamsInRoots, resolveTeamByIdInRoots, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, teamHeadName, type TerminalGroupsSettingsAccessor } from './teamWiring';
 import { isTmuxAvailable, listTmuxSessions, buildTmuxGrid, validateTmuxSessionName, killTmuxSession, killTmuxSessionGroup } from '../standalone/tmuxBackend';
 import { installReviewerCallbackOrder, removeReviewerCallbackOrder } from './standingOrders';
-import { resolveWorkContext, resolveTeamGroupForTerminal, computeRosterClearTargets, dropDeferredClear, renameDeferredClear } from './workContextResolver';
+import { resolveWorkContext, resolveTeamGroupForTerminal, computeRosterClearTargets } from './workContextResolver';
 import { ORIENTATION_PREAMBLE, waitForSeatQuiescence } from './startupOrientation';
 import { detectSyncFolder } from './cloudSyncMigration';
 import { attachDirectoryWatcher, type DirectoryWatcherHandle } from './directoryWatcher';
@@ -699,11 +699,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // dropped too — the terminal is gone.
         if (verb === 'ptyCloseTerminal' && typeof payload?.name === 'string') {
             this._lastWorkContextByTerminal.delete(payload.name);
-            // The deferred-clear set holds terminal NAMES and needs the same
-            // lifecycle maintenance: a closed seat's entry would otherwise
-            // outlive it and hand a phantom clear to the next seat that takes
-            // the name.
-            dropDeferredClear(this._deferredClearsByTeam, payload.name);
         }
         const seatCacheDropName =
             (verb === 'ptyClearTerminal' || verb === 'ptyRenameTerminal'
@@ -726,16 +721,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 if (oldWorkKey) {
                     this._lastWorkContextByTerminal.set(payload.alias, oldWorkKey);
                 }
-                // Re-key the deferred clear too. rename() mutates friendlyName in
-                // place, so an un-rekeyed entry is looked up under the NEW name by
-                // the same-feature intercept, never matches, and the seat carries
-                // the previous run's context into the next one — the exact
-                // invariant the deferral exists to hold.
-                renameDeferredClear(this._deferredClearsByTeam, payload.name, payload.alias);
             } else {
                 this._lastWorkContextByTerminal.delete(payload.name);
-                // A seat cleared by hand has nothing left to defer.
-                dropDeferredClear(this._deferredClearsByTeam, payload.name);
             }
             // Restore a coder's callback standing order when it is cleared.
             // A reviewer-callback override may have been installed during
@@ -754,7 +741,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             this._lastWorkContextByTerminal.clear();
             this._lastWorkContextByTeam.clear();
             this._teamPreparationChains.clear();
-            this._deferredClearsByTeam.clear();
         }
 
         // Append seat-scoped directive block AND standing-orders block at the
@@ -967,20 +953,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     const lastTeamWorkKey = this._lastWorkContextByTeam.get(teamId);
 
                     if (lastTeamWorkKey === workContextKey) {
-                        // Same feature/work context: preserve context across coder reports, review, fixes, and handoffs.
-                        // Intercept: if the destination is in the team's deferred-clear set,
-                        // override to clearBeforePrompt: true and remove it from the set. The
-                        // delivery path already does readiness-gated clears — no sweep hook, no
-                        // timer. A deferred seat that is never dispatched to again is cleared by
-                        // the next feature run's barrier (different work-context key).
-                        const deferredSet = this._deferredClearsByTeam.get(teamId);
-                        if (deferredSet && deferredSet.has(payload.name) && clearEnabled) {
-                            deferredSet.delete(payload.name);
-                            if (deferredSet.size === 0) { this._deferredClearsByTeam.delete(teamId); }
-                            payload = { ...payload, clearBeforePrompt: true };
-                        } else {
-                            payload = { ...payload, clearBeforePrompt: false };
-                        }
+                        // Same feature/work context: preserve context across coder reports,
+                        // review, fixes, and handoffs. The dispatch path issues no
+                        // clear — the destination was already cleaned by the at-rest
+                        // path (clearSeatAtRest) or the previous feature barrier, and
+                        // a deferred seat gets its clear from the at-rest path or the
+                        // next feature barrier, never from a dispatch.
+                        payload = { ...payload, clearBeforePrompt: false };
                     } else {
                         // New feature/work context enters the team: prepare entire roster barrier once
                         let prevChain = this._teamPreparationChains.get(teamId) || Promise.resolve();
@@ -1027,13 +1006,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                 head: teamInfo.head,
                                 busySet,
                             });
-                            const toClear = rawToClear.filter(name => this._lastWorkContextByTerminal.has(name));
-                            // Record deferred seats for the same-feature branch intercept.
-                            if (deferred.length > 0) {
-                                const deferredSet = this._deferredClearsByTeam.get(teamId) || new Set<string>();
-                                for (const name of deferred) { deferredSet.add(name); }
-                                this._deferredClearsByTeam.set(teamId, deferredSet);
-                            }
+                            // Two filters, not one. `has(name)` is the already-clean filter
+                            // (never dispatched to since its last clear → nothing to reset).
+                            // The second is what the decoupling requires: the barrier is no
+                            // longer awaited, so a sibling can be dispatched into THIS work
+                            // context while the barrier is still clearing. Clearing it then
+                            // wipes a prompt that has already landed. A seat already carrying
+                            // the new key is by definition not carrying the old feature's
+                            // context, so skipping it costs nothing.
+                            const toClear = rawToClear.filter(name => this._lastWorkContextByTerminal.has(name) && this._lastWorkContextByTerminal.get(name) !== workContextKey);
                             if (toClear.length > 0) {
                                 // Arm the curtain on EVERY roster pane before any clear I/O
                                 // starts. Without this the extension host runs a multi-second
@@ -1092,20 +1073,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                         this.postMessage(finishMsg, SURFACES.terminals);
                                         this._broadcaster?.push(finishMsg, SURFACES.terminals);
                                     });
-                                    // Prune the deferred set for seats the barrier just
-                                    // cleared — they are no longer owed a deferred clear.
-                                    for (const name of toClear) {
-                                        dropDeferredClear(this._deferredClearsByTeam, name);
-                                    }
                                 }
                             }
                             // Deferred seats get NO curtain. A curtain exists to hide a
                             // context reset; a deferred seat is not reset, so covering it
                             // (then lifting with no startup text) is the cosmetic flicker
-                            // this fix removes. The deferred set is still recorded above so
-                            // the same-feature branch intercept clears the seat before its
-                            // next delivery — the pane receives no terminal-level signal at
-                            // all for a deferred seat.
+                            // this fix removes. A deferred seat gets its clear from the
+                            // at-rest path (clearSeatAtRest) or the next feature barrier —
+                            // never from a dispatch.
                             // Record the work-context key unconditionally after the barrier
                             // runs. The re-fire (barrier running on every dispatch forever)
                             // is the worse failure; a genuinely needed later pass is
@@ -1113,23 +1088,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             this._lastWorkContextByTeam.set(teamId, workContextKey);
                         });
                         this._teamPreparationChains.set(teamId, prepPromise.catch(() => {}));
-                        try {
-                            await prepPromise;
-                            // The destination clears itself through the delivery path, WITH readiness
-                            // — the prompt follows immediately. Suppressing it here was the hole: the
-                            // roster clear had already fired, so nothing waited for anything.
-                            if (clearEnabled && lastTeamWorkKey && lastTeamWorkKey !== workContextKey) {
-                                payload = { ...payload, clearBeforePrompt: true };
-                            }
-                        } catch (prepErr) {
-                            return {
-                                success: false,
-                                attributed: 0,
-                                skipped: (contextIdentity.planId || contextIdentity.planFile ? 1 : 0),
-                                directivesAttached: [],
-                                error: prepErr instanceof Error ? prepErr.message : String(prepErr)
-                            };
-                        }
+                        // Decoupled: the roster clear runs concurrently with the prompt
+                        // delivery. The barrier is NOT awaited — it does not block the
+                        // destination's prompt. A barrier failure is swallowed by the
+                        // chain's .catch and does not fail the dispatch; the roster clear
+                        // is a side effect, not a prerequisite. The dispatch path issues
+                        // no clear at all — the destination was already cleaned by the
+                        // at-rest path or the previous feature barrier.
                     }
                     // Record the DESTINATION's per-terminal work-context key on the team
                     // branch too. The barrier's already-clean filter (:901) reads this map
@@ -1145,10 +1110,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     // (featureId ?? planId), never on planId: two subtasks of one feature are
                     // one work context, and OR-ing a planId compare back in here would clear
                     // between them — the per-subtask reset this feature exists to remove.
-                    const lastWorkKey = this._lastWorkContextByTerminal.get(payload.name);
-                    if (clearEnabled && lastWorkKey && lastWorkKey !== workContextKey) {
-                        payload = { ...payload, clearBeforePrompt: true };
-                    }
+                    //
+                    // The dispatch path issues no clear at all. The destination was
+                    // already cleaned by the at-rest path (clearSeatAtRest) or the
+                    // previous feature barrier. The work-context key is still recorded
+                    // so the next feature barrier's already-clean filter works.
                     this._lastWorkContextByTerminal.set(payload.name, workContextKey);
                 }
                 } // end skipClear else
@@ -2056,17 +2022,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _lastWorkContextByTerminal = new Map<string, string>();
     private _lastWorkContextByTeam = new Map<string, string>();
     private _teamPreparationChains = new Map<string, Promise<void>>();
-    /**
-     * Per-team deferred-clear sets: seats that were mid-turn when the roster
-     * barrier fired and could not be cleared. The same-feature branch
-     * intercept checks this set before each dispatch and overrides
-     * `clearBeforePrompt` to `true` for a deferred seat, then removes it —
-     * the delivery path already does readiness-gated clears. A deferred seat
-     * that is never dispatched to again is cleared by the next feature run's
-     * barrier (different work-context key → barrier fires → clears if at
-     * rest).
-     */
-    private _deferredClearsByTeam = new Map<string, Set<string>>();
 
     /**
      * Liveness snapshot cache (all statuses), refreshed from the same
@@ -4765,11 +4720,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             resolveTeamMembers: async (wsRoot, headTerminal) => this.resolveTeamMembers(wsRoot, headTerminal),
             resolveTeamPacing: async (wsRoot, headTerminal) => this.resolveTeamPacing(wsRoot, headTerminal),
             clearTerminalContext: async (wsRoot, terminalName) => this.clearTerminalContext(wsRoot, terminalName),
-            recordDeferredClears: (teamId, names) => {
-                const deferredSet = this._deferredClearsByTeam.get(teamId) || new Set<string>();
-                for (const name of names) { deferredSet.add(name); }
-                this._deferredClearsByTeam.set(teamId, deferredSet);
-            },
             // Roll the terminal log file (session boundary) when a seat's context
             // is cleared via queue/done. The log writer lives in the pty host child
             // process, so the roll is forwarded over the verb boundary.
@@ -12317,7 +12267,6 @@ Each plan file must include:
         // auto-clear an already-clean terminal (optimization — a redundant
         // clear is harmless but wastes the settle window).
         this._lastWorkContextByTerminal.delete(terminalName);
-        dropDeferredClear(this._deferredClearsByTeam, terminalName);
         for (const [id, entry] of this._seatBlockCache.entries()) {
             if (entry.name === terminalName) {
                 this._seatBlockCache.delete(id);

@@ -42,10 +42,8 @@ const WCR_SRC = read('src/services/workContextResolver.ts');
 
 // Load the compiled helper for behavioural tests.
 let computeRosterClearTargets;
-let dropDeferredClear;
-let renameDeferredClear;
 try {
-    ({ computeRosterClearTargets, dropDeferredClear, renameDeferredClear } = require(path.join(REPO_ROOT, 'out', 'services', 'workContextResolver.js')));
+    ({ computeRosterClearTargets } = require(path.join(REPO_ROOT, 'out', 'services', 'workContextResolver.js')));
 } catch {
     // out/ may not be compiled yet; behavioural tests will be skipped.
 }
@@ -419,61 +417,59 @@ test('bootstrap.ts calls computeRosterClearTargets inside the barrier', () => {
     );
 });
 
-// ── 4. SOURCE-LEVEL: deferred set + same-feature intercept ────────────
+// ── 4. SOURCE-LEVEL: deferred set is GONE — no same-feature intercept ───
 
-test('TaskViewerProvider.ts declares _deferredClearsByTeam', () => {
+test('TaskViewerProvider.ts does NOT declare _deferredClearsByTeam', () => {
     assert.ok(
-        /_deferredClearsByTeam\s*=\s*new\s+Map/.test(TVP),
-        'TaskViewerProvider.ts must declare _deferredClearsByTeam as a Map'
+        !/_deferredClearsByTeam\s*=\s*new\s+Map/.test(TVP),
+        'TaskViewerProvider.ts must NOT declare _deferredClearsByTeam — the deferred-clear set is gone'
     );
 });
 
-test('bootstrap.ts declares deferredClearsByTeam', () => {
+test('bootstrap.ts does NOT declare deferredClearsByTeam', () => {
     assert.ok(
-        /deferredClearsByTeam\s*=\s*new\s+Map/.test(BOOT),
-        'bootstrap.ts must declare deferredClearsByTeam as a Map'
+        !/deferredClearsByTeam\s*=\s*new\s+Map/.test(BOOT),
+        'bootstrap.ts must NOT declare deferredClearsByTeam — the deferred-clear set is gone'
     );
 });
 
-test('TaskViewerProvider.ts checks deferred set in same-feature branch and overrides clearBeforePrompt', () => {
-    // Slice the same-feature branch.
+test('TaskViewerProvider.ts same-feature branch does NOT intercept a deferred set', () => {
     const sameFeatureStart = TVP.indexOf('if (lastTeamWorkKey === workContextKey) {');
     assert.ok(sameFeatureStart > 0, 'same-feature branch must exist in TaskViewerProvider.ts');
-    // The next `} else {` is the new-feature branch boundary.
     const sameFeatureEnd = TVP.indexOf('} else {', sameFeatureStart + 50);
     assert.ok(sameFeatureEnd > 0, 'same-feature branch must have a closing boundary');
     const sameFeatureSrc = TVP.slice(sameFeatureStart, sameFeatureEnd);
     assert.ok(
-        /_deferredClearsByTeam\.get\(teamId\)/.test(sameFeatureSrc),
-        'same-feature branch must read _deferredClearsByTeam'
+        !/_deferredClearsByTeam\.get\(teamId\)/.test(sameFeatureSrc),
+        'same-feature branch must NOT read _deferredClearsByTeam — the intercept is gone'
     );
     assert.ok(
-        /clearBeforePrompt:\s*true/.test(sameFeatureSrc),
-        'same-feature branch must override clearBeforePrompt to true for a deferred seat'
+        !/clearBeforePrompt:\s*true/.test(sameFeatureSrc),
+        'same-feature branch must NOT override clearBeforePrompt to true — the dispatch path issues no clear'
     );
     assert.ok(
-        /_deferredClearsByTeam\.delete\(teamId\)/.test(sameFeatureSrc),
-        'same-feature branch must clean up the deferred set when empty'
+        /clearBeforePrompt:\s*false/.test(sameFeatureSrc),
+        'same-feature branch must set clearBeforePrompt to false'
     );
 });
 
-test('bootstrap.ts checks deferred set in same-feature branch and overrides clearBeforePrompt', () => {
+test('bootstrap.ts same-feature branch does NOT intercept a deferred set', () => {
     const sameFeatureStart = BOOT.indexOf('if (lastTeamWorkKey === workContextKey) {');
     assert.ok(sameFeatureStart > 0, 'same-feature branch must exist in bootstrap.ts');
     const sameFeatureEnd = BOOT.indexOf('} else {', sameFeatureStart + 50);
     assert.ok(sameFeatureEnd > 0, 'same-feature branch must have a closing boundary');
     const sameFeatureSrc = BOOT.slice(sameFeatureStart, sameFeatureEnd);
     assert.ok(
-        /deferredClearsByTeam\.get\(teamId\)/.test(sameFeatureSrc),
-        'same-feature branch must read deferredClearsByTeam'
+        !/deferredClearsByTeam\.get\(teamId\)/.test(sameFeatureSrc),
+        'same-feature branch must NOT read deferredClearsByTeam — the intercept is gone'
     );
     assert.ok(
-        /clearBeforePrompt\s*=\s*true/.test(sameFeatureSrc),
-        'same-feature branch must override clearBeforePrompt to true for a deferred seat'
+        !/clearBeforePrompt\s*=\s*true/.test(sameFeatureSrc),
+        'same-feature branch must NOT override clearBeforePrompt to true — the dispatch path issues no clear'
     );
     assert.ok(
-        /deferredClearsByTeam\.delete\(teamId\)/.test(sameFeatureSrc),
-        'same-feature branch must clean up the deferred set when empty'
+        /clearBeforePrompt\s*=\s*false/.test(sameFeatureSrc),
+        'same-feature branch must set clearBeforePrompt to false'
     );
 });
 
@@ -482,12 +478,12 @@ test('bootstrap.ts checks deferred set in same-feature branch and overrides clea
 // `toClear > 0 || deferred === 0`. That guard was itself the defect. On a team
 // whose only idle seat is the head, `toClear` is empty and `deferred` is not, so
 // the key was NEVER recorded and the next dispatch re-ran the whole barrier —
-// permanently, on every dispatch, forever. The deferred seats it was trying to
-// protect are already caught by the same-feature branch intercept above (which
-// clears a deferred destination before its next delivery), so nothing is owed a
-// later pass; and a seat that becomes dirty after the barrier ran is dispatched
-// to, which writes its own per-terminal key and is caught by the next NEW work
-// context. The re-fire is the worse failure. Recording is now unconditional.
+// permanently, on every dispatch, forever. A deferred seat gets its clear
+// from the at-rest path (clearSeatAtRest) or the next feature barrier — never
+// from a dispatch, so nothing is owed a later pass; and a seat that becomes
+// dirty after the barrier ran is dispatched to, which writes its own
+// per-terminal key and is caught by the next NEW work context. The re-fire is
+// the worse failure. Recording is now unconditional.
 test('TaskViewerProvider.ts records the work-context key unconditionally after the barrier', () => {
     const barrierStart = TVP.indexOf('if (teamInfo && teamInfo.id) {');
     const barrierEnd = TVP.indexOf('} else if (workContextKey && payload.name) {', barrierStart);
@@ -521,10 +517,8 @@ test('TaskViewerProvider.ts does NOT curtain deferred seats (no terminalDispatch
     // so covering it (then lifting with no startup text) is the cosmetic
     // flicker this fix removes. The deferred curtain block was the ONLY place
     // `reason: 'deferred'` appeared in the barrier — its absence pins that the
-    // block is gone. (The deferred-set RECORDING block stays, and uses
-    // `for (const name of deferred) { deferredSet.add(name); }` — it has no
-    // `reason:` literal, so it does not match this assertion. The same-feature
-    // intercept continues to work.)
+    // block is gone. A deferred seat gets its clear from the at-rest path
+    // (clearSeatAtRest) or the next feature barrier — never from a dispatch.
     const barrierStart = TVP.indexOf('if (teamInfo && teamInfo.id) {');
     const barrierEnd = TVP.indexOf('} else if (workContextKey && payload.name) {', barrierStart);
     const barrierSrc = TVP.slice(barrierStart, barrierEnd);
@@ -685,17 +679,17 @@ test('bootstrap.ts builds busySet from lastDataAt with livenessWindowMs', () => 
     );
 });
 
-test('TaskViewerProvider.ts clears _deferredClearsByTeam on ptyClearAllTerminals', () => {
+test('TaskViewerProvider.ts does NOT clear _deferredClearsByTeam on ptyClearAllTerminals — the set is gone', () => {
     assert.ok(
-        /_deferredClearsByTeam\.clear\(\)/.test(TVP),
-        'TaskViewerProvider.ts must clear _deferredClearsByTeam on ptyClearAllTerminals'
+        !/_deferredClearsByTeam\.clear\(\)/.test(TVP),
+        'TaskViewerProvider.ts must NOT clear _deferredClearsByTeam — the set is gone'
     );
 });
 
-test('bootstrap.ts clears deferredClearsByTeam on ptyClearAllTerminals', () => {
+test('bootstrap.ts does NOT clear deferredClearsByTeam on ptyClearAllTerminals — the set is gone', () => {
     assert.ok(
-        /deferredClearsByTeam\.clear\(\)/.test(BOOT),
-        'bootstrap.ts must clear deferredClearsByTeam on ptyClearAllTerminals'
+        !/deferredClearsByTeam\.clear\(\)/.test(BOOT),
+        'bootstrap.ts must NOT clear deferredClearsByTeam — the set is gone'
     );
 });
 
@@ -771,71 +765,42 @@ test('regression — lead dispatches to coder-1 while itself mid-turn: lead is o
 
 // ── 7. Deferred-set lifecycle: close, clear, rename ───────────────────
 //
-// The deferred set holds terminal NAMES, so it needs the same lifecycle
-// maintenance the sibling per-terminal maps already get. The rename case is
-// the one that silently defeats the feature: rename() mutates friendlyName in
-// place, so an un-rekeyed entry is looked up under the NEW name by the
-// same-feature intercept, never matches, and the seat carries the previous
-// run's context into the next one.
+// dropDeferredClear / renameDeferredClear are GONE from workContextResolver.ts.
+// They existed only to maintain the per-team deferred-clear set across close,
+// clear and rename. The set is deleted, so the helpers are too — a pure helper
+// with no caller is a gate that pins a mechanism nothing runs.
 
-test('dropDeferredClear removes a seat from every team and prunes the empty team', () => {
-    if (typeof dropDeferredClear !== 'function') {
-        console.log('  ⏭️  (skipped — out/services/workContextResolver.js not compiled)');
-        return;
-    }
-    const map = new Map([
-        ['team_a', new Set(['coder-1', 'coder-2'])],
-        ['team_b', new Set(['coder-1'])],
-    ]);
-    dropDeferredClear(map, 'coder-1');
-    assert.deepStrictEqual([...map.keys()], ['team_a'], 'a team left empty must be pruned');
-    assert.deepStrictEqual([...map.get('team_a')], ['coder-2']);
-});
-
-test('dropDeferredClear is a no-op for an unknown name', () => {
-    if (typeof dropDeferredClear !== 'function') return;
-    const map = new Map([['team_a', new Set(['coder-1'])]]);
-    dropDeferredClear(map, 'nobody');
-    assert.deepStrictEqual([...map.get('team_a')], ['coder-1']);
-});
-
-test('renameDeferredClear re-keys a deferred seat so the same-feature intercept still matches', () => {
-    if (typeof renameDeferredClear !== 'function') return;
-    const map = new Map([['team_a', new Set(['coder-1', 'coder-2'])]]);
-    renameDeferredClear(map, 'coder-1', 'coder-1-renamed');
-    assert.deepStrictEqual([...map.get('team_a')].sort(), ['coder-1-renamed', 'coder-2']);
-});
-
-test('renameDeferredClear does not ADD a name that was not deferred', () => {
-    if (typeof renameDeferredClear !== 'function') return;
-    const map = new Map([['team_a', new Set(['coder-2'])]]);
-    renameDeferredClear(map, 'coder-1', 'coder-1-renamed');
-    assert.deepStrictEqual([...map.get('team_a')], ['coder-2'], 'rename must never widen the deferred set');
-});
-
-test('TaskViewerProvider.ts maintains the deferred set on close, clear and rename', () => {
+test('TaskViewerProvider.ts does NOT maintain a deferred set — the set is gone', () => {
     assert.ok(
-        /dropDeferredClear\(this\._deferredClearsByTeam, payload\.name\)/.test(TVP),
-        'TaskViewerProvider.ts must drop the deferred entry on close and on a hand clear'
+        !/dropDeferredClear\(this\._deferredClearsByTeam, payload\.name\)/.test(TVP),
+        'TaskViewerProvider.ts must NOT drop a deferred entry — the deferred-clear set is gone'
     );
     assert.ok(
-        /renameDeferredClear\(this\._deferredClearsByTeam, payload\.name, payload\.alias\)/.test(TVP),
-        'TaskViewerProvider.ts must re-key the deferred entry on rename'
+        !/renameDeferredClear\(this\._deferredClearsByTeam, payload\.name, payload\.alias\)/.test(TVP),
+        'TaskViewerProvider.ts must NOT re-key a deferred entry — the deferred-clear set is gone'
+    );
+    assert.ok(
+        !/_deferredClearsByTeam/.test(TVP),
+        'TaskViewerProvider.ts must NOT reference _deferredClearsByTeam — the set is gone'
     );
 });
 
-test('bootstrap.ts maintains the deferred set on close, clear and rename', () => {
+test('bootstrap.ts does NOT maintain a deferred set — the set is gone', () => {
     assert.ok(
-        /dropDeferredClear\(deferredClearsByTeam, payload\.name\)/.test(BOOT),
-        'bootstrap.ts must drop the deferred entry on close and on ptyClearTerminal'
+        !/dropDeferredClear\(deferredClearsByTeam, payload\.name\)/.test(BOOT),
+        'bootstrap.ts must NOT drop a deferred entry — the deferred-clear set is gone'
     );
     assert.ok(
-        /dropDeferredClear\(deferredClearsByTeam, handle\.friendlyName\)/.test(BOOT),
-        "bootstrap.ts must drop the deferred entry on a bare '/clear' sendToTerminal"
+        !/dropDeferredClear\(deferredClearsByTeam, handle\.friendlyName\)/.test(BOOT),
+        "bootstrap.ts must NOT drop a deferred entry on a bare '/clear' — the deferred-clear set is gone"
     );
     assert.ok(
-        /renameDeferredClear\(deferredClearsByTeam, payload\.name, payload\.alias\)/.test(BOOT),
-        'bootstrap.ts must re-key the deferred entry on rename'
+        !/renameDeferredClear\(deferredClearsByTeam, payload\.name, payload\.alias\)/.test(BOOT),
+        'bootstrap.ts must NOT re-key a deferred entry — the deferred-clear set is gone'
+    );
+    assert.ok(
+        !/deferredClearsByTeam/.test(BOOT),
+        'bootstrap.ts must NOT reference deferredClearsByTeam — the set is gone'
     );
 });
 

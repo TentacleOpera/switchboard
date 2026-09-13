@@ -352,12 +352,36 @@ CI-wired gate threw at module load and all six of its assertions had been unreac
 clear suites now pass (`terminal-rest-clear`, `host-auto-clear`, `clear-readiness`, `pty-clear-policy`,
 `roster-clear-mid-turn`) after `npm run compile-tests`, and all five are confirmed invoked by CI.
 
+### Review pass 2 (2026-09-13, post-implementation)
+
+The implementation now exists and the goal is met: no dispatch path on either root sets
+`clearBeforePrompt` to true, all five at-rest paths route through the new
+`LocalApiServer.clearSeatAtRest`, the `deferredClearsByTeam` plumbing is gone from both roots, and
+both false `KanbanProvider` instruction lines are corrected. Six files were changed in this pass —
+`src/standalone/bootstrap.ts` and `src/services/TaskViewerProvider.ts` (barrier now skips a sibling
+already dispatched into the new work context, closing the wipe window the decoupling opened),
+`src/services/workContextResolver.ts` (deleted the orphaned `dropDeferredClear` /
+`renameDeferredClear` and corrected two docblocks still describing the deleted intercept), and the
+`host-auto-clear-on-plan-change`, `dispatch-curtain-and-ufo-contract`, `roster-clear-mid-turn-deferral`
+and `prompt-payload-kind-contract` suites. `tsc --noEmit` is clean apart from four pre-existing TS2835
+import-extension errors, and all six named clear suites pass and are CI-wired in
+`.github/workflows/integration-tests.yml`; `atomic-team-lifecycle`, `team-release-control`,
+`terminal-coder-dispatch`, `queue-pipeline`, `completion-asserted-never-inferred` and two
+`dispatch-curtain` assertions are red for reasons that reproduce against HEAD content (HTTP 403
+cross-site stubs, `res.getHeaders is not a function`, a `return block.join` anchor broken by
+`17cbc519`, and other in-flight plans' work). The barrier-timing invariant has no automated check
+that can discriminate on live behaviour — passing source-level suites is not evidence the decoupled
+barrier behaves correctly against a real fleet, and no live run was performed in this pass.
+
 ## Deferred Findings
 
-- CRITICAL — Changes 1, 2, 3 and 5 are entirely unimplemented; this card needs coding, not review. `src/standalone/bootstrap.ts:2888` (deferred-clear intercept), `:3010` (team-branch destination), `:3035` (non-team destination) all still set `payload.clearBeforePrompt = true`.
-- CRITICAL — Extension twins equally unimplemented: `src/services/TaskViewerProvider.ts:980`, `:1122`, `:1150` still set `clearBeforePrompt: true` on the dispatch payload.
-- CRITICAL — `_handleKanbanRoundComplete` still clears the roster twice: `src/services/LocalApiServer.ts:4840` and `src/services/LocalApiServer.ts:4962`.
-- CRITICAL — No `clearSeatAtRest` exists; rows 4–8 remain five independent deciders. `src/services/LocalApiServer.ts:4168`
-- MAJOR — Change 3 names one instruction line to correct, but two carry the now-false "the host overrides it to true automatically when the plan changes": `src/services/KanbanProvider.ts:5926` and `src/services/KanbanProvider.ts:5986`. A single-site edit leaves the false instruction live.
-- NIT — Plan line numbers are stale by 30–110 lines (measured 2026-09-12). Symbols are correct; numbers are not: `completeCardInternal` is at `src/services/LocalApiServer.ts:4168` (plan says 4212), `releaseCardInternal` `:4374` (4411), round clears `:4840`/`:4962` (4727/4849), `_completeFeatureCore` `:5852` (5820).
-- NIT — Change 4's "already shipped" claim verified TRUE, but the path is `src/standalone/ptyPromptDelivery.ts:61`, not `src/services/`. Caps and `min(familyFloor, cap)` are intact; the regression guard holds.
+- MAJOR — The barrier does NOT gain the destination, contrary to change 2's "It gains the destination". `src/services/workContextResolver.ts:232` still skips `destination`, and with the dispatch-time clear deleted, the destination of the first dispatch of a new feature is now cleared by NOTHING unless its previous card was accepted. This bites seat-paced / external-head teams (change 2b), where the feature goes straight to a coder with no head dispatch. Not fixed: with the barrier decoupled (un-awaited), adding the destination would clear the seat concurrently with its own prompt delivery — strictly worse than the race the plan removes. The plan text is self-contradictory here ("destination/origin/head exclusions all stand" and "It gains the destination" in one paragraph) and the revised change-2 callout drops the claim.
+- MAJOR — Residual wipe window in the decoupled barrier. `src/standalone/bootstrap.ts:2905` / `src/services/TaskViewerProvider.ts:1007` now skip a seat already carrying the new `workContextKey`, but `toClear` is computed once and the clears then take seconds; a dispatch landing on a target seat AFTER the target set is computed but BEFORE its `clearPty` resolves is still wiped. Narrow in practice — rapid multi-seat dispatch goes through `skipClear`, which bypasses the barrier entirely — so a per-handle re-check at clear time was not worth serialising `Promise.all`.
+- MAJOR — The head/lead is no longer cleared at a feature boundary. It is excluded from the barrier by design (`computeRosterClearTargets`, head exclusion, a Goal Invariant) and previously got its reset from the now-deleted team-branch destination override. Its only remaining clear is `_completeFeatureCore` with `clearLead: true` (`src/services/LocalApiServer.ts:5929`), reached from the round-complete last-round delegation. A lead that never closes a round accumulates context across features.
+- NIT — `_handleKanbanRoundComplete` still has two coder-seat clear loops (`src/services/LocalApiServer.ts:4851`, `src/services/LocalApiServer.ts:4974`), so verification item 2 ("exactly one clear call") is not satisfied literally. The plan's premise is wrong: the first loop sits inside the `teamRounds.length === 0` stateless fallback, which returns before the round-aware path, so they are mutually exclusive branches and never clear one roster twice. Pinned at exactly two with a comment rather than merged.
+- NIT — `deferred` is destructured from `computeRosterClearTargets` and unused in both roots (`src/standalone/bootstrap.ts:2899`, `src/services/TaskViewerProvider.ts:1001`). Harmless (`noUnusedLocals` is off) and kept because it documents the helper's contract at the call site.
+- NIT — `_runQueueDone` now reports `clearSkipped` for a non-deliberate skip (`clearTerminalContext` absent, or `terminal.clearBeforePrompt` disabled) where it previously reported nothing (`src/services/LocalApiServer.ts:6738`). More information, not less, and consistent with the source-tagging rule — but `clearSkipped` no longer means only "deliberately preserved for review".
+
+## Implementation Summary
+
+All five changes implemented. Change 1: added `clearSeatAtRest` to `LocalApiServer.ts` and routed all five at-rest clear paths (complete, release, round-complete, feature-complete, queue-done) through it, collapsing the independent deciders into one shared helper that owns `clearTerminalContext`, `markSeatAtRest`, and `onTerminalContextCleared`. Change 2: decoupled the roster barrier from dispatch in both roots — the barrier is no longer awaited and runs concurrently with prompt delivery; a barrier failure is swallowed by the chain's `.catch` and does not fail the dispatch. Change 3: deleted every dispatch-time `clearBeforePrompt = true` override in both roots (deferred-clear intercept, team-branch destination, non-team destination), removed the obsolete `deferredClearsByTeam` plumbing and `recordDeferredClears` seam from both roots and `LocalApiServer`, and corrected both false instruction lines in `KanbanProvider.ts`. Change 5: rewrote `host-auto-clear-on-plan-change.test.js` tests 3 and 4 to assert the dispatch path issues NO forced clear, updated the deferred-clear and destination-override assertions to pin the absence, added `clearSeatAtRest` and round-complete deduplication assertions, and updated `prompt-payload-kind-contract.test.js` and `roster-clear-mid-turn-deferral.test.js` to pin the removed plumbing. The manual stand-down clear, `clearBeforePromptFromConfig`, readiness gates, family floors, and attended/unattended caps are unchanged.

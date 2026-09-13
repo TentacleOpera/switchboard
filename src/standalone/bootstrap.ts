@@ -94,7 +94,7 @@ import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExtern
 import { wireSpawnedTeam, loadEffectiveStandingOrders, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, resolveLiveGroupHeads, type TerminalGroupsSettingsAccessor } from '../services/teamWiring';
 import { setStandingOrdersApplier } from '../services/standingOrdersDelivery';
 import { ORIENTATION_PREAMBLE, waitForSeatQuiescence } from '../services/startupOrientation';
-import { resolveWorkContext, resolveTeamGroupForTerminal, computeRosterClearTargets, dropDeferredClear, renameDeferredClear } from '../services/workContextResolver';
+import { resolveWorkContext, resolveTeamGroupForTerminal, computeRosterClearTargets } from '../services/workContextResolver';
 
 import { ClickUpSyncService } from '../services/ClickUpSyncService';
 import { LinearSyncService } from '../services/LinearSyncService';
@@ -467,11 +467,6 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     const lastWorkContextByTerminal = new Map<string, string>();
     const lastWorkContextByTeam = new Map<string, string>();
     const teamPreparationChains = new Map<string, Promise<void>>();
-    // Per-team deferred-clear sets: seats that were mid-turn when the roster
-    // barrier fired and could not be cleared. The same-feature branch
-    // intercept checks this set before each dispatch and overrides
-    // clearBeforePrompt to true for a deferred seat, then removes it.
-    const deferredClearsByTeam = new Map<string, Set<string>>();
 
     /**
      * Sole standalone chokepoint for prompt delivery. Every `sendPromptToPty` call
@@ -2481,11 +2476,6 @@ Read the current content above. Deepen the problem analysis, verify every file p
                 case 'ptyCloseTerminal': {
                     const ok = ptyFleetService.kill(payload.name);
                     lastWorkContextByTerminal.delete(payload.name);
-                    // The deferred-clear set holds terminal NAMES and needs the same
-                    // lifecycle maintenance: a closed seat's entry would otherwise
-                    // outlive it and hand a phantom clear to the next seat that takes
-                    // the name.
-                    dropDeferredClear(deferredClearsByTeam, payload.name);
                     void ManualGroupStore.getInstance().onTerminalExit(payload.name).catch(() => {});
                     return { success: ok };
                 }
@@ -2650,12 +2640,6 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             lastWorkContextByTerminal.delete(payload.name);
                             lastWorkContextByTerminal.set(payload.alias, oldWorkKey);
                         }
-                        // Re-key the deferred clear too. rename() mutates friendlyName in
-                        // place, so an un-rekeyed entry is looked up under the NEW name by
-                        // the same-feature intercept, never matches, and the seat carries
-                        // the previous run's context into the next one — the exact
-                        // invariant the deferral exists to hold.
-                        renameDeferredClear(deferredClearsByTeam, payload.name, payload.alias);
                     }
                     return { success: ok };
                 }
@@ -2667,8 +2651,6 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         seatBlockCache.delete(handle.agentInstanceId);
                     }
                     lastWorkContextByTerminal.delete(payload.name);
-                    // A seat cleared by hand has nothing left to defer.
-                    dropDeferredClear(deferredClearsByTeam, payload.name);
                     if (handle.status === 'active') { await clearPty(handle); }
                     return { success: true };
                 }
@@ -2877,18 +2859,12 @@ Read the current content above. Deepen the problem analysis, verify every file p
 
                             if (lastTeamWorkKey === workContextKey) {
                                 // Same feature/work context: preserve context across coder reports,
-                                // review, fixes, and handoffs. Intercept: if the destination is in
-                                // the team's deferred-clear set, override to clearBeforePrompt: true
-                                // and remove it from the set. The delivery path already does
-                                // readiness-gated clears — no sweep hook, no timer.
-                                const deferredSet = deferredClearsByTeam.get(teamId);
-                                if (deferredSet && deferredSet.has(payload.name) && clearEnabled) {
-                                    deferredSet.delete(payload.name);
-                                    if (deferredSet.size === 0) { deferredClearsByTeam.delete(teamId); }
-                                    payload.clearBeforePrompt = true;
-                                } else {
-                                    payload.clearBeforePrompt = false;
-                                }
+                                // review, fixes, and handoffs. The dispatch path issues no
+                                // clear — the destination was already cleaned by the at-rest
+                                // path (clearSeatAtRest) or the previous feature barrier, and
+                                // a deferred seat gets its clear from the at-rest path or the
+                                // next feature barrier, never from a dispatch.
+                                payload.clearBeforePrompt = false;
                             } else {
                                 let prevChain = teamPreparationChains.get(teamId) || Promise.resolve();
                                 const prepPromise = prevChain.then(async () => {
@@ -2928,13 +2904,15 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                         head: teamInfo.head,
                                         busySet,
                                     });
-                                    const toClear = rawToClear.filter(name => lastWorkContextByTerminal.has(name));
-                                    // Record deferred seats for the same-feature branch intercept.
-                                    if (deferred.length > 0) {
-                                        const deferredSet = deferredClearsByTeam.get(teamId) || new Set<string>();
-                                        for (const name of deferred) { deferredSet.add(name); }
-                                        deferredClearsByTeam.set(teamId, deferredSet);
-                                    }
+                                    // Two filters, not one. `has(name)` is the already-clean filter
+                                    // (never dispatched to since its last clear → nothing to reset).
+                                    // The second is what the decoupling requires: the barrier is no
+                                    // longer awaited, so a sibling can be dispatched into THIS work
+                                    // context while the barrier is still clearing. Clearing it then
+                                    // wipes a prompt that has already landed. A seat already carrying
+                                    // the new key is by definition not carrying the old feature's
+                                    // context, so skipping it costs nothing.
+                                    const toClear = rawToClear.filter(name => lastWorkContextByTerminal.has(name) && lastWorkContextByTerminal.get(name) !== workContextKey);
                                     if (toClear.length > 0) {
                                         const teamOpId = `team-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
                                         const handles = toClear.map(name => ptyFleetService.get(name)).filter(Boolean);
@@ -2979,20 +2957,14 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                                     }, SURFACES.terminals);
                                                 } catch { /* best effort */ }
                                             }
-                                            // Prune the deferred set for seats the barrier just
-                                            // cleared — they are no longer owed a deferred clear.
-                                            for (const name of toClear) {
-                                                dropDeferredClear(deferredClearsByTeam, name);
-                                            }
                                         }
                                     }
                                     // Deferred seats get NO curtain. A curtain exists to hide a
                                     // context reset; a deferred seat is not reset, so covering it
                                     // (then lifting with no startup text) is the cosmetic flicker
-                                    // this fix removes. The deferred set is still recorded above so
-                                    // the same-feature branch intercept clears the seat before its
-                                    // next delivery — the pane receives no terminal-level signal at
-                                    // all for a deferred seat.
+                                    // this fix removes. A deferred seat gets its clear from the
+                                    // at-rest path (clearSeatAtRest) or the next feature barrier —
+                                    // never from a dispatch.
                                     // Record the work-context key unconditionally after the barrier
                                     // runs. The re-fire (barrier running on every dispatch forever)
                                     // is the worse failure; a genuinely needed later pass is
@@ -3000,24 +2972,13 @@ Read the current content above. Deepen the problem analysis, verify every file p
                                     lastWorkContextByTeam.set(teamId, workContextKey);
                                 });
                                 teamPreparationChains.set(teamId, prepPromise.catch(() => {}));
-                                try {
-                                    await prepPromise;
-                                    // The destination clears itself, through the delivery path, WITH
-                                    // readiness — the prompt follows immediately, so this is the gap
-                                    // that actually needs detecting. Suppressing it here was the hole:
-                                    // the roster clear had already fired, so nothing waited for anything.
-                                    if (clearEnabled && lastTeamWorkKey && lastTeamWorkKey !== workContextKey) {
-                                        payload.clearBeforePrompt = true;
-                                    }
-                                } catch (prepErr) {
-                                    return {
-                                        success: false,
-                                        attributed: 0,
-                                        skipped: (contextIdentity.planId || contextIdentity.planFile ? 1 : 0),
-                                        directivesAttached: [],
-                                        error: prepErr instanceof Error ? prepErr.message : String(prepErr)
-                                    };
-                                }
+                                // Decoupled: the roster clear runs concurrently with the prompt
+                                // delivery. The barrier is NOT awaited — it does not block the
+                                // destination's prompt. A barrier failure is swallowed by the
+                                // chain's .catch and does not fail the dispatch; the roster clear
+                                // is a side effect, not a prerequisite. The dispatch path issues
+                                // no clear at all — the destination was already cleaned by the
+                                // at-rest path or the previous feature barrier.
                             }
                             // Record the DESTINATION's per-terminal work-context key on the
                             // team branch too. The barrier's already-clean filter reads this
@@ -3030,10 +2991,11 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             // Compare the WORK CONTEXT key (featureId ?? planId), never planId:
                             // two subtasks of one feature are one work context. See the
                             // matching comment in TaskViewerProvider.
-                            const lastWorkKey = lastWorkContextByTerminal.get(payload.name);
-                            if (clearEnabled && lastWorkKey && lastWorkKey !== workContextKey) {
-                                payload.clearBeforePrompt = true;
-                            }
+                            //
+                            // The dispatch path issues no clear at all. The destination was
+                            // already cleaned by the at-rest path (clearSeatAtRest) or the
+                            // previous feature barrier. The work-context key is still recorded
+                            // so the next feature barrier's already-clean filter works.
                             lastWorkContextByTerminal.set(payload.name, workContextKey);
                         }
                         } // end skipClear else
@@ -3128,7 +3090,6 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     lastWorkContextByTerminal.clear();
                     lastWorkContextByTeam.clear();
                     teamPreparationChains.clear();
-                    deferredClearsByTeam.clear();
                     const active = ptyFleetService.listActive();
                     await Promise.all(active.map(t => clearPty(t)));
                     return { success: true, cleared: active.length };
@@ -3645,11 +3606,6 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             if (text.trim() === '/clear' && handle.agentInstanceId) {
                                 seatBlockCache.delete(handle.agentInstanceId);
                             }
-                            if (text.trim() === '/clear') {
-                                // Same reason as ptyClearTerminal: a seat cleared by hand
-                                // has nothing left to defer.
-                                dropDeferredClear(deferredClearsByTeam, handle.friendlyName);
-                            }
                             await writeSlashCommand(handle, text);
                         } else {
                             await deliverPrompt(handle, text, { clearBeforePrompt: false }, payload.standingOrders !== false);
@@ -3692,9 +3648,6 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     if (!text.includes('\n') && text.trimStart().startsWith('/')) {
                         if (text.trim() === '/clear' && handle.agentInstanceId) {
                             seatBlockCache.delete(handle.agentInstanceId);
-                        }
-                        if (text.trim() === '/clear') {
-                            dropDeferredClear(deferredClearsByTeam, handle.friendlyName);
                         }
                         await writeSlashCommand(handle, text);
                     } else {
@@ -4779,7 +4732,6 @@ Each plan file must include:
                 seatBlockCache.delete(handle.agentInstanceId);
             }
             lastWorkContextByTerminal.delete(terminalName);
-            dropDeferredClear(deferredClearsByTeam, terminalName);
             if (db) {
                 try {
                     await removeReviewerCallbackOrder(db, terminalName);
@@ -4817,11 +4769,6 @@ Each plan file must include:
             // either; keeping the roll in exactly one place is what stops the two
             // hosts drifting.
             return { cleared: true };
-        },
-        recordDeferredClears: (teamId: string, names: string[]) => {
-            const deferredSet = deferredClearsByTeam.get(teamId) || new Set<string>();
-            for (const name of names) { deferredSet.add(name); }
-            deferredClearsByTeam.set(teamId, deferredSet);
         },
         // Roll the terminal log file when a seat's context is cleared via
         // queue/done — a cleared terminal starting fresh work is a new session.

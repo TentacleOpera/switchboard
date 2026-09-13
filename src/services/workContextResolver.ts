@@ -211,9 +211,10 @@ export interface RosterClearTargetInput {
  *
  * - `toClear` — names to clear immediately (at rest, not the destination,
  *   not the origin).
- * - `deferred` — names to defer (mid-turn). A deferred seat is NOT skipped
- *   permanently: the same-feature branch intercept clears it before its
- *   next prompt delivery.
+ * - `deferred` — names to defer (mid-turn). The dispatch path issues no clear,
+ *   so a deferred seat is settled by the at-rest path
+ *   (`LocalApiServer.clearSeatAtRest`) or by the next feature-receipt barrier —
+ *   never by a dispatch. Reported for observability, not acted on here.
  */
 export interface RosterClearTargetResult {
     toClear: string[];
@@ -238,8 +239,8 @@ export interface RosterClearTargetResult {
  *     `origin` is caller-supplied and routinely absent on machine dispatches,
  *     so it is not a substitute — an idle lead with no origin would otherwise
  *     be cleared mid-feature).
- *  5. In `busySet` → defer (mid-turn; cleared later via the same-feature
- *     branch intercept).
+ *  5. In `busySet` → defer (mid-turn; cleared later by the at-rest path or the
+ *     next feature-receipt barrier, never by a dispatch).
  *  6. Otherwise → clear immediately.
  *
  * Security: `origin` is caller-supplied and used only to REMOVE a name from
@@ -268,45 +269,4 @@ export function computeRosterClearTargets(input: RosterClearTargetInput): Roster
     }
 
     return { toClear, deferred };
-}
-
-/**
- * Drop a terminal from every team's deferred-clear set.
- *
- * The deferred set is keyed by team id and holds TERMINAL NAMES, so it needs the
- * same lifecycle maintenance the sibling per-terminal maps already get on close
- * and clear. Without it: a closed seat's name lingers forever (and a later seat
- * that reuses the name inherits a phantom clear), and a seat the operator
- * cleared by hand still gets a redundant `/clear` on its next same-feature
- * prompt.
- *
- * Pure — takes the map, mutates it, reads nothing else. Both composition roots
- * call it so the two hosts keep byte-identical deferred state.
- */
-export function dropDeferredClear(deferredByTeam: Map<string, Set<string>>, terminalName: string): void {
-    if (!deferredByTeam || !terminalName) return;
-    for (const [teamId, names] of deferredByTeam.entries()) {
-        if (names.delete(terminalName) && names.size === 0) {
-            deferredByTeam.delete(teamId);
-        }
-    }
-}
-
-/**
- * Re-key a terminal in every team's deferred-clear set after a rename.
- *
- * This is the case that silently defeats the feature rather than merely wasting
- * a clear: `ptyFleetService.rename()` mutates `friendlyName` in place, so a
- * deferred seat that is renamed is looked up under its NEW name by the
- * same-feature intercept and never matches — the seat carries the previous
- * run's context into the next one, which is exactly the invariant the deferral
- * exists to hold. Same class as the seat-block cache's documented rename bug.
- */
-export function renameDeferredClear(deferredByTeam: Map<string, Set<string>>, oldName: string, newName: string): void {
-    if (!deferredByTeam || !oldName || !newName || oldName === newName) return;
-    for (const names of deferredByTeam.values()) {
-        if (names.delete(oldName)) {
-            names.add(newName);
-        }
-    }
 }
