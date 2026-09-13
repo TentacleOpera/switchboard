@@ -64,10 +64,18 @@ async function test(name, fn) {
 // transport shim injected server-side). addon-canvas.js is excluded because it is
 // now lazy — fetched only when WebGL is absent.
 //
-// BUDGET IS UNCOMPRESSED BYTES. See file header. The pre-plan first load measured
-// 1517 KB (2026-09-12); the budget is materially below that and tight enough that
-// re-adding the 95 KB canvas addon eagerly would breach it.
-const PANEL_BUDGET_BYTES = 1500 * 1024;
+// BUDGET IS UNCOMPRESSED SOURCE BYTES, measured against src/webview. That is
+// deliberately NOT what a packaged install downloads: `webpack --mode production`
+// minifies the CopyPlugin output, so dist/webview/terminals.js is ~170 KB where the
+// source is ~664 KB. The budget's job is to bound what humans ADD to the source, which
+// is where re-accretion happens; the shipped figure is a build-time property and is
+// asserted separately by the eager-set assertions below.
+//
+// The pre-plan first load measured 1517 KB of source (2026-09-12, against a
+// DEVELOPMENT build, which is served unminified). 1045 KB is the post-plan figure with
+// the xterm bundle and the canvas addon both off the critical path; the budget sits
+// just above it, tight enough that re-adding either eagerly breaches it.
+const PANEL_BUDGET_BYTES = 1100 * 1024;
 
 // Placeholders substituted server-side by getTerminalsHtml (headlessPanelHtml.ts).
 // Mapped here so the budget reads SRC, not a possibly-stale dist/.
@@ -85,6 +93,17 @@ const PLACEHOLDER_TO_URI = {
 // The transport shim files injected by injectTransportShim
 // (headlessPanelHtml.ts:74) — plain <script> tags, NOT in the HTML source, so
 // added explicitly. They are eagerly fetched and parsed, so they count.
+// Injected by terminalViewport.js at runtime (data-* body attributes carry the URLs),
+// never <script> tags in the document. The xterm bundle is 383 KB — 27% of the old
+// first load — and is needed only by materializeTerminalView, which runs after the
+// fleet fetch; the canvas addon only when WebGL is absent.
+const LAZY_VENDOR_URIS = [
+    '/static/webview/vendor/xterm/xterm.js',
+    '/static/webview/vendor/xterm/addon-fit.js',
+    '/static/webview/vendor/xterm/addon-webgl.js',
+    '/static/webview/vendor/xterm/addon-canvas.js',
+];
+
 const TRANSPORT_SHIM_URIS = [
     '/static/webview/sharedDefaults.js',
     '/static/webview/clipboardFallback.js',
@@ -105,8 +124,11 @@ function eagerAssetUris(html) {
     while ((m = scriptRe.exec(html)) !== null) { assets.push(m[1]); }
     return assets
         .map(u => PLACEHOLDER_TO_URI[u] || u)
-        // addon-canvas is lazy now; if it is referenced it MUST NOT be eager.
-        .filter(u => u !== '/static/webview/vendor/xterm/addon-canvas.js');
+        // Everything terminalViewport.js injects at runtime is off the first-load
+        // path and does not count against the budget. If any of these reappears as a
+        // <script> tag the assertions below fail, so this filter cannot hide a
+        // regression — it only keeps the arithmetic honest.
+        .filter(u => !LAZY_VENDOR_URIS.includes(u));
 }
 
 function panelFirstLoadBytes(html) {
@@ -167,9 +189,12 @@ async function main() {
     await test('the budget is materially below the 1517 KB measured on 2026-09-12', () => {
         const bytes = panelFirstLoadBytes(TERMINALS_HTML);
         const measured = 1517 * 1024;
-        assert.ok(bytes < measured - 40 * 1024,
+        // The xterm bundle (383 KB) and the canvas addon (95 KB) both left the critical
+        // path, so the gap is ~470 KB, not the ~95 KB the lazy-canvas step alone bought.
+        assert.ok(bytes < measured - 400 * 1024,
             `first load (${(bytes / 1024).toFixed(0)} KB) is not materially below the 1517 KB `
-            + 'baseline — the cheap wins (lazy canvas, cacheable CSS) should have removed ~95 KB.');
+            + 'baseline — the xterm bundle and the canvas addon should both be off the '
+            + 'first-load path.');
     });
 
     // ── 2. addon-canvas.js is NOT eagerly referenced ────────────────────────
@@ -182,6 +207,51 @@ async function main() {
     await test('addon-canvas.js is not referenced by an eager <script> tag in dock.html', () => {
         assert.ok(!/<script[^>]+addon-canvas\.js/.test(DOCK_HTML),
             'dock.html embeds terminal viewports too and must not eagerly load the canvas addon.');
+    });
+
+    await test('the xterm bundle is not referenced by an eager <script> tag in either document', () => {
+        // 383 KB — 27% of the pre-plan first load — and none of it is needed before the
+        // sidebar takes a click. Deferred scripts execute in DOCUMENT ORDER, so these
+        // tags sitting ahead of terminals.js meant the browser compiled all of xterm
+        // before it compiled the code that wires a single button.
+        for (const [label, html] of [['terminals.html', TERMINALS_HTML], ['dock.html', DOCK_HTML]]) {
+            for (const f of ['xterm.js', 'addon-fit.js', 'addon-webgl.js']) {
+                assert.ok(!new RegExp('<script[^>]+' + f.replace('.', '\\.')).test(html),
+                    `${label} must not load ${f} with a <script> tag — terminalViewport.js `
+                    + 'injects it, which keeps the compile off the path to interactive.');
+            }
+        }
+    });
+
+    await test('the xterm bundle URIs are exposed as body data attributes (both roots)', () => {
+        // Without these the injector has no URL, xtermReady resolves immediately with
+        // nothing loaded, and every pane logs "xterm.js did not load" — a panel that
+        // renders its chrome and no terminals.
+        const src = fs.readFileSync(path.join(__dirname, '..', 'services', 'headlessPanelHtml.ts'), 'utf8');
+        for (const fn of ['getTerminalsHtml', 'getDockHtml']) {
+            const block = src.match(new RegExp(fn + '[\\s\\S]{0,6000}?data-xterm-uri="([^"]+)"'));
+            assert.ok(block, `${fn} must inject data-xterm-uri onto <body>`);
+            assert.strictEqual(block[1], '/static/webview/vendor/xterm/xterm.js');
+        }
+        for (const attr of ['data-xterm-fit-uri', 'data-xterm-webgl-uri']) {
+            assert.ok(src.includes(attr), `headlessPanelHtml must inject ${attr}`);
+        }
+    });
+
+    await test('materializeTerminalView is gated on xtermReady, and createTerminalView is not', () => {
+        // The shape that matters: createTerminalView must stay synchronous (dock.js and
+        // renderPaneGrid call it for effect and ignore the return), while the xterm
+        // dependency is awaited one layer in, at the only site that touches
+        // window.Terminal. A guard placed in createTerminalView instead would return
+        // before terminalsMap.set and silently drop the pane.
+        assert.ok(/whenRendered\(entry, \(\) => \{ void xtermReady\.then\(\(\) => materializeTerminalView\(entry\)\); \}\);/.test(TERMINALS_VP),
+            'materialization must be gated on BOTH whenRendered and xtermReady.');
+        const fn = TERMINALS_VP.match(/function createTerminalView\([\s\S]*?whenRendered\(entry,/);
+        assert.ok(fn, 'createTerminalView not found');
+        assert.ok(!/typeof window\.Terminal/.test(fn[0]),
+            'createTerminalView must not check window.Terminal — it runs before the '
+            + 'bundle is guaranteed to have landed, and an early return there drops the '
+            + 'entry before terminalsMap.set.');
     });
 
     await test('the canvas addon URI is exposed as a body data attribute (terminals)', () => {
@@ -208,11 +278,16 @@ async function main() {
     await test('terminalViewport.js kicks off the canvas fetch when WebGL is absent', () => {
         assert.ok(/function ensureCanvasAddonKickedOff\(\)/.test(TERMINALS_VP),
             'terminalViewport.js must define ensureCanvasAddonKickedOff — the lazy-load kickoff.');
-        assert.ok(/if \(!webglAvailable\(\)\) \{ ensureCanvasAddonKickedOff\(\); \}/.test(TERMINALS_VP),
-            'the module-init kickoff must be gated on !webglAvailable() AT THE CALL SITE — '
-            + 'that gate is what saves the 95 KB on a WebGL machine.');
-        assert.ok(/document\.body\.dataset\.canvasAddonUri/.test(TERMINALS_VP),
-            'the kickoff must read the URI from document.body.dataset.canvasAddonUri.');
+        assert.ok(/xtermReady\.then\(\(\) => \{\s*if \(!webglAvailable\(\)\) \{ ensureCanvasAddonKickedOff\(\); \}/.test(TERMINALS_VP),
+            'the init kickoff must be gated on !webglAvailable() AT THE CALL SITE (that '
+            + 'gate saves the 95 KB on a WebGL machine) and must run only AFTER xtermReady '
+            + '— addon-webgl.js is injected now, so asking before it lands answers false on '
+            + 'every machine and fetches the canvas addon universally.');
+        assert.ok(/bodyUri\('canvasAddonUri'\)/.test(TERMINALS_VP),
+            'the kickoff must read the URI from the canvasAddonUri body data attribute.');
+        assert.ok(/document\.body\.dataset\[key\]/.test(TERMINALS_VP),
+            'bodyUri must read from document.body.dataset — that is how every server-'
+            + 'substituted asset URL reaches the runtime.');
     });
 
     await test('ensureCanvasAddonKickedOff does NOT gate itself on webglAvailable()', () => {

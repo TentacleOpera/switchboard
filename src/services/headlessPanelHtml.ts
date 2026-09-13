@@ -461,16 +461,17 @@ export function getDockHtml(repoRoot: string, workspaceRoot: string, capabilitie
     content = content.replace(/\{\{DOCK_JS_URI\}\}/g, '/static/webview/dock.js');
     content = content.replace(/\{\{TERMINAL_VIEWPORT_JS_URI\}\}/g, '/static/webview/terminalViewport.js');
     content = content.replace(/\{\{SHARED_UTILS_URI\}\}/g, '/static/webview/sharedUtils.js');
-    content = content.replace(/\{\{XTERM_JS_URI\}\}/g, '/static/webview/vendor/xterm/xterm.js');
+    // The xterm bundle (xterm.js, addon-fit, addon-webgl) and addon-canvas carry NO
+    // {{…_URI}} placeholder: they are no longer <script> tags in the document. Their
+    // URLs reach the runtime as `data-xterm-*-uri` / `data-canvas-addon-uri` body
+    // attributes below, and terminalViewport.js injects them. Only xterm.css stays a
+    // template substitution — it is a 5 KB stylesheet, not part of the compile cost.
     content = content.replace(/\{\{XTERM_CSS_URI\}\}/g, '/static/webview/vendor/xterm/xterm.css');
-    content = content.replace(/\{\{XTERM_ADDON_FIT_URI\}\}/g, '/static/webview/vendor/xterm/addon-fit.js');
-    content = content.replace(/\{\{XTERM_ADDON_WEBGL_URI\}\}/g, '/static/webview/vendor/xterm/addon-webgl.js');
-    content = content.replace(/\{\{XTERM_ADDON_CANVAS_URI\}\}/g, '/static/webview/vendor/xterm/addon-canvas.js');
     content = content.replace(/\{\{HANKEN_FONT_URI\}\}/g, '/static/designs/HankenGrotesk-Variable.woff2');
     content = content.replace(/\{\{GEIST_PIXEL_FONT_URI\}\}/g, '/static/designs/GeistPixel-Square.woff2');
     content = injectTransportShim(content, nonce, '<!-- SHARED_DEFAULTS_SCRIPT -->', `<script nonce="${nonce}" src="/static/webview/dock.js"></script>`);
     const caps = { ...DEFAULT_HOST_CAPABILITIES, ...capabilities };
-    const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="terminals" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}" data-canvas-addon-uri="/static/webview/vendor/xterm/addon-canvas.js"`;
+    const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="terminals" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}" data-xterm-uri="/static/webview/vendor/xterm/xterm.js" data-xterm-fit-uri="/static/webview/vendor/xterm/addon-fit.js" data-xterm-webgl-uri="/static/webview/vendor/xterm/addon-webgl.js" data-canvas-addon-uri="/static/webview/vendor/xterm/addon-canvas.js"`;
     content = injectBodyAttributes(content, bodyAttr);
     content = applyThemeClass(content, themeClass);
     return { html: content, csp };
@@ -492,17 +493,18 @@ export function getTerminalsHtml(repoRoot: string, workspaceRoot: string, capabi
     content = content.replace(/\{\{TERMINALS_JS_URI\}\}/g, '/static/webview/terminals.js');
     content = content.replace(/\{\{TERMINAL_VIEWPORT_JS_URI\}\}/g, '/static/webview/terminalViewport.js');
     content = content.replace(/\{\{SHARED_UTILS_URI\}\}/g, '/static/webview/sharedUtils.js');
-    content = content.replace(/\{\{XTERM_JS_URI\}\}/g, '/static/webview/vendor/xterm/xterm.js');
+    // The xterm bundle (xterm.js, addon-fit, addon-webgl) and addon-canvas carry NO
+    // {{…_URI}} placeholder: they are no longer <script> tags in the document. Their
+    // URLs reach the runtime as `data-xterm-*-uri` / `data-canvas-addon-uri` body
+    // attributes below, and terminalViewport.js injects them. Only xterm.css stays a
+    // template substitution — it is a 5 KB stylesheet, not part of the compile cost.
     content = content.replace(/\{\{XTERM_CSS_URI\}\}/g, '/static/webview/vendor/xterm/xterm.css');
-    content = content.replace(/\{\{XTERM_ADDON_FIT_URI\}\}/g, '/static/webview/vendor/xterm/addon-fit.js');
-    content = content.replace(/\{\{XTERM_ADDON_WEBGL_URI\}\}/g, '/static/webview/vendor/xterm/addon-webgl.js');
-    content = content.replace(/\{\{XTERM_ADDON_CANVAS_URI\}\}/g, '/static/webview/vendor/xterm/addon-canvas.js');
     content = content.replace(/\{\{HANKEN_FONT_URI\}\}/g, '/static/designs/HankenGrotesk-Variable.woff2');
     content = content.replace(/\{\{GEIST_PIXEL_FONT_URI\}\}/g, '/static/designs/GeistPixel-Square.woff2');
     content = injectTransportShim(content, nonce, '<!-- SHARED_DEFAULTS_SCRIPT -->', `<script nonce="${nonce}" src="/static/webview/terminals.js"></script>`);
     const caps = { ...DEFAULT_HOST_CAPABILITIES, ...capabilities };
     const brandIconDir = '/static/icons';
-    const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="terminals" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}" data-canvas-addon-uri="/static/webview/vendor/xterm/addon-canvas.js" data-brand-icon-claude="${brandIconDir}/brand-claude.svg" data-brand-icon-antigravity="${brandIconDir}/brand-antigravity.svg" data-brand-icon-devin="${brandIconDir}/brand-devin.svg" data-brand-icon-jules="${brandIconDir}/brand-jules.svg" data-brand-icon-gemini="${brandIconDir}/brand-gemini.svg" data-brand-icon-openai="${brandIconDir}/brand-openai.svg" data-brand-icon-cursor="${brandIconDir}/brand-cursor.svg" data-brand-icon-copilot="${brandIconDir}/brand-copilot.svg" data-brand-icon-windsurf="${brandIconDir}/brand-windsurf.svg" data-brand-icon-qwen="${brandIconDir}/brand-qwen.svg" data-brand-icon-amp="${brandIconDir}/brand-amp.svg" data-brand-icon-cline="${brandIconDir}/brand-cline.svg" data-brand-icon-kiro="${brandIconDir}/brand-kiro.svg" data-brand-icon-kilo="${brandIconDir}/brand-kilo.svg" data-brand-icon-trae="${brandIconDir}/brand-trae.svg" data-brand-icon-opencode="${brandIconDir}/brand-opencode.svg" data-brand-icon-zed="${brandIconDir}/brand-zed.svg" data-brand-icon-ollama="${brandIconDir}/brand-ollama.svg" data-brand-icon-default="${brandIconDir}/brand-cli-default.svg" data-ufo-animated="${brandIconDir}/switchboard-ufo.svg" data-ufo-static="${brandIconDir}/switchboard-ufo-static.svg" data-ufo-claudify-animated="${brandIconDir}/switchboard-ufo-claudify.svg" data-ufo-claudify-static="${brandIconDir}/switchboard-ufo-claudify-static.svg"`;
+    const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="terminals" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}" data-xterm-uri="/static/webview/vendor/xterm/xterm.js" data-xterm-fit-uri="/static/webview/vendor/xterm/addon-fit.js" data-xterm-webgl-uri="/static/webview/vendor/xterm/addon-webgl.js" data-canvas-addon-uri="/static/webview/vendor/xterm/addon-canvas.js" data-brand-icon-claude="${brandIconDir}/brand-claude.svg" data-brand-icon-antigravity="${brandIconDir}/brand-antigravity.svg" data-brand-icon-devin="${brandIconDir}/brand-devin.svg" data-brand-icon-jules="${brandIconDir}/brand-jules.svg" data-brand-icon-gemini="${brandIconDir}/brand-gemini.svg" data-brand-icon-openai="${brandIconDir}/brand-openai.svg" data-brand-icon-cursor="${brandIconDir}/brand-cursor.svg" data-brand-icon-copilot="${brandIconDir}/brand-copilot.svg" data-brand-icon-windsurf="${brandIconDir}/brand-windsurf.svg" data-brand-icon-qwen="${brandIconDir}/brand-qwen.svg" data-brand-icon-amp="${brandIconDir}/brand-amp.svg" data-brand-icon-cline="${brandIconDir}/brand-cline.svg" data-brand-icon-kiro="${brandIconDir}/brand-kiro.svg" data-brand-icon-kilo="${brandIconDir}/brand-kilo.svg" data-brand-icon-trae="${brandIconDir}/brand-trae.svg" data-brand-icon-opencode="${brandIconDir}/brand-opencode.svg" data-brand-icon-zed="${brandIconDir}/brand-zed.svg" data-brand-icon-ollama="${brandIconDir}/brand-ollama.svg" data-brand-icon-default="${brandIconDir}/brand-cli-default.svg" data-ufo-animated="${brandIconDir}/switchboard-ufo.svg" data-ufo-static="${brandIconDir}/switchboard-ufo-static.svg" data-ufo-claudify-animated="${brandIconDir}/switchboard-ufo-claudify.svg" data-ufo-claudify-static="${brandIconDir}/switchboard-ufo-claudify-static.svg"`;
     content = injectBodyAttributes(content, bodyAttr);
     content = applyThemeClass(content, themeClass);
     return { html: content, csp };

@@ -18,6 +18,68 @@
 
     window.SwitchboardTerminalViewport = { create: createTerminalViewport };
 
+    // ─── Lazy vendor loading ─────────────────────────────────────────────
+    //
+    // xterm.js (283 KB) + addon-webgl (98 KB) + addon-fit (1.5 KB) is 27% of the
+    // Terminals panel's first load, and NONE of it is needed before the sidebar can
+    // take a click. It used to sit in the <script defer> chain AHEAD of this file and
+    // terminals.js, and deferred scripts execute in document order — so the browser
+    // compiled 383 KB of xterm before it compiled the code that wires a single button.
+    //
+    // Injecting instead keeps the download starting at parse time (it is kicked off on
+    // the line below, before anything awaits it) while taking the compile off the path
+    // to interactive. Panes are not built until `renderPaneGrid()` runs after the fleet
+    // fetch resolves, so the bundle has a full network round trip of head start.
+    //
+    // All three are self-contained UMD bundles (`define([], …)`) with no load-time
+    // dependency on each other, so they are injected in parallel and in any order.
+    // Same-origin, so CSP `script-src 'nonce-…' 'self'` covers them with no nonce on
+    // the element.
+
+    /** Read a server-substituted URI off <body data-…>. Returns '' when absent. */
+    function bodyUri(key) {
+        return (document.body && document.body.dataset && document.body.dataset[key]) || '';
+    }
+
+    const scriptLoads = new Map();
+    /**
+     * Inject `uri` once and resolve when it has executed.
+     *
+     * Resolves — never rejects — on load failure, because every caller's fallback is
+     * a capability check against the global the script was supposed to define
+     * (`window.Terminal`, `window.WebglAddon`). A rejection would need handling at
+     * each site to reach the same place. The console.error is the loud half: a
+     * missing bundle must not read as "this machine has no WebGL".
+     */
+    function loadScriptOnce(uri) {
+        if (!uri) { return Promise.resolve(); }
+        let p = scriptLoads.get(uri);
+        if (p) { return p; }
+        p = new Promise(resolve => {
+            const s = document.createElement('script');
+            s.src = uri;
+            s.onload = () => resolve();
+            s.onerror = () => {
+                console.error('[Terminals] failed to load ' + uri);
+                resolve();
+            };
+            document.head.appendChild(s);
+        });
+        scriptLoads.set(uri, p);
+        return p;
+    }
+
+    /**
+     * Resolves once the xterm bundle has executed (or failed). Kicked off HERE, at
+     * module init, so the download overlaps the panel's own compile and its first
+     * fleet fetch. `materializeTerminalView` is gated on it; nothing else may be.
+     */
+    const xtermReady = Promise.all([
+        loadScriptOnce(bodyUri('xtermUri')),
+        loadScriptOnce(bodyUri('xtermFitUri')),
+        loadScriptOnce(bodyUri('xtermWebglUri')),
+    ]);
+
     /**
      * Build a terminal viewport controller.
      *
@@ -409,17 +471,18 @@
     let canvasAddonKickoff = false;
     function ensureCanvasAddonKickedOff() {
         if (canvasAddonKickoff) { return; }
-        const uri = document.body && document.body.dataset && document.body.dataset.canvasAddonUri;
+        const uri = bodyUri('canvasAddonUri');
         if (!uri) { return; }
         canvasAddonKickoff = true;
-        const s = document.createElement('script');
-        s.src = uri;
-        document.head.appendChild(s);
+        void loadScriptOnce(uri);
     }
-    // Init kickoff: only when WebGL is known absent. With WebGL present the fetch
-    // is skipped entirely — that is the 95 KB this plan is saving — and the
-    // attachCanvasRenderer kickoff covers the context-failure case.
-    if (!webglAvailable()) { ensureCanvasAddonKickedOff(); }
+    // Init kickoff: only when WebGL is known absent — and only ONCE THE XTERM BUNDLE
+    // HAS LANDED, because addon-webgl.js is now injected rather than parser-loaded.
+    // Asking `webglAvailable()` before it lands answers false on every machine, which
+    // would fetch the 95 KB canvas addon universally: the exact cost item 1 removed.
+    xtermReady.then(() => {
+        if (!webglAvailable()) { ensureCanvasAddonKickedOff(); }
+    });
 
     function attachCanvasRenderer(term) {
         if (!(window.CanvasAddon && window.CanvasAddon.CanvasAddon)) {
@@ -1115,11 +1178,6 @@
         container.className = 'terminal-view-host active';
         targetContainer.appendChild(container);
 
-        if (typeof window.Terminal === 'undefined') {
-            console.warn('[Terminals] xterm.js library not loaded');
-            return;
-        }
-
         // Claim the name now so renderPaneGrid does not build a second view for it,
         // but build nothing else until the pane has a real box. A terminal
         // constructed into a zero-size document is stuck at 80x24 (see isRendered)
@@ -1190,7 +1248,14 @@
             lastObservedFitGen: 0
         };
         deps.terminalsMap.set(name, entry);
-        whenRendered(entry, () => materializeTerminalView(entry));
+        // TWO gates, and the order matters: the container must have a real box
+        // (whenRendered) AND the xterm bundle must have executed (xtermReady).
+        // whenRendered first, because a pane that never becomes visible should not
+        // be materialised at all; the bundle is almost always already in hand by
+        // then, since it was injected at module init and this runs after the fleet
+        // fetch. materializeTerminalView re-checks `disposed`/`term`, so a pane torn
+        // down while the bundle was in flight is a no-op rather than a resurrection.
+        whenRendered(entry, () => { void xtermReady.then(() => materializeTerminalView(entry)); });
     }
 
     /**
@@ -1219,6 +1284,14 @@
      *  container — see createTerminalView. */
     function materializeTerminalView(entry) {
         if (entry.disposed || entry.term) { return; }
+        if (typeof window.Terminal === 'undefined') {
+            // The bundle was awaited and still is not here, so the fetch failed
+            // (loadScriptOnce already logged the URL). Leave the container empty
+            // rather than throwing through renderPaneGrid; the entry stays in
+            // terminalsMap so disposal and re-render paths behave normally.
+            console.error('[Terminals] xterm.js did not load — pane "' + entry.name + '" cannot render');
+            return;
+        }
         const container = entry.container;
 
         const term = new window.Terminal({
