@@ -3,22 +3,23 @@
 /**
  * WSL detection contract.
  *
- * `detectWsl()` is the discriminator the standalone CLI's `openBrowser()` uses
+ * `detectWsl()` was the discriminator the standalone CLI's `openBrowser()` used
  * to decide between `cmd.exe /c start` (WSL), `open` (macOS), `cmd /c start`
- * (native Windows), and `xdg-open` (Linux). A wrong answer is SILENT:
- *   - Returning `{ wsl: true }` on real Linux makes `openBrowser` call
- *     `cmd.exe`, which does not exist — the URL never opens and the user has
- *     to find it in the log.
- *   - Returning `{ wsl: false }` inside WSL makes `openBrowser` call
- *     `xdg-open`, which does not exist in a minimal WSL install — same silent
- *     failure.
- *   - Misclassifying WSL1 as WSL2 (or vice versa) does not break browser
- *     opening, but it does break the diagnostic log line that tells the user
- *     why node-pty might not have prebuilt binaries.
+ * (native Windows), and `xdg-open` (Linux). `openBrowser` was removed (plan:
+ * starting-the-board-prints-where-to-reach-it-and-opens-nothing) — starting
+ * the board never opens a browser — so `detectWsl` has no live consumer in the
+ * standalone CLI today. The utility itself stays tested here: the detection
+ * logic is correct, and a future consumer (or phase 2 cleanup) can rely on it.
+ *
+ * A wrong answer is SILENT:
+ *   - Returning `{ wsl: true }` on real Linux would mislabel the install.
+ *   - Returning `{ wsl: false }` inside WSL would miss the diagnostic.
+ *   - Misclassifying WSL1 as WSL2 (or vice versa) does not break the
+ *     diagnostic, but it does break the log line's accuracy.
  *   - Crashing on a missing `/proc/version` would block server startup on a
  *     broken minimal install — the read must be wrapped.
  *   - Re-reading `/proc/version` on every call is cheap but pointless, and
- *     `openBrowser` is called on every launch — the cache must hold.
+ *     the cache must hold.
  *
  * None of these are reachable by compile or lint, so this is the only gate on
  * the detection. The tests run the compiled module from `out/` after
@@ -33,7 +34,6 @@ const fs = require('fs');
 const path = require('path');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
-const SRC = path.join(REPO_ROOT, 'src');
 
 let failures = 0;
 function check(name, fn) {
@@ -165,39 +165,6 @@ check('detectWsl() is cached — second call does not re-read /proc/version', ()
         const result = { readCount };
     `);
     assert.strictEqual(result.readCount, 1);
-});
-
-// 6. openBrowser() dispatches to cmd.exe when detectWsl() returns WSL2.
-//    The standalone cli module's main() runs on require and never resolves
-//    (it awaits a never-resolving promise to keep the server alive), so a
-//    behavioural test that imports the compiled module would hang. Instead
-//    this is a source contract: the openBrowser function must contain a WSL
-//    arm that spawns `cmd.exe` with argv `['/c', 'start', '', <url>]` ahead of
-//    the darwin/win32/xdg-open arms, and a wslview + print-URL fallback after
-//    the primary spawn. This pins the exact dispatch logic the plan specifies;
-//    a behavioural test would require restructuring the CLI entry's startup,
-//    which is out of scope for this additive change.
-check('openBrowser() source dispatches to cmd.exe on WSL with wslview fallback', () => {
-    const cliSrc = fs.readFileSync(path.join(SRC, 'standalone', 'cli.ts'), 'utf8');
-    const openBrowserMatch = cliSrc.match(/async function openBrowser[\s\S]*?^}/m);
-    assert.ok(openBrowserMatch, 'openBrowser function not found in cli.ts');
-    const body = openBrowserMatch[0];
-    // WSL arm precedes the platform arms and spawns cmd.exe with the expected argv.
-    assert.ok(/detectWsl\(\)/.test(body), 'openBrowser does not call detectWsl()');
-    assert.ok(/wsl\.wsl\)/.test(body), 'openBrowser has no wsl.wsl branch');
-    assert.ok(/cmd\.exe/.test(body), 'openBrowser WSL arm does not use cmd.exe');
-    assert.ok(/'\/c',\s*'start',\s*'',\s*url/.test(body), 'openBrowser WSL argv is not ["/c","start","",url]');
-    // The WSL arm must come before the darwin/win32/xdg-open arms so it wins.
-    const wslIdx = body.indexOf('wsl.wsl');
-    const darwinIdx = body.indexOf("'darwin'");
-    const win32Idx = body.indexOf("'win32'");
-    const xdgIdx = body.indexOf('xdg-open');
-    assert.ok(wslIdx > -1 && wslIdx < darwinIdx, 'WSL arm must precede the darwin arm');
-    assert.ok(wslIdx < win32Idx, 'WSL arm must precede the win32 arm');
-    assert.ok(wslIdx < xdgIdx, 'WSL arm must precede the xdg-open arm');
-    // Fallback chain: wslview then print, inside the catch, only on WSL.
-    assert.ok(/wslview/.test(body), 'openBrowser has no wslview fallback');
-    assert.ok(/Open this URL in your Windows browser/.test(body), 'openBrowser has no print-URL fallback');
 });
 
 if (failures > 0) {

@@ -66,8 +66,23 @@ export type SurfaceType = typeof SURFACES[keyof typeof SURFACES];
  * undeclared panel receives EVERYTHING (fail-open), which is correct until the
  * provider's tagging is untangled. Do not "complete" this map without fixing
  * that first.
+ *
+ * `mission-control`, `linear` and `database` declare `['common']` only. Each
+ * consumes untagged broadcasts (mcMissions, remoteConfig, dbPathUpdated —
+ * untagged messages always pass the surface filter) plus common-tagged state
+ * (autoban, theme). None renders the board, so `kanban` is excluded to shed
+ * the 445 KB board build on connect. An undeclared panel would receive the
+ * full board resync; declaring `['common']` is the minimal safe set that
+ * drops it.
  */
 export const PANEL_SURFACES: Record<string, string[]> = {
+    // The shell frame. Absent from this map it declared no surfaces at all,
+    // which the server reads as "subscribe to everything" and answers with a
+    // full resync — ~423 KB on a real board, enough to kill the socket over a
+    // network while working perfectly on loopback. Mirrors the client entry
+    // in transport.js PANEL_SURFACES_MAP; the two maps must not drift
+    // (src/test/ws-surface-scoping-contract.test.js pins them equal).
+    shell: [SURFACES.terminals, SURFACES.common],
     kanban: [SURFACES.kanban, SURFACES.common],
     command: [SURFACES.kanban, SURFACES.common],
     terminals: [SURFACES.terminals, SURFACES.common],
@@ -77,6 +92,9 @@ export const PANEL_SURFACES: Record<string, string[]> = {
     memo: [SURFACES.memo, SURFACES.common],
     tickets: [SURFACES.tickets, SURFACES.common],
     connections: [SURFACES.connections, SURFACES.common],
+    'mission-control': [SURFACES.common],
+    linear: [SURFACES.common],
+    database: [SURFACES.common],
 };
 
 const VALID_SURFACES = new Set<string>(Object.values(SURFACES));
@@ -107,8 +125,15 @@ export interface WsHubOptions {
      * project scope. The result is sent as a single
      * `{type:'__resync', seq:0, payload}` message before any broadcast
      * pushes, so the client converges to the current state.
+     *
+     * `surfaces` is the connection's declared surface set (undefined when the
+     * connection declared nothing → fail-open, receives everything). Threaded
+     * in so the snapshot builder can skip work the connection cannot receive —
+     * a connection declaring only `design` never runs `db.getBoard`. See the
+     * coalescing key in `_getCoalescedFullState` for why the key includes
+     * `needsKanban`, not just the scope.
      */
-    getFullState?: (scope?: string | null) => Promise<any>;
+    getFullState?: (scope?: string | null, surfaces?: Set<string>) => Promise<any>;
     /**
      * Keepalive ping cadence in ms (default 30000). A connection whose pong has
      * not arrived by the next tick is terminate()d — the `ws` FAQ pattern that
@@ -191,6 +216,15 @@ export class WsHub {
     private _connections: Set<ConnectionMeta> = new Set();
     private _disconnectListeners: Set<(originatorId: string) => void> = new Set();
     private _pingInterval: NodeJS.Timeout | null = null;
+    /**
+     * In-flight snapshot builds, keyed by (scope, needsKanban). Concurrent
+     * upgrades that share the same key await the SAME promise — a shell load
+     * that opens 14 connections in ~1.5 s collapses to 2 builds (one full
+     * board, one common-only) instead of 14. The entry is deleted on settle
+     * (finally), so a sequential request always starts a fresh build — no
+     * staleness. See `_getCoalescedFullState`.
+     */
+    private _inFlightFullState: Map<string, Promise<any>> = new Map();
 
     constructor(options: WsHubOptions) {
         this._options = options;
@@ -199,6 +233,37 @@ export class WsHub {
     onDisconnect(cb: (originatorId: string) => void): () => void {
         this._disconnectListeners.add(cb);
         return () => { this._disconnectListeners.delete(cb); };
+    }
+
+    /**
+     * Coalesce concurrent snapshot builds. Keyed by (scope, needsKanban) —
+     * the SAME three-way scope split `broadcast()` uses for factory renders
+     * (undeclared / declared-null / named-project), plus a boolean for whether
+     * the connection's surface set includes `kanban` (or is undeclared, which
+     * is fail-open and receives everything). Two connections with the same
+     * scope but different surface needs get DIFFERENT builds: a full board
+     * build for kanban-needing connections, a common-only build for the rest.
+     * This is what turns 14 builds per shell load into 2.
+     *
+     * The in-flight promise is deleted on settle (finally), so a request
+     * arriving after the build completes always starts a fresh one — no TTL,
+     * no staleness window. Only truly concurrent upgrades (arriving while the
+     * first is still in flight) share the build.
+     */
+    private _getCoalescedFullState(meta: ConnectionMeta): Promise<any> {
+        if (!this._options.getFullState) { return Promise.resolve(undefined); }
+        const scopeKey = meta.project === undefined ? '\u0000undeclared'
+            : meta.project === null ? '\u0000null'
+                : `p:${meta.project}`;
+        const needsKanban = !meta.surfaces || meta.surfaces.has(SURFACES.kanban);
+        const key = `${scopeKey}:${needsKanban ? 'k' : 'n'}`;
+        const existing = this._inFlightFullState.get(key);
+        if (existing) { return existing; }
+        const p = Promise.resolve()
+            .then(() => this._options.getFullState!(meta.project, meta.surfaces))
+            .finally(() => { this._inFlightFullState.delete(key); });
+        this._inFlightFullState.set(key, p);
+        return p;
     }
 
     /**
@@ -384,8 +449,7 @@ export class WsHub {
             // exact ordering hazard the plan flags). Every broadcast after this point
             // increments strictly monotonically from the snapshot baseline.
             if (this._options.getFullState) {
-                const snapshot = Promise.resolve()
-                    .then(() => this._options.getFullState!(meta.project));
+                const snapshot = this._getCoalescedFullState(meta);
                 let timer: NodeJS.Timeout | undefined;
                 const timeout = new Promise<never>((_resolve, reject) => {
                     timer = setTimeout(

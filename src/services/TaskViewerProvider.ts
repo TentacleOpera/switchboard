@@ -17,11 +17,11 @@ import {
     renderStandaloneOrdersBlock,
     resolveHasRegisteredRoundsForSeat,
 } from './standingOrders';
-import { writeMissionControlReport, writeInstruction, bootstrapInstructionsDirectory, ingestJobActivity, migrateLegacyOrchestratorDir } from './ScheduledJobsService';
+import { recordTurnEndEvent, writeInstruction, bootstrapInstructionsDirectory, ingestJobActivity, migrateLegacyOrchestratorDir } from './ScheduledJobsService';
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { resolvePreferredPort, PORT_BASE, PORT_SPAN } from '../utils/portResolver';
-import { setBundledCliPath, setGoClientPath, resolveGoClientPath } from '../utils/cliPathToken';
+import { setBundledCliPath, setGoClientPath, resolveGoClientPath, substituteCliPath } from '../utils/cliPathToken';
 import { getConstitutionPath } from './constitutionUtils';
 import { buildWorkspaceItems } from './workspaceUtils';
 import { stateFs as fs, stateLockfile as lockfile, getWorkspaceRootFromStatePath } from './stateConfigBridge';
@@ -104,6 +104,7 @@ import {
 } from './agentPromptBuilder';
 import { buildAccuracyDirective, resolveProtocolSet, DIRECTIVE_PROTOCOL_NAMES } from './protocolDirectives';
 import type { ProtocolResolution } from './protocolDirectives';
+import { ProtocolService } from './ProtocolService';
 import { extractDispatchIdentity } from './dispatchIdentity';
 import type { NotionFetchService } from './NotionFetchService';
 let NotionFetchServiceClass: any;
@@ -1487,7 +1488,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 // is dispatched, fire-and-forget. Never awaited ahead of the send
                 // (the send completed above), never able to fail it — a lost
                 // registration degrades a backstop, a blocked send loses the
-                // dispatch. Mirrors the writeMissionControlReport precedent
+                // dispatch. Mirrors the recordTurnEndEvent precedent
                 // (never awaited ahead of the pty send, never able to suppress
                 // it). Reuses the shipped `attributePastedPrompt` verb so plan
                 // resolution (planIds first, planFiles fallback) is identical to
@@ -2572,48 +2573,46 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 : info.outcome === 'blocked'
                     ? `[switchboard:turn-end] Seat '${seatName}' could not be reached for '${planFile}'.`
                     : `[switchboard:turn-end] Feature stall: seat '${seatName}' is idle with un-accepted subtasks remaining.`);
-            // Fire-and-forget mirror to the reports directory — a non-pty
-            // Mission Control reads the same notice as a file. Never awaited
-            // ahead of the pty send, never able to suppress it. `finished`
-            // for the seat-finished variant; `blocked` for the feature-stall and
-            // Phone-a-Friend dispatch-drop variants.
+            // Record the turn-end as a `plan_events` row (event_type
+            // `turn_end`, action `finished` | `blocked`). This replaces the
+            // fire-and-forget file mirror to `.switchboard/mission-control/
+            // reports/` — a gitignored directory no reader could reach. The
+            // row is indexed, joined to `plans` by `plan_id` (the plan's
+            // RELATIVE path), and pruned by `RetentionService`, so the
+            // accumulation that 190 files became cannot recur. Never awaited
+            // ahead of the pty send, never able to suppress it.
             //
-            // This mirror MUST run before the _ptyHostPort guard below: with no
-            // pty host the file is the ONLY thing that survives — exactly the
-            // unattended case where the report is the only channel a Mission Control
-            // has. The guard skips live delivery, not the durable write.
-            void writeMissionControlReport(info.workspaceRoot, {
-                from: 'system',
-                kind: info.outcome === 'completed' ? 'finished' : 'blocked',
-                planId: planFile,
-                body: message
-            }).then(r => {
-                // writeMissionControlReport RETURNS its failure rather than throwing,
-                // so a bare .catch() swallows the case that actually happens (no
-                // .switchboard dir, 5 name collisions, EACCES) and the mirror goes
-                // silently missing while the pty send still succeeds.
-                if (!r.success) { console.warn('[TaskViewerProvider] turn-end report mirror failed:', r.error); }
-            }).catch(err => { console.warn('[TaskViewerProvider] turn-end report mirror threw:', err); });
-            // Live-delivery suppression. Placed AFTER the report mirror and
-            // BEFORE every recipient-resolution step, because the mirror and the
-            // live send serve different readers: the mirror is a non-pty Mission
-            // Control's only channel and is never suppressed, while the live send
-            // is skipped when the queue/done relay already prompted the team lead
-            // (LocalApiServer._runQueueDone sets liveDelivery: false when it
-            // resolved a head). Without this the lead is prompted twice about one
-            // completion — notifyTurnEnd's parent walk lands on the head too,
-            // since a team member's parentInstanceId IS the head.
+            // This record MUST run before the `_hasFleet` guard below: with no
+            // pty host the row is the only thing that survives — exactly the
+            // unattended case the deleted file mirror was defending. A
+            // `plan_events` row survives a missing pty host strictly better
+            // than a file does (it is queryable and joined to live board
+            // state). The guard skips live delivery, not the durable record.
+            void (async () => {
+                const reportDb = await this._getKanbanDb(info.workspaceRoot);
+                await recordTurnEndEvent(reportDb, { planFile: planFile, outcome: info.outcome, body: message });
+            })().catch(err => { console.warn('[TaskViewerProvider] turn-end plan_events record threw:', err); });
+            // Live-delivery suppression. Placed AFTER the plan_events record and
+            // BEFORE every recipient-resolution step, because the record and the
+            // live send serve different readers: the record is the durable
+            // turn-end history (queryable, joined to the card) and is never
+            // suppressed, while the live send is skipped when the queue/done
+            // relay already prompted the team lead (LocalApiServer._runQueueDone
+            // sets liveDelivery: false when it resolved a head). Without this
+            // the lead is prompted twice about one completion — notifyTurnEnd's
+            // parent walk lands on the head too, since a team member's
+            // parentInstanceId IS the head.
             if (info.liveDelivery === false) {
-                console.log(`[TaskViewerProvider] turn-end: live delivery suppressed for seat '${seatName}' (${info.outcome} on ${planFile}) — the queue/done relay owns the team lead's notification. Report mirror written.`);
+                console.log(`[TaskViewerProvider] turn-end: live delivery suppressed for seat '${seatName}' (${info.outcome} on ${planFile}) — the queue/done relay owns the team lead's notification. plan_events row recorded.`);
                 return;
             }
             if (!this._hasFleet()) {
                 // Say so. Every other no-delivery path here logs; a silent return
                 // when the fleet host is absent is the same hollow success in a
                 // different costume — the notifier looks wired and never fires.
-                // The report mirror above still ran — the file survives even though
-                // live delivery cannot.
-                console.log(`[TaskViewerProvider] turn-end: no pty host — cannot deliver live for seat '${info.seatName}' (${info.outcome} on ${info.planFile}). Report mirror written.`);
+                // The plan_events record above still ran — the row survives even
+                // though live delivery cannot.
+                console.log(`[TaskViewerProvider] turn-end: no pty host — cannot deliver live for seat '${info.seatName}' (${info.outcome} on ${info.planFile}). plan_events row recorded.`);
                 return;
             }
             // ptyListTerminals is the only path that carries agentInstanceId and
@@ -5212,10 +5211,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 }
                 return null;
             },
-            getFullState: async (scope?: string | null) => {
+            getFullState: async (scope?: string | null, surfaces?: Set<string>) => {
                 if (this._kanbanProvider) {
                     try {
-                        return await this._kanbanProvider.getFullStateMessages(effectiveRoot, scope);
+                        return await this._kanbanProvider.getFullStateMessages(effectiveRoot, scope, surfaces);
                     } catch (e) {
                         console.error('[TaskViewerProvider] getFullState error from kanbanProvider:', e);
                     }
@@ -7682,7 +7681,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             // later curl advances the queue spuriously. The queue is not the only
             // writer to that terminal.
             const prompt = (queueOriginated && apiPort > 0)
-                ? basePrompt + PHONE_A_FRIEND_DONE_DIRECTIVE(apiPort, targetKey, planFiles[0], mode)
+                ? basePrompt + substituteCliPath(PHONE_A_FRIEND_DONE_DIRECTIVE(apiPort, targetKey, planFiles[0], mode))
                 : basePrompt;
 
             const sendLockKey = this._normalizeAgentKey(this._stripIdeSuffix(terminal.name || agentName)) || agentName;
@@ -7876,8 +7875,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     /**
      * Whether a Mission Control is configured — a seat is held OR Mission Control is
      * armed. Used to gate Phone-a-Friend Mission Control reports: no Mission Control
-     * means no report file, no notifyTurnEnd call. Diagnostics and status
-     * messages are NOT gated — a stalled queue must never go silent.
+     * means no notifyTurnEnd call (no live delivery). Diagnostics and status
+     * messages are NOT gated — a stalled queue must never go silent. The
+     * `plan_events` turn-end record is NOT gated here — it is written for
+     * every turn-end in `notifyTurnEnd` itself, since the row is cheap and
+     * queryable regardless of whether a Mission Control exists.
      */
     private _hasMissionControl(): boolean {
         return !!this._autobanState?.missionControlSeat || !!this._autobanState?.missionControlArmed;
@@ -7901,10 +7903,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     /**
      * Emit a Phone-a-Friend notice. ALWAYS logs to the diagnostics channel and
      * posts a showStatusMessage to the kanban webview — a stalled queue must
-     * never go silent, even with no Mission Control. Mission Control report
-     * (notifyTurnEnd → durable file + live delivery) is gated on
-     * _hasMissionControl: writing reports nobody will read litters .switchboard/
-     * and is the same hollow pattern as a dispatch that silently drops.
+     * never go silent, even with no Mission Control. The live Mission Control
+     * delivery (notifyTurnEnd → pty send) is gated on _hasMissionControl:
+     * prompting a terminal nobody is in is the same hollow pattern as a
+     * dispatch that silently drops. The `plan_events` turn-end record is
+     * written unconditionally inside `notifyTurnEnd`.
      */
     private _emitPhoneAFriendNotice(
         outcome: 'completed' | 'blocked' | 'stalled',
@@ -7918,8 +7921,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // Always post a status message to the kanban webview.
         const isError = outcome !== 'completed';
         this.postMessage({ type: 'showStatusMessage', message: body, isError }, SURFACES.kanban);
-        // Gate Mission Control report — no Mission Control means no report file,
-        // no notifyTurnEnd call. Check before the write, not after.
+        // Gate the live Mission Control delivery — no Mission Control means no
+        // live recipient, so no notifyTurnEnd call. The plan_events record is
+        // written inside notifyTurnEnd when it fires; this gate is the live
+        // send only. Check before the call, not after.
         if (!this._hasMissionControl()) { return; }
         const workspaceRoot = this._resolveWorkspaceRoot('');
         if (!workspaceRoot) { return; }
@@ -12947,19 +12952,19 @@ Each plan file must include:
         initiatorProject?: string | null,
         deliveryMode?: 'host' | 'self',
         missionId?: string
-    ): Promise<{ mode: 'interview' | 'resume' | 'stale-session' | 'no-persona'; prompt: string }> {
-        const sharedLogicPath = path.join(root, '.agents', 'protocols', 'switchboard-mission-control', 'SKILL.md');
+    ): Promise<{ mode: 'interview' | 'resume' | 'stale-session' | 'no-persona'; prompt: string; error?: string }> {
+        const sharedLogicName = 'switchboard-mission-control';
         const runsheetName = deliveryMode === 'self'
             ? 'switchboard-mission-control-external'
             : 'switchboard-mission-control-internal';
-        const runsheetPath = path.join(root, '.agents', 'protocols', runsheetName, 'SKILL.md');
         let projectFilter = '';
         try {
             projectFilter = (await this._kanbanProvider?.resolveAuthoringProject(root, initiatorProject)) || '';
         } catch { /* best-effort */ }
         let missionInfo: string[] = [];
+        let db: KanbanDatabase | null = null;
         try {
-            const db = await this.getKanbanDbForRoot(root);
+            db = await this.getKanbanDbForRoot(root);
             if (db && (await db.ensureReady())) {
                 // No missionId supplied → the same "which mission is the operator
                 // overseeing?" derivation GET /kanban/mission/active uses: in-flight
@@ -12987,49 +12992,84 @@ Each plan file must include:
         let sessionExists = false;
         try { await fs.promises.access(sessionPath); sessionExists = true; } catch { /* absent */ }
         const armed = !!this._autobanState?.missionControlArmed;
+        // Resolve the shared logic and the runtime runsheet through the protocol
+        // system — the seam that knows about the control plane, workspace
+        // overrides, and the materialize cache. The old code hardcoded
+        // `.agents/protocols/<name>/SKILL.md` paths that the protocol system
+        // never writes for these names (only improve-plan/improve-feature are
+        // committed survivors on disk), so on every machine the access calls
+        // threw and the catch returned a no-persona apology. A
+        // workspace override of a Mission Control protocol was silently ignored
+        // even where the files did exist.
+        let sharedResolved: Awaited<ReturnType<typeof ProtocolService.resolveProtocol>> = null;
+        let runsheetResolved: Awaited<ReturnType<typeof ProtocolService.resolveProtocol>> = null;
         try {
-            await fs.promises.access(sharedLogicPath);
-            await fs.promises.access(runsheetPath);
-            // Read the runtime-specific runsheet and the shared logic, then
-            // concatenate: runsheet preamble + shared logic body. The combined
-            // document replaces the old single-file persona. The branch-specific
-            // instruction (interview / resume / stale-session) is appended after.
-            const runsheetBody = await fs.promises.readFile(runsheetPath, 'utf8');
-            const sharedBody = await fs.promises.readFile(sharedLogicPath, 'utf8');
-            const personaContent = runsheetBody.trimEnd() + '\n\n---\n\n' + sharedBody;
-            const baseLines = [
-                `You are Switchboard Mission Control. Read and follow the combined document below (runsheet + shared Mission Control logic).`,
-                ``,
-                personaContent,
-                ``,
-                `UNATTENDED=true`,
-                `WORKSPACE_ROOT=${root}`,
-                `ACTIVE_PROJECT_FILTER=${projectFilter || ''}`,
-                ...missionInfo,
-                ``
-            ];
-            // Three-way branch: pre-flight (no session), resume (session + armed),
-            // pre-flight-with-stale-session (session but disarmed). The persona skill's
-            // ## Pre-flight section owns the protocol for each mode.
-            if (!sessionExists) {
-                const prompt = baseLines.concat([
-                    `This is a fresh start — no session file exists. Run the pre-flight: the six checks in ## Pre-flight, report what you find, propose a goal for this session, and STOP. Do not begin ticking. The user will answer in this terminal; on their confirmation, write .switchboard/mission-control/session.md (Rules then Log) and call POST /mission-control/confirm — only then begin.`
-                ]).join('\n');
-                return { mode: 'interview', prompt };
-            } else if (armed) {
-                const prompt = baseLines.concat([
-                    `A session is already confirmed and armed — .switchboard/mission-control/session.md exists and automation is armed. Resume: read session.md, continue under its existing rules, do not re-run the pre-flight or re-interview. Pick up where the session left off.`
-                ]).join('\n');
-                return { mode: 'resume', prompt };
-            } else {
-                const prompt = baseLines.concat([
-                    `A stale session file exists at .switchboard/mission-control/session.md but Mission Control is not armed. Run the pre-flight (## Pre-flight, the six checks), tell the user a stale session file exists, and offer to reuse its goal. On confirmation, write session.md (overwrite the stale one if the user accepts it, or write a fresh one if they alter the goal) and call POST /mission-control/confirm — only then begin.`
-                ]).join('\n');
-                return { mode: 'stale-session', prompt };
-            }
-        } catch {
-            const prompt = `You are Switchboard Mission Control. Mission Control workflow is incomplete: the shared logic or required runtime runsheet is missing. Stand by — do not take autonomous action.`;
-            return { mode: 'no-persona', prompt };
+            sharedResolved = await ProtocolService.resolveProtocol(sharedLogicName, root, db || undefined);
+        } catch { /* null below */ }
+        try {
+            runsheetResolved = await ProtocolService.resolveProtocol(runsheetName, root, db || undefined);
+        } catch { /* null below */ }
+        if (!sharedResolved) {
+            return { mode: 'no-persona', prompt: '', error: `Mission Control cannot start: protocol "${sharedLogicName}" could not be resolved (not found in control plane, bundled protocols, or workspace overrides). No terminal was launched.` };
+        }
+        if (!runsheetResolved) {
+            return { mode: 'no-persona', prompt: '', error: `Mission Control cannot start: protocol "${runsheetName}" could not be resolved (not found in control plane, bundled protocols, or workspace overrides). No terminal was launched.` };
+        }
+        // Read the runtime-specific runsheet and the shared logic, then
+        // concatenate: runsheet preamble + shared logic body. The combined
+        // document replaces the old single-file persona. The branch-specific
+        // instruction (interview / resume / stale-session) is appended after.
+        // For inline delivery the body is already in the resolved protocol;
+        // for materialize delivery read from the materialized cache path, with
+        // the resolved body as a fallback if the cache file is unreadable.
+        let runsheetBody = '';
+        if (runsheetResolved.body && runsheetResolved.delivery === 'inline') {
+            runsheetBody = runsheetResolved.body;
+        } else if (runsheetResolved.path) {
+            try { runsheetBody = await fs.promises.readFile(runsheetResolved.path, 'utf8'); }
+            catch { runsheetBody = runsheetResolved.body || ''; }
+        } else {
+            runsheetBody = runsheetResolved.body || '';
+        }
+        let sharedBody = '';
+        if (sharedResolved.body && sharedResolved.delivery === 'inline') {
+            sharedBody = sharedResolved.body;
+        } else if (sharedResolved.path) {
+            try { sharedBody = await fs.promises.readFile(sharedResolved.path, 'utf8'); }
+            catch { sharedBody = sharedResolved.body || ''; }
+        } else {
+            sharedBody = sharedResolved.body || '';
+        }
+        const personaContent = runsheetBody.trimEnd() + '\n\n---\n\n' + sharedBody;
+        const baseLines = [
+            `You are Switchboard Mission Control. Read and follow the combined document below (runsheet + shared Mission Control logic).`,
+            ``,
+            personaContent,
+            ``,
+            `UNATTENDED=true`,
+            `WORKSPACE_ROOT=${root}`,
+            `ACTIVE_PROJECT_FILTER=${projectFilter || ''}`,
+            ...missionInfo,
+            ``
+        ];
+        // Three-way branch: pre-flight (no session), resume (session + armed),
+        // pre-flight-with-stale-session (session but disarmed). The persona skill's
+        // ## Pre-flight section owns the protocol for each mode.
+        if (!sessionExists) {
+            const prompt = baseLines.concat([
+                `This is a fresh start — no session file exists. Run the pre-flight: the six checks in ## Pre-flight, report what you find, propose a goal for this session, and STOP. Do not begin ticking. The user will answer in this terminal; on their confirmation, write .switchboard/mission-control/session.md (Rules then Log) and call POST /mission-control/confirm — only then begin.`
+            ]).join('\n');
+            return { mode: 'interview', prompt };
+        } else if (armed) {
+            const prompt = baseLines.concat([
+                `A session is already confirmed and armed — .switchboard/mission-control/session.md exists and automation is armed. Resume: read session.md, continue under its existing rules, do not re-run the pre-flight or re-interview. Pick up where the session left off.`
+            ]).join('\n');
+            return { mode: 'resume', prompt };
+        } else {
+            const prompt = baseLines.concat([
+                `A stale session file exists at .switchboard/mission-control/session.md but Mission Control is not armed. Run the pre-flight (## Pre-flight, the six checks), tell the user a stale session file exists, and offer to reuse its goal. On confirmation, write session.md (overwrite the stale one if the user accepts it, or write a fresh one if they alter the goal) and call POST /mission-control/confirm — only then begin.`
+            ]).join('\n');
+            return { mode: 'stale-session', prompt };
         }
     }
 
@@ -13060,9 +13100,14 @@ Each plan file must include:
         // seat when it is reachable, and say so when it is not.
         const adopted = this._autobanState.missionControlSeat;
         if (adopted?.terminalName) {
-            const { prompt } = await this.buildMissionControlKickoffPrompt(root, initiatorProject, 'host', missionId);
+            const kickoff = await this.buildMissionControlKickoffPrompt(root, initiatorProject, 'host', missionId);
+            if (kickoff.error) {
+                this._seams().ui.showErrorMessage(kickoff.error);
+                this.postMessage({ type: 'missionControlStartResult', success: false, error: kickoff.error });
+                return;
+            }
             const sent = await this._dispatchExecuteMessage(
-                root, adopted.terminalName, prompt, { missionControlKickoff: true }, 'sidebar'
+                root, adopted.terminalName, kickoff.prompt, { missionControlKickoff: true }, 'sidebar'
             );
             this.postMessage({ type: 'missionControlStartResult', success: sent,
                 ...(sent ? {} : { error: `adopted seat '${adopted.terminalName}' did not accept the kickoff` }) });
@@ -13077,6 +13122,18 @@ Each plan file must include:
             // prompt from the adopt call). Carry an explanatory note so the AUTOMATION
             // tab does not read as "kickoff sent" when nothing was sent.
             this.postMessage({ type: 'missionControlStartResult', success: true, note: 'Adopted seat has no terminal name — kickoff was not re-delivered. The adopted session already holds the prompt.' });
+            return;
+        }
+
+        // Build the kickoff prompt BEFORE creating a terminal. If the
+        // protocols cannot resolve, fail loudly — surface the error and do
+        // not launch a terminal. The old code built the prompt after
+        // terminal creation, so a resolution failure left a dead terminal
+        // sitting idle with a no-persona apology injected.
+        const kickoff = await this.buildMissionControlKickoffPrompt(root, initiatorProject, 'host', missionId);
+        if (kickoff.error) {
+            this._seams().ui.showErrorMessage(kickoff.error);
+            this.postMessage({ type: 'missionControlStartResult', success: false, error: kickoff.error });
             return;
         }
 
@@ -13212,7 +13269,7 @@ Each plan file must include:
         // and is automation armed (autobanState.enabled)? The arming half moved to
         // confirmMissionControlSession (called by POST /mission-control/confirm after the
         // user answers the pre-flight). See the ## Pre-flight section of the persona skill.
-        const { prompt: kickoffPrompt } = await this.buildMissionControlKickoffPrompt(root, initiatorProject, 'host', missionId);
+        const kickoffPrompt = kickoff.prompt;
         // Small delay so a freshly-created terminal's CLI is ready to receive.
         if (createdNew) { await new Promise(r => setTimeout(r, 1500)); }
         const kickoffSent = await this._dispatchExecuteMessage(
@@ -13276,20 +13333,27 @@ Each plan file must include:
                 } catch { /* treat as not live */ }
             }
             if (live) { resolvedName = requested; }
-            else { note = `'${requested}' is not an active fleet terminal — turn-end notices will land in .switchboard/mission-control/reports/ instead of this terminal.`; }
+            else { note = `'${requested}' is not an active fleet terminal — turn-end notices will be recorded as plan_events rows instead of delivered to this terminal.`; }
         } else {
-            note = 'No terminal name supplied (SWITCHBOARD_TERMINAL is set for fleet seats only) — turn-end notices will land in .switchboard/mission-control/reports/ instead of this terminal.';
+            note = 'No terminal name supplied (SWITCHBOARD_TERMINAL is set for fleet seats only) — turn-end notices will be recorded as plan_events rows instead of delivered to this terminal.';
         }
 
+        const liveDelivery = !!resolvedName;
+        // Build the kickoff prompt BEFORE seating. If the protocols cannot
+        // resolve, fail loudly — return the error without recording a seat,
+        // so the caller (the agent itself, via POST /mission-control/adopt)
+        // learns immediately that Mission Control cannot start.
+        const kickoff = await this.buildMissionControlKickoffPrompt(root, initiatorProject, liveDelivery ? 'host' : 'self', missionId);
+        if (kickoff.error) {
+            return { success: false, error: kickoff.error };
+        }
         const seat: MissionControlSeat = { terminalName: resolvedName, adoptedAt: new Date().toISOString() };
         this._autobanState = normalizeAutobanConfigState({ ...this._autobanState, missionControlSeat: seat });
         await this._persistAutobanState();
         this._postAutobanStateNow();
         this._pushControllerSeatToPtyHost();
 
-        const liveDelivery = !!resolvedName;
-        const { mode, prompt } = await this.buildMissionControlKickoffPrompt(root, initiatorProject, liveDelivery ? 'host' : 'self', missionId);
-        return { success: true, mode, prompt, seat, liveDelivery, ...(note ? { note } : {}) };
+        return { success: true, mode: kickoff.mode, prompt: kickoff.prompt, seat, liveDelivery, ...(note ? { note } : {}) };
     }
 
     /**

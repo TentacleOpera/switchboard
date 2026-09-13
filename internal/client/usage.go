@@ -27,6 +27,7 @@ const usageText = `Usage: switchboard                        (interactive front-
        switchboard dispatch <planId|prefix> [column] [--project <name>] [--seat <terminal>] [--json]
        switchboard done --from <seat> [--plan <planId>] [--outcome failed] [--json]
        switchboard next --from <seat> [--json]
+       switchboard reports [--kind blocked|finished] [--limit N] [--json]
        switchboard clear <terminal|--all> [--json]
        switchboard fleet [--json]
        switchboard verb <verbName> [jsonPayload] [--json]
@@ -47,6 +48,9 @@ Board commands (drive the board from a terminal — served by this Go client):
                         4 auth failed  5 bad input  6 unavailable
   done                Signal task completion for a seat (pops next card if queued).
   next                Pull the next card from the queue for a seat.
+  reports             List host turn-end reports (blocked/finished) read from
+                      plan_events, joined to each card's current kanban column.
+                      `--kind blocked` filters to blocked turn-ends.
   clear               Clear a terminal seat (or --all seats).
   fleet               Show live terminal seats, roles, and assigned plans.
   verb                Call any protocol verb directly: switchboard verb <name> <json>

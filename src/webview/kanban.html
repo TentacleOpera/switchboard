@@ -3877,10 +3877,19 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <button id="standing-orders-add-btn" class="action-btn" style="height:26px; line-height:24px; padding:0 12px; margin:0;">+ ADD ORDER</button>
           </div>
 
-          <!-- Availability gate (shown when available === false) -->
+          <!-- Availability gate (shown ONLY when the host has answered `available:false`).
+               `available` starts null ("not answered yet") and the red line is suppressed
+               until a response actually refuses — see standingOrdersTabRender. The text
+               is set dynamically from `reason` so "no workspace root" and "the DB read
+               threw" are not conflated into one misleading sentence. -->
           <div id="standing-orders-unavailable" style="display:none; color: var(--accent-red); font-size: 12px; margin-bottom: 8px;">
             Standing orders require a Kanban database. Open Setup to configure one.
           </div>
+
+          <!-- Quiet loading state: shown while `available` is still null (no response
+               yet). Replaces the old behaviour of painting the red line before any
+               answer could arrive. -->
+          <div id="standing-orders-loading" style="display:none; color: var(--text-secondary, #999); font-size: 12px; margin-bottom: 8px;">Loading standing orders…</div>
 
           <!-- Inline add form (toggled by the Add button) -->
           <div id="standing-orders-add-form" style="display:none; border:1px solid var(--panel-border, #444); padding:10px; margin-bottom:12px; border-radius:4px;">
@@ -5052,8 +5061,8 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     + 'one rung along intern → coder → lead, name the specific defects in the dispatch, and say '
                     + 'in your status report which seat you moved it to and why; if the seat that failed twice is '
                     + 'a lead, or your team has no seat above it, stop and report to the human instead of '
-                    + 'dispatching again (or unattended: record the blocked card to .switchboard/mission-control/reports/ '
-                    + 'and proceed to the next queue item). When a coder reports a subtask finished, note it and '
+                    + 'dispatching again (or unattended: the host records the blocked card as a plan_events row '
+                    + '— proceed to the next queue item). When a coder reports a subtask finished, note it and '
                     + 'dispatch the next subtask to an idle seat that has not already worked on it — do not stack '
                     + 'subtasks on the same coder, or it will hit its context limit mid-task. One subtask per '
                     + 'cleared seat before rotation. When a coder finishes its turn, the system delivers a '
@@ -7135,7 +7144,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         // HTTP fetches. `pair` orders are list + delete only (add/edit stays in
         // the Link-up modal, which has the terminal-pairing selectors this view
         // lacks). No confirm gate on delete (per CLAUDE.md).
-        const standingOrdersTabState = { available: false, orders: [], definitions: [] };
+        // `available` is tri-state: `null` = no response yet (the tab was just
+        // activated and nothing has answered), `true` = the store answered with
+        // orders, `false` = the host refused (no root resolved, or the DB read
+        // threw). The red gate renders ONLY on an explicit `false` — a `null`
+        // would otherwise paint "no database" before any answer could arrive
+        // (the original bug: the activation arm posts the verb and renders in the
+        // same synchronous block). `reason` names the refusal when `available` is
+        // false, so "no workspace root" and "the DB read threw" are not conflated.
+        const standingOrdersTabState = { available: null, orders: [], definitions: [], reason: null };
         const standingOrdersTabBuiltInRoles = ['planner', 'lead', 'coder', 'intern', 'reviewer', 'tester', 'analyst', 'researcher', 'ticket_updater', 'jules'];
 
         function standingOrdersTabEscapeHtml(s) {
@@ -7249,26 +7266,50 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const listEl = document.getElementById('standing-orders-list');
             const emptyEl = document.getElementById('standing-orders-empty');
             const unavailEl = document.getElementById('standing-orders-unavailable');
+            const loadingEl = document.getElementById('standing-orders-loading');
             const addBtn = document.getElementById('standing-orders-add-btn');
             const defListEl = document.getElementById('standing-orders-def-list');
             const defEmptyEl = document.getElementById('standing-orders-def-empty');
             const defAddBtn = document.getElementById('standing-orders-def-add-btn');
             if (!listEl || !defListEl) { return; }
 
-            // Availability gate
-            if (unavailEl) { unavailEl.style.display = standingOrdersTabState.available ? 'none' : 'block'; }
-            if (addBtn) { addBtn.disabled = !standingOrdersTabState.available; }
-            if (defAddBtn) { defAddBtn.disabled = !standingOrdersTabState.available; }
+            // Tri-state availability gate:
+            //   null  — no response yet: show a quiet loading line, hide the red
+            //           gate, and keep the add buttons disabled (we do not know
+            //           whether the store is reachable).
+            //   false — the host refused: show the red gate, named by `reason`
+            //           (falling back to the legacy sentence when no reason was
+            //           carried), disable the add buttons.
+            //   true  — store answered: hide both gate and loading, enable adds.
+            const available = standingOrdersTabState.available;
+            if (loadingEl) { loadingEl.style.display = (available === null) ? 'block' : 'none'; }
+            if (unavailEl) {
+                unavailEl.style.display = (available === false) ? 'block' : 'none';
+                if (available === false) {
+                    // Name the refusal when the host gave a reason; otherwise the
+                    // legacy sentence stands. `reason` is HTML-escaped because it
+                    // carries an error message that may reach the DOM.
+                    unavailEl.textContent = standingOrdersTabState.reason
+                        ? standingOrdersTabState.reason
+                        : 'Standing orders require a Kanban database. Open Setup to configure one.';
+                }
+            }
+            const addEnabled = available === true;
+            if (addBtn) { addBtn.disabled = !addEnabled; }
+            if (defAddBtn) { defAddBtn.disabled = !addEnabled; }
 
-            const definitions = standingOrdersTabState.available
+            const definitions = addEnabled
                 ? (standingOrdersTabState.definitions || []).filter(definition => definition && definition.id)
                 : [];
             defListEl.innerHTML = definitions.map(definition => standingOrdersTabRenderDefRow(definition)).join('');
-            if (defEmptyEl) { defEmptyEl.style.display = standingOrdersTabState.available && !definitions.length ? 'block' : 'none'; }
+            if (defEmptyEl) { defEmptyEl.style.display = addEnabled && !definitions.length ? 'block' : 'none'; }
             standingOrdersTabPopulateDefinitionSelect();
 
             const filtered = standingOrdersTabFilteredOrders();
-            if (emptyEl) { emptyEl.style.display = filtered.length ? 'none' : 'block'; }
+            // The "No standing orders in this scope." line is a claim about an
+            // ANSWERED store, not a not-yet-answered one — suppress it while
+            // `available` is null so loading is not misread as empty.
+            if (emptyEl) { emptyEl.style.display = (addEnabled && !filtered.length) ? 'block' : 'none'; }
             listEl.innerHTML = filtered.map(o => standingOrdersTabRenderRow(o)).join('');
         }
 
@@ -7591,6 +7632,22 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             }
         }
         standingOrdersTabWireEvents();
+
+        // Re-hydrate the Standing Orders tab after a transport reconnect. The tab's
+        // only hydration is a `getStandingOrders` request posted once on activation;
+        // its answer arrives as the `standingOrders` push over the WS hub (and now
+        // also as the typed `standingOrdersResult` return body). If the socket was
+        // down at request time the push had nowhere to land, and `__resync` carries
+        // board state only — not standing orders — so the tab would stay in its
+        // `available:null` loading state (or a stale `false`) until the operator
+        // clicked away and back. Re-requesting on reconnect heals a host restart
+        // without a manual tab switch. Only fires when this tab is the active one,
+        // so an unseen tab does not generate round trips.
+        window.addEventListener('sbTransportReconnected', () => {
+            const activeTabBtn = document.querySelector('.shared-tab-btn.active');
+            if (!activeTabBtn || activeTabBtn.dataset.tab !== 'standing-orders') { return; }
+            postKanbanMessage({ type: 'getStandingOrders' });
+        });
 
         // Initialize the initially active tab
         const initialTabBtn = document.querySelector('.shared-tab-btn.active');
@@ -12806,10 +12863,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                   teamsTabRenderGallery();
                   break;
                 }
-                case 'standingOrders': {
+                case 'standingOrders':
+                case 'standingOrdersResult': {
                   standingOrdersTabState.available = !!msg.available;
                   standingOrdersTabState.orders = Array.isArray(msg.orders) ? msg.orders : [];
                   standingOrdersTabState.definitions = Array.isArray(msg.definitions) ? msg.definitions : [];
+                  // `reason` is carried on every `available:false` so the gate can
+                  // name the refusal (no root vs. a DB read throw). Only meaningful
+                  // when available is false; cleared on a true answer.
+                  standingOrdersTabState.reason = (msg.available === false && typeof msg.reason === 'string') ? msg.reason : null;
                   standingOrdersTabRender();
                   break;
                 }

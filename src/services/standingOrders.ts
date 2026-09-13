@@ -2,6 +2,7 @@ import * as crypto from 'crypto';
 import {
     composeStandingOrderFragments,
     getStandingOrderFragment,
+    STANDING_ORDER_FRAGMENT_IDS,
     StandingOrderCompositionContext,
 } from './standingOrderFragments';
 import { substituteCliPath } from '../utils/cliPathToken';
@@ -28,16 +29,6 @@ export interface StandingOrder {
      * `instruction` copy and work as before.
      */
     definitionId?: string;
-    /**
-     * Optional schema-version stamp on a SYSTEM-installed standing order
-     * (one whose `id` carries a system prefix like `context-aware-completion:`).
-     * When present, {@link migrateCodingTeamOrders} rewrites the row to the
-     * current body on `version < CONTEXT_AWARE_COMPLETION_ORDER_VERSION`
-     * instead of matching frozen instruction text — so a body revision needs
-     * a version bump, not a new text recogniser. Absent on operator-authored
-     * rows and on rows written before the stamp existed (read as 0).
-     */
-    version?: number;
 }
 
 /**
@@ -264,10 +255,19 @@ function scopeOf(o: StandingOrder): StandingOrderScope {
 }
 
 /**
- * Team standing of a seat, derived from the SAME facts `selectOrders` uses:
- * the group roster (`terminals.groups`) plus the head name carried on each
- * team-scoped order's `parent`. Returns `inTeam: false` when no live team
+ * Team standing of a seat, sourced from the registered team rosters
+ * (`terminals.groups`) — NOT from persisted `team`/`team-head` order rows.
+ * System orders are composed at delivery ({@link selectOrders}) and never
+ * persisted, so the rows are gone; a team has its protocol because it is a
+ * team (a spawned group claims the seat), not because a row was once written
+ * for its head's name. Returns `inTeam: false` when no live spawned team
  * claims the seat — never a guess.
+ *
+ * `isSpawnedTeamGroup` (teamWiring.ts) is the team/non-team split — a
+ * hand-saved Link-up pair group is NOT a team and must not receive team
+ * protocol fragments. Inlined here to avoid a circular import
+ * (teamWiring.ts imports from this module); the canonical helper stays the
+ * single source every other consumer reads through.
  *
  * `members` is the resolved group's `members` array VERBATIM — head included,
  * flat, in stored order. `[]` when `inTeam` is false. Returned because the
@@ -282,6 +282,9 @@ function scopeOf(o: StandingOrder): StandingOrderScope {
  * **head**, and `members` is the roster of the team it *heads* — a head's
  * commit authority wins, because it is the seat other agents are reporting
  * to, and the plan ids it must carry are its own team's.
+ *
+ * The `orders` parameter is retained in the signature to avoid a wide
+ * call-site change; team resolution no longer reads it.
  */
 export function resolveTeamStanding(
     targetName: string,
@@ -294,52 +297,40 @@ export function resolveTeamStanding(
     headName?: string;
     members: string[];
 } {
-    // Head-first: a seat that heads any team resolves as head, and its team's
-    // roster is what the commit-trailer plan needs. The team-head scope carries
-    // the head name in `o.parent`; `!!o.parent` is the gate that makes an
-    // empty-parent team-head order resolve as not-head (and thus not-in-team
-    // via this path).
-    for (const o of orders) {
-        if (scopeOf(o) !== 'team-head') { continue; }
-        if (!o.teamId) { continue; }
-        const group = groups.find(g => g && g.id === o.teamId);
-        if (!group || !Array.isArray(group.members)) { continue; }
-        if (!!o.parent && targetName === o.parent && group.members.includes(targetName)) {
-            return { inTeam: true, isHead: true, teamId: o.teamId, headName: o.parent, members: group.members };
+    void orders;
+    const isSpawnedTeam = (g: any): boolean => {
+        if (!g || typeof g !== 'object') { return false; }
+        if (g.teamKind === 'spawned') { return true; }
+        return g.teamGroup === true
+            && typeof g.id === 'string'
+            && g.id.startsWith('team_');
+    };
+    // Head-first: a seat that heads any spawned team resolves as head, and
+    // its team's roster is what the commit-trailer plan needs. The declared
+    // head is `g.head` (stamped at spawn by `wireSpawnedTeam`), falling back
+    // to `g.name` — never inferred from `members[0]`, which diverges when an
+    // operator reorders.
+    for (const g of groups) {
+        if (!isSpawnedTeam(g) || !Array.isArray(g.members)) { continue; }
+        const head = (typeof g.head === 'string' && g.head.length > 0)
+            ? g.head
+            : (typeof g.name === 'string' ? g.name : '');
+        if (head && targetName === head && g.members.includes(targetName)) {
+            return { inTeam: true, isHead: true, teamId: g.id, headName: head, members: g.members };
         }
     }
-    // Head-second: a `team-head` order exists ONLY when the team was wired with a
-    // non-empty headPrompt (`wireSpawnedTeam`), which is true for exactly one of
-    // the three shipped team types and for no operator-created team that left the
-    // head-prompt box empty. The head name is nevertheless always recorded — the
-    // ALWAYS-written `team` order stores it in `parent` precisely so the head can
-    // be excluded from member delivery. Resolve headship from that same fact, or
-    // a headPrompt-less team gags its members into `dontCommit` while its head
-    // keeps the shipped `notSpecified` default and is told to commit nothing —
-    // a completed body of work with no committer, which is the exact asymmetry
-    // this gate exists to prevent. Runs as its own pass, before the member pass,
-    // so "head wins" holds regardless of the order rows' array order.
-    for (const o of orders) {
-        if (scopeOf(o) !== 'team') { continue; }
-        if (!o.teamId) { continue; }
-        const group = groups.find(g => g && g.id === o.teamId);
-        if (!group || !Array.isArray(group.members)) { continue; }
-        if (!!o.parent && targetName === o.parent && group.members.includes(targetName)) {
-            return { inTeam: true, isHead: true, teamId: o.teamId, headName: o.parent, members: group.members };
-        }
-    }
-    // Not a head of any team — check if the target is a non-head member of a
-    // team-scope order's group. The head exclusion (`o.parent && targetName ===
-    // o.parent`) is the SAME check `selectOrders`' team branch uses, so the two
-    // cannot diverge on who is a member vs a head.
-    for (const o of orders) {
-        if (scopeOf(o) !== 'team') { continue; }
-        if (!o.teamId) { continue; }
-        const group = groups.find(g => g && g.id === o.teamId);
-        if (!group || !Array.isArray(group.members)) { continue; }
-        if (o.parent && targetName === o.parent) { continue; } // head exclusion
-        if (group.members.includes(targetName)) {
-            return { inTeam: true, isHead: false, teamId: o.teamId, headName: o.parent || undefined, members: group.members };
+    // Not a head — check if the target is a non-head member of a spawned
+    // team. The head exclusion (`head && targetName === head`) mirrors the
+    // `team` branch in {@link selectOrders}, so the two cannot diverge on
+    // who is a member vs a head.
+    for (const g of groups) {
+        if (!isSpawnedTeam(g) || !Array.isArray(g.members)) { continue; }
+        const head = (typeof g.head === 'string' && g.head.length > 0)
+            ? g.head
+            : (typeof g.name === 'string' ? g.name : '');
+        if (head && targetName === head) { continue; } // head exclusion
+        if (g.members.includes(targetName)) {
+            return { inTeam: true, isHead: false, teamId: g.id, headName: head || undefined, members: g.members };
         }
     }
     return { inTeam: false, isHead: false, members: [] };
@@ -428,7 +419,67 @@ function selectOrders(
     // the delivery layer and this selector cannot diverge on what "is a
     // non-head team member" means.
     const standing = resolveTeamStanding(targetName, orders, groups);
-    const selected = orders.filter(o => {
+
+    // System orders are composed at delivery from the canonical fragment
+    // lists — never persisted. A team has its protocol because it is a team
+    // (standing.inTeam), not because a row was once written for its head's
+    // name. The synthetic orders carry `parent = headName` and `teamId =
+    // group.id` so they flow through the SAME scope-selection branches
+    // below as a persisted row would (head-exclusion for `team`, head-match
+    // for `team-head`). Built per delivery from STANDING_ORDER_FRAGMENT_IDS
+    // and the live composition context, so a fragment-body edit in src/ is
+    // live on the next prompt for every team, including teams started
+    // months ago. The fragment `applies` gates self-filter (e.g.
+    // memberCompletion fires only for non-external heads, externalMemberCallback
+    // only for external heads), so the union member list is safe for both.
+    const synthetic: StandingOrder[] = [];
+    if (standing.inTeam && standing.teamId && standing.headName) {
+        if (standing.isHead) {
+            synthetic.push({
+                id: `synthetic-team-head:${standing.teamId}`,
+                parent: standing.headName,
+                child: '',
+                fragments: [
+                    STANDING_ORDER_FRAGMENT_IDS.codingHead,
+                    STANDING_ORDER_FRAGMENT_IDS.reviewHead,
+                    STANDING_ORDER_FRAGMENT_IDS.headCommit,
+                    STANDING_ORDER_FRAGMENT_IDS.headCompletion,
+                    STANDING_ORDER_FRAGMENT_IDS.headNext,
+                    // orchestratorReport removed: it was gated on
+                    // orchestratorPresent (always false in production) and
+                    // told the head to write to .switchboard/mission-control/
+                    // reports/ — a directory the host no longer writes and
+                    // no reader could reach. The host now records turn-ends
+                    // as plan_events rows unconditionally (plan 171). The
+                    // fragment ID stays recognized in standingOrderFragments.ts
+                    // so persisted rows referencing it resolve cleanly.
+                    STANDING_ORDER_FRAGMENT_IDS.subagentPolicy,
+                ],
+                createdAt: 0,
+                scope: 'team-head',
+                teamId: standing.teamId,
+            });
+        } else {
+            synthetic.push({
+                id: `synthetic-team:${standing.teamId}`,
+                parent: standing.headName,
+                child: '',
+                fragments: [
+                    STANDING_ORDER_FRAGMENT_IDS.memberCompletion,
+                    STANDING_ORDER_FRAGMENT_IDS.memberWork,
+                    STANDING_ORDER_FRAGMENT_IDS.externalMemberCallback,
+                    STANDING_ORDER_FRAGMENT_IDS.gitSafety,
+                    STANDING_ORDER_FRAGMENT_IDS.subagentPolicy,
+                ],
+                createdAt: 0,
+                scope: 'team',
+                teamId: standing.teamId,
+            });
+        }
+    }
+    const pool = synthetic.length > 0 ? [...orders, ...synthetic] : orders;
+
+    const selected = pool.filter(o => {
         const scope = scopeOf(o);
         if (scope === 'global') {
             return true;
@@ -528,13 +579,21 @@ function compositionContext(
 }
 
 export function resolveStandingOrderInstruction(o: StandingOrder, ctx: StandingOrderCompositionContext): string {
-    if (typeof o.instruction === 'string') { return o.instruction; }
-    if (!Array.isArray(o.fragments) || o.fragments.length === 0) { return ''; }
-    const composed = composeStandingOrderFragments(o.fragments, ctx);
-    if (composed.unknown.length) {
-        console.warn(`[standingOrders] Unknown fragment id(s) on order '${o.id}': ${composed.unknown.join(', ')}`);
+    // A body ADDS to the fragments; it never replaces them. Compose fragments
+    // first, then append the operator-authored `instruction` after them. A
+    // row carrying only a body renders only that body — correct, because the
+    // system half no longer lives on rows at all (it is composed at delivery
+    // by selectOrders). A row carrying only fragments renders only fragments.
+    const parts: string[] = [];
+    if (Array.isArray(o.fragments) && o.fragments.length > 0) {
+        const composed = composeStandingOrderFragments(o.fragments, ctx);
+        if (composed.unknown.length) {
+            console.warn(`[standingOrders] Unknown fragment id(s) on order '${o.id}': ${composed.unknown.join(', ')}`);
+        }
+        if (composed.text) { parts.push(composed.text); }
     }
-    return composed.text;
+    if (typeof o.instruction === 'string' && o.instruction.length > 0) { parts.push(o.instruction); }
+    return parts.join('\n\n');
 }
 
 /**

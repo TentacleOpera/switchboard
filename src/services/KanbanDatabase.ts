@@ -12990,6 +12990,77 @@ FROM plans
     }
 
     /**
+     * Read host turn-end reports out of `plan_events` (event_type `turn_end`),
+     * joined to `plans` for the card's CURRENT column — the question the file
+     * mirror could never answer ("is a blocked card still blocked?"). Replaces
+     * the directory walk + frontmatter parse that 190 files required.
+     *
+     * `kind` filters by `action` (`finished` | `blocked`); absent returns both.
+     * `plan_id` is the plan's RELATIVE path (the board's stored shape), never
+     * the absolute one the files carried. A row whose `plan_id` no longer joins
+     * to `plans` (the card was deleted) still returns, with `kanbanColumn:
+     * null` — the join is a LEFT JOIN so the record survives its card.
+     *
+     * Ordered by timestamp DESC (most recent first), capped at `limit` (default
+     * 100) so an unbounded history never floods a terminal.
+     */
+    public async getTurnEndReports(
+        workspaceId: string,
+        options?: { kind?: 'finished' | 'blocked'; limit?: number }
+    ): Promise<any[]> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        try {
+            const wsId = workspaceId || await this.getWorkspaceId() || this._getWorkspaceIdFallback();
+            const limit = Math.max(1, Math.min(options?.limit ?? 100, 500));
+            const params: any[] = [];
+            let where = `WHERE e.event_type = 'turn_end'`;
+            if (options?.kind) {
+                where += ` AND e.action = ?`;
+                params.push(options.kind);
+            }
+            if (wsId) {
+                where += ` AND (e.workspace_id = ? OR e.workspace_id IS NULL OR e.workspace_id = '')`;
+                params.push(wsId);
+            }
+            params.push(limit);
+            const stmt = this._db.prepare(
+                `SELECT e.event_id, e.plan_id, e.action, e.timestamp, e.device_id, e.payload,
+                        p.kanban_column AS kanbanColumn, p.topic AS planTopic
+                 FROM plan_events e
+                 LEFT JOIN plans p ON e.plan_id = p.plan_id
+                 ${where}
+                 ORDER BY e.timestamp DESC
+                 LIMIT ?`,
+                params
+            );
+            const results: any[] = [];
+            while (stmt.step()) {
+                const row = stmt.getAsObject();
+                let message: string | undefined;
+                try {
+                    const parsed = JSON.parse(String(row.payload || '{}'));
+                    if (parsed && typeof parsed.message === 'string') { message = parsed.message; }
+                } catch { /* payload not JSON — leave message undefined */ }
+                results.push({
+                    eventId: row.event_id,
+                    planId: row.plan_id || '',
+                    action: row.action || '',
+                    timestamp: row.timestamp || '',
+                    deviceId: row.device_id || '',
+                    message,
+                    kanbanColumn: row.kanbanColumn ?? null,
+                    planTopic: row.planTopic ?? null,
+                });
+            }
+            stmt.free();
+            return results;
+        } catch (error) {
+            console.error('[KanbanDatabase] Failed to get turn-end reports:', error);
+            return [];
+        }
+    }
+
+    /**
      * Append an activity log event (replaces activity.jsonl writes)
      */
     public async appendActivityEvent(event: {

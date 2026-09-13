@@ -16,7 +16,6 @@ import {
 import { DEFAULT_DISPLAY_HOSTNAME, isLoopbackHostname } from '../utils/loopbackHostname';
 import { detectTailnetAddress, resolveMagicDnsNames, readCertDomains, detectServeConfigMapping } from '../utils/tailnetDetect';
 import { resolveTailnetOrigin } from '../utils/tailnetOrigin';
-import { detectWsl } from '../utils/wslDetect';
 import { isPortFree, resolvePreferredPort, PORT_BASE, PORT_SPAN } from '../utils/portResolver';
 import { BANNER_ART_TRUECOLOR, BANNER_ART_256, BANNER_ART_ASCII } from '../generated/bannerArt';
 import { getInotifyWatchCount, getOpenFdCount } from './planIngestionHost';
@@ -30,6 +29,7 @@ function usage(): string {
        npx switchboard dispatch <planId|prefix> [column] [--project <name>] [--seat <terminal>] [--json]
        npx switchboard done --from <seat> [--plan <planId>] [--outcome failed] [--json]
        npx switchboard next --from <seat> [--json]
+       npx switchboard reports [--kind blocked|finished] [--limit N] [--json]
        npx switchboard clear <terminal|--all> [--json]
        npx switchboard fleet [--json]
        npx switchboard verb <verbName> [jsonPayload] [--json]
@@ -67,6 +67,9 @@ Board commands (drive the board from a terminal):
                         4 auth failed  5 bad input  6 unavailable
   done                Signal task completion for a seat (pops next card if queued).
   next                Pull the next card from the queue for a seat.
+  reports             List host turn-end reports (blocked/finished) read from
+                      plan_events, joined to each card's current kanban column.
+                      --kind blocked filters to blocked turn-ends.
   clear               Clear a terminal seat (or --all seats).
   fleet               Show live terminal seats, roles, and assigned plans.
   probe               Probe host resident memory, inotify watches, and open FDs.
@@ -109,9 +112,9 @@ Options:
                        or anything under the reserved .localhost TLD, e.g.
                        ${DEFAULT_DISPLAY_HOSTNAME}. Under 'tailnet' a MagicDNS name
                        or tailnet address is also accepted.
-  --detach             serve: run in background (detached). Implies --no-open unless --open is given.
-  --no-open            Do not open a browser
-  --open               serve --detach: open a browser anyway (overrides implied --no-open)
+  --detach             serve: run in background (detached).
+  --no-open            Accepted but ignored — starting the board never opens a browser
+  --open               Accepted but ignored — no browser auto-open to override
   --json               Machine-readable JSON output (status, plans, fleet, verb, etc.)
   -f, --follow         logs: tail live output
   --target <name>      Protocol target for 'init': agents, claude, or both (default: both)
@@ -506,75 +509,6 @@ async function findRunningInstance(workspaceRoot: string): Promise<number | null
         }
     }
     return null;
-}
-
-async function openBrowser(url: string): Promise<void> {
-    const platform = process.platform;
-    const wsl = detectWsl();
-    let cmd: string;
-    const args: string[] = [];
-    if (wsl.wsl) {
-        // cmd.exe is on PATH via WSL interop; fall back to wslview, then print.
-        // The empty title arg keeps `start` from treating a URL-shaped first
-        // arg as a window title on some Windows shells.
-        cmd = 'cmd.exe'; args.push('/c', 'start', '', url);
-    } else if (platform === 'darwin') { cmd = 'open'; args.push(url); }
-    else if (platform === 'win32') { cmd = 'cmd'; args.push('/c', 'start', '', url); }
-    else { cmd = 'xdg-open'; args.push(url); }
-
-    // spawn() does NOT throw synchronously when the binary is missing — it
-    // emits an 'error' event asynchronously (ENOENT). A bare try/catch around
-    // spawn() therefore never enters the fallback on a missing cmd.exe, which
-    // is exactly the WSL interop-disabled case this function must handle. The
-    // promise resolves `false` on either a synchronous throw or an async
-    // 'error' event, so the fallback chain below actually fires.
-    //
-    // A short timeout guards against a hang on a Node build where neither
-    // 'spawn' nor 'error' fires promptly: openBrowser is awaited in the
-    // startup sequence, so an unresolving promise would block the board URL
-    // and the "Press Ctrl+C" line. On timeout we assume success — the original
-    // code was fire-and-forget, and the URL is printed in the startup log
-    // regardless, so a wrong "success" is no worse than the status quo.
-    const trySpawn = (spawnCmd: string, spawnArgs: string[]): Promise<boolean> => {
-        return new Promise(resolve => {
-            let settled = false;
-            const finish = (ok: boolean) => {
-                if (settled) { return; }
-                settled = true;
-                clearTimeout(timer);
-                resolve(ok);
-            };
-            const timer = setTimeout(() => finish(true), 500);
-            timer.unref();
-            try {
-                const p = spawn(spawnCmd, spawnArgs, { detached: true, stdio: 'ignore' });
-                p.on('error', () => finish(false));
-                p.unref();
-                // 'spawn' fires once the process is created successfully; if it
-                // fires, the binary was found and the launch is best-effort from
-                // here. Resolve true so the fallback chain stops.
-                p.on('spawn', () => finish(true));
-            } catch {
-                finish(false);
-            }
-        });
-    };
-
-    const ok = await trySpawn(cmd, args);
-    if (ok) { return; }
-
-    // WSL interop may be disabled via /etc/wsl.conf ([interop] enabled = false),
-    // in which case cmd.exe is not on PATH. Try wslview (from wslu), then
-    // fall back to printing the URL so the user can open it manually. A
-    // headless WSL install with no interop and no wslview gets the same
-    // behaviour as a headless server today — the URL is in the log.
-    if (wsl.wsl) {
-        const wslviewOk = await trySpawn('wslview', [url]);
-        if (wslviewOk) { return; }
-        console.log(`[switchboard] Open this URL in your Windows browser: ${url}`);
-    } else {
-        console.error(`[switchboard] Failed to open browser: ${url}`);
-    }
 }
 
 async function waitForHealth(port: number, timeoutMs = 10000): Promise<void> {
@@ -2180,6 +2114,107 @@ async function cmdNext(workspaceRoot: string, argv: string[]): Promise<void> {
 }
 
 /**
+ * `switchboard reports [--kind blocked|finished] [--limit N] [--json]`
+ *
+ * Reads host turn-end out of `plan_events` (event_type `turn_end`), joined to
+ * `plans` for each card's CURRENT column — the question the file mirror could
+ * never answer ("is a blocked card still blocked?"). Pull shape matches
+ * `switchboard next`: a GET against the running host, no DB access from the
+ * CLI. `--kind blocked` filters to blocked turn-ends; absent lists both.
+ */
+async function cmdReports(workspaceRoot: string, argv: string[]): Promise<void> {
+    const jsonFlag = argv.includes('--json');
+    if (jsonFlag) { routeLogsToStderr(); }
+
+    let kind: 'finished' | 'blocked' | undefined;
+    let limit: number | undefined;
+    for (let i = 0; i < argv.length; i++) {
+        const a = argv[i];
+        if (a === '--json') { continue; }
+        if (a === '--kind') {
+            const v = argv[++i];
+            if (v === 'finished' || v === 'blocked') { kind = v; }
+            else { console.error(`[switchboard] --kind must be 'blocked' or 'finished' (got '${v}')`); exitFlushed(5); }
+            continue;
+        }
+        if (a.startsWith('--kind=')) {
+            const v = a.slice('--kind='.length);
+            if (v === 'finished' || v === 'blocked') { kind = v; }
+            else { console.error(`[switchboard] --kind must be 'blocked' or 'finished' (got '${v}')`); exitFlushed(5); }
+            continue;
+        }
+        if (a === '--limit') {
+            const v = Number(argv[++i]);
+            if (Number.isInteger(v) && v > 0) { limit = v; }
+            else { console.error(`[switchboard] --limit must be a positive integer (got '${v}')`); exitFlushed(5); }
+            continue;
+        }
+        if (a.startsWith('--limit=')) {
+            const v = Number(a.slice('--limit='.length));
+            if (Number.isInteger(v) && v > 0) { limit = v; }
+            else { console.error(`[switchboard] --limit must be a positive integer (got '${v}')`); exitFlushed(5); }
+            continue;
+        }
+    }
+
+    const port = await findRunningInstance(workspaceRoot);
+    if (port === null) {
+        if (jsonFlag) { emitJson({ success: false, error: 'No running Switchboard instance' }); }
+        else { console.error('[switchboard] No running Switchboard instance for this workspace.'); }
+        exitFlushed(1);
+    }
+
+    const query: Record<string, string> = {};
+    if (kind) { query.kind = kind; }
+    if (limit) { query.limit = String(limit); }
+
+    let res;
+    try {
+        res = await apiGet(port, '/kanban/reports', workspaceRoot, query);
+    } catch (err: any) {
+        if (jsonFlag) { emitJson({ success: false, error: `Switchboard did not answer: ${err?.message || err}` }); }
+        else { console.error(`[switchboard] Switchboard did not answer on port ${port}: ${err?.message || err}`); }
+        exitFlushed(1);
+        return;
+    }
+    if (res.status === 401) {
+        if (jsonFlag) { emitJson({ success: false, error: 'Auth failed' }); }
+        else { console.error('[switchboard] Auth failed (token rejected).'); }
+        exitFlushed(4);
+    }
+    if (res.status !== 200) {
+        const data = res.json();
+        const errMsg = String(data?.error || res.body || 'reports failed');
+        if (jsonFlag) { emitJson({ success: false, status: res.status, error: errMsg }); }
+        else { console.error(`[switchboard] ${errMsg}`); }
+        exitFlushed(1);
+    }
+
+    const data = res.json();
+    const reports: any[] = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
+    if (jsonFlag) {
+        emitJson({ success: true, count: reports.length, reports });
+        exitFlushed(0);
+    }
+    if (reports.length === 0) {
+        const filter = kind ? ` (${kind})` : '';
+        console.log(`[switchboard] No turn-end reports${filter}.`);
+        exitFlushed(0);
+    }
+    const filter = kind ? ` ${kind}` : '';
+    console.log(`[switchboard] ${reports.length}${filter} turn-end report${reports.length === 1 ? '' : 's'}:`);
+    for (const r of reports) {
+        const ts = String(r.timestamp || '');
+        const action = String(r.action || '');
+        const col = r.kanbanColumn ? ` [${r.kanbanColumn}]` : ' [no card]';
+        const topic = r.planTopic ? ` ${r.planTopic}` : (r.planId ? ` ${r.planId}` : '');
+        const msg = r.message ? ` — ${r.message}` : '';
+        console.log(`  ${ts} ${action}${col}${topic}${msg}`);
+    }
+    exitFlushed(0);
+}
+
+/**
  * `switchboard setup host` — one interactive command to configure the
  * systemd service on a Raspberry Pi or any Debian/arm64 host. Collects
  * the workspace root, resolves the service user, writes
@@ -3268,7 +3303,7 @@ async function main() {
     const KNOWN_SUBCOMMANDS = new Set([
         'local', 'tailnet', 'stop', 'status', 'logs', 'init', 'scaffold',
         'control-plane', 'secrets', 'token', 'export', 'import',
-        'plans', 'ready', 'dispatch', 'done', 'next', 'clear', 'fleet', 'probe', 'verb', 'api',
+        'plans', 'ready', 'dispatch', 'done', 'next', 'reports', 'clear', 'fleet', 'probe', 'verb', 'api',
         'help', 'about', 'version', 'setup', 'launcher-state', 'service',
         // Internal routing token — re-spawned by cmdMainMenu's CLI Mode to
         // enable Back without refactoring cmdBoardConsole's exit semantics.
@@ -4274,6 +4309,11 @@ async function main() {
         await cmdNext(workspaceRoot, process.argv.slice(3));
     }
 
+    // ── reports ───────────────────────────────────────────────────
+    if (process.argv[2] === 'reports') {
+        await cmdReports(workspaceRoot, process.argv.slice(3));
+    }
+
     // ── clear ─────────────────────────────────────────────────────
     if (process.argv[2] === 'clear') {
         await cmdClear(workspaceRoot, process.argv.slice(3));
@@ -4563,13 +4603,9 @@ async function main() {
 
         console.log(`[switchboard] Server started in background.`);
         console.log(`  PID:   ${detachPid}`);
-        console.log(`  URL:   http://127.0.0.1:${detachPort}`);
-        if (tailnetAddress) {
-            // The parent re-runs the resolver after findRunningInstance confirmed
-            // health, so the printed URL is probed against the live server, not a
-            // guess. An explicit --hostname bypasses the resolver (Edge Case 7).
+        if (firstArg === 'tailnet') {
             const hostnameExplicit = Boolean(args._explicit?.hostname);
-            const tailnetResolved = await resolveTailnetUrl(tailnetAddress, magicDnsNames, detachPort, hostnameExplicit);
+            const tailnetResolved = await resolveTailnetUrl(tailnetAddress!, magicDnsNames, detachPort, hostnameExplicit);
             console.log(`  Tailnet: ${tailnetResolved.url} (no token, on your tailnet only)`);
             if (tailnetResolved.url !== tailnetResolved.ipFallback) {
                 console.log(`  Tailnet (IP fallback): ${tailnetResolved.ipFallback}`);
@@ -4583,9 +4619,12 @@ async function main() {
             } else if (!tailnetResolved.secure && !hostnameExplicit) {
                 console.log('[switchboard] This tailnet URL is not a secure origin. The board cannot be installed to a Home Screen as a standalone app on iOS (Safari treats a plain-http manifest as a bookmark). Run `tailscale serve` with HTTPS to enable this.');
             }
+        } else if (firstArg === 'local') {
+            console.log(`  URL:   http://127.0.0.1:${detachPort}`);
         }
+        // Bare `switchboard --detach` prints no address.
         console.log(`  Logs:  ${logFile}`);
-        console.log(`[switchboard] Use 'npx switchboard token show' for a board URL, 'npx switchboard status' to check, or 'npx switchboard stop' to shut down.`);
+        console.log(`[switchboard] Use 'npx switchboard status' to check, or 'npx switchboard stop' to shut down.`);
         process.exit(0);
     }
 
@@ -4645,53 +4684,23 @@ async function main() {
 
     await waitForHealth(instance.port);
 
-    const displayHost = new URL(instance.url).hostname;
-    const boardUrl = `${instance.url}/?token=${instance.oneTimeToken}`;
-
-    console.log(`\nSwitchboard is running at ${instance.url}`);
-    if (instance.usingDurableToken) {
-        console.log(`Board URL (one-time token, expires in 15 minutes): ${boardUrl}`);
-        console.log(`To enrol another device or re-enter after expiry: npx switchboard token show`);
-    } else {
-        // Ephemeral mode: this token does not expire, because there is no durable
-        // secret for `token show` to authenticate a replacement mint with.
-        console.log(`Board URL (one-time token): ${boardUrl}`);
-        console.log(`For a token that survives restarts and can enrol a second device: npx switchboard token rotate`);
-    }
-    // In tailnet mode the browser must be handed the tailnet URL — the one that
-    // needs no credential and cannot be spent — instead of the loopback URL with
-    // a single-use token that is routinely consumed by a browser prefetch before
-    // the page loads. `tailnetUrl` is the resolver's output (HTTPS FQDN, HTTP
-    // FQDN, or HTTP IP — in that trust order), computed inside the tailnet branch
-    // below and hoisted here so `openBrowser` can select it. Without this the
-    // banner advertises the credential-free URL and the browser launches the
-    // credentialed one, which then fails with a spent-token error. Do NOT fall
-    // back to `boardUrl` if the tailnet open appears to fail — the mode already
-    // refuses to start without a live Tailscale, so reintroducing the token URL
-    // restores the reported bug under a condition nobody will notice.
-    let launchUrl = boardUrl;
-    if (tailnetAddress) {
-        // Tailnet mode: no token is required on the tailnet listener (decision 4:
-        // tailnet membership is the control). Print the resolver-picked URL so
-        // the operator can hand it to a phone or tablet on the same tailnet —
-        // preferring a secure origin when the tailnet offers one, so the board
-        // can install to a Home Screen as a standalone app (plain-http remote
-        // origins cannot). An explicit --hostname bypasses the resolver and
-        // honours the operator's choice verbatim (Edge Case 7).
+    // One address per serve mode, matching the subcommand. No token is ever
+    // printed (plan: starting-the-board-prints-where-to-reach-it-and-opens-nothing).
+    //   `switchboard tailnet` → the tailnet address
+    //   `switchboard local`   → the loopback address
+    //   `switchboard`         → no address
+    // `firstArg` is captured before the subcommand is spliced out of argv, so
+    // it still distinguishes explicit `local` from a bare invocation that
+    // defaulted to local mode.
+    if (firstArg === 'tailnet') {
+        // Tailnet mode: the tailnet URL block below prints the address. No
+        // loopback URL is printed — the subcommand asked for the tailnet.
         const hostnameExplicit = Boolean(args._explicit?.hostname);
-        const tailnetResolved = await resolveTailnetUrl(tailnetAddress, magicDnsNames, instance.port, hostnameExplicit);
-        launchUrl = tailnetResolved.url;
+        const tailnetResolved = await resolveTailnetUrl(tailnetAddress!, magicDnsNames, instance.port, hostnameExplicit);
         console.log(`\nTailnet URL (no token needed, on your tailnet only): ${tailnetResolved.url}`);
-        // The raw-IP tailnet URL stays as a fallback line — a Tailscale hiccup
-        // that breaks the resolver-picked name must not force a re-run to find
-        // the IP. The IP is the terminal fallback the resolver would emit last
-        // anyway; printing it here is informational, not a second candidate.
         if (tailnetResolved.url !== tailnetResolved.ipFallback) {
             console.log(`  Fallback (IP): ${tailnetResolved.ipFallback}`);
         }
-        // The v6 tailnet address is carried bracketed inside `magicDnsNames`;
-        // pull it out for a dedicated banner line so a v6-preferring client
-        // (Happy Eyeballs) has a URL to try first.
         const v6Names = magicDnsNames.filter(n => n.startsWith('['));
         const dnsNames = magicDnsNames.filter(n => !n.startsWith('['));
         if (v6Names.length > 0) {
@@ -4701,26 +4710,14 @@ async function main() {
             console.log(`  MagicDNS: ${dnsNames.map(n => `http://${n}:${instance.port}/`).join(', ')}`);
         }
         if (tailnetResolved.secure && tailnetResolved.isFunnel) {
-            // The chosen origin is internet-public (Tailscale Funnel), not
-            // tailnet-only — the security posture differs and the operator
-            // should know the board is reachable from the open internet.
             console.log('[switchboard] This tailnet URL is internet-public (Tailscale Funnel), not tailnet-only.');
         } else if (!tailnetResolved.secure && !hostnameExplicit) {
-            // One advisory line, once, only when the chosen origin is insecure.
-            // Names the concrete cost — Home Screen install will not launch
-            // standalone — rather than lecturing about TLS. Does NOT claim to
-            // fix copy-button reliability (that was a separate, superseded
-            // theory — see the plan's "What this plan is NOT fixing").
             console.log('[switchboard] This tailnet URL is not a secure origin. The board cannot be installed to a Home Screen as a standalone app on iOS (Safari treats a plain-http manifest as a bookmark). Run `tailscale serve` with HTTPS to enable this.');
         }
+    } else if (firstArg === 'local') {
+        console.log(`\nSwitchboard is running at ${instance.url}`);
     }
-    if (displayHost !== '127.0.0.1') {
-        // The token is consumed server-side, so a name the browser fails to
-        // resolve never reaches the server and never spends it — this fallback
-        // stays valid. Printed up front because the failure mode (a browser that
-        // does not map *.localhost to loopback) looks like Switchboard is down.
-        console.log(`If your browser cannot resolve ${displayHost}, use http://127.0.0.1:${instance.port}/?token=${instance.oneTimeToken} instead.`);
-    }
+    // Bare `switchboard` prints no address — the operator did not name a mode.
     if (isDetachedChild) {
         console.log('Running detached. Use \'npx switchboard stop\' to shut down.\n');
     } else {
@@ -4729,13 +4726,6 @@ async function main() {
 
     if (pendingBundlePath) {
         await runPendingBundleImport(workspaceRoot, pendingBundlePath);
-    }
-
-    if (!args.noOpen) {
-        // `launchUrl` is the tailnet URL in tailnet mode (no credential, cannot
-        // be spent) and the loopback token URL otherwise. See the comment at the
-        // declaration for why this is not `boardUrl` unconditionally.
-        await openBrowser(launchUrl);
     }
 
     // Discovery hint (Part 3, Phase 3). tmux does not exist on native Windows,

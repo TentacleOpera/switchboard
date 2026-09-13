@@ -84,18 +84,16 @@ export class ProtocolService {
         const delivery: "inline" | "materialize" = entry?.delivery || bundled?.delivery || "materialize";
         const contentHash = entry?.contentHash || bundled?.contentHash || crypto.createHash("sha256").update(body, "utf8").digest("hex");
 
-        // Check if committed survivor files exist for improve-plan and improve-feature
-        if (workspaceRoot && (name === "improve-plan" || name === "improve-feature")) {
-            const committedPath = path.join(workspaceRoot, ".agents", "protocols", name, "SKILL.md");
-            if (fs.existsSync(committedPath)) {
-                return {
-                    name,
-                    body,
-                    path: committedPath,
-                    delivery
-                };
-            }
-        }
+        // The two-name committed-survivor special case (improve-plan /
+        // improve-feature) was deleted: both are delivery=inline, so the
+        // on-disk check was answering a question their delivery mode says
+        // should never be asked — the returned `path` was never consumed by
+        // any caller (protocolPhrase uses the body for inline). The on-disk
+        // files still ship and are still the defaults of the user-editable
+        // planner workflow path fields, but those path-shaped defaults go
+        // through renderPlannerWorkflowRef's path branch (literal "Read <path>"),
+        // never through resolveProtocol. Bare-name resolution of these two
+        // now returns the inline body like every other inline protocol.
 
         if (delivery === "inline") {
             return {

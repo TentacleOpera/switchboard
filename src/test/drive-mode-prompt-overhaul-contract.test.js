@@ -130,18 +130,19 @@ async function main() {
     assert.ok(!prefix.includes('watchFeature'), 'enriched prefix must not tell the lead to arm a second watch');
 
     // --- Resolved-port case: temp workspace with a port file ---
-    // The existing prefix (line 85) uses '/missing-workspace' which has no port file,
-    // so portResolved is false and the "Do NOT read" directive is absent. To test the
-    // resolved-port case, create a temp directory with a real port file.
+    // The port file is no longer read by the drive prefix at all — the CLI
+    // resolves the running instance itself, and the API base is named in the
+    // SWITCHBOARD STATUS line. The prefix must NOT contain any port-file
+    // reference, regardless of whether the file exists.
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'drive-test-'));
     fs.mkdirSync(path.join(tmpDir, '.switchboard'), { recursive: true });
     fs.writeFileSync(path.join(tmpDir, '.switchboard', 'api-server-port.txt'), '58312');
     const resolvedPrefix = await teamProvider._buildDrivePrefix(tmpDir, [{ planId: 'feature-1', isFeature: true, absolutePath: '/ws/feature.md' }, { planId: 'subtask-1', isSubtask: true, absolutePath: '/ws/sub1.md' }]);
-    assert.ok(resolvedPrefix.includes('Do NOT read .switchboard/api-server-port.txt'), 'prefix must tell the lead not to re-read the port file when port is resolved');
+    assert.ok(!resolvedPrefix.includes('api-server-port.txt'), 'prefix must not reference the port file even when it exists');
+    assert.ok(!resolvedPrefix.includes('$BASE'), 'prefix must not reference $BASE');
     assert.ok(resolvedPrefix.includes('Your seat name is below — do not go looking it up.'), 'prefix must tell the lead not to check its terminal name');
     assert.ok(!resolvedPrefix.includes('Do NOT check your own terminal name'), 'prefix must not use old prohibition when seat is resolved');
     assert.ok(!resolvedPrefix.includes('Your terminal name is in $SWITCHBOARD_TERMINAL'), 'prefix must not surface the terminal-name line');
-    assert.ok(!resolvedPrefix.includes('(also in .switchboard/api-server-port.txt)'), 'prefix must not point at the port file');
     fs.rmSync(tmpDir, { recursive: true, force: true });
 
     // --- External-head regression ---
@@ -191,9 +192,11 @@ async function main() {
     assert.deepStrictEqual(standaloneRoster.members.map(m => m.role), ['standalone-coder', 'standalone-intern']);
 
     // --- Fallback case: no port file (existing prefix from line 85 uses '/missing-workspace') ---
-    // The existing `prefix` variable already has no port file, so the "Do NOT read"
-    // directive must NOT be present.
-    assert.ok(!prefix.includes('Do NOT read .switchboard/api-server-port.txt'), 'prefix must not prohibit port-file reads when the port was not resolved');
+    // The drive prefix no longer reads the port file at all — the CLI resolves
+    // the running instance itself — so no port-file reference should appear
+    // regardless of whether the file exists.
+    assert.ok(!prefix.includes('api-server-port.txt'), 'prefix must not reference the port file');
+    assert.ok(!prefix.includes('$BASE'), 'prefix must not reference $BASE');
 
     const noRoleProvider = makeProvider(makeDb({ groups }), liveness, []);
     assert.deepStrictEqual((await noRoleProvider._resolveTeamRosterForPrompt('/missing-workspace')).members.map(row => row.role), ['', '']);

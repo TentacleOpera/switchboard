@@ -37,11 +37,10 @@ export interface LinkPreset {
 /**
  * The callback contract installed on every worker by default.
  *
- * Byte-identical to `AGENT_GROUP_CALLBACK_INSTRUCTION` in `teamWiring.ts`.
- * The contract test (`link-presets-mirror-contract.test.js`) enforces this —
- * two copies exist because `linkPresets.ts` cannot import from `teamWiring.ts`
- * without creating a circular dependency (`teamWiring.ts` imports the resolver
- * from here). The text names the delivery ROUTE, not just the obligation.
+ * Byte-identical to the `reports-to-head` preset template here and to the
+ * `team.member.completion` fragment body in `standingOrderFragments.ts` (the
+ * system half is composed at delivery, never persisted). The text names the
+ * delivery ROUTE, not just the obligation.
  */
 
 /**
@@ -95,12 +94,9 @@ export const LINK_PRESETS: ReadonlyArray<LinkPreset> = [
         id: 'reports-to-head',
         label: 'Reports to me — it works what I hand it',
         direction: 'member-receives',
-        // Byte-identical to AGENT_GROUP_CALLBACK_INSTRUCTION in teamWiring.ts.
-        // The contract test enforces this — two copies exist to avoid a
-        // circular dependency (teamWiring.ts imports the resolver from here).
+        // Byte-identical to the reports-to-head template in terminals.js.
         // {child} is the head terminal name — substituted by resolvePreset
-        // in the pair-order path (childName = headName for member-receives)
-        // and by wireSpawnedTeam directly when building the team prompt.
+        // in the pair-order path (childName = headName for member-receives).
         template:
             '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
             + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '

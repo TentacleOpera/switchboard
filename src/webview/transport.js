@@ -123,6 +123,10 @@
      * A panel with no entry sends no `surfaces` parameter at all and receives the
      * full stream, which is also what an older server does with the parameter.
      *
+     * `mission-control`, `linear` and `database` declare `['common']` only —
+     * they consume untagged broadcasts plus common-tagged state, never the board.
+     * See the comment on PANEL_SURFACES (wsHub.ts) for the full rationale.
+     *
      * Debugging note: with this in effect, the WS frames visible in one panel's
      * devtools are that panel's traffic only, not the whole system's.
      */
@@ -141,6 +145,9 @@
         memo: ['memo', 'common'],
         tickets: ['tickets', 'common'],
         connections: ['connections', 'common'],
+        'mission-control': ['common'],
+        linear: ['common'],
+        database: ['common'],
     };
 
     function wsUrl() {

@@ -1,3 +1,50 @@
+// ── Same-origin client marker ────────────────────────────────────────────
+// The board's own pages are SUPPORTED clients and must say so on every request.
+//
+// `_isAllowedCrossSiteRequest` (LocalApiServer) decides on three signals, in
+// order: `Sec-Fetch-Site`, then `Origin`, then the `X-Switchboard-Client`
+// marker. `Sec-Fetch-*` is not universal — Safari only shipped it in 16.4, and
+// several in-app/embedded webviews omit it — and a same-origin POST does not
+// always carry an `Origin` either. A panel hitting that combination has none of
+// the three signals and is rejected as a cross-site request.
+//
+// The failure is silent and total: `fetchTeamsState` catches the error, leaves
+// `teamRoster` as `[]`, and the command view renders "No teams declared for
+// this workspace" on a board with four live seats. Every other panel fetch
+// fails the same way on the same browser, so the surface looks empty rather
+// than broken. Observed 2026-09-13: the mobile command view had never once
+// shown a team.
+//
+// Injected here rather than at each call site — there are dozens across the
+// panels, and one that is added later without the header reintroduces the bug
+// on exactly the devices nobody develops on. Only same-origin/relative requests
+// are touched: a custom header on a genuinely cross-origin request would force
+// a CORS preflight that the board does not answer.
+(function installSwitchboardClientMarker() {
+    if (typeof window === 'undefined' || typeof window.fetch !== 'function') { return; }
+    if (window.__sbClientMarkerInstalled) { return; }
+    window.__sbClientMarkerInstalled = true;
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = function switchboardFetch(input, init) {
+        try {
+            const url = typeof input === 'string' ? input : (input && input.url) || '';
+            const sameOrigin = url.startsWith('/')
+                || url.startsWith(window.location.origin)
+                || (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(url) && !url.startsWith('//'));
+            if (sameOrigin) {
+                const opts = init ? Object.assign({}, init) : {};
+                const headers = new Headers(opts.headers || (typeof input === 'object' && input && input.headers) || {});
+                if (!headers.has('X-Switchboard-Client')) {
+                    headers.set('X-Switchboard-Client', 'switchboard-panel');
+                }
+                opts.headers = headers;
+                return nativeFetch(input, opts);
+            }
+        } catch { /* fall through to the unmodified call */ }
+        return nativeFetch(input, init);
+    };
+})();
+
 // Shared utilities for Switchboard webviews (Planning and Design panels)
 // Loaded globally within the webview environment
 

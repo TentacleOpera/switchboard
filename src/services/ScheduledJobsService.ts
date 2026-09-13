@@ -241,31 +241,9 @@ function _mergeDirInto(fromDir: string, toDir: string): void {
 }
 
 /**
- * Lazily creates `.switchboard/mission-control/reports/claimed/` and returns the
- * reports directory. Returns `null` when `.switchboard` is absent — same lazy
- * guard as `bootstrapInstructionsDirectory` — so a non-Switchboard folder is
- * never littered. No standing-job seeding (this is a reports inbox, not an
- * instructions pipeline).
- */
-export async function bootstrapMissionControlReportsDirectory(workspaceRoot: string): Promise<string | null> {
-    const sbDir = path.join(workspaceRoot, '.switchboard');
-    if (!fs.existsSync(sbDir)) {
-        // Lazy creation: do not eagerly pollute non-Switchboard workspaces
-        return null;
-    }
-    // Adopt any pre-rename `.switchboard/orchestrator/` tree before creating the
-    // new one, so unclaimed reports written under the old name are still seen.
-    migrateLegacyOrchestratorDir(workspaceRoot);
-    const reportsDir = path.join(sbDir, 'mission-control', 'reports');
-    const claimedDir = path.join(reportsDir, 'claimed');
-    await fs.promises.mkdir(claimedDir, { recursive: true });
-    return reportsDir;
-}
-
-/**
  * Lazily creates `.switchboard/teams/<teamId>/reports/claimed/` and returns the
  * reports directory. Returns `null` when `.switchboard` is absent — same lazy
- * guard as `bootstrapMissionControlReportsDirectory`.
+ * guard as `bootstrapInstructionsDirectory`.
  */
 export async function bootstrapTeamReportsDirectory(workspaceRoot: string, teamId: string): Promise<string | null> {
     const sbDir = path.join(workspaceRoot, '.switchboard');
@@ -296,20 +274,60 @@ export async function writeTeamReport(workspaceRoot: string, teamId: string, req
 }
 
 /**
- * Writes a report file to `.switchboard/mission-control/reports/` using the same
- * `writeInboxFile` mechanics as the instructions inbox (exclusive-create with
- * retry, frontmatter flatten). The only TS writer for the reports channel —
- * agent-authored reports are plain file writes by the agent, not code.
+ * Record a host turn-end as a `plan_events` row (event_type `turn_end`,
+ * action `finished` | `blocked`). Replaces the file mirror that wrote to
+ * `.switchboard/mission-control/reports/` — a gitignored directory no reader
+ * could reach (the box that can read it also has the API and the DB). The row
+ * is indexed, joined to `plans` by `plan_id`, and pruned by
+ * `RetentionService`, so the accumulation that 190 files became cannot recur.
+ *
+ * `planFile` is the plan's relative path (the board's stored shape); empty for
+ * the queue-stall nudges that carry no card. It is resolved to the plan's UUID
+ * (`plan_id`) before insert, so the `plan_events.plan_id` column stays
+ * consistent with every other caller and the JOIN to `plans` works. An
+ * unresolvable `planFile` (deleted card, stale path) is stored as-is — the row
+ * survives its card, with `kanbanColumn: null` on read.
+ *
+ * `outcome` maps the same way the deleted file mirror did: `completed` →
+ * `finished`, everything else → `blocked`.
+ *
+ * No existence gate: the row is cheap and the question a Mission Control asks
+ * ("is a blocked card still blocked?") is answered by joining `plan_events`
+ * to live board state, which a file could never do. Write it always.
  */
-export async function writeMissionControlReport(workspaceRoot: string, req: InstructionRequest): Promise<InstructionWriteResult> {
+export async function recordTurnEndEvent(db: any, info: {
+    planFile: string;
+    outcome: 'completed' | 'blocked' | 'stalled';
+    body: string;
+    workspaceId?: string;
+}): Promise<void> {
+    if (!db || typeof db.appendPlanEventByPlanId !== 'function') return;
+    const action = info.outcome === 'completed' ? 'finished' : 'blocked';
     try {
-        const reportsDir = await bootstrapMissionControlReportsDirectory(workspaceRoot);
-        if (!reportsDir) {
-            return { success: false, error: '.switchboard directory does not exist' };
+        // Resolve the relative planFile to the plan's UUID (plan_id) so the
+        // plan_events.plan_id column stays consistent with every other caller
+        // and the JOIN to plans works. If the card is gone (deleted/archived),
+        // store the planFile as-is — the row survives with kanbanColumn: null.
+        let resolvedPlanId = info.planFile || '';
+        if (resolvedPlanId && typeof db.getPlanByPlanFile === 'function') {
+            try {
+                const wsId = info.workspaceId || (await db.getWorkspaceId?.()) || db._getWorkspaceIdFallback?.() || '';
+                if (wsId) {
+                    const plan = await db.getPlanByPlanFile(resolvedPlanId, wsId);
+                    if (plan?.planId) { resolvedPlanId = plan.planId; }
+                }
+            } catch { /* resolution is best-effort — store the planFile as-is */ }
         }
-        return writeInboxFile(reportsDir, req, 'report');
+        await db.appendPlanEventByPlanId(resolvedPlanId, {
+            eventType: 'turn_end',
+            action,
+            payload: JSON.stringify({ message: info.body }),
+            ...(info.workspaceId ? { workspaceId: info.workspaceId } : {}),
+        });
     } catch (err) {
-        return { success: false, error: err instanceof Error ? err.message : String(err) };
+        // A failed record must never abort the pty send that follows. The row
+        // is best-effort durable state; the live delivery is the primary channel.
+        console.warn('[ScheduledJobsService] recordTurnEndEvent failed:', err);
     }
 }
 

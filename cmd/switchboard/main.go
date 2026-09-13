@@ -21,7 +21,7 @@ import (
 // else is delegated to the Node host entry point.
 var ownedVerbs = map[string]bool{
 	"plans": true, "ready": true, "dispatch": true, "done": true, "next": true,
-	"clear": true, "fleet": true, "verb": true, "api": true, "status": true,
+	"reports": true, "clear": true, "fleet": true, "verb": true, "api": true, "status": true,
 	"logs": true, "probe": true, "help": true, "about": true, "version": true,
 }
 
@@ -180,6 +180,8 @@ func dispatchOwned(c *client.Client, verb string, args []string) {
 		c.CmdDone(rest)
 	case "next":
 		c.CmdNext(rest)
+	case "reports":
+		c.CmdReports(rest)
 	case "clear":
 		c.CmdClear(rest)
 	case "fleet":

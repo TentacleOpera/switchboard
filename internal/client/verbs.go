@@ -477,6 +477,117 @@ func (c *Client) CmdNext(args []string) {
 	os.Exit(code)
 }
 
+// ── reports ────────────────────────────────────────────────────────────────
+
+// CmdReports reads host turn-end reports out of `plan_events` (event_type
+// `turn_end`), joined to `plans` for each card's CURRENT column. Pull shape
+// matches CmdNext: a GET against the running host. `--kind blocked` filters
+// to blocked turn-ends; absent lists both.
+func (c *Client) CmdReports(args []string) {
+	var kind string
+	var limit int
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--json":
+		case a == "--kind":
+			i++
+			if i < len(args) {
+				kind = args[i]
+			}
+		case strings.HasPrefix(a, "--kind="):
+			kind = a[len("--kind="):]
+		case a == "--limit":
+			i++
+			if i < len(args) {
+				if n, err := strconv.Atoi(args[i]); err == nil {
+					limit = n
+				}
+			}
+		case strings.HasPrefix(a, "--limit="):
+			if n, err := strconv.Atoi(a[len("--limit="):]); err == nil {
+				limit = n
+			}
+		}
+	}
+	if kind != "" && kind != "blocked" && kind != "finished" {
+		c.badInput("Usage: npx switchboard reports [--kind blocked|finished] [--limit N] [--json]")
+	}
+
+	query := map[string]string{}
+	if kind != "" {
+		query["kind"] = kind
+	}
+	if limit > 0 {
+		query["limit"] = strconv.Itoa(limit)
+	}
+
+	res, err := c.Transport.apiGet("/kanban/reports", query)
+	if err != nil {
+		if c.JSONFlag {
+			emitJSON(map[string]any{"success": false, "error": fmt.Sprintf("Switchboard did not answer: %v", err)})
+		} else {
+			emitErr("[switchboard] Switchboard did not answer: %v", err)
+		}
+		os.Exit(1)
+	}
+	if res.Status == 401 {
+		c.authFailed()
+	}
+	if res.Status != 200 {
+		c.serverError(res)
+	}
+
+	data := res.JSON()
+	envelope, _ := data.(map[string]any)
+	rawReports, _ := envelope["data"].([]any)
+	if rawReports == nil {
+		rawReports, _ = data.([]any)
+	}
+
+	if c.JSONFlag {
+		emitJSON(map[string]any{"success": true, "count": len(rawReports), "reports": rawReports})
+		os.Exit(0)
+	}
+	if len(rawReports) == 0 {
+		filter := ""
+		if kind != "" {
+			filter = " (" + kind + ")"
+		}
+		emitHuman("[switchboard] No turn-end reports%s.", filter)
+		os.Exit(0)
+	}
+	filter := ""
+	if kind != "" {
+		filter = " " + kind
+	}
+	emitHuman("[switchboard] %d%s turn-end report%s:", len(rawReports), filter, plural(len(rawReports)))
+	for _, r := range rawReports {
+		m, _ := r.(map[string]any)
+		ts := asString(m["timestamp"])
+		action := asString(m["action"])
+		col := asString(m["kanbanColumn"])
+		colLabel := "[no card]"
+		if col != "" {
+			colLabel = "[" + col + "]"
+		}
+		topic := asString(m["planTopic"])
+		if topic == "" {
+			topic = asString(m["planId"])
+		}
+		msg := asString(m["message"])
+		line := fmt.Sprintf("  %s %s %s", ts, action, colLabel)
+		if topic != "" {
+			line += " " + topic
+		}
+		if msg != "" {
+			line += " — " + msg
+		}
+		emitHuman("%s", line)
+	}
+	os.Exit(0)
+}
+
 // ── clear ─────────────────────────────────────────────────────────────────
 
 func (c *Client) CmdClear(args []string) {

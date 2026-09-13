@@ -957,7 +957,7 @@ export const PHONE_A_FRIEND_DIRECTIVE = (port: number, originRole: string, origi
     ...(originTerminal ? [`"originTerminal":"${originTerminal}"`] : []),
     `"dispatchId":"${dispatchId}"`,
   ].join(',');
-  return `PHONE-A-FRIEND: When you have finished coding ALL plans in this batch, you MUST notify the Phone-a-Friend agent ONCE by running:\ncurl -s -X POST http://127.0.0.1:${port}/phone-a-friend -H "Content-Type: application/json" -d '{${fields}}'\nReplace <PLAN_FILE_PATH> with the relative path of the LAST plan file you completed. Send exactly one request per batch (not one per plan). This is a required step — if the Phone-a-Friend agent is not running, the request will still succeed silently, but you must send it regardless. (Requires the Phone-a-Friend toggle enabled in the TEAMS tab.)`;
+  return `PHONE-A-FRIEND: When you have finished coding ALL plans in this batch, you MUST notify the Phone-a-Friend agent ONCE by running:\nnode "<cliPath>" api POST /phone-a-friend '{${fields}}'\nReplace <PLAN_FILE_PATH> with the relative path of the LAST plan file you completed. Send exactly one request per batch (not one per plan). This is a required step — if the Phone-a-Friend agent is not running, the request will still succeed silently, but you must send it regardless. (Requires the Phone-a-Friend toggle enabled in the TEAMS tab.)`;
 };
 
 /**
@@ -974,7 +974,7 @@ export const PHONE_A_FRIEND_DIRECTIVE = (port: number, originRole: string, origi
  */
 export const PHONE_A_FRIEND_DONE_DIRECTIVE = (port: number, targetKey: string, planFile: string, mode?: 'pre-review' | 'post-batch') => {
   const verdictFields = mode === 'pre-review' ? ',"result":"<PASS_OR_FAIL>","findings":"<JSON_ESCAPED_FINDINGS>"' : '';
-  return `\n\nCOMPLETION SIGNAL: When you have finished reviewing and fixing this plan, you MUST call exactly ONCE:\ncurl -s -X POST http://127.0.0.1:${port}/phone-a-friend/done -H "Content-Type: application/json" -d '{"target":"${targetKey}","planFile":"${planFile}"${verdictFields}}'\nThis is a required step — it tells the host you are done so the next plan can be sent. Send exactly one request.${mode === 'pre-review' ? ' Replace PASS_OR_FAIL with your verdict and JSON_ESCAPED_FINDINGS with a concise JSON-escaped explanation.' : ''}`;
+  return `\n\nCOMPLETION SIGNAL: When you have finished reviewing and fixing this plan, you MUST call exactly ONCE:\nnode "<cliPath>" api POST /phone-a-friend/done '{"target":"${targetKey}","planFile":"${planFile}"${verdictFields}}'\nThis is a required step — it tells the host you are done so the next plan can be sent. Send exactly one request.${mode === 'pre-review' ? ' Replace PASS_OR_FAIL with your verdict and JSON_ESCAPED_FINDINGS with a concise JSON-escaped explanation.' : ''}`;
 };
 
 /**
@@ -1282,20 +1282,14 @@ export function ensureCompletionDirective(text: string): string {
 
 // MISSION_CONTROL_REPORT_DIRECTIVE is a sibling of CODING_COMPLETION_REPORT_DIRECTIVE,
 // NOT folded into it — the completion directive's text is load-bearing for
-// completion detection and asserted elsewhere. This directive gives agents a
-// file-based reply channel for mid-work updates (finished, blocked, question,
-// status) that works when ptySendPrompt cannot reach Mission Control. It is
-// IN ADDITION TO, never INSTEAD OF, the completion POST (POST /kanban/queue/done) —
-// an agent that reads it as a replacement breaks completion detection for every card.
-export const MISSION_CONTROL_REPORT_DIRECTIVE = `MISSION CONTROL REPORT: Post a report file to .switchboard/mission-control/reports/ when you finish, when you are blocked, when you have a question, and when asked for status. Format: a markdown file named report-<UTC timestamp>-<kind>-<5 digits>.md with frontmatter:
----
-from: <your seat name>
-kind: finished | blocked | question | status
-planId: <plan id>
-created: <UTC timestamp>
----
-<one-line message body>
-This is IN ADDITION TO, never INSTEAD OF, the completion POST (POST /kanban/queue/done) — the completion POST is the signal that clears your card. Do NOT skip the completion POST.`;
+// completion detection and asserted elsewhere. The file-based report channel
+// (.switchboard/mission-control/reports/) is retired (plan 171): the host
+// now records turn-ends as plan_events rows, queryable via `switchboard reports`.
+// The directive is kept as a recognized sentinel so existing dispatch prompts
+// that carry it do not break, but the body no longer instructs agents to
+// write report files — the completion POST (POST /kanban/queue/done) is the
+// only signal that clears a card, and `switchboard reports` is the read path.
+export const MISSION_CONTROL_REPORT_DIRECTIVE = `MISSION CONTROL REPORT: The host records every turn-end (finished, blocked, stalled) as a plan_events row — queryable via \`switchboard reports [--kind blocked]\`. You do NOT need to write a report file. This is IN ADDITION TO, never INSTEAD OF, the completion POST (POST /kanban/queue/done via \`switchboard done --from "<your terminal name>"\`) — the completion POST is the signal that clears your card. Do NOT skip the completion POST. If you are blocked and cannot continue, report the block in your status and stop; the host records the turn-end and the card stays parked for review.`;
 
 /**
  * Idempotent report-directive guard. Appends MISSION_CONTROL_REPORT_DIRECTIVE to

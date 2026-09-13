@@ -103,12 +103,15 @@ The defects that make the board unreliable, make the GUI show errors that are no
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [The Standing Orders Tab Hydrates Once, Over the One Channel That Can Fail](../plans/the-standing-orders-tab-hydrates-once-over-the-one-channel-that-can-fail.md) — **PLAN REVIEWED** — ID: 9fe3046b-7256-4292-84d2-c7ba79b492de
-- [ ] [One Shell Load Builds the Board Fourteen Times, Then Discards Half of Them](../plans/one-shell-load-builds-the-board-fourteen-times-then-discards-half.md) — **PLAN REVIEWED** — ID: 7ff55c0c-3fae-4df8-8570-b0127529c0c4
-- [ ] [Starting the Board Prints One Address, Never a Token, and Opens Nothing](../plans/starting-the-board-prints-where-to-reach-it-and-opens-nothing.md) — **PLAN REVIEWED** — ID: 2580a5cb-2ba4-4624-a772-14da1cb77dc8
-- [ ] [The Host Still Types curl Into Every Lead Prompt](../plans/the-host-still-types-curl-into-every-lead-prompt.md) — **PLAN REVIEWED** — ID: 2d22baeb-e9ae-4436-8a17-05d5f728bd98
-- [ ] [The Host Mirrors Every Turn-End Into an Inbox With No Reader and No Listener](../plans/171-blocked-reports-nobody-can-read.md) — **PLAN REVIEWED** — ID: 56e50bc2-6cc2-47f8-a1f2-b9551209f07e
-- [ ] [Mission Control Reads Its Protocols From a Directory Nothing Writes To](../plans/mission-control-reads-its-protocols-from-a-directory-nothing-writes.md) — **PLAN REVIEWED** — ID: 5372655c-4c2a-4157-9a9a-e43d601ec6f2
-- [ ] [Every Prompt to a Team Seat Is Delivered to the Previous Generation's Agent](../plans/a-tmux-seat-gets-a-blind-two-second-clear-and-loses-the-first-dispatch.md) — **PLAN REVIEWED** — ID: 59b355e5-78f7-4a13-a7c5-8f6729e7bcb8
+- [ ] [The Standing Orders Tab Hydrates Once, Over the One Channel That Can Fail](../plans/the-standing-orders-tab-hydrates-once-over-the-one-channel-that-can-fail.md) — **LEAD CODED** — ID: 9fe3046b-7256-4292-84d2-c7ba79b492de
+- [ ] [One Shell Load Builds the Board Fourteen Times, Then Discards Half of Them](../plans/one-shell-load-builds-the-board-fourteen-times-then-discards-half.md) — **LEAD CODED** — ID: 7ff55c0c-3fae-4df8-8570-b0127529c0c4
+- [ ] [Starting the Board Prints One Address, Never a Token, and Opens Nothing](../plans/starting-the-board-prints-where-to-reach-it-and-opens-nothing.md) — **LEAD CODED** — ID: 2580a5cb-2ba4-4624-a772-14da1cb77dc8
+- [ ] [The Host Still Types curl Into Every Lead Prompt](../plans/the-host-still-types-curl-into-every-lead-prompt.md) — **LEAD CODED** — ID: 2d22baeb-e9ae-4436-8a17-05d5f728bd98
+- [ ] [The Host Mirrors Every Turn-End Into an Inbox With No Reader and No Listener](../plans/171-blocked-reports-nobody-can-read.md) — **LEAD CODED** — ID: 56e50bc2-6cc2-47f8-a1f2-b9551209f07e
+- [ ] [Mission Control Reads Its Protocols From a Directory Nothing Writes To](../plans/mission-control-reads-its-protocols-from-a-directory-nothing-writes.md) — **LEAD CODED** — ID: 5372655c-4c2a-4157-9a9a-e43d601ec6f2
 <!-- END SUBTASKS -->
+
+## Completion Summary
+
+All six subtasks completed and posted by the Coding team (head: Coding; worked by Coding-intern and Coding-coder-1) on 2026-09-13. The turn-end mirror moved host reports into `plan_events` behind a `switchboard reports` CLI joined to each card's current column; Mission Control now resolves its protocols through `ProtocolService.resolveProtocol` in both hosts and fails loudly, naming the missing protocol, before any terminal is launched; the Standing Orders tab hydrates over both the WS push and a typed verb-body channel with a tri-state availability gate that names the actual refusal; one shell load coalesces fourteen concurrent board builds into two via scope-and-surface-keyed in-flight snapshots, with non-kanban panels receiving a 0.3 KB common-only snapshot; all seven generated curl strings were replaced with CLI invocations behind a no-curl ratchet contract; and startup prints one address per serve mode, never a token, and opens nothing (Phase 1 — token-machinery deletion awaits the external CSRF guard). Verified per subtask: `npm run compile-tests` clean, and the mission-control-tick, ws-surface-scoping, cross-client-scope, no-curl-in-generated-prompts, batch-move-team-prompt, drive-mode-prompt-overhaul, wsl-detection, tailscale-bind, loopback-hostname, and standalone-parity suites all green.
 

@@ -191,3 +191,7 @@ the mode that was asked for.
 
 - Is `--no-open` worth keeping as an accepted no-op indefinitely, or should it warn once and be
   dropped a release later? Keeping it forever is a small permanent lie about what the CLI does.
+
+## Implementation Summary
+
+Phase 1 implemented. The foreground and detach startup paths now print one address per serve mode matching the subcommand: `switchboard tailnet` prints the tailnet URL, `switchboard local` prints the loopback URL, bare `switchboard` prints no address. All token-bearing prints (`Board URL (one-time token)`, the `token show`/`token rotate` pointers, the "If your browser cannot resolve" fallback) were deleted from the startup output. `bootstrap.ts` no longer mints `oneTimeToken` in ephemeral mode (no durable token configured) — the immortal secret that authorised nothing is gone; in durable mode the enrolment mint stays load-bearing until phase 2 but is not printed. The `openBrowser` function and its `detectWsl` import were deleted from `cli.ts`; `--no-open` and `--open` still parse as no-ops so existing aliases and the `--detach` argv do not break. The inline menu's explicit `[1] Open in Browser` choice (cmdSetup) is untouched — it is a user action, not a default. The `wsl-detection-contract.test.js` check 6 (openBrowser source contract) was removed and the header updated; `detectWsl` itself stays tested. `npm run compile-tests` clean; `test:contract:wsl-detection`, `test:contract:tailscale-bind`, `test:contract:loopback-hostname`, and `test:contract:no-curl-in-generated-prompts` all green.

@@ -11896,7 +11896,7 @@
      * Build the relay prompt. Two parts, in this order:
      *   1. the operator's instruction verbatim, delimited — it is the point of
      *      the message and comes first so the agent reads it before the recipe;
-     *   2. a single curl against the /terminals/relay endpoint.
+     *   2. a single CLI call against the /terminals/relay endpoint.
      *
      * The prompt is an instruction, not an API tutorial. The old recipe handed
      * the agent a /tmp heredoc, a python3 JSON builder, a clearBeforePrompt
@@ -11908,24 +11908,17 @@
      * provenance itself, and validates both ends against the live fleet. The
      * agent can produce the call correctly in one attempt.
      *
-     * The API base is taken from location.origin — this page IS served by the
-     * LocalApiServer that owns /terminals/relay (the same server that owns
-     * /terminals/verb/), so it is guaranteed correct without a port-file read.
-     * PTY_HOST_ORIGIN is a DIFFERENT server (the pty host child) and must not be
-     * used here.
-     *
-     * The auth token is NOT interpolated: it reaches the shell as
-     * $SWITCHBOARD_API_TOKEN (see the ptyFleetService change) so the secret
-     * never enters the agent's scrollback or conversation history. The header is
-     * emitted unconditionally — under the extension host getAuthToken() is empty
-     * and _checkAuth short-circuits to loopback trust before reading it, so an
-     * empty value is harmless there and correct under standalone.
+     * The CLI resolves the running server, the port, and the auth header
+     * itself — the prompt no longer names curl, a port, or a token. The
+     * `<cliPath>` token is substituted server-side by `applyStandingOrders`
+     * (both hosts), which calls `substituteCliPath` on the prompt text before
+     * writing it to the terminal — the same path that substitutes the token
+     * in standing-order fragments and drive prefixes.
      *
      * Every line of the shell block starts at column 0: an indented heredoc
      * terminator is not recognised and the shell hangs waiting for input.
      */
     function buildLinkPrompt(parentName, childName, message) {
-        const api = location.origin;
         return [
             `You have been asked to relay something to another Switchboard terminal.`,
             ``,
@@ -11939,12 +11932,9 @@
             ``,
             `To deliver this to ${childName}, run:`,
             ``,
-            `curl -s -X POST "${api}/terminals/relay" \\`,
-            `  -H "Content-Type: application/json" \\`,
-            `  -H "Authorization: Bearer $SWITCHBOARD_API_TOKEN" \\`,
-            `  -d '{"to":${JSON.stringify(childName)},"from":${JSON.stringify(parentName)},"message":"<the operator instruction above, verbatim>"}'`,
+            `node "<cliPath>" api POST /terminals/relay '{"to":${JSON.stringify(childName)},"from":${JSON.stringify(parentName)},"message":"<the operator instruction above, verbatim>"}'`,
             ``,
-            `For a long or multi-line message, use a heredoc to build the JSON body instead of hand-escaping it into the -d string.`,
+            `For a long or multi-line message, use a heredoc to build the JSON body instead of hand-escaping it into the command line.`,
             ``,
             `Carry out the operator instruction now.`,
         ].join('\n');

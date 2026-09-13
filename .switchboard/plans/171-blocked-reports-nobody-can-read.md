@@ -237,3 +237,7 @@ question and none of it belongs in this plan.
 - Should a blocked report be able to act on its card — move it back to a review column, or flag it —
   rather than only being readable? That is the difference between an inbox and a queue and is a
   larger decision. Gating the writes (change 1) is worth doing regardless.
+
+## Completion Summary
+
+The host turn-end file mirror is deleted; `plan_events` is the durable record. Both composition roots (TaskViewerProvider.ts, standalone/bootstrap.ts) now call `recordTurnEndEvent` before the liveDelivery gate, writing a `turn_end` row with action `finished`/`blocked` and the plan resolved to its UUID so the JOIN to `plans` works. `writeMissionControlReport` is removed; the `MISSION_CONTROL_REPORT_DIRECTIVE` and all bundled protocol docs now describe the `plan_events` row and `switchboard reports` CLI, not file writes. A `GET /kanban/reports` route with `--kind`/`--limit` filtering is wired in LocalApiServer and served by both the Node CLI (`cmdReports`) and the Go client (`CmdReports`, registered in `ownedVerbs`/`dispatchOwned`). The 1,994 existing report files were triaged by machine: 23 surviving (card still parked) imported into `plan_events`, 199 stale (card moved on), 4 orphaned; 0 deleted — files remain as archival evidence.

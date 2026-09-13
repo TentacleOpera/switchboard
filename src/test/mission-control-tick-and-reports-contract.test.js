@@ -267,12 +267,93 @@ async function run() {
         }
     });
 
-    await check('kickoff fails closed when the runtime runsheet is missing', () => {
+    await check('kickoff resolves protocols through ProtocolService, not hardcoded paths', () => {
         const provider = read('src/services/TaskViewerProvider.ts');
         const start = provider.indexOf('public async buildMissionControlKickoffPrompt(');
         const body = provider.slice(start, provider.indexOf('\n    /**', start + 10));
-        assert.ok(/access\(runsheetPath\)/.test(body), 'kickoff does not require the selected runtime runsheet');
-        assert.ok(!/runsheet missing[^\n]*fall back to shared logic/i.test(body), 'kickoff silently drops the wake contract when a runsheet is missing');
+        // The old code hardcoded `.agents/protocols/<name>/SKILL.md` paths and
+        // used fs.access — paths the protocol system never writes for these
+        // names, so on every machine the access calls threw and the catch
+        // returned a "workflow is incomplete" apology. The fix routes through
+        // ProtocolService.resolveProtocol, the seam that knows about the
+        // control plane, workspace overrides, and the materialize cache.
+        assert.ok(/ProtocolService\.resolveProtocol\(/.test(body), 'kickoff does not resolve protocols through ProtocolService');
+        assert.ok(!/access\(sharedLogicPath\)/.test(body), 'kickoff still uses fs.access on a hardcoded shared-logic path');
+        assert.ok(!/access\(runsheetPath\)/.test(body), 'kickoff still uses fs.access on a hardcoded runsheet path');
+        assert.ok(!/\.agents.*protocols.*switchboard-mission-control.*SKILL\.md/.test(body), 'kickoff still hardcodes a .agents/protocols/switchboard-mission-control/SKILL.md path');
+    });
+
+    await check('kickoff fails loudly with an error naming the protocol, not a no-persona apology', () => {
+        const provider = read('src/services/TaskViewerProvider.ts');
+        const start = provider.indexOf('public async buildMissionControlKickoffPrompt(');
+        const body = provider.slice(start, provider.indexOf('\n    /**', start + 10));
+        // The old catch returned a "workflow is incomplete" apology as
+        // mode: 'no-persona' — a silent failure that reads like a setup
+        // problem the operator should fix. The fix returns an `error`
+        // field naming the protocol that failed to resolve, so the caller
+        // can surface it instead of launching a terminal with an apology.
+        assert.ok(/error\?:\s*string/.test(body), 'buildMissionControlKickoffPrompt return type does not declare an optional error field');
+        assert.ok(/if\s*\(!\w+Resolved\)/.test(body), 'kickoff does not check whether a resolved protocol is null before building the prompt');
+        assert.ok(/return\s*\{[^}]*mode:\s*'no-persona'[^}]*error:/.test(body), 'kickoff does not return an error field when a protocol fails to resolve');
+        assert.ok(!/workflow is incomplete/.test(body), 'kickoff still injects the "workflow is incomplete" apology instead of failing loudly');
+    });
+
+    await check('startMissionControlFromKanban builds the prompt before terminal creation and surfaces resolution errors', () => {
+        const provider = read('src/services/TaskViewerProvider.ts');
+        const start = provider.indexOf('public async startMissionControlFromKanban(');
+        const body = provider.slice(start, provider.indexOf('\n    /**', start + 10));
+        // The old code built the prompt AFTER creating the terminal, so a
+        // resolution failure left a dead terminal sitting idle. The fix
+        // builds the prompt before terminal creation and returns early on
+        // error — no terminal is launched when the protocols cannot resolve.
+        const promptBuildIdx = body.indexOf('buildMissionControlKickoffPrompt(');
+        const createTerminalIdx = body.indexOf('vscode.window.createTerminal');
+        assert.ok(promptBuildIdx !== -1 && createTerminalIdx !== -1, 'startMissionControlFromKanban missing either prompt build or terminal creation');
+        assert.ok(promptBuildIdx < createTerminalIdx, 'startMissionControlFromKanban builds the kickoff prompt AFTER terminal creation — a resolution failure would leave a dead terminal');
+        assert.ok(/if\s*\(kickoff\.error\)/.test(body), 'startMissionControlFromKanban does not check kickoff.error before proceeding');
+    });
+
+    await check('adoptMissionControlSeat builds the prompt before seating and surfaces resolution errors', () => {
+        const provider = read('src/services/TaskViewerProvider.ts');
+        const start = provider.indexOf('public async adoptMissionControlSeat(');
+        const body = provider.slice(start, provider.indexOf('\n    /**', start + 10));
+        // The adopt door is called by the agent itself (POST /mission-control/adopt).
+        // If the protocols cannot resolve, the adopt must return success: false
+        // with the error — not seat the agent and hand it an apology.
+        const promptBuildIdx = body.indexOf('buildMissionControlKickoffPrompt(');
+        // Use the seat construction line, not the return-type annotation —
+        // `MissionControlSeat` appears in the return type before the prompt
+        // build, so indexOf('MissionControlSeat') would find the wrong spot.
+        const seatIdx = body.indexOf('adoptedAt');
+        assert.ok(promptBuildIdx !== -1 && seatIdx !== -1, 'adoptMissionControlSeat missing either prompt build or seat construction');
+        assert.ok(promptBuildIdx < seatIdx, 'adoptMissionControlSeat builds the kickoff prompt AFTER seating — a resolution failure would seat the agent with no prompt');
+        assert.ok(/if\s*\(kickoff\.error\)/.test(body), 'adoptMissionControlSeat does not check kickoff.error before seating');
+    });
+
+    await check('standalone missionControlStart checks kickoff.error at every call site', () => {
+        const bootstrap = read('src/standalone/bootstrap.ts');
+        const start = bootstrap.indexOf('missionControlStart:');
+        const body = bootstrap.slice(start, bootstrap.indexOf('missionControlConfirm:', start));
+        // Both hosts must behave identically. The standalone host has three
+        // call sites for buildMissionControlKickoffPrompt (seat guard, existing
+        // terminal, new terminal). Each must check kickoff.error and return
+        // failure — a resolution failure must not launch or deliver to a terminal
+        // in either host.
+        const callSites = (body.match(/buildMissionControlKickoffPrompt\(/g) || []).length;
+        assert.ok(callSites >= 3, `standalone missionControlStart has ${callSites} call sites — expected at least 3`);
+        const errorChecks = (body.match(/if\s*\(kickoff\.error\)/g) || []).length;
+        assert.ok(errorChecks >= 3, `standalone missionControlStart checks kickoff.error ${errorChecks} times — expected at least 3 (one per call site)`);
+    });
+
+    await check('ProtocolService no longer hardcodes the improve-plan/improve-feature survivor special case', () => {
+        const ps = read('src/services/ProtocolService.ts');
+        // The two-name committed-survivor special case was deleted: both are
+        // delivery=inline, so the on-disk check was answering a question their
+        // delivery mode says should never be asked — the returned `path` was
+        // never consumed by any caller. They now resolve like every other
+        // inline protocol (body returned, no path).
+        assert.ok(!/name === "improve-plan" \|\| name === "improve-feature"/.test(ps), 'ProtocolService still hardcodes the improve-plan/improve-feature survivor special case');
+        assert.ok(!/committed-survivor/i.test(ps) || /deleted/i.test(ps), 'ProtocolService still has an active committed-survivor branch for two names');
     });
 
     await check('the handoff bullet describes what the queue watch actually does', () => {
@@ -397,14 +478,13 @@ async function run() {
 
     // ─── 5. The reports channel is documented as a contract ──────────────────
     await check('switchboard-mission-control-http documents the reports channel', () => {
-        assert.ok(/Reports channel/i.test(missionControlHttp), 'no reports-channel section — the frontmatter contract exists only in the prompt directive');
+        assert.ok(/Reports channel/i.test(missionControlHttp), 'no reports-channel section — the turn-end record contract exists only in the prompt directive');
         const section = missionControlHttp.slice(missionControlHttp.search(/### Reports channel/i));
-        for (const kind of ['finished', 'blocked', 'question', 'status']) {
+        for (const kind of ['finished', 'blocked']) {
             assert.ok(section.includes(kind), `the reports section does not name the "${kind}" kind`);
         }
-        assert.ok(section.includes('claimed_ts'), 'the reports section does not document the claim-marker body');
-        assert.ok(/\.claim/.test(section), 'the reports section does not document the claim-marker filename');
-        assert.ok(/24 hours|24-hour/i.test(section), 'the reports section does not state the staleness window');
+        assert.ok(/switchboard reports/.test(section), 'the reports section must document the `switchboard reports` CLI command — it is the read path');
+        assert.ok(/plan_events/.test(section), 'the reports section must name the plan_events table — it is the store');
         assert.ok(
             /not an HTTP surface|no endpoint/i.test(section),
             'the reports section must say there is no endpoint — describing it as HTTP is how a caller looks for a route that does not exist'
@@ -412,40 +492,26 @@ async function run() {
     });
 
     // ─── 6. The reports channel MECHANICS, behaviourally ─────────────────────
+    // writeMissionControlReport is deleted (plan 171): the file mirror is
+    // replaced by a plan_events row. The shared inbox mechanics
+    // (writeInboxFile, claimInboxItemIn, isInboxItemClaimedIn) are still used
+    // by the team reports path (writeTeamReport), so they stay under test.
     const {
         writeInboxFile,
         writeInstruction,
-        writeMissionControlReport,
         claimInboxItemIn,
         isInboxItemClaimedIn
     } = require(path.join(ROOT, 'out', 'services', 'ScheduledJobsService.js'));
 
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sb-reports-'));
 
-    await check('.switchboard absent → no Mission Control tree is created and the write fails honestly', async () => {
-        const bare = path.join(tmp, 'bare-workspace');
-        fs.mkdirSync(bare, { recursive: true });
-        const res = await writeMissionControlReport(bare, { from: 'Coding-lead', kind: 'status', body: 'hi' });
-        assert.strictEqual(res.success, false, 'a workspace with no .switchboard must not gain a Mission Control/ tree');
-        assert.ok(!fs.existsSync(path.join(bare, '.switchboard')), 'scaffold litter: .switchboard was created');
-    });
-
     const ws = path.join(tmp, 'workspace');
     fs.mkdirSync(path.join(ws, '.switchboard'), { recursive: true });
-
-    await check('two reports posted in the same second produce two files, neither clobbering the other', async () => {
-        const results = await Promise.all([
-            writeMissionControlReport(ws, { from: 'lead-a', kind: 'status', body: 'a' }),
-            writeMissionControlReport(ws, { from: 'lead-b', kind: 'status', body: 'b' })
-        ]);
-        assert.ok(results.every(r => r.success), `a concurrent post failed: ${JSON.stringify(results)}`);
-        assert.notStrictEqual(results[0].filePath, results[1].filePath, 'both reports landed on the same path — a silent clobber');
-        const bodies = results.map(r => fs.readFileSync(r.filePath, 'utf8'));
-        assert.ok(bodies.some(b => b.endsWith('a')) && bodies.some(b => b.endsWith('b')), 'one report was overwritten by the other');
-    });
+    fs.mkdirSync(path.join(ws, '.switchboard', 'mission-control', 'reports'), { recursive: true });
 
     await check('report filenames carry the report- prefix; instructions keep instr-', async () => {
-        const rep = await writeMissionControlReport(ws, { from: 'lead', kind: 'finished', body: 'done' });
+        const dir = path.join(ws, '.switchboard', 'mission-control', 'reports');
+        const rep = await writeInboxFile(dir, { from: 'lead', kind: 'finished', body: 'done' }, 'report');
         assert.ok(rep.success, rep.error);
         assert.ok(path.basename(rep.filePath).startsWith('report-'), `report filename is ${path.basename(rep.filePath)}`);
         assert.ok(rep.filePath.includes(path.join('.switchboard', 'mission-control', 'reports')), 'report landed outside the reports directory');
@@ -486,7 +552,7 @@ async function run() {
 
     await check('a claimed report reads as claimed; an unclaimed one does not', async () => {
         const dir = path.join(ws, '.switchboard', 'mission-control', 'reports');
-        const res = await writeMissionControlReport(ws, { from: 'lead', kind: 'blocked', body: 'need a decision' });
+        const res = await writeInboxFile(dir, { from: 'lead', kind: 'blocked', body: 'need a decision' }, 'report');
         const name = path.basename(res.filePath);
         assert.strictEqual(await isInboxItemClaimedIn(dir, name), false, 'a fresh report must read as unclaimed');
         await claimInboxItemIn(dir, name, 'mission-control');
@@ -495,30 +561,29 @@ async function run() {
         assert.ok(/claimed_ts:/.test(marker) && /agent:/.test(marker), 'the claim marker does not match the documented format');
     });
 
-    // ─── 7. The only TS writer has a live call site in BOTH hosts ────────────
-    await check('the turn-end mirror is wired in both hosts with the same frontmatter mapping', () => {
+    // ─── 7. The turn-end record is wired in BOTH hosts ───────────────────────
+    await check('the turn-end plan_events record is wired in both hosts with the same outcome→action mapping', () => {
         const hosts = {
             'src/services/TaskViewerProvider.ts': read('src/services/TaskViewerProvider.ts'),
             'src/standalone/bootstrap.ts': read('src/standalone/bootstrap.ts')
         };
         for (const [file, src] of Object.entries(hosts)) {
             assert.ok(
-                src.includes('writeMissionControlReport('),
-                `${file} does not mirror turn-end notices to the reports channel — a report writer with no caller is the zero-caller failure this plan diagnosed`
+                src.includes('recordTurnEndEvent('),
+                `${file} does not record turn-end notices as plan_events rows — the durable record the file mirror stood in for is gone`
             );
             assert.ok(
-                /from:\s*'system'/.test(src),
-                `${file} does not stamp from: 'system' on the mirrored notice`
-            );
-            assert.ok(
-                /kind:\s*info\.outcome === 'completed' \? 'finished' : 'blocked'/.test(src),
-                `${file}'s outcome→kind mapping differs — both hosts must produce the same frontmatter for the same event`
-            );
-            assert.ok(
-                /void writeMissionControlReport\(/.test(src),
-                `${file} awaits the mirror — a filesystem write must never delay or suppress the pty send that works today`
+                /void \(async \(\) => \{[\s\S]*?recordTurnEndEvent\(/.test(src),
+                `${file} does not fire-and-forget the record — a DB write must never delay or suppress the pty send that works today`
             );
         }
+        // The outcome→action mapping lives in the shared recordTurnEndEvent
+        // helper (ScheduledJobsService.ts), not duplicated in each host.
+        const helper = read('src/services/ScheduledJobsService.ts');
+        assert.ok(
+            /info\.outcome === 'completed' \? 'finished' : 'blocked'/.test(helper),
+            'recordTurnEndEvent outcome→action mapping differs — completed must map to finished, everything else to blocked'
+        );
     });
 
     // The bundle is the only place the two directives are named. A count of
@@ -812,8 +877,8 @@ async function run() {
             'adopt must confirm the requested name is an ACTIVE fleet terminal before recording it — a seat nothing can reach is worse than an unnamed one'
         );
         assert.ok(
-            /liveDelivery/.test(body) && /reports\//.test(body),
-            'adopt must report liveDelivery and name the reports inbox in its note — an unreachable seat that reports success is the hollow-success failure'
+            /liveDelivery/.test(body) && /plan_events/.test(body),
+            'adopt must report liveDelivery and name the plan_events record in its note — an unreachable seat that reports success is the hollow-success failure'
         );
     });
 

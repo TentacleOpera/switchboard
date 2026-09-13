@@ -35,7 +35,7 @@ import {
 } from '../services/agentPromptBuilder';
 import { resolveProtocolSet } from '../services/protocolDirectives';
 import type { ProtocolResolution } from '../services/protocolDirectives';
-import { writeMissionControlReport } from '../services/ScheduledJobsService';
+import { recordTurnEndEvent } from '../services/ScheduledJobsService';
 import { StandaloneHostPathConfigProvider, createStandaloneHostSecrets } from './hostServices';
 import {
     HostSettingsContext,
@@ -1013,16 +1013,21 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // leaking into shell history or a process list is not a standing credential.
     const ENROLMENT_TTL_MS = 15 * 60 * 1000; // 15 minutes
     const enrolmentTokens = new Map<string, number>(); // token → expiry timestamp
-    const oneTimeToken = crypto.randomBytes(32).toString('hex');
-    // The boot-time token keeps its historical unlimited lifetime in ephemeral mode.
-    // A TTL is only safe where a replacement can be minted: without a durable secret
-    // there is no credential for the CLI to present to POST /auth/mint, so expiring
-    // the boot token would leave a running board with no way in at all — recoverable
-    // only by a restart, which kills every agent. That is worse than the stale-URL
-    // risk the TTL exists to bound, and it is a regression on today's behaviour. In
-    // durable mode `token show` mints on demand, so the TTL applies and an unredeemed
-    // URL left in scrollback goes stale on its own.
-    enrolmentTokens.set(oneTimeToken, usingDurableToken ? Date.now() + ENROLMENT_TTL_MS : Number.POSITIVE_INFINITY);
+    // The boot-time token is minted ONLY when a durable token is configured.
+    // In ephemeral mode (no durable secret) the token authorises nothing —
+    // `_checkAuth` returns true before inspecting any credential on both
+    // listeners — so minting an immortal secret that exists only to be printed
+    // is a liability, not a defence. The token is also no longer printed at
+    // startup (plan: starting-the-board-prints-where-to-reach-it-and-opens-nothing),
+    // so there is no longer a print site that needs it. `switchboard token show`
+    // mints on demand in durable mode; in ephemeral mode it refuses with a clear
+    // message. Phase 2 deletes this machinery entirely.
+    const oneTimeToken = usingDurableToken
+        ? crypto.randomBytes(32).toString('hex')
+        : '';
+    if (usingDurableToken) {
+        enrolmentTokens.set(oneTimeToken, Date.now() + ENROLMENT_TTL_MS);
+    }
 
     const consumeOneTimeToken = (t: string): boolean => {
         const now = Date.now();
@@ -1136,14 +1141,14 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         }
     };
 
-    const getFullState = async (scope?: string | null) => {
+    const getFullState = async (scope?: string | null, surfaces?: Set<string>) => {
         const workspaceId = await getWorkspaceId();
         if (!workspaceId) return [];
         // Delegate to the provider's canonical state builder, scope-aware — the
         // same pipeline the extension webview receives. The scope parameter is
         // the connection's declared project, threaded from wsHub's getFullState
         // callback. Replaces hand-built literals with live state.
-        const baseState = await kanbanProvider.getFullStateMessages(workspaceRoot, scope);
+        const baseState = await kanbanProvider.getFullStateMessages(workspaceRoot, scope, surfaces);
         if (!baseState || baseState.length === 0) { return []; }
         // Prime _lastCards from the updateBoard entry (same as pushFullState).
         const boardMsg = baseState.find((m: any) => m.type === 'updateBoard');
@@ -4152,7 +4157,7 @@ Each plan file must include:
     // engine's setTurnEndNotifier AND the LocalApiServer's onTurnEndNotify
     // callback (the API-based queue/done path) share ONE delivery path — no
     // duplicated recipient resolution or deliverPrompt logic. Captures
-    // deliverPrompt, taskViewerProvider, ptyFleetService, writeMissionControlReport,
+    // deliverPrompt, taskViewerProvider, ptyFleetService, recordTurnEndEvent,
     // log, opts — all in scope here.
     const handleTurnEndNotify = (info: any) => {
         if (info.outcome === 'completed') {
@@ -4177,35 +4182,29 @@ Each plan file must include:
                 : info.outcome === 'blocked'
                     ? `[switchboard:turn-end] Seat '${seatName}' could not be reached for '${planFile}'.`
                     : `[switchboard:turn-end] Feature stall: seat '${seatName}' is idle with un-accepted subtasks remaining.`);
-            // Fire-and-forget mirror to the reports directory — a non-pty
-            // Mission Control reads the same notice as a file. Never awaited
-            // ahead of the pty send, never able to suppress it. `finished`
-            // for the seat-finished variant; `blocked` for the feature-stall and
-            // Phone-a-Friend dispatch-drop variants. Same helper, same from:
-            // system mapping as the extension host twin.
-            void writeMissionControlReport(info.workspaceRoot, {
-                from: 'system',
-                kind: info.outcome === 'completed' ? 'finished' : 'blocked',
-                planId: planFile,
-                body: message
-            }).then(r => {
-                // writeMissionControlReport RETURNS its failure rather than throwing,
-                // so a bare .catch() swallows the case that actually happens (no
-                // .switchboard dir, 5 name collisions, EACCES) and the mirror goes
-                // silently missing while the pty send still succeeds.
-                if (!r.success) { log(opts, `turn-end report mirror failed: ${r.error}`); }
-            }).catch(err => { log(opts, `turn-end report mirror threw: ${err}`); });
-            // Live-delivery suppression. Placed AFTER the report mirror and
-            // BEFORE every recipient-resolution step, because the mirror and the
-            // live send serve different readers: the mirror is a non-pty Mission
-            // Control's only channel and is never suppressed, while the live send
-            // is skipped when the queue/done relay already prompted the team lead
-            // (LocalApiServer._runQueueDone sets liveDelivery: false when it
-            // resolved a head). Without this the lead is prompted twice about one
-            // completion — notifyTurnEnd's parent walk lands on the head too,
-            // since a team member's parentInstanceId IS the head.
+            // Record the turn-end as a `plan_events` row (event_type
+            // `turn_end`, action `finished` | `blocked`). This replaces the
+            // fire-and-forget file mirror to `.switchboard/mission-control/
+            // reports/` — a gitignored directory no reader could reach. The
+            // row is indexed, joined to `plans` by `plan_id` (the plan's
+            // RELATIVE path), and pruned by `RetentionService`, so the
+            // accumulation that 190 files became cannot recur. Same
+            // outcome→action mapping as the extension host twin.
+            void (async () => {
+                await recordTurnEndEvent(db, { planFile: planFile, outcome: info.outcome, body: message });
+            })().catch(err => { log(opts, `turn-end plan_events record threw: ${err}`); });
+            // Live-delivery suppression. Placed AFTER the plan_events record and
+            // BEFORE every recipient-resolution step, because the record and the
+            // live send serve different readers: the record is the durable
+            // turn-end history (queryable, joined to the card) and is never
+            // suppressed, while the live send is skipped when the queue/done
+            // relay already prompted the team lead (LocalApiServer._runQueueDone
+            // sets liveDelivery: false when it resolved a head). Without this
+            // the lead is prompted twice about one completion — notifyTurnEnd's
+            // parent walk lands on the head too, since a team member's
+            // parentInstanceId IS the head.
             if (info.liveDelivery === false) {
-                log(opts, `turn-end: live delivery suppressed for seat '${seatName}' (${info.outcome} on ${planFile}) — the queue/done relay owns the team lead's notification. Report mirror written.`);
+                log(opts, `turn-end: live delivery suppressed for seat '${seatName}' (${info.outcome} on ${planFile}) — the queue/done relay owns the team lead's notification. plan_events row recorded.`);
                 return;
             }
             const active = ptyFleetService.listActive();
@@ -4994,8 +4993,11 @@ Each plan file must include:
                 const handle = ptyFleetService.get(seat.terminalName);
                 if (handle && handle.status === 'active') {
                     try {
-                        const { prompt } = await taskViewerProvider.buildMissionControlKickoffPrompt(root, undefined, undefined, missionId);
-                        await deliverPrompt(handle, prompt, getPromptDeliveryOptions());
+                        const kickoff = await taskViewerProvider.buildMissionControlKickoffPrompt(root, undefined, undefined, missionId);
+                        if (kickoff.error) {
+                            return { success: false, mode: 'terminal', error: kickoff.error };
+                        }
+                        await deliverPrompt(handle, kickoff.prompt, getPromptDeliveryOptions());
                         return { success: true, mode: 'terminal', friendlyName: handle.friendlyName || handle.name || MISSION_CONTROL_TERMINAL_NAME };
                     } catch (err: any) {
                         return { success: false, mode: 'terminal', error: err instanceof Error ? err.message : String(err) };
@@ -5024,24 +5026,32 @@ Each plan file must include:
                 const existing = ptyFleetService.get(MISSION_CONTROL_TERMINAL_NAME);
                 if (existing && existing.status === 'active') {
                     try {
-                        const { prompt } = await taskViewerProvider.buildMissionControlKickoffPrompt(root, undefined, undefined, missionId);
-                        await deliverPrompt(existing, prompt, getPromptDeliveryOptions());
+                        const kickoff = await taskViewerProvider.buildMissionControlKickoffPrompt(root, undefined, undefined, missionId);
+                        if (kickoff.error) {
+                            return { success: false, mode: 'terminal', error: kickoff.error };
+                        }
+                        await deliverPrompt(existing, kickoff.prompt, getPromptDeliveryOptions());
                         return { success: true, mode: 'terminal', friendlyName: existing.friendlyName || existing.name || MISSION_CONTROL_TERMINAL_NAME };
                     } catch (err: any) {
                         return { success: false, mode: 'terminal', error: err instanceof Error ? err.message : String(err) };
                     }
                 }
-                // 4. Terminal path. create() injects the boot command after its
-                //    internal SHELL_READINESS_DELAY_MS; the extra 1500ms mirrors
-                //    startMissionControlFromKanban's post-create wait so the CLI
-                //    is ready to receive the persona prompt.
+                // 4. Terminal path. Build the kickoff prompt BEFORE creating the
+                //    terminal — if the protocols cannot resolve, fail loudly and
+                //    do not launch a terminal. create() injects the boot command
+                //    after its internal SHELL_READINESS_DELAY_MS; the extra 1500ms
+                //    mirrors startMissionControlFromKanban's post-create wait so
+                //    the CLI is ready to receive the persona prompt.
+                const kickoff = await taskViewerProvider.buildMissionControlKickoffPrompt(root, undefined, undefined, missionId);
+                if (kickoff.error) {
+                    return { success: false, mode: 'terminal', error: kickoff.error };
+                }
                 try {
                     const handle = await ptyFleetService.create(
                         'mission-control', MISSION_CONTROL_TERMINAL_NAME, root, undefined, undefined, startupCommand.trim()
                     );
                     await new Promise(r => setTimeout(r, 1500));
-                    const { prompt } = await taskViewerProvider.buildMissionControlKickoffPrompt(root, undefined, undefined, missionId);
-                    await deliverPrompt(handle, prompt, getPromptDeliveryOptions());
+                    await deliverPrompt(handle, kickoff.prompt, getPromptDeliveryOptions());
                     return { success: true, mode: 'terminal', friendlyName: handle.friendlyName || handle.name || MISSION_CONTROL_TERMINAL_NAME };
                 } catch (err: any) {
                     return { success: false, mode: 'terminal', error: err instanceof Error ? err.message : String(err) };

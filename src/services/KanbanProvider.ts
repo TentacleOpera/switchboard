@@ -25,6 +25,7 @@ import { AgentSkillExporter } from './AgentSkillExporter';
 import { deriveAgentDisplayName } from './cliIdentity';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
 import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, partitionPlansByFeature, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, FOCUS_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions, PHONE_A_FRIEND_DIRECTIVE, SWITCHBOARD_LIVENESS_DIRECTIVE, SWITCHBOARD_CLI_DIRECTIVE, resolvePlanPathForWorktree, resolveWorkingDirForWorktree, normalizeRetiredWorkflowPath, buildAnalysisScopeLine, SeatDirectiveOptions, STAGE_BY_ROLE, TEAM_BATCH_PLAN_CAP, applyBatchCap, DIRECTIVE_PROTOCOL_NAMES, resolveProtocolSet } from './agentPromptBuilder';
+import { substituteCliPath } from '../utils/cliPathToken';
 import type { ProtocolResolution } from './protocolDirectives';
 import { renderPlannerWorkflowRef } from './protocolDirectives';
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord, type WorktreeRow, type ColumnUpdateOutcome } from './KanbanDatabase';
@@ -1324,8 +1325,28 @@ export class KanbanProvider implements vscode.Disposable {
      * Full-state message list for a browser WS resync (cockpit). Returns the same
      * updateColumns/updateWorkspaceSelection/cliTriggersState/updateBoard messages
      * the editor webview receives, built from the real board-cards builder.
+     *
+     * `surfaces` is the connection's declared surface set (undefined when the
+     * connection declared nothing → fail-open, receives everything). When
+     * `kanban` is NOT in the set, the board build is skipped entirely — no
+     * db.getBoard, no getCompletedPlans, no _buildBoardCards, no column building.
+     * Only the common-surface entries (autoban/pair-programming) are returned.
+     * This is the larger win for panels like `setup` and `memo`: today they
+     * pay 500 ms and a full 641-card board build for 0.3 KB of common state.
      */
-    public async getFullStateMessages(wsRoot?: string, scope?: string | null): Promise<any[]> {
+    public async getFullStateMessages(wsRoot?: string, scope?: string | null, surfaces?: Set<string>): Promise<any[]> {
+        // When the connection declared a surface set that does NOT include
+        // 'kanban', skip the entire board build — no db.getBoard, no
+        // getCompletedPlans, no _buildBoardCards, no column building. Only the
+        // common-surface entries (autoban/pair-programming) are returned. This
+        // is the larger win for panels like setup, memo, design: today they pay
+        // 500 ms and a full 641-card board build for 0.3 KB of common state.
+        // Undeclared surfaces (undefined) = fail-open = receives everything, so
+        // the full build runs (the existing behaviour).
+        const needsKanban = !surfaces || surfaces.has(SURFACES.kanban);
+        if (!needsKanban) {
+            return this._buildCommonOnlySnapshot();
+        }
         // Prefer the editor board's ACTIVE selection so the browser mirrors what the
         // editor is showing — not the primary/first workspace the caller passes.
         // Fall back to the passed root (standalone, or before any selection).
@@ -1470,6 +1491,25 @@ export class KanbanProvider implements vscode.Disposable {
             console.error('[KanbanProvider] getFullStateMessages error:', err);
             return [];
         }
+    }
+
+    /**
+     * Reduced snapshot for connections that declared a surface set WITHOUT
+     * `kanban` (design, setup, memo, terminals, etc.). Returns only the
+     * common-surface entries — autoban/pair-programming — without touching
+     * the database. The theme entry is added by the caller (bootstrap.ts
+     * getFullState wrapper), not here. An empty array (no autoban state yet)
+     * is correct: the panel gets a trivially small resync and converges via
+     * broadcasts, same as it would have after the full build was filtered
+     * away by `_filterResync`.
+     */
+    private _buildCommonOnlySnapshot(): any[] {
+        return this._autobanState
+            ? [
+                { type: 'updateAutobanConfig', state: this._autobanState, surface: SURFACES.common },
+                { type: 'updatePairProgrammingMode', mode: this._autobanState.pairProgrammingMode, surface: SURFACES.common },
+            ]
+            : [];
     }
 
     /**
@@ -5826,32 +5866,9 @@ If the user asks a question in a comment, post it as a comment on the issue. The
     private async _resolveRosterAndPort(workspaceRoot: string): Promise<{
         head: string;
         rosterLines: string[];
-        portLine: string;
-        portResolved: boolean;
     } | null> {
         const resolved = await this._resolveTeamRosterForPrompt(workspaceRoot);
         if (!resolved || resolved.members.length === 0) return null;
-
-        let portLine = 'read .switchboard/api-server-port.txt';
-        // `?.()` on the METHOD, not just the provider: `_taskViewerProvider` is
-        // set from several roots (and stubbed in the drive-prefix contract test)
-        // with objects that do not carry the full surface. A bare
-        // `provider?.getLocalApiServerPort()` throws TypeError and takes the whole
-        // batch drive prefix down.
-        const apiPort = this._taskViewerProvider?.getLocalApiServerPort?.() ?? 0;
-        if (apiPort > 0) {
-            portLine = `Port is ${apiPort}. BASE="http://127.0.0.1:${apiPort}"`;
-        } else {
-            try {
-                const portFilePath = path.join(workspaceRoot, '.switchboard', 'api-server-port.txt');
-                if (fs.existsSync(portFilePath)) {
-                    const portRaw = fs.readFileSync(portFilePath, 'utf8').trim();
-                    if (portRaw && /^\d+$/.test(portRaw)) {
-                        portLine = `Port is ${portRaw}. BASE="http://127.0.0.1:${portRaw}"`;
-                    }
-                }
-            } catch { /* best-effort */ }
-        }
 
         const rosterLines = resolved.members.map(m => {
             const roleLabel = m.role ? ` (${m.role})` : '';
@@ -5859,20 +5876,14 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             return `- ${m.name}${roleLabel} — ${statusLabel}`;
         });
 
-        return { head: resolved.head, rosterLines, portLine, portResolved: portLine.startsWith('Port is ') };
+        return { head: resolved.head, rosterLines };
     }
 
     private async _buildBatchDrivePrefix(workspaceRoot: string, plans: BatchPromptPlan[]): Promise<string | null> {
         const resolved = await this._resolveRosterAndPort(workspaceRoot);
         if (!resolved) return null;
-        const { head, rosterLines, portLine, portResolved } = resolved;
+        const { head, rosterLines } = resolved;
 
-        const closeOutTarget = portResolved
-            ? 'against $BASE'
-            : 'against the port in .switchboard/api-server-port.txt';
-        const skipPortDirective = portResolved
-            ? ' Do NOT read .switchboard/api-server-port.txt (the port is above).'
-            : '';
         const terminalDirective = head
             ? ' Your seat name is below — do not go looking it up.'
             : ' Do NOT check your own terminal name — you dispatch TO named seats (see YOUR TEAM below), and standing orders handle callbacks.';
@@ -5880,29 +5891,26 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         const originVal = head ? JSON.stringify(head).slice(1, -1) : '<your terminal name>';
 
         const block = [
-            `You are driving a batch of loose plans through your team seats. Everything you need is below — the port, your team roster, and the plan list are all in this prompt.${skipPortDirective}${terminalDirective}`,
+            `You are driving a batch of loose plans through your team seats. Everything you need is below — your team roster and the plan list are all in this prompt.${terminalDirective}`,
             '',
             ...(head ? [`YOUR SEAT: ${head}. Use this exact string wherever an instruction below says "your terminal name".`, ''] : []),
             'YOUR TEAM:',
             ...rosterLines,
             '',
-            `API: ${portLine}`,
             'Standing orders: callback contract is installed on all workers — they report to you on completion. Do not re-register.',
             '',
             'STAGING (one call per plan):',
-            'curl -s -X POST "$BASE/terminals/verb/ptySendPrompt" -H "Content-Type: application/json" --max-time 30 \\',
-            `  -d '{"name":"<seat>","data":"Implement the plan at <path>. This plan only.","clearBeforePrompt":false,"origin":"${originVal}","dispatch":{"planId":"<id>","role":"coder"}}'`,
+            `node "<cliPath>" verb ptySendPrompt '{"name":"<seat>","data":"Implement the plan at <path>. This plan only.","clearBeforePrompt":false,"origin":"${originVal}","dispatch":{"planId":"<id>","role":"coder"}}'`,
             'origin is your own seat name — it keeps the team-wide context reset from clearing you.',
             '',
             'MESSAGE (fix rounds, questions, verdicts — anything that is not a new subtask):',
-            'curl -s -X POST "$BASE/terminals/verb/ptySendPrompt" -H "Content-Type: application/json" --max-time 30 \\',
-            `  -d '{"name":"<seat>","data":"<your message>","clearBeforePrompt":false,"origin":"${originVal}"}'`,
+            `node "<cliPath>" verb ptySendPrompt '{"name":"<seat>","data":"<your message>","clearBeforePrompt":false,"origin":"${originVal}"}'`,
             'No dispatch field on a message — it would make the recipient write a plan file and report a false completion.',
             'The response tells you it landed: promptSeq is that seat\'s delivery ordinal and bytesWritten is what was written to it. bytesWritten counts the host\'s appended directives too, so it is larger than your data — that is normal.',
             '',
             'REVIEW: On callback, review git diff — not the coder\'s self-report. Coder self-report does not clear context; resend fixes to the same terminal (context preserved). Escalate after two failures on the same plan: intern → coder → lead.',
             '',
-            `CLOSE OUT EVERY PLAN — ALWAYS, no judgement call. When you are finished with a plan, commit, then POST /kanban/task/complete with {"from":"${originVal}","planId":"<that plan's planId>","workspaceRoot":"<your cwd>"} ${closeOutTarget}. Post per plan, with that plan's planId. Nothing downstream happens until you post: the coder is not cleared and you cannot be handed the next plan.`,
+            `CLOSE OUT EVERY PLAN — ALWAYS, no judgement call. When you are finished with a plan, commit, then POST /kanban/task/complete with {"from":"${originVal}","planId":"<that plan's planId>","workspaceRoot":"<your cwd>"} against the API base named in your SWITCHBOARD STATUS line. Post per plan, with that plan's planId. Nothing downstream happens until you post: the coder is not cleared and you cannot be handed the next plan.`,
             '',
             'BATCH RULES:',
             '- The plans in this batch are independent and possibly unrelated.',
@@ -5918,13 +5926,13 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             '- clearBeforePrompt stays false on every dispatch — the host overrides it to true automatically when the plan changes.',
         ];
 
-        return block.join('\n');
+        return substituteCliPath(block.join('\n'));
     }
 
     private async _buildDrivePrefix(workspaceRoot: string, plans: BatchPromptPlan[]): Promise<string | null> {
         const resolved = await this._resolveRosterAndPort(workspaceRoot);
         if (!resolved) return null;
-        const { head, rosterLines, portLine, portResolved } = resolved;
+        const { head, rosterLines } = resolved;
 
         // Extract the feature plan's file path from the plans array (the entry
         // with isFeature: true). The lead reads this file for plan IDs, file
@@ -5934,24 +5942,13 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             ? `FEATURE FILE: ${featurePlan.absolutePath}. Read it — its Subtasks section has plan IDs and file paths; its Team Dispatch Instructions section has seat assignments, acceptance criteria, and scope constraints for each subtask. This is your single source of truth for dispatch and review.`
             : 'FEATURE FILE: (not found in prompt). Read the feature plan file for plan IDs, seat assignments, and scope constraints.';
 
-        const skipPortDirective = portResolved
-            ? ' Do NOT read .switchboard/api-server-port.txt (the port is above).'
-            : '';
         const terminalDirective = head
             ? ' Your seat name is below — do not go looking it up.'
             : ' Do NOT check your own terminal name — you dispatch TO named seats (see YOUR TEAM below), and standing orders handle callbacks.';
 
         const originVal = head ? JSON.stringify(head).slice(1, -1) : '<your terminal name>';
 
-        // The close-out POST is the one instruction in this block that names an
-        // endpoint, so it is where a "read the port file" reference would undo the
-        // opener's prohibition. Point it at $BASE (set from the API line above) when
-        // the port resolved; keep the file reference only in the branch where the
-        // opener does NOT forbid reading it.
-        const closeOutTarget = portResolved
-            ? 'against $BASE'
-            : 'against the port in .switchboard/api-server-port.txt';
-        const opener = `You are driving this feature through your team seats. Everything you need is below — the port, your team roster, and the FEATURE FILE line are all in this prompt.${skipPortDirective}${terminalDirective}`;
+        const opener = `You are driving this feature through your team seats. Everything you need is below — your team roster and the FEATURE FILE line are all in this prompt.${terminalDirective}`;
 
         const block = [
             opener,
@@ -5960,23 +5957,20 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             'YOUR TEAM:',
             ...rosterLines,
             '',
-            `API: ${portLine}`,
             'Standing orders: callback contract is installed on all workers — they report to you on completion. Do not re-register.',
             '',
             'STAGING (one call per subtask):',
-            'curl -s -X POST "$BASE/terminals/verb/ptySendPrompt" -H "Content-Type: application/json" --max-time 30 \\',
-            `  -d '{"name":"<seat>","data":"Implement the plan at <path>. This subtask only.","clearBeforePrompt":false,"origin":"${originVal}","dispatch":{"planId":"<id>","role":"coder"}}'`,
+            `node "<cliPath>" verb ptySendPrompt '{"name":"<seat>","data":"Implement the plan at <path>. This subtask only.","clearBeforePrompt":false,"origin":"${originVal}","dispatch":{"planId":"<id>","role":"coder"}}'`,
             'origin is your own seat name — it keeps the team-wide context reset from clearing you.',
             '',
             'MESSAGE (fix rounds, questions, verdicts — anything that is not a new subtask):',
-            'curl -s -X POST "$BASE/terminals/verb/ptySendPrompt" -H "Content-Type: application/json" --max-time 30 \\',
-            `  -d '{"name":"<seat>","data":"<your message>","clearBeforePrompt":false,"origin":"${originVal}"}'`,
+            `node "<cliPath>" verb ptySendPrompt '{"name":"<seat>","data":"<your message>","clearBeforePrompt":false,"origin":"${originVal}"}'`,
             'No dispatch field on a message — it would make the recipient write a plan file and report a false completion.',
             'The response tells you it landed: promptSeq is that seat\'s delivery ordinal and bytesWritten is what was written to it. bytesWritten counts the host\'s appended directives too, so it is larger than your data — that is normal.',
             '',
             'REVIEW: On callback, review git diff — not the coder\'s self-report. Coder self-report does not clear context; resend fixes to the same terminal (context preserved). Escalate after two failures on the same subtask: intern → coder → lead.',
             '',
-            `CLOSE OUT EVERY SUBTASK — ALWAYS, no judgement call. When you are finished with a subtask, commit, then POST /kanban/task/complete with {"from":"${originVal}","planId":"<that SUBTASK's planId>","workspaceRoot":"<your cwd>"} ${closeOutTarget}. Accepting and rejecting are not two different endings: you reject by sending a fix round FIRST, then you post when the subtask is done. Post per subtask, with that subtask's planId — never the feature's. Nothing downstream happens until you post: the coder is not cleared and you cannot be handed the next subtask.`,
+            `CLOSE OUT EVERY SUBTASK — ALWAYS, no judgement call. When you are finished with a subtask, commit, then POST /kanban/task/complete with {"from":"${originVal}","planId":"<that SUBTASK's planId>","workspaceRoot":"<your cwd>"} against the API base named in your SWITCHBOARD STATUS line. Accepting and rejecting are not two different endings: you reject by sending a fix round FIRST, then you post when the subtask is done. Post per subtask, with that subtask's planId — never the feature's. Nothing downstream happens until you post: the coder is not cleared and you cannot be handed the next subtask.`,
             '',
             'FEATURE WATCH: Armed by the system. You will be nudged if you go idle with subtasks you have not posted completion for. No action needed — do not wait for it, do not poll for it.',
             '',
@@ -6003,7 +5997,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             '- Anything irreversible (destructive git, pushing, deleting data or cards): stop and record. The only unattended action that blocks.',
         ];
 
-        return block.join('\n');
+        return substituteCliPath(block.join('\n'));
     }
 
     /**
@@ -6367,7 +6361,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const customPhoneAFriendOriginTerminal = (overrides as any)?.originTerminal as string | undefined;
             const customPhoneAFriendDispatchId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
             const customPhoneSuffix = (mergedAddons.phoneAFriend && customApiPort)
-                ? `\n\n${PHONE_A_FRIEND_DIRECTIVE(customApiPort, role, customPhoneAFriendOriginTerminal, customPhoneAFriendDispatchId)}`
+                ? `\n\n${substituteCliPath(PHONE_A_FRIEND_DIRECTIVE(customApiPort, role, customPhoneAFriendOriginTerminal, customPhoneAFriendDispatchId))}`
                 : '';
             const customLivenessSuffix = (customApiPort > 0)
                 ? `\n\n${SWITCHBOARD_LIVENESS_DIRECTIVE(customApiPort)}`
@@ -14125,17 +14119,29 @@ ${FOCUS_DIRECTIVE}`;
                 // standing-orders config key with the HTTP endpoint so both hosts
                 // agree on what is persisted.
                 //
-                // The typed payload rides `postMessage` ONLY, as in `getIconPalette`
-                // and `getAgentGroups`. The HTTP return body deliberately carries no
-                // `type`: in the browser, transport.js dispatches the return body as a
-                // MessageEvent *and* the broadcaster mirrors the postMessage push over
-                // the WS hub, so a typed return makes the panel handle every response
-                // twice — doubling the getStandingOrders round-trips every write kicks
-                // off. Applies to all four standing-orders verbs below.
+                // The push (`type: 'standingOrders'`) rides `postMessage` ONLY,
+                // as in `getIconPalette` and `getAgentGroups`. The HTTP return body
+                // is ALSO typed — but with a DISTINCT type, `standingOrdersResult`,
+                // handled by the same webview code path as the push. The double-
+                // dispatch hazard the old "untyped body" comment guarded against
+                // applies to the WRITE verbs: their success handlers re-request
+                // getStandingOrders, so typing a WRITE body would fire that handler
+                // twice and double the round trips. A READ's body costs one extra
+                // idempotent render, not an extra round trip — safe, and it is the
+                // only channel that survives a dropped WS at request time (the push
+                // has nowhere to land while the socket is down). The three write
+                // verbs below keep untyped bodies.
+                //
+                // `reason` is carried on every `available:false` (both the push and
+                // the body) so the webview can name the refusal — `_resolveStandingOrdersRoot`
+                // returning null and a DB read throwing are different operator
+                // problems, and only one is fixed in Setup. Mirrors the HTTP
+                // endpoint's `reason` contract in LocalApiServer.
                 const workspaceRoot = this._resolveStandingOrdersRoot(msg.workspaceRoot);
                 if (!workspaceRoot) {
-                    this.postMessage({ type: 'standingOrders', available: false, orders: [], definitions: [] });
-                    return { success: false, available: false, orders: [], definitions: [] };
+                    const reason = 'No standing-orders root resolved — no workspace root available';
+                    this.postMessage({ type: 'standingOrders', available: false, orders: [], definitions: [], reason });
+                    return { success: false, available: false, orders: [], definitions: [], reason, type: 'standingOrdersResult' };
                 }
                 try {
                     const db = this._getKanbanDb(workspaceRoot);
@@ -14154,10 +14160,11 @@ ${FOCUS_DIRECTIVE}`;
                     const rawDefinitions = await db.getConfigJson<StandingOrderDefinition[]>(STANDING_ORDER_DEFINITIONS_CONFIG_KEY, []) as StandingOrderDefinition[];
                     const definitions = Array.isArray(rawDefinitions) ? rawDefinitions : [];
                     this.postMessage({ type: 'standingOrders', available: true, orders, definitions });
-                    return { success: true, available: true, orders, definitions };
+                    return { success: true, available: true, orders, definitions, type: 'standingOrdersResult' };
                 } catch (e: any) {
-                    this.postMessage({ type: 'standingOrders', available: false, orders: [], definitions: [] });
-                    return { success: false, available: false, orders: [], definitions: [], error: e?.message || 'Failed to read standing orders' };
+                    const reason = 'Standing-orders store read failed: ' + (e?.message || 'Failed to read standing orders');
+                    this.postMessage({ type: 'standingOrders', available: false, orders: [], definitions: [], reason });
+                    return { success: false, available: false, orders: [], definitions: [], reason, error: e?.message || 'Failed to read standing orders', type: 'standingOrdersResult' };
                 }
             }
             case 'addStandingOrder': {

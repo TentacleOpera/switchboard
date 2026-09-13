@@ -315,9 +315,8 @@ async function testGenerateUnifiedPromptBatchTeamHead() {
     assert.ok(prompt.startsWith('You are driving a batch of loose plans through your team seats.'), 'Prompt should start with batch drive prefix');
     assert.ok(prompt.includes('YOUR TEAM:'), 'Should contain YOUR TEAM section');
     assert.ok(prompt.includes('- Coding-coder-1 (coder) — active'), 'Should list roster members');
-    assert.ok(prompt.includes('API:'), 'Should contain API line');
     assert.ok(prompt.includes('STAGING (one call per plan):'), 'Should contain STAGING section');
-    assert.ok(prompt.includes('curl -s -X POST "$BASE/terminals/verb/ptySendPrompt"'), 'Should contain ptySendPrompt recipe');
+    assert.ok(prompt.includes('verb ptySendPrompt'), 'Should contain ptySendPrompt CLI recipe');
     assert.ok(prompt.includes('CLOSE OUT EVERY PLAN — ALWAYS, no judgement call.'), 'Should contain close out per plan instruction');
     assert.ok(prompt.includes('/kanban/task/complete'), 'Should contain /kanban/task/complete instruction');
     assert.ok(prompt.includes('BATCH RULES:'), 'Should contain BATCH RULES');
