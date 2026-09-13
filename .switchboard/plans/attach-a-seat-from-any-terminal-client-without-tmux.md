@@ -49,10 +49,41 @@ module dependency.
   coder-1's prompts into coder-2.
 - **Many viewers already work.** `f.clients[name]` is a set and `publish` fans out to all of
   them; the browser and a terminal can watch the same seat simultaneously, today.
-- **Scrollback is already served.** The ring replays on connect, which is what the browser
-  panel does.
+- **Scrollback is already served, in three tiers** — see below.
 - **Sizing has one authority.** The attach client sends its own size; there is no second
   client to arbitrate against, which is the whole reason `window-size manual` existed.
+
+### Scrollback, which is the part this trades on
+
+There are three different things called scrollback here, and only one of them is a gap.
+
+| Tier | What holds it | Size | Covers |
+| :--- | :--- | :--- | :--- |
+| Live, while attached | the operator's own terminal client | whatever it is set to | scrolling, search, mouse selection, copy |
+| Paint-on-connect | the host ring (`main.go:874`) | **256 KB** raw bytes | arriving at a seat mid-session |
+| Deep history | `.switchboard/logs/<seat>-<ts>.md` (`log.go`) | **10 MB** per session, then rolled | anything older |
+
+**Live scrolling is the client's job, and it does it better than tmux.** Bytes written to a
+normal screen land in the terminal emulator's own scrollback, where the operator's existing
+scroll gesture, search and copy already work — no prefix key, no mode to enter and leave,
+and it works on a phone where tmux copy-mode is close to unusable.
+
+**The alternate screen is the honest caveat.** When a CLI sends `?1049h` its output never
+enters the client's scrollback — that is the terminal's design, and tmux does not fix it
+either (copy-mode inside an alternate screen shows only that screen and cannot reach the
+main history). The agent CLIs draw their transcript on the normal screen with a redrawn
+composer pinned at the bottom, so the common case is covered; a full-screen pager or editor
+inside a seat is not scrollable by either mechanism.
+
+**The pre-attach window is the one real number to weigh.** 256 KB at ~96 columns is roughly
+800–1500 rendered lines once ANSI overhead is counted, against tmux's default
+`history-limit` of 2000 lines per pane. Comparable, and the seating chain's
+`capture-pane -S -50000` was already asking for more than tmux's default retains.
+
+**Deep history is where this wins outright.** The host already writes a per-session log per
+seat and has for months: 481 files and 311 MB on this machine right now, with individual
+sessions at the full 10 MB cap. tmux has no equivalent — its history dies with the server,
+which is exactly what makes "my agent said something an hour ago" unanswerable today.
 
 ### Non-goals
 
@@ -113,7 +144,16 @@ This is a clean break: teams have never shipped, and a seat created without tmux
 an empty `tmuxSession`/`tmuxWindow`, which every tmux path already treats as "not
 tmux-backed" (`close()`, `resizeTmuxWindow`, `ensureTmuxRouting` all test exactly that).
 
-### 4. Say where the seat can be reached
+### 4. `switchboard history <seat>` — reach the deep log
+
+The per-session logs already exist and nothing surfaces them. Add a verb that resolves the
+seat's current session log and pages it (honouring `$PAGER`, defaulting to plain stdout so
+it pipes), with `--session <n>` to reach a rolled predecessor and `--follow` to tail.
+
+This is the tier tmux never had, and it is the answer to "scroll back further than the
+ring": not a bigger buffer, a file that was already on disk.
+
+### 5. Say where the seat can be reached
 
 The board's startup banner already prints its URL. Add the attach hint — `switchboard
 attach <seat>` — next to it, so the terminal path is discoverable from the thing an operator
@@ -131,10 +171,12 @@ already reads on boot.
 2. **Go test** over the detach sequence: `Ctrl-\ q` detaches, and `Ctrl-\` followed by
    anything else is forwarded to the agent verbatim — a detach key that eats a legitimate
    keystroke is worse than a longer one.
-3. Assert two simultaneous clients on one seat both receive output, pinning the fan-out this
+3. Assert `switchboard history` resolves the newest session log for a seat, and that
+   `--session 1` reaches the rolled predecessor rather than silently returning the newest.
+4. Assert two simultaneous clients on one seat both receive output, pinning the fan-out this
    plan depends on (`f.clients[name]` is already a set; the test stops a future change from
    making it single-client).
-4. Regression: `test:contract:pty-host-blackbox`, `test:contract:tmux-view-chrome`,
+5. Regression: `test:contract:pty-host-blackbox`, `test:contract:tmux-view-chrome`,
    `go test ./cmd/...`, `gofmt -l ./cmd`.
 
 ### Goal Invariants
@@ -145,6 +187,10 @@ already reads on boot.
 - Ctrl-C typed into an attached seat interrupts the **agent**, not the attach client.
 - Detaching leaves the agent running and the seat unchanged — no session, no window, nothing
   to clean up afterwards. `tmux ls` is unchanged by an attach/detach cycle.
+- Arriving at a busy seat paints its recent screen from the ring, and scrolling up in the
+  operator's own terminal reaches everything that arrived since attaching.
+- `switchboard history <seat>` reaches output older than the ring, including from a previous
+  rolled session.
 - The browser panel and a terminal client can watch the same seat at once, and both see the
   same output.
 - With tmux disabled, starting a team creates zero tmux sessions and every seat is still
