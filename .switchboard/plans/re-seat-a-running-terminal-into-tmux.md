@@ -17,9 +17,9 @@ and `ptySendPrompt` can no longer address the seat. Board control would be trade
 visibility.
 
 **The seat, however, can be re-seated even though the process cannot be moved.**
-`respawnAndReinject` (`main.go:945`) already does nearly all of it: it kills the child tree,
+`respawnAndReinject` (`main.go:1109`) already does nearly all of it: it kills the child tree,
 opens a fresh pty on a login shell, and replays `t.startupCommand`. `respawnTerminal`
-(`main.go:881`) updates the terminal struct **in place** — name, listeners, ring buffer,
+(`main.go:1042`) updates the terminal struct **in place** — name, listeners, ring buffer,
 connected clients and the registry row all survive — and deliberately clears
 `tmuxWindowId`, `paneID`, `controlActive` and `parseState` so *"the respawn re-runs the
 seating chain (the startup command IS the chain)"*.
@@ -32,19 +32,19 @@ seat whose stored `startupCommand` is not a tmux chain.
 1. **No verb rewrites `startupCommand`.** The Go host exposes 13 pty verbs
    (`ptyCreateTerminal`, `ptyClearTerminal`, `ptyCloseTerminal`, `ptyWrite`,
    `ptySendPrompt`, `ptyRenameTerminal`, …). `startupCommand` is read from the payload once,
-   in `ptyCreateTerminal` (`main.go:293-300`), and thereafter only read (`:881`, `:966`).
+   in `create` (`main.go:336`), and thereafter only read (`:1043`, `:1130`).
    A seat created while tmux seating was off stores the bare composed CLI, and respawn
    faithfully re-runs it outside tmux forever.
 
 2. **The tmux identity fields are write-once at create.** `tmuxViewSession`, `tmuxSession`
-   and `tmuxWindow` are set under `f.mu` in `ptyCreateTerminal` and never reassigned —
-   `main.go:787` says so explicitly. Both close-time kills gate on them (`:801`), so a
-   re-seat that does not write them produces a seat inside tmux whose session nothing will
-   ever close.
+   and `tmuxWindow` are set under `f.mu` in `create` (`main.go:321,327,328`) and never
+   reassigned — the comment at `main.go:949` says so explicitly. Both close-time kills gate
+   on them (`:963` view kill, `:999` window kill), so a re-seat that does not write them
+   produces a seat inside tmux whose session nothing will ever close.
 
 3. **The chain builder is inline and not callable.** The tmux command chain is constructed
-   inside `createTerminal` (`goPtyFleetProjection.ts:289-471`), interleaved with the create
-   payload. Nothing else can build one.
+   inside the `create` method (`goPtyFleetProjection.ts:289-494`), interleaved with the
+   create payload. Nothing else can build one.
 
 ### Root cause
 
@@ -67,66 +67,117 @@ chain on an existing terminal without disturbing its identity.
 
 ## Metadata
 
-- **Complexity:** 4
-- **Tags:** tmux, pty-host, terminals, feature
+- **Complexity:** 5
+- **Tags:** feature, backend, ui, refactor
 
 ## User Review Required
 
 None.
 
+## Complexity Audit
+
+### Routine
+- Extracting the inline tmux chain builder out of `create` into a pure function — pure refactor, byte-identical create payload asserted by test.
+- Adding a single Go host verb that writes four existing struct fields and calls an existing function (`respawnAndReinject`).
+- Emitting the existing `change` event so the panel re-renders — one line, an existing pattern.
+- The per-seat UI action: a button shown under a condition, firing an existing verb path.
+
+### Complex / Risky
+- **Composition-root wiring across both hosts.** `reseatIntoTmux` is a TS projection method, not a Go verb. Both `handlePtyVerb` roots need an explicit `case` calling it — standalone's `default:` arm errors (`bootstrap.ts:3878`), and the extension's `default:` delegates to the Go host (`TaskViewerProvider.ts:4505`), bypassing the projection. This is the AGENTS.md composition-root trap; the seam wiring is the audit, not the verb reachability.
+- **Lock ordering around the field swap + respawn.** `f.mu` (fleet) must not be held across `respawnAndReinject`'s `waitReadiness` (up to 20s for Devin — freezes the whole fleet). The swap and the respawn are two lock regions, with a re-existence check between them against a racing `close()`.
+- **Write-once field reassignment.** Amending the write-once invariant at `main.go:949` is a documented contract change; the verb is the sole sanctioned second writer and holds `f.mu` for the swap.
+
+## Edge-Case & Dependency Audit
+
+- **Race Conditions:** A `close()` that takes `f.mu` can delete the terminal between the field-swap (under `f.mu`) and the respawn (under `t.mu`). Mitigation: after dropping `f.mu`, re-fetch the terminal under `f.mu` (or re-check `f.terminals[name]`) before taking `t.mu`; treat a missing terminal as a clean refusal, not a panic. A concurrent `ptySendPrompt` on the same seat is serialized by `t.mu` against the respawn — same as the existing clear path.
+- **Security:** The verb writes `startupCommand` from a payload. The payload is auth-gated (`LocalApiServer._checkAuth` on standalone; `TaskViewerProvider.handlePtyVerb` on extension) like every other pty verb. No new surface; no shell interpolation in the Go host (the chain is built in TS and typed into the pty, never `exec.Command`'d by the host).
+- **Side Effects:** Re-seat cold-boots the CLI (accepted, stated non-goal). The old process tree is killed by `killProcessTree` inside `respawnTerminal` — no orphan. The old *unseated* shell had no tmux state to clean up.
+- **Dependencies & Conflicts:** Depends on `respawnAndReinject` (`main.go:1109`) and `respawnTerminal` (`main.go:1042`) unchanged. Depends on the extracted chain builder (change 1) producing a byte-identical chain to the inline one — the extraction test is the gate. Conflicts with the write-once comment at `main.go:949` — amended, not removed.
+
+## Dependencies
+
+- `respawnAndReinject` (`main.go:1109`) — the existing kill-pty + fresh-shell + re-inject sequence this plan reuses.
+- `respawnTerminal` (`main.go:1042`) — the in-place struct update that preserves name/registry/listeners.
+- The tmux chain construction block in `create` (`goPtyFleetProjection.ts:289-494`) — lifted out by change 1.
+- `setTmuxSeatingResolver` wired at `bootstrap.ts:4044` (standalone only) — the seating-enabled signal the projection refuses without.
+
+## Adversarial Synthesis
+
+Key risks: (1) the reseat verb is a TS projection method that both `handlePtyVerb` roots must wire explicitly — standalone's `default:` errors and the extension's `default:` bypasses the projection, so without both `case` arms the feature 404s on the Pi and silently skips its own logic on the extension; (2) the cached handle carries `tmuxSession` but not `tmuxViewSession`, so the projection's "already seated" refusal must key on `tmuxSession` or it never fires; (3) `f.mu` must not be held across the respawn's readiness wait. Mitigations: explicit `case` arms in both roots calling `ptyFleetService.reseatIntoTmux(name)`; refusal keyed on `handle.tmuxSession`; two lock regions with a re-existence check between them.
+
 ## Proposed Changes
 
 ### 1. Extract the tmux chain builder
 
-Lift the chain construction out of `createTerminal` (`goPtyFleetProjection.ts:289-471`)
-into a function returning `{ chain, view, session, window }`, taking the seat's name, role
-and composed command. `createTerminal` calls it and is otherwise unchanged.
+Lift the chain construction out of the `create` method
+(`goPtyFleetProjection.ts:289-494`) into a function returning
+`{ chain, view, session, window }`.
+
+**Inputs (clarification — the inline block reads all of these):** the seat's `name`, `role`,
+the composed command (`composedCli`), and `opts?.tmuxSession` (the solo-seat detection at
+`:330` keys on it — without it every re-seat is treated as solo and gets no grouped view
+session). `create` calls it and is otherwise unchanged.
 
 Pure extraction: a test asserts the create path's payload is byte-identical before and
 after, so the re-seat feature cannot quietly alter how new seats are seated.
 
-### 2. `ptyReseatTerminal` — the one new verb
+### 2. `ptyReseatTerminal` — the one new Go host verb
 
-Payload `{ name, startupCommand, tmuxViewSession, tmuxSession, tmuxWindow }`. Under `f.mu`:
-overwrite those four fields on the terminal, then call `respawnAndReinject(t, t.cliFamily, "")`
-— the existing sequence, with an empty prompt, which is exactly what the clear button does.
+Payload `{ name, startupCommand, tmuxViewSession, tmuxSession, tmuxWindow }`.
+
+**Lock sequence (correction — do not hold `f.mu` across the respawn):**
+1. Under `f.mu`: look up `t := f.terminals[name]`. If absent → refuse "No such terminal".
+   If `t.tmuxViewSession != ""` → refuse "already seated". If `startupCommand == ""` →
+   refuse "respawn requires a startup command". Overwrite the four fields on `t`.
+   Drop `f.mu`.
+2. Re-fetch the terminal under `f.mu` (a racing `close()` may have deleted it). If gone →
+   return a clean refusal, not a panic. Drop `f.mu`.
+3. Under `t.mu`: call `respawnAndReinject(t, t.cliFamily, "")` — the existing sequence with
+   an empty prompt, exactly what the clear button does (`main.go:1320-1322`). Drop `t.mu`.
 
 Refusals, each a distinct error rather than a silent no-op:
 - unknown terminal name;
 - `t.tmuxViewSession != ""` — already seated, nothing to do;
-- empty `startupCommand` — respawn already refuses this at `main.go:881` and the verb
-  refuses earlier with a clearer message.
+- empty `startupCommand` — `respawnTerminal` already refuses this at `main.go:1043` and the
+  verb refuses earlier with a clearer message.
 
-The write-once comment at `main.go:787` is amended: written at create, reassigned **only**
-by this verb, which holds `f.mu` for the whole swap. The close-on-close kills at `:801` and
-`:804` then find the fields they need, so a re-seated terminal's view session is closed by
+The write-once comment at `main.go:949` is amended: written at create, reassigned **only**
+by this verb, which holds `f.mu` for the swap. The close-on-close kills at `:963` and
+`:999` then find the fields they need, so a re-seated terminal's view session is closed by
 the same path as one seated at create.
 
 ### 3. `reseatIntoTmux(name)` on the projection
 
+> **Superseded:** Refuses when `_tmuxSeatingEnabled()` is false and when the cached handle already carries a `tmuxViewSession`.
+> **Reason:** `ExtendedTerminalHandle` (`ptyFleetService.ts:118-154`) and `ProjectedTerminal` (`goPtyFleetProjection.ts:32-56`) carry `tmuxSession` but **not** `tmuxViewSession` or `tmuxWindow`. The cached handle has no `tmuxViewSession` field, so the refusal as written reads `undefined` for every seat and never fires — an already-seated seat would be re-seated, defeating the no-op gate the plan claims.
+> **Replaced with:** Refuses when `_tmuxSeatingEnabled()` is false and when the cached handle already carries a non-empty `tmuxSession` (the BASE session name, which is set for every seated seat and is already the boot-reaper's ownership signal at `ptyFleetService.ts:154`). `tmuxSession` is the sufficient proxy: a seated seat always has one, an unseated seat never does.
+
 Refuses when `_tmuxSeatingEnabled()` is false and when the cached handle already carries a
-`tmuxViewSession`. Otherwise builds the chain via change 1, calls the verb, and updates the
-cached handle's `startupCommand` and `tmuxSession` so the projection does not disagree with
-the host. Emits the existing `change` event so the panel re-renders.
+non-empty `tmuxSession`. Otherwise builds the chain via change 1, calls the verb
+(`this.supervisor.request('ptyReseatTerminal', …)`), and updates the cached handle's
+`startupCommand` and `tmuxSession` so the projection does not disagree with the host. The
+handle does not carry `tmuxViewSession` or `tmuxWindow` (only `tmuxSession`), and that is
+sufficient — nothing on the read path keys off the other two from the handle; the Go host's
+`close()` reads them from its own struct, not the cache. Emits the existing `change` event
+so the panel re-renders.
 
 ### 4. The action in the terminals panel
 
 A per-seat action on the terminals panel and the tmux tab, shown only for a seat that is
-not already seated. It fires immediately — no confirm gate, no dialog, per the repo rule.
-A team-level action re-seats every unseated member of that team.
+not already seated **and only when tmux seating is enabled** (the panel needs the
+seating-enabled signal — without it the extension host, where `_tmuxSeatingEnabled()`
+returns false, would show a button whose only effect is an error). It fires immediately —
+no confirm gate, no dialog, per the repo rule. A team-level action re-seats every unseated
+member of that team.
 
 The seat's pane goes blank and the CLI restarts; that is the visible feedback and needs no
 extra UI.
 
-### 5. Host scope
+### 5. Host scope — both composition roots
 
-`src/standalone/bootstrap.ts` is the target. The verb reaches the extension host through
-its existing `default:` delegation, so nothing 404s there — but `setTmuxSeatingResolver`
-is wired **only** at `bootstrap.ts:4043` and the resolver defaults to `false` when unwired,
-so tmux seating is already off on the extension host regardless of the setting. Re-seat
-there therefore refuses with "tmux seating is not enabled", which is the honest answer
-rather than a silent divergence. That pre-existing resolver gap is **not** fixed by this
-plan and is not introduced by it.
+> **Superseded:** `src/standalone/bootstrap.ts` is the target. The verb reaches the extension host through its existing `default:` delegation, so nothing 404s there — but `setTmuxSeatingResolver` is wired only at `bootstrap.ts:4043` and the resolver defaults to `false` when unwired, so tmux seating is already off on the extension host regardless of the setting.
+> **Reason:** Two errors. (1) The standalone `handlePtyVerb` `default:` arm (`bootstrap.ts:3878`) returns `PTY verb '${verb}' not implemented in standalone mode` — it **errors**, it does not delegate. Every existing pty verb has an explicit `case` arm (`ptyClearTerminal:2647`, `ptyWrite:2660`, `ptySendModel:2692`); a reseat verb with no case 404s on the Pi, the primary host. (2) The extension `handlePtyVerb` `default:` (`TaskViewerProvider.ts:4505`) delegates to `this._ptyHostVerb` — straight to the Go host — which **bypasses** the projection's `reseatIntoTmux` (chain building, cached-handle update, refusal checks). This is the AGENTS.md composition-root trap: the seams each host *wires* are the audit, not the verbs each host answers.
+> **Replaced with:** Both `handlePtyVerb` roots get an explicit `case` for the reseat verb that calls `ptyFleetService.reseatIntoTmux(payload.name)` and returns its result. The standalone case lives in `bootstrap.ts`'s switch (alongside `ptyClearTerminal`); the extension case lives in `TaskViewerProvider.handlePtyVerb` (alongside its pty verb arms). Neither relies on the `default:` arm. The pre-existing `setTmuxSeatingResolver` gap (unwired in the extension, so `_tmuxSeatingEnabled()` returns false there) is **not** fixed by this plan and is not introduced by it — on the extension the re-seat action is hidden (change 4 gates on seating-enabled), so the unwired resolver produces no button rather than an erroring one.
 
 ## Verification Plan
 
@@ -136,14 +187,19 @@ plan and is not introduced by it.
    **and invoked from `.github/workflows/integration-tests.yml`** — defined-but-not-invoked
    is not a gate. Asserts: re-seat writes all four fields; an already-seated seat is
    refused; a seat with no startup command is refused; the terminal keeps its name, role,
-   `parentInstanceId` and registry row across the respawn.
+   `parentInstanceId` and registry row across the respawn; the projection's cached handle
+   gains a `tmuxSession` and an updated `startupCommand` after re-seat.
 2. Extraction test for change 1: the create payload is byte-identical before and after the
    builder is lifted out, for a seated seat and an unseated one.
 3. **Go test** over the verb: the four fields are reassigned under `f.mu`, and
    `tmuxWindowId` / `paneID` / `controlActive` / `parseState` are reset exactly as
-   `respawnTerminal` already resets them.
-4. Regression: `test:contract:tmux-view-chrome`, `test:contract:pty-host-blackbox`,
-   `test:contract:pty-clear-policy`, `go test ./cmd/...`, `gofmt -l ./cmd`.
+   `respawnTerminal` already resets them; `f.mu` is not held across `waitReadiness`
+   (assert the fleet lock is releasable during a re-seat on a second seat).
+4. **Composition-root wiring test:** both `handlePtyVerb` roots resolve the reseat verb to
+   `ptyFleetService.reseatIntoTmux` (not to the Go host directly, not to the `default:`
+   error arm). The standalone-fleet-seam contract is the existing pattern to extend.
+5. Regression: `test:contract:tmux-view-chrome`, `test:contract:pty-host-blackbox`,
+   `test:contract:pty-clear-policy`, `test:contract:standalone-fleet-seam`, `go test ./cmd/...`, `gofmt -l ./cmd`.
 
 ### Goal Invariants
 
@@ -156,3 +212,9 @@ plan and is not introduced by it.
 - A seat that is already seated is refused, and the refusal names the reason.
 - New-seat creation is unchanged: the create payload is identical to what it was before
   change 1.
+- The re-seat action is absent from the terminals panel when tmux seating is disabled
+  (extension host) — no button whose only effect is an error.
+
+## Outstanding Questions
+
+- **[user]** The standalone `handlePtyVerb` `default:` arm errors rather than delegates, and the extension `default:` delegates to the Go host (bypassing the projection). This plan assumes both roots get an explicit `case` for the reseat verb (change 5). Proceeding on the assumption that explicit wiring in both roots is required and acceptable — it is the AGENTS.md "no divergence" contract.

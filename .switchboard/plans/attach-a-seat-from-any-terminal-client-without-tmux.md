@@ -97,12 +97,101 @@ which is exactly what makes "my agent said something an hour ago" unanswerable t
 
 ## Metadata
 
-- **Complexity:** 5
-- **Tags:** cli, pty-host, terminals, tmux
+- **Complexity:** 6
+- **Tags:** cli, feature, refactor
 
 ## User Review Required
 
 None.
+
+## Complexity Audit
+
+### Routine
+
+- Dialing an existing WebSocket endpoint (`ws.go` `handleWebSocket`) whose frame contract is
+  already exercised by `ws_race_test.go` — no protocol work, only a client.
+- Reading `port`/`token` from `.switchboard/pty-host-state.json` — a flat JSON file written by
+  every host at startup (`main.go:1505`).
+- `switchboard history <seat>` — paging a file that already exists on disk
+  (`.switchboard/logs/<seat>-<ts>.md`, `log.go`); the only logic is resolving the newest
+  session log and `--session <n>` indexing into rolled predecessors.
+- Flipping `switchboard.terminal.tmux.enabled` to `false` by default — a one-line schema
+  change in `package.json` plus the standalone/extension config reads.
+- Adding the attach hint to the startup banner — a one-line print next to the existing URL.
+
+### Complex / Risky
+
+- **Answerback suppression on a raw terminal.** The browser clears `suppressAnswerback`
+  inside xterm.js's write callback (`terminalViewport.js:994`); a raw terminal has no
+  callback, so the suppression window's upper bound is a timing decision, not a parse
+  boundary. Get it wrong in either direction and you either inject garbage into the agent
+  (too short) or eat the operator's first keystroke (too long).
+- **Adding `golang.org/x/term` as a new module dependency.** It is not in the module graph
+  today (see Superseded callout in §1); adding it changes the build and the cross-compile
+  set for the Pi target.
+- **The tmux default flip interacts with the legacy `terminalBackend` migration.**
+  `bootstrap.ts:4487-4489` re-promotes legacy `terminalBackend: 'tmux'` users to
+  `terminal.tmux.enabled: true` on every boot. The plan's default flip does not reach those
+  users unless the migration is also updated — and updating it changes behaviour for an
+  install base that explicitly chose tmux.
+
+## Edge-Case & Dependency Audit
+
+### Race Conditions
+
+- **Answerback vs. first keystroke.** Device-query answers arrive as a burst right after the
+  replay is written. The plan closes the suppression window on the first non-matching input.
+  If the operator types during the burst, the first real keystroke closes the window and a
+  trailing (delayed) answerback leaks through to the agent. Mitigation: the window should
+  also close on a bounded timer (the "short settle"), not solely on first non-match input.
+- **Replay vs. live frame boundary.** The host sends `hello` + one coalesced replay frame
+  back-to-back under the write lock (`ws.go:128-136`); a live `publish` cannot interleave.
+  The attach client must consume exactly `replayChars` worth of the replay frame before
+  treating subsequent binary frames as live — same contract the browser honours.
+
+### Security
+
+- The pty host binds `127.0.0.1:0` (loopback only). The attach client must be on the same
+  machine as the host — consistent with the Pi appliance model (operator SSHes in, then
+  attaches). No remote exposure is added.
+- The state file is `0o600` and carries the pty-host token. The attach client reads it with
+  the operator's own privileges; no new surface is exposed.
+
+### Side Effects
+
+- Detach closes a WebSocket; the host's `removeClient` drops the viewer from
+  `f.clients[name]`. No session, no window, no reaper — the seat is untouched.
+- The tmux default flip changes behaviour for any user who never explicitly set
+  `terminal.tmux.enabled` and relied on the `true` default. Explicit settings are preserved
+  by `configProvider`; only the unset default changes.
+
+### Dependencies & Conflicts
+
+- `golang.org/x/term` is a **new** direct dependency (not already in the graph — see
+  Superseded callout). It pulls in `golang.org/x/sys`. Both are pure Go and cross-compile to
+  `linux/arm64` for the Pi.
+- `gorilla/websocket` is already a direct dependency (`go.mod`) and is what the attach
+  client dials with.
+- The `attach`, `seats`/`history` verbs must be added to the `ownedVerbs` map in
+  `cmd/switchboard/main.go:22` — without that, the Go client delegates them to the Node
+  host instead of serving them itself.
+
+## Dependencies
+
+None — this plan depends on no other plan or session.
+
+## Adversarial Synthesis
+
+Key risks: (1) the answerback suppression window on a raw terminal has no parse-boundary
+callback to anchor it, so the "short settle" is a timing guess that can either leak garbage
+into the agent or eat a keystroke; (2) `golang.org/x/term` is a new dependency the plan
+mis-identifies as already present; (3) the tmux default flip is silently defeated for legacy
+users by the `bootstrap.ts` `terminalBackend` migration the plan does not touch; (4)
+`switchboard seats` duplicates the existing `switchboard fleet` verb. Mitigations: bound
+the suppression window with a timer in addition to first-non-match; correct the dependency
+claim and add the module explicitly; acknowledge the migration interaction and decide
+whether legacy users keep tmux (recommended — preserve their explicit choice); alias
+`seats` to `fleet` rather than building a parallel verb.
 
 ## Proposed Changes
 
@@ -125,8 +214,39 @@ Detach is an escape sequence, not Ctrl-C: Ctrl-C must reach the agent, which is 
 raw mode. Use `Ctrl-\` followed by `q` — two keys, neither of which any CLI binds — and
 print the detach key in the hello banner so it is discoverable without documentation.
 
-`golang.org/x/term` is added for raw mode and size; it is the standard library-adjacent
-answer and already an indirect dependency of the module graph.
+> **Superseded:** `golang.org/x/term` is added for raw mode and size; it is the standard
+> library-adjacent answer and already an indirect dependency of the module graph.
+>
+> **Reason:** Verified against the actual module graph: `go.mod` lists only
+> `github.com/creack/pty` and `github.com/gorilla/websocket`; `go.sum` is 4 lines with no
+> `golang.org/x/term` or `golang.org/x/sys` entry; `go list -m all` confirms the graph is
+> exactly three modules. `golang.org/x/term` is **not** present, directly or indirectly. The
+> claim that it is "already an indirect dependency" is false — adding it is a new direct
+> dependency that also pulls in `golang.org/x/sys`.
+>
+> **Replaced with:** Add `golang.org/x/term` as a new direct dependency (`go get
+> golang.org/x/term@latest`), which also brings in `golang.org/x/sys`. Both are pure Go and
+> cross-compile cleanly to `linux/arm64` for the Pi target. Alternatively, raw mode and
+> terminal size can be obtained via `golang.org/x/sys/unix` termios ioctls directly (one
+> fewer module), but `x/term`'s `MakeRaw`/`GetState`/`Restore` and `GetSize` are the
+> idiomatic choice and worth the one extra module.
+
+**Implementation detail — workspace-root resolution.** The state file lives at
+`<workspace-root>/.switchboard/pty-host-state.json` (`main.go:1499`). The attach verb must
+resolve the workspace root before it can read the file. Reuse the existing Go-client
+machinery: `ResolveEndpoint` + `ResolveServerRoot` (already used by every owned verb in
+`runOwnedVerb`, `cmd/switchboard/main.go:97-135`) resolve the board endpoint and its
+advertised root; then read `<root>/.switchboard/pty-host-state.json` for `port` and
+`token`. This keeps attach consistent with the other owned verbs and avoids a separate
+root-discovery path. (An alternative is to dial the board's own `/ws/terminal` listener,
+which proxies the upgrade to the pty host — `LocalApiServer.ts:1322` — but that adds a hop
+and requires the board's auth token; the direct loopback dial is simpler and the pty host's
+`CheckOrigin` already accepts an empty Origin for CLI clients, `ws.go:31`.)
+
+**Implementation detail — `ownedVerbs`.** Add `attach`, `seats`, and `history` to the
+`ownedVerbs` map (`cmd/switchboard/main.go:22`) and to the `dispatchOwned` switch
+(`cmd/switchboard/main.go:172`). Without this the verbs fall through to the Node host
+delegation arm and never reach the Go client.
 
 ### 2. Suppress answerback across the replay, or every attach types garbage
 
@@ -150,6 +270,17 @@ that does not match. Suppress on the INPUT side, as the browser does — do not 
 query sequences out of the replay, which mangles legitimate output and cannot be tested
 against a fixture of real agent bytes.
 
+> **Clarification (answerback window boundary):** The browser clears
+> `suppressAnswerback` inside xterm.js's async write callback (`terminalViewport.js:997`),
+> which fires when the replay has been fully parsed. A raw terminal offers no such
+> callback — bytes are written to stdout and the terminal parses them asynchronously. The
+> "short settle" must therefore be a **bounded timer** (e.g. 200–500 ms after the last
+> replay byte is written), combined with the first-non-match-input early-close. The timer is
+> the upper bound that prevents a delayed answerback from leaking if the operator never
+> types; the first-non-match close is the fast path. Without the timer, a quiet seat with a
+> slow terminal emulator could leak a late answerback after the operator's first keystroke
+> already closed the input-side window.
+
 Pin it with a test that feeds a replay containing a DA query and asserts nothing is written
 back to the host.
 
@@ -158,6 +289,18 @@ back to the host.
 `ptyListTerminals` already returns names, roles and status. Surface it as a plain table so
 `switchboard seats` then `switchboard attach <name>` is the whole workflow over SSH. `--json`
 for scripting, consistent with the existing CLI verbs.
+
+> **Clarification (`seats` vs the existing `fleet` verb):** The Go client **already** has a
+> `fleet` verb (`internal/client/verbs.go:566` `CmdFleet`) that calls
+> `/terminals/verb/ptyListTerminals` and renders a `SEAT | ROLE | STATUS | CURRENT PLAN /
+> TASK` table with `--json` support — exactly the surface §3 describes. Building a
+> parallel `seats` verb would duplicate `fleet` and create a divergence with no benefit.
+> **Replaced with:** Make `seats` a thin alias for `fleet` (add `"seats": true` to
+> `ownedVerbs` and route it to `CmdFleet` in `dispatchOwned`), so the attach workflow reads
+> naturally as `switchboard seats` → `switchboard attach <name>` without forking the
+> listing implementation. If a distinct verb is still wanted, justify why `fleet` is
+> insufficient — but do not build two verbs that call the same endpoint and render the same
+> table.
 
 ### 4. tmux seating becomes opt-in
 
@@ -168,6 +311,20 @@ is how remote viewing works.
 This is a clean break: teams have never shipped, and a seat created without tmux simply has
 an empty `tmuxSession`/`tmuxWindow`, which every tmux path already treats as "not
 tmux-backed" (`close()`, `resizeTmuxWindow`, `ensureTmuxRouting` all test exactly that).
+
+> **Clarification (interaction with the legacy `terminalBackend` migration):** The default
+> flip lives in two places that must change together: the `package.json` schema default
+> (`package.json:380`, currently `true`) and the standalone/extension config reads
+> (`bootstrap.ts:4514`, `cli.ts:4752`, `extension.ts` — all pass `true` as the fallback).
+> Additionally, `bootstrap.ts:4487-4489` runs a migration that re-promotes any legacy
+> `terminalBackend: 'tmux'` user to `terminal.tmux.enabled: true` on every boot. That
+> migration **defeats** the new default for those users. This is arguably correct — it
+> preserves the explicit intent of a user who chose tmux — but the plan must state it
+> rather than imply the flip reaches everyone. If the intent is to turn tmux off for legacy
+> users too, the migration must be updated or removed; if the intent is to preserve their
+> choice, leave the migration and document that only new installs get the `false` default.
+> Recommended: leave the migration (preserve explicit choice), flip only the schema default
+> and the `getConfigBoolean` fallbacks for new installs.
 
 ### 5. `switchboard history <seat>` — reach the deep log
 

@@ -55,29 +55,135 @@ different things on the same screen.
 
 ## Metadata
 
-- **Complexity:** 5
-- **Tags:** webview, terminals, mobile, ux
+- **Complexity:** 6
+- **Tags:** frontend, ui, ux, mobile, feature
 
 ## User Review Required
 
 None.
 
+## Complexity Audit
+
+### Routine
+
+- The key bar itself: one fixed row of buttons, `pointerdown` → `preventDefault`, send a
+  control sequence. No state beyond the sticky-Ctrl flag.
+- DECCKM-correct arrows: read `term.modes.applicationCursorKeysMode` at press time, emit
+  `ESC O X` or `ESC [ X`. The API is confirmed at `xterm.d.ts:1869`.
+- The input path: `encodeInputFrame(data)` on the existing `/ws/terminal` socket. The gateway
+  already accepts the `0x01` binary input frame (`terminalWsGateway.ts:1380`); `command.js`
+  simply never calls `ws.send`. Sending is the small part.
+- The fleet-roster change (step 7): `liveFleet` is already fetched and cached by
+  `fetchTeamsState` (`command.js:679`) via `/terminals/verb/ptyListTerminals`. The switcher is
+  already correct; only the roster it is handed is team-scoped.
+
+### Complex / Risky
+
+- **Embedding `SwitchboardTerminalViewport` in the command view.** `create(deps)` requires ~20
+  panel-side dependencies (`terminalsMap`, `fitLadderGen`, `workingSilenceShown`,
+  `getFleetList`, `getPaneAssignments`, `getFocusedPaneIndex`, `isTerminalSeated`,
+  `resyncPaneRenderer`, `startFitLadder`, `refreshInputState`, `notifyInputDropped`,
+  `showPaneToast`, `clearCaretRing`, `focusPaneTerminal`, `clearWorkingSilence`,
+  `bumpStartupCurtain`, `dismissStartupCurtain`, `showTerminalErrorToast`, `markReplayGap`,
+  `cancelDetachTimer`), most called unconditionally. None exist in the command view. This is
+  the bulk of the work and is addressed by the step-1 refactor below.
+- **Body-dataset wiring.** `command.html` sets none of `body.dataset.ptyHostOrigin`,
+  `body.dataset.terminalToken`, or `body.classList('is-solo')`, all of which the viewport
+  reads to build the socket URL. The command view today hardcodes `location.host` and `&solo=1`
+  inline; the viewport derives both from body state. These must be wired consistently on both
+  hosts or the socket origin/auth diverges.
+- **Parity seam.** The `ptyHostOrigin` / `terminalToken` wiring lands in the HTML template
+  that serves `command.html`. Both hosts must inject the same datasets, or the command view's
+  terminal connects to the wrong origin on one host and works on the other.
+
+## Edge-Case & Dependency Audit
+
+- **Race Conditions:** Seat switching already routes through `openTerminalViewer` →
+  `closeActiveWs()` before opening the next socket (`command.js:2132`), so there is never a
+  two-socket window. The viewport refactor must preserve this: the embedder mode must close
+  the prior viewport's socket before constructing the next, not after.
+- **Security:** `terminalToken` is the auth gate on the Go pty host's `/ws/terminal` upgrade
+  (`LocalApiServer.ts:1322`). If the command view's template omits it, the socket either fails
+  closed (good) or — if a fallback origin is used — silently connects unauthenticated (bad,
+  and exactly the "fallback indistinguishable from a real value" failure the rules warn of).
+  No fallback: if `terminalToken` is absent, fail the connection loudly, do not substitute
+  `location.host`.
+- **Side Effects:** `pointerdown` → `preventDefault` on key-bar buttons must keep the buttons
+  non-focusable (`tabindex="-1"` or `el.focus()` never called) or the iOS soft keyboard
+  dismisses on every arrow press — the plan's step 6 already nails this; preserve it.
+- **Dependencies & Conflicts:** `@xterm/xterm@^5.5.0`, `@xterm/addon-fit@^0.10.0` are already
+  in `package.json`. `terminalViewport.js` is already loaded by the terminals panel; loading
+  it into `command.html` adds a second `<script>` consumer of the same module — the module is
+  explicitly designed for this ("any embedder", header comment lines 4-6). No new dependency.
+
+## Dependencies
+
+- None identified.
+
+## Adversarial Synthesis
+
+Key risks: (1) the step-1 "drop in the shared viewport" framing hides a ~20-deps integration
+cost that is the real work; (2) verification check #3 ("renders through the shared module")
+can pass while replay/resize/answerback silently no-op under stubbed deps; (3) the
+`ptyHostOrigin`/`terminalToken`/`is-solo` body-dataset wiring is absent from `command.html`
+and must land on both hosts or the socket origin diverges. Mitigations: refactor
+`SwitchboardTerminalViewport` to a lightweight embedder mode (panel deps optional with guards)
+rather than stubbing panel concepts in `command.js`; tighten verification #3 to assert the
+features *fire*, not merely that the module is imported; wire the three body datasets in the
+`command.html` template on both hosts with no fallback for a missing `terminalToken`.
+
 ## Proposed Changes
 
 ### 1. The command view renders a real terminal
 
-Replace the `<pre>` stream box with the same terminal the panel uses —
-`SwitchboardTerminalViewport` over xterm — so the escapes that are currently stripped are
-interpreted, and the operator sees the agent's actual screen instead of a flattened transcript.
-
-This also brings the replay, the answerback suppression and the resize frame with it, rather
-than reimplementing a second, lesser terminal client in `command.js`. The `solo=1` socket
-already carries exactly what the viewport expects.
+> **Superseded:** Replace the `<pre>` stream box with the same terminal the panel uses —
+> `SwitchboardTerminalViewport` over xterm — so the escapes that are currently stripped are
+> interpreted, and the operator sees the agent's actual screen instead of a flattened
+> transcript. This also brings the replay, the answerback suppression and the resize frame
+> with it, rather than reimplementing a second, lesser terminal client in `command.js`. The
+> `solo=1` socket already carries exactly what the viewport expects.
+>
+> **Reason:** The socket *frame format* is compatible, but `SwitchboardTerminalViewport.create(deps)`
+> requires ~20 panel-side dependencies (listed in the Complexity Audit), most called
+> unconditionally, none of which exist in the command view. `command.html` loads only
+> `sharedUtils.js` and `command.js` — no xterm, no addons, no `terminalViewport.js` — and sets
+> none of the body datasets the viewport reads (`ptyHostOrigin`, `terminalToken`, `is-solo`
+> class). "Drop in the shared viewport" is the bulk of the work, not a one-line swap, and
+> stubbing 15 panel functions in `command.js` creates a second, divergent embedding contract
+> that drifts the moment the panel changes one — the exact divergence the rules forbid.
+>
+> **Replaced with:** Refactor `SwitchboardTerminalViewport` (`src/webview/terminalViewport.js`)
+> to expose a **lightweight embedder mode**: split a core (xterm + WebSocket +
+> `encodeInputFrame` input + resize vote + replay) from panel-only concerns (fit ladder,
+> startup curtain, pane-renderer resync, caret ring, working-silence), making the panel-only
+> deps **optional with guards** (the module already guards `deps.getPaneAssignments ?` at
+> line 1427 and `deps.isTerminalSeated ?` at 1789 — extend that pattern to the rest). The
+> command view then embeds the core with a small *real* deps bag: `ptyHostOrigin`,
+> `terminalToken`, a solo flag, and `terminalsMap` scoped to the one open terminal. One
+> terminal client, two surfaces, no divergent stub contract. Then:
+> - Load `xterm` CSS, `@xterm/xterm`, `@xterm/addon-fit`, and `terminalViewport.js` into
+>   `command.html` (script/CSS tags alongside `sharedUtils.js`/`command.js`).
+> - Wire `body.dataset.ptyHostOrigin`, `body.dataset.terminalToken`, and
+>   `body.classList.add('is-solo')` in the `command.html` template **on both hosts**
+>   (standalone `bootstrap.ts` and extension `LocalApiServer`/template path) so the viewport
+>   builds the same socket URL the command view builds today. No fallback for a missing
+>   `terminalToken` — fail the connection loudly.
+> - Replace the `<pre id="terminal-stream-output">` (`command.html:1086`) and the
+>   `textContent +=` append loop (`command.js:2164-2169`) with a viewport-mounted xterm
+>   container. The escapes that are currently stripped are then interpreted, and the operator
+>   sees the agent's actual screen. Replay, answerback suppression and the resize frame come
+>   with the core, because the core owns them.
 
 ### 2. The command view gains an input path
 
 Keystrokes go out as `encodeInputFrame(data)` on the same socket, which is the one thing
 `command.js` has never done. Without this the viewer stays read-only however well it renders.
+
+**Clarification (not a new requirement):** the gateway already accepts the `0x01` binary
+input frame on `/ws/terminal` (`terminalWsGateway.ts:1380`), and both hosts proxy
+`/ws/terminal` to the same Go pty host (`LocalApiServer.ts:1320-1339`). So the input path is
+webview-only work and carries no host divergence risk — but the parity argument is stated
+here because the rules make it a hard check, not an assumption.
 
 ### 3. A key bar in the command view
 
@@ -147,8 +253,15 @@ why it belongs here rather than in its own plan.
 2. Assert `command.js` sends on the terminal socket at all — the file currently contains zero
    `ws.send` calls, so this pins the input path against silently reverting to a read-only view.
 3. Assert the command view's terminal renders through the shared viewport module, not a second
-   hand-rolled client, and that no `textContent +=` stream box remains.
+   hand-rolled client, and that no `textContent +=` stream box remains. **Additionally assert the
+   viewport's features actually fire in the command-view embedding** — a resize vote is sent on
+   connect (`t:'resize'` frame with cols/rows ≥ 1), the replay tail is requested via `lastSeq`,
+   and answerback suppression is armed — so a green "uses the shared module" check cannot hide a
+   terminal that renders but neither resizes nor replays because panel deps were stubbed to no-ops.
 4. Assert the bar is absent on a fine-pointer viewport and present on a coarse-pointer one.
+5. Assert `command.html` loads `terminalViewport.js` and the xterm/addon-fit scripts, and that
+   `body.dataset.ptyHostOrigin` and `body.dataset.terminalToken` are injected by **both** the
+   standalone template path and the extension template path — pinning the parity seam.
 
 ### Goal Invariants
 
@@ -161,3 +274,11 @@ why it belongs here rather than in its own plan.
 - Switching seats mid-session closes the previous socket and does not leave the viewer showing a
   stale screen.
 - A desktop session is visually unchanged.
+
+## Recommendation
+
+Complexity 6 → **Send to Coder**. The key bar, input path, and fleet-roster change are
+routine; the load-bearing work is the `SwitchboardTerminalViewport` embedder-mode refactor
+(step 1), which touches the shared terminal module the panel also depends on — a coder can
+land it, but the refactor should be reviewed against the panel's existing call sites to
+confirm no panel dep became optional-and-broken in the split.
