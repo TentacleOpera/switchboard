@@ -908,11 +908,22 @@
         if (btnClearAll) {
             btnClearAll.addEventListener('click', () => withClearingFeedback(btnClearAll, clearAllTerminals));
         }
-        // tmux seating toggle. The key is ABSOLUTE (`switchboard.terminal.*`), not a
-        // `switchboard.prompts.*` panel setting — getSetting/saveSetting pass a key
-        // that already carries the namespace straight through. Default true: it must
-        // match the contributed default in package.json and the two host read sites
-        // (bootstrap.ts, cli.ts), or the checkbox lies about the state on first load.
+        // tmux seating toggle. The key must be the one the HOST reads, not merely a
+        // stable one the panel round-trips with itself.
+        //
+        // `saveSetting`/`loadSetting` store and fetch a key verbatim, so the previous
+        // `switchboard.terminal.tmux.enabled` landed at exactly that row — and the
+        // host never looks there. Every host read goes through
+        // `readConfigValueSync(root, 'terminal.tmux.enabled')`, which tries
+        // `config.terminal.tmux.enabled` then `config.switchboard.terminal.tmux.enabled`
+        // and nothing else (configJsonBridge). Neither matched, so the read returned
+        // undefined, the `true` default won, and unticking the box seated every new
+        // team in tmux anyway — while the checkbox itself showed the right state,
+        // because it read back its own unread row.
+        //
+        // `config.switchboard.` prefixed, therefore: that is what `writeConfigValue`
+        // itself writes, so the panel now lands on the same row the host, the CLI and
+        // `bootstrap.ts`'s explicit `getConfigJsonSync` lookup all read.
         const tmuxToggle = document.getElementById('tmux-enabled');
         if (tmuxToggle) {
             const TMUX_KEY = 'switchboard.terminal.tmux.enabled';
@@ -2630,9 +2641,35 @@
     }
 
     /**
+     * Deliver text straight into a pane's terminal, bracketed and submitted — the
+     * one-tap path taken when the browser hands us the clipboard.
+     *
+     * Returns false when the pane has no live terminal to deliver to, so the
+     * caller can fall back to the dialog rather than silently dropping the text.
+     * Bracketing is `term.paste()` (DEC 2004 framing plus paste attribution); the
+     * CR is a separate write, matching `deliverPaste` and the shift-drop path.
+     */
+    function deliverPasteToPane(paneIndex, text) {
+        const terminalName = paneAssignments[paneIndex];
+        if (!terminalName) { return false; }
+        const entry = terminalsMap.get(terminalName);
+        if (!entry || !entry.term || entry.disposed || entry.exited) { return false; }
+        try {
+            entry.term.paste(text);
+            if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
+                entry.ws.send(viewport.encodeInputFrame('\r'));
+            }
+        } catch {
+            return false;
+        }
+        return true;
+    }
+
+    /**
      * Programmatic and button-driven entry point to open the paste dialog for a pane.
      * Captures pane identity at call time.
      * Sized and placed with a visible, editable textarea so iOS offers its Paste callout.
+     * This is the FALLBACK — see the paste button for the one-tap path.
      */
     function openTerminalPasteDialog(targetPaneIndex) {
         if (typeof targetPaneIndex !== 'number' || targetPaneIndex < 0) { return; }
@@ -2781,6 +2818,20 @@
             // Deliver solely via term.paste(text) for DEC mode 2004 bracketed paste and attribution
             try {
                 currentEntry.term.paste(text);
+                // …then submit. Without this the button STAGED text and the
+                // operator still had to press Enter — the fourth action in a
+                // flow that should be one. `paste()` only writes the bracketed
+                // body; the CR is its own write, exactly as the shift-drop path
+                // frames its paste separately (see the prompt-drop handler).
+                //
+                // Sent over the raw socket rather than through ptySendPrompt:
+                // that verb is the dispatch path and carries the family
+                // delivery floor (5 s attended), which is the right caution for
+                // a CLI that may still be booting and pure latency for an
+                // operator pasting into a terminal they are looking at.
+                if (currentEntry.ws && currentEntry.ws.readyState === WebSocket.OPEN) {
+                    currentEntry.ws.send(viewport.encodeInputFrame('\r'));
+                }
             } catch (err) {
                 statusEl.textContent = `Paste failed: ${err?.message || String(err)}`;
                 statusEl.classList.add('is-error');
@@ -4031,6 +4082,57 @@
         const group = activeGroupId ? getAllGroups().find(g => g.id === activeGroupId) : null;
         if (!group) { return; }
         const members = getGroupMembers(group);
+        // Seat a registered team by its REGISTERED ORDER, holding a slot for a
+        // member that is not live yet — and anchor the head to slot 0.
+        //
+        // `getGroupMembers` returns `order.filter(n => live.has(n))`: it drops
+        // whatever has not registered at this instant and everyone behind it
+        // shifts up a slot. A team's four seats spawn within ~3 seconds of each
+        // other, so losing that race puts coder-1 top-left and appends the head
+        // to the last slot when it appears — and nothing re-seats afterwards, so
+        // the grid stays wrong for the session. The operator then reads the grid,
+        // pastes the lead's prompt into the top-left pane, and a coder spends the
+        // next hour acting as lead: dispatching to the intern, planning its own
+        // head commit, reporting sideways. Observed 2026-09-13.
+        //
+        // The registration already holds the answer — `order` is head-first and
+        // `head` is recorded explicitly — and neither was consulted. A null in
+        // `seatOrder` is a HELD slot: `assignments` is pre-filled with null, so
+        // the pane renders empty and the seat is filled the moment its terminal
+        // registers, in its own position.
+        //
+        // The head anchor is separate from the order on purpose: a definition
+        // edited by hand, or a group written by an older build, can carry an
+        // order that does not start with the head. Slot 0 is the one position an
+        // operator navigates by, so it is asserted rather than assumed.
+        //
+        // Pins cannot do this job: `pinnedPanes[i]` is never true while
+        // `paneAssignments[i]` is null (see the invariant at the top of this
+        // file), so a pin cannot reserve an empty slot for a terminal that has
+        // not appeared. A pin protects a seated terminal; this protects a seat.
+        let seatOrder = members;
+        if (group.source === 'manual') {
+            const registeredRaw = (Array.isArray(group.order) && group.order.length)
+                ? group.order
+                : (Array.isArray(group.members) ? group.members : []);
+            if (registeredRaw.length) {
+                const registered = registeredRaw.slice();
+                const headName = typeof group.head === 'string' ? group.head : '';
+                const headAt = headName ? registered.indexOf(headName) : -1;
+                if (headAt > 0) {
+                    registered.splice(headAt, 1);
+                    registered.unshift(headName);
+                }
+                const liveNow = new Set(fleetList.filter(t => t.status !== 'exited').map(t => t.friendlyName));
+                seatOrder = registered.map(n => (liveNow.has(n) ? n : null));
+                // A live member the registration does not know about (added after
+                // the group was written) still gets a slot, appended — never
+                // displacing a registered position.
+                for (const n of members) {
+                    if (!registered.includes(n)) { seatOrder.push(n); }
+                }
+            }
+        }
         const rendered = Math.max(1, getSlotCount(effectiveLayout));
         // Paging must count FREE slots, or the last member of each page silently
         // vanishes when a kanban pane is open.
@@ -4039,10 +4141,12 @@
             if (paneModes[i] !== 'kanban') { freeSlots.push(i); }
         }
         const perPage = Math.max(1, freeSlots.length);
-        const pageCount = Math.max(1, Math.ceil(members.length / perPage));
+        // Paging counts HELD slots too — a page whose length shrank because a
+        // member was offline would renumber every later page as seats came up.
+        const pageCount = Math.max(1, Math.ceil(seatOrder.length / perPage));
         if (activeGroupPage >= pageCount) { activeGroupPage = pageCount - 1; }
         if (activeGroupPage < 0) { activeGroupPage = 0; }
-        const page = members.slice(activeGroupPage * perPage, activeGroupPage * perPage + perPage);
+        const page = seatOrder.slice(activeGroupPage * perPage, activeGroupPage * perPage + perPage);
         const assignments = new Array(getMaxSlotCount()).fill(null);
         page.forEach((name, n) => { if (freeSlots[n] !== undefined) { assignments[freeSlots[n]] = name; } });
         paneAssignments = assignments;
@@ -7049,14 +7153,47 @@
             renderPaneGrid();
         });
 
-        // Paste button: opens the visible paste dialog for touch and insecure contexts
+        // Paste button. One tap when the browser will hand us the clipboard; the
+        // visible dialog only as a fallback.
+        //
+        // The dialog exists because `navigator.clipboard.readText()` is not
+        // always available and iOS needs a real editable field to offer its
+        // Paste callout — but it was opened UNCONDITIONALLY, so a desktop
+        // browser that would have answered readText() still cost four actions:
+        // open, paste, Send, Enter.
+        //
+        // readText() needs a SECURE CONTEXT (https, or 127.0.0.1 — a plain-http
+        // tailnet address is not one) and a live user gesture, which is why the
+        // call is made directly in the click handler and never after an await.
+        // Where it resolves this is one tap; where it rejects or is missing we
+        // fall back to the dialog, now one action shorter because Send submits.
         const pasteBtn = document.createElement('button');
         pasteBtn.className = 'btn-unassign-pane btn-paste-pane';
         pasteBtn.textContent = 'paste';
         pasteBtn.title = 'Paste text into this terminal';
         pasteBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            openTerminalPasteDialog(index);
+            const canReadClipboard = !!(navigator.clipboard && navigator.clipboard.readText && window.isSecureContext);
+            if (!canReadClipboard) {
+                openTerminalPasteDialog(index);
+                return;
+            }
+            navigator.clipboard.readText().then((text) => {
+                // An empty clipboard is not a failure to fall back from — the
+                // dialog would show the operator the same nothing.
+                if (typeof text !== 'string' || text.length === 0) {
+                    showPaneToast('Clipboard is empty');
+                    return;
+                }
+                if (!deliverPasteToPane(index, text)) {
+                    openTerminalPasteDialog(index);
+                }
+            }).catch(() => {
+                // Denied, dismissed, or unsupported despite the feature test.
+                // The dialog always works, so a rejection costs the operator a
+                // tap rather than the paste.
+                openTerminalPasteDialog(index);
+            });
         });
 
         actionsEl.appendChild(pinBtn);
@@ -7864,8 +8001,9 @@
      * host-derived signals, which is the correct ordering.
      *
      * NOTE the inbox's REACH: only the per-team inbox has a read route. A seat
-     * outside a spawned team writes to `.switchboard/mission-control/reports/`,
-     * which LocalApiServer does not serve, so that seat's declarations cannot be
+     * outside a spawned team has no team reports inbox — its turn-end notices
+     * are recorded as `plan_events` rows (queryable via `switchboard reports`),
+     * not as files LocalApiServer serves, so that seat's declarations cannot be
      * read here at all. Such a pane shows `nothing declared` — which is honest
      * about this client's knowledge, not about the seat, and is the reason the
      * host-derived block is always rendered rather than hidden when a report
@@ -11160,11 +11298,9 @@
             id: 'reports-to-head',
             label: 'Reports to me — it works what I hand it',
             direction: 'member-receives',
-            // Byte-identical to AGENT_GROUP_CALLBACK_INSTRUCTION in teamWiring.ts
-            // and to the reports-to-head template in linkPresets.ts.
+            // Byte-identical to the reports-to-head template in linkPresets.ts.
             // {child} is the head terminal name — substituted by resolvePreset
-            // in the pair-order path (childName = headName for member-receives)
-            // and by wireSpawnedTeam directly when building the team prompt.
+            // in the pair-order path (childName = headName for member-receives).
             template:
                 '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt ' +
                 '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) ' +
@@ -11555,29 +11691,6 @@
     /** Client-side mirror of `applyStandingOrders` from `src/services/standingOrders.ts`. */
 
     /**
-     * Pre-rewrite callback text — byte-identical to the shipped
-     * AGENT_GROUP_CALLBACK_INSTRUCTION before the team-prompt change.
-     * Existing installs have per-member pair rows carrying this exact string.
-     * The migration recogniser matches against it (not the post-rewrite
-     * constant) because this is what is actually on disk.
-     *
-     * Mirror of PRE_REWRITE_CALLBACK_INSTRUCTION in teamWiring.ts.
-     */
-    var PRE_REWRITE_CALLBACK_INSTRUCTION =
-        'it is your head agent. When you finish a task, report to it — POST /terminals/verb/ptySendPrompt with '
-        + '{"name":"<that terminal>","data":"<your report>","clearBeforePrompt":false} against the port in '
-        + '.switchboard/api-server-port.txt — naming what you changed and what to review. Do not wait to be asked.';
-
-    /**
-     * Post-rewrite callback template — {child} is the head terminal name.
-     * Mirror of AGENT_GROUP_CALLBACK_INSTRUCTION in teamWiring.ts.
-     */
-    var POST_REWRITE_CALLBACK_INSTRUCTION =
-        '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
-        + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
-        + '— naming what you changed and what to review. Do not wait to be asked.';
-
-    /**
      * Git safety directive — mirror of GIT_SAFETY_DIRECTIVE in
      * agentPromptBuilder.ts. One source of truth in the host; this copy
      * exists because the webview cannot import TypeScript modules. The
@@ -11587,176 +11700,17 @@
         'Never run work-discarding or history-rewriting commands: git reset (--hard/--mixed), git checkout `<path>` / git restore, git clean, git stash drop/clear, force pushes, or branch/worktree deletion. If you make a mistake, do not discard — commit first, then correct forward. Stage by explicit path only the files belonging to the work you are committing — never `git add -A` or `git add .` — other agents may be working the same tree.';
 
     /**
-     * POST-rewrite Coding team headPrompt — mirror of NEW_CODING_HEAD_PROMPT
-     * in teamWiring.ts. Subtask-level, single-action: the lead finishes each
-     * subtask, commits, posts completion for that subtask, and asks for the
-     * next card via queue/next. {head} is substituted with the live head name.
+     * Client-side standing-orders renderer.
+     *
+     * System team protocol is composed at delivery by the host
+     * (selectOrders in standingOrders.ts) from the fragment library, and never
+     * persisted. The persisted store holds only what a human authored, so the
+     * client no longer runs migration recognisers or composes system bodies —
+     * that would make this panel a second source of system protocol, drifting
+     * from the host. The client renders the persisted rows the host returned
+     * (operator-authored Link-up pair rows, authored team/head prompts,
+     * role-scoped notes) and nothing else.
      */
-    var NEW_CODING_HEAD_PROMPT_CLIENT =
-        'You lead this team. Your coders work the subtasks of one feature. '
-        + 'PLAN FILES ARE THE SOURCE OF TRUTH. Do not rewrite, edit, restructure, or replace plan content. '
-        + 'Read the plan, dispatch based on it, review against it — never modify its content. '
-        + 'Each subtask carries '
-        + 'a recommendedRole; dispatch it to a seat of that role on your team. If your team has '
-        + 'no such seat, dispatch to a coder and say why in your status report. Your team\'s seats are the '
-        + 'ptyListTerminals rows whose parentInstanceId matches your SWITCHBOARD_AGENT_INSTANCE_ID — role alone '
-        + 'is not a membership test, and a standalone seat of the same role is not yours to drive. Take the '
-        + 'subtask\'s recommendedRole as the routing decision; do not invent complexity tiers. Before sending any '
-        + 'seat a revert or stand-down, confirm with git diff that the state you are undoing exists. When a seat fails '
-        + 'review on the same subtask twice, do not send that subtask to it a third time — escalate '
-        + 'one rung along intern → coder → lead, name the specific defects in the dispatch, and say '
-        + 'in your status report which seat you moved it to and why; if the seat that failed twice is '
-        + 'a lead, or your team has no seat above it, stop and report to the human instead of '
-        + 'dispatching again (or unattended: record the blocked card to .switchboard/mission-control/reports/ '
-        + 'and proceed to the next queue item). When a coder reports a subtask finished, note it and '
-        + 'dispatch the next subtask to an idle seat that has not already worked on it — do not stack '
-        + 'subtasks on the same coder, or it will hit its context limit mid-task. One subtask per '
-        + 'cleared seat before rotation. When a coder finishes its turn, the system delivers a '
-        + 'completion prompt into this terminal — you do not need to check, wait, or watch for it. '
-        + 'Do not sleep, poll, loop, or run any timer to find out whether a coder is done. '
-        + 'Dispatch what is dispatchable, close out what is closable, and end your turn. '
-        + 'An idle lead is the correct resting state, not a failure. '
-        + 'Do not send anything to the reviewer, and do not write review '
-        + 'instructions — that is not your job. '
-        + 'Never move a card backwards to an earlier pipeline stage — only Mission Control may do that. '
-        + 'Never move a card to a new column yourself — that is not your role. '
-        + 'When the work is complete, stage the files you changed by explicit path '
-        + '— never `git add -A` or `git add .`. Then create a single commit with a '
-        + 'descriptive message. '
-        + 'POST /kanban/task/complete with {"from":"{head}","planId":"<the subtask\'s planId>","workspaceRoot":'
-        + '"<your current working directory>"} against the API base named in your SWITCHBOARD STATUS line. '
-        + 'The card stays where it is. Completion is asserted, never inferred from board position. '
-        + 'run node "<cliPath>" next --from "{head}" (or switchboard next --from "{head}"); '
-        + 'if it returns a dispatched card, work it; if it returns dispatched: null, report that the queue is '
-        + 'empty and stop.';
-
-    /**
-     * Client-side mirror of migrateTeamPairOrders from teamWiring.ts.
-     *
-     * Recognises pre-rewrite per-member pair rows (instruction matches
-     * PRE_REWRITE_CALLBACK_INSTRUCTION), groups them by head (the `child`
-     * field in member-receives direction), and folds them into team-scoped
-     * orders carrying the default team prompt (callback + git safety).
-     * Unrecognised rows are left untouched.
-     *
-     * Applied INSIDE applyStandingOrdersClient at render time — NOT at the
-     * GET /terminals/standing-orders fetch level — so the standingOrders
-     * array used by the Link-up editor for delete-by-id is never touched
-     * and ids do not churn.
-     */
-    function migrateTeamPairOrdersClient(orders) {
-        if (!Array.isArray(orders) || orders.length === 0) { return orders; }
-
-        var groups = {}; // headName → true (we only need the head name)
-        var recognised = {}; // order id → true
-
-        for (var i = 0; i < orders.length; i++) {
-            var o = orders[i];
-            if (!o || typeof o !== 'object') { continue; }
-            var scope = o.scope || 'pair';
-            if (scope !== 'pair') { continue; }
-            if (o.instruction !== PRE_REWRITE_CALLBACK_INSTRUCTION) { continue; }
-            var headName = o.child;
-            if (!headName) { continue; }
-            if (!o.parent) { continue; }
-
-            groups[headName] = true;
-            recognised[o.id] = true;
-        }
-
-        var recognisedCount = Object.keys(recognised).length;
-        if (recognisedCount === 0) { return orders; }
-
-        var migrated = [];
-        var headNames = Object.keys(groups);
-        for (var j = 0; j < headNames.length; j++) {
-            var headName = headNames[j];
-            var teamId = 'team_' + encodeURIComponent(headName).replace(/[^a-zA-Z0-9_]/g, '_');
-            var callbackText = POST_REWRITE_CALLBACK_INSTRUCTION.replace(/\{child\}/g, headName);
-            var instruction = callbackText + '\n' + GIT_SAFETY_DIRECTIVE_CLIENT;
-            migrated.push({
-                id: 'migrated-team-' + teamId,
-                parent: headName,
-                child: '',
-                instruction: instruction,
-                createdAt: Date.now(),
-                scope: 'team',
-                teamId: teamId,
-            });
-        }
-
-        // Check for existing team-scoped orders with the same teamId to
-        // avoid duplication (e.g. from a prior wireSpawnedTeam call).
-        var existingTeamIds = {};
-        for (var k = 0; k < orders.length; k++) {
-            var ord = orders[k];
-            if (ord && ord.scope === 'team' && ord.teamId) {
-                existingTeamIds[ord.teamId] = true;
-            }
-        }
-        var newTeamOrders = [];
-        for (var m = 0; m < migrated.length; m++) {
-            if (!existingTeamIds[migrated[m].teamId]) {
-                newTeamOrders.push(migrated[m]);
-            }
-        }
-
-        var kept = [];
-        for (var n = 0; n < orders.length; n++) {
-            if (!recognised[orders[n].id]) {
-                kept.push(orders[n]);
-            }
-        }
-        return kept.concat(newTeamOrders);
-    }
-
-    /**
-     * Client-side mirror of migrateCodingTeamOrders from teamWiring.ts.
-     *
-     * Drops the stale reviewer pair row (instruction equals the resolved
-     * reviewer preset text for this parent/child pair). Unrecognised rows
-     * are left untouched.
-     *
-     * Applied INSIDE applyStandingOrdersClient at render time, composed
-     * AFTER migrateTeamPairOrdersClient so the pair converter sees the array
-     * shape it expects. Pure — does not mutate the input array or the
-     * persisted standingOrders. Idempotent.
-     */
-    function migrateCodingTeamOrdersClient(orders) {
-        if (!Array.isArray(orders) || orders.length === 0) { return orders; }
-
-        var drop = {};       // order id → true
-        var touched = false;
-
-        for (var i = 0; i < orders.length; i++) {
-            var o = orders[i];
-            if (!o || typeof o !== 'object') { continue; }
-
-            // Stale reviewer pair row: instruction equals the resolved
-            // reviewer preset text for this (parent, child) pair. Drop it.
-            var scope = o.scope || 'pair';
-            if (scope === 'pair') {
-                var expected = resolvePreset('reviewer', o.parent, o.child);
-                if (expected && o.instruction === expected) {
-                    drop[o.id] = true;
-                    touched = true;
-                    continue;
-                }
-            }
-        }
-
-        if (!touched) { return orders; }
-
-        var kept = [];
-        for (var j = 0; j < orders.length; j++) {
-            var ord = orders[j];
-            if (!drop[ord.id]) {
-                kept.push(ord);
-            }
-        }
-        return kept;
-    }
-
     function applyStandingOrdersClient(prompt, targetName, orders, liveNames) {
         if (!prompt) { return prompt; }
         // Strip a pre-existing block so a prompt that already carries one does
@@ -11764,17 +11718,10 @@
         // the host resolver's strip + re-append behaviour.
         var cleanPrompt = prompt.replace(STANDING_ORDERS_BLOCK_RE, '');
 
-        // Migrate pre-rewrite per-member pair rows into team-scoped orders,
-        // then migrate stale Coding-team orders, before selection. Pure
-        // transforms — do not mutate the input array or the persisted
-        // standingOrders. Mirror migrateTeamPairOrders +
-        // migrateCodingTeamOrders in teamWiring.ts. Pair-fold first, then
-        // Coding-team rewrite, so the pair converter sees the array shape
-        // it expects.
-        var effectiveOrders = migrateCodingTeamOrdersClient(migrateTeamPairOrdersClient(orders));
-
         // Scope-aware selection — mirrors selectOrders in standingOrders.ts.
-        var mine = effectiveOrders.filter(function (o) {
+        // System team/team-head orders are NOT synthesised here; the host
+        // composes them at delivery. The client renders only persisted rows.
+        var mine = orders.filter(function (o) {
             var scope = o.scope || 'pair';
             if (scope === 'global') { return true; }
             // `role` scope is host-resolved: matching it needs the terminal-to-role

@@ -569,6 +569,16 @@ jobs:
       - name: task/complete instruction contract (instructions match handler validation)
         run: npm run test:contract:task-complete-instruction
 
+      # A team seats by its registered order with the head in slot 0, holding a
+      # slot for a member that has not registered yet. Seating from the
+      # liveness-filtered list dropped whatever had not come up and shifted every
+      # later seat up a pane, putting coder-1 top-left and the head last. The
+      # operator then pasted the lead's prompt into the wrong pane and a coder
+      # ran as lead for an hour. Pins cannot cover it — a pin cannot reserve an
+      # empty slot.
+      - name: Team pane order contract (registered order, head in slot 0, held slots)
+        run: npm run test:contract:team-pane-order
+
       - name: Tailnet LocalAPI Host-header contract (Host header sent, unavailable distinguished from empty)
         run: npm run test:contract:tailnet-localapi-host-header
 
