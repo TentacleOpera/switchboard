@@ -124,30 +124,20 @@ next stage (triggers CLI if enabled)"* — an accidental press fires prompts at 
 restoring the columns while twenty seats keep working on prompts nobody meant to send is not a
 recovery. Undo must reach the terminals.
 
-So the operation records **which seats it delivered to**, and undo sends each of them an interrupt.
+So the operation records **which seats it delivered to**, and undo sends each of them ESC.
 
-**This cannot be a blanket ESC.** Measured 2026-08-23 across eight CLIs: ESC is not a
-"dismiss and continue" key — after typing, the text survives on claude, devin and agy, and
-**copilot echoes ESC as a literal `^[` into its input box**. Those measurements were taken with
-nothing submitted, so they describe a seat sitting at an idle prompt, which is precisely the seat
-that must not receive one: there ESC is not an interrupt, it is garbage typed into the box.
+Two constraints, and nothing beyond them:
 
-The distinction is *is this seat mid-turn*, and it is the same distinction the delivery path already
-gets wrong — it knows only `status` and `lastDataAt`, which is why it presses Enter into surfaces it
-cannot see. An interrupt sent on that basis inherits the same defect.
+- **Only the seats this operation delivered to**, recorded at delivery — never every terminal, and
+  never inferred afterwards from liveness. A seat busy on unrelated work is not part of this undo.
+- **The interrupt key must not default.** ESC interrupts Claude (demonstrated 2026-09-14). What
+  interrupts the other families is not established, and one measurement that does exist cuts the
+  other way: copilot echoes ESC as a literal `^[` rather than acting on it. So a seat whose family
+  is not known to take ESC is reported by name and left alone. A family→key table pretending to be
+  a runtime probe is the mistake `CLI_AGENT_REGEX` was deleted for.
 
-Therefore:
-
-- Send only to seats this operation actually delivered to, recorded at delivery — never to every
-  terminal, and never inferred afterwards from liveness.
-- Send only to a seat observed to be mid-turn. The echo probe already identified for this
-  (`handle.onData(cb)` on the handle `sendPromptToPty` holds, `ptyBackend.ts`) distinguishes a live
-  input box from a busy or blocked one without a per-CLI pattern list.
-- The interrupt key is per family and **must not** default. An unrecognised family is reported by
-  name and left alone — guessing ESC for it is how copilot's box gets `^[` typed into it. A static
-  family→key table pretending to be a runtime probe is the mistake `CLI_AGENT_REGEX` was deleted for.
-- Report what was interrupted and what was not. A seat that could not be interrupted is a seat
-  still working on an unwanted prompt, and the operator has to know which.
+Whether the seat has already finished its turn is **not** checked. An ESC into a settled Claude seat
+costs nothing, and a liveness probe on the delivery path is a subsystem this does not need.
 
 ### 7. Both composition roots
 
@@ -174,10 +164,10 @@ on one host and absent on the other is the divergence `CLAUDE.md` names, and it 
 5. Assert the advertised undo count matches the number of cards the undo restores.
 6. Assert the undo button lives in `#kanban-sub-bar` and survives longer than the 5000 ms
    `showStatusBarMessage` timeout, while an ordinary status message still clears at 5000 ms.
-7. Assert undo interrupts only seats this operation delivered to — a seat that was busy on
-   unrelated work receives nothing.
-8. Assert an unrecognised CLI family is reported and **not** sent an interrupt key, and that no
-   family→key default exists for one.
+7. Assert undo sends ESC only to seats this operation delivered to — a seat busy on unrelated work
+   receives nothing.
+8. Assert a family not known to take ESC is reported and sent nothing, and that no family→key
+   default exists.
 9. Assert no `confirm()`, `window.confirm()` or modal gate exists on the move path, on either host.
 
 ### Goal Invariants
@@ -191,3 +181,4 @@ on one host and absent on the other is the divergence `CLAUDE.md` names, and it 
   every time.
 - Undoing a move stops the agents that move set working, and says which ones it could not stop.
 - No seat is ever sent an interrupt key chosen by a default.
+- No seat outside the undone operation is touched.
