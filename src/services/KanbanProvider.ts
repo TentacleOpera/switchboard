@@ -37,7 +37,7 @@ import { SURFACES } from './wsHub';
 import { reviveWithRetention, injectInitialWebviewState } from '../utils/reviveWithRetention';
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent, resolveRoleWithDegradation } from './complexityScale';
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
-import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, DEFAULT_TEAM_DEFINITIONS, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor, readTeamPacing, readTeamPairProgramming, resolveTeamDefinitionForHeadTerminal, type TeamPairProgrammingIntensity, mutateTerminalGroups, describeStandingOrderMigrations, resolveTeamMembersForHead, resolveTeamById } from './teamWiring';
+import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, DEFAULT_TEAM_DEFINITIONS, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor, readTeamPacing, readTeamPairProgramming, resolveTeamDefinitionForHeadTerminal, type TeamPairProgrammingIntensity, mutateTerminalGroups, resolveTeamMembersForHead, resolveTeamById } from './teamWiring';
 import { mutateStandingOrders, mutateStandingOrderDefinitions, makeStandingOrder, makeStandingOrderDefinition, syncDefinitionToAssignments, validateInstruction, STANDING_ORDERS_CONFIG_KEY, STANDING_ORDER_DEFINITIONS_CONFIG_KEY, type StandingOrder, type StandingOrderDefinition, type StandingOrderScope } from './standingOrders';
 import { KanbanService, type KanbanServiceContext } from './kanbanService';
 import { KANBAN_VERBS } from '../generated/verbAllowlist';
@@ -5902,7 +5902,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             '',
             'REVIEW: On callback, review git diff — not the coder\'s self-report. Coder self-report does not clear context; resend fixes to the same terminal (context preserved). Escalate after two failures on the same plan: intern → coder → lead.',
             '',
-            `CLOSE OUT EVERY PLAN — ALWAYS, no judgement call. When you are finished with a plan, commit, then POST /kanban/task/complete with {"from":"${originVal}","planId":"<that plan's planId>","workspaceRoot":"<your cwd>"} ${closeOutTarget}. Post per plan, with that plan's planId. Nothing downstream happens until you post: the coder is not cleared and you cannot be handed the next plan.`,
+            `CLOSE OUT EVERY PLAN — ALWAYS, no judgement call. When you are finished with a plan, commit, then POST /kanban/task/complete with {"from":"${originVal}","planId":"<that plan's planId>","workspaceRoot":"<your cwd>","outcome":"<one line stating what was done>"} ${closeOutTarget}. Post per plan, with that plan's planId. Nothing downstream happens until you post: the coder is not cleared and you cannot be handed the next plan.`,
             '',
             'BATCH RULES:',
             '- The plans in this batch are independent and possibly unrelated.',
@@ -5976,7 +5976,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             '',
             'REVIEW: On callback, review git diff — not the coder\'s self-report. Coder self-report does not clear context; resend fixes to the same terminal (context preserved). Escalate after two failures on the same subtask: intern → coder → lead.',
             '',
-            `CLOSE OUT EVERY SUBTASK — ALWAYS, no judgement call. When you are finished with a subtask, commit, then POST /kanban/task/complete with {"from":"${originVal}","planId":"<that SUBTASK's planId>","workspaceRoot":"<your cwd>"} ${closeOutTarget}. Accepting and rejecting are not two different endings: you reject by sending a fix round FIRST, then you post when the subtask is done. Post per subtask, with that subtask's planId — never the feature's. Nothing downstream happens until you post: the coder is not cleared and you cannot be handed the next subtask.`,
+            `CLOSE OUT EVERY SUBTASK — ALWAYS, no judgement call. When you are finished with a subtask, commit, then POST /kanban/task/complete with {"from":"${originVal}","planId":"<that SUBTASK's planId>","workspaceRoot":"<your cwd>","outcome":"<one line stating what was done>"} ${closeOutTarget}. Accepting and rejecting are not two different endings: you reject by sending a fix round FIRST, then you post when the subtask is done. Post per subtask, with that subtask's planId — never the feature's. Nothing downstream happens until you post: the coder is not cleared and you cannot be handed the next subtask.`,
             '',
             'FEATURE WATCH: Armed by the system. You will be nudged if you go idle with subtasks you have not posted completion for. No action needed — do not wait for it, do not poll for it.',
             '',
@@ -14109,8 +14109,8 @@ ${FOCUS_DIRECTIVE}`;
                 // directly (VS Code webview CSP `connect-src 'none'` + no auth
                 // cookie), so the Standing Orders tab requests the list via this
                 // verb — the same proxy pattern as `getIconPalette`. Shares the
-                // standing-orders config key and `describeStandingOrderMigrations`
-                // with the HTTP endpoint so both hosts agree on staleness.
+                // standing-orders config key with the HTTP endpoint so both hosts
+                // agree on what is persisted.
                 //
                 // The typed payload rides `postMessage` ONLY, as in `getIconPalette`
                 // and `getAgentGroups`. The HTTP return body deliberately carries no
@@ -14128,16 +14128,15 @@ ${FOCUS_DIRECTIVE}`;
                     const db = this._getKanbanDb(workspaceRoot);
                     const raw = await db.getConfigJson<StandingOrder[]>(STANDING_ORDERS_CONFIG_KEY, []) as StandingOrder[];
                     const rawArray = Array.isArray(raw) ? raw : [];
-                    // Derived from the pure transforms, keyed by the row's ON-DISK
-                    // id — no minted ids leak into the response (same contract as
-                    // `_handleStandingOrdersList` in LocalApiServer).
-                    const notes = describeStandingOrderMigrations(rawArray);
+                    // System orders are composed at delivery and never persisted,
+                    // so the persisted store holds only what a human authored —
+                    // no staleness to surface. Rows are returned as-is, with
+                    // `scope` defaulted to `pair` for shipped-state rows.
                     const orders = rawArray.map(o => ({
                         ...o,
                         // Default absent `scope` to `pair` on read so the client
                         // always sees an explicit scope field.
                         scope: (o.scope || 'pair') as StandingOrderScope,
-                        ...(notes.get(o?.id) || {}),
                     }));
                     const rawDefinitions = await db.getConfigJson<StandingOrderDefinition[]>(STANDING_ORDER_DEFINITIONS_CONFIG_KEY, []) as StandingOrderDefinition[];
                     const definitions = Array.isArray(rawDefinitions) ? rawDefinitions : [];

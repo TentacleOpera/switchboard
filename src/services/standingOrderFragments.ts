@@ -112,7 +112,8 @@ export function buildHeadCompletionFragment(): string {
         + 'replaces pending (not-yet-dispatched) rounds and leaves dispatched/closed ones alone.\n\n'
         + 'CLOSE OUT EVERY SUBTASK. When a seat reports a subtask finished and you are satisfied '
         + 'with it, POST /kanban/task/complete with {"from":"<your terminal name>","planId":'
-        + '"<that SUBTASK\'s planId>","workspaceRoot":"<your cwd>"} against the API base named in your '
+        + '"<that SUBTASK\'s planId>","workspaceRoot":"<your cwd>",'
+        + '"outcome":"<one line stating what was done>"} against the API base named in your '
         + 'SWITCHBOARD STATUS line. Post per subtask, with that subtask\'s planId — never '
         + 'the feature\'s. Accepting and rejecting are not two different endings: you reject by '
         + 'sending a fix round first, then you post when the subtask is done. Until you post, that '
@@ -235,7 +236,17 @@ export const STANDING_ORDER_FRAGMENTS: ReadonlyArray<StandingOrderFragment> = [
     // rounds (the stateless path) and every REVIEWER head keep the pop —
     // rounds are a coding-team construct and the gate is unchanged for them.
     { id: STANDING_ORDER_FRAGMENT_IDS.headNext, name: 'Request next work', order: 50, obligation: 'queue', applies: ctx => ctx.inTeam && ctx.isHead && (ctx.headRole === 'lead' || ctx.headRole === 'reviewer') && !(ctx.headRole === 'lead' && ctx.hasRegisteredRounds), body: buildHeadNextFragment },
-    { id: STANDING_ORDER_FRAGMENT_IDS.orchestratorReport, name: 'Report blocked work to Mission Control', order: 60, obligation: 'report', applies: ctx => ctx.inTeam && ctx.isHead && ctx.orchestratorPresent, body: () => 'When blocked during unattended orchestration, record the blocked card in .switchboard/mission-control/reports/ and continue to the next queue item.' },
+    // orchestratorReport is retained as a recognized fragment ID so any
+    // persisted standing-order row that references it resolves cleanly
+    // (composeStandingOrderFragments would otherwise emit "[Unknown
+    // standing-order fragment: ...]"). It is no longer in the synthetic
+    // team-head fragment list (standingOrders.ts), so it is not delivered to
+    // any team head by default, and its `applies` gate (orchestratorPresent,
+    // always false in production — teamWiring.ts is the only assignment) keeps
+    // it from emitting for an operator-authored row too. The body points at
+    // the plan_events row the host now records, not the deleted file
+    // directory — so if the gate is ever opened the instruction stays true.
+    { id: STANDING_ORDER_FRAGMENT_IDS.orchestratorReport, name: 'Report blocked work to Mission Control', order: 60, obligation: 'report', applies: ctx => ctx.inTeam && ctx.isHead && ctx.orchestratorPresent, body: () => 'When blocked during unattended orchestration, the host records the blocked card as a plan_events row — proceed to the next queue item.' },
     { id: STANDING_ORDER_FRAGMENT_IDS.globalCompletion, name: 'Standalone queue completion', order: 10, obligation: 'completion', applies: ctx => !ctx.inTeam, body: () => GLOBAL_QUEUE_COMPLETION_FRAGMENT_BODY },
 ];
 

@@ -353,6 +353,19 @@ jobs:
       - name: Standing-orders definitions library (migration, sync, dedup, crash recovery)
         run: npm run test:contract:standing-orders-definitions
 
+      # An operator's team prompt ADDS to the system protocol; it never replaces
+      # it. System orders are composed at delivery from the fragment library and
+      # never persisted, so filling in a team definition's prompt box cannot
+      # uninstall the member/head protocol. This suite asserts: a team with an
+      # operator prompt delivers every required fragment AND the operator text
+      # (fragments first, operator text after); a team with no prompt still
+      # receives every fragment; no system-authored rows are persisted; and a
+      # fragment-body edit in src/ changes the block on the next prompt with no
+      # migration. The regression this catches is the one the plan exists to end:
+      # an operator prompt that silently replaces the protocol.
+      - name: Standing-orders additive (operator prompt adds, never replaces protocol)
+        run: npm run test:contract:standing-orders-additive
+
       # A seat safeguard configured on a terminal must ride EVERY prompt that seat
       # receives, not only board-composed ones. The failure this pins is silent by
       # construction: a lead relays a subtask over ptySendPrompt, the coder's
@@ -546,6 +559,16 @@ jobs:
       # with an empty allowlist and the Host guard 403'd the only name a person
       # types. This test mirrors the exact 403-then-200 behaviour on a mock
       # unix-socket server: a test that accepts any Host cannot fail on this bug.
+      # POST /kanban/task/complete rejects a call without a non-empty `outcome`,
+      # a requirement added in 307078f3 that updated none of the five places
+      # telling an agent how to call it. The instructions then described a call
+      # the endpoint refuses, and because they also say "until you post, the seat
+      # is not cleared", a lead that obeyed them deadlocked its whole team for an
+      # hour. Instruction text and handler validation live in different files
+      # with no import between them, so nothing compared them until this gate.
+      - name: task/complete instruction contract (instructions match handler validation)
+        run: npm run test:contract:task-complete-instruction
+
       - name: Tailnet LocalAPI Host-header contract (Host header sent, unavailable distinguished from empty)
         run: npm run test:contract:tailnet-localapi-host-header
 

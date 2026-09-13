@@ -11,9 +11,6 @@ import {
     STANDING_ORDER_DEFINITIONS_CONFIG_KEY,
 } from './standingOrders';
 import {
-    buildHeadCompletionFragment,
-    buildHeadNextFragment,
-    buildMemberCompletionFragment,
     composeStandingOrderFragments,
     GLOBAL_QUEUE_COMPLETION_FRAGMENT_BODY,
     STANDING_ORDER_FRAGMENT_IDS,
@@ -21,7 +18,6 @@ import {
     TEAM_HEAD_COMMIT_FRAGMENT_BODY,
 } from './standingOrderFragments';
 import { resolvePreset, resolvePresetMeta, DEFAULT_MEMBER_RELATIONSHIP } from './linkPresets';
-import { GIT_SAFETY_DIRECTIVE } from './agentPromptBuilder';
 import { substituteCliPath } from '../utils/cliPathToken';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -49,45 +45,6 @@ import * as path from 'path';
  */
 
 /**
- * The callback contract installed on every worker by default.
- *
- * ORIENTATION IS LOAD-BEARING. In `applyStandingOrders`, `parent` is the terminal
- * that RECEIVES the block (`o.parent === targetName`) and `child` is the terminal
- * the instruction is ABOUT — rendered as `- Regarding terminal "<child>": …`. The
- * Link-up modal proves it: it POSTs the order and then delivers the prompt to
- * `parentName`. So a WORKER is the `parent` of its own callback order and the head
- * is its `child`. Backwards, the block is delivered to the head about a worker
- * that is never told anything, and the coder finishes and reports to nobody.
- *
- * The text names the delivery ROUTE, not just the obligation: "send it a message"
- * is not something a CLI agent can act on. Every fleet terminal is handed the port
- * file and `SWITCHBOARD_API_TOKEN`, so the call is available to it.
- *
- * `{child}` is the head terminal name — substituted by `resolvePreset` in the
- * pair-order path (where `childName = headName` for `member-receives` direction)
- * and by `wireSpawnedTeam` directly when building the team prompt. The previous
- * form opened with a bare `it` whose antecedent came from the `- Regarding
- * terminal "X": ` render prefix; the team scope drops that prefix, so the head
- * must be named explicitly here.
- */
-export const AGENT_GROUP_CALLBACK_INSTRUCTION =
-    '{child} is your head agent. When you finish a task, report to it — node "<cliPath>" verb ptySendPrompt '
-    + '\'{"name":"{child}","data":"<your report>","clearBeforePrompt":false}\' (or switchboard verb ptySendPrompt) '
-    + '— naming what you changed and what to review. Do not wait to be asked.';
-
-/**
- * Callback instruction for external-headed teams (head is a non-terminal agent
- * like Antigravity, Cursor, or IDE chat). Directs workers to write structured
- * report files into the team's dedicated reports inbox.
- */
-export const EXTERNAL_HEAD_CALLBACK_INSTRUCTION =
-    '{child} is your head agent. When you finish a task, report to it — write a report file to '
-    + '.switchboard/teams/{teamId}/reports/ named report-<UTC-compact>-<kind>-<5 digits>.md '
-    + 'with frontmatter (from: <your seat name>, kind: finished|blocked|question|status, '
-    + 'planId: <plan id>, created: <UTC timestamp>) and a one-line message body. '
-    + 'Do not wait to be asked.';
-
-/**
  * Standing-order template for an agent running in any local terminal that
  * Switchboard cannot push into (plain shell, iTerm, tmux pane, editor chat
  * pane). The agent registers itself, heartbeats, polls for work, and reports
@@ -104,17 +61,6 @@ export const EXTERNAL_AGENT_PULL_INSTRUCTION =
     + '3. POLL: GET http://127.0.0.1:<port>/agents/inbox?seat=<your name>&token=<token> — returns pending dispatch items. Poll every 5-10 seconds.\n'
     + '4. DONE: When you finish a dispatched item, report completion via the mechanism the dispatch item specifies (POST /kanban/queue/done, POST /kanban/task/complete, etc.).\n'
     + 'The port comes from your SWITCHBOARD STATUS line. Use http://127.0.0.1:<port> for all calls.';
-
-/**
- * The PRE-rewrite callback text — byte-identical to the shipped constant before
- * this change. Existing installs have per-member pair rows whose `instruction`
- * field carries this exact string. The migration recogniser matches against it
- * (not the post-rewrite constant) because this is what is actually on disk.
- */
-export const PRE_REWRITE_CALLBACK_INSTRUCTION =
-    'it is your head agent. When you finish a task, report to it — POST /terminals/verb/ptySendPrompt with '
-    + '{"name":"<that terminal>","data":"<your report>","clearBeforePrompt":false} against the port in '
-    + '.switchboard/api-server-port.txt — naming what you changed and what to review. Do not wait to be asked.';
 
 /**
  * Layout sizing for a registered team group. The shipped loader
@@ -338,61 +284,6 @@ export function deriveSharedMemberName(
 }
 
 /**
- * Context-aware completion standing order installed on every seat of a spawned team.
- * Instructs the coder to inspect the dispatch source and route its completion:
- *  1. Dispatched from kanban STAGING column (in a coding column) -> POST /kanban/queue/done
- *  2. Dispatched from file-based queue (no planId) -> POST /terminals/teams/<groupId>/queue/done
- *  3. Direct head dispatch / fallback -> ptySendPrompt to head
- *
- * Reading `kanbanColumn` here picks an ENDPOINT; it never decides that work is
- * finished. The body says so explicitly, because the two look alike and only
- * one of them is legal: completion is the lead's asserted
- * `POST /kanban/task/complete`, never a column, an mtime, or silence.
- *
- * Members only. The head seat gets
- * {@link CONTEXT_AWARE_HEAD_COMPLETION_ORDER_BODY} — this body's fallback names
- * the head as the recipient, which for the head is itself.
- */
-export function CONTEXT_AWARE_COMPLETION_ORDER_BODY(groupId: string, headName: string): string {
-    return buildMemberCompletionFragment({ teamId: groupId, headName });
-}
-
-/**
- * The `team-head` half of the context-aware completion order — the lead's own.
- *
- * The member body above cannot be handed to the head: its fallback names the
- * head as the recipient, so a head reading it is told to ptySendPrompt itself,
- * and it never states the one post only a lead can make. `completed_at` has a
- * single writer that the system acts on, and the lead's `task/complete` is it —
- * an order installed on the head that omits it leaves nothing to release the
- * team.
- *
- * Wording is deliberately in step with `KanbanProvider._buildDrivePrefix`'s
- * CLOSE OUT clause and `LocalApiServer`'s `composeAcceptanceInstruction` —
- * three surfaces, one contract. Commit policy is NOT restated here: the head
- * prompt preset owns it, and a per-subtask commit rule stated here would
- * contradict "a team commits once, as its head".
- */
-export function CONTEXT_AWARE_HEAD_COMPLETION_ORDER_BODY(groupId: string): string {
-    return `${buildHeadCompletionFragment()}\n\n${buildHeadNextFragment({ teamId: groupId })}`;
-}
-
-/**
- * Schema-version stamp for system-installed context-aware completion orders
- * (id prefix `context-aware-completion:`). `wireSpawnedTeam` stamps this on
- * the row at install time; {@link migrateCodingTeamOrders} rewrites any row
- * whose `version` is below this to the current body and bumps the stamp,
- * instead of matching frozen instruction text.
- *
- * History: 1 = pre-exclusivity body, 2 = exclusive-routing + `machineOrigin`
- * body (both retired — their text recognisers were the frozen-string pile
- * this stamp replaces). 3 = current body (head scope takes its own body, the
- * board-position "hand the feature to review" paragraph removed). A future
- * body revision bumps this number and needs no new text recogniser.
- */
-export const CONTEXT_AWARE_COMPLETION_ORDER_VERSION = 3;
-
-/**
  * The queue/done instruction appended to the team-scoped standing order for
  * head-paced team coders. Tells the coder to POST /kanban/queue/done when it
  * has finished ALL work on the dispatched plan — not after individual parts.
@@ -433,62 +324,6 @@ export const GLOBAL_QUEUE_DONE_ORDER_BODY = GLOBAL_QUEUE_COMPLETION_FRAGMENT_BOD
 const GLOBAL_QUEUE_ORDER_ID = 'global-queue-done:global';
 
 /**
- * Fragment ids that every SYSTEM fragment row must carry, added additively to
- * rows that were persisted before the id existed.
- *
- * `seat.subagent-policy` is seat-scoped and self-gating: its `applies` returns
- * false unless the seat's resolved policy is `noSubagents` or a named custom
- * subagent, so carrying it on a row costs nothing for a seat with no policy set.
- */
-const REQUIRED_SYSTEM_FRAGMENT_IDS: readonly string[] = [
-    STANDING_ORDER_FRAGMENT_IDS.subagentPolicy,
-];
-
-/**
- * Additively reconcile the system fragment list on ALREADY-PERSISTED rows.
- *
- * Every system writer keys on `(scope, teamId)` or a deterministic id and
- * SKIPS a row that already exists. `groupId` is `team_<headName>` and standing
- * orders persist across sessions, so a team started a second time under the
- * same head keeps whatever fragment list it was FIRST written with, and
- * `installGlobalQueueDoneOrder` returns early on its deterministic row.
- * Adding a fragment id to those lists therefore reaches only head names that
- * have never been wired: on every existing install the new fragment is inert.
- * That is not hypothetical — `seat.subagent-policy` was added to all three
- * lists and could not reach a single shipped row.
- *
- * `migrateSystemOrdersToFragments` is NOT the tool for this. It rewrites ANY
- * team-scoped row to the canonical member list and strips `instruction`, which
- * would destroy an operator-authored team prompt (`teamPromptInstruction` from
- * a team definition is stored exactly that way). This helper touches only
- * fragment-carrying rows — an `instruction` row is left alone — and only
- * appends. Composition sorts by each fragment's own `order`, so array position
- * does not matter.
- *
- * Returns the same array when nothing changed, so callers can use it inside a
- * `mutateStandingOrders` mutator without forcing a write.
- */
-export function reconcileSystemFragmentRows(orders: StandingOrder[]): StandingOrder[] {
-    if (!Array.isArray(orders) || orders.length === 0) { return orders; }
-    let changed = false;
-    const next = orders.map((order) => {
-        if (!order || typeof order !== 'object') { return order; }
-        // An instruction row is operator- or definition-authored text. Never touched.
-        if (typeof order.instruction === 'string') { return order; }
-        if (!Array.isArray(order.fragments) || order.fragments.length === 0) { return order; }
-        const scope = order.scope || 'pair';
-        const isSystemRow = scope === 'team' || scope === 'team-head'
-            || (scope === 'global' && order.id === GLOBAL_QUEUE_ORDER_ID);
-        if (!isSystemRow) { return order; }
-        const missing = REQUIRED_SYSTEM_FRAGMENT_IDS.filter(id => !order.fragments!.includes(id));
-        if (missing.length === 0) { return order; }
-        changed = true;
-        return { ...order, fragments: [...order.fragments, ...missing] };
-    });
-    return changed ? next : orders;
-}
-
-/**
  * Install the `global`-scoped `queue/done` standing order so a standalone
  * agent (not on any team) knows to POST `queue/done` when it finishes a
  * dispatched card. Idempotent: if the order already exists, the mutation is a
@@ -501,21 +336,15 @@ export function reconcileSystemFragmentRows(orders: StandingOrder[]): StandingOr
 export async function installGlobalQueueDoneOrder(db: any): Promise<void> {
     if (!db) return;
     await mutateStandingOrders(db, async (orders) => {
-        // Reconcile FIRST, then install-if-missing. The early return below is
-        // correct for creation and wrong for upgrade: a row written by an older
-        // version carries the fragment list of that version forever, so a
-        // fragment added to the list here would never reach an install that has
-        // already popped one queue card. See `reconcileSystemFragmentRows`.
-        const reconciled = reconcileSystemFragmentRows(orders);
-        if (reconciled.some(o => o.id === GLOBAL_QUEUE_ORDER_ID)) {
-            return reconciled;
+        if (orders.some(o => o.id === GLOBAL_QUEUE_ORDER_ID)) {
+            return orders;
         }
         const order = makeFragmentStandingOrder(
             '', '', [STANDING_ORDER_FRAGMENT_IDS.globalCompletion, STANDING_ORDER_FRAGMENT_IDS.subagentPolicy], 'global',
         );
         // makeStandingOrder mints a random id; overwrite with the deterministic
         // one so a re-run finds it rather than duplicating.
-        return [...reconciled, { ...order, id: GLOBAL_QUEUE_ORDER_ID }];
+        return [...orders, { ...order, id: GLOBAL_QUEUE_ORDER_ID }];
     });
 }
 
@@ -785,8 +614,9 @@ export const TEAM_HEAD_COMMIT_INSTRUCTION = ` ${TEAM_HEAD_COMMIT_FRAGMENT_BODY}`
  *  - "advance" language removed entirely to prevent misinterpretation, and
  *    card movement is never described as the lead's role.
  *
- * Byte-identical to the shipped `headPrompt` in `kanban.html`'s Coding entry
- * and `terminals.js`'s `NEW_CODING_HEAD_PROMPT_CLIENT`.
+ * Byte-identical to the shipped `headPrompt` in `kanban.html`'s Coding entry.
+ * The client mirror (`NEW_CODING_HEAD_PROMPT_CLIENT`) was retired when system
+ * protocol composition moved to delivery-time fragment composition.
  */
 export const NEW_CODING_HEAD_PROMPT =
     'You lead this team. Your coders work the subtasks of one feature. '
@@ -803,8 +633,8 @@ export const NEW_CODING_HEAD_PROMPT =
     + 'one rung along intern → coder → lead, name the specific defects in the dispatch, and say '
     + 'in your status report which seat you moved it to and why; if the seat that failed twice is '
     + 'a lead, or your team has no seat above it, stop and report to the human instead of '
-    + 'dispatching again (or unattended: record the blocked card to .switchboard/mission-control/reports/ '
-    + 'and proceed to the next queue item). When a coder reports a subtask finished, note it and '
+    + 'dispatching again (or unattended: the host records the blocked card as a plan_events row '
+    + '— proceed to the next queue item). When a coder reports a subtask finished, note it and '
     + 'dispatch the next subtask to an idle seat that has not already worked on it — do not stack '
     + 'subtasks on the same coder, or it will hit its context limit mid-task. One subtask per '
     + 'cleared seat before rotation. When a coder finishes its turn, the system delivers a '
@@ -820,7 +650,8 @@ export const NEW_CODING_HEAD_PROMPT =
     + '— never `git add -A` or `git add .`. Then create a single commit with a '
     + 'descriptive message. '
     + 'POST /kanban/task/complete with {"from":"{head}","planId":"<the subtask\'s planId>","workspaceRoot":'
-    + '"<your current working directory>"} against the API base named in your SWITCHBOARD STATUS line. '
+    + '"<your current working directory>","outcome":"<one line stating what was done>"} '
+    + 'against the API base named in your SWITCHBOARD STATUS line. '
     + 'The card stays where it is. Completion is asserted, never inferred from board position. '
     + 'run node "<cliPath>" next --from "{head}" (or switchboard next --from "{head}"); '
     + 'if it returns a dispatched card, work it; if it returns dispatched: null, report that the queue is '
@@ -1485,10 +1316,11 @@ export interface WireSpawnedTeamOptions {
      */
     teamId?: string;
     /**
-     * The team prompt — prose carried as one `team`-scoped standing order
-     * delivered to every member on every message. When omitted, a default
-     * prompt is built from the callback instruction (head name interpolated)
-     * plus `GIT_SAFETY_DIRECTIVE`.
+     * The team prompt — operator-authored prose carried as one `team`-scoped
+     * standing order delivered to every member on every message. When omitted,
+     * nothing is persisted: the system protocol (member completion, work, git
+     * safety, subagent policy) is composed at delivery from code and never
+     * lives on a row.
      */
     prompt?: string;
     /**
@@ -1500,9 +1332,10 @@ export interface WireSpawnedTeamOptions {
     headPrompt?: string;
     /**
      * True when the team lead is a non-terminal external agent (Antigravity /
-     * Cursor / IDE chat). Uses EXTERNAL_HEAD_CALLBACK_INSTRUCTION for workers
-     * to write reports to .switchboard/teams/<teamId>/reports/, skips installing
-     * a team-head standing order, and excludes the headName from group.members
+     * Cursor / IDE chat). Workers receive the external-member-callback fragment
+     * (composed at delivery) to write reports to
+     * .switchboard/teams/<teamId>/reports/, skips installing a team-head
+     * standing order, and excludes the headName from group.members
      * (workers only).
      */
     externalHead?: boolean;
@@ -1709,17 +1542,14 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
         || ('team_' + encodeURIComponent(headName).replace(/[^a-zA-Z0-9_]/g, '_'));
 
     // ── Build the team prompt ─────────────────────────────────────────
-    // The prompt is carried as one team-scoped standing order. When the caller
-    // supplies a `prompt` (from the team definition), use it with {child}
-    // interpolated to the head name and {teamId} interpolated to the groupId.
-    // Otherwise build a default from the callback instruction (or external head callback)
-    // + GIT_SAFETY_DIRECTIVE (imported, not copied).
+    // The operator-authored prompt (from the team definition) is carried as
+    // one team-scoped standing order. {child} is interpolated to the head name
+    // and {teamId} to the groupId. When the definition carries no `prompt`,
+    // nothing is persisted — the system protocol is composed at delivery
+    // (selectOrders) and never lives on a row.
     const teamPromptInstruction = prompt
         ? prompt.replace(/\{child\}/g, headName).replace(/\{teamId\}/g, groupId)
         : undefined;
-    const teamFragments = opts.externalHead
-        ? [STANDING_ORDER_FRAGMENT_IDS.externalMemberCallback, STANDING_ORDER_FRAGMENT_IDS.gitSafety, STANDING_ORDER_FRAGMENT_IDS.subagentPolicy]
-        : [STANDING_ORDER_FRAGMENT_IDS.memberCompletion, STANDING_ORDER_FRAGMENT_IDS.memberWork, STANDING_ORDER_FRAGMENT_IDS.gitSafety, STANDING_ORDER_FRAGMENT_IDS.subagentPolicy];
 
     // ── Resolve pair-scoped relationships per child ───────────────────
     // Walk the member definitions and children together — children are in the
@@ -1819,60 +1649,33 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
 
     try {
         await mutateStandingOrders(db, async (orders) => {
-            // Reconcile before the exists-checks below. `groupId` is
-            // `team_<headName>` and every check here is "skip if a row for this
-            // (scope, teamId) exists", so re-starting a team under a name that
-            // has been wired before leaves its rows on the fragment list they
-            // were first written with. Reconciling here makes a team start the
-            // upgrade path as well as the creation path.
-            const next = [...reconcileSystemFragmentRows(orders)];
+            const next = [...orders];
 
-            // One team-scoped order carrying the team prompt. `parent` stores
-            // the head name so `selectOrders` can exclude the head from
-            // delivery (the head is in the group's members array but should
-            // not receive the member prompt).
-            const teamExists = next.some((o: StandingOrder) =>
-                o.scope === 'team' && o.teamId === groupId);
-            if (!teamExists) {
-                const teamOrder = teamPromptInstruction
-                    ? makeStandingOrder(headName, '', teamPromptInstruction, 'team', groupId)
-                    : makeFragmentStandingOrder(headName, '', teamFragments, 'team', groupId);
-                // Stamp the schema version so a future body revision migrates on
-                // `version < CONTEXT_AWARE_COMPLETION_ORDER_VERSION`, not on a new
-                // text recogniser. See migrateCodingTeamOrders.
-                //
-                // The stamp is the SYSTEM-AUTHORED marker, so it goes only on the
-                // default install. An operator-authored team prompt lands under
-                // the same id with its text in `instruction`; stamping it would
-                // hand the migrator licence to overwrite the operator's words at
-                // the next version bump. Unstamped means "not ours to rewrite".
-                next.push(teamPromptInstruction
-                    ? { ...teamOrder, id: `context-aware-completion:${groupId}:team` }
-                    : { ...teamOrder, id: `context-aware-completion:${groupId}:team`, version: CONTEXT_AWARE_COMPLETION_ORDER_VERSION });
+            // Team-scoped order: ONLY when the operator authored a prompt.
+            // System protocol is composed at delivery (selectOrders) and never
+            // persisted, so a team with no authored prompt writes no row at
+            // all. Keyed on (scope, teamId) for idempotency — a re-run skips
+            // an existing authored row rather than duplicating. Same mutator
+            // as the head order and pair rows below — do not split into a
+            // second mutateStandingOrders call; that reopens the
+            // read-modify-write window.
+            if (teamPromptInstruction) {
+                const teamExists = next.some((o: StandingOrder) =>
+                    o.scope === 'team' && o.teamId === groupId);
+                if (!teamExists) {
+                    next.push(makeStandingOrder(headName, '', teamPromptInstruction, 'team', groupId));
+                }
             }
 
-            // Head-facing order (skipped for external heads — no head terminal).
-            // Keyed on (scope, teamId) exactly like the member order, so a re-run
-            // of wireSpawnedTeam skips it rather than duplicating.
-            // Same mutator as the team order above — do not split this into a second
-            // mutateStandingOrders call; that reopens a read-modify-write window.
-            const useDefaultHeadFragments = !headInstruction && (opts.headRole === 'lead' || opts.headRole === 'reviewer' || !opts.headRole);
-            if (!opts.externalHead && (headInstruction || useDefaultHeadFragments)) {
+            // Head-facing order: ONLY when the operator authored a headPrompt.
+            // System head protocol is composed at delivery; no row is written
+            // for a team whose definition left the head-prompt box empty.
+            // Skipped for external heads — no head terminal.
+            if (!opts.externalHead && headInstruction) {
                 const headExists = next.some((o: StandingOrder) =>
                     o.scope === 'team-head' && o.teamId === groupId);
                 if (!headExists) {
-                    const headOrder = headInstruction
-                        ? makeStandingOrder(headName, '', headInstruction, 'team-head', groupId)
-                        : makeFragmentStandingOrder(headName, '', [
-                            STANDING_ORDER_FRAGMENT_IDS.codingHead,
-                            STANDING_ORDER_FRAGMENT_IDS.reviewHead,
-                            STANDING_ORDER_FRAGMENT_IDS.headCommit,
-                            STANDING_ORDER_FRAGMENT_IDS.headCompletion,
-                            STANDING_ORDER_FRAGMENT_IDS.headNext,
-                            STANDING_ORDER_FRAGMENT_IDS.orchestratorReport,
-                            STANDING_ORDER_FRAGMENT_IDS.subagentPolicy,
-                        ], 'team-head', groupId);
-                    next.push({ ...headOrder, id: `composed-head:${groupId}` });
+                    next.push(makeStandingOrder(headName, '', headInstruction, 'team-head', groupId));
                 }
             }
 
@@ -2017,307 +1820,35 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
 }
 
 /**
- * Migrate existing per-member pair rows into a team-scoped order.
+ * Drop pre-rewrite per-member pair rows carrying the legacy callback text that
+ * named `.switchboard/api-server-port.txt`. These are system-authored rows
+ * from before the team-scoped order existed; system orders are now composed at
+ * delivery ({@link selectOrders}) and never persisted, so the rows are DROPPED
+ * (not folded into a team-scoped order, which would itself be a system row
+ * violating the "no system-authored text on disk" invariant). Operator-authored
+ * Link-up pair rows are untouched — they do not carry this text.
  *
- * Before this change, `wireSpawnedTeam` wrote one `(member, head)` pair row
- * per member, each carrying `PRE_REWRITE_CALLBACK_INSTRUCTION`. This function
- * recognises those rows, groups them by head, and folds them into a single
- * `team`-scoped order carrying the default team prompt (callback + safety).
- * Unrecognised rows — operator-edited ad-hoc link-up orders, `head-receives`
- * presets — are left untouched.
- *
- * Pure: no DB writes of its own. Called through
- * `loadEffectiveStandingOrders`, which persists the result once; the transform
- * itself stays pure so it is unit-testable and safe to re-run. Idempotent
- * because the team-scoped order it produces is keyed on `(scope, teamId)` and
- * a second pass finds no recognisable pair rows to convert (they were already
- * replaced in the returned array). **Returns the input array BY REFERENCE when
- * it recognises nothing** — `loadEffectiveStandingOrders` stakes its
- * "did anything change?" test on that identity, so a refactor that always
- * returns a fresh array turns the one-time persist into a write on every
- * prompt.
- *
- * The recogniser matches the PRE-rewrite callback text — that is what is
- * actually on disk. Matching the post-rewrite constant would miss every
- * existing install's rows.
+ * Pure: no DB writes of its own. Called through {@link loadEffectiveStandingOrders},
+ * which persists the result once. Idempotent: a second pass finds nothing to
+ * drop. **Returns the input array BY REFERENCE when it recognises nothing** —
+ * `loadEffectiveStandingOrders` stakes its "did anything change?" test on that
+ * identity, so a refactor that always returns a fresh array turns the one-time
+ * persist into a write on every prompt.
  */
 export function migrateTeamPairOrders(orders: StandingOrder[]): StandingOrder[] {
     if (!Array.isArray(orders) || orders.length === 0) { return orders; }
-
-    // Find pair orders whose instruction is the pre-rewrite callback text.
-    // In the `member-receives` direction, `parent` = member, `child` = head.
-    // Group by head name (the `child` field).
-    const groups = new Map<string, string[]>(); // headName → memberNames
-    const recognised = new Set<string>(); // order ids to remove
-
-    for (const o of orders) {
-        if (!o || typeof o !== 'object') { continue; }
-        // Only pair-scoped (or unscoped = pair default) orders are candidates.
-        const scope = o.scope || 'pair';
-        if (scope !== 'pair') { continue; }
-        if (o.instruction !== PRE_REWRITE_CALLBACK_INSTRUCTION) { continue; }
-        const headName = o.child;
-        if (!headName) { continue; }
-        const memberName = o.parent;
-        if (!memberName) { continue; }
-
-        if (!groups.has(headName)) { groups.set(headName, []); }
-        groups.get(headName)!.push(memberName);
-        recognised.add(o.id);
-    }
-
-    if (recognised.size === 0) { return orders; }
-
-    // Build the replacement team-scoped orders.
-    const migrated: StandingOrder[] = [];
-    for (const [headName] of groups) {
-        const teamId = 'team_' + encodeURIComponent(headName).replace(/[^a-zA-Z0-9_]/g, '_');
-        const callbackText = AGENT_GROUP_CALLBACK_INSTRUCTION.replace(/\{child\}/g, headName);
-        const instruction = `${callbackText}\n${GIT_SAFETY_DIRECTIVE}`;
-        migrated.push(makeStandingOrder(
-            headName,   // parent = head (for selectOrders exclusion)
-            '',         // child = empty (team-scoped, no child)
-            instruction,
-            'team',
-            teamId,
-        ));
-    }
-
-    // Return the array with recognised pair rows removed and team-scoped
-    // orders added. If a team-scoped order with the same teamId already
-    // exists (e.g. from a prior wireSpawnedTeam call), do not duplicate.
-    const existingTeamIds = new Set(
-        orders.filter(o => o && o.scope === 'team' && o.teamId)
-            .map(o => o.teamId!)
-    );
-    const newTeamOrders = migrated.filter(o => !existingTeamIds.has(o.teamId!));
-
-    return [
-        ...orders.filter(o => !recognised.has(o.id)),
-        ...newTeamOrders,
-    ];
-}
-
-/**
- * Migrate stale Coding-team standing orders on read.
- *
- * Drops a stale pair-scoped order carrying the resolved `reviewer` preset text
- * (`parent` = lead, `child` = reviewer) — installed because the old reviewer
- * member declared `relationship: 'reviewer'` (a `head-receives` preset).
- * The reviewer is now reached only by a card arriving in CODE REVIEWED.
- *
- * Pure: no DB writes. Idempotent. Every unrecognised row — including
- * operator-edited ad-hoc link-ups — is left untouched.
- */
-export function migrateCodingTeamOrders(orders: StandingOrder[]): StandingOrder[] {
-    if (!Array.isArray(orders) || orders.length === 0) { return orders; }
-
-    const drop = new Set<string>();        // order ids to remove
-    const rewrite = new Map<string, string>();  // order id → replacement instruction
-    let touched = false;
-
-    for (const o of orders) {
-        if (!o || typeof o !== 'object') { continue; }
-
-        // Stale reviewer pair row: instruction equals the resolved reviewer
-        // preset text for this (parent, child) pair. Drop it — the reviewer
-        // is now reached only by a card arriving in CODE REVIEWED.
-        const scope = o.scope || 'pair';
-        if (scope === 'pair') {
-            // `child` is optional on StandingOrder; `resolvePreset` takes a
-            // string and maps a falsy name to its own placeholder, so `|| ''`
-            // is behaviour-identical to the client mirror (which passes the
-            // raw value into the same `childName || …` fallback).
-            const expected = resolvePreset('reviewer', o.parent, o.child || '');
-            if (expected && o.instruction === expected) {
-                drop.add(o.id);
-                touched = true;
-                continue;
-            }
-        }
-
-        // Context-aware completion order: system-installed (id prefix
-        // `context-aware-completion:`). The body has been revised twice; each
-        // revision previously needed a frozen-text recogniser here, which is the
-        // pile this branch retired. The row now carries a `version` stamp
-        // (CONTEXT_AWARE_COMPLETION_ORDER_VERSION), and migration fires on
-        // `version < current` — a body revision bumps the version constant and
-        // needs no new text recogniser. The install path skips rows that
-        // already exist, so without this a re-spawn never updates the text.
-        //
-        // TWO rewrite triggers, deliberately separate — `instruction` alone is
-        // NOT one of them. An operator-authored team prompt (`teamPromptInstruction`,
-        // from a team definition's `prompt`) is persisted under this exact id with
-        // its text in `instruction`, which is why the retired text matchers compared
-        // exact bodies rather than keying on the id (see the note on
-        // `reconcileSystemFragmentRows`). Rewriting every instruction row would
-        // destroy that prompt on the next read — a default behaving exactly like a
-        // configured value.
-        //
-        //   (1) VERSION-DRIVEN, the going-forward mechanism. `wireSpawnedTeam`
-        //       stamps `version` only on a SYSTEM-authored row, so the stamp IS the
-        //       "ours to rewrite" marker; a body revision bumps the constant and
-        //       needs no new text recogniser. An unstamped row is never version-
-        //       migrated.
-        //   (2) LEGACY HEAL, narrow and terminal. Pre-stamp installs carry a body
-        //       that names `.switchboard/api-server-port.txt`, which
-        //       team-state-endpoint-access-contract forbids reaching an agent. That
-        //       one semantic marker — not a frozen copy of the body — is the
-        //       recogniser, and it cannot match an operator prompt unless the
-        //       operator wrote the forbidden reference themselves, in which case
-        //       rewriting is still the contract-correct answer.
-        //
-        // Only body-based rows are rewritten: a fragment-based row (the current
-        // default install) carries no `instruction` and is left to its fragments
-        // — which resolve their text live, so a body revision reaches them with
-        // no migration at all. The rewrite target is the current body — the head
-        // body for `team-head` scope, the member body + GIT_SAFETY_DIRECTIVE for
-        // `team` scope — and the stamp is bumped so the next read is a no-op.
-        if (typeof o.id === 'string' && o.id.startsWith('context-aware-completion:')) {
-            const isStamped = typeof o.version === 'number' && o.version >= 0;
-            const versionStale = isStamped && (o.version as number) < CONTEXT_AWARE_COMPLETION_ORDER_VERSION;
-            const legacyPortFileBody = !isStamped && typeof o.instruction === 'string'
-                && o.instruction.includes('.switchboard/api-server-port.txt');
-            if ((versionStale || legacyPortFileBody) && typeof o.instruction === 'string') {
-                const gid = o.teamId || '';
-                const head = o.parent || '';
-                if (scope === 'team-head') {
-                    // A head-scope row carrying a member body is a legacy install
-                    // from before the head body existed — rewrite to the head body.
-                    rewrite.set(o.id, CONTEXT_AWARE_HEAD_COMPLETION_ORDER_BODY(gid));
-                    touched = true;
-                } else if (scope === 'team') {
-                    rewrite.set(o.id, CONTEXT_AWARE_COMPLETION_ORDER_BODY(gid, head) + '\n' + GIT_SAFETY_DIRECTIVE);
-                    touched = true;
-                }
-            }
-        }
-    }
-
-    if (!touched) { return orders; }
-
-    return orders
-        .filter(o => !drop.has(o.id))
-        .map(o => {
-            const replacement = o && typeof o.id === 'string' ? rewrite.get(o.id) : undefined;
-            // Bump the version stamp on rewritten rows so the next read is a
-            // no-op (the persisting pass in loadEffectiveStandingOrders writes
-            // this back to disk).
-            return replacement ? { ...o, instruction: replacement, version: CONTEXT_AWARE_COMPLETION_ORDER_VERSION } : o;
-        });
-}
-
-/** Additive per-row migration verdict for a persisted standing order. */
-export function migrateSystemOrdersToFragments(orders: StandingOrder[]): StandingOrder[] {
-    if (!Array.isArray(orders) || orders.length === 0) { return orders; }
-    const memberFragments = [
-        STANDING_ORDER_FRAGMENT_IDS.memberCompletion,
-        STANDING_ORDER_FRAGMENT_IDS.memberWork,
-        STANDING_ORDER_FRAGMENT_IDS.externalMemberCallback,
-        STANDING_ORDER_FRAGMENT_IDS.gitSafety,
-        STANDING_ORDER_FRAGMENT_IDS.subagentPolicy,
-    ];
-    const headFragments = [
-        STANDING_ORDER_FRAGMENT_IDS.codingHead,
-        STANDING_ORDER_FRAGMENT_IDS.reviewHead,
-        STANDING_ORDER_FRAGMENT_IDS.headCommit,
-        STANDING_ORDER_FRAGMENT_IDS.headCompletion,
-        STANDING_ORDER_FRAGMENT_IDS.headNext,
-        STANDING_ORDER_FRAGMENT_IDS.orchestratorReport,
-        STANDING_ORDER_FRAGMENT_IDS.subagentPolicy,
-    ];
-    const seen = new Set<string>();
-    const next: StandingOrder[] = [];
     let changed = false;
-    for (const order of orders) {
-        if (!order || typeof order !== 'object') { next.push(order); continue; }
-        const scope = order.scope || 'pair';
-        let fragments: string[] | undefined;
-        let key = '';
-        if ((scope === 'team' || scope === 'team-head') && order.teamId) {
-            key = `${scope}:${order.teamId}`;
-            if (seen.has(key)) { changed = true; continue; }
-            seen.add(key);
-            fragments = scope === 'team' ? memberFragments : headFragments;
-        } else if (scope === 'global' && order.id === GLOBAL_QUEUE_ORDER_ID) {
-            fragments = [STANDING_ORDER_FRAGMENT_IDS.globalCompletion, STANDING_ORDER_FRAGMENT_IDS.subagentPolicy];
+    const next = orders.filter(o => {
+        if (!o || typeof o !== 'object') { return true; }
+        const scope = o.scope || 'pair';
+        if (scope !== 'pair') { return true; }
+        if (typeof o.instruction === 'string' && o.instruction.includes('.switchboard/api-server-port.txt')) {
+            changed = true;
+            return false;
         }
-        if (!fragments) { next.push(order); continue; }
-        const sameFragments = Array.isArray(order.fragments)
-            && order.fragments.length === fragments.length
-            && order.fragments.every((id, index) => id === fragments![index]);
-        if (sameFragments && order.instruction === undefined && order.definitionId === undefined) {
-            next.push(order);
-            continue;
-        }
-        const { instruction: _instruction, definitionId: _definitionId, ...rest } = order;
-        void _instruction;
-        void _definitionId;
-        next.push({ ...rest, fragments: [...fragments] });
-        changed = true;
-    }
+        return true;
+    });
     return changed ? next : orders;
-}
-
-export interface StandingOrderMigrationNote {
-    /** A recogniser fired on this row: what is on disk is not what is delivered. */
-    stale?: true;
-    /** The transform removes this row entirely — it exists on disk and contributes nothing. */
-    dropped?: true;
-    /** The text this row actually contributes to a delivered prompt. Present only when it differs. */
-    effectiveInstruction?: string;
-}
-
-/**
- * Per-`id` migration verdict for the rows persisted at
- * `terminals.standingOrders`, derived by running **the same pure transforms
- * delivery runs** and diffing by id — never by re-implementing a recogniser.
- * That is the whole point: a second hand-rolled copy of a recogniser (or of a
- * matching fragment) is how `GET /terminals/standing-orders` drifted out of
- * agreement with what an agent is actually told.
- *
- * Covers BOTH transforms — the pair-fold's dropped `(member, head)` rows and
- * the Coding reviewer pair row — because it diffs the composed result rather
- * than pattern-matching row shapes.
- *
- * Identity-safe: rows the pair migration *mints* carry a fresh
- * `crypto.randomUUID()` and have no on-disk counterpart, so they appear in no
- * note and are never surfaced as persisted rows. Calling this twice therefore
- * yields the same notes against the same ids — the endpoint's `orders` array
- * stays byte-stable and the Link-up editor's delete-by-id keeps working.
- *
- * Returns an empty map once the persisting pass in
- * `loadEffectiveStandingOrders` has run. That is the correct end state, not an
- * inert function.
- */
-export function describeStandingOrderMigrations(
-    raw: StandingOrder[]
-): Map<string, StandingOrderMigrationNote> {
-    const notes = new Map<string, StandingOrderMigrationNote>();
-    if (!Array.isArray(raw) || raw.length === 0) { return notes; }
-
-    const effective = migrateCodingTeamOrders(migrateTeamPairOrders(raw));
-    // Reference short-circuit — both transforms return their input by reference
-    // when they recognise nothing, so this is an exact "nothing is stale" test.
-    if (effective === raw) { return notes; }
-
-    const survivors = new Map<string, StandingOrder>();
-    for (const o of effective) {
-        if (o && typeof o.id === 'string') { survivors.set(o.id, o); }
-    }
-
-    for (const o of raw) {
-        if (!o || typeof o !== 'object' || typeof o.id !== 'string') { continue; }
-        const survivor = survivors.get(o.id);
-        if (!survivor) {
-            notes.set(o.id, { stale: true, dropped: true });
-            continue;
-        }
-        if (survivor.instruction !== o.instruction) {
-            notes.set(o.id, { stale: true, effectiveInstruction: survivor.instruction });
-        }
-    }
-    return notes;
 }
 
 /** Backup config key for standing orders before first migration persist. */
@@ -2462,14 +1993,52 @@ async function reSyncAssignmentsFromDefinitions(db: any, orders: StandingOrder[]
 }
 
 /**
+ * One-time clean break: drop system-authored standing-order rows. Teams have
+ * never shipped, so there is no install base to migrate — system orders are
+ * composed at delivery ({@link selectOrders}) and never persisted. The
+ * persisted store must hold only what a human authored.
+ *
+ * Recognises system rows by:
+ *  - deterministic id prefix (`context-aware-completion:`, `composed-head:`)
+ *    stamped by the retired `wireSpawnedTeam` system-install path; OR
+ *  - `instruction` text naming the bare `.switchboard/api-server-port.txt`
+ *    path (legacy system rows with uuid ids).
+ *
+ * Operator-authored rows (Link-up pair rows, authored team/head prompts,
+ * role-scoped notes) are untouched. Returns the input BY REFERENCE when
+ * nothing changed, so {@link loadEffectiveStandingOrders} can avoid a write
+ * on every prompt.
+ */
+export function dropSystemAuthoredRows(orders: StandingOrder[]): StandingOrder[] {
+    if (!Array.isArray(orders) || orders.length === 0) { return orders; }
+    let changed = false;
+    const next = orders.filter(o => {
+        if (!o || typeof o !== 'object') { return true; }
+        const id = typeof o.id === 'string' ? o.id : '';
+        if (id.startsWith('context-aware-completion:') || id.startsWith('composed-head:')) {
+            changed = true;
+            return false;
+        }
+        if (typeof o.instruction === 'string' && o.instruction.includes('.switchboard/api-server-port.txt')) {
+            changed = true;
+            return false;
+        }
+        return true;
+    });
+    return changed ? next : orders;
+}
+
+/**
  * The only server-side reader of terminals.standingOrders. Reads, applies the
  * pure transforms, persists the result once if anything changed, and returns the
  * effective set. A failed persist logs and returns the in-memory transform —
  * delivery never depends on the write.
  *
- * After the existing pair/coding-team migration, runs the definitions
- * migration ({@link migrateToDefinitions}) and the lazy re-sync
- * ({@link reSyncAssignmentsFromDefinitions}). Both are gated to avoid a
+ * The system-row cleanup ({@link dropSystemAuthoredRows}) and the pair-row
+ * cleanup ({@link migrateTeamPairOrders}) run first and persist once; both are
+ * no-ops after the first successful persist. The definitions migration
+ * ({@link migrateToDefinitions}) and the lazy re-sync
+ * ({@link reSyncAssignmentsFromDefinitions}) follow; both are gated to avoid a
  * write on every prompt when nothing needs to change.
  */
 export async function loadEffectiveStandingOrders(db: any): Promise<StandingOrder[]> {
@@ -2477,15 +2046,15 @@ export async function loadEffectiveStandingOrders(db: any): Promise<StandingOrde
         return [];
     }
     const raw = await db.getConfigJson(STANDING_ORDERS_CONFIG_KEY, []) as StandingOrder[];
-    let effective = migrateCodingTeamOrders(migrateTeamPairOrders(raw));
+    let effective = migrateTeamPairOrders(dropSystemAuthoredRows(raw));
     if (effective !== raw) {
         try {
             await backupOnce(db, raw);
             await mutateStandingOrders(db, async (current) =>
-                migrateCodingTeamOrders(migrateTeamPairOrders(current))
+                migrateTeamPairOrders(dropSystemAuthoredRows(current))
             );
         } catch (err) {
-            console.warn('[teamWiring] standing-order migration persist failed:', err);
+            console.warn('[teamWiring] standing-order cleanup persist failed:', err);
         }
     }
 

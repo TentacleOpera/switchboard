@@ -32,7 +32,7 @@ import {
     makeStandingOrder,
     makeStandingOrderDefinition,
 } from './standingOrders';
-import { plausibleOriginTerminal, describeStandingOrderMigrations, TERMINALS_GROUPS_KEY, mutateTerminalGroups, teamHeadName, installGlobalQueueDoneOrder } from './teamWiring';
+import { plausibleOriginTerminal, TERMINALS_GROUPS_KEY, mutateTerminalGroups, teamHeadName, installGlobalQueueDoneOrder } from './teamWiring';
 import { computeRosterClearTargets } from './workContextResolver';
 import { instantiateExternalHeadedTeam, resolveExternalTeamTemplate } from './agentGroupInstantiation';
 import { parseComplexityScore, getFallbackRole } from './complexityScale';
@@ -1042,7 +1042,8 @@ function composeAcceptanceInstruction(
 ): string {
     const idPart = planId ? JSON.stringify(planId) : '"<this subtask\'s planId>"';
     return ' When you are done with this subtask, commit, then POST /kanban/task/complete with '
-        + `{"from":${JSON.stringify(leadName)},"planId":${idPart},"workspaceRoot":${JSON.stringify(workspaceRoot)}} `
+        + `{"from":${JSON.stringify(leadName)},"planId":${idPart},"workspaceRoot":${JSON.stringify(workspaceRoot)},`
+        + '"outcome":"<one line stating what was done>"} '
         + 'against the API base named in your SWITCHBOARD STATUS line. Post every time — you reject by sending '
         + `a fix round first, not by withholding the post. Until you post, the seat is not cleared and you `
         + 'cannot be handed the next subtask.';
@@ -6529,9 +6530,9 @@ export class LocalApiServer {
                     //   - externalHead: the head is a non-terminal agent
                     //     (Antigravity/Cursor/IDE chat) whose name matches no
                     //     pty seat, so ptySendPrompt is a dead click. Those
-                    //     workers already report via
-                    //     EXTERNAL_HEAD_CALLBACK_INSTRUCTION, which writes into
-                    //     the team's reports inbox — the head's real channel.
+                    //     workers already report via the external-member-callback
+                    //     fragment, which writes into the team's reports inbox
+                    //     — the head's real channel.
                     // In all three the turn-end notice keeps its live delivery:
                     // nothing else is going to tell anyone.
                     let relayHead: string | undefined;
@@ -8557,22 +8558,11 @@ export class LocalApiServer {
      * workspace. Returns `{ success: true, available, orders }`; `available` is false
      * when no kanban DB is reachable so the webview can gate the UI honestly.
      *
-     * Keeps `orders` raw and identity-stable (preserving on-disk UUIDs for
-     * delete-by-id — `standing-orders-marker-contract.test.js` forbids returning
-     * migrated rows here, because the pair migration mints a fresh
-     * `crypto.randomUUID()` per call and the Link-up editor deletes by id).
-     * Staleness is therefore **additive per-row metadata**, not a rewritten
-     * array: `stale`, `dropped`, and `effectiveInstruction`.
-     *
-     * Those markers come from `describeStandingOrderMigrations`, which runs the
-     * SAME pure transforms delivery runs. Re-deriving them here from a local copy
-     * of a recogniser (or of a matching fragment) is the defect this
-     * endpoint exists to close: the one surface you would use to ask "what is
-     * this agent actually told?" must not be able to drift from the answer.
-     *
-     * Once the persisting pass in `loadEffectiveStandingOrders` has run, no
-     * recogniser fires and the markers are permanently absent. That is the
-     * correct end state, not a broken endpoint.
+     * Returns rows raw and identity-stable (preserving on-disk UUIDs for
+     * delete-by-id). System orders are composed at delivery and never persisted,
+     * so the persisted store holds only what a human authored — there is no
+     * staleness to surface. The endpoint returns the rows as-is, with `scope`
+     * defaulted to `pair` for shipped-state rows that predate the field.
      */
     private async _handleStandingOrdersList(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
@@ -8597,15 +8587,11 @@ export class LocalApiServer {
             const raw = await db.getConfigJson(STANDING_ORDERS_CONFIG_KEY, []) as StandingOrder[];
             const rawArray = Array.isArray(raw) ? raw : [];
 
-            // Derived from the pure transforms, keyed by the row's ON-DISK id —
-            // no minted ids leak into the response.
-            const notes = describeStandingOrderMigrations(rawArray);
             const orders = rawArray.map(o => ({
                 ...o,
                 // Default absent `scope` to `pair` on read so the client always
                 // sees an explicit scope field, even for shipped-state rows.
                 scope: (o.scope || 'pair') as StandingOrderScope,
-                ...(notes.get(o?.id) || {}),
             }));
 
             // Definitions library — returned alongside orders so the webview
@@ -10123,6 +10109,30 @@ export class LocalApiServer {
             const board = await this._resolveBoard(db);
             const features = (board || []).filter((p: any) => p.isFeature === 1 || p.isFeature === true);
             return this._withRecommendedRole(features);
+        });
+    }
+
+    /**
+     * GET /kanban/reports[?kind=blocked|finished][&limit=N] — host turn-end
+     * reports read out of `plan_events` (event_type `turn_end`), joined to
+     * `plans` for each card's CURRENT column. Replaces the file-directory
+     * reader that walked `.switchboard/mission-control/reports/` and parsed
+     * frontmatter. The join answers the question the files could not: whether
+     * a blocked card is still blocked. NOT the deleted `GET
+     * /mission-control/reports` (a file route that never existed) — this is a
+     * DB query, not a directory scan, and carries no claim route (claiming was
+     * file bookkeeping standing in for a query).
+     */
+    private async _handleGetReports(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        await this._handleReadEndpoint(req, res, async () => {
+            const db = await this._requireReadableStore(req);
+            const url = new URL(req.url || '', `http://localhost:${this._port}`);
+            const kindRaw = url.searchParams.get('kind') || undefined;
+            const kind = (kindRaw === 'finished' || kindRaw === 'blocked') ? kindRaw : undefined;
+            const limitRaw = url.searchParams.get('limit');
+            const limit = limitRaw ? Number(limitRaw) : undefined;
+            const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
+            return db.getTurnEndReports?.(wsId, { kind, limit }) ?? [];
         });
     }
 
@@ -12273,10 +12283,42 @@ export class LocalApiServer {
         const fetchSite = req.headers['sec-fetch-site'];
         if (typeof fetchSite === 'string') {
             // Browser signal always wins; marker is not an override.
-            if (fetchSite === 'cross-site' || fetchSite === 'same-site') {
+            if (fetchSite === 'cross-site') {
                 return false;
             }
             if (fetchSite === 'none' || fetchSite === 'same-origin') {
+                return true;
+            }
+            if (fetchSite === 'same-site') {
+                // NOT a blanket reject. The docblock's reason — "different
+                // localhost ports are not same-origin" — is true and is not a
+                // threat: a different port on a host the bind policy already
+                // allows is the operator's own board. Under a tailnet it is
+                // worse than harmless, it is a lockout: `ts.net` is on the
+                // Public Suffix List, so `<tailnet>.ts.net` is ONE site and
+                // every device and host-form under it is `same-site`. A
+                // home-screen/PWA launch and a hop between the board's own host
+                // forms both land here.
+                //
+                // Observed 2026-09-13: every navigation to the tailnet address
+                // answered `{"error":"Access denied: cross-site request
+                // rejected"}` and the operator could not reach their own board
+                // from any machine.
+                //
+                // Guard 3 has ALREADY validated the Host header against the bind
+                // policy before this runs, so the request is known to be
+                // addressed to a host this board serves. What remains is who
+                // sent it: an Origin, when present, is checked against the same
+                // trusted set the Host guard and the WS upgrade use. A top-level
+                // navigation sends no Origin and is a GET that changes nothing,
+                // so there is no CSRF there to prevent.
+                //
+                // `cross-site` above is untouched — a page on the public
+                // internet is the threat this guard exists for.
+                const sameSiteOrigin = req.headers['origin'];
+                if (typeof sameSiteOrigin === 'string' && sameSiteOrigin.length > 0) {
+                    return this._isLocalhostOrigin(sameSiteOrigin);
+                }
                 return true;
             }
             // Unknown value: fall through to the Origin check.
@@ -12289,10 +12331,31 @@ export class LocalApiServer {
             return this._isLocalhostOrigin(origin);
         }
 
-        // Neither signal present: non-browser case. A supported local client
-        // sends `X-Switchboard-Client`; a request with none of the three is
-        // rejected (2026-09-10 correction). A browser cannot forge the marker
-        // — a custom header on a cross-site request requires a CORS preflight.
+        // Neither signal present. The 2026-09-10 correction assumed this meant
+        // "not a browser" — that is false. `Sec-Fetch-*` is not universal:
+        // Safari only shipped it in 16.4, and several in-app/embedded webviews
+        // still omit it entirely. A top-level navigation from such a browser
+        // sends no `Origin` either (navigations never do), so a real operator
+        // on a real browser landed here and was refused. Observed 2026-09-13:
+        // the board answered every navigation with
+        // `{"error":"Access denied: cross-site request rejected"}`.
+        //
+        // Split on the METHOD instead of guessing at the client:
+        //
+        //   - A GET/HEAD is the page load. Guard 3 has already validated the
+        //     Host against the bind policy, and this plan's own audit recorded
+        //     "2026-09-13 confirmed no side-effecting GET endpoint exists
+        //     today" — so there is no state for a forged GET to change, and
+        //     refusing it only locks out the browsers that omit the header.
+        //
+        //   - Anything that can change state still requires the explicit
+        //     `X-Switchboard-Client` marker. That is the case the CSRF guard
+        //     exists for, and it is unchanged: a hostile page cannot set a
+        //     custom header cross-site without a CORS preflight, and the
+        //     preflight only mirrors an origin the bind policy already allows.
+        if (req.method === 'GET' || req.method === 'HEAD') {
+            return true;
+        }
         const marker = req.headers['x-switchboard-client'];
         return typeof marker === 'string' && marker.length > 0;
     }
@@ -13314,6 +13377,8 @@ export class LocalApiServer {
                 await this._handleGetPlans(req, res);
             } else if (pathname === '/kanban/features' && req.method === 'GET') {
                 await this._handleGetFeatures(req, res);
+            } else if (pathname === '/kanban/reports' && req.method === 'GET') {
+                await this._handleGetReports(req, res);
             } else if (pathname === '/kanban/plan' && req.method === 'GET') {
                 await this._handleGetPlan(req, res);
             } else if (pathname === '/kanban/columns' && req.method === 'GET') {
