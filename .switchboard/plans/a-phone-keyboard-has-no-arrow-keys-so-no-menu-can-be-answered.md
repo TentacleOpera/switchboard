@@ -119,6 +119,22 @@ phone at all.
 dismisses the iOS soft keyboard, so the operator would lose the letter keys on every arrow
 press — worse than nothing for a menu that mixes typing and navigation.
 
+### 7. Every live seat is reachable, not just team members
+
+`openTerminalViewer` is entered only as `openTerminalViewer(team, …)`, and its seat list is
+`[liveSeat, ...memberSeats]` (`command.js:1529`) — the head and members of one team. There is no
+path from this surface to a seat that is not on a team, so a lone planner, a shared reviewer or
+any standalone terminal cannot be opened from a phone at all.
+
+The switcher itself is already right: one button per live seat, the active one highlighted,
+re-entering the same function so the previous socket is closed before the next opens. What is
+missing is the roster it is given. Feed it the live fleet — `ptyListTerminals` — grouped by team
+with ungrouped seats in their own section, so the switcher can reach anything that exists rather
+than only what shares a team with the seat already open.
+
+A seat that cannot be opened is exactly as unusable as one that cannot be typed into, which is
+why it belongs here rather than in its own plan.
+
 ## Verification Plan
 
 ### Automated Tests
@@ -141,4 +157,7 @@ press — worse than nothing for a menu that mixes typing and navigation.
   it against a live seat.
 - Ctrl-C interrupts a running agent from the phone.
 - Pressing an arrow does not dismiss the soft keyboard.
+- A standalone seat that belongs to no team can be opened and driven from the phone.
+- Switching seats mid-session closes the previous socket and does not leave the viewer showing a
+  stale screen.
 - A desktop session is visually unchanged.
