@@ -521,7 +521,7 @@ async function test(name, fn) {
         mockRun(args => {
             if (args[0] === 'list-panes') {
                 // %1 is still alive; %2 died while Switchboard was down.
-                return ['%1', 'work', '1', 'win', '0', 'coder-1', 'claude', '/tmp/wt', '4242'].join('\x1f') + '\n';
+                return ['%1', 'work', '1', 'win', '0', 'coder-1', 'claude', '/tmp/wt', '4242', '', '0'].join('\x1f') + '\n';
             }
             return '';
         });
@@ -552,7 +552,7 @@ async function test(name, fn) {
     await test('adopted rows persist sessionName — the field the liveness poll reads', async () => {
         mockRun(args => {
             if (args[0] === 'list-panes') {
-                return ['%7', 'mysession', '1', 'win', '0', 'coder-9', 'claude', '/tmp/wt', '99'].join('\x1f') + '\n';
+                return ['%7', 'mysession', '1', 'win', '0', 'coder-9', 'claude', '/tmp/wt', '99', '', '0'].join('\x1f') + '\n';
             }
             return '';
         });
@@ -584,7 +584,7 @@ async function test(name, fn) {
         // The adoption half runs behaviourally; the seat row is pre-seeded here.
         mockRun(args => {
             if (args[0] === 'list-panes') {
-                return ['%1', 'work', '1', 'win', '0', 'coder-1', 'claude', '/tmp/wt', '11'].join('\x1f') + '\n';
+                return ['%1', 'work', '1', 'win', '0', 'coder-1', 'claude', '/tmp/wt', '11', '', '0'].join('\x1f') + '\n';
             }
             return '';
         });
@@ -618,8 +618,12 @@ async function test(name, fn) {
     // server while every mock that feeds raw 0x1f stays green. The fixtures
     // below deliberately use the ESCAPED form — that is what tmux emits.
     const ESC = '\\037';
-    const paneLine = (session, win, name, group) =>
-        ['%1', session, '1', win, '0', name, 'sleep', '/tmp', '123', group].join(ESC);
+    // ELEVEN fields. PANE_FORMAT gained `#{session_attached}` as the 11th, and
+    // `listTmuxPanes` guards on `fields.length < 11` — a 10-field fixture is
+    // silently DROPPED, so every session/grid/reconcile assertion below fails
+    // with a misleading "pane not found". Keep this in step with PANE_FORMAT.
+    const paneLine = (session, win, name, group, attached = '0') =>
+        ['%1', session, '1', win, '0', name, 'sleep', '/tmp', '123', group, attached].join(ESC);
 
     await test('listTmuxPanes parses the escaped \\037 separator tmux actually emits', async () => {
         mockRun(async () => [
@@ -737,6 +741,19 @@ async function test(name, fn) {
             'window name test must be `grep -Fxq -- "${win}"` (fixed-string, exact-line, quiet, end-of-options)');
     });
 
+    // The seating chain carries long explanatory comments that NAME the very
+    // commands these tests count (`new-window`, `new-session`, `if`). Counting
+    // occurrences in the raw source counts the prose too, so strip comments
+    // first and match the chain that actually ships.
+    function seatingCommandBlock() {
+        const code = projectionSource
+            .replace(/\/\*[\s\S]*?\*\//g, '')
+            .replace(/^\s*\/\/[^\n]*$/gm, '');
+        const m = code.match(/effectiveStartupCommand\s*=\s*[\s\S]*?exec tmux -u attach/);
+        assert.ok(m, 'seating command block must end with `exec tmux -u attach`');
+        return m[0];
+    }
+
     await test('tmux-seat-reuse: existing window → no new-window in the command', async () => {
         // The three-branch decision: no session → new-session; session but no
         // window → new-window; session AND window → reuse (no new-window, no
@@ -744,14 +761,18 @@ async function test(name, fn) {
         // branch is the new-session branch. There is NO third tmux creation
         // command — the `fi` ends the branch, and the reuse case is the
         // implicit else.
-        const seatingBlock = projectionSource.match(/effectiveStartupCommand\s*=\s*[\s\S]*?exec tmux -u -CC attach/);
-        assert.ok(seatingBlock, 'seating command block must end with `exec tmux -u -CC attach`');
-        const block = seatingBlock[0];
-        // The block must contain exactly one `new-session` (the if-branch) and
-        // exactly one `new-window` (the elif-branch). The reuse case (else) is
-        // implicit — neither runs.
-        assert.strictEqual((block.match(/tmux new-session/g) || []).length, 1,
-            'exactly one `tmux new-session` (the no-session branch)');
+        const block = seatingCommandBlock();
+        // Exactly two `new-session` in the block, and they are DIFFERENT things:
+        // the if-branch creates the seat's WINDOW (`-n ${win}`, capturing the
+        // window id), and the view line ensures the per-seat grouped VIEW
+        // exists (`-t ${session} -s ${view}`, skipped entirely for a solo
+        // seat). Counting them together says nothing; pin each by its shape.
+        assert.strictEqual((block.match(/tmux new-session -d -P -F '#\{window_id\}' -s \$\{session\} -n \$\{win\}/g) || []).length, 1,
+            'exactly one window-creating `tmux new-session` (the no-session branch), capturing the window id');
+        assert.strictEqual((block.match(/tmux new-session -d -t \$\{session\} -s \$\{view\}/g) || []).length, 1,
+            'exactly one view-creating `tmux new-session` (guarded by has-session, never `-A`)');
+        assert.strictEqual((block.match(/tmux new-session/g) || []).length, 2,
+            'no THIRD `tmux new-session` — the reuse case (else) must create nothing');
         assert.strictEqual((block.match(/tmux new-window/g) || []).length, 1,
             'exactly one `tmux new-window` (the no-window branch)');
     });
@@ -802,9 +823,7 @@ async function test(name, fn) {
         // of an existing window hits the implicit else and creates nothing.
         // This is what makes `tmux list-windows -t lc-<team> | wc -l` stay at
         // the roster size across two starts.
-        const seatingBlock = projectionSource.match(/effectiveStartupCommand\s*=\s*[\s\S]*?exec tmux -u -CC attach/);
-        assert.ok(seatingBlock, 'seating command block found');
-        const block = seatingBlock[0];
+        const block = seatingCommandBlock();
         // `new-window` must be inside the `elif` branch, not at the top level
         // of the command. The `elif` gate is the window-name test.
         const elifIdx = block.indexOf('elif');
@@ -827,8 +846,18 @@ async function test(name, fn) {
         assert.ok(/tmux.*kill-window.*-t.*=\$\{?t\.tmuxSession/.test(goHostSource) ||
                   /exec\.Command\("tmux",\s*"kill-window",\s*"-t",\s*"="\s*\+\s*t\.tmuxSession/.test(goHostSource),
             'fleet.close() must issue `tmux kill-window -t =<session>:<window>`');
-        assert.ok(/t\.controlMode\s*&&\s*t\.tmuxSession\s*!=\s*""\s*&&\s*t\.tmuxWindow\s*!=\s*""/.test(goHostSource),
-            'kill-window must be gated on controlMode && tmuxSession != "" && tmuxWindow != ""');
+        // Gated on killTmuxView (operator close vs board shutdown) and on the
+        // seat being tmux-backed — NOT on controlMode. controlMode says who
+        // DRAWS the pane; it says nothing about whether tmux owns the session.
+        // Gating the kill on it meant turning control mode off silently turned
+        // "closing a terminal closes its tmux session" back off too, and
+        // sessions leaked on every close. The killTmuxView half is the real
+        // invariant: only an operator close ends an agent, a board shutdown
+        // never does.
+        assert.ok(/killTmuxView\s*&&\s*t\.tmuxSession\s*!=\s*""\s*&&\s*t\.tmuxWindow\s*!=\s*""/.test(goHostSource),
+            'kill-window must be gated on killTmuxView && tmuxSession != "" && tmuxWindow != ""');
+        assert.ok(!/t\.controlMode\s*&&\s*t\.tmuxSession\s*!=\s*""/.test(goHostSource),
+            'kill-window must NOT be gated on controlMode — that regression disabled close-on-close entirely');
     });
 
     await test('operator-close kills the view session too: Go host fleet.close() issues kill-session for the view', async () => {
@@ -884,14 +913,14 @@ async function test(name, fn) {
             'reaper must run AFTER reconcile so dead panes are marked exited first');
         // Must read from db.getConfigJsonSync('runtime.terminals'), not from
         // the in-memory cache.
-        const reaperBlock = bootstrapSource.slice(reaperIdx - 200, reaperIdx + 1500);
+        const reaperBlock = bootstrapSource.slice(reaperIdx - 3000, reaperIdx + 2000);
         assert.ok(/getConfigJsonSync.*runtime\.terminals/.test(reaperBlock),
             'reaper must read `runtime.terminals` from db (persisted registry), not in-memory cache');
     });
 
     await test('startup reaper ownership rule: ideName === PTY_IDE_NAME && status !== exited && tmuxSession present', async () => {
         const reaperIdx = bootstrapSource.indexOf('tmux-reaper');
-        const reaperBlock = bootstrapSource.slice(reaperIdx - 200, reaperIdx + 2000);
+        const reaperBlock = bootstrapSource.slice(reaperIdx - 3000, reaperIdx + 2000);
         assert.ok(/PTY_IDE_NAME/.test(reaperBlock),
             'reaper must filter registry rows by `ideName === PTY_IDE_NAME`');
         assert.ok(/status\s*===\s*['"]exited['"]/.test(reaperBlock),
@@ -902,7 +931,7 @@ async function test(name, fn) {
 
     await test('startup reaper kills lc-* sessions not in owned set, passes tmuxSocket', async () => {
         const reaperIdx = bootstrapSource.indexOf('tmux-reaper');
-        const reaperBlock = bootstrapSource.slice(reaperIdx - 200, reaperIdx + 2000);
+        const reaperBlock = bootstrapSource.slice(reaperIdx - 3000, reaperIdx + 2000);
         assert.ok(/killTmuxSession\(name,\s*tmuxSocket\)/.test(reaperBlock),
             'reaper must call killTmuxSession(name, tmuxSocket) — socket-aware, not bare tmux');
         assert.ok(/n\.startsWith\(['"]lc-['"]\)/.test(reaperBlock),
@@ -917,7 +946,7 @@ async function test(name, fn) {
         // EVERY surviving session — the opposite of crash survival. The
         // reaper must read the persisted registry.
         const reaperIdx = bootstrapSource.indexOf('tmux-reaper');
-        const reaperBlock = bootstrapSource.slice(reaperIdx - 200, reaperIdx + 2000);
+        const reaperBlock = bootstrapSource.slice(reaperIdx - 3000, reaperIdx + 2000);
         assert.ok(!/ptyFleetService\.cache/.test(reaperBlock) && !/this\.cache/.test(reaperBlock),
             'reaper must NOT read from the in-memory fleet cache — only the persisted registry');
     });

@@ -148,10 +148,20 @@ check('Go host declares a clearStrategy for every recognised family and an argv 
     // Every family the readiness table recognises must be covered by
     // clearStrategy. A family added to readiness but not to clearStrategy
     // would silently fall back to in-process on a guess.
-    const recognisedFamilies = ['claude', 'antigravity', 'devin'];
-    for (const fam of recognisedFamilies) {
+    // Scope to the clearStrategy BODY. Testing the whole file let `case "claude"`
+    // match inside respawnArgvSuffix, so the loop asserted nothing about the
+    // clear table — and demanded an explicit arm for every family, which is not
+    // the design: only `devin` needs respawn, and the `default` arm below is the
+    // deliberate, SAFE answer for everything else (in-process clear, never a
+    // respawn guess). Pin the shape that actually ships.
+    const clearBody = (prompt.match(/func clearStrategy\(family string\) string \{[\s\S]*?\n\}/) || [''])[0];
+    assert.ok(clearBody, 'could not locate the clearStrategy() body');
+    assert.ok(/case "devin":\s*\n?\s*return "respawn"/.test(clearBody),
+        'clearStrategy must route devin to respawn — an in-process /clear does not reset a devin session');
+    for (const fam of ['claude', 'antigravity']) {
         const re = new RegExp(`case "${fam}"`);
-        assert.ok(re.test(prompt), `clearStrategy table missing family ${fam}`);
+        assert.ok(!re.test(clearBody),
+            `clearStrategy must NOT carry an explicit arm for ${fam} — it takes the in-process default`);
     }
     // Respawn families (devin) must have an argv template branch in
     // respawnArgvSuffix — a respawn family without a template would inject
@@ -165,7 +175,14 @@ check('Go host respawn path never calls writeSlashLocked and in-process path sti
     const prompt = fs.readFileSync(path.join(REPO_ROOT, 'cmd', 'switchboard-pty-host', 'prompt.go'), 'utf8');
     const main = fs.readFileSync(path.join(REPO_ROOT, 'cmd', 'switchboard-pty-host', 'main.go'), 'utf8');
     // The respawn branch in deliverPrompt must not type /clear.
-    const respawnBranch = prompt.slice(prompt.indexOf('clearStrategy(family) == "respawn"'));
+    // Slice the respawn branch ONLY. The old slice ran to the end of the file,
+    // so it always swept in the in-process branch below it and could never fail
+    // for the reason it claimed — it asserted the opposite of its own name.
+    const respawnStart = prompt.indexOf('clearStrategy(family) == "respawn"');
+    assert.ok(respawnStart >= 0, 'could not locate the respawn branch');
+    const afterRespawn = prompt.slice(respawnStart);
+    const respawnBranch = afterRespawn.slice(0, afterRespawn.indexOf('\n\t\t}') + 1);
+    assert.ok(respawnBranch.length > 0, 'could not delimit the respawn branch');
     assert.ok(!respawnBranch.includes('writeSlashLocked'), 'respawn branch must not call writeSlashLocked');
     // The in-process branch must still call writeSlashLocked(t, "/clear").
     const inProcessBranch = prompt.slice(prompt.indexOf('clearReadinessWindows(family)'));

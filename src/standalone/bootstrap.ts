@@ -4581,9 +4581,28 @@ Each plan file must include:
                 // base names. Flattening `members` — base plus every per-seat view —
                 // would make every live view look unowned and reap it. Killing the
                 // base kills its grouped views anyway, which is the intended reap.
+                // An ATTACHED session is never an orphan, whatever the registry
+                // says. The sibling plan's post-mortem is explicit: the hand-run
+                // sweep that destroyed an operator's live session on 2026-09-12
+                // reasoned "the board's fleet does not list this seat, so nobody
+                // is using it" — while `#{session_attached}` was 1 and was
+                // "printed and read past". The registry is a fallible signal (a
+                // pty-host crash empties it; a rehydrated row loses
+                // `tmuxSession` if the host does not report it), so it must not
+                // be the SOLE input to a destructive action. A connected client
+                // is direct evidence of an owner and outranks registry absence.
+                const attachedGroups = new Set(
+                    sessions.filter(s => s.attached && typeof s.baseSession === 'string').map(s => s.baseSession)
+                );
                 const lcSessions = sessions
                     .map(s => s.baseSession)
-                    .filter(n => typeof n === 'string' && n.startsWith('lc-'));
+                    .filter(n => typeof n === 'string' && n.startsWith('lc-'))
+                    .filter(n => !attachedGroups.has(n));
+                if (attachedGroups.size > 0) {
+                    // Say which signal spared them — "which store answered?"
+                    // must be answerable after the fact for a destructive path.
+                    log(opts, `[tmux-reaper] ${attachedGroups.size} session(s) have an attached client and are never reaped: ${[...attachedGroups].join(', ')}`);
+                }
                 if (lcSessions.length === 0) {
                     // No `lc-*` sessions at all — nothing to reap. Logged at
                     // debug level only; a clean boot is the common case and a

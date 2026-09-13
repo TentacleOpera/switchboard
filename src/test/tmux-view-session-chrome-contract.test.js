@@ -184,12 +184,33 @@ test('the chain captures the window id at creation and targets by id', () => {
     );
 });
 
-test('the view session uses manual window sizing', () => {
+test('the view AND base sessions size to the smallest attached client', () => {
+    // `smallest`, NOT `manual`. `manual` was right while control mode arbitrated
+    // pane geometry and the browser needed sole authority. Control mode is off,
+    // and what `manual` does now is pin a window at its birth size and refuse
+    // every other client — so a second client (SSH, a phone) attached to a
+    // window TALLER than its terminal sees the top and nothing else. The agent's
+    // composer is drawn at the BOTTOM, so the operator types into a line off the
+    // bottom of the screen: input arrives, nothing appears, the terminal reads
+    // as broken. Measured 2026-09-13: window `Coding` was 48x41 with an SSH
+    // client at 59x25 — sixteen rows, the composer included, below the fold.
     assert.ok(
-        /tmux set-option -t \$\{view\} window-size manual/.test(src),
-        'goPtyFleetProjection.ts must set `window-size manual` on ${view} — under the '
-        + 'default `latest` a second attached client (SSH) ping-pongs the window size, '
-        + 'which is the arbitration failure aggressive-resize used to paper over',
+        /tmux set-option -t \$\{view\} window-size smallest/.test(src),
+        'goPtyFleetProjection.ts must set `window-size smallest` on ${view} so every attached client sees the whole window',
+    );
+    // Set on BOTH: grouped sessions share one window list, so a split policy
+    // leaves whichever session holds the stricter one pinning it for everyone.
+    assert.ok(
+        /tmux set-option -t \$\{session\} window-size smallest/.test(src),
+        'the BASE session must carry the same `window-size smallest` — a split policy across the group pins the window for everyone',
+    );
+    // Strip comments first: the chain DOCUMENTS why `manual` was rejected, and
+    // a guard that fails on its own rationale teaches the next reader to delete
+    // the rationale.
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/[^\n]*$/gm, '');
+    assert.ok(
+        !/window-size manual/.test(code),
+        '`window-size manual` clips a second client below the fold and silently eats their typing',
     );
 });
 

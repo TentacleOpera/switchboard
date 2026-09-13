@@ -80,33 +80,43 @@ function stripComments(src) {
         _setTmuxRunImpl(null);
     }
 
-    // ─── 1. fleet.close() issues kill-session for a control-mode terminal ──
-    await test('fleet.close() issues kill-session for a control-mode terminal with tmuxViewSession', () => {
+    // ─── 1. fleet.close() issues kill-session for a tmux-backed terminal ───
+    await test('fleet.close() issues kill-session for a tmux-backed terminal with tmuxViewSession', () => {
         const src = fs.readFileSync(GO_HOST_FILE, 'utf8');
         // The close function must issue exec.Command("tmux", "kill-session",
-        // "-t", "="+t.tmuxViewSession) when killTmuxView && t.controlMode &&
-        // t.tmuxViewSession != "".
+        // "-t", "="+t.tmuxViewSession) when killTmuxView && t.tmuxViewSession != "".
         assert.ok(
             /exec\.Command\(\s*"tmux"\s*,\s*"kill-session"\s*,\s*"-t"\s*,\s*"="\s*\+\s*t\.tmuxViewSession\s*\)/.test(src),
-            'fleet.close() must issue exec.Command("tmux", "kill-session", "-t", "="+t.tmuxViewSession) for a control-mode terminal'
+            'fleet.close() must issue exec.Command("tmux", "kill-session", "-t", "="+t.tmuxViewSession) for a tmux-backed terminal'
         );
-        // The kill-session must be gated on killTmuxView AND controlMode AND a non-empty tmuxViewSession.
+        // Gated on killTmuxView AND a non-empty tmuxViewSession — NOT on
+        // controlMode. controlMode says who DRAWS the pane; it says nothing
+        // about whether tmux owns the session. Gating on it meant that turning
+        // control mode off silently turned "closing a terminal closes its tmux
+        // session" back off too, and sessions leaked on every close.
+        // `tmuxViewSession != ""` is the honest test: it is set at create only
+        // for a tmux-backed seat, and is empty for extension and raw ptys.
         assert.ok(
-            /killTmuxView\s*&&\s*t\.controlMode\s*&&\s*t\.tmuxViewSession\s*!=\s*""/.test(src),
-            'fleet.close() must gate kill-session on killTmuxView && t.controlMode && t.tmuxViewSession != ""'
+            /killTmuxView\s*&&\s*t\.tmuxViewSession\s*!=\s*""/.test(src),
+            'fleet.close() must gate kill-session on killTmuxView && t.tmuxViewSession != ""'
+        );
+        assert.ok(
+            !/killTmuxView\s*&&\s*t\.controlMode/.test(src),
+            'the kill must NOT be gated on controlMode — that regression disabled close-on-close entirely'
         );
     });
 
-    await test('a non-control-mode terminal triggers no kill-session in fleet.close()', () => {
+    await test('a non-tmux terminal triggers no kill-session in fleet.close()', () => {
         const src = fs.readFileSync(GO_HOST_FILE, 'utf8');
         // Extract the close() function body and verify the kill-session is
-        // inside the controlMode guard, not unconditional.
+        // inside the tmuxViewSession guard, not unconditional. A raw pty has
+        // an empty tmuxViewSession, so the guard is what spares it.
         const closeMatch = src.match(/func \(f \*fleet\) close\(name string, killTmuxView bool\) bool \{([\s\S]*?)\n\}/);
         assert.ok(closeMatch, 'could not locate fleet.close() function');
         const closeBody = closeMatch[1];
         assert.ok(
-            /killTmuxView\s*&&\s*t\.controlMode\s*&&\s*t\.tmuxViewSession\s*!=\s*""/.test(closeBody),
-            'the kill-session in close() must be gated on controlMode — a raw terminal must not trigger it'
+            /killTmuxView\s*&&\s*t\.tmuxViewSession\s*!=\s*""/.test(closeBody),
+            'the kill-session in close() must be gated on a non-empty tmuxViewSession — a raw terminal must not trigger it'
         );
     });
 
@@ -321,13 +331,23 @@ function stripComments(src) {
 
     await test('INVARIANT: ptyCloseTerminal passes killTmuxView=true (explicit close kills)', () => {
         const src = fs.readFileSync(GO_HOST_FILE, 'utf8');
-        // ptyCloseTerminal must call f.close(name, true) — the explicit
-        // operator close action kills the seat's view session.
+        // ptyCloseTerminal must call f.close(name, !teardown). An operator
+        // close sends no `teardown`, so killTmuxView is true and the seat's
+        // view session dies with it. The board's own shutdown (disposeAll in
+        // bootstrap.ts stop(), which reaches this SAME verb through
+        // handle.pty.kill()) sends `teardown: true`, so killTmuxView is false
+        // and tmux is left alone. A bare `true` here made every board restart
+        // destroy the whole fleet's tmux sessions, agents included — the
+        // invariant is "a board restart closes nothing".
         const ptyCloseMatch = src.match(/case "ptyCloseTerminal":\s*([\s\S]*?)\n\s*case /);
         assert.ok(ptyCloseMatch, 'could not locate ptyCloseTerminal case');
         assert.ok(
-            /f\.close\(\s*name\s*,\s*true\s*\)/.test(ptyCloseMatch[1]),
-            'ptyCloseTerminal must pass killTmuxView=true so the seat view is killed'
+            /teardown,\s*_\s*:?=\s*payload\["teardown"\]\.\(bool\)/.test(ptyCloseMatch[1]),
+            'ptyCloseTerminal must read a `teardown` flag from the payload'
+        );
+        assert.ok(
+            /f\.close\(\s*name\s*,\s*!teardown\s*\)/.test(ptyCloseMatch[1]),
+            'ptyCloseTerminal must pass killTmuxView=!teardown — an operator close kills, a board shutdown does not'
         );
     });
 
@@ -366,6 +386,44 @@ function stripComments(src) {
             !/\[\s*['"]kill-session['"]/.test(outsideKill),
             'kill-session must NOT appear outside killTmuxSession() and killTmuxSessionGroup() — no automatic close path in tmuxBackend.ts'
         );
+    });
+
+    // The invariant above scopes to tmuxBackend.ts — it pins where kill-session
+    // is ISSUED, but says nothing about who CALLS killTmuxSession(). That is the
+    // half that matters: an automatic reaper does not need to issue kill-session
+    // itself, it just calls the operator's function. The plan's own words —
+    // "this is the gate that stops an automatic reaper being added later by
+    // someone who thinks it is an improvement" — were not met by a check that a
+    // startup sweep passes unchanged. This test closes that hole by pinning the
+    // caller set.
+    await test('INVARIANT: killTmuxSession() callers are the operator verbs plus the ONE declared boot reaper', () => {
+        const roots = {
+            'bootstrap.ts': fs.readFileSync(BOOTSTRAP_FILE, 'utf8'),
+            'TaskViewerProvider.ts': fs.readFileSync(TASK_VIEWER_FILE, 'utf8'),
+        };
+        for (const [label, raw] of Object.entries(roots)) {
+            const code = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/[^\n]*$/gm, '');
+            const calls = (code.match(/\bkillTmuxSession(?!Group)\s*\(/g) || []).length;
+            // The extension root has exactly one caller (the tmuxKillSession
+            // verb). The standalone root has two: that same verb, plus the boot
+            // reaper — which is the SOLE sanctioned automatic caller and is
+            // named here deliberately, so adding a second one fails this gate.
+            const expected = label === 'bootstrap.ts' ? 2 : 1;
+            assert.strictEqual(calls, expected,
+                `${label}: expected exactly ${expected} killTmuxSession() call site(s) — a new automatic caller `
+                + '(timer, sweep, idle check, age threshold) is forbidden by the plan invariant');
+        }
+        // The one automatic caller must refuse to kill an ATTACHED session.
+        // The sibling plan's post-mortem is explicit: the hand-run sweep that
+        // destroyed an operator's live session read `#{session_attached} == 1`
+        // and went past it. The registry is a fallible ownership signal (a
+        // pty-host crash empties it), so a connected client must veto the kill.
+        const bootstrap = roots['bootstrap.ts'];
+        const reaperIdx = bootstrap.indexOf('tmux-reaper');
+        assert.ok(reaperIdx >= 0, 'bootstrap must contain a tmux-reaper block');
+        const reaperBlock = bootstrap.slice(reaperIdx - 4000, reaperIdx + 2500);
+        assert.ok(/attachedGroups/.test(reaperBlock) && /s\.attached/.test(reaperBlock),
+            'the boot reaper must exclude sessions with an attached client — registry absence alone must never authorise a kill');
     });
 
     // ─── 5. Source-text: renderTmuxSessions renders attached + close button ─

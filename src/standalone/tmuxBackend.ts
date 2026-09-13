@@ -514,7 +514,13 @@ export async function killTmuxSessionGroup(group: string, socket?: TmuxSocket): 
     const lines = out.split('\n').filter(l => l.length > 0);
     const ids: string[] = [];
     for (const line of lines) {
-        const parts = line.split('\x1f');
+        // MEASURED (tmux 3.4): tmux vis-escapes the 0x1f we ask for and writes
+        // it back as the four literal characters `\037` — the same trap
+        // `splitPaneFields` exists for. A bare `split('\x1f')` here found ONE
+        // field per line, so `parts.length < 2` skipped EVERY row, `ids` came
+        // back empty, and team close killed nothing while returning 0 and
+        // reporting success. Use the shared un-escaping splitter.
+        const parts = splitPaneFields(line);
         if (parts.length < 2) { continue; }
         const [groupName, sessionId] = parts;
         if (groupName === group && sessionId) {
