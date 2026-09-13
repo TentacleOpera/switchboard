@@ -178,7 +178,7 @@ Two residual propagation caveats remain, and they are notes rather than work:
 
 ## Metadata
 - **Project:** Browser Switchboard
-- **Feature:** b0f1f2cd-8591-4021-8b5f-51e5b6bcbb1f
+- **Feature:** 50c93771-8835-4b23-9a4b-db626416a6d9
 - **Tags:** cli, dx, docs, reliability
 - **Complexity:** 5
 

@@ -45,6 +45,7 @@ A Unix domain socket is a filesystem inode whose connectability is owned by the 
 
 ## Metadata
 - **Complexity:** 4
+- **Feature:** 50c93771-8835-4b23-9a4b-db626416a6d9
 - **Tags:** reliability, sandbox, api-server, cli, launcher
 
 ## User Review Required

@@ -31,7 +31,7 @@ Measured on this board, the Planned column as the console prints it:
 ## Metadata
 
 - **Complexity:** 3
-- **Feature:** The /switchboard front door
+- **Feature:** 50c93771-8835-4b23-9a4b-db626416a6d9
 - **Tags:** cli, ux, board
 
 ## User Review Required
@@ -78,3 +78,33 @@ Even at 87 a column does not fit a phone screen, and the console's whole value i
 5. A starred filter across columns answers "what is high priority" in one view.
 6. A column longer than a screen pages rather than printing in full.
 7. Selecting card N on page 2 dispatches the card shown as N on page 2.
+
+### Goal Invariants
+
+- **No card with a non-empty `featureId` appears in a column's PLANS section** (negative — subtasks are excluded from the flat column listing).
+- **Subtasks are reachable through their feature** (positive — selecting a feature lists its subtasks, so nothing becomes unreachable).
+- **The starred filter shows only starred cards and states so in the header** (positive — an empty list reads as "nothing starred here", not "no cards").
+- **A column longer than a screen pages rather than printing in full** (positive — the console is usable over ssh from a small client).
+
+## Complexity Audit
+
+### Routine
+- Applying the existing `featureId === ''` filter at the column view — the filter already exists and is already used in the ready/dispatch view.
+- Adding a starred filter predicate — the data is already read by the comparator; this is a predicate, not new plumbing.
+- Adding a `switchboard projects`-style feature→subtasks listing — selecting a feature lists its subtasks.
+
+### Complex / Risky
+- **Paging with stable numeric selection.** A card's number must not change meaning when the page does — the operator types a number they see on screen, and it must dispatch the card they pointed at. Getting this wrong makes the console dangerous, not just unusable.
+- **Across-columns starred filter.** The question is "what is high priority", not "what is high priority in Planned" — the filter must span columns, which means a different data path than per-column browsing.
+
+## Dependencies
+
+- None. This is a self-contained refactor of `src/standalone/cli.ts` column-browsing functions. The `featureId === ''` filter already exists at `cli.ts:744` and is reused, not invented.
+
+## Adversarial Synthesis
+
+Key risks: (1) paging with unstable numbers makes the console dangerous — an operator types "5" and dispatches the wrong card; (2) excluding subtasks could make a subtask that genuinely needs direct dispatch unreachable if the feature→subtasks path is not implemented alongside the exclusion. Mitigations: verification 7 asserts page-2 selection is stable; change 2 ensures subtasks are reachable through their feature, so exclusion is not removal.
+
+## Recommendation
+
+Complexity 3 → **Send to Intern.** Single-file, reuses existing filter, low risk. The paging stability check is the one thing that needs care.

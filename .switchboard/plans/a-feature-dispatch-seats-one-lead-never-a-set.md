@@ -8,7 +8,7 @@ One rule, enforced in one place: **dispatching a feature seats exactly one agent
 
 **Observed 2026-09-03.** A feature was dispatched to `LEAD CODED`. Multiple coding seats received the lead's orchestration prompt, so more than one agent on the team believed it was organising the work. The operator had to cancel the team. This is not a degraded outcome — it is an incoherent one: a team has one head by definition.
 
-**The routing does not have a rule; it has four branches.** `LocalApiServer.ts:2195-2218` resolves a dispatch target through a chain — explicit `targetTerminalOverride`, then `gate.role`, then an origin terminal, then a team lookup — and emits one of four `teamRouting` outcomes:
+**The routing does not have a rule; it has four branches.** `LocalApiServer.ts:3278-3300` resolves a dispatch target through a chain — explicit `targetTerminalOverride`, then `gate.role`, then an origin terminal, then a team lookup — and emits one of four `teamRouting` outcomes:
 
 | branch | condition | `teamOverride` |
 | :-- | :-- | :--: |
@@ -43,9 +43,59 @@ Fan-out is prevented by *arriving at* a single target through a resolution chain
 **Tags:** backend, api, teams, correctness
 **Project:** Browser Switchboard
 
+## User Review Required
+
+None. The invariant (a team has one head by definition) is not a new product decision; it is the enforcement of an existing one.
+
+## Complexity Audit
+
+### Routine
+
+- Adding the exactly-one assertion at the single delivery chokepoint — a count check, not selection logic.
+- Returning the relevant `teamRouting` string as the refusal reason.
+- Filtering features out of a distribution set and refusing if one is present.
+
+### Complex / Risky
+
+- **Naming the chokepoint.** The invariant must be enforced AFTER both team-scoped resolution (`teamOverride`, `LocalApiServer.ts:3278-3300`) AND the workspace-wide fallback (`getRoleTerminalSet`) resolve the target — i.e., at the single delivery path that consumes the resolved target, before the prompt is pasted. Putting the check in one of the four branches leaves the other three failing open (the original bug, restated as the cure).
+- **Scoping the `restrictToOriginTeam` inversion to feature dispatch.** Inverting `restrictToOriginTeam` to refuse-by-default would change the queue/next path's existing refusal-vs-fallback semantics unless the inversion is scoped to feature dispatch only. The queue/next path already refuses (Verification 6 unchanged); the inversion must not touch it.
+- **The invariant is per-dispatch, not per-feature.** Two concurrent dispatches of the same feature each seat "exactly one" — and the feature now has two leads. This plan prevents one dispatch fanning to many; it does not prevent many dispatches seating one each. A per-feature "exactly one lead" guard would need a held-feature check; recorded as a follow-up, not in scope here.
+- **`getRoleTerminalSet` returns a set; a feature dispatch must take one or refuse.** Selecting "the first" is the fan-out bug with one survivor and no diagnosis — the invariant is by count, not by selection.
+- **Distribution degrades to sequential until `plan_dependencies` is populated.** The table has existed since V64 and holds no rows, so the "drag N plans into a coding column" gesture falls back to sequential dispatch. This is a UX change the operator will notice — flag it, do not hide it.
+
+## Edge-Case & Dependency Audit
+
+**Race conditions**
+
+- Two feature dispatches for the same feature racing: the invariant is per-dispatch, so each seats exactly one — and the feature ends up with two leads. This is the per-feature residual noted above; the per-dispatch invariant does not catch it. A held-feature check would; out of scope here.
+
+**Security**
+
+- No new surface. The refusal returns a diagnostic `teamRouting` string; no new auth path. The invariant refuses rather than escalating privilege.
+
+**Side effects**
+
+- Refusing a dispatch that previously fell back to workspace-wide changes operator-visible behaviour — the operator now sees a refusal where they saw a (wrong) success. Intended, and the diagnostic string names the remedy.
+- Distribution degrading to sequential is slower but correct; the operator sees sequential dispatch where they might expect parallel.
+
+**Dependencies & conflicts**
+
+- `plan_dependencies` + `map_fingerprint` (table V64, holds no rows) — the parallelisation map that distribution requires. Until populated, distribution is sequential. The invariant itself does not depend on it — the invariant refuses fan-out regardless.
+- `cascadeFeatureByPlanId` (column cascade) — explicitly out of scope; this plan constrains who is *seated*, not which cards *move*.
+
+## Dependencies
+
+None blocking. The invariant (exactly-one for a feature dispatch) refuses fan-out unconditionally; the parallelisation-map distribution path depends on `plan_dependencies` being populated by the analysis graph (`d2e20f6d`), but that gates *distribution*, not the invariant.
+
+## Adversarial Synthesis
+
+Key risks: (1) the invariant is enforced "at the single point every dispatch passes through" but the plan must name it — a coder who puts the check in one branch leaves the other three failing open (the original bug); (2) inverting `restrictToOriginTeam` to refuse-by-default risks changing the queue/next path's existing refusal semantics unless scoped to feature dispatch; (3) the invariant is per-dispatch, not per-feature, so two concurrent dispatches of the same feature still seat two leads. Mitigations: name the chokepoint (after both team-scoped and workspace-wide resolution, before delivery); scope the inversion to feature dispatch; record the per-feature residual as a follow-up.
+
 ## Proposed Changes
 
 1. **State the invariant and enforce it once.** Before delivery, assert that a feature dispatch has resolved to exactly one terminal. Zero or more than one is a refusal, not a fallback. Put the check at the single point every dispatch passes through, not in each branch.
+
+   **Clarification (chokepoint):** the single point is the delivery path AFTER both resolution stages — the team-scoped chain (`LocalApiServer.ts:3278-3300`, which sets `teamOverride` or leaves it unset) AND the workspace-wide fallback (`getRoleTerminalSet`, which fills the target when `teamOverride` is unset) — and BEFORE the prompt is pasted to the terminal. The check reads the resolved target set's count: exactly one proceeds; zero or more than one is refused with the relevant `teamRouting` string. Placing it inside the four-branch chain re-creates the original bug (three branches still fail open).
 
 2. **Make refusal the default, not an opt-in.** Invert `restrictToOriginTeam`: team-scoped resolution refuses on a miss unless a caller explicitly asks for workspace-wide. Keep the existing refusal wording — it already tells the operator both remedies (add the seat, or pass an explicit target).
 
@@ -89,3 +139,13 @@ The **column** cascade. `cascadeFeatureByPlanId` moving a feature's subtasks int
 9. A selection containing a feature is refused, naming the feature, rather than silently dropping it or dispatching it alongside the plans.
 10. With no parallelisation map, the same gesture dispatches sequentially rather than concurrently.
 11. No dispatch path can deliver one card's prompt to more than one terminal.
+
+### Goal Invariants
+
+- **Positive:** a feature dispatch resolves to exactly one terminal (count === 1); zero or >1 is a refusal.
+- **Negative (paired):** a feature dispatch that would resolve to a terminal SET (`getRoleTerminalSet` returns >1) is refused, NOT silently truncated to "the first." Paired positive: an explicit `targetTerminalOverride` seats exactly that one terminal.
+- **Negative:** with `gate.role` unavailable, the dispatch is refused naming that reason — it does NOT fall back to workspace-wide. Paired positive: adding the role seat makes the same dispatch succeed.
+- **Negative:** with two seats matching the role workspace-wide, the dispatch is refused rather than picking one.
+- **Positive:** the `queue/next` path's existing refusal behaviour is unchanged (the `restrictToOriginTeam` inversion is scoped to feature dispatch, not queue/next).
+- **Negative:** a selection containing a feature is refused, naming the feature, rather than silently dropping it or dispatching it alongside the plans. Paired positive: the same selection with the feature removed dispatches the plans.
+- **Negative (residual, out of scope):** two concurrent dispatches of the same feature each seat exactly one — the feature ends with two leads. The per-dispatch invariant does not catch this; a per-feature held-lead check would. Recorded as a follow-up, not asserted here.

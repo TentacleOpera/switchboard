@@ -48,9 +48,10 @@ They overlap only where an operation serves both audiences. Where an entry here 
 
 ## Metadata
 
-- **Complexity:** 6
-- **Feature:** The /switchboard front door
+- **Complexity:** 7
+- **Feature:** 50c93771-8835-4b23-9a4b-db626416a6d9
 - **Tags:** cli, ux
+- **Consolidated From:** split-cli-front-door-menu-into-gui-and-cli-branches.md (shipped — GUI/CLI bifurcation already in `cmdMainMenu` at `cli.ts:2697`), the-cli-front-door-costs-a-keystroke-to-do-the-likely-thing-and-is-free-to-quit.md (merged — Enter/remember-mode/return-to-menu ergonomics)
 
 ## User Review Required
 
@@ -130,6 +131,44 @@ Launch opens Local or Remote. When a server is already running the entry reads *
 
 Direct actions, unchanged behaviour, at the bottom. **Setup**, not "First time setup" — it is run again whenever a repo is scaffolded or a secret changes, and naming it for first use discourages exactly that.
 
+### 7. Enter does the likely thing (merged from the deleted keystroke-ergonomics plan)
+
+Bind Enter to the primary action for the current state: open the board console (Fleet command) when a server is running, start the board (Launch) when one is not. Print what Enter will do on the prompt line so it is never a guess. Quitting keeps `q` — the exit costs one deliberate character and the common action costs none.
+
+### 8. Remember the last serve mode (merged from the deleted keystroke-ergonomics plan)
+
+The Launch menu's real question is local or remote, and on any given machine the answer rarely changes. Remember the last choice and make it what Enter does, showing which mode it will use. This is a genuine default, not a silent one: it is displayed before it is taken, and the other mode stays one keystroke away. It must record which source answered — remembered value, explicit flag, or first-run — so "why did it start tailnet?" is answerable. A remembered mode that cannot run (Tailscale down) must say so and offer local, not silently fall back.
+
+### 9. The front door returns to its own menu (merged from `5cc038b6` fix 4)
+
+The current `cmdMainMenu` (shipped by the deleted `759c05b5`) loops for CLI Mode (`continue` at `cli.ts:2825`) but still `exitFlushed(code)` for GUI serve (`cli.ts:2794`), Setup (`cli.ts:2839`), and About (`cli.ts:2853`). Every branch in the restructured menu must loop back to the top-level `for(;;)` after its child exits, not propagate the child's exit code. A bare `switchboard` used for help, diagnostics, or a failed serve must return to the menu, not exit to shell.
+
+## Complexity Audit
+
+### Routine
+- Restructuring `cmdMainMenu` from the shipped GUI/CLI bifurcation to the Fleet Command shape — single function, reuses the shipped `__board-console` re-spawn pattern, `banner(version)`, `findRunningInstance`, and `openPrompter`.
+- Adding `[s] Setup` and `[a] About` are already in the shipped menu; they stay as direct actions at the bottom.
+- Non-TTY guard (`cli.ts:2699-2704`) and direct-subcommand bypass are unchanged.
+
+### Complex / Risky
+- **Every branch must loop, not exit.** The shipped menu's GUI serve, Setup, and About branches still `exitFlushed(code)`. This plan restructures them and must make them all `continue` — a bare `switchboard` used for help then quit must exit zero and return to the menu in between.
+- **Monitor is the one genuinely new capability.** An interval redraw loop needs a clean single-key exit, must not accumulate scrollback, and must survive the server going away without spinning on errors. Keep it small: Status on a loop.
+- **Teams, Agents, Sync, and Missions depend on commands that may not exist yet.** An entry with nothing behind it is left out until its command lands; an entry that errors is worse than an absent one.
+- **Remembered serve mode is a persisted default on a configuration read.** Per the fallback rule, it must record which source answered (remembered, explicit, first-run) and never silently substitute a plausible value.
+- **Enter binding changes the default action.** Today Enter quits; after this plan Enter does the likely thing. The prompt must state what Enter will do so the operator is never guessing.
+
+## Dependencies
+
+- **`9572d35f` (column view) is independent** and still needed — it fixes what a column listing contains (excluding subtasks). This plan's Columns entry depends on that fix being in place.
+- **`ef40963b` (CLI as peer control surface) overlaps but does not block.** Where an entry needs a command that does not exist, that command belongs there. Most of what this plan arranges is already reachable.
+- **`e7e9f2f5` (board sync capability) owns the sync model.** This plan's Sync entry exposes existing capability; it does not build sync.
+- **`73ebf150` owns how missions work.** This plan's Missions entry exposes start/stop; watching is gated on `d2953390`.
+- **`5cc038b6` (memo CLI fixes) fix 4 is merged into this plan.** The remaining fixes (1, 2, 3, 5, 6, 7) are independent and stay on that card.
+
+## Adversarial Synthesis
+
+Key risks: (1) the menu restructure touches every branch of `cmdMainMenu` and must make them all loop — a single missed `exitFlushed` is a dead-end regression; (2) Teams/Agents/Sync/Missions entries may reference commands that do not exist yet, producing error-on-select rather than graceful omission; (3) the remembered serve mode is a persisted default that must tag its source or it becomes the exact "fallback indistinguishable from a real value" bug this codebase has been bitten by. Mitigations: verification asserts every branch loops; entries with no backing command are left out until they land; the remembered mode records its source (remembered/explicit/first-run) and displays itself before being taken.
+
 ## Edge-Case & Dependency Audit
 
 1. **Nothing loses its capability.** Column browsing, fleet inspection, project filtering and search all survive — as Columns, Monitor, and values under Set Filters.
@@ -138,10 +177,11 @@ Direct actions, unchanged behaviour, at the bottom. **Setup**, not "First time s
 3. **Server-offline state** greys entries with their keys intact; it never renumbers.
 4. **Stop needs to be a real shutdown**, not a signal kill — see `8eba302d`, which covers exactly this on Windows.
 5. **`9572d35f`** fixes what a column listing contains (excluding subtasks). Independent of this and still needed.
-6. **`5fb04de7`** binds Enter and stabilises keys on the same function. Same code, sequence them.
-6b. **`ef40963b` overlaps but does not block.** It serves agents; this serves a human at a terminal. Where an entry needs a command that does not exist, that command belongs there — but the arrangement does not wait on its agent-facing scope.
-6c. **Monitor must not hold the terminal hostage.** A redraw loop needs a clean exit on a single key, must not accumulate scrollback on every tick, and must survive the server going away without spinning on errors.
-7. **`759c05b5`** proposed a GUI/CLI split of this menu. This supersedes it — reconcile before either is coded.
+6. **Enter and stable keys** (merged from the deleted `5fb04de7`): Enter does the likely thing (open console when online, start board when offline), stable mnemonic keys that never shift with server state, and remembering the last serve mode so `[G]`+Enter is the whole interaction on a machine that always starts the same way. These are ergonomics on top of this plan's structure, not separate work — they touch the same `cmdMainMenu` function.
+6b. **The front door returns to its own menu** (merged from `5cc038b6` fix 4): the current `cmdMainMenu` (shipped by the deleted `759c05b5`) loops correctly for CLI Mode (`continue` at `cli.ts:2825`) but still `exitFlushed(code)` for GUI serve (`cli.ts:2794`), Setup (`cli.ts:2839`), and About (`cli.ts:2853`). A bare `switchboard` used for help or diagnostics exits with the child's code instead of looping back. This plan restructures those branches and must make them all loop.
+6c. **`ef40963b` overlaps but does not block.** It serves agents; this serves a human at a terminal. Where an entry needs a command that does not exist, that command belongs there — but the arrangement does not wait on its agent-facing scope.
+6d. **Monitor must not hold the terminal hostage.** A redraw loop needs a clean exit on a single key, must not accumulate scrollback on every tick, and must survive the server going away without spinning on errors.
+7. **`759c05b5` has shipped.** The GUI/CLI bifurcation it proposed is already in `cmdMainMenu` at `cli.ts:2697-2860` — fixed `[1] GUI Mode` / `[2] CLI Mode` / `[s] Setup` / `[a] About` / `[q] Exit` menu, state-aware GUI sub-menu, `__board-console` re-spawn for Back, trimmed `cmdBoardConsole` (4 options, no `[5] Setup`). This plan restructures that shipped menu into the Fleet Command shape; it does not re-implement the bifurcation.
 8. **Sync depends on a reachable provider.** An unconfigured or unauthenticated tracker must say so and offer the configuration path, not fail with a transport error.
 9. **Do not build a second provider-selection model.** The active provider is already a setting behind `switchTicketsProvider`; read it, show it, and change it through the same verb.
 9b. **Do not duplicate `e7e9f2f5`.** If a sync operation the CLI wants does not exist yet, it belongs on that feature, not here. This card adds a surface, never a capability.
@@ -167,3 +207,20 @@ Direct actions, unchanged behaviour, at the bottom. **Setup**, not "First time s
 8. Sync fetches tickets and reports what changed, and names the active provider.
 9. Sync against an unconfigured tracker explains that and offers the configuration path.
 10. Keys mean the same thing whether or not a server is running.
+11. **Enter does the likely thing** (merged): with a server running, Enter opens Fleet command; with no server, Enter starts the board in the remembered mode. The prompt states what Enter will do in both states.
+12. **Remembered serve mode** (merged): the last Local/Remote choice is remembered and used as the default for Enter. The mode is displayed before it is taken. A remembered tailnet with Tailscale down reports that and offers local.
+13. **Every branch loops** (merged from `5cc038b6` fix 4): after any child process exits (serve, setup, about, board console), `cmdMainMenu` returns to the top-level menu, not to shell. A bare `switchboard` used for help then quit exits zero and returns to the menu in between.
+14. **Non-TTY is unchanged**: `node ./out/standalone/cli.js < /dev/null` exits 0 without rendering a menu.
+
+### Goal Invariants
+
+- **No `exitFlushed(code)` remains inside the `cmdMainMenu` `for(;;)` loop body** (negative — the front door returns to its own menu, not to shell).
+- **Every child-process branch ends in `continue`** (positive — the loop is the only exit path, via `q` or Enter-to-quit).
+- **Enter is bound to the primary action, not to quit** (positive — the likely thing is the free one).
+- **The prompt line states what Enter will do** (positive — the default is visible, not guessed).
+- **No numeric key shifts meaning with server state** (negative — the shipped bifurcation's fixed shape is preserved; this plan uses stable letters).
+- **A remembered serve mode records its source** (positive — remembered/explicit/first-run is answerable after the fact).
+
+## Recommendation
+
+Complexity 7 → **Send to Lead Coder.** The menu restructure touches every branch of `cmdMainMenu`, absorbs the ergonomics layer (Enter, remember mode, return-to-menu), and coordinates with external features for Teams/Agents/Sync/Missions commands. The risk is concentrated in two places: every branch must loop (a single missed `exitFlushed` is a dead-end), and entries with no backing command must be omitted, not error-on-select.

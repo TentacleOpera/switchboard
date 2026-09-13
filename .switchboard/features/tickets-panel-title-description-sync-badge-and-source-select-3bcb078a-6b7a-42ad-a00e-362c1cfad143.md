@@ -7,7 +7,6 @@
 > 
 > The "Source Selection" half of this feature's title is therefore delivered elsewhere. The file-level contention on `TicketsPanelProvider.ts` still stands, now against the merge target.
 
-
 **Complexity:** 7
 
 ## Goal

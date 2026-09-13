@@ -56,3 +56,4 @@ Three operator-facing surfaces — the `switchboard fleet` CLI, the phone comman
 - [ ] [The Command Surface Re-Arms After an Unknown Outcome, Claims a Delivery It Cannot Know, and Is Locked to One Workspace](../plans/memo-the-command-surface-can-fire-twice-and-claims-delivery-it-cannot-know.md) — **PLAN REVIEWED** — ID: f824db44-117d-4b46-b184-264676d4d9f7
 - [ ] [The Fleet Tab Blanks on a Half-Dead Host, Hides Its Own Staleness, and Loses Hop History on Restart](../plans/memo-the-fleet-tab-blanks-on-a-half-dead-host-and-hop-history-dies-with-the-process.md) — **PLAN REVIEWED** — ID: 1fdcc41d-1f20-4c05-bcb7-6ff7a3a05fe8
 <!-- END SUBTASKS -->
+

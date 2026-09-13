@@ -27,7 +27,7 @@ kanbanColumn: CREATED
 ## Metadata
 
 - **Complexity:** 2
-- **Feature:** The /switchboard front door
+- **Feature:** 50c93771-8835-4b23-9a4b-db626416a6d9
 - **Tags:** cli, ux, board
 
 ## User Review Required
@@ -67,3 +67,25 @@ Keep the existing meaning of an omitted flag unchanged — this adds a value, it
 5. Omitting the flag still means no filter.
 6. A project filter and a starred filter apply together.
 7. A name with spaces works from both the flag and the picker.
+
+## Complexity Audit
+
+### Routine
+- Adding `switchboard projects` — a new subcommand that lists projects with card counts. Read-only, no new endpoints.
+- Adding a project filter to the interactive console — the `--project` flag's matching logic already exists; the console reuses it.
+- Making unassigned selectable — give the empty string an explicit selector distinct from "no filter".
+
+### Complex / Risky
+- None. This is a read-and-filter feature with no state mutation, no new endpoints, and no concurrent access.
+
+## Dependencies
+
+- None. Self-contained refactor of `src/standalone/cli.ts`.
+
+## Adversarial Synthesis
+
+Key risks: (1) repurposing the empty string for "unassigned" would break every existing `--project ""` caller that means "no filter"; (2) a project name with spaces could break the flag parser or the picker. Mitigations: the plan explicitly adds a new selector for unassigned rather than repurposing the empty one; verification 7 tests names with spaces from both the flag and the picker.
+
+## Recommendation
+
+Complexity 2 → **Send to Intern.** Trivial read-and-filter work. The one thing to get right is not repurposing the empty string.

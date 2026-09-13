@@ -10403,7 +10403,12 @@ export class LocalApiServer {
      */
     private async _resolveBoard(db: any): Promise<any[]> {
         const wsId = await this._wsId(db);
-        return await db.getBoard(wsId);
+        // Working-set read (parity with getFullStateMessages and
+        // TaskViewerProvider._refreshRunSheetsImpl): dormant PLAN REVIEWED /
+        // CODE REVIEWED cards older than the hot window are not materialised.
+        // status stays 'active' (read-side filter, not archive move); record
+        // lookups via GET /kanban/plan still resolve them by id.
+        return await db.getBoardWorkingSet(wsId);
     }
 
     /**

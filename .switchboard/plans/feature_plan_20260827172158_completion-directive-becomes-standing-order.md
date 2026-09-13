@@ -18,25 +18,29 @@ While moving it, fix two text-quality problems the user identified:
 
 ### Root cause
 
-`CODING_COMPLETION_REPORT_DIRECTIVE` (`src/services/agentPromptBuilder.ts:1064`) is a string constant appended to every coder/lead/intern prompt by `ensureCompletionDirective` (line 1139), which is called from `ensureDispatchProtocolDirectives` (line 1181). `ensureDispatchProtocolDirectives` is called in five places inside `buildKanbanBatchPrompt` (lines 2046, 2197, 2284, 2339, 2378) — once per code-touching role branch — and also at the `dispatch` payload gate in the pty-delivery layer (`TaskViewerProvider.ts:676`, `bootstrap.ts:285`).
+`CODING_COMPLETION_REPORT_DIRECTIVE` (`src/services/agentPromptBuilder.ts:1215`) is a string constant appended to every coder/lead/intern prompt by `ensureCompletionDirective` (line 1294), which is called from `ensureDispatchProtocolDirectives` (line 1330). `ensureDispatchProtocolDirectives` is called in five places inside `buildKanbanBatchPrompt` (lines 2197, 2348, 2435, 2490, 2529) — once per code-touching role branch — and also at the `dispatch` payload gate in the pty-delivery layer (`TaskViewerProvider.ts:882`, `bootstrap.ts:537`).
 
 > **Superseded:** "also at two pty-delivery chokepoints (`TaskViewerProvider.ts:527` for the `dispatch` payload gate, and the seat-block gate added by the lead-dispatched-coders plan)"
 > **Reason:** Two factual errors. (1) `TaskViewerProvider.ts:527` is a `ptyRenameTerminal` handler, not the dispatch payload gate — the actual gate is at line 676. (2) The "seat-block gate added by the lead-dispatched-coders plan" does not exist: `roleTakesDispatchDirectives` and `DISPATCH_DIRECTIVE_ROLES` (the functions that plan proposes) are absent from `src/` — that plan (`feature_plan_20260817141300_lead-dispatched-coders-never-get-the-completion-report-directive.md`) has not been implemented. Treating a non-existent gate as a fallback is a silent hole in the safety net.
-> **Replaced with:** the dispatch payload gate is at `TaskViewerProvider.ts:676` and `bootstrap.ts:285`. The seat-block gate is a **prerequisite dependency**, not an existing fallback — see `## Dependencies`.
+> **Replaced with:** the dispatch payload gate is at `TaskViewerProvider.ts:882` and `bootstrap.ts:537`. The seat-block gate is a **prerequisite dependency**, not an existing fallback — see `## Dependencies`.
 
 The directive text is:
 ```
-COMPLETION REPORT: When you have finished implementing ALL parts of the plan, POST /kanban/queue/done with {"from":"<your terminal name>"} against the port in .switchboard/api-server-port.txt. ...
+COMPLETION REPORT: When you have finished implementing ALL parts of the plan, run `node "<cliPath>" done --from "<your terminal name>"` (or `switchboard done --from "<your terminal name>"`). This signals task completion to the kanban board — the system clears your card's activity light and notifies your lead. Do NOT report after finishing individual parts — only when ALL work is complete. Also append a brief summary (3-5 sentences) to the END of the original plan file for the record. Do NOT skip the completion report.
 ```
 
-The `SWITCHBOARD_LIVENESS_DIRECTIVE` (line 811) already injects the port and says "wherever an instruction in this prompt says 'against the port in .switchboard/api-server-port.txt', use http://127.0.0.1:${port}" — but this is a workaround for the directive's own vagueness, and it only exists in prompts where `apiPort` is passed (which is every `generateUnifiedPrompt` call, but the indirection is still wrong).
+> **Superseded:** the original directive text quoted above used `POST /kanban/queue/done with {"from":"<your terminal name>"} against the port in .switchboard/api-server-port.txt`.
+> **Reason:** The directive has migrated to the bundled CLI form (`run node "<cliPath>" done --from "<your terminal name>"` or `switchboard done --from "<your terminal name>"`) — verified at `agentPromptBuilder.ts:1215`. The `api-server-port.txt` reference has been removed by a fragment sweep (the `SWITCHBOARD_LIVENESS_DIRECTIVE` comment at `:940-942` records the sweep). The standing-order text in Proposed Change #1 must use the CLI form, not the old POST form, or it reverts the CLI migration.
+> **Replaced with:** the CLI form above. The standing order still interpolates `${terminalName}` (the CLI takes `--from "<your terminal name>"`), but the `api-server-port.txt` / `${port}` interpolation is no longer needed for the completion directive — the CLI resolves the port itself. The `${port}` interpolation machinery in Proposed Changes #2-#4 remains useful for any future standing order that names an HTTP endpoint directly, but the completion directive itself no longer needs it.
+
+The `SWITCHBOARD_LIVENESS_DIRECTIVE` (`agentPromptBuilder.ts:944`) injects the port and says "SWITCHBOARD STATUS: Live (port ${port})... Use http://127.0.0.1:${port} for any direct API calls." A prior version also said "wherever an instruction in this prompt says 'against the port in .switchboard/api-server-port.txt', use http://127.0.0.1:${port}" — that cross-reference has been removed by a fragment sweep (the comment at `:940-942` records the sweep), so Proposed Change #7 (updating the cross-reference) is obsolete. The liveness directive itself is still prompt-injected; moving it to a standing order is a follow-up, not this plan.
 
 Standing orders (`src/services/standingOrders.ts`) are the correct mechanism:
-- They are applied at the `ptySendPrompt` delivery layer (`TaskViewerProvider.ts:1010`, `bootstrap.ts:389`), NOT in the prompt text.
+- They are applied at the `ptySendPrompt` delivery layer (`TaskViewerProvider.ts:1352`, `bootstrap.ts:666`), NOT in the prompt text.
 - They only reach terminals that are live and connected to Switchboard.
 - They are NOT part of the prompt that gets copied to the clipboard for copy-prompt buttons.
 - They support `role` scope (line 3 of `standingOrders.ts`) — a role-scoped order for `coder`, `intern`, `lead`, and `reviewer` would carry the completion directive to exactly the right terminals.
-- The delivery layer already knows the terminal name (`payload.name` at `TaskViewerProvider.ts:1010`) and the API port (`this.getLocalApiServerPort()` at `TaskViewerProvider.ts:4371`).
+- The delivery layer already knows the terminal name (`payload.name` at `TaskViewerProvider.ts:1352`) and the API port (`this.getLocalApiServerPort()` at `TaskViewerProvider.ts:5381`).
 
 ### What needs to happen
 
@@ -67,13 +71,13 @@ None.
 
 ### Complex / Risky
 
-- **The completion handshake is load-bearing.** The `CODING_COMPLETION_REPORT_DIRECTIVE` comment (lines 1053-1063) names three consumers: the activity-light off-switch (`PlanIngestionEngine`), the autoban wake (`TaskViewerProvider.handleAutobanTurnEnd`), and the Column Oversight pass. All depend on the agent POSTing `/kanban/queue/done`. If the standing order fails to install or fails to deliver, cards stay lit indefinitely. The `dispatch` payload gate is the fallback — but it must remain in place and functional. The seat-block gate (lead-dispatched-coders plan) is a second fallback that does not yet exist — see Dependencies.
+- **The completion handshake is load-bearing.** The `CODING_COMPLETION_REPORT_DIRECTIVE` comment (lines 1204-1214) names three consumers: the activity-light off-switch (`PlanIngestionEngine`), the autoban wake (`TaskViewerProvider.handleAutobanTurnEnd`), and the Column Oversight pass. All depend on the agent running `switchboard done --from`. If the standing order fails to install or fails to deliver, cards stay lit indefinitely. The `dispatch` payload gate is the fallback — but it must remain in place and functional. The seat-block gate (lead-dispatched-coders plan) is a second fallback that does not yet exist — see Dependencies.
 
 - **Standing order installation timing.** Role-scoped standing orders are resolved at delivery time from the `terminals.standingOrders` config key. The order must be installed when a terminal is created or a role is assigned, not when a prompt is built. `wireSpawnedTeam` already installs team-scoped orders; a new installation path is needed for standalone (non-team) coding terminals. The order must also be installed for existing terminals on upgrade (migration).
 
-- **Reviewer completion steps are woven into the step list, not appended.** `COMPLETION_STEP_FULL` / `COMPLETION_STEP_COMPACT` (lines 1127-1129) are part of the reviewer's composed steps array (line 2002), not appended by `ensureDispatchProtocolDirectives`. They carry the `COMPLETION REPORT:` sentinel so `ensureCompletionDirective` is a no-op on the normal path. Moving the reviewer's completion instruction to a standing order means removing the completion step from the reviewer's step list AND ensuring the standing order carries it. The reviewer's step also includes plan-file update instructions ("update the original plan file with fixed items, files changed, validation results, and remaining risks") — those plan-file instructions are NOT API-dependent and should stay in the prompt. Only the `POST /kanban/queue/done` instruction should move to the standing order.
+- **Reviewer completion steps are woven into the step list, not appended.** `COMPLETION_STEP_FULL` / `COMPLETION_STEP_COMPACT` (lines 1282-1284) are part of the reviewer's composed steps array (line 2153), not appended by `ensureDispatchProtocolDirectives`. They carry the `COMPLETION REPORT:` sentinel so `ensureCompletionDirective` is a no-op on the normal path. Moving the reviewer's completion instruction to a standing order means removing the completion step from the reviewer's step list AND ensuring the standing order carries it. The reviewer's step also includes plan-file update instructions ("update the original plan file with fixed items, files changed, validation results, and remaining risks") — those plan-file instructions are NOT API-dependent and should stay in the prompt. Only the `run node "<cliPath>" done --from` instruction should move to the standing order.
 
-- **Two hosts must stay identical.** `TaskViewerProvider._ptyHostVerb` and `bootstrap.deliverPrompt` are twins. The standing order is applied at both chokepoints already (`applyStandingOrders` at `TaskViewerProvider.ts:1010` and `bootstrap.ts:389`), so the delivery mechanism is shared. But the installation path — when and how the role-scoped order is created — must land in both hosts.
+- **Two hosts must stay identical.** `TaskViewerProvider._ptyHostVerb` and `bootstrap.deliverPrompt` are twins. The standing order is applied at both chokepoints already (`applyStandingOrders` at `TaskViewerProvider.ts:1352` and `bootstrap.ts:666`), so the delivery mechanism is shared. But the installation path — when and how the role-scoped order is created — must land in both hosts.
 
 - **Port interpolation at delivery time.** Standing orders are stored as text in the config DB. The port is known at delivery time (`this.getLocalApiServerPort()`), not at install time. The order text must be stored with `${port}` and `${terminalName}` placeholders and interpolated at delivery time in `applyStandingOrders`. This requires modifying `applyStandingOrders` (or `renderStandaloneOrdersBlock`) to accept an interpolation context and replace placeholders before rendering.
 
@@ -97,13 +101,13 @@ None.
 
 - **Copy-prompt buttons produce shorter prompts.** Removing the completion directive from `buildKanbanBatchPrompt` reduces prompt size by ~600 bytes for coder/lead/intern. (The mission control directive stays in this plan — see the clarification above.)
 
-- **`SWITCHBOARD_LIVENESS_DIRECTIVE` may also need to move.** The liveness directive tells the agent the port and says "skip port-discovery steps." It is only relevant for Switchboard-connected terminals. If the completion directive moves to a standing order, the liveness directive should arguably move too — it has the same "only relevant for connected terminals" property. However, the liveness directive is less harmful in copy-prompt prompts (it just says "the server is at port X" — a cloud agent can ignore it). Consider moving it in a follow-up, not this plan. **Note:** the liveness directive's clause "wherever an instruction in this prompt says 'against the port in .switchboard/api-server-port.txt'" becomes partially stale once the completion directive leaves the prompt — the completion directive is no longer "in this prompt." The liveness directive text should be updated to remove that cross-reference, or the reference should be softened to "wherever an instruction says..." (not "in this prompt").
+- **`SWITCHBOARD_LIVENESS_DIRECTIVE` may also need to move.** The liveness directive tells the agent the port and says "skip port-discovery steps." It is only relevant for Switchboard-connected terminals. If the completion directive moves to a standing order, the liveness directive should arguably move too — it has the same "only relevant for connected terminals" property. However, the liveness directive is less harmful in copy-prompt prompts (it just says "the server is at port X" — a cloud agent can ignore it). Consider moving it in a follow-up, not this plan. **Note:** the liveness directive's prior "wherever an instruction in this prompt says 'against the port in .switchboard/api-server-port.txt'" cross-reference has already been removed by a fragment sweep (`agentPromptBuilder.ts:940-942` comment records it), so no cross-reference update is needed in this plan — see Proposed Change #7 (obsolete).
 
-- **`NO_SEPARATE_REVIEW_ARTIFACTS_DIRECTIVE` references "the COMPLETION REPORT step."** Line 1050: "Record your findings in your response and in the existing target plan file, per the COMPLETION REPORT step." If the completion step moves out of the prompt, this reference becomes dangling. The directive text should be updated to say "per your standing orders" or the reference should be removed.
+- **`NO_SEPARATE_REVIEW_ARTIFACTS_DIRECTIVE` references "the COMPLETION REPORT step."** Line 1201: "Record your findings in your response and in the existing target plan file, per the COMPLETION REPORT step." If the completion step moves out of the prompt, this reference becomes dangling. The directive text should be updated to say "per your standing orders" or the reference should be removed.
 
-- **`STAGGERED_IMPLEMENTATION_DIRECTIVE` references "the per-plan completion POST."** Line 1052: "This is in addition to the per-plan completion POST (POST /kanban/queue/done, which signals task completion to the kanban board)." This reference is still valid — the POST is still required, just delivered via standing order instead of prompt text.
+- **`STAGGERED_IMPLEMENTATION_DIRECTIVE` references "the per-plan completion POST."** Line 1203: "This is in addition to the per-plan completion POST (POST /kanban/queue/done, which signals task completion to the kanban board)." This reference is itself stale — the directive has migrated to the CLI form (`switchboard done --from`), so the "POST /kanban/queue/done" reference in `STAGGERED_IMPLEMENTATION_DIRECTIVE` should be updated to the CLI form in the same change. The POST is still required, just delivered via standing order instead of prompt text.
 
-- **`GIT_COMMIT_CLAUSES.whenDone` references "this plan's own file, whose completion report is part of the work."** Line 660. This reference is to the plan-file summary append, not to the POST directive. It stays valid.
+- **`GIT_COMMIT_CLAUSES.whenDone` references "this plan's own file, whose completion report is part of the work."** Line 790. This reference is to the plan-file summary append, not to the POST directive. It stays valid.
 
 **Dependencies & conflicts**
 
@@ -124,7 +128,7 @@ None.
 
 ## Adversarial Synthesis
 
-**Risk summary.** Key risks: (1) the plan's fallback strategy depends on a seat-block gate that does not exist yet — the lead-dispatched-coders plan is unimplemented, leaving a hole in the safety net for lead-dispatched coders; (2) the original plan contradicted itself on interpolation timing — `COMPLETION_DIRECTIVE_ORDER_TEXT(port, terminalName)` interpolated at install time while `applyStandingOrders` expected `${port}` placeholders at delivery time, and the `installCompletionDirectiveOrder` function set `parent: terminalName` on a role-scoped order (semantically wrong — a role order applies to all terminals with that role, not one); (3) the `SWITCHBOARD_LIVENESS_DIRECTIVE` cross-reference to "in this prompt" becomes stale when the completion directive leaves the prompt. Mitigations: declare the seat-block gate as a prerequisite dependency; store the order text with `${port}`/`${terminalName}` placeholders and interpolate at delivery time only; install once per role (not per terminal) with `parent: ''`; update the liveness directive's cross-reference.
+**Risk summary.** Key risks: (1) the plan's fallback strategy depends on a seat-block gate that does not exist yet — the lead-dispatched-coders plan is unimplemented, leaving a hole in the safety net for lead-dispatched coders; (2) the original plan contradicted itself on interpolation timing — `COMPLETION_DIRECTIVE_ORDER_TEXT(port, terminalName)` interpolated at install time while `applyStandingOrders` expected `${port}` placeholders at delivery time, and the `installCompletionDirectiveOrder` function set `parent: terminalName` on a role-scoped order (semantically wrong — a role order applies to all terminals with that role, not one); (3) the original order text used the old `POST /kanban/queue/done` form, but the directive has migrated to the bundled CLI (`switchboard done --from`) — the standing order must use the CLI form or it reverts the CLI migration; (4) the `SWITCHBOARD_LIVENESS_DIRECTIVE` cross-reference this plan proposed to update has already been removed by a fragment sweep, making Proposed Change #7 obsolete. Mitigations: declare the seat-block gate as a prerequisite dependency; store the order text with `${terminalName}`/`${cliPath}` placeholders and interpolate at delivery time only (the CLI resolves the port, so `${port}` is no longer needed for this order); install once per role (not per terminal) with `parent: ''`; mark Proposed Change #7 obsolete.
 
 ## Proposed Changes
 
@@ -148,8 +152,12 @@ Add a constant for the order text with `${port}` and `${terminalName}` placehold
  * prompt buttons produce clean prompts without this directive; the standing
  * order delivers it only to terminals connected to Switchboard.
  */
-export const COMPLETION_DIRECTIVE_ORDER_INSTRUCTION = `COMPLETION REPORT: When you have finished implementing ALL parts of the plan, POST /kanban/queue/done with {"from":"\${terminalName}"} against http://127.0.0.1:\${port}. This signals task completion to the kanban board — the system clears your card's activity light and notifies your lead. Do NOT post after finishing individual parts — only when ALL work is complete. Also append a brief summary (3-5 sentences) to the END of the original plan file for the record. Do NOT skip the POST.`;
+export const COMPLETION_DIRECTIVE_ORDER_INSTRUCTION = `COMPLETION REPORT: When you have finished implementing ALL parts of the plan, run \`\${cliPath} done --from "\${terminalName}"\` (or \`switchboard done --from "\${terminalName}"\`). This signals task completion to the kanban board — the system clears your card's activity light and notifies your lead. Do NOT report after finishing individual parts — only when ALL work is complete. Also append a brief summary (3-5 sentences) to the END of the original plan file for the record. Do NOT skip the completion report.`;
 ```
+
+> **Superseded:** the original order text used `POST /kanban/queue/done with {"from":"\${terminalName}"} against http://127.0.0.1:\${port}`.
+> **Reason:** The directive has migrated to the bundled CLI form (`run node "<cliPath>" done --from "<your terminal name>"` or `switchboard done --from "<your terminal name>"`) — verified at `agentPromptBuilder.ts:1215`. The standing order must use the CLI form or it reverts the CLI migration. The CLI resolves the port itself, so `${port}` interpolation is no longer needed for this order; `${terminalName}` is still interpolated (the CLI takes `--from "<your terminal name>"`). The `${cliPath}` placeholder is interpolated the same way `agentPromptBuilder.ts` interpolates `<cliPath>` into the prompt-injected directive.
+> **Replaced with:** the CLI form above. The `${port}` interpolation machinery in Proposed Changes #2-#4 remains useful for any future standing order that names an HTTP endpoint directly, but the completion directive itself no longer needs it.
 
 Add a deterministic ID prefix and an installation function. The function installs **once per role** (not per terminal) — `parent` is `''` because a role-scoped order applies to all terminals with that role, not one specific terminal:
 
@@ -244,7 +252,7 @@ export function renderStandaloneOrdersBlock(
 
 ### 3. `src/services/TaskViewerProvider.ts` — pass interpolation context to `applyStandingOrders`
 
-At the standing-orders application site (line 1010):
+At the standing-orders application site (line 1352):
 
 ```ts
 const apiPort = this.getLocalApiServerPort();
@@ -258,7 +266,7 @@ Note: `this._taskViewerProvider?.getLocalApiServerPort()` in the original plan w
 
 ### 4. `src/standalone/bootstrap.ts` — identical interpolation context at the standalone twin
 
-At the standalone `applyStandingOrders` call site (line 389):
+At the standalone `applyStandingOrders` call site (line 666):
 
 ```ts
 const apiPort = taskViewerProvider?.getLocalApiServerPort() ?? 0;
@@ -275,33 +283,35 @@ out = applyStandingOrders(
 ### 5. `src/services/agentPromptBuilder.ts` — remove completion directive from prompt builder
 
 Remove the five `ensureDispatchProtocolDirectives` calls from `buildKanbanBatchPrompt`:
-- Line 2046 (reviewer branch)
-- Line 2197 (lead branch)
-- Line 2284 (coder/feature branch)
-- Line 2339 (coder branch)
-- Line 2378 (intern branch)
+- Line 2197 (reviewer branch)
+- Line 2348 (lead branch)
+- Line 2435 (coder/feature branch)
+- Line 2490 (coder branch)
+- Line 2529 (intern branch)
 
-Also remove the call at line 2788 (custom agent branch).
+Also remove the call at line 2944 (custom agent branch).
 
-For the reviewer branch: split `COMPLETION_STEP_FULL` and `COMPLETION_STEP_COMPACT` — keep the plan-file update instructions in the step list, remove the `POST /kanban/queue/done` instruction (it moves to the standing order). The step text becomes:
+For the reviewer branch: split `COMPLETION_STEP_FULL` and `COMPLETION_STEP_COMPACT` — keep the plan-file update instructions in the step list, remove the `run node "<cliPath>" done --from` instruction (it moves to the standing order). The step text becomes:
 
 ```
 COMPLETION REPORT: When you have finished ALL parts of the review, update the original plan file with fixed items, files changed, validation results, and remaining risks. ${DEFERRED_FINDINGS_SECTION_INSTRUCTION} Do NOT truncate, summarize, or delete existing implementation steps.
 ```
 
-The `POST /kanban/queue/done` instruction is carried by the standing order instead.
+The `run node "<cliPath>" done --from` instruction is carried by the standing order instead.
 
-**Keep** `ensureDispatchProtocolDirectives` at the `dispatch` payload gate (`TaskViewerProvider.ts:676`) — this is the fallback for the race condition where the standing order has not been installed yet. It is idempotent (the sentinel guard prevents double-append).
+**Keep** `ensureDispatchProtocolDirectives` at the `dispatch` payload gate (`TaskViewerProvider.ts:882`, `bootstrap.ts:537`) — this is the fallback for the race condition where the standing order has not been installed yet. It is idempotent (the sentinel guard prevents double-append).
 
 **Keep** `ensureCompletionDirective` and `ensureDispatchProtocolDirectives` as exported functions — they are still called from the pty-delivery fallback. But remove the override-proofing comment's reference to `buildKanbanBatchPrompt` — the override-proofing is now only for the fallback path.
 
 ### 6. `src/services/agentPromptBuilder.ts` — update `NO_SEPARATE_REVIEW_ARTIFACTS_DIRECTIVE`
 
-Line 1050 references "the COMPLETION REPORT step." Update to: "Record your findings in your response and in the existing target plan file, per the completion-report step above."
+Line 1201 references "the COMPLETION REPORT step." Update to: "Record your findings in your response and in the existing target plan file, per the completion-report step above."
 
-### 7. `src/services/agentPromptBuilder.ts` — update `SWITCHBOARD_LIVENESS_DIRECTIVE`
+### 7. `src/services/agentPromptBuilder.ts` — `SWITCHBOARD_LIVENESS_DIRECTIVE` cross-reference (OBSOLETE)
 
-Line 811: the clause "wherever an instruction in this prompt says 'against the port in .switchboard/api-server-port.txt'" becomes stale when the completion directive leaves the prompt. Update to: "wherever an instruction says 'against the port in .switchboard/api-server-port.txt'" (drop "in this prompt").
+> **Superseded:** "Update the `SWITCHBOARD_LIVENESS_DIRECTIVE` clause 'wherever an instruction in this prompt says against the port in .switchboard/api-server-port.txt' to drop 'in this prompt'."
+> **Reason:** The cross-reference has already been removed by a fragment sweep. The `SWITCHBOARD_LIVENESS_DIRECTIVE` at `agentPromptBuilder.ts:944` now reads "SWITCHBOARD STATUS: Live (port ${port})... Use http://127.0.0.1:${port} for any direct API calls." — no "in this prompt" / "api-server-port.txt" clause remains. The comment at `:940-942` records the sweep.
+> **Replaced with:** No edit. The cross-reference this step targeted no longer exists. The liveness directive itself is still prompt-injected; moving it to a standing order is a follow-up, not this plan.
 
 ### 8. Terminal creation / role assignment — install the standing order
 
@@ -333,15 +343,16 @@ For existing terminals on upgrade: run a one-time migration that installs the or
 
 - Assert `COMPLETION_REPORT:` is absent from `buildKanbanBatchPrompt` output for roles `reviewer`, `lead`, `coder` (feature and non-feature), `intern`, and `custom_agent_*` (code-touching).
 - Assert `COMPLETION_REPORT:` is present in `applyStandingOrders` output when a `role`-scoped order with `role: 'coder'` exists and the target's `roleMap` entry is `'coder'`.
-- Assert the string `against the port in .switchboard/api-server-port.txt` is absent from `applyStandingOrders` output when interpolation context with `port > 0` is supplied.
+- Assert the standing-order text uses the CLI form (`switchboard done --from` or `node "<cliPath>" done --from`), NOT the old `POST /kanban/queue/done` form — the directive has migrated to the bundled CLI.
+- Assert the string `against the port in .switchboard/api-server-port.txt` is absent from `applyStandingOrders` output (the CLI resolves the port itself; the standing order does not reference the port file).
 - Assert the string `<your terminal name>` is absent from `applyStandingOrders` output when interpolation context with a non-empty `terminalName` is supplied.
 - Assert `installCompletionDirectiveOrder(db, 'coder')` called twice produces exactly one order with `id === 'completion-directive:role:coder'` in the `terminals.standingOrders` config key.
 - Assert the installed order has `parent: ''` and `scope: 'role'`.
 
 ### Manual
 
-1. Copy-prompt a coder card — verify the clipboard prompt does NOT contain `COMPLETION REPORT:` or `POST /kanban/queue/done`.
-2. Dispatch a coder card to a live terminal — verify the terminal receives the completion directive via standing orders, with the actual port number and terminal name (not placeholders or file references).
-3. Dispatch a reviewer card — verify the reviewer's step list still includes plan-file update instructions, and the `POST /kanban/queue/done` instruction arrives via standing order.
+1. Copy-prompt a coder card — verify the clipboard prompt does NOT contain `COMPLETION REPORT:` or `switchboard done --from` (or `node "<cliPath>" done --from`).
+2. Dispatch a coder card to a live terminal — verify the terminal receives the completion directive via standing orders, with the actual terminal name interpolated (not a `<your terminal name>` placeholder) and the CLI form (`switchboard done --from "<terminal name>"`), not the old `POST /kanban/queue/done` form.
+3. Dispatch a reviewer card — verify the reviewer's step list still includes plan-file update instructions, and the `switchboard done --from` instruction arrives via standing order.
 4. Paste a copy-prompt into an external agent (e.g., a cloud agent) — verify the prompt works without any Switchboard API references.
 5. Clear and re-establish a terminal — verify the completion-directive standing order is re-installed.

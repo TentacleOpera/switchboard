@@ -62,6 +62,10 @@ The design is coherent. It just does not fire.
 
 ### Root cause 1 — the clear seam is wired in one composition root only
 
+> **Superseded:** "In `bootstrap.ts` the identifier appears exactly once, inside a comment (`:2902`); it is **never wired**."
+> **Reason:** The standalone seam is now wired — commit `cf57044b`. Verified in code at `src/standalone/bootstrap.ts:4722` (`clearTerminalContext: async (wsRoot, terminalName) => { ... }`), routing through the same shared clear path the extension arm uses. The rescoping note at the top of this plan already states this is done; this inline note makes the body consistent so a coder does not re-wire it and diverge the two roots (the CLAUDE.md composition-root trap).
+> **Replaced with:** The standalone seam is wired. What remains of this root cause is the audit step — diff the two options objects field-by-field and confirm no other seam is present in one root and absent in the other. The active defects are root causes 2 and 3 below.
+
 `LocalApiServer` reaches the host through `this._options.clearTerminalContext`, and **both**
 completion clears are gated on it:
 
@@ -115,9 +119,68 @@ Every one of these returns `success: true` with `cleared: false`, and nothing ac
 Also: `CODING_ROLES` is `coder | intern` only, so a reviewer seat is never cleared by this path
 at all.
 
+## User Review Required
+
+None. The contract is already stated on three surfaces and is not changed; this plan makes the
+existing contract fire and surfaces its failures.
+
+## Complexity Audit
+
+### Routine
+
+- Returning `cleared` / `clearError` from `completeCardInternal` to the caller and logging a warning when a resolved seat's clear returns `cleared: false`.
+- The four no-op fixes inside `completeCardInternal`: idempotency still clears, attribution fallback when `dispatchedTerminal` is empty, clear every attributed seat minus `from`, return the excluded `from` name.
+- The seam audit (diff the two options objects field-by-field) — mechanical, but it is the only thing that catches the next composition-root divergence.
+
+### Complex / Risky
+
+- **The standalone seam is already wired (`cf57044b`, `bootstrap.ts:4722`) — do not re-do it.** A coder who misses the Superseded callouts above re-wires it and diverges the two roots. This is the single largest implementation hazard in the plan.
+- **Multi-seat clear must bound attribution to the active dispatch.** "Clear every seat attributed to the subtask, minus `from`" keys on `getLiveDispatchAttribution` / the `planId` projection. If that attribution is stale — a seat that worked the subtask, released, and took a NEW subtask — the clear hits it mid-turn on its new work. "Minus `from`" guards the poster; it does not guard a moved-on seat. The Verification plan tests two seats on one subtask, but not "released and moved on."
+- **`cleared: false` was silently dropped; surfacing it changes operator-visible behaviour.** "Surface the failure on the board" is underspecified — a log line does not stop the operator clearing by hand (they do not tail the log). The `cleared: false` must land where the operator looks: a seat-status field the status pane renders. That couples this plan to *Status panes render an empty model* (subtask 5), and neither plan states the coupling. See Outstanding Questions.
+- **`CODING_ROLES` is `coder | intern` only — a reviewer seat is never cleared by this path.** A subtask that went through review leaves the reviewer seat holding context. This plan notes it (Root cause 3) and does not fix it; it must be explicitly in scope or deferred, not left ambiguous. See Outstanding Questions.
+- **Both hosts must stay identical.** The seam audit is the only thing that catches the next divergence; the verb path is not the audit, the composition root is.
+
+## Edge-Case & Dependency Audit
+
+**Race conditions**
+
+- A re-posted completion (idempotency path) clearing the seat while a callback from that seat is in flight. The clear wipes context; the in-flight callback reports on pre-clear state and should be discarded. The prompt should instruct the lead to ignore callbacks from a seat it has just cleared until the re-dispatch lands — but this plan does not re-dispatch (that is the escalation ladder's rung 1); it only clears on acceptance. The race is bounded: acceptance is terminal for that seat's work on this subtask.
+- Multi-seat clear racing with the escalation ladder (*Team lead escalation*) moving work to a second seat: the clear on `task/complete` must clear both seats that touched the subtask, but must NOT clear a seat that just took a NEW subtask. Attribution must be current, not historical.
+
+**Security**
+
+- No new surface. `clearTerminalContext` is reached through `POST /kanban/task/complete`, which sits behind `_checkAuth`. The clear itself operates on a terminal name resolved from the card's own `dispatchedTerminal` (or attribution evidence), not from caller input.
+
+**Side effects**
+
+- A seat cleared mid-output loses its context — intended for accepted work. A multi-seat clear that over-matches (stale attribution) clears a seat working a different subtask. Bounded by the attribution-precision risk above.
+- Surfacing `cleared: false` on the board changes operator-visible state — intended, but the surface must exist (see Outstanding Questions).
+- The lead self-fix exclusion returns the excluded `from` name in the response so the UI can offer a one-click clear; this is new response shape, consumed by the UI.
+
+**Dependencies & conflicts**
+
+- *Team lead escalation must exhaust cheap recovery* (subtask 3) — its rung 1 (clear and re-dispatch) and rung 2 (lateral hand-off) put a second seat on a subtask; this plan's multi-seat clear (Implementation step 3) must clear both on `task/complete`. The feature's Dependencies notes subtask 3 owns the sole edit to the KanbanProvider drive-block wording and must not be authored in parallel with this plan's clear semantics.
+- *A column move orphans the dispatch holder* (subtask 4) — owns the `queue/done` release; this plan owns the `task/complete` clear. Distinct endpoints, complementary. Subtask 4 explicitly does not change `task/complete`.
+- *Status panes render an empty model* (subtask 5) — owns the seat-status surface where `cleared: false` should be visible. Coupling not yet stated in either plan; see Outstanding Questions.
+- `cf57044b` — already wired the standalone seam; this plan does NOT re-do it.
+
+## Dependencies
+
+- `cf57044b` — the standalone `clearTerminalContext` wiring is already landed; this plan consumes it, it does not re-implement it.
+- *Team lead escalation must exhaust cheap recovery* (subtask 3) — verification coupling only (Verification step 8 drives the two-seats-one-subtask path the escalation ladder creates); no code dependency.
+- *Status panes render an empty model* (subtask 5) — the `cleared: false` board surface should land on the seat-status field that plan populates; resolve the coupling during implementation (see Outstanding Questions).
+
+## Adversarial Synthesis
+
+Key risks: (1) the standalone seam is already wired (`cf57044b`, `bootstrap.ts:4722`) — a coder who misses the Superseded callouts re-wires it and diverges the two roots, the CLAUDE.md composition-root trap; (2) the multi-seat clear keys on plan-attribution evidence that must be current or it clears a seat mid-turn on a different subtask, and "minus `from`" does not guard a moved-on seat; (3) "surface `cleared: false` on the board" is underspecified — a log line does not stop the operator clearing by hand, and the board surface couples to subtask 5. Mitigations: Superseded callouts on the already-done wiring; bound attribution to the active dispatch and add a "released and moved on" test; land `cleared: false` on the seat-status field the status pane reads.
+
 ## Implementation
 
 ### 1. Wire `clearTerminalContext` in the standalone composition root
+
+> **Superseded:** "Add the seam to the options object at `bootstrap.ts:3368`, alongside the already-present `onTerminalContextCleared`..."
+> **Reason:** Already done by commit `cf57044b`. Verified at `src/standalone/bootstrap.ts:4722`. Re-doing it would diverge the two roots.
+> **Replaced with:** Skip the wiring. Run the seam audit only — diff the two options objects (`TaskViewerProvider.ts` and `bootstrap.ts`) field-by-field and record any other seam present in one root and absent in the other. The precedent in CLAUDE.md is four queue seams missing for a month; a seam audit here is cheap and is the only thing that catches the next one.
 
 Add the seam to the options object at `bootstrap.ts:3368`, alongside the already-present
 `onTerminalContextCleared`, routing to the same shared `TaskViewerProvider.clearTerminalContext`
@@ -201,6 +264,20 @@ board so a silently-uncleared seat is visible rather than discovered by hand.
 10. `npx tsc --noEmit -p tsconfig.json`, plus the queue and completion contract tests
     (`queue-pipeline-contract`, `queue-stall-watch-contract`,
     `completion-asserted-never-inferred`, `stage-marker-commit-contract`).
+
+### Goal Invariants
+
+- **Positive:** under the standalone host, `POST /kanban/task/complete` for a team subtask returns `cleared: true` for the accepted coding seat (was `false` before `cf57044b` + this plan).
+- **Negative (paired):** a completion that resolves no seat returns `cleared: false` with a reason, NOT `success: true` with the `cleared` field absent. Paired positive: a completion that resolves a seat and clears it returns `cleared: true`.
+- **Positive:** a re-posted completion (idempotency) clears the seat once and returns no error on the second post; a third post is a no-op.
+- **Positive:** a subtask touched by two seats (the escalation-ladder path) clears both on `task/complete`, minus `from`.
+- **Negative:** a seat working a DIFFERENT subtask is not cleared by another subtask's `task/complete` — assert the moved-on seat's `lastWorkContextByTerminal` entry is preserved.
+- **Positive:** `clearTerminalContext` is present in BOTH composition roots' options objects (`bootstrap.ts:4722` and `TaskViewerProvider.ts`) — no asymmetry (the seam audit confirms this, not the verb path).
+
+## Outstanding Questions
+
+- **[user]** Where does `cleared: false` land so the operator stops clearing by hand? A log line is necessary but not sufficient — the operator does not tail the log. The candidate surface is the seat-status field the status pane renders (owned by *Status panes render an empty model*, subtask 5). — proceeding on the assumption that the implementer lands `cleared: false` on the seat-status field the status pane reads, and that this plan's verification step 1 is extended to assert the failure is visible on that surface, not merely in the response.
+- **[user]** `CODING_ROLES` is `coder | intern` only, so a reviewer seat is never cleared by the `task/complete` path. A subtask that went through review leaves the reviewer seat holding context. Is clearing the reviewer seat on acceptance in scope for this plan, or deferred? — proceeding on the assumption that it is deferred to a follow-up (the reviewer's context is review-scoped, not implementation-scoped, and the atomic-team lifecycle barrier already clears the roster on a new work context), and that this plan records the deferral rather than silently leaving the hole.
 
 ## Metadata
 

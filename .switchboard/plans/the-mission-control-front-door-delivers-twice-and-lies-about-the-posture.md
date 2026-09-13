@@ -104,7 +104,7 @@ revisited for a door with a human standing in it.
 
 **Complexity:** 3
 **Tags:** bugfix, docs, reliability
-**Feature:** 73ebf150-50f9-4e8f-b9db-58af49202c6a
+**Feature:** 50c93771-8835-4b23-9a4b-db626416a6d9
 
 ## User Review Required
 
@@ -139,15 +139,11 @@ Key risks: the `ATTENDED=true`/`UNATTENDED=true` substring overlap can silently 
 
 ## Proposed Changes
 
-1. **Repair step 2's endpoint and paths** in `.agents/workflows/switchboard.md` — ship this first; it is
-   the only one of the three that makes the door functional rather than merely tidy.
-   `POST /orchestration/confirm` → `POST /mission-control/confirm`; `.switchboard/orchestrator/session.md`
-   → `.switchboard/mission-control/session.md`; `.switchboard/orchestrator/reports/` →
-   `.switchboard/mission-control/reports/`. Delete the `POST /orchestration/start` warning rather than
-   renaming it: `/mission-control/start` is a real route with a legitimate purpose (the panel's Start
-   button), so a blanket "never call this" would be wrong advice about a live endpoint. Replace it with
-   the accurate constraint — do not start a *second* Mission Control terminal from here, because this
-   session has already adopted the seat.
+1. **Repair step 2's endpoint and paths** in `.agents/workflows/switchboard.md`.
+
+   > **Superseded (2026-09-14, cross-subtask reconciliation):** This change previously owned the endpoint fix (`POST /orchestration/confirm` → `POST /mission-control/confirm`), the path fix (`.switchboard/orchestrator/` → `.switchboard/mission-control/`), and the `POST /orchestration/start` warning deletion.
+   > **Reason:** `switchboard-launcher-adopts-the-wrong-workspace.md` change 7 now owns all three: it ships first (per the feature's dependency order), and duplicating the same four-line fix in two plans that edit the same file in sequence is the overlap this reconciliation exists to remove.
+   > **Replaced with:** This plan defers the endpoint + path + start-warning fix to `switchboard-launcher-adopts-the-wrong-workspace.md` change 7. What remains here is the read-instruction fix (change 2) and the posture fix (change 3) — both unique to this plan and both required by the downstream run-sheet plan.
 
 2. **Fix the launcher's read instruction** in `.agents/workflows/switchboard.md`. Replace the read instruction
    with an accurate description: the response's `prompt` field **is** the complete persona — runsheet

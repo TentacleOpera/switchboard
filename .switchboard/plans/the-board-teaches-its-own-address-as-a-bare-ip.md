@@ -43,6 +43,24 @@ the home-screen install the mobile work depends on.
 
 So the bare-IP banner is upstream of a UX defect that has its own plan, and nothing connects them.
 
+### What is already shipped (read before implementing)
+
+The HTTPS / no-port / advisory half of this goal is **already delivered** by the "Tailnet URL"
+resolver block, shipped under `the-tailnet-url-never-offers-a-secure-origin`:
+
+- `src/standalone/cli.ts:4741-4762` (foreground) and `:4651-4666` (detach) call `resolveTailnetUrl`,
+  which prefers `https://<fqdn>` when `tailscale serve` is configured and the cert is live, falls
+  back through `http://<fqdn>:<port>` to `http://<ip>:<port>`, prints the IP as a secondary
+  `Fallback (IP)` line, and emits exactly one advisory line when the origin is insecure.
+- `src/extension.ts:1377-1391` consumes the same `resolveTailnetOrigin` and emits the same
+  advisory. `src/test/tailscale-bind-contract.test.js:182-230` gates this (resolver present in
+  both roots, no hardcoded IP in the primary emission, HTTPS probe, serve-config parser).
+
+The **remaining** defect is the *early detection banner* — `cli.ts:4550` (standalone) and its
+exact analogue `TaskViewerProvider.ts:4036` (extension) — which print the bare IP first, before
+the resolver block runs, and which the resolver block does not replace. That banner is what this
+plan actually changes.
+
 ### Not the same as the existing address plan
 
 `starting-the-board-prints-where-to-reach-it-and-opens-nothing` settles **which** address is
@@ -60,45 +78,151 @@ tells an operator a better form exists.
 
 ## Metadata
 
-- **Complexity:** 2
-- **Tags:** cli, docs, tailnet, ux
+- **Complexity:** 4
+- **Tags:** cli, docs, ux
 
 ## User Review Required
 
-None.
+None. The scope decision — detect and advise, never configure `tailscale serve` — is inherited
+from the shipped resolver plan and needs no product call. One design choice (demote the banner
+from an address to a detection line) is made below and justified; if the operator prefers the
+banner deleted entirely, that is a smaller change in the same direction and needs no new plan.
+
+## Complexity Audit
+
+### Routine
+- Reordering the banner interpolation to lead with the MagicDNS name and demote the IPv4 to a
+  parenthetical, in two files (`cli.ts:4550`, `TaskViewerProvider.ts:4036`) that already hold the
+  same pattern.
+- Dropping the bracketed IPv6 literal from the banner headline (it remains available in the
+  resolver block's `Tailnet (IPv6)` side-line, which is unaffected).
+- Correcting the stale "prints two URLs … IP" sentence in `docs/REMOTE_ACCESS.md` to match the
+  resolver's best-URL behaviour, and adding the `tailscale serve` / HTTPS step to the Home Screen
+  section that already teaches MagicDNS-over-IP.
+
+### Complex / Risky
+- **The banner-vs-resolver redundancy is a design decision, not a format tweak.** The banner at
+  `cli.ts:4550` and the resolver block at `cli.ts:4746` both print a tailnet address for the same
+  mode. Fixing the banner's form in place leaves two name-first address lines and the operator
+  with no way to tell which to copy. The chosen resolution (below) demotes the banner to a
+  *detection* line and lets the resolver block own the *address* — killing the redundancy and the
+  bare-IP-first defect in one move.
+- **Two composition roots, one plan.** The standalone banner (`cli.ts:4550`) and the extension
+  banner (`TaskViewerProvider.ts:4036`) are the same pattern. Both change, or the plan diverges
+  the two hosts — the exact failure mode AGENTS.md names as the largest trap in this repo.
+
+## Edge-Case & Dependency Audit
+
+- **Race Conditions:** none. The banner prints during tailnet detection (pre-boot); the resolver
+  block prints after `waitForHealth`. They never compete for the same stdout line because they
+  are sequenced by the boot. Demoting the banner to a detection line removes the only
+  *semantic* race — two lines claiming to be "the address".
+- **Security:** no change to the bind policy, Host guard, or token machinery. The banner is
+  presentation only; reordering its fields does not widen the Host allowlist (that is populated
+  from `magicDnsNames` regardless of print order).
+- **Side Effects:** the `magicDnsNames` array is also consumed by `tailnetAcceptable`
+  (`cli.ts:4555`) and the bind policy (`cli.ts:4718`). Reordering the *print* must not reorder or
+  filter the array itself — the array feeds the Host guard. The change is to the template
+  literal only.
+- **Dependencies & Conflicts:** depends on the shipped resolver (`src/utils/tailnetOrigin.ts`)
+  and the shipped serve-config detector (`detectServeConfigMapping`). This plan does not modify
+  either; it relies on the resolver block already printing the authoritative address. No
+  conflict with `starting-the-board-prints-where-to-reach-it-and-opens-nothing` — that plan's
+  four printing rules are about *which* address per subcommand; this plan is about the *form* of
+  the early banner, which that plan does not reach.
+
+## Dependencies
+
+None. The resolver and serve-config detector this plan relies on are already shipped and gated
+by `test:contract:tailscale-bind`.
+
+## Adversarial Synthesis
+
+Key risks: (1) the plan as originally written re-implemented the already-shipped resolver block
+(Proposed Change #2) — superseded, the remaining work is the banner only; (2) the plan touched
+only the standalone banner and silently omitted the identical extension banner at
+`TaskViewerProvider.ts:4036` — the divergence trap this repo's rules exist to prevent — both
+banners are now co-equal targets; (3) fixing the banner's form in place leaves two address lines
+for one mode ("which do I copy?") — resolved by demoting the banner to a detection line and
+letting the resolver block own the address. Mitigations: supersede #2, add the extension target,
+make the redundancy decision explicit.
 
 ## Proposed Changes
 
-### 1. Lead with the name, demote the IP
+### 1. Demote the banner from an address to a detection line (standalone + extension)
 
-Print the MagicDNS name as the address. The IPv4 becomes a fallback shown after it, and the IPv6
-literal is dropped from the headline entirely — it is diagnostic output, not an address anyone
-types.
+> **Superseded:** "Lead with the name, demote the IP" — i.e. reorder the banner interpolation at
+> `cli.ts:4550` so the MagicDNS name is first and the IPv4 is parenthesised, keeping the banner as
+> an address line alongside the resolver block.
+> **Reason:** the resolver block at `cli.ts:4746`/`:4654` already prints the authoritative,
+> name-first, HTTPS-aware address. Fixing the banner's form in place produces *two* name-first
+> address lines for one mode, and the operator has no way to tell which to copy. The teaching
+> defect is redundancy, not just word order. The banner's real job is pre-boot detection
+> confirmation — it prints before `startHeadlessSwitchboard`, the resolver prints after — so the
+> two have different roles and should print different *kinds* of thing.
+> **Replaced with:** Demote the banner to a *detection* line. Print the MagicDNS name as the
+> subject and the IPv4 as a parenthetical; drop the bracketed IPv6 literal from the headline
+> entirely (it remains in the resolver block's `Tailnet (IPv6)` side-line, which is unaffected).
+> The resolver block remains the single *address* print. When no MagicDNS name resolves, the IP
+> is the subject and is printed alone — the existing behaviour, preserved.
 
-When no MagicDNS name resolves, the IP is the address and is printed alone, as today.
+**`src/standalone/cli.ts:4550`** — change the banner from an address to a detection line. With a
+name available, print e.g. `[switchboard] Tailnet detected: <name> (IP <tailnetAddress>)`; with no
+name, print `[switchboard] Tailnet detected: <tailnetAddress>` (IP alone, as today). The IPv6
+literal (`magicDnsNames.filter(n => n.startsWith('['))`) is excluded from the headline. The
+`magicDnsNames` array itself is **not** filtered or reordered — it still feeds `tailnetAcceptable`
+(`:4555`) and the bind policy (`:4718`); only the template literal changes.
 
-### 2. Print the HTTPS URL when serve is configured, and say so when it is not
+**`src/services/TaskViewerProvider.ts:4036`** — the exact analogue: `[TaskViewerProvider] Tailnet
+mode: <addr> (<names>)`. Apply the same demotion: name as subject, IPv4 parenthesised, IPv6
+dropped from the headline. This is the extension-side banner the original plan omitted; both
+composition roots change or the plan diverges the two hosts.
 
-Read `tailscale serve status`. If the board is already served, print
-`https://<name>` with no port — that IS the address, and the loopback port is no longer part of
-it.
+### 2. The HTTPS URL / advisory is already shipped — no new work here
 
-If it is not, print one line naming the command and the reason it is worth running: HTTPS, no
-port, and clipboard/PWA support that plain HTTP cannot provide. One line, once, at startup —
-not a tutorial, and not repeated in every log.
+> **Superseded:** "Print the HTTPS URL when serve is configured, and say so when it is not" —
+> described as new work.
+> **Reason:** `resolveTailnetUrl` / `resolveTailnetOrigin` already prefer `https://<fqdn>` when
+> `tailscale serve` is configured and the cert is live, fall back through `http://<fqdn>:<port>`
+> to `http://<ip>:<port>`, print the IP as a `Fallback (IP)` line, and emit exactly one advisory
+> line when the origin is insecure. This is the shipped work of
+> `the-tailnet-url-never-offers-a-secure-origin`, gated by
+> `test:contract:tailscale-bind`. The serve-config read uses `detectServeConfigMapping(port)`
+> (LocalAPI `/localapi/v0/serve-config` primary, `tailscale serve status --json` fallback) — not
+> a bare `tailscale serve status`.
+> **Replaced with:** No code change. The resolver block is the authoritative address print and
+> already does this. The banner demotion in #1 makes the resolver block the *single* address
+> line, which is the point.
 
-### 3. Say it once in the docs, where the deployment is described
+### 3. Correct the stale docs and add the serve step
 
-The Pi/appliance setup documentation gets the same three-step form: rename the host, run serve,
-use the name. It is the first thing an operator does and the last thing they should have to
-rediscover.
+**`docs/REMOTE_ACCESS.md`** — two changes:
 
-### 4. The port file is not an address
+- **`:66-69` is stale.** It says the command "prints two URLs: … `http://100.110.206.86:<port>/`
+  — tailnet". The resolver now prints the *best* URL (HTTPS FQDN when serve is configured, else
+  HTTP FQDN, else HTTP IP) with the IP as a fallback line, not a bare IP as the tailnet address.
+  Correct this to describe the resolver's actual behaviour: the tailnet URL is the best
+  available origin, the IP is the fallback.
+- **`:103-117` (Home Screen install) already teaches MagicDNS-over-IP** and stands. Add the
+  `tailscale serve` / HTTPS step to the same section: rename the host
+  (`tailscale set --hostname=switchboard`), run `tailscale serve --bg 7777` for HTTPS on 443
+  (tailnet-only, real cert), then install from `https://<name>` with no port. This is the
+  three-step form the original plan #3 described; it lands here because this is the deployment
+  section an operator actually reads.
 
-`.switchboard/api-server-port.txt` exists for local callers resolving the loopback port. Nothing
-in operator-facing output should present it, or the port, as part of how a person reaches the
-board — the two audiences are different and conflating them is how `:7777` became the public
-face.
+### 4. The port file is not an address — recorded as a question, not a code change
+
+> **Superseded:** "The port file is not an address" — proposed as a code change with no target
+> site.
+> **Reason:** the proposal named no line that wrongly presents the port file or the port as the
+> public address. `cli.ts:4706` warns "discovery will require api-server-port.txt" —
+> operator-facing, but about *local CLI discovery*, not the public address. The `:7777` port in
+> the resolver block's `http://<name>:<port>/` is *part of the reachable address* when serve is
+> not configured; stripping it breaks the URL. The principle is sound but the code target does
+> not exist.
+> **Replaced with:** Recorded as an Outstanding Question (below). Proceed on the assumption that
+> the ephemeral-port warning and the plain-HTTP `:port` are both acceptable as-is until serve is
+> configured.
 
 ## Verification Plan
 
@@ -106,19 +230,39 @@ face.
 
 1. **New** `src/test/startup-address-form-contract.test.js`, wired as
    `test:contract:startup-address-form` **and invoked from
-   `.github/workflows/integration-tests.yml`** — defined-but-not-invoked is not a gate. Asserts:
-   with a MagicDNS name available the printed headline address is the name, not the IPv4; the
-   IPv6 literal does not appear in the headline; with no name available the IPv4 is printed
-   alone.
-2. Assert a serve-configured host prints an `https://` URL with no port, and an unconfigured one
-   prints exactly one line naming the command.
-3. Assert no token appears in any startup output — the existing rule, re-pinned here because this
-   plan edits the same lines.
+   `.github/workflows/integration-tests.yml`** — defined-but-not-invoked is not a gate. Scoped to
+   the *banner* (the resolver block is already gated by `test:contract:tailscale-bind`; do not
+   re-test it). Asserts:
+   - In `src/standalone/cli.ts`, the `Tailnet detected:` / `Tailnet address:` banner line leads
+     with a MagicDNS name (not the bare IPv4) when `magicDnsNames` is non-empty; the bracketed
+     IPv6 literal does not appear in the banner interpolation; with no name the IPv4 is printed
+     alone.
+   - In `src/services/TaskViewerProvider.ts`, the `Tailnet mode:` banner applies the same
+     name-first / no-IPv6-headline form (the extension-side check the original plan omitted).
+   - No token appears in any startup output — the existing rule, re-pinned here because this
+     plan edits the same lines.
+2. **Do not** assert the resolver block's HTTPS/advisory behaviour here — that is owned by
+   `test:contract:tailscale-bind` and re-asserting it duplicates the gate.
 
 ### Goal Invariants
 
-- An operator reading first-run output copies a name, not an IP, and not a port.
-- With serve configured, the printed address is a working `https://` URL and the clipboard path
-  in the terminal panel is the one-tap one.
-- The four printing rules from the existing address plan are unchanged: one address per
-  subcommand, none for bare `switchboard`, never a token.
+- The standalone banner (`cli.ts:4550`) and the extension banner (`TaskViewerProvider.ts:4036`)
+  both lead with the MagicDNS name when one is available; neither prints a bracketed IPv6 literal
+  in the headline.
+- The resolver block (`cli.ts:4746`/`:4654`, `extension.ts:1382`) remains the single *address*
+  print: with serve configured it emits `https://<name>` (no port); without, it emits
+  `http://<name>:<port>` plus exactly one advisory line.
+- The `magicDnsNames` array is unchanged in order or content — it still feeds `tailnetAcceptable`
+  (`cli.ts:4555`) and the bind policy (`cli.ts:4718`); only the banner's template literal changes.
+- The four printing rules from `starting-the-board-prints-where-to-reach-it-and-opens-nothing` are
+  unchanged: one address per subcommand, none for bare `switchboard`, never a token.
+- `docs/REMOTE_ACCESS.md:66-69` no longer states the command prints a bare-IP tailnet URL; the
+  Home Screen section names `tailscale serve` as the HTTPS step.
+
+## Outstanding Questions
+
+- **[user]** Should the ephemeral-port fallback warning (`cli.ts:4706`) stop naming
+  `api-server-port.txt`, and is the `:port` in the resolver block's plain-HTTP URL acceptable
+  until `tailscale serve` is configured? — proceeding on the assumption that both are acceptable
+  as-is: the warning is about local CLI discovery, and the port is genuinely part of the
+  reachable address without serve. No code change is made for this in the current pass.

@@ -9,10 +9,8 @@ description: 'Milestones — Long-Term Goals On The Board'
 > 
 > **Dispatching from the list alone ships the tab against routes that do not exist.** This drift predates the Board Collapse work; it is recorded here rather than silently regenerated, because the regeneration path is itself the subject of an open plan (*Serialize feature-file subtask-block regeneration so the file can't silently lose subtasks the DB has*), and this file is a live instance of exactly that defect.
 
-
 <!-- board-collapse-01c -->
 > **MIGRATION NUMBER CORRECTED 2026-09-04 (Board Collapse 01).** This feature reserved **V66**. V66 is already the `mission_milestones` mapping table (`KanbanDatabase.ts:636`) and the schema head is **V67**. Both this file and its state subtask now say "the next free migration version at implementation time".
-
 
 **Complexity:** 5
 
@@ -32,7 +30,8 @@ Milestones are deliberately inert. Adding a card to one runs nothing, and nothin
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [A Milestones tab on the board — goals, their cards, and where those cards are](../plans/milestones-tab-in-the-kanban-panel.md) — **CREATED** — ID: 66dcb1a4-74b9-4eb5-8ce6-3d47d8b3374e
+- [ ] [A Milestones tab on the board — goals, their cards, and where those cards are](../plans/milestones-tab-in-the-kanban-panel.md) — **PLAN REVIEWED** — ID: 66dcb1a4-74b9-4eb5-8ce6-3d47d8b3374e
+- [ ] [Milestones — long-term goals that cards belong to, and that a controller agent can read](../plans/milestones-long-term-targets-on-the-board.md) — **PLAN REVIEWED** — ID: 2ed72b09-e6ad-489e-83d4-459d21e4035d
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -41,3 +40,31 @@ Strictly ordered. The state plan must land first: it owns the tables, the derive
 
 Both are independent of the other plans on this branch (`agents-set-a-columns-card-order`, `agents-set-a-cards-priority-level`, `priority-as-a-native-field-and-a-board-wide-order-by`) — different state, different consumers, any order.
  the other plans on this branch (`agents-set-a-columns-card-order`, `agents-set-a-cards-priority-level`, `priority-as-a-native-field-and-a-board-wide-order-by`) — different state, different consumers, any order.
+
+## Team Dispatch Instructions
+
+### Milestones — long-term goals that cards belong to, and that a controller agent can read
+
+**Seat:** Coder (complexity 5)
+
+**Acceptance:**
+- CRUD round-trip over HTTP: create, update, add plan and feature members, reorder, complete, reopen, delete; delete removes join rows and leaves every card on the board.
+- Completion is a declaration: complete with unfinished members succeeds and no card's column or `completed_at` changes; `complete: "false"` is rejected (not coerced); completing every member does not auto-complete the milestone.
+- Column status is honest: a feature counts once (not per-subtask); the same feature plus one of its own subtasks added directly yields identical numbers; a renamed board column appears under its new name in `byColumn` with no count lost.
+- Milestones are not missions: `getMissions` never returns a milestone; no milestone route dispatches, queues, or moves a card (spy on those paths, require zero calls).
+- Orphan rejection: `member/add` with an unknown id returns 404 and writes zero rows; `member/add` twice returns success both times with one row; fresh vs upgraded DB produce identical `PRAGMA table_info` for both tables; CRUD round-trip passes against both the extension host and the standalone host.
+
+**Must not touch:** the `missions` table, Mission Control, any tracker integration (no Linear/ClickUp milestone sync, no `linear_milestone_id` column); no nesting (milestones inside milestones); no date machinery (store and display `target_date` only); no derived completion; no confirm gates.
+
+### A Milestones tab on the board — goals, their cards, and where those cards are
+
+**Seat:** Coder (complexity 5)
+
+**Acceptance:**
+- Tab mechanics: the MILESTONES button switches to `#milestones-tab-content`; activating posts `getMilestones` once per activation; the tab is hidden under `body[data-view="agent-control"]` (both the button via the NOT-list selector and the content div via the `!important` hide list).
+- Counts come from the payload: the webview does no arithmetic over a card list to produce them (source-text assertion).
+- Add from board: select three subtasks of one feature, add to a milestone, assert one member (the feature) was added; a standalone plan is added as a plan.
+- Complete/reopen with outstanding cards succeeds, no card changes column; delete has no confirm dialog in the path (assert no `confirm(` in the added code), the milestone disappears, every card is still on the board.
+- Not a second board: the tab renders no dispatch, no column-move, and no "start" control; no code path from this tab posts a dispatch or move verb; hand-run checklist (create, add member, reorder, complete, reopen, delete) passes in both the extension and the standalone browser host.
+
+**Must not touch:** no state of its own (all state, routes, and derived status belong to the state plan); no dispatch, queue, or column-move; no date machinery; no auto-completion; no Gantt bars or timeline canvas; no card content editing; no confirm gates.

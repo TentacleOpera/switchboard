@@ -34,18 +34,19 @@ cards are simultaneously in CREATED, CODED, and COMPLETED.
 
 **Ordering is not a goal, and the difference is structural.** `column_order` is
 cleared the moment a card changes column (`clearColumnOrder`,
-`KanbanDatabase.ts:10392-10412`: *"the number is per-column, so it must not
-travel"*). A hand-arranged order is destroyed by the card progressing — the one
-thing a long-term goal must survive.
+grep `clearColumnOrder` in `KanbanDatabase.ts`: *"the number is per-column, so it
+must not travel"*). A hand-arranged order is destroyed by the card progressing —
+the one thing a long-term goal must survive.
 
 **A milestone must not be a mission, and the schema is already inviting the
 mistake.** `missions.type` is free text defaulting to `'mission'`
-(`KanbanDatabase.ts:273-284`, `createMission` at `:11469`), so `type =
+(grep `CREATE TABLE IF NOT EXISTS missions` in `KanbanDatabase.ts`,
+`createMission` in the same file), so `type =
 'milestone'` would "work" today with no migration. Refuse it:
 
 - A mission is an **execution vehicle**: it carries `team`, `ready`, and
   `max_extra_worktrees`, and it is launched (`launchMission`,
-  `KanbanProvider.ts:14577`). A milestone is **inert** — adding a card to one runs
+  grep `launchMission` in `KanbanProvider.ts`). A milestone is **inert** — adding a card to one runs
   nothing.
 - Sharing the table means every existing mission query grows a `type` filter
   forever, three columns are meaningless on half the rows, and the first bug is a
@@ -55,13 +56,12 @@ mistake.** `missions.type` is free text defaulting to `'mission'`
 
 **Missions need nothing from this plan, and nothing from Linear.** They remain
 what they are: cards that trigger a launch when moved. That already works
-remotely — `RemoteControlService` treats `STAGING` as a queueable target
-(`:113-119`) and stages a remotely-moved card via `onStageForQueue` (`:135-140`),
-so moving a card in Linear stages it here. Composing a mission from Linear is
-therefore a matter of naming cards in the mission card's text, or asking the
-Linear agent to do it over the endpoints that already exist. **No Linear
-milestone mechanism is built, mapped, or reserved by this plan** — for missions or
-for milestones.
+remotely — `RemoteControlService` treats `STAGING` as a queueable target and
+stages a remotely-moved card via `onStageForQueue`, so moving a card in Linear
+stages it here. Composing a mission from Linear is therefore a matter of naming
+cards in the mission card's text, or asking the Linear agent to do it over the
+endpoints that already exist. **No Linear milestone mechanism is built, mapped,
+or reserved by this plan** — for missions or for milestones.
 
 ### Root Cause
 
@@ -92,19 +92,100 @@ where neither the board nor the controller agent can read it.
 **Tags:** feature, backend, database, api
 **Feature:** debd9d87-d178-4caa-a059-3f7578d7f806
 
+## User Review Required
+
+None — the plan is self-contained and ready for implementation. The migration
+version (V78) is determined by the current schema head (V77). The `total` vs
+`byColumn` semantics, orphan-rejection location, and `project_id` filtering are
+all specified in the Proposed Changes. No external decision is blocked.
+
+## Complexity Audit
+
+### Routine
+
+- Two new tables mirroring the proven `missions` / `mission_members` shape — same
+  columns, same join pattern, same `member_kind` discriminator.
+- Nine HTTP routes mirroring `/kanban/mission/*` — same auth, same response
+  shapes, same `_resolveDbForRoot` path.
+- `setMilestoneOrders` reusing `setColumnOrders`' 1..N transaction shape.
+- Orchestration skill edit — adding milestone routes to read/write tables and a
+  "read milestones first" step in Workflow B.
+
+### Complex / Risky
+
+- **Feature-dedupe in `getMilestoneStatus`.** Resolving features to their subtask
+  sets, subtracting directly-added subtasks already covered, and keeping `total`
+  (member count) distinct from `byColumn` (card distribution) is the single most
+  likely implementation bug. A wrong dedupe silently inflates every number the
+  tab and the controller agent read — a fallback indistinguishable from a real
+  value.
+- **Orphan-rejection at the route layer.** The mission routes don't validate
+  `memberId` existence; this plan adds that validation. The lookup must handle
+  both plans and features (features are plans with `is_feature = 1`), and must
+  run before the DB write.
+- **`setMilestoneOrders` workspace validation.** Refusing a list containing ids
+  that are not milestones of the given workspace — not writing positions for
+  rows that do not exist.
+
+## Edge-Case & Dependency Audit
+
+- **Race Conditions:** A card moving columns while `getMilestoneStatus` is
+  computing counts. Mitigated by deriving at read time — the status is a
+  snapshot, not a cached value. A card that moves mid-read produces a
+  momentarily inconsistent `byColumn`, but the next read is correct. No stored
+  count can go stale.
+- **Security:** All routes use the same auth as the mission block
+  (`_checkAuth`). No new auth surface. The `complete` endpoint uses strict
+  boolean validation (rejecting `"false"` strings) to prevent silent
+  reopen/close — the same class of bug the star endpoint guards against.
+- **Side Effects:** `deleteMilestone` removes join rows but never cards.
+  `setMilestoneCompleted` changes no card columns or `completed_at`. No
+  milestone operation causes anything to execute (no dispatch, no queue, no
+  move). These are enforced by the plan's non-goals and verified by the
+  "Milestones are not missions" test (spy on dispatch/queue/move paths, require
+  zero calls).
+- **Dependencies & Conflicts:** Independent of the three sibling plans on this
+  branch (`agents-set-a-columns-card-order`, `agents-set-a-cards-priority-level`,
+  `priority-as-a-native-field-and-a-board-wide-order-by`). Different state,
+  different consumers, any order. The tab plan
+  (`milestones-tab-in-the-kanban-panel.md`) depends on this plan's tables,
+  routes, and derived status — it adds no state of its own.
+
 ## Dependencies
 
 None. Independent of `agents-set-a-columns-card-order.md`,
 `agents-set-a-cards-priority-level.md`, and
 `priority-as-a-native-field-and-a-board-wide-order-by.md`.
 
+## Adversarial Synthesis
+
+Key risks: feature-dedupe silently inflating counts (`total` ≠ sum(`byColumn`)
+is the trap), orphan join rows from unvalidated `memberId`, and
+`setMilestoneOrders` writing positions for non-existent rows. Mitigations:
+explicit `total`-vs-`byColumn` semantics in the plan, route-layer 404 lookup
+before `addMilestoneMember`, and workspace-id validation in
+`setMilestoneOrders` mirroring `setColumnOrders`. The two-table approach is
+proven by `missions`/`mission_members`; the derived-status approach avoids the
+stale-count trap. The plan's non-goals (no Linear sync, no nesting, no
+date machinery, no derived completion) are correctly scoped and prevent scope
+creep into Mission Control's execution surface.
+
 ## Proposed Changes
 
-### 1. `src/services/KanbanDatabase.ts` — two tables (V66)
+### 1. `src/services/KanbanDatabase.ts` — two tables (V78)
+
+> **Superseded:** Two tables (V66)
+> **Reason:** V66 is already the `mission_milestones` mapping table (`KanbanDatabase.ts:1006`). The schema head at the time of this revision is **V77**; the next free migration version is **V78**. The Board Collapse 01 note already corrected the prose to "the next free migration version at implementation time" — this fixes the section header and SQL block comment to match.
+> **Replaced with:** Two tables (V78) — `MIGRATION_V78_SQL`.
 
 Mirror `missions` / `mission_members`, which already proves the two-table
 membership shape in this schema, including a `member_kind` distinguishing plans
-from features (`:285-290`, used at `LocalApiServer.ts:2694`).
+from features (`KanbanDatabase.ts:519-536`, used at `LocalApiServer.ts:6342`).
+
+> **Line-reference drift:** All line numbers in this plan were accurate at
+> planning time. The codebase has grown since; every cited line is now stale by
+> roughly 30-50%. The coder should grep for the named symbols, not navigate by
+> number. The symbol names are stable; the numbers are not.
 
 ```sql
 CREATE TABLE IF NOT EXISTS milestones (
@@ -129,17 +210,22 @@ CREATE INDEX IF NOT EXISTS idx_milestone_members_member ON milestone_members(mem
 ```
 
 Added to `SCHEMA_TABLES_SQL` for fresh DBs **and** as an idempotent
-`MIGRATION_V66_SQL` block for existing installs, following the V63/V64 pattern
-(`:626-642`). No change to `plans` — membership lives in the join table, so no
-existing row is rewritten. This is new state that has never shipped, so it takes a
-clean break; the migration block is still required so ~4,000 installs converge on
-the same shape a fresh DB gets.
+`MIGRATION_V78_SQL` block for existing installs, following the V63/V64 pattern
+(grep `MIGRATION_V63_SQL` / `MIGRATION_V64_SQL`). No change to `plans` —
+membership lives in the join table, so no existing row is rewritten. This is new
+state that has never shipped, so it takes a clean break; the migration block is
+still required so existing installs converge on the same shape a fresh DB gets.
 
 **Methods:** `getMilestones`, `getMilestoneById`, `createMilestone`,
 `updateMilestone`, `deleteMilestone`, `setMilestoneCompleted`,
 `addMilestoneMember`, `removeMilestoneMember`, `getMilestoneMembers`,
-`setMilestoneOrders` (reusing `setColumnOrders`' 1..N single-transaction shape at
-`:10421-10456` rather than inventing a second ordering idiom).
+`setMilestoneOrders` (reusing `setColumnOrders`' 1..N single-transaction shape
+— grep `setColumnOrders` in `KanbanDatabase.ts` — rather than inventing a second
+ordering idiom). `setMilestoneOrders` **must validate** that every id in the
+ordered list is a milestone of the given workspace, and refuse the write if any
+id is not — mirroring `setColumnOrders`' own validation that all ids are plans of
+the workspace. Writing positions for rows that do not exist is the bug this
+prevents.
 
 `deleteMilestone` removes the goal and its join rows and **never a card**. Say it
 in the docstring: the one destructive misreading available here is "delete the
@@ -161,10 +247,19 @@ returns the shape the tab and the controller agent both read:
 
 Two rules decide whether those numbers are trustworthy:
 
+- **`total` ≠ sum(`byColumn`).** `total` is the count of **distinct members** —
+  a feature counts as 1, a standalone plan counts as 1. `byColumn` is the
+  distribution of the **underlying cards** a member expands to — a feature
+  expands to its subtask set, so a feature of 4 subtasks (3 CREATED, 1 CODED)
+  yields `total: 1` but `byColumn: { "CREATED": 3, "CODED": 1 }`. A coder who
+  implements `total = Object.values(byColumn).reduce(...)` breaks the dedupe
+  invariant on day one: the feature counts as 4, not 1, and adding the feature
+  plus its own subtask inflates to 5. `total` is the member count; `byColumn` is
+  the card distribution. They measure different things.
 - **Columns come from the board, not a hardcoded list.** Columns are
   user-configurable (`saveKanbanColumn`, `deleteKanbanColumn`), so `byColumn` is
-  keyed by whatever columns the board currently has. Any count keyed to a literal
-  `'DONE'` or `'COMPLETED'` string breaks for a user who renamed it.
+  keyed by whatever columns the board currently has. Any count keyed to a
+  literal `'DONE'` or `'COMPLETED'` string breaks for a user who renamed it.
 - **A feature counts once, through the feature.** If a milestone holds feature F
   and F's subtask S is also a member, S is counted once and only via F. Without
   this the same work inflates every number the tab and the controller agent read.
@@ -187,13 +282,14 @@ Three consequences, stated because each is a thing someone will otherwise
   `completed_at`.
 - **It is reversible.** `complete: false` reopens it, mirroring the board's own
   `uncompleteCard` verb. Strict boolean validation, following the star endpoint's
-  ladder (`LocalApiServer.ts:6505-6528`) — a coerced `"false"` here silently
-  reopens or closes a goal.
+  ladder (grep `_handleSetPlanPriority` in `LocalApiServer.ts` — the strict boolean
+  validation block) — a coerced `"false"` here silently reopens or closes a goal.
 
 ### 4. `src/services/LocalApiServer.ts` — routes mirroring `/kanban/mission/*`
 
-Same shapes, same style, same auth as the mission block at `:2655-2722`, so there
-is one idiom for "a named grouping with members":
+Same shapes, same style, same auth as the mission block (grep `/kanban/mission`
+in `LocalApiServer.ts` — the routes start at the `GET /kanban/missions` handler),
+so there is one idiom for "a named grouping with members":
 
 | Route | Body | Notes |
 |---|---|---|
@@ -203,7 +299,7 @@ is one idiom for "a named grouping with members":
 | `POST /kanban/milestone/update` | `{ milestoneId, …fields }` | |
 | `POST /kanban/milestone/complete` | `{ milestoneId, complete }` | §3 |
 | `POST /kanban/milestone/delete` | `{ milestoneId }` | Members unlinked, cards untouched |
-| `POST /kanban/milestone/member/add` | `{ milestoneId, memberId, kind }` | `kind` defaults to `'plan'`, as `:2691` does |
+| `POST /kanban/milestone/member/add` | `{ milestoneId, memberId, kind }` | `kind` defaults to `'plan'`, as the mission `member/add` handler does |
 | `POST /kanban/milestone/member/remove` | `{ milestoneId, memberId }` | |
 | `PUT /kanban/milestones/order` | `{ orderedMilestoneIds }` | |
 
@@ -211,6 +307,23 @@ Validation the mission routes do **not** do and should have: reject an unknown
 `memberId` with 404 rather than writing an orphan join row, and reject a
 non-ISO `targetDate` with 400. An orphan member is invisible until the status
 reports a total nobody can account for.
+
+**Orphan-rejection lookup lives in the route handler.** Before calling
+`addMilestoneMember`, the handler must verify the `memberId` resolves to a real
+row in `plans` — for `kind: 'plan'`, via `getPlanByPlanId`; for `kind: 'feature'`,
+via the same lookup (features are plans with `is_feature = 1`). If the lookup
+returns null, respond 404 and write no join row. The DB method
+(`addMilestoneMember`) stays thin — it writes the row, mirroring
+`addMissionMember`. The validation is a route-layer concern because the DB layer
+has no knowledge of plan-vs-feature semantics beyond the `member_kind` string.
+
+**`project_id` filtering.** `getMilestones` returns **all** milestones for the
+workspace regardless of `project_id` — a milestone is a board-wide view over
+cards, not a project filter. The `project_id` column is stored for future use
+(scoping a goal to one project's cards) but is **not filtered on read** in this
+plan. The tab shows every milestone; the controller agent reads every milestone.
+If project-scoped milestones are added later, that is a new filter parameter, not
+a change to the default behaviour.
 
 `member/add` is idempotent (`PRIMARY KEY` conflict → success), so an agent
 re-running a script does not fail halfway.
@@ -245,15 +358,17 @@ so an agent that never reaches §8 still finds them.
 ### Host parity (extension + standalone)
 
 All nine routes live in `LocalApiServer` and use `_resolveDbForRoot` — the
-DB-direct family, wired in both roots already (`TaskViewerProvider.ts:3714`,
-`bootstrap.ts:2769`). No new composition-root seam. The webview verbs the tab
-needs belong to plan B and must be wired in both roots there.
+DB-direct family, wired in both roots already (grep `_resolveDbForRoot` in
+`TaskViewerProvider.ts` and `bootstrap.ts`). No new composition-root seam. The
+webview verbs the tab needs belong to plan B and must be wired in both roots
+there.
 
 ### Migration
 
 New tables only; `plans` untouched. An install that never opens the tab is
-behaviourally identical. `SCHEMA_TABLES_SQL` and the V66 block must produce the
-same shape, verified by the schema-reconciliation path (`:1028`) rather than by
+behaviourally identical. `SCHEMA_TABLES_SQL` and the V78 block must produce the
+same shape, verified by the schema-reconciliation path (grep
+`schema-reconciliation` / `table_info` in `KanbanDatabase.ts`) rather than by
 inspection.
 
 ## Verification Plan

@@ -50,10 +50,87 @@ offering to change it.
 **Tags:** feature, frontend, ui, ux
 **Feature:** debd9d87-d178-4caa-a059-3f7578d7f806
 
+> **Line-reference drift:** All line numbers in this plan were accurate at
+> planning time. The codebase has grown since; every cited line is now stale by
+> roughly 30-50%. The coder should grep for the named symbols, not navigate by
+> number. The symbol names are stable; the numbers are not.
+
+## User Review Required
+
+None — the plan is self-contained and ready for implementation. It depends on
+the state plan (`milestones-long-term-targets-on-the-board.md`) for tables,
+routes, and derived status, all of which are specified. No external decision is
+blocked.
+
+## Complexity Audit
+
+### Routine
+
+- Adding a tab button, content div, and hydrate-on-activate branch — all
+  existing seams, all conventional.
+- `renderMilestonesTab()` following `renderWorktreesTab()` — one root element
+  rebuilt from the last payload, no partial DOM surgery.
+- Eight verb arms in `KanbanProvider.ts`, each thin over the DB methods the
+  state plan adds.
+- `catalog:generate` to add the verbs to the allowlist.
+
+### Complex / Risky
+
+- **Subtask → parent feature resolution for ADD TO MILESTONE.** The plan says
+  "prefer the feature over its subtasks," but the webview must determine a
+  selected subtask's parent feature. The existing `selectedCards` entries carry
+  `isFeature` (used by ASSIGN), but resolving a subtask to its parent requires
+  the card data to carry `feature_id`. If it does not, the dedupe falls to the
+  API layer (which already has it via the state plan's feature-dedupe rule) —
+  but then the status message cannot say "added the feature, not the subtasks."
+- **Agent Control view hiding — two surfaces.** The button is hidden by the
+  NOT-list selector (everything not in the allowlist is hidden). The content
+  div must be added to the `!important` hide list. Both surfaces need attention;
+  fixing only one leaks the tab.
+- **"Not a second board" enforcement.** The tab must not offer dispatch,
+  column-move, or "start" controls. This is a constraint on what the render
+  function does NOT generate, verified by a source-text assertion (no dispatch
+  or move verb posted from this tab's code paths).
+
+## Edge-Case & Dependency Audit
+
+- **Race Conditions:** The tab hydrates on activation, not on board refresh, so
+  there is no race between a board refresh and a tab render. Counts come from
+  the payload (derived at read time by the backend), so they are always fresh on
+  re-activation. A card that moves while the tab is open produces stale counts
+  until the next activation — acceptable, since the tab is not a live view.
+- **Security:** No new auth surface. The verb arms use the same
+  `showStatusMessage`-on-failure pattern as the mission arms. No milestone
+  operation is exposed that the routes don't already guard.
+- **Side Effects:** The tab moves nothing and runs nothing. ADD TO MILESTONE
+  posts `addMilestoneMember` (idempotent). Complete/reopen posts
+  `setMilestoneComplete` (changes no card). Delete posts `deleteMilestone`
+  (removes the goal and its join rows, never a card). Reorder posts
+  `PUT /kanban/milestones/order` (positions only).
+- **Dependencies & Conflicts:** Blocked on
+  `milestones-long-term-targets-on-the-board.md` — tables, derived status,
+  routes. This plan adds no state of its own. The `kanban.html` file is shared
+  with no other in-flight plan on this branch. The `KanbanProvider.ts` verb arms
+  are additive (new case labels, no modification to existing arms).
+
 ## Dependencies
 
 Blocked on `milestones-long-term-targets-on-the-board.md` — tables, derived
 status, routes. This plan adds no state of its own.
+
+## Adversarial Synthesis
+
+Key risks: the subtask → parent feature resolution for ADD TO MILESTONE is
+unspecified (the webview may not have `feature_id` on card data), the Agent
+Control view hiding needs both the button NOT-list and the content `!important`
+list, and the "not a second board" constraint is a negative-space enforcement
+(what the render function must NOT generate). Mitigations: if the card data
+lacks `feature_id`, defer dedupe to the API layer (already implemented in the
+state plan) and adjust the status message accordingly; name both hiding surfaces
+explicitly; verify the negative-space constraint with a source-text assertion
+(no dispatch/move verb posted from this tab's code paths). The tab approach
+using existing seams is conventional and low-risk; the backend-counts-rendering
+prevents tab-vs-API disagreement.
 
 ## Proposed Changes
 
@@ -62,23 +139,31 @@ status, routes. This plan adds no state of its own.
 **Seams, all existing and all conventional:**
 
 - **Button** — add `<button class="shared-tab-btn" data-tab="milestones">MILESTONES</button>`
-  to the `.shared-tab-bar` at `:2979-2987`, directly after `KANBAN`: it is a
-  board-level view, and the tail of that bar (`UAT`, `SETUP`) is where
-  configuration lives.
+  to the `.shared-tab-bar` (grep `shared-tab-bar` in `kanban.html`), directly
+  after `KANBAN`: it is a board-level view, and the tail of that bar (`UAT`,
+  `SETUP`) is where configuration lives.
 - **Content** — `<div id="milestones-tab-content" class="shared-tab-content">`,
   matching the `#<tab>-tab-content` convention the switch handler derives from
-  (`:6598`).
-- **Hydrate on activate** — the click handler at `:6581-6605` already has per-tab
-  hydration branches (`agents` `:6608`, `teams` `:6615`). Add a `milestones`
-  branch posting `getMilestones`. Do **not** load on board refresh: the board
-  refreshes constantly and this tab is usually not visible.
-- **Agent Control view** — non-agent tabs are hidden by an explicit selector list
-  (`:2930-2934`). Add `#milestones-tab-content` to it, or the tab leaks into a view
-  it does not belong to. This is the omission that ships looking fine because the
-  default view is correct.
+  (grep `tab-content` in the tab switch handler).
+- **Hydrate on activate** — the click handler (grep `shared-tab-btn` for the
+  click handler binding) already has per-tab hydration branches (`agents`,
+  `teams`). Add a `milestones` branch posting `getMilestones`. Do **not** load
+  on board refresh: the board refreshes constantly and this tab is usually not
+  visible.
+- **Agent Control view — two surfaces.** The button is already hidden by the
+  NOT-list selector (grep `data-view="agent-control"` in the CSS — everything
+  not in the allowlist is hidden). The content div must be added to the
+  `!important` hide list (grep `data-view="agent-control"` for the
+  `#kanban-tab-content, #worktrees-tab-content, ...` rule). Add
+  `#milestones-tab-content` to that `!important` list. Both surfaces need
+  attention; fixing only the content div leaves a button that switches to an
+  empty area, and fixing only the button leaves a content div that could be
+  activated programmatically. This is the omission that ships looking fine
+  because the default view is correct.
 
-**Render — `renderMilestonesTab()`**, following `renderWorktreesTab()` (`:12651`):
-one root element rebuilt from the last payload, no partial DOM surgery.
+**Render — `renderMilestonesTab()`**, following `renderWorktreesTab()` (grep
+`function renderWorktreesTab` in `kanban.html`): one root element rebuilt from
+the last payload, no partial DOM surgery.
 
 Each row shows:
 
@@ -99,13 +184,18 @@ parent plan's feature-dedupe rule is a second answer, and the discrepancy would
 surface as the tab and the API disagreeing about how much work a goal contains.
 Render the payload's numbers.
 
-**Ordering** — drag to reorder rows, posting the full ordered id list: the same
-post-drop-full-list shape the board's own drop handler uses (`:10128`), so there
-is one ordering idiom in this codebase rather than two.
+**Ordering** — drag to reorder rows, posting the full ordered id list to
+`PUT /kanban/milestones/order`: the same post-drop-full-list shape the board's
+own drop handler uses (grep the board's drop handler for the full-list post
+pattern), so there is one ordering idiom in this codebase rather than two. Name
+the endpoint explicitly — a coder who copies the column drop handler will post
+to the wrong URL.
 
 **Empty state** must teach: what a milestone is, that cards are added by selecting
 them on the board, and that an agent can create and populate them too. A blank tab
-is where this feature gets misread as broken.
+is where this feature gets misread as broken. Suggested copy: *"A milestone is a
+long-term goal that cards belong to. Select cards on the board and use ADD TO
+MILESTONE, or ask an agent to create and populate one."*
 
 **Create** — a name field plus optional description and date, inline at the top.
 No modal.
@@ -120,8 +210,9 @@ guarantees the cards survive; the label is what stops a user believing otherwise
 
 ### 2. `src/webview/kanban.html` — add to a milestone from the board
 
-The board already maintains a `selectedCards` Map (`:6454`) driving the
-controls-strip actions (`ASSIGN` at `:3059` and neighbours). Add one strip button
+The board already maintains a `selectedCards` Map (grep `const selectedCards`
+in `kanban.html`) driving the controls-strip actions (`ASSIGN` — grep
+`btn-assign-workspace-project` for the strip button). Add one strip button
 — `ADD TO MILESTONE` — enabled on a non-empty selection, opening a milestone
 picker (a multi-choice decision dialog, which the project rules permit; a confirm
 gate is what they forbid) and posting one `addMilestoneMember` per selected card.
@@ -132,23 +223,36 @@ enforces the parent plan's dedupe rule at the point of entry — cheaper than
 deduping forever afterwards — and it is what a user means when they select three
 subtasks of one feature and add them to a goal.
 
+**Resolution mechanism.** The existing `selectedCards` entries carry `isFeature`
+(used by the ASSIGN logic — grep `isFeature` in `kanban.html`). To resolve a
+selected subtask to its parent feature, the card data must carry `feature_id`.
+If it does, the webview resolves subtask → feature before posting. If it does
+not, the webview posts each selected card as-is, and the API's feature-dedupe
+rule (in the state plan's `getMilestoneStatus`) handles it — but the status
+message cannot say "added the feature, not the subtasks." **The coder must
+check whether card data carries `feature_id` and choose the resolution path
+accordingly.** If it does not, the status message should say "added N cards to
+milestone M" rather than claiming feature-level dedupe happened at entry.
+
 ### 3. `src/services/KanbanProvider.ts` — verb arms
 
 Eight arms beside the existing mission arms, each thin over the DB methods the
 parent plan adds: `getMilestones`, `createMilestone`, `updateMilestone`,
 `setMilestoneComplete`, `deleteMilestone`, `addMilestoneMember`,
 `removeMilestoneMember`, `reorderMilestones`. Each resolves the workspace root the
-way the mission and `setPriorityStarred` arms do (`:12557`), returns
-`{ success, … }`, and posts `showStatusMessage` on failure — the pattern at
-`:12539`.
+way the mission and `setPriorityStarred` arms do (grep `setPriorityStarred` in
+`KanbanProvider.ts`), returns `{ success, … }`, and posts `showStatusMessage` on
+failure — the same pattern the mission arms use.
 
 `reorderMilestones` takes the full ordered list and delegates to
-`setMilestoneOrders`, mirroring `reorderColumn` (`:8664`) **including** the
-validation that plan adds: refuse a list whose ids are not all milestones of this
-workspace rather than writing positions for rows that do not exist.
+`setMilestoneOrders`, mirroring `reorderColumn` (grep `reorderColumn` in
+`KanbanProvider.ts`) **including** the validation the state plan adds: refuse a
+list whose ids are not all milestones of this workspace rather than writing
+positions for rows that do not exist.
 
-Then `npm run catalog:generate` (`package.json:942`) to add the verbs to
-`src/generated/verbAllowlist.ts` and the catalog; `catalog:check` is the gate.
+Then `npm run catalog:generate` (grep `catalog:generate` in `package.json`) to
+add the verbs to `src/generated/verbAllowlist.ts` and the catalog; `catalog:check`
+is the gate.
 
 ### Host parity (extension + standalone)
 

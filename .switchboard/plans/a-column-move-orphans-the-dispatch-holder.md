@@ -49,13 +49,13 @@ Every stuck card sits in a **post-dispatch** column. That is the tell.
 
 **Root cause — two `WHERE` clauses that disagree about what "held" means.**
 
-The in-flight predicate, `heldByTeam` (`LocalApiServer.ts:76`), reads two fields:
+The in-flight predicate, `heldByTeam` (`LocalApiServer.ts:120`), reads two fields:
 
 ```ts
 !p.completedAt && typeof p.dispatchedTerminal === 'string' && p.dispatchedTerminal.length > 0
 ```
 
-The release path inside `_runQueueDone` (`LocalApiServer.ts:3256`) reads a *third*:
+The release path inside `_runQueueDone` (`LocalApiServer.ts:6470`) reads a *third*:
 
 ```ts
 board.find(p => p.dispatchedTerminal === from && !!p.dispatchedAt)
@@ -240,7 +240,7 @@ because the orphan population stops growing the moment this ships; (2) a reader 
 change for a restoration of the deleted column-release valve and reverts it — mitigated by
 stating the distinction in the code comment and by a test asserting `kanban_column` stays out of
 the in-flight predicate; (3) the directive edits drift again the next time the endpoint contract
-moves — mitigated by the superset test in step 4, which fails on the *code*, not on prose.
+moves — mitigated by the superset test in step 4, which fails on the *code*, not on prose. That test is one-directional (release ⊆ `heldByTeam`); a later field added to `heldByTeam` that the release does not read passes the test but reopens the bug class — a bidirectional "the two predicates agree on what 'held' means" assertion would be stronger. The `planId` disambiguation a 142-orphan seat needs rides in the standing order from *Completion Directive Becomes a Standing Order*, which lands later in this feature — so a transitional window exists where an orphaned seat releases its most-recent card without `planId`; bounded (orphans stop growing once this ships) and explicitly chosen, but silent in the sense the repo's fallback rule warns about.
 
 The residual risk is behavioural, not structural: a seat that posts `queue/done` without ever
 posting `task/complete` leaves `completed_at` NULL forever, so a lead reading "which plans are
@@ -249,7 +249,7 @@ contract and this plan does not change it, but it is the next question someone w
 
 ## Proposed Changes
 
-### `src/services/LocalApiServer.ts` — `_runQueueDone` held-card select (`~:3250`)
+### `src/services/LocalApiServer.ts` — `_runQueueDone` held-card select (`~:6470`)
 
 **Context.** `board.find(p => p.dispatchedTerminal === from && !!p.dispatchedAt)` cannot see a
 card whose column has advanced.
@@ -284,7 +284,7 @@ Keep the existing `planId` mismatch guard below it — with `planId` now used fo
 guard's job becomes "the seat does not hold that card at all", so its message is adjusted, not
 removed.
 
-### `src/services/LocalApiServer.ts` — `heldByTeam` comment (`:74`)
+### `src/services/LocalApiServer.ts` — `heldByTeam` comment (`:120`)
 
 **Logic.** Add one paragraph recording that `dispatched_at` is intentionally absent from this
 predicate, that the release path is keyed on the same field this predicate is (`dispatched_terminal`),

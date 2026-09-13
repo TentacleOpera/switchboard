@@ -63,7 +63,25 @@ The server compounds it by treating an omitted `workspaceRoot` as consent to sub
 ## Metadata
 
 **Complexity:** 4
+**Feature:** 50c93771-8835-4b23-9a4b-db626416a6d9
 **Tags:** bugfix, reliability, api, cli
+
+## User Review Required
+
+**Yes.** One `[user]` question in Outstanding Questions (whether a mismatch should offer to launch a second board or only stop) shapes the mismatch-branch behaviour. The identity verification, endpoint fix, and server-side validation proceed regardless of the answer — they are wrong under either option.
+
+## Complexity Audit
+
+### Routine
+- Walking up for `.switchboard/` to resolve `ROOT` — a simple upward directory walk.
+- Capturing the `/health` body instead of discarding it — one curl flag change.
+- Sending `workspaceRoot` in the adopt call — one field added to the JSON payload.
+- Fixing the dead `/orchestration/` endpoint names and legacy paths — string replacement in one workflow file + its mirror.
+
+### Complex / Risky
+- **Path normalisation is the whole risk.** A naive string compare between `$PWD` and a `roots` entry will disagree over symlinks, trailing slashes, case-insensitive filesystems, and mapped child workspaces. A false negative blocks every user; a false positive is the multi-workspace bug. Normalise both sides and test each case.
+- **Server-side validation against `_allRoots`.** The validation must handle mapped roots (`resolveEffectiveWorkspaceRootFromMappings`, `_filterMappedRoots`) where the effective root differs from the folder the user is standing in. A child mapped to a parent DB must still pass.
+- **The endpoint fix is the primary path, not an edge case.** An agent following the skill verbatim 404s on the arming call — arming silently never happens. This is higher severity than the identity bug.
 
 ## Proposed Changes
 
@@ -79,7 +97,9 @@ The server compounds it by treating an omitted `workspaceRoot` as consent to sub
 
 6. **Edit the source, not the mirror — resolved, not an open question.** `.agents/workflows/switchboard.md` (121 lines, 5088 bytes at `5cd7935`) is authoritative: `src/services/ClaudeCodeMirrorService.ts:52` declares `source: 'workflows/switchboard.md', name: 'switchboard', invocation: 'default'`. `.claude/skills/switchboard/SKILL.md` (5151 bytes — the 63-byte delta is rewritten frontmatter) is **generated** and tracked in `.claude/.switchboard-generated.json`; anything written there is overwritten on the next mirror run. All line numbers in this plan refer to the source file. (`.agents/skills/switchboard/SKILL.md` has never existed in any commit — an earlier draft of this plan claimed it was present-but-empty, which was a bad check, not a fact.) After editing, run the mirror and confirm the `.claude/` copy regenerates to match.
 
-7. **Fix the two nonexistent endpoints the launcher names — higher severity than the identity bug.** Source line 103 instructs the agent to call `POST /orchestration/confirm` as *"the only call that arms"*, and line 109 warns against `POST /orchestration/start`. **Neither route exists.** No `/orchestration/*` match anywhere in `src/`, no such prefix route in `LocalApiServer.ts`, and the generated `protocol-catalog.json` lists only `/mission-control/*`. The real names are `POST /mission-control/confirm` (`LocalApiServer.ts:7495`) and `POST /mission-control/start` (`:7493`). An agent following the skill verbatim therefore completes adopt and pre-flight, then 404s on the arming call — **arming silently never happens**, which breaks the primary path rather than a multi-workspace edge case. Fix both names and add them to the endpoint-name audit in change 5.
+7. **Fix the dead endpoints and legacy paths the launcher names — higher severity than the identity bug.** Source line 60 instructs the agent to call `POST /orchestration/confirm` as *"the only call that arms"*, line 66 warns against `POST /orchestration/start`, and lines 59/63 reference `.switchboard/orchestrator/session.md` and `.switchboard/orchestrator/reports/`. **None of these routes or paths exist.** No `/orchestration/*` match anywhere in `src/`, no such prefix route in `LocalApiServer.ts`, and `migrateLegacyOrchestratorDir` (`ScheduledJobsService.ts:199`) exists precisely because `.switchboard/orchestrator/` is the legacy tree. The real names are `POST /mission-control/confirm` and `POST /mission-control/start`, and the real paths are `.switchboard/mission-control/session.md` and `.switchboard/mission-control/reports/`. An agent following the skill verbatim therefore completes adopt and pre-flight, then 404s on the arming call — **arming silently never happens**, which breaks the primary path rather than a multi-workspace edge case. Fix the endpoint name, fix the paths, and **delete the `POST /orchestration/start` warning rather than renaming it** — `/mission-control/start` is a real route with a legitimate purpose (the panel's Start button), so a blanket "never call this" would be wrong advice about a live endpoint. Replace it with the accurate constraint: do not start a *second* Mission Control terminal from here, because this session has already adopted the seat. Add all four corrections to the endpoint-name audit in change 5.
+
+   > **Reconciled with `the-mission-control-front-door-delivers-twice-and-lies-about-the-posture.md` (2026-09-14).** That plan's change 1 previously duplicated this endpoint fix and added the path fix and the start-warning deletion. Since this plan ships first (per the feature's dependency order), it owns the endpoint + path + start-warning fix. The front-door plan's change 1 is superseded for the endpoint and path repair; it keeps the read-instruction fix (change 2) and the posture fix (change 3).
 
 8. **Reconcile the extension's dispatch prompt with the restored skill.** `src/services/TaskViewerProvider.ts:28408` builds a prompt telling the agent to read `.agents/workflows/switchboard.md` and *"follow its entry protocol exactly: concise one-line board snapshot, then present the skill's two-tier entry menu (Plan / Code / Board / Automate, plus a one-line More: design & artifacts, external PM, setup & tour)"*. That describes the **previous** 605-line console document, not the restored 121-line launcher, which has no board snapshot and no menu. The prompt and the file it points at now contradict each other.
 
@@ -100,6 +120,10 @@ The server compounds it by treating an omitted `workspaceRoot` as consent to sub
 ## Dependencies
 
 None. Independent of the four API-auth plans and of the storage-layer feature.
+
+## Adversarial Synthesis
+
+Key risks: (1) path normalisation produces a false negative that blocks every user — mitigated by normalising both sides (symlinks, trailing slashes, case-insensitivity) and testing each case explicitly; (2) the server-side validation rejects a mapped child workspace that legitimately resolves elsewhere — mitigated by testing mapped configurations and using `resolveEffectiveWorkspaceRootFromMappings`; (3) the endpoint fix is duplicated with the front-door plan and one edit overwrites the other — mitigated by the cross-subtask reconciliation: this plan owns the endpoint + path fix, the front-door plan defers.
 
 ## Verification Plan
 

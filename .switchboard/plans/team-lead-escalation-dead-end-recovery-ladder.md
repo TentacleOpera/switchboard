@@ -100,13 +100,18 @@ service seams, no host-parity work.
 ## Complexity Audit
 
 ### Routine
-- Text edit to the escalation clause in three source files (the three copies of the coding head prompt).
+- Text edit to the escalation clause in the two source copies of the coding head prompt (`teamWiring.ts:621` and `kanban.html:~5060`). The `terminals.js` client mirror is retired — see the Superseded callout in Complexity Audit.
 - Text edit to the REVIEW line and two RULES lines in the KanbanProvider drive block.
 - Updating/adding test assertions for pinned literals.
 
 ### Complex / Risky
 - The three copies of `NEW_CODING_HEAD_PROMPT` have **already diverged** in source: `terminals.js` uses `POST /kanban/queue/next` and `against the port in .switchboard/api-server-port.txt` while `teamWiring.ts` and `kanban.html` use `run node "<cliPath>" next`. The byte-identity tests are either failing (source-based: `coding-head-prompt-contract.test.js`) or passing only against a stale `out/` build (`stage-marker-commit-contract.test.js`). This divergence must be resolved before or as part of the ladder edit — otherwise the byte-identity tests cannot pass after recompilation.
-- The KanbanProvider drive block (`KanbanProvider.ts:5878,5890-5891`) carries conflicting guidance: "context preserved; resend fixes to the same terminal" and "Manual ptyClearTerminal is for the stand-down case only." Rung 1 of the ladder prescribes the exact opposite. Both surfaces must be reconciled in the same change.
+
+  > **Superseded:** "The three copies of `NEW_CODING_HEAD_PROMPT` have already diverged in source: `terminals.js` uses `POST /kanban/queue/next`..."
+  > **Reason:** The `terminals.js` client mirror (`NEW_CODING_HEAD_PROMPT_CLIENT`) has been RETIRED. `teamWiring.ts:618` comment records the retirement, and `coding-head-prompt-contract.test.js` (lines 12-13, 70-73, 90-93) now asserts TWO-copy byte-identity (`teamWiring.ts` === `kanban.html`) AND that `NEW_CODING_HEAD_PROMPT_CLIENT` is ABSENT from `terminals.js`. There is no `terminals.js` copy to diverge or reunify. The "source-based test is currently failing" claim is itself stale — the test now passes from source against the two-copy + retirement contract.
+  > **Replaced with:** Two copies remain: `teamWiring.ts:621` (`NEW_CODING_HEAD_PROMPT`) and `kanban.html:~5060` (Coding `headPrompt`), asserted byte-identical by `coding-head-prompt-contract.test.js:87`. Apply the escalation-clause replacement to both. The `terminals.js` reunification sub-step (Proposed Change #2) is obsolete — see the Superseded callout there.
+
+- The KanbanProvider drive block (`KanbanProvider.ts:6024,6036-6037`) carries conflicting guidance: "context preserved; resend fixes to the same terminal" and "Manual ptyClearTerminal is for the stand-down case only." Rung 1 of the ladder prescribes the exact opposite. Both surfaces must be reconciled in the same change.
 - The replacement text must not introduce `against the port in .switchboard/api-server-port.txt` into the head prompt — the drive block at `KanbanProvider.ts:5839` explicitly tells the lead "Do NOT read .switchboard/api-server-port.txt (the port is above)." The head prompt's ptyClearTerminal instruction should use host-neutral language (e.g. "POST /terminals/verb/ptyClearTerminal with {"name":"<the seat>"}") without referencing the port file.
 
 ## Edge-Case & Dependency Audit
@@ -120,11 +125,15 @@ service seams, no host-parity work.
 
 ### Side Effects
 - `ptyClearTerminal` on a seat drops its `seatBlockCache` entry and `lastWorkContextByTerminal` entry (both hosts). This is the intended effect (fresh context) but also drops any deferred-clear state. The seat is fully reset.
-- The drive block's RULES at `KanbanProvider.ts:5893` says "clearBeforePrompt stays false on every dispatch — the host overrides it to true automatically when the plan changes." Rung 1 manually clears via `ptyClearTerminal` *before* the re-dispatch, so `clearBeforePrompt: false` on the re-dispatch is correct (the seat is already clear). No double-clear.
+- The drive block's RULES at `KanbanProvider.ts:6045` says "clearBeforePrompt stays false on every dispatch — the host overrides it to true automatically when the plan changes." Rung 1 manually clears via `ptyClearTerminal` *before* the re-dispatch, so `clearBeforePrompt: false` on the re-dispatch is correct (the seat is already clear). No double-clear.
 
 ### Dependencies & Conflicts
-- **CRITICAL: KanbanProvider drive block conflict.** The drive block at `KanbanProvider.ts:5878` says "resend fixes to the same terminal (context preserved). Escalate after two failures on the same subtask: intern → coder → lead." This is the old vertical-only, context-preserved rule. It must be updated to reference the ladder or removed in favour of the head prompt's ladder. The drive block at `KanbanProvider.ts:5890-5891` says "Clear a terminal only when at rest" and "Manual ptyClearTerminal is for the stand-down case only." These must be updated to permit rung 1's clear-and-re-dispatch.
+- **CRITICAL: KanbanProvider drive block conflict.** The drive block at `KanbanProvider.ts:6024` says "resend fixes to the same terminal (context preserved). Escalate after two failures on the same subtask: intern → coder → lead." This is the old vertical-only, context-preserved rule. It must be updated to reference the ladder or removed in favour of the head prompt's ladder. The drive block at `KanbanProvider.ts:6036-6037` says "Clear a terminal only when at rest" and "Manual ptyClearTerminal is for the stand-down case only." These must be updated to permit rung 1's clear-and-re-dispatch.
 - **Three-copy divergence.** `terminals.js` `NEW_CODING_HEAD_PROMPT_CLIENT` (line 11478) has diverged from `teamWiring.ts` `NEW_CODING_HEAD_PROMPT` (line 613) and `kanban.html` Coding `headPrompt` (line 4804). The divergence is in the "next card" and "completion post" sections, not the escalation clause. The byte-identity tests (`coding-head-prompt-contract.test.js:84-90`, `stage-marker-commit-contract.test.js:357-361`, `standing-orders-marker-contract.test.js:448-455`) enforce byte-identity. The source-based test is currently failing; the compiled-based tests pass only because `out/` is stale. This divergence must be resolved before the ladder edit can produce a passing byte-identity check.
+
+  > **Superseded:** the "three-copy divergence" and "source-based test is currently failing" claims above.
+  > **Reason:** `NEW_CODING_HEAD_PROMPT_CLIENT` is RETIRED from `terminals.js` (`teamWiring.ts:618` comment; `coding-head-prompt-contract.test.js:70-73,90-93` asserts its ABSENCE). The test now asserts TWO-copy byte-identity (`teamWiring.ts` === `kanban.html`, line 87) and passes from source. There is no `terminals.js` copy and no failing source-based test.
+  > **Replaced with:** Two copies (`teamWiring.ts:621`, `kanban.html:~5060`), asserted byte-identical. Apply the escalation-clause replacement to both; no reunification step.
 - `standing-orders-marker-contract.test.js:462-468` asserts the head prompt includes `run node "<cliPath>" next --from "{head}"`. The replacement text must not alter this sentence (it is outside the escalation clause).
 - `standing-orders-marker-contract.test.js:484-496` asserts the head prompt includes the exact unattended escalation sentence. The plan's replacement text preserves this as a substring (within rung 5), so the `includes` check passes.
 
@@ -134,13 +143,13 @@ None — this is a standalone text edit.
 
 ## Adversarial Synthesis
 
-Key risks: (1) the KanbanProvider drive block overrides the head prompt's ladder with conflicting "context preserved" and "stand-down case only" rules — the ladder is unreachable in practice unless the drive block is updated in the same change; (2) the three copies of the head prompt have already diverged in source, making the byte-identity tests fail and invalidating the "edit all three identically" premise; (3) the one-reset-per-seat cap is unenforceable prose — nothing counts resets mechanically. Mitigations: expand scope to include the drive block's REVIEW line and clear-terminal RULES; reunify all three copies on the `teamWiring.ts`/`kanban.html` style before editing; acknowledge the cap is a prompt-level guardrail only.
+Key risks: (1) the KanbanProvider drive block overrides the head prompt's ladder with conflicting "context preserved" and "stand-down case only" rules — the ladder is unreachable in practice unless the drive block is updated in the same change; (2) the head prompt exists in two byte-identical copies (`teamWiring.ts:621`, `kanban.html:~5060`) — both must receive the identical escalation-clause replacement or the byte-identity test fails (the `terminals.js` client mirror is retired; no reunification step); (3) the one-reset-per-seat cap is unenforceable prose — nothing counts resets mechanically. Mitigations: expand scope to include the drive block's REVIEW line and clear-terminal RULES; apply the same replacement to both copies; acknowledge the cap is a prompt-level guardrail only.
 
 ## Proposed Changes
 
-### `src/services/teamWiring.ts` (line 613-644, `NEW_CODING_HEAD_PROMPT`)
+### `src/services/teamWiring.ts` (line 621-648, `NEW_CODING_HEAD_PROMPT`)
 
-**Context:** The escalation clause at lines 623-629 is the terminal branch being replaced. The rest of the prompt (standing orders, completion post, next-card instruction) is unchanged.
+**Context:** The escalation clause at lines ~633-636 is the terminal branch being replaced. The rest of the prompt (standing orders, completion post, next-card instruction) is unchanged.
 
 **Logic:** Replace the sentence beginning "When a seat fails review on the same subtask twice…" through "…proceed to the next queue item)." with the five-rung ladder text. Do NOT use `against the port in .switchboard/api-server-port.txt` — the drive block forbids reading that file. Use host-neutral language: `POST /terminals/verb/ptyClearTerminal with {"name":"<the seat>"}`.
 
@@ -160,37 +169,31 @@ When a seat fails review on the same subtask twice, do not send that subtask to 
 - The replacement must preserve every literal pinned by `stage-marker-commit-contract.test.js:387-408`: `intern → coder → lead`, `seat fails review on the same subtask twice`, `stop and report to the human instead of dispatching again`.
 - Must contain no form of the word "advance" (`!/advanc/i`), no `targetColumn`, and no literal `/kanban/dispatch` — all asserted by the contract tests.
 - Must not weaken the team-membership invariant. Rung 2 says "an idle seat **on your team**"; the prompt's standing rule that "a standalone seat of the same role is not yours to drive" is unchanged.
-- Must not introduce `against the port in .switchboard/api-server-port.txt` — the drive block at `KanbanProvider.ts:5839` forbids it.
+- Must not introduce `against the port in .switchboard/api-server-port.txt` — the head prompt should use host-neutral language (`POST /terminals/verb/ptyClearTerminal with {"name":"<the seat>"}`) so it stays portable to external/cloud agents. (The drive block's prior "Do NOT read api-server-port.txt" line is no longer present in `KanbanProvider.ts` — verified by grep — but the host-neutral-language rule still holds for the head prompt.)
 
 ### `src/webview/terminals.js` (line 11478-11509, `NEW_CODING_HEAD_PROMPT_CLIENT`)
 
-**Context:** This copy has **diverged** from `teamWiring.ts` — it uses `POST /kanban/queue/next with {"from":"{head}"} against the port in .switchboard/api-server-port.txt` where `teamWiring.ts` uses `run node "<cliPath>" next --from "{head}" (or switchboard next --from "{head}")`, and appends `against the port in .switchboard/api-server-port.txt` after the completion POST.
+> **Superseded:** The entire `terminals.js` sub-step — both the original "edit all three identically" instruction and the later "reunify `terminals.js` with `teamWiring.ts`" two-sub-step revision.
+> **Reason:** `NEW_CODING_HEAD_PROMPT_CLIENT` is RETIRED from `terminals.js`. `teamWiring.ts:618` comment records the retirement; `coding-head-prompt-contract.test.js:70-73,90-93` asserts the constant is ABSENT from `terminals.js`. There is no `terminals.js` copy to edit, diverge, or reunify. The "source-based test is currently failing" claim was stale — the test now asserts two-copy identity and the retirement, and passes from source.
+> **Replaced with:** No `terminals.js` change. Apply the escalation-clause replacement to the two surviving copies (`teamWiring.ts` and `kanban.html`) only. A coder who follows the original sub-step edits a file that no longer has the symbol and adds a reunification that is already done.
 
-> **Superseded:** The plan originally claimed "three byte-identical copies, all with the same line breaks" and instructed editing all three with the same replacement text.
-> **Reason:** The three copies are NOT byte-identical in source. `terminals.js` diverged at some point — the "next card" and "completion post" sections differ. The `coding-head-prompt-contract.test.js` reads from source and asserts `assert.strictEqual(twPrompt, tjPrompt)` — that assertion is currently failing. The `stage-marker-commit-contract.test.js` imports from the stale `out/` build, so it passes only because `out/` hasn't been recompiled.
-> **Replaced with:** Two sub-steps: (a) **reunify** `terminals.js` with `teamWiring.ts` by changing the "next card" instruction back to `run node "<cliPath>" next --from "{head}" (or switchboard next --from "{head}")` and removing the `against the port in .switchboard/api-server-port.txt` suffix from the completion POST; (b) then apply the same escalation-clause replacement as `teamWiring.ts`. After both sub-steps, all three copies are byte-identical and the byte-identity tests pass from source.
+### `src/webview/kanban.html` (line ~5060, Coding team `headPrompt`)
 
-**Implementation:**
-1. Reunify: change the completion POST line from `'<your current working directory>"} against the port in .switchboard/api-server-port.txt. '` to `'<your current working directory>"}. '` and change the next-card line from `'POST /kanban/queue/next with {"from":"{head}"} against the port in .switchboard/api-server-port.txt; '` to `'run node "<cliPath>" next --from "{head}" (or switchboard next --from "{head}"); '`.
-2. Apply the same escalation-clause replacement as `teamWiring.ts`.
-
-### `src/webview/kanban.html` (line 4804-4834, Coding team `headPrompt`)
-
-**Context:** This copy matches `teamWiring.ts` in source. Apply the same escalation-clause replacement.
+**Context:** This copy matches `teamWiring.ts` in source (asserted byte-identical by `coding-head-prompt-contract.test.js:87`). Apply the same escalation-clause replacement.
 
 **Implementation:** Replace the same escalation-clause sentence as in `teamWiring.ts`. No reunification needed — this copy already matches.
 
-### `src/services/KanbanProvider.ts` (line 5878, 5890-5891, drive block)
+### `src/services/KanbanProvider.ts` (line 6024, 6036-6037, drive block)
 
-**Context:** The drive block is composed at runtime by `_buildDrivePrefix` (line 5825) and prepended to the feature dispatch prompt when `feature_drive_enabled` is true. It is delivered to the lead at feature dispatch time — AFTER the head prompt (at team creation). It carries its own escalation rule and clear-terminal RULES that conflict with the ladder.
+**Context:** The drive block is composed at runtime by `_buildDrivePrefix` (line 5988) and prepended to the feature dispatch prompt when `feature_drive_enabled` is true. It is delivered to the lead at feature dispatch time — AFTER the head prompt (at team creation). It carries its own escalation rule and clear-terminal RULES that conflict with the ladder.
 
 > **Superseded:** The plan originally scoped to "the coding head prompt only" and did not mention the KanbanProvider drive block.
-> **Reason:** The drive block IS a coding-team prompt — it is composed for the coding team's lead and delivered at feature dispatch. It carries "resend fixes to the same terminal (context preserved). Escalate after two failures on the same subtask: intern → coder → lead" (line 5878) and "Manual ptyClearTerminal is for the stand-down case only" (line 5891). These directly contradict rung 1 (clear and re-dispatch) and the ladder concept. The lead receives both prompts; the drive block, delivered later with more operational specificity, would override the head prompt's ladder in practice.
+> **Reason:** The drive block IS a coding-team prompt — it is composed for the coding team's lead and delivered at feature dispatch. It carries "resend fixes to the same terminal (context preserved). Escalate after two failures on the same subtask: intern → coder → lead" (line 6024) and "Manual ptyClearTerminal is for the stand-down case only" (line 6037). These directly contradict rung 1 (clear and re-dispatch) and the ladder concept. The lead receives both prompts; the drive block, delivered later with more operational specificity, would override the head prompt's ladder in practice.
 > **Replaced with:** Expand scope to include three drive-block edits: (1) update the REVIEW line to reference the ladder; (2) update the "Clear a terminal only when at rest" RULE to permit rung 1's clear-and-re-dispatch; (3) update the "Manual ptyClearTerminal is for the stand-down case only" RULE to permit rung 1.
 
 **Implementation:**
 
-1. **Line 5878** — change:
+1. **Line 6024** — change:
    ```
    REVIEW: On callback, review git diff — not the coder's self-report. Coder self-report does not clear context; resend fixes to the same terminal (context preserved). Escalate after two failures on the same subtask: intern → coder → lead.
    ```
@@ -199,7 +202,7 @@ When a seat fails review on the same subtask twice, do not send that subtask to 
    REVIEW: On callback, review git diff — not the coder's self-report. Coder self-report does not clear context; resend fixes to the same terminal (context preserved). After two failures on the same subtask, follow the recovery ladder in your standing orders (clear and retry, lateral hand-off, vertical escalation, lead self-fix, stop) — do not escalate vertically without trying the cheaper rungs first.
    ```
 
-2. **Line 5890** — change:
+2. **Line 6036** — change:
    ```
    - Clear a terminal only when at rest (completion received AND next work goes elsewhere).
    ```
@@ -208,7 +211,7 @@ When a seat fails review on the same subtask twice, do not send that subtask to 
    - Clear a terminal when at rest (completion received AND next work goes elsewhere), or when following rung 1 of the recovery ladder (clear and re-dispatch the same subtask with named defects). The ladder is in your standing orders.
    ```
 
-3. **Line 5891** — change:
+3. **Line 6037** — change:
    ```
    - The host auto-clears the full team roster once when a new feature run starts, and clears the accepted coder when you POST /kanban/task/complete. Coder self-report does not clear context — do not manually clear between subtasks or fixes. Manual ptyClearTerminal is for the stand-down case only — a terminal you are putting away without dispatching new work to it.
    ```
@@ -232,9 +235,9 @@ When a seat fails review on the same subtask twice, do not send that subtask to 
 
 ### `src/test/coding-head-prompt-contract.test.js` (line 84-90)
 
-**Context:** The byte-identity assertions. Currently failing in source because `terminals.js` diverged. After the reunification sub-step (reunifying `terminals.js` with `teamWiring.ts`), these assertions pass from source without modification.
+**Context:** The byte-identity assertions. The test now asserts TWO-copy byte-identity (`teamWiring.ts` === `kanban.html`, line 87) AND that `NEW_CODING_HEAD_PROMPT_CLIENT` is ABSENT from `terminals.js` (lines 70-73, 90-93). Both pass from source today.
 
-**Implementation:** No test changes needed — the reunification fixes the divergence. Confirm all six invariants pass.
+**Implementation:** No test changes needed — the `terminals.js` reunification sub-step is obsolete (the constant is retired). Confirm all invariants pass after the two-copy escalation-clause replacement (the replacement is identical in both copies, so byte-identity holds).
 
 ### `src/test/standing-orders-marker-contract.test.js` (line 448-455, 462-468, 484-496)
 
@@ -245,17 +248,17 @@ When a seat fails review on the same subtask twice, do not send that subtask to 
 ## Verification Plan
 
 ### Automated Tests
-1. `node --require ./src/test/bootstrap/sandboxStateHome.js src/test/coding-head-prompt-contract.test.js` — all six invariants pass, in particular the three-way byte-identity check across `teamWiring.ts`, `terminals.js` and `kanban.html`. **This test is currently failing in source due to the terminals.js divergence; the reunification sub-step fixes it.**
-2. Run `src/test/stage-marker-commit-contract.test.js` — the pinned load-bearing literals still resolve and the new assertions pass. **Requires `npm run compile-tests` first** (imports from `out/`); after recompilation, the byte-identity check (line 357-361) passes because the source is now reunified.
+1. `node --require ./src/test/bootstrap/sandboxStateHome.js src/test/coding-head-prompt-contract.test.js` — all invariants pass, in particular the TWO-copy byte-identity check (`teamWiring.ts` === `kanban.html`, line 87) and the ABSENCE of `NEW_CODING_HEAD_PROMPT_CLIENT` from `terminals.js` (lines 70-73, 90-93). The `terminals.js` reunification sub-step is obsolete; no three-way check exists.
+2. Run `src/test/stage-marker-commit-contract.test.js` — the pinned load-bearing literals still resolve and the new assertions pass. **Requires `npm run compile-tests` first** (imports from `out/`); after recompilation, the byte-identity check (line 357-361) passes because the two source copies are byte-identical.
 3. Run `src/test/standing-orders-marker-contract.test.js` — byte-identity (448-455), `run node` sentence (462-468), and unattended escalation sentence (484-496) all pass.
 4. `npx tsc --noEmit -p tsconfig.json` — no type regressions.
 
 ### Goal Invariants
 - Assert `NEW_CODING_HEAD_PROMPT` in `src/services/teamWiring.ts` contains `ptyClearTerminal` and `recovery ladder` (or equivalent ladder phrasing).
 - Assert `NEW_CODING_HEAD_PROMPT` does NOT contain `'if the seat that failed twice is a lead, or your team has no seat above it'` (the old dead-end fragment).
-- Assert `NEW_CODING_HEAD_PROMPT_CLIENT` in `src/webview/terminals.js` is byte-identical to `NEW_CODING_HEAD_PROMPT` in `src/services/teamWiring.ts` (reunification succeeded).
-- Assert the KanbanProvider drive block at `src/services/KanbanProvider.ts:5878` contains `recovery ladder` (or equivalent reference).
-- Assert the KanbanProvider drive block at `src/services/KanbanProvider.ts:5891` contains `rung 1` (or equivalent permission for clear-and-re-dispatch).
+- Assert `NEW_CODING_HEAD_PROMPT_CLIENT` is ABSENT from `src/webview/terminals.js` (the client mirror is retired; `coding-head-prompt-contract.test.js:70-73,90-93` enforces this). Paired positive: `teamWiring.ts` and `kanban.html` remain byte-identical after the identical escalation-clause replacement.
+- Assert the KanbanProvider drive block at `src/services/KanbanProvider.ts:6024` contains `recovery ladder` (or equivalent reference).
+- Assert the KanbanProvider drive block at `src/services/KanbanProvider.ts:6037` contains `rung 1` (or equivalent permission for clear-and-re-dispatch).
 - Assert `NEW_CODING_HEAD_PROMPT` does NOT contain `against the port in .switchboard/api-server-port.txt` (port-reference language kept out of the head prompt).
 
 ### Manual
@@ -270,7 +273,7 @@ When a seat fails review on the same subtask twice, do not send that subtask to 
 ## No migration — teams are unreleased dev work
 
 `headPrompt` is stored per agent group in the DB (`agentGroupInstantiation.ts:162` passes
-`group?.headPrompt`), and the kanban.html value is a creation template, so editing the three
+`group?.headPrompt`), and the kanban.html value is a creation template, so editing the two
 source copies governs **newly created teams only**. That would normally demand a
 `migrateAgentGroups` step under the repo's migration rule.
 
