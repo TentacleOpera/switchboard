@@ -83,6 +83,7 @@ a wrong value silently changes *behaviour*.
 
 ## Build
 
+- **This deployment's board is served with `switchboard tailnet`, not `switchboard local`.** Restarting it with `local` brings up the wrong posture — the operator's board serves the tailnet (`<host>.ts.net:7777`, plus IPv4/IPv6 listeners on the tailnet IP) as well as loopback. If the host must be restarted, use `switchboard tailnet`.
 - **Treat `src/` as the source of truth for review.** Do NOT audit, check, or flag `dist/` staleness during reviews or verification — a stale `dist/` is never the finding.
 - **`dist/` is not inert, though.** The standalone host runs from it (`node dist/standalone/cli.js`, and the `switchboard` CLI binary under `dist/<platform>/`), and `test:contract:pty-host-blackbox` spawns the Go pty host from it. So "nothing is served from `dist/`" is false — it is simply not what you review.
 - Contract suites run against `out/`, not `dist/`: run `npm run compile-tests` before any `test:contract:*` script or you are testing the previous build.
