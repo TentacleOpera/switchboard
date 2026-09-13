@@ -326,7 +326,21 @@ func (f *fleet) deliverPrompt(name, text string, clearBefore bool, delayMs int, 
 			}
 		}
 	}
-	if text != "" {
+	// The floor exists for ONE case: a send that follows a clear. `/clear`
+	// restarts the CLI's session, so the seat is booting and a paste that lands
+	// before it is ready is swallowed. That is what familyFloor measures —
+	// devin's 15s is boot time, not think time.
+	//
+	// A send to a seat that was NOT just cleared has nothing to wait for. The
+	// CLI is already up with a live composer, so the floor was pure latency:
+	// every prompt to an idle seat sat out 5-15s for a boot that had happened
+	// long ago, and a four-seat round paid it four times.
+	//
+	// This was previously applied to EVERY send, gated on attendance rather than
+	// on whether a clear had run — so the sleep was decided by who sent the
+	// prompt instead of by whether the receiver was restarting. Those are
+	// unrelated: the seat boots for the same 15s whoever is typing at it.
+	if text != "" && cleared {
 		floor := deliveryFloor(family, attended)
 		if elapsed := time.Since(start); elapsed < floor {
 			sleep(floor - elapsed)

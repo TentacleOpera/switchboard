@@ -24,6 +24,7 @@ package main
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -259,5 +260,31 @@ func TestAttendedSendKeepsItsCap(t *testing.T) {
 			t.Fatalf("claude (attended=%v) floored at %v, want %v — the cap must never lengthen a wait",
 				attended, got, familyFloor("claude"))
 		}
+	}
+}
+
+// TestFloorAppliesOnlyAfterAClear pins what the floor is FOR.
+//
+// familyFloor measures BOOT time, not think time: `/clear` restarts the CLI's
+// session, and a paste landing before it comes up is swallowed. A seat that was
+// not cleared is already running with a live composer and has nothing to wait
+// for — the floor there was pure latency on every prompt, paid once per seat per
+// round.
+//
+// It used to apply to every send, gated on ATTENDANCE: the sleep was decided by
+// who sent the prompt rather than by whether the receiver was restarting. Those
+// are unrelated — a seat boots for the same 15s whoever is typing at it.
+//
+// The source is asserted rather than the timing: a real delivery needs a pty and
+// a live CLI, and a timing test would either sleep 15 real seconds or prove
+// nothing.
+func TestFloorAppliesOnlyAfterAClear(t *testing.T) {
+	src, err := os.ReadFile("prompt.go")
+	if err != nil {
+		t.Fatalf("read prompt.go: %v", err)
+	}
+	if !strings.Contains(string(src), `if text != "" && cleared {`) {
+		t.Fatal("the delivery floor must be gated on `cleared` — ungated it charges every " +
+			"prompt to an already-running seat for a boot that is not happening")
 	}
 }
