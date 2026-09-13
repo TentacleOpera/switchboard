@@ -57,6 +57,12 @@ export interface InstantiateAgentGroupOptions {
         cwd: string;
         delegates: any[];
         teamName?: string;
+        /**
+         * Machine id the team is pinned to. The head AND every delegate spawn
+         * on this machine; per-member startupCommand is retired. See the plan
+         * `agents-are-saved-per-machine-and-a-team-picks-one`.
+         */
+        machineId?: string;
     }) => Promise<AgentGroupCreateResult>;
     /** Host hook fired once terminals exist (e.g. the runtime.terminals mirror). */
     onCreated?: () => void;
@@ -145,15 +151,21 @@ export async function instantiateAgentGroupCore(
     //
     // Read ONCE per start, not per seat: the map is a file read and a commandless
     // seat is a report, not a spawn decision, so a stale read is harmless.
-    const startupCommands = (await GlobalIntegrationConfigService.getAgentStartupCommands()) || {};
+    //
+    // Machine threading: resolve from the TEAM's machine so the report matches
+    // what the spawn path will actually read. A team with no `machine` field
+    // defaults to `'local'` (the always-present machine).
+    const teamMachineId = (typeof group?.machine === 'string' && group.machine) ? group.machine : 'local';
+    const startupCommands = (await GlobalIntegrationConfigService.getAgentStartupCommands(teamMachineId)) || {};
     const hasCommand = (role: string) => typeof startupCommands[role] === 'string'
         && startupCommands[role].trim().length > 0;
 
     const candidates = new Set<string>([group?.headRole || 'lead']);
     for (const m of members) {
-        // A member with its own command never consults the role map; a shared member
-        // that reuses a live terminal is never re-injected at all.
-        if (m?.startupCommand || m?.scope === 'shared') { continue; }
+        // Per-member startupCommand is retired — every member resolves from the
+        // team's machine. A shared member that reuses a live terminal is never
+        // re-injected at all.
+        if (m?.scope === 'shared') { continue; }
         if (typeof m?.role === 'string' && m.role) { candidates.add(m.role); }
     }
     const commandlessRoles = [...candidates].filter(r => !hasCommand(r));
@@ -180,6 +192,10 @@ export async function instantiateAgentGroupCore(
         cwd,
         delegates: members,
         teamName: group?.name,
+        // Thread the team's machine to the head spawn — the head AND every
+        // delegate resolve from this machine. See the plan
+        // `agents-are-saved-per-machine-and-a-team-picks-one`.
+        machineId: teamMachineId,
     });
     if (!result?.success) {
         return { success: false, error: result?.error || 'Failed to create head terminal' };

@@ -2,7 +2,7 @@ import * as crypto from 'crypto';
 import { EventEmitter } from 'events';
 import type { TerminalHandle } from '../services/hostSeams';
 import { PtyTerminalBackend } from './ptyBackend';
-import { GlobalIntegrationConfigService } from '../services/GlobalIntegrationConfigService';
+import { GlobalIntegrationConfigService, type AgentMachine, LOCAL_AGENT_MACHINE } from '../services/GlobalIntegrationConfigService';
 import type { KanbanDatabase } from '../services/KanbanDatabase';
 import type { DelegateDefinition } from '../services/agentConfig';
 import { deriveCliFamily, type CliFamily } from '../services/cliIdentity';
@@ -107,6 +107,12 @@ export interface FleetTerminalInfo {
      * tmux-windows-duplicate-on-re-seat plan, change 3).
      */
     tmuxSession?: string;
+    /**
+     * Machine id this seat spawns on (`'local'` when absent). Surfaced in the
+     * `ptyListTerminals` projection so the UI can attribute a seat to its
+     * machine. See the plan `agents-are-saved-per-machine-and-a-team-picks-one`.
+     */
+    machineId?: string;
 }
 
 export interface ExtendedTerminalHandle extends TerminalHandle {
@@ -219,6 +225,23 @@ export interface ExtendedTerminalHandle extends TerminalHandle {
      * Never a security control.
      */
     hidden?: boolean;
+    /**
+     * Machine id this seat spawns on (`'local'` when absent — the always-
+     * present default). Recorded so the delivery path and the registry can
+     * attribute a seat to its machine; the transport prefix is NOT stored
+     * here (it lives on the machine definition and is composed at spawn).
+     * See the plan `agents-are-saved-per-machine-and-a-team-picks-one`.
+     */
+    machineId?: string;
+    /**
+     * The INNER startup command (the per-machine CLI, BEFORE transport
+     * composition). {@link startupCommand} holds the COMPOSED command that was
+     * actually typed into the pty (e.g. `ssh host 'claude'`); this field holds
+     * the inner CLI (`claude`) so cliFamily re-derivation never sees a
+     * transport-wrapped string. Absent on seats created before the machine
+     * change landed.
+     */
+    startupCommandInner?: string;
 }
 
 /** Liveness snapshot entry returned by {@link PtyFleetService.getLiveness}. */
@@ -269,6 +292,16 @@ export interface CreateOptions {
      * running would erase the operator's own controller from the sidebar.
      */
     hidden?: boolean;
+    /**
+     * Machine the seat spawns on. Resolves the startup command from
+     * `machineStartupCommands[machineId]` and wraps it in the machine's
+     * transport (`ssh`/`mosh`/local). Defaults to `'local'` when absent — the
+     * always-present machine with no transport prefix. A non-`local` id that
+     * is not registered fails loudly (throws) rather than silently falling
+     * back to local; see the plan
+     * `agents-are-saved-per-machine-and-a-team-picks-one`.
+     */
+    machineId?: string;
 }
 
 export type FleetChangeEvent =
@@ -569,21 +602,47 @@ export class PtyFleetService {
         // the handle so a seat that launched the wrong binary can be traced to
         // the store that produced the string — see the plan
         // `two-stores-hold-agent-startup-commands-and-they-disagree`.
+        //
+        // Machine threading (plan: agents-are-saved-per-machine-and-a-team-picks-one):
+        // the per-machine command map is the source when no explicit command
+        // was passed. The resolved string is the INNER cli (e.g. `claude`); the
+        // COMPOSED command (e.g. `ssh host 'claude'`) is what gets typed into
+        // the pty. cliFamily is derived from the INNER command only — a
+        // transport-wrapped string would classify as `unknown` and pick the
+        // wrong readiness gate.
+        const machineId = opts?.machineId || 'local';
+        let machine: AgentMachine | undefined;
+        if (opts?.machineId && opts.machineId !== 'local') {
+            machine = await GlobalIntegrationConfigService.getMachineSync(opts.machineId);
+            if (!machine) {
+                // Fail loudly: a team pinned to a deleted/unknown machine must
+                // not silently fall back to local — that is the exact
+                // "fallback indistinguishable from a real value" trap the rules
+                // forbid on a routing/membership read.
+                throw new Error(`Machine '${opts.machineId}' not found (referenced by role '${role}'); refusing to spawn on a fallback machine.`);
+            }
+        } else {
+            machine = LOCAL_AGENT_MACHINE;
+        }
         let effectiveStartupCommand = startupCommand;
         let effectiveStartupSource: string;
         if (effectiveStartupCommand) {
             effectiveStartupSource = opts?._isTeamMember ? 'team-definition' : 'argument';
         } else {
             try {
-                const commands = await GlobalIntegrationConfigService.getAgentStartupCommands() || {};
+                const commands = await GlobalIntegrationConfigService.getAgentStartupCommands(machineId) || {};
                 effectiveStartupCommand = commands[role];
-                effectiveStartupSource = effectiveStartupCommand ? 'global-file' : 'none';
+                effectiveStartupSource = effectiveStartupCommand ? `global-file:${machineId}` : 'none';
             } catch {
                 effectiveStartupCommand = undefined;
                 effectiveStartupSource = 'none';
             }
         }
-        const cliFamily = deriveCliFamily(effectiveStartupCommand);
+        // inner = the per-machine CLI; composed = what the pty types. For
+        // `local` (or no transport prefix) they are identical.
+        const innerCli = effectiveStartupCommand;
+        const composedCli = innerCli ? GlobalIntegrationConfigService.renderSpawnCommand(innerCli, machine) : undefined;
+        const cliFamily = deriveCliFamily(innerCli);
 
         const startTime = new Date().toISOString();
         const startedAtMs = Date.now();
@@ -615,8 +674,16 @@ export class PtyFleetService {
             // at the spawn-time classification. See ExtendedTerminalHandle.startupCommand.
             // Provenance is the FIRST resolution; injectStartupCommand may overwrite
             // both below when its re-read produces a different command.
-            startupCommand: effectiveStartupCommand,
+            //
+            // Machine threading: `startupCommand` is the COMPOSED command (what
+            // the pty actually typed, e.g. `ssh host 'claude'`) so the stale-death
+            // echo allowance and the Go host's respawn replay both see the real
+            // string. `startupCommandInner` is the per-machine CLI (`claude`) and
+            // is what cliFamily re-derivation reads — never the composed one.
+            startupCommand: composedCli,
+            startupCommandInner: innerCli,
             startupCommandSource: effectiveStartupSource,
+            machineId,
             // Wall-clock ms at construction — keys the stale-command-death window.
             startedAtMs,
             // Initialise the heartbeat to creation time so a freshly-spawned shell
@@ -699,13 +766,21 @@ export class PtyFleetService {
         // resolution if the file changed between the two reads. The handle is the
         // auditable fact — it must reflect what was really injected, not what the
         // first resolution guessed.
-        const injected = await this.injectStartupCommand(handle, role, effectiveStartupCommand, effectiveStartupSource);
-        handle.startupCommand = injected.command;
+        //
+        // Machine threading: injectStartupCommand receives the INNER cli and the
+        // machine id, composes the transport prefix itself, and returns the
+        // COMPOSED command. handle.startupCommand stores the composed string
+        // (echo allowance + respawn replay); handle.startupCommandInner stores
+        // the inner string (cliFamily re-derivation).
+        const injected = await this.injectStartupCommand(handle, role, machineId, machine, innerCli, effectiveStartupSource);
+        handle.startupCommand = injected.composed;
+        handle.startupCommandInner = injected.inner;
         handle.startupCommandSource = injected.source;
-        if (injected.command && injected.command !== effectiveStartupCommand) {
+        if (injected.inner && injected.inner !== innerCli) {
             // The injected command diverged from the first resolution — re-derive
-            // cliFamily so the readiness arm matches the CLI that actually ran.
-            handle.cliFamily = deriveCliFamily(injected.command);
+            // cliFamily from the INNER command so the readiness arm matches the
+            // CLI that actually ran. Never derive from the composed command.
+            handle.cliFamily = deriveCliFamily(injected.inner);
         }
 
         // Spawn-time family log — seat, role, resolved command, provenance and
@@ -743,22 +818,27 @@ export class PtyFleetService {
     private async injectStartupCommand(
         handle: ExtendedTerminalHandle,
         role: string,
-        startupCommand?: string,
+        machineId: string,
+        machine: AgentMachine | undefined,
+        innerCli?: string,
         source?: string,
-    ): Promise<{ command?: string; source: string }> {
+    ): Promise<{ composed?: string; inner?: string; source: string }> {
         // Held outside the try so a failure part-way through still reports the
         // command and store that WERE resolved. Returning `none` on error would
         // erase the very provenance this path exists to record — a seat that
         // failed to launch is exactly when "which store answered?" matters.
-        let cmd = startupCommand;
+        let inner = innerCli;
         let src = source ?? 'none';
         try {
-            if (!cmd) {
-                const commands = await GlobalIntegrationConfigService.getAgentStartupCommands() || {};
-                cmd = commands[role];
-                src = cmd ? 'global-file' : 'none';
+            if (!inner) {
+                const commands = await GlobalIntegrationConfigService.getAgentStartupCommands(machineId) || {};
+                inner = commands[role];
+                src = inner ? `global-file:${machineId}` : 'none';
             }
-            if (!cmd) { return { command: undefined, source: 'none' }; }
+            if (!inner) { return { composed: undefined, inner: undefined, source: 'none' }; }
+            // Compose the transport prefix around the inner cli. For `local`
+            // (or no transport prefix) this returns the inner cli unchanged.
+            const composed = GlobalIntegrationConfigService.renderSpawnCommand(inner, machine);
             await new Promise(resolve => setTimeout(resolve, SHELL_READINESS_DELAY_MS));
             if (handle.status === 'active') {
                 // Baseline the stale-death output counter to the instant the
@@ -766,12 +846,13 @@ export class PtyFleetService {
                 // the command line is the only thing inside the allowance.
                 handle.injectedAtMs = Date.now();
                 handle.outputBytesSinceInjection = 0;
-                handle.sendText(cmd, true);
+                handle.sendText(composed, true);
             }
-            return { command: cmd, source: src };
+            return { composed, inner, source: src };
         } catch (err) {
             console.warn(`[PtyFleetService] Failed to inject startup command for role ${role}:`, err);
-            return { command: cmd, source: cmd ? src : 'none' };
+            const composed = inner ? GlobalIntegrationConfigService.renderSpawnCommand(inner, machine) : undefined;
+            return { composed, inner, source: inner ? src : 'none' };
         }
     }
 
@@ -921,11 +1002,18 @@ export class PtyFleetService {
     public async spawnDelegates(
         parent: ExtendedTerminalHandle,
         definitions: DelegateDefinition[],
-        opts?: { teamName?: string }
+        opts?: { teamName?: string; machineId?: string }
     ): Promise<{ children: ExtendedTerminalHandle[]; createdNames: string[]; error?: string }> {
         // Per-team (parented) delegates count against caps. Shared members are
         // unparented and outside both caps — their count is bounded by the
         // number of team definitions, not by head starts.
+        //
+        // Machine threading: every delegate inherits the TEAM's machine
+        // (opts.machineId, falling back to the parent's machineId). Per-member
+        // startupCommand is no longer read — a team is one machine, and the
+        // per-member command field is retired (plan:
+        // agents-are-saved-per-machine-and-a-team-picks-one).
+        const delegateMachineId = opts?.machineId || parent.machineId || 'local';
         const perTeamRequested = definitions
             .filter(d => d.scope !== 'shared')
             .reduce((n, d) => n + Math.max(1, Math.min(d.count || 1, MAX_DELEGATES_PER_PARENT)), 0);
@@ -969,9 +1057,10 @@ export class PtyFleetService {
                                 parent.cwd,
                                 parent.worktreePath,
                                 undefined, // unparented — no parentInstanceId
-                                d.startupCommand,
+                                undefined, // per-member startupCommand retired
                                 // Inherit the head's env decision — see ExtendedTerminalHandle.
-                                { _isTeamMember: true, claudeInlineRendering: parent.claudeInlineRendering }
+                                // Machine inherited from the team — a team is one machine.
+                                { _isTeamMember: true, claudeInlineRendering: parent.claudeInlineRendering, machineId: delegateMachineId }
                             );
                         });
                         children.push(existing);
@@ -1008,9 +1097,10 @@ export class PtyFleetService {
                         parent.cwd,
                         parent.worktreePath,
                         parent.agentInstanceId,
-                        d.startupCommand,
+                        undefined, // per-member startupCommand retired
                         // Inherit the head's env decision — see ExtendedTerminalHandle.
-                        { _isTeamMember: true, claudeInlineRendering: parent.claudeInlineRendering }
+                        // Machine inherited from the team — a team is one machine.
+                        { _isTeamMember: true, claudeInlineRendering: parent.claudeInlineRendering, machineId: delegateMachineId }
                     );
                     children.push(child);
                     createdNames.push(child.friendlyName);
@@ -1061,7 +1151,8 @@ export class PtyFleetService {
         allocation: Array<{ role: string; count: number }>,
         cwd?: string,
         worktreePath?: string,
-        claudeInlineRendering?: boolean
+        claudeInlineRendering?: boolean,
+        machineId?: string,
     ): Promise<{ success: boolean; created: Array<{ friendlyName: string; role: string }>; failed: Array<{ role: string; reason: string; kind: string }>; error?: string; estimatedDurationMs: number }> {
         const MAX_BATCH = 32;
         const created: Array<{ friendlyName: string; role: string }> = [];
@@ -1083,10 +1174,11 @@ export class PtyFleetService {
             return { success: false, created, failed, error: `batch cap: ${total} requested, ${MAX_BATCH} allowed`, estimatedDurationMs: 0 };
         }
 
-        const commands = await GlobalIntegrationConfigService.getAgentStartupCommands() || {};
+        const resolvedMachineId = machineId || 'local';
+        const commands = await GlobalIntegrationConfigService.getAgentStartupCommands(resolvedMachineId) || {};
         for (const a of allocation) {
             if (typeof a.role !== 'string' || !commands[a.role]) {
-                return { success: false, created, failed, error: `no startup command for role '${a.role || ''}'`, estimatedDurationMs: 0 };
+                return { success: false, created, failed, error: `no startup command for role '${a.role || ''}' on machine '${resolvedMachineId}'`, estimatedDurationMs: 0 };
             }
         }
 
@@ -1098,7 +1190,7 @@ export class PtyFleetService {
                     continue;
                 }
                 try {
-                    const t = await this.create(a.role, undefined, cwd, worktreePath, null, undefined, { claudeInlineRendering });
+                    const t = await this.create(a.role, undefined, cwd, worktreePath, null, undefined, { claudeInlineRendering, machineId: resolvedMachineId });
                     created.push({ friendlyName: t.friendlyName, role: t.role });
                 } catch (err: any) {
                     const msg = err instanceof Error ? err.message : String(err);
@@ -1194,6 +1286,7 @@ export class PtyFleetService {
                     agentInstanceId: t.agentInstanceId,
                     parentInstanceId: t.parentInstanceId,
                     cliFamily: t.cliFamily,
+                    machineId: t.machineId,
                 } satisfies FleetTerminalInfo;
             }
             await db.setConfigJson('runtime.terminals', terminalMap);

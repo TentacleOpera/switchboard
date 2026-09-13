@@ -3265,6 +3265,41 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             Set pre-consent flags or pre-populate trusted directories for your CLIs to prevent unseen blocking prompts at spawn. See <code style="font-size:10px;">docs/AGENT_CLI_CONSENT_FLAGS.md</code> in this repository.
           </div>
 
+          <!-- Machine selector (plan: agents-are-saved-per-machine-and-a-team-picks-one).
+               Agents are saved PER MACHINE. A team picks one machine. The machine
+               carries its own ssh/mosh prefix, applied to every agent in that set. -->
+          <div id="agents-tab-machine-bar" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:4px 0 10px; padding:6px 8px; border:1px solid var(--border); border-radius:4px; background:var(--panel-bg2);">
+            <label style="font-size:11px; font-weight:600; min-width:60px;">Machine</label>
+            <select id="agents-tab-machine-select" style="flex:0 1 auto; min-width:140px;"></select>
+            <span id="agents-tab-machine-transport" style="font-size:10px; color:var(--text-secondary);"></span>
+            <div style="flex:1;"></div>
+            <button id="agents-tab-btn-add-machine" class="strip-btn" style="font-size:10px;">ADD MACHINE</button>
+            <button id="agents-tab-btn-edit-machine" class="strip-btn" style="font-size:10px;">EDIT</button>
+            <button id="agents-tab-btn-delete-machine" class="strip-btn" style="font-size:10px; color:var(--accent-red);">DELETE</button>
+            <button id="agents-tab-btn-probe-machine" class="strip-btn" style="font-size:10px;">PROBE</button>
+            <span id="agents-tab-machine-probe-status" style="font-size:10px; min-width:40px;"></span>
+          </div>
+          <div id="agents-tab-machine-form" class="agents-tab-inline-form" style="display:none;">
+            <div class="agents-tab-inline-form-title" id="agents-tab-machine-form-title">New Machine</div>
+            <label class="modal-label" for="agents-tab-machine-name">Name</label>
+            <input id="agents-tab-machine-name" class="modal-input" type="text" placeholder="e.g. Pi Cluster">
+            <label class="modal-label" for="agents-tab-machine-id">ID (unique, no spaces)</label>
+            <input id="agents-tab-machine-id" class="modal-input" type="text" placeholder="e.g. pi-cluster">
+            <label class="modal-label" for="agents-tab-machine-transport-select">Transport</label>
+            <select id="agents-tab-machine-transport-select" class="modal-input">
+              <option value="local">local</option>
+              <option value="ssh">ssh</option>
+              <option value="mosh">mosh</option>
+            </select>
+            <label class="modal-label" for="agents-tab-machine-prefix">Transport prefix</label>
+            <input id="agents-tab-machine-prefix" class="modal-input" type="text" placeholder="e.g. user@host (for ssh/mosh); empty for local">
+            <div id="agents-tab-machine-error" style="min-height:16px; color: var(--accent-red); font-size: 11px; margin-top: 6px;"></div>
+            <div style="display:flex; gap:8px; margin-top:8px;">
+              <button id="agents-tab-btn-save-machine" class="modal-btn-primary">SAVE MACHINE</button>
+              <button id="agents-tab-btn-cancel-machine" class="modal-btn-secondary">CANCEL</button>
+            </div>
+          </div>
+
           <!-- CORE -->
           <div class="agents-group-label" style="margin-top:4px;">Core</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="planner" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Planner</label><input type="text" data-role="planner" id="agents-tab-cmd-planner" placeholder="e.g. agy --approval-mode auto_edit" style="flex:1;"></div>
@@ -3438,6 +3473,14 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             <input id="agent-groups-name" class="modal-input" type="text" placeholder="e.g. Feature Implementation">
             <label class="modal-label" for="agent-groups-head-role">Head role</label>
             <select id="agent-groups-head-role" class="modal-input"></select>
+            <!-- Machine selector (plan: agents-are-saved-per-machine-and-a-team-picks-one).
+                 A team picks ONE machine — head and every delegate spawn on it. The
+                 machine carries its own ssh/mosh prefix, applied to every agent. -->
+            <label class="modal-label" for="agent-groups-machine" style="margin-top:10px;">Machine</label>
+            <select id="agent-groups-machine" class="modal-input"></select>
+            <div style="font-size:10px; color:var(--text-secondary); margin-top:2px;">
+              The head and every member spawn on this machine. Per-member startup commands are retired — each role resolves from the machine's command map.
+            </div>
             <div style="display:flex; align-items:center; gap:6px; margin-top:10px;">
               <input type="checkbox" id="agent-groups-worktree-mode" style="margin:0; cursor:pointer;">
               <label for="agent-groups-worktree-mode" style="font-size:11px; cursor:pointer; margin:0;">Spawn in own worktree</label>
@@ -3471,7 +3514,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
               <div id="agent-groups-icon-error" style="min-height:0; color:var(--accent-red); font-size:10px; margin-top:4px;"></div>
             </div>
             <div style="font-size:11px; font-weight:600; margin-top:10px; margin-bottom:4px;">Members</div>
-            <div style="font-size:10px;color:var(--text-secondary);">Leave a member's command empty to use the role's configured CLI.</div>
+            <div style="font-size:10px;color:var(--text-secondary);">Each member resolves its startup command from the selected machine's command map (Agents tab).</div>
             <div id="agent-groups-members" style="display:flex; flex-direction:column; gap:4px;"></div>
             <button id="agent-groups-add-member" class="strip-btn" style="width:100%; margin-top:6px;">ADD MEMBER</button>
             <div style="font-size:11px; color:var(--text-secondary); margin-top:8px;">
@@ -5773,13 +5816,15 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
         }
 
         function teamsTabAgentGroupMemberRow(member) {
-            // Member editor row: role, count, scope, relationship, label, command.
-            // `command` is the seat's own startupCommand — empty means inherit the
-            // role's global command (injectStartupCommand, ptyFleetService.ts:360-370).
-            // NEVER tag these inputs with data-role: agentsTabCollectConfig (:5366)
-            // scoops `#teams-tab-content input[type="text"][data-role]` into the
-            // GLOBAL role-command map, so a data-role here would overwrite the
-            // workspace's role command on the next Agents-config save.
+            // Member editor row: role, count, scope, relationship, label.
+            // Per-member startupCommand is RETIRED (plan:
+            // agents-are-saved-per-machine-and-a-team-picks-one) — a team
+            // resolves every member from its one machine's command map. The
+            // machine selector lives on the team form, not on the member row.
+            // NEVER tag these inputs with data-role: agentsTabCollectConfig
+            // scoops `#teams-tab-content input[type="text"][data-role]` into
+            // the GLOBAL role-command map, so a data-role here would overwrite
+            // the workspace's role command on the next Agents-config save.
             const row = document.createElement('div');
             row.className = 'startup-row';
             row.style.flexWrap = 'wrap';
@@ -5819,22 +5864,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             labelIn.style.width = '70px';
             labelIn.value = member.label || '';
 
-            const cmdIn = document.createElement('input');
-            cmdIn.type = 'text';
-            cmdIn.className = 'member-cmd';
-            cmdIn.style.flex = '1';
-            cmdIn.style.minWidth = '110px';
-            cmdIn.value = member.startupCommand || '';
-
-            // Placeholder names what the seat inherits when the field is empty.
-            // lastStartupCommands is the role -> command map this webview already
-            // receives on the `startupCommands` message (:9756-9758).
-            const syncCmdPlaceholder = () => {
-                const inherited = (lastStartupCommands || {})[roleSel.value.trim()] || '';
-                cmdIn.placeholder = inherited ? `inherits: ${inherited}` : 'inherits: (none)';
-            };
-            syncCmdPlaceholder();
-
             const delBtn = document.createElement('button');
             delBtn.className = 'strip-btn';
             delBtn.style.padding = '2px 8px';
@@ -5845,7 +5874,6 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             row.appendChild(scopeSel);
             row.appendChild(relSel);
             row.appendChild(labelIn);
-            row.appendChild(cmdIn);
             row.appendChild(delBtn);
 
             function save() {
@@ -5854,14 +5882,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 member.scope = scopeSel.value;
                 member.relationship = relSel.value;
                 const label = labelIn.value.trim();
-                const cmd = cmdIn.value.trim();
                 if (label) { member.label = label; } else { delete member.label; }
-                if (cmd) { member.startupCommand = cmd; } else { delete member.startupCommand; }
-                syncCmdPlaceholder();
+                // Per-member startupCommand is retired — never persist it.
+                delete member.startupCommand;
             }
             countIn.addEventListener('blur', save);
             labelIn.addEventListener('blur', save);
-            cmdIn.addEventListener('blur', save);
             [roleSel, scopeSel, relSel].forEach(el => el.addEventListener('change', save));
             delBtn.addEventListener('click', () => {
                 const membersDiv = document.getElementById('agent-groups-members');
@@ -5881,6 +5907,24 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             // operator knows which role already has an auto-start default.
             const headSel = document.getElementById('agent-groups-head-role');
             teamsTabRoleOptions(headSel, group?.headRole || 'lead');
+            // Populate the machine selector (plan:
+            // agents-are-saved-per-machine-and-a-team-picks-one). A team picks
+            // ONE machine; default to `local` for a new team or a legacy team
+            // without the field.
+            const machineSel = document.getElementById('agent-groups-machine');
+            if (machineSel) {
+                machineSel.innerHTML = '';
+                for (const m of agentsTabMachines) {
+                    if (!m || !m.id) { continue; }
+                    const opt = document.createElement('option');
+                    opt.value = m.id;
+                    opt.textContent = m.name || m.id;
+                    machineSel.appendChild(opt);
+                }
+                machineSel.value = (group?.machine && agentsTabMachines.some(m => m.id === group.machine))
+                    ? group.machine
+                    : 'local';
+            }
             const claimedRoles = new Set(agentsTabAgentGroups
                 .filter(g => g.id !== group?.id && !g.unassigned)
                 .map(g => g.headRole));
@@ -6223,11 +6267,13 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                         const scope = scopeEl.value;
                         const relationship = relEl.value;
                         const label = (r.querySelector('.member-label')?.value || '').trim();
-                        const startupCommand = (r.querySelector('.member-cmd')?.value || '').trim();
+                        // Per-member startupCommand is RETIRED (plan:
+                        // agents-are-saved-per-machine-and-a-team-picks-one).
+                        // Members never carry their own command — the team's
+                        // machine resolves every role.
                         members.push({
                             role, count, scope, relationship,
                             ...(label ? { label } : {}),
-                            ...(startupCommand ? { startupCommand } : {}),
                         });
                     } else {
                         // Defensive: a row missing any of the four data-field controls is a
@@ -6272,8 +6318,18 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             const pairProgrammingVal = ppSelectEl
                 ? (ppSelectEl.value === 'off' || ppSelectEl.value === 'aggressive' ? ppSelectEl.value : 'on')
                 : (prevGroup?.pairProgramming || 'on');
+            // Read the team's machine (plan:
+            // agents-are-saved-per-machine-and-a-team-picks-one). A team picks
+            // ONE machine; default to `local` when unset or pointing at a
+            // deleted machine (the migration repairs this on load too).
+            const machineSelEl = document.getElementById('agent-groups-machine');
+            let teamMachine = machineSelEl?.value || prevGroup?.machine || 'local';
+            if (!agentsTabMachines.some(m => m.id === teamMachine)) {
+                teamMachine = 'local';
+            }
             const group = {
                 id, name, headRole, members,
+                machine: teamMachine,
                 pairProgramming: pairProgrammingVal,
                 ...(promptText ? { prompt: promptText } : {}),
                 ...(headPromptText ? { headPrompt: headPromptText } : {}),
@@ -6292,6 +6348,145 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
             postKanbanMessage({ type: 'saveAgentGroup', group });
         }
 
+        // ── Machine selector (plan: agents-are-saved-per-machine-and-a-team-picks-one) ──
+        // Agents are saved PER MACHINE. The selected machine's command map is
+        // what the role inputs below show and save. A team picks one machine;
+        // the machine's transport prefix is applied to every agent in that set.
+        let agentsTabMachines = [];
+        let agentsTabSelectedMachineId = 'local';
+        let agentsTabMachineEditing = null; // null | 'add' | 'edit'
+
+        function agentsTabMachineById(id) {
+          return agentsTabMachines.find(m => m && m.id === id) || null;
+        }
+
+        function agentsTabRenderMachineSelect() {
+          const sel = document.getElementById('agents-tab-machine-select');
+          if (!sel) { return; }
+          const prev = agentsTabSelectedMachineId;
+          sel.innerHTML = '';
+          for (const m of agentsTabMachines) {
+            if (!m || !m.id) { continue; }
+            const opt = document.createElement('option');
+            opt.value = m.id;
+            opt.textContent = m.name || m.id;
+            sel.appendChild(opt);
+          }
+          // Preserve selection if still present; else fall back to local.
+          if (agentsTabMachines.some(m => m.id === prev)) {
+            sel.value = prev;
+          } else {
+            sel.value = 'local';
+            agentsTabSelectedMachineId = 'local';
+          }
+          agentsTabUpdateMachineTransportLabel();
+        }
+
+        function agentsTabUpdateMachineTransportLabel() {
+          const span = document.getElementById('agents-tab-machine-transport');
+          if (!span) { return; }
+          const m = agentsTabMachineById(agentsTabSelectedMachineId);
+          if (!m || m.transport === 'local' || !m.transportPrefix) {
+            span.textContent = m && m.id !== 'local' ? '(local)' : '';
+          } else {
+            span.textContent = `(${m.transport} ${m.transportPrefix})`;
+          }
+          const delBtn = document.getElementById('agents-tab-btn-delete-machine');
+          if (delBtn) { delBtn.style.display = agentsTabSelectedMachineId === 'local' ? 'none' : ''; }
+        }
+
+        function agentsTabShowMachineForm(mode) {
+          agentsTabMachineEditing = mode;
+          const form = document.getElementById('agents-tab-machine-form');
+          const title = document.getElementById('agents-tab-machine-form-title');
+          if (!form || !title) { return; }
+          title.textContent = mode === 'edit' ? 'Edit Machine' : 'New Machine';
+          if (mode === 'edit') {
+            const m = agentsTabMachineById(agentsTabSelectedMachineId);
+            document.getElementById('agents-tab-machine-name').value = m?.name || '';
+            document.getElementById('agents-tab-machine-id').value = m?.id || '';
+            document.getElementById('agents-tab-machine-id').disabled = true;
+            document.getElementById('agents-tab-machine-transport-select').value = m?.transport || 'local';
+            document.getElementById('agents-tab-machine-prefix').value = m?.transportPrefix || '';
+          } else {
+            document.getElementById('agents-tab-machine-name').value = '';
+            document.getElementById('agents-tab-machine-id').value = '';
+            document.getElementById('agents-tab-machine-id').disabled = false;
+            document.getElementById('agents-tab-machine-transport-select').value = 'local';
+            document.getElementById('agents-tab-machine-prefix').value = '';
+          }
+          document.getElementById('agents-tab-machine-error').textContent = '';
+          form.style.display = '';
+        }
+
+        function agentsTabHideMachineForm() {
+          agentsTabMachineEditing = null;
+          const form = document.getElementById('agents-tab-machine-form');
+          if (form) { form.style.display = 'none'; }
+          document.getElementById('agents-tab-machine-id').disabled = false;
+        }
+
+        function agentsTabSaveMachine() {
+          const name = document.getElementById('agents-tab-machine-name').value.trim();
+          const id = document.getElementById('agents-tab-machine-id').value.trim().replace(/\s+/g, '-');
+          const transport = document.getElementById('agents-tab-machine-transport-select').value;
+          const prefix = document.getElementById('agents-tab-machine-prefix').value.trim();
+          const errEl = document.getElementById('agents-tab-machine-error');
+          if (!name || !id) {
+            errEl.textContent = 'Name and ID are required.';
+            return;
+          }
+          if (!/^[A-Za-z0-9_.-]+$/.test(id)) {
+            errEl.textContent = 'ID must be alphanumeric (letters, digits, _, ., -).';
+            return;
+          }
+          if (transport !== 'local' && !prefix) {
+            errEl.textContent = 'Transport prefix is required for ssh/mosh.';
+            return;
+          }
+          if (transport === 'local' && prefix) {
+            errEl.textContent = 'Local transport must have an empty prefix.';
+            return;
+          }
+          if (agentsTabMachineEditing === 'add' && agentsTabMachineById(id)) {
+            errEl.textContent = `Machine id '${id}' already exists.`;
+            return;
+          }
+          const machine = { id, name, transport, transportPrefix: transport === 'local' ? '' : prefix };
+          vscode.postMessage({ type: 'saveMachine', machine, mode: agentsTabMachineEditing });
+          agentsTabHideMachineForm();
+        }
+
+        function agentsTabDeleteMachine() {
+          if (agentsTabSelectedMachineId === 'local') { return; }
+          vscode.postMessage({ type: 'deleteMachine', machineId: agentsTabSelectedMachineId });
+        }
+
+        function agentsTabProbeMachine() {
+          const statusEl = document.getElementById('agents-tab-machine-probe-status');
+          if (statusEl) { statusEl.textContent = 'probing...'; statusEl.style.color = 'var(--text-secondary)'; }
+          vscode.postMessage({ type: 'probeMachine', machineId: agentsTabSelectedMachineId });
+        }
+
+        document.getElementById('agents-tab-machine-select')?.addEventListener('change', (e) => {
+          agentsTabSelectedMachineId = e.target.value || 'local';
+          agentsTabUpdateMachineTransportLabel();
+          // Request the per-machine command map from the backend.
+          vscode.postMessage({ type: 'getStartupCommandsForMachine', machineId: agentsTabSelectedMachineId });
+        });
+        document.getElementById('agents-tab-btn-add-machine')?.addEventListener('click', () => agentsTabShowMachineForm('add'));
+        document.getElementById('agents-tab-btn-edit-machine')?.addEventListener('click', () => {
+          if (agentsTabSelectedMachineId === 'local') {
+            agentsTabShowMachineForm('edit');
+          } else {
+            agentsTabShowMachineForm('edit');
+          }
+        });
+        document.getElementById('agents-tab-btn-delete-machine')?.addEventListener('click', agentsTabDeleteMachine);
+        document.getElementById('agents-tab-btn-probe-machine')?.addEventListener('click', agentsTabProbeMachine);
+        document.getElementById('agents-tab-btn-save-machine')?.addEventListener('click', agentsTabSaveMachine);
+        document.getElementById('agents-tab-btn-cancel-machine')?.addEventListener('click', agentsTabHideMachineForm);
+
         function agentsTabCollectConfig() {
           const commands = {}, visibleAgents = {};
           // The Agent Visibility & CLI Commands section lives in #agents-tab-content;
@@ -6305,6 +6500,10 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
           });
           return {
             commands, visibleAgents,
+            // Thread the selected machine so the backend writes to the
+            // per-machine command map, not the legacy flat key. See the plan
+            // `agents-are-saved-per-machine-and-a-team-picks-one`.
+            machineId: agentsTabSelectedMachineId,
             julesAutoSyncEnabled: document.getElementById('agents-tab-jules-auto-sync')?.checked ?? false,
             plannerTerminalCount: parseInt(document.getElementById('agents-tab-planner-terminal-count')?.value || '1', 10),
             plannerLimitDispatchToTerminals: document.getElementById('agents-tab-planner-limit-dispatch')?.checked ?? false
@@ -12422,6 +12621,18 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                 case 'startupCommands': {
                   const cmds = msg.commands || {}, vis = msg.visibleAgents || {};
                   lastStartupCommands = cmds;
+                  // Populate the machine selector (plan: agents-are-saved-per-machine-and-a-team-picks-one).
+                  if (Array.isArray(msg.machines)) {
+                    agentsTabMachines = msg.machines.filter(m => m && m.id);
+                    agentsTabRenderMachineSelect();
+                  }
+                  // The backend sends the SELECTED machine's command map; record it.
+                  if (typeof msg.machineId === 'string') {
+                    agentsTabSelectedMachineId = msg.machineId;
+                    const sel = document.getElementById('agents-tab-machine-select');
+                    if (sel) { sel.value = agentsTabSelectedMachineId; }
+                    agentsTabUpdateMachineTransportLabel();
+                  }
                   document.querySelectorAll('#agents-tab-content input[type="text"][data-role]').forEach(i => {
                     if (i.dataset.role) i.value = cmds[i.dataset.role] || '';
                   });
@@ -12447,6 +12658,61 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     lastVisibleAgents = { ...lastVisibleAgents, ...vis };
                     updateAllColumnAgents();
                     updateJulesButtonVisibility();
+                  }
+                  break;
+                }
+                case 'machinesList': {
+                  agentsTabMachines = (msg.machines || []).filter(m => m && m.id);
+                  agentsTabRenderMachineSelect();
+                  break;
+                }
+                case 'startupCommandsForMachine': {
+                  // Per-machine command map response (plan:
+                  // agents-are-saved-per-machine-and-a-team-picks-one).
+                  if (typeof msg.machineId === 'string') {
+                    agentsTabSelectedMachineId = msg.machineId;
+                    const sel = document.getElementById('agents-tab-machine-select');
+                    if (sel) { sel.value = agentsTabSelectedMachineId; }
+                    agentsTabUpdateMachineTransportLabel();
+                  }
+                  const cmds = msg.commands || {};
+                  document.querySelectorAll('#agents-tab-content input[type="text"][data-role]').forEach(i => {
+                    if (i.dataset.role) i.value = cmds[i.dataset.role] || '';
+                  });
+                  agentsTabRefreshUnknownCliIndicators();
+                  break;
+                }
+                case 'saveMachineResult': {
+                  if (msg.machines) {
+                    agentsTabMachines = msg.machines.filter(m => m && m.id);
+                    agentsTabRenderMachineSelect();
+                  }
+                  if (typeof msg.selectedMachineId === 'string') {
+                    agentsTabSelectedMachineId = msg.selectedMachineId;
+                    const sel = document.getElementById('agents-tab-machine-select');
+                    if (sel) { sel.value = agentsTabSelectedMachineId; }
+                    agentsTabUpdateMachineTransportLabel();
+                  }
+                  break;
+                }
+                case 'deleteMachineResult': {
+                  if (msg.error) {
+                    const statusEl = document.getElementById('agents-tab-machine-probe-status');
+                    if (statusEl) { statusEl.textContent = msg.error; statusEl.style.color = 'var(--accent-red)'; }
+                  } else if (msg.machines) {
+                    agentsTabMachines = msg.machines.filter(m => m && m.id);
+                    if (typeof msg.selectedMachineId === 'string') {
+                      agentsTabSelectedMachineId = msg.selectedMachineId;
+                    }
+                    agentsTabRenderMachineSelect();
+                  }
+                  break;
+                }
+                case 'probeMachineResult': {
+                  const statusEl = document.getElementById('agents-tab-machine-probe-status');
+                  if (statusEl) {
+                    statusEl.textContent = msg.reachable ? 'reachable' : (msg.error || 'unreachable');
+                    statusEl.style.color = msg.reachable ? 'var(--accent-green, green)' : 'var(--accent-red)';
                   }
                   break;
                 }

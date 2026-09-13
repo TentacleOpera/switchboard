@@ -990,7 +990,8 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // they are standing in. A whitespace-only stored value trims to '' and is
     // treated as "no token" — loopback trust, not a silently-disabled credential
     // on a browser board (the browser surface is guarded by the Host allowlist
-    // and the planned Sec-Fetch-Site/Origin metadata guard, not by this token).
+    // and the Sec-Fetch-Site/Origin metadata CSRF guard in `_handleRequest`,
+    // not by this token).
     // The token stays opt-in: setting one restores credential enforcement on
     // loopback (`_checkAuth` still compares the bearer header / sb_session cookie
     // against a non-empty `expected`).
@@ -2388,11 +2389,15 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         // routable exactly like any other; it is only kept out of the
                         // sidebar and rail lists. The shell's agent dock is the one caller
                         // that sets it, because that seat belongs to the dock alone.
-                        hidden: payload.hidden === true
+                        hidden: payload.hidden === true,
+                        // Thread the team's machine to the head spawn — the head AND
+                        // every delegate resolve from this machine. See the plan
+                        // `agents-are-saved-per-machine-and-a-team-picks-one`.
+                        machineId: typeof payload.machineId === 'string' ? payload.machineId : undefined,
                     });
                     const rawDelegates = Array.isArray(payload.delegates) ? payload.delegates : [];
                     const spawned = rawDelegates.length > 0
-                        ? await ptyFleetService.spawnDelegates(terminal, rawDelegates, { teamName: payload.teamName })
+                        ? await ptyFleetService.spawnDelegates(terminal, rawDelegates, { teamName: payload.teamName, machineId: typeof payload.machineId === 'string' ? payload.machineId : undefined })
                         : { children: [], createdNames: [], error: undefined as string | undefined };
                     // Wire the team (standing orders + group registration). Runs in
                     // the host that holds the DB, not in spawnDelegates — the
@@ -4382,10 +4387,13 @@ Each plan file must include:
                         : undefined;
                     const head = await ptyFleetService.create(
                         spec.role, spec.name, spec.cwd, undefined, undefined, undefined,
-                        { tmuxSession: teamSession }
+                        // Thread the team's machine to the head spawn — the head
+                        // AND every delegate resolve from this machine. See the plan
+                        // `agents-are-saved-per-machine-and-a-team-picks-one`.
+                        { tmuxSession: teamSession, machineId: spec.machineId }
                     );
                     const spawned = spec.delegates.length > 0
-                        ? await ptyFleetService.spawnDelegates(head, spec.delegates, { teamName: group?.name, tmuxSession: teamSession })
+                        ? await ptyFleetService.spawnDelegates(head, spec.delegates, { teamName: group?.name, tmuxSession: teamSession, machineId: spec.machineId })
                         : { children: [], createdNames: [], error: undefined as string | undefined };
                     return {
                         success: true,

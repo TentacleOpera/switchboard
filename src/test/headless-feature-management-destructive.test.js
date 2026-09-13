@@ -517,6 +517,9 @@ async function run() {
                     headers: {
                         'Content-Type': 'application/json',
                         'Content-Length': Buffer.byteLength(payload),
+                        // Positive client marker for the CSRF guard (plan:
+                        // browser-board-csrf-cross-site-rejection).
+                        'X-Switchboard-Client': 'test',
                     },
                 }, (r) => {
                     let body = '';

@@ -728,24 +728,29 @@ export const DEFAULT_TEAM_DEFINITIONS: any[] = [
         id: 'planning-team',
         name: 'Planning team',
         headRole: 'planner',
+        // A team picks ONE machine — head and every delegate spawn on it. See
+        // the plan `agents-are-saved-per-machine-and-a-team-picks-one`.
+        machine: 'local',
         members: [
-            { role: 'planner', count: 2, label: '', startupCommand: '' },
+            { role: 'planner', count: 2, label: '' },
         ],
     },
     {
         id: 'feature-implementation',
         name: 'Lead team',
         headRole: 'lead',
+        machine: 'local',
         members: [
-            { role: 'coder', count: 3, label: '', startupCommand: '' },
+            { role: 'coder', count: 3, label: '' },
         ],
     },
     {
         id: 'review-team',
         name: 'Review team',
         headRole: 'reviewer',
+        machine: 'local',
         members: [
-            { role: 'reviewer', count: 2, label: '', startupCommand: '' },
+            { role: 'reviewer', count: 2, label: '' },
         ],
     },
 ];
@@ -846,8 +851,10 @@ export const NEW_REVIEW_TEAM_HEAD_PROMPT =
  * Two steps, one pass:
  *  1. Add `scope: 'per-team'` and `relationship: 'reports-to-head'`
  *     defaults to every member that lacks them — the final member shape.
- *     Preserves `label`, `startupCommand` and any unknown keys on each
- *     member.
+ *     Preserves `label` and any unknown keys on each member. Per-member
+ *     `startupCommand` is retired (plan:
+ *     `agents-are-saved-per-machine-and-a-team-picks-one`) and stripped on
+ *     read.
  *  2. Resolve head-role collisions: the first group by stored order
  *     keeps its head role and becomes active; subsequent groups with
  *     the same head role are marked `unassigned: true` with a note
@@ -873,6 +880,16 @@ export function migrateAgentGroups(groups: any[]): any[] | null {
         }
 
         let g = { ...group };
+
+        // Machine threading (plan: agents-are-saved-per-machine-and-a-team-picks-one):
+        // a team with no `machine` field defaults to `'local'`. Stamp it on
+        // read so the spawn path and the UI see a concrete value, and persist
+        // the cleaned shape. A non-string or empty machine is repaired to
+        // `'local'` — never silently to another machine.
+        if (typeof g.machine !== 'string' || !g.machine) {
+            g.machine = 'local';
+            changed = true;
+        }
 
         // Retire the `startOnLoad` field (clear-on-read). Auto-start is gone —
         // a stored `startOnLoad: true` that does nothing is the
@@ -904,7 +921,22 @@ export function migrateAgentGroups(groups: any[]): any[] | null {
                 converted.relationship = 'reports-to-head';
                 changed = true;
             }
-            // Preserve label, startupCommand, and any unknown keys.
+            // Per-member startupCommand is retired (plan:
+            // agents-are-saved-per-machine-and-a-team-picks-one). Strip it on
+            // read and persist the cleaned shape — a team resolves every member
+            // from its one machine's command map. Preserve label and any
+            // unknown keys.
+            if (converted.startupCommand !== undefined) {
+                delete converted.startupCommand;
+                changed = true;
+            }
+            // Split-team guard: a member must NEVER carry its own machine. The
+            // team's machine is the only machine; a per-member machine would
+            // silently split the team across two hosts. Strip and persist.
+            if (converted.machine !== undefined) {
+                delete converted.machine;
+                changed = true;
+            }
             return converted;
         });
         // Always reseat the array: this is also what converts a group with a
@@ -1013,15 +1045,20 @@ export function importDelegatesIntoTeams(
 
         // Convert delegate entries to team member shape — same defaults as
         // migrateAgentGroups step 2 (scope: per-team, relationship:
-        // reports-to-head). Preserve label, startupCommand, and any unknown
-        // keys the operator may have set.
+        // reports-to-head). Per-member startupCommand is retired (plan:
+        // agents-are-saved-per-machine-and-a-team-picks-one) — drop it on
+        // import; the imported team defaults to `machine: 'local'`. Also drop
+        // any per-member `machine` (split-team guard).
         const members = delegates
             .filter(d => d && typeof d === 'object')
-            .map((d: any) => ({
-                ...d,
-                scope: d.scope ?? 'per-team',
-                relationship: d.relationship ?? 'reports-to-head',
-            }));
+            .map((d: any) => {
+                const { startupCommand: _dropCmd, machine: _dropMachine, ...rest } = d;
+                return {
+                    ...rest,
+                    scope: d.scope ?? 'per-team',
+                    relationship: d.relationship ?? 'reports-to-head',
+                };
+            });
 
         if (members.length === 0) { continue; }
 
@@ -1029,6 +1066,7 @@ export function importDelegatesIntoTeams(
             id: 'imported-delegates-' + role + '-' + Date.now().toString(36),
             name: role.charAt(0).toUpperCase() + role.slice(1) + ' team',
             headRole: role,
+            machine: 'local',
             members,
         };
         imported.push(team);
@@ -1287,7 +1325,13 @@ export function isUntouchedSeed(group: any): boolean {
         const sm = seedMembers[i];
         if (!m || m.role !== sm.role || m.count !== sm.count) { return false; }
         if ((m.label || '') !== (sm.label || '')) { return false; }
+        // Per-member startupCommand is retired (plan:
+        // agents-are-saved-per-machine-and-a-team-picks-one). A seed member has
+        // no startupCommand key; an authored one may still carry a stale empty
+        // string from a prior release, which is the same as absent.
         if ((m.startupCommand || '') !== (sm.startupCommand || '')) { return false; }
+        // The team's machine must match the seed's (`local`).
+        if ((group.machine || 'local') !== (SEEDED_AGENT_GROUP.machine || 'local')) { return false; }
         // Keys beyond the seed's own are allowed ONLY for the two converter
         // defaults, and only at their default values.
         const smKeys = new Set(Object.keys(sm));

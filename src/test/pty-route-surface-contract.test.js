@@ -51,7 +51,7 @@ function post(port, pathname, body) {
     return new Promise((resolve, reject) => {
         const payload = JSON.stringify(body || {});
         const req = http.request(
-            { host: '127.0.0.1', port, path: pathname, method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) } },
+            { host: '127.0.0.1', port, path: pathname, method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload), 'X-Switchboard-Client': 'test' } },
             res => {
                 let data = '';
                 res.on('data', c => { data += c; });

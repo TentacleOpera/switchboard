@@ -27,11 +27,51 @@ export interface GlobalConfig {
      * you launch) is the same tool regardless of which repo or editor opened it.
      */
     agents?: {
+        /**
+         * Machines the operator has registered. `local` is always present and
+         * undeletable. See {@link AgentMachine} and the plan
+         * `agents-are-saved-per-machine-and-a-team-picks-one`.
+         */
+        machines?: AgentMachine[];
         startupCommands?: Record<string, string>;
+        /**
+         * Per-machine startup commands: `machineStartupCommands[machineId][role]`.
+         * The legacy flat `startupCommands` is the migration source for the
+         * `local` machine and is kept as a read-fallback for one release so a
+         * caller not yet threaded with the machine id still resolves.
+         */
+        machineStartupCommands?: Record<string, Record<string, string>>;
         visibleAgents?: Record<string, boolean>;
         customAgents?: any[];
     };
 }
+
+/**
+ * A machine the operator can run agent seats on. A team picks ONE machine;
+ * every seat in that team (head + delegates) spawns on it. The
+ * `transportPrefix` is the `user@host` (or host alias) the spawn layer wraps
+ * the inner CLI with; `transport` picks the wrapping shape (`ssh`
+ * single-quote-wraps, `mosh` uses `--`).
+ *
+ * `local` is `{ id: 'local', name: 'Local', transport: 'local', transportPrefix: '' }`
+ * — always present, undeletable. A `local` seat's rendered command equals its
+ * inner CLI unchanged.
+ */
+export interface AgentMachine {
+    id: string;
+    name: string;
+    transport: 'local' | 'ssh' | 'mosh';
+    /** `user@host` (or host alias). Empty for `local`. */
+    transportPrefix: string;
+}
+
+/** The always-present default machine. */
+export const LOCAL_AGENT_MACHINE: AgentMachine = {
+    id: 'local',
+    name: 'Local',
+    transport: 'local',
+    transportPrefix: '',
+};
 
 /** Agent-config keys that are stored machine-globally (cross-workspace, cross-IDE). */
 export type AgentGlobalKey = 'startupCommands' | 'visibleAgents' | 'customAgents';
@@ -461,12 +501,179 @@ export class GlobalIntegrationConfigService {
         return this.getAgentConfigSync<Record<string, string>>('startupCommands');
     }
 
-    public static async getAgentStartupCommands(): Promise<Record<string, string> | undefined> {
+    /**
+     * Resolve the startup-command map for a machine. When `machineId` is given,
+     * returns `machineStartupCommands[machineId]`; when that is absent, falls
+     * back to the legacy flat `startupCommands` (transition window — the legacy
+     * key is the migration source for the `local` machine and is kept for one
+     * release so a caller not yet threaded with the machine id still resolves).
+     * When `machineId` is omitted, returns the legacy flat map (callers that
+     * have not been threaded yet).
+     */
+    public static async getAgentStartupCommands(machineId?: string): Promise<Record<string, string> | undefined> {
+        if (machineId) {
+            await this._ensureMachineMigration();
+            const globalConfig = await this.loadGlobal();
+            const perMachine = globalConfig.agents?.machineStartupCommands?.[machineId];
+            if (perMachine) { return perMachine; }
+            // Transition fallback: the local machine's set may still live only
+            // in the legacy flat key. Other machines have no legacy fallback —
+            // an unknown machine id resolves to nothing, which is correct.
+            if (machineId === 'local') {
+                return globalConfig.agents?.startupCommands;
+            }
+            return undefined;
+        }
         return this.getAgentConfig<Record<string, string>>('startupCommands');
     }
 
     public static async setAgentStartupCommands(commands: Record<string, string>): Promise<void> {
         await this.setAgentConfig('startupCommands', commands);
+    }
+
+    // ─── Machines ─────────────────────────────────────────────────────────
+
+    /**
+     * One-time migration: if `machineStartupCommands` is absent and the legacy
+     * flat `startupCommands` is present, copy `startupCommands` into
+     * `machineStartupCommands.local` and ensure `machines` contains `local`.
+     * The legacy key is NOT deleted here — it stays as a read-fallback for one
+     * release. Idempotent: a no-op when the new shape is already populated.
+     */
+    private static _machineMigrationDone = false;
+    private static async _ensureMachineMigration(): Promise<void> {
+        if (this._machineMigrationDone) { return; }
+        this._machineMigrationDone = true;
+        try {
+            const globalConfig = await this.loadGlobal();
+            const agents = globalConfig.agents || {};
+            const hasMachineShape = !!agents.machineStartupCommands;
+            const legacy = agents.startupCommands;
+            if (hasMachineShape) {
+                // Ensure `local` machine exists even when the shape is present
+                // (an operator who hand-edited the file could drop it).
+                const machines = Array.isArray(agents.machines) ? agents.machines : [];
+                if (!machines.some(m => m && m.id === 'local')) {
+                    globalConfig.agents = {
+                        ...agents,
+                        machines: [LOCAL_AGENT_MACHINE, ...machines],
+                    };
+                    await this.saveGlobal(globalConfig);
+                }
+                return;
+            }
+            // No machine shape yet — build it from the legacy flat map.
+            const localCommands = (legacy && typeof legacy === 'object') ? legacy : {};
+            const machines = Array.isArray(agents.machines) ? agents.machines : [];
+            const withLocal = machines.some(m => m && m.id === 'local')
+                ? machines
+                : [LOCAL_AGENT_MACHINE, ...machines];
+            globalConfig.agents = {
+                ...agents,
+                machines: withLocal,
+                machineStartupCommands: { local: { ...localCommands } },
+            };
+            await this.saveGlobal(globalConfig);
+        } catch (err) {
+            console.error('[GlobalIntegrationConfigService] Machine migration failed:', err);
+        }
+    }
+
+    /**
+     * Return the machines list, always including `local`. Runs the migration
+     * first so a fresh upgrade populates the shape before any read.
+     */
+    public static async getMachines(): Promise<AgentMachine[]> {
+        await this._ensureMachineMigration();
+        const globalConfig = await this.loadGlobal();
+        const machines = Array.isArray(globalConfig.agents?.machines) ? globalConfig.agents!.machines! : [];
+        if (!machines.some(m => m && m.id === 'local')) {
+            return [LOCAL_AGENT_MACHINE, ...machines];
+        }
+        return machines;
+    }
+
+    public static async getMachineSync(machineId: string): Promise<AgentMachine | undefined> {
+        const globalConfig = this.loadGlobalSync();
+        const machines = Array.isArray(globalConfig.agents?.machines) ? globalConfig.agents!.machines! : [];
+        return machines.find(m => m && m.id === machineId) ?? (machineId === 'local' ? LOCAL_AGENT_MACHINE : undefined);
+    }
+
+    /**
+     * Persist the machines list. `local` is forced to the front and is never
+     * removable — a caller that omits it gets it re-added. Returns the names of
+     * teams (by machine id) that pin a machine no longer in the list, so the UI
+     * can refuse the deletion rather than orphaning teams.
+     */
+    public static async setMachines(machines: AgentMachine[]): Promise<void> {
+        const filtered = Array.isArray(machines) ? machines.filter(m => m && typeof m.id === 'string') : [];
+        const hasLocal = filtered.some(m => m.id === 'local');
+        const finalMachines = hasLocal ? filtered : [LOCAL_AGENT_MACHINE, ...filtered];
+        const globalConfig = await this.loadGlobal();
+        globalConfig.agents = { ...(globalConfig.agents || {}), machines: finalMachines };
+        await this.saveGlobal(globalConfig);
+    }
+
+    public static async getMachineStartupCommands(machineId: string): Promise<Record<string, string> | undefined> {
+        await this._ensureMachineMigration();
+        const globalConfig = await this.loadGlobal();
+        return globalConfig.agents?.machineStartupCommands?.[machineId];
+    }
+
+    /**
+     * Persist a machine's startup-command map. When `machineId === 'local'`,
+     * also mirrors the write to the legacy flat `startupCommands` key so the
+     * transition-window read-fallback stays in sync. The wipe guard on the
+     * legacy key is bypassed via a direct `saveGlobal` (an empty local set is a
+     * legitimate operator action now, not a reinstall blanking).
+     */
+    public static async setMachineStartupCommands(machineId: string, commands: Record<string, string>): Promise<void> {
+        await this._ensureMachineMigration();
+        const globalConfig = await this.loadGlobal();
+        const agents = globalConfig.agents || {};
+        const perMachine = { ...(agents.machineStartupCommands || {}) };
+        perMachine[machineId] = commands;
+        const nextAgents: any = { ...agents, machineStartupCommands: perMachine };
+        if (machineId === 'local') {
+            // Mirror to legacy flat key (transition fallback). Bypass the
+            // setAgentConfig wipe guard — an explicit empty local set is valid.
+            nextAgents.startupCommands = commands;
+        }
+        globalConfig.agents = nextAgents;
+        await this.saveGlobal(globalConfig);
+    }
+
+    /**
+     * Render the spawn command for a machine's transport. The inner CLI is the
+     * per-machine `machineStartupCommands[machineId][role]` value; the rendered
+     * command is what the spawn layer types into the pty.
+     *
+     * - `local` (empty prefix): the inner CLI unchanged.
+     * - `ssh`: `ssh <prefix> '<cli>'` — the CLI is single-quote-wrapped as one
+     *   remote argument. Inner single quotes are escaped (`'\''`).
+     * - `mosh`: `mosh <prefix> -- <cli>` — `--` separates mosh args from the
+     *   remote command.
+     *
+     * Returns the inner CLI unchanged when the machine is `local` or unknown
+     * (a missing machine id is a runtime failure the operator handles, not a
+     * config gate — falling back to the inner CLI keeps the seat runnable).
+     */
+    public static renderSpawnCommand(innerCli: string, machine: AgentMachine | undefined): string {
+        if (!innerCli) { return innerCli; }
+        if (!machine || machine.transport === 'local' || !machine.transportPrefix) {
+            return innerCli;
+        }
+        const prefix = machine.transportPrefix;
+        if (machine.transport === 'ssh') {
+            const escaped = innerCli.replace(/'/g, "'\\''");
+            return `ssh ${prefix} '${escaped}'`;
+        }
+        if (machine.transport === 'mosh') {
+            return `mosh ${prefix} -- ${innerCli}`;
+        }
+        // Unknown transport — do not concat blindly (a dumb `<prefix> <cli>`
+        // breaks one of the two known transports). Fall back to the inner CLI.
+        return innerCli;
     }
 
     public static async getTicketsAutoSync(): Promise<boolean> {

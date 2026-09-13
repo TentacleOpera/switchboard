@@ -4,7 +4,7 @@ import { WebSocket } from 'ws';
 import type { DelegateDefinition } from './agentConfig';
 import { deriveCliFamily, type CliFamily } from './cliIdentity';
 import { deriveTmuxSessionName } from './teamWiring';
-import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
+import { GlobalIntegrationConfigService, type AgentMachine, LOCAL_AGENT_MACHINE } from './GlobalIntegrationConfigService';
 import type { KanbanDatabase } from './KanbanDatabase';
 import { MAX_DELEGATES_PER_PARENT, MAX_LIVE_DELEGATE_PTYS } from './ptyLimits';
 import { PTY_IDE_NAME, type PtyHostSupervisor } from './ptyHostSupervisor';
@@ -49,6 +49,10 @@ interface ProjectedTerminal {
     _isTeamMember?: boolean;
     /** BASE tmux session name for a control-mode seat (undefined for raw PTY). */
     tmuxSession?: string;
+    /** Machine id this seat spawns on (default `'local'`). */
+    machineId?: string;
+    /** INNER startup command (per-machine CLI before transport composition). */
+    startupCommandInner?: string;
 }
 
 /**
@@ -202,20 +206,40 @@ export class GoPtyFleetProjection {
         const claudeInlineRendering = opts?.claudeInlineRendering
             ?? (this._claudeInlineRenderingResolver ? this._claudeInlineRenderingResolver() : true);
 
+        // Machine threading (plan: agents-are-saved-per-machine-and-a-team-picks-one):
+        // resolve the INNER cli from the per-machine command map, then compose
+        // the transport prefix (`ssh`/`mosh`/local) to get the SPAWN command.
+        // cliFamily is derived from the INNER command only — a transport-wrapped
+        // string would classify as `unknown` and pick the wrong readiness gate.
+        // A non-`local` machine id that is not registered fails loudly.
+        const machineId = opts?.machineId || 'local';
+        let machine: AgentMachine | undefined;
+        if (opts?.machineId && opts.machineId !== 'local') {
+            machine = await GlobalIntegrationConfigService.getMachineSync(opts.machineId);
+            if (!machine) {
+                throw new Error(`Machine '${opts.machineId}' not found (referenced by role '${role}'); refusing to spawn on a fallback machine.`);
+            }
+        } else {
+            machine = LOCAL_AGENT_MACHINE;
+        }
         let effectiveStartupCommand = startupCommand;
         let effectiveStartupSource: string;
         if (effectiveStartupCommand) {
             effectiveStartupSource = opts?._isTeamMember ? 'team-definition' : 'argument';
         } else {
             try {
-                const commands = await GlobalIntegrationConfigService.getAgentStartupCommands() || {};
+                const commands = await GlobalIntegrationConfigService.getAgentStartupCommands(machineId) || {};
                 effectiveStartupCommand = commands[role];
-                effectiveStartupSource = effectiveStartupCommand ? 'global-file' : 'none';
+                effectiveStartupSource = effectiveStartupCommand ? `global-file:${machineId}` : 'none';
             } catch {
                 effectiveStartupCommand = undefined;
                 effectiveStartupSource = 'none';
             }
         }
+        // inner = per-machine CLI; composed = what the pty types. For `local`
+        // (or no transport prefix) they are identical.
+        const innerCli = effectiveStartupCommand;
+        const composedCli = innerCli ? GlobalIntegrationConfigService.renderSpawnCommand(innerCli, machine) : undefined;
 
         // ── tmux as a SUPPLEMENT to the fleet, not a replacement ────────────────
         // The seat stays a Go-host PTY; that PTY runs a tmux client. The board keeps
@@ -265,7 +289,11 @@ export class GoPtyFleetProjection {
         if (usesTmuxSeating) {
             const session = deriveTmuxSessionName(opts?.tmuxSession || name || role);
             const win = String(name || role).replace(/[^A-Za-z0-9_.-]/g, '-');
-            const inner = JSON.stringify(effectiveStartupCommand);
+            // The tmux pane runs the COMPOSED command (transport-wrapped) so an
+            // SSH/mosh seat's remote CLI is what tmux sends to the pane, not
+            // the bare inner cli. See the plan
+            // `agents-are-saved-per-machine-and-a-team-picks-one`.
+            const inner = JSON.stringify(composedCli ?? effectiveStartupCommand);
             // `new-session -A` ATTACHES when the session exists and ignores -n, so a
             // second seat joining a team session would land on the first seat's window
             // instead of getting its own. Branch explicitly: create the session with
@@ -478,7 +506,15 @@ export class GoPtyFleetProjection {
             // command. The Go host replays this string into a fresh login
             // shell; it never re-derives or parses it. See
             // a-seats-clear-strategy-is-declared-per-cli-family-not-assumed.md.
-            startupCommand: effectiveStartupCommand,
+            //
+            // Machine threading: for a non-tmux seat this is the COMPOSED
+            // command (transport-wrapped), so an SSH/mosh respawn re-runs the
+            // remote CLI. For a tmux seat the chain above already reassigned
+            // `effectiveStartupCommand` to the tmux command string (which
+            // embeds the composed command in its send-keys).
+            startupCommand: usesTmuxSeating ? effectiveStartupCommand : composedCli,
+            startupCommandInner: innerCli,
+            machineId,
         });
         if (!result || result.success === false) {
             throw new Error(result?.error || `PTY create failed (state: ${this.supervisor.getState()})`);
@@ -494,9 +530,13 @@ export class GoPtyFleetProjection {
             hidden: opts?.hidden === true,
             claudeInlineRendering,
             _isTeamMember: opts?._isTeamMember === true,
-            startupCommand: effectiveStartupCommand,
+            // COMPOSED command (or the tmux chain string) — what the pty types.
+            startupCommand: usesTmuxSeating ? effectiveStartupCommand : composedCli,
+            // INNER cli — what cliFamily re-derivation reads. Never transport-wrapped.
+            startupCommandInner: innerCli,
             startupCommandSource: effectiveStartupSource,
-            cliFamily: deriveCliFamily(effectiveStartupCommand),
+            cliFamily: deriveCliFamily(innerCli),
+            machineId,
             // Persisted in `runtime.terminals` so the boot reaper has an
             // ownership signal that survives a restart — the in-memory cache
             // is empty at boot. Empty (not undefined) for non-control-mode
@@ -507,12 +547,13 @@ export class GoPtyFleetProjection {
         this.updateRegistryState();
         this.emitter.emit('change', { type: 'created', terminal: handle });
 
-        if (effectiveStartupCommand) {
+        const injectCommand = usesTmuxSeating ? effectiveStartupCommand : composedCli;
+        if (injectCommand) {
             await new Promise(resolve => setTimeout(resolve, SHELL_READINESS_DELAY_MS));
             if (handle.status === 'active') {
                 handle.injectedAtMs = Date.now();
                 handle.outputBytesSinceInjection = 0;
-                handle.sendText(effectiveStartupCommand, true);
+                handle.sendText(injectCommand, true);
             }
         }
         return handle;
@@ -521,8 +562,13 @@ export class GoPtyFleetProjection {
     public async spawnDelegates(
         parent: ExtendedTerminalHandle,
         definitions: DelegateDefinition[],
-        opts?: { teamName?: string; tmuxSession?: string },
+        opts?: { teamName?: string; tmuxSession?: string; machineId?: string },
     ): Promise<{ children: ExtendedTerminalHandle[]; createdNames: string[]; error?: string }> {
+        // Machine threading: every delegate inherits the TEAM's machine
+        // (opts.machineId, falling back to the parent's machineId). Per-member
+        // startupCommand is retired — a team is one machine. See the plan
+        // `agents-are-saved-per-machine-and-a-team-picks-one`.
+        const delegateMachineId = opts?.machineId || parent.machineId || 'local';
         const perTeamRequested = definitions
             .filter(d => d.scope !== 'shared')
             .reduce((n, d) => n + Math.max(1, Math.min(d.count || 1, MAX_DELEGATES_PER_PARENT)), 0);
@@ -550,10 +596,11 @@ export class GoPtyFleetProjection {
                             const live = this.listActive().find(t => t.friendlyName === sharedName);
                             if (live) { return live; }
                             wasCreated = true;
-                            return this.create(d.role, sharedName, parent.cwd, parent.worktreePath, undefined, d.startupCommand, {
+                            return this.create(d.role, sharedName, parent.cwd, parent.worktreePath, undefined, undefined, {
                                 _isTeamMember: true,
                                 claudeInlineRendering: parent.claudeInlineRendering,
                                 tmuxSession: opts?.tmuxSession,
+                                machineId: delegateMachineId,
                             });
                         });
                         children.push(existing);
@@ -569,8 +616,8 @@ export class GoPtyFleetProjection {
                 const baseName = `${parent.friendlyName}-${d.label || d.role}${suffix}`;
                 try {
                     const child = await this.create(
-                        d.role, baseName, parent.cwd, parent.worktreePath, parent.agentInstanceId, d.startupCommand,
-                        { _isTeamMember: true, claudeInlineRendering: parent.claudeInlineRendering, tmuxSession: opts?.tmuxSession },
+                        d.role, baseName, parent.cwd, parent.worktreePath, parent.agentInstanceId, undefined,
+                        { _isTeamMember: true, claudeInlineRendering: parent.claudeInlineRendering, tmuxSession: opts?.tmuxSession, machineId: delegateMachineId },
                     );
                     children.push(child);
                     createdNames.push(child.friendlyName);
@@ -587,6 +634,7 @@ export class GoPtyFleetProjection {
         cwd?: string,
         worktreePath?: string,
         claudeInlineRendering?: boolean,
+        machineId?: string,
     ): Promise<{ success: boolean; created: Array<{ friendlyName: string; role: string }>; failed: Array<{ role: string; reason: string; kind: string }>; error?: string; estimatedDurationMs: number }> {
         const MAX_BATCH = 32;
         const created: Array<{ friendlyName: string; role: string }> = [];
@@ -605,10 +653,11 @@ export class GoPtyFleetProjection {
         if (total > MAX_BATCH) {
             return { success: false, created, failed, error: `batch cap: ${total} requested, ${MAX_BATCH} allowed`, estimatedDurationMs: 0 };
         }
-        const commands = await GlobalIntegrationConfigService.getAgentStartupCommands() || {};
+        const resolvedMachineId = machineId || 'local';
+        const commands = await GlobalIntegrationConfigService.getAgentStartupCommands(resolvedMachineId) || {};
         for (const a of allocation) {
             if (typeof a.role !== 'string' || !commands[a.role]) {
-                return { success: false, created, failed, error: `no startup command for role '${a.role || ''}'`, estimatedDurationMs: 0 };
+                return { success: false, created, failed, error: `no startup command for role '${a.role || ''}' on machine '${resolvedMachineId}'`, estimatedDurationMs: 0 };
             }
         }
         let abortResource = false;
@@ -619,7 +668,7 @@ export class GoPtyFleetProjection {
                     continue;
                 }
                 try {
-                    const t = await this.create(a.role, undefined, cwd, worktreePath, null, undefined, { claudeInlineRendering });
+                    const t = await this.create(a.role, undefined, cwd, worktreePath, null, undefined, { claudeInlineRendering, machineId: resolvedMachineId });
                     created.push({ friendlyName: t.friendlyName, role: t.role });
                 } catch (err: any) {
                     const msg = err instanceof Error ? err.message : String(err);
@@ -916,9 +965,11 @@ export class GoPtyFleetProjection {
             status: row.status === 'exited' ? 'exited' : 'active',
             worktreePath: row.worktreePath,
             cwd: row.cwd || this.workspaceRoot,
-            cliFamily: row.cliFamily || deriveCliFamily(row.startupCommand),
+            cliFamily: row.cliFamily || deriveCliFamily(row.startupCommandInner || row.startupCommand),
             startupCommand: row.startupCommand,
+            startupCommandInner: row.startupCommandInner,
             startupCommandSource: row.startupCommandSource,
+            machineId: row.machineId,
             tmuxSession: row.tmuxSession,
             startedAtMs,
             lastDataAt: row.lastDataAt || startedAtMs,

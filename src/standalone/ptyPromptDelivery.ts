@@ -278,10 +278,17 @@ export async function sendPromptToPty(
         // `unknown` at spawn stays `unknown` forever even after its command is
         // fixed, and every Devin readiness fix silently misses it.
         // See a-seats-cli-family-is-frozen-at-spawn-so-devin-timing-fixes-never-reach-it.md.
+        //
+        // Machine threading: derive from the INNER command
+        // (`startupCommandInner`) when present — `startupCommand` may hold a
+        // transport-wrapped string (`ssh host 'claude'`) whose first token is
+        // `ssh`, which would classify as `unknown`. See the plan
+        // `agents-are-saved-per-machine-and-a-team-picks-one`.
         if (handle.startupCommand !== undefined) {
-            const rederived = deriveCliFamily(handle.startupCommand);
+            const rederiveFrom = handle.startupCommandInner ?? handle.startupCommand;
+            const rederived = deriveCliFamily(rederiveFrom);
             if (rederived !== handle.cliFamily) {
-                console.log(`[cliFamily] rederive seat=${handle.name} was=${handle.cliFamily} now=${rederived} command=${handle.startupCommand}`);
+                console.log(`[cliFamily] rederive seat=${handle.name} was=${handle.cliFamily} now=${rederived} command=${rederiveFrom}`);
                 handle.cliFamily = rederived;
             }
         }

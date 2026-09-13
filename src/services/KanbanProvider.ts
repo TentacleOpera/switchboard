@@ -5328,6 +5328,10 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const julesAutoSyncEnabled = this._context.globalState.get<boolean>('switchboard.agents.julesAutoSyncEnabled', false);
             const plannerTerminalCount = await this._taskViewerProvider.getPlannerTerminalCount(workspaceRoot);
             const plannerLimitDispatchToTerminals = await this._taskViewerProvider.getLimitDispatchToTerminals('planner', workspaceRoot);
+            // Machine threading (plan: agents-are-saved-per-machine-and-a-team-picks-one):
+            // surface the machines list + the selected machine (local on first load)
+            // so the Agents tab can render the machine selector.
+            const machines = await GlobalIntegrationConfigService.getMachines();
             return {
                 commands,
                 visibleAgents,
@@ -5339,7 +5343,9 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 agentNames: await this._getAgentNames(workspaceRoot),
                 julesAutoSyncEnabled,
                 plannerTerminalCount,
-                plannerLimitDispatchToTerminals
+                plannerLimitDispatchToTerminals,
+                machines,
+                machineId: 'local'
             };
         }
         const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
@@ -5362,8 +5368,19 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         // Persist startup commands to the machine-global, cross-IDE store (the
         // authoritative source read by getStartupCommands). Shared across every
         // workspace AND every IDE on the machine.
+        //
+        // Machine threading (plan: agents-are-saved-per-machine-and-a-team-picks-one):
+        // when `msg.machineId` is present, write to the per-machine command map;
+        // otherwise fall back to the legacy flat key.
         if (msg.commands) {
-            await GlobalIntegrationConfigService.setAgentStartupCommands(msg.commands);
+            if (typeof msg.machineId === 'string' && msg.machineId) {
+                await GlobalIntegrationConfigService.setMachineStartupCommands(msg.machineId, msg.commands);
+                if (msg.machineId === 'local') {
+                    await GlobalIntegrationConfigService.setAgentStartupCommands(msg.commands);
+                }
+            } else {
+                await GlobalIntegrationConfigService.setAgentStartupCommands(msg.commands);
+            }
         }
         if (this._taskViewerProvider) {
             await this._taskViewerProvider.updateState(async (state: any) => {
@@ -13470,6 +13487,108 @@ ${FOCUS_DIRECTIVE}`;
                     this._broadcaster?.mirrorToWs(SURFACES.terminals, { type: 'startupCommandsChanged' }, 'startupCommandsChanged');
                 } catch { /* broadcast failure must not fail the save */ }
                 return { success: true };
+            }
+            case 'getStartupCommandsForMachine': {
+                // Per-machine command map (plan:
+                // agents-are-saved-per-machine-and-a-team-picks-one).
+                const machineId = typeof msg.machineId === 'string' ? msg.machineId : 'local';
+                const commands = (await GlobalIntegrationConfigService.getAgentStartupCommands(machineId)) || {};
+                this.postMessage({ type: 'startupCommandsForMachine', machineId, commands });
+                return { success: true, machineId, commands };
+            }
+            case 'getMachines': {
+                const machines = await GlobalIntegrationConfigService.getMachines();
+                this.postMessage({ type: 'machinesList', machines });
+                return { success: true, machines };
+            }
+            case 'saveMachine': {
+                const machine = msg.machine;
+                const mode = msg.mode === 'edit' ? 'edit' : 'add';
+                if (!machine || typeof machine.id !== 'string' || !machine.id) {
+                    return { success: false, error: 'Machine id is required' };
+                }
+                const machines = await GlobalIntegrationConfigService.getMachines();
+                const exists = machines.some(m => m.id === machine.id);
+                if (mode === 'add' && exists) {
+                    return { success: false, error: `Machine id '${machine.id}' already exists` };
+                }
+                const normalized = {
+                    id: machine.id,
+                    name: machine.name || machine.id,
+                    transport: machine.transport === 'ssh' || machine.transport === 'mosh' ? machine.transport : 'local',
+                    transportPrefix: machine.transport === 'local' ? '' : (machine.transportPrefix || ''),
+                };
+                const next = exists
+                    ? machines.map(m => m.id === normalized.id ? normalized : m)
+                    : [...machines, normalized];
+                await GlobalIntegrationConfigService.setMachines(next);
+                const finalMachines = await GlobalIntegrationConfigService.getMachines();
+                this.postMessage({ type: 'saveMachineResult', machines: finalMachines, selectedMachineId: normalized.id });
+                this.postMessage({ type: 'machinesList', machines: finalMachines });
+                return { success: true, machines: finalMachines, selectedMachineId: normalized.id };
+            }
+            case 'deleteMachine': {
+                const machineId = typeof msg.machineId === 'string' ? msg.machineId : '';
+                if (!machineId || machineId === 'local') {
+                    return { success: false, error: 'The local machine cannot be deleted' };
+                }
+                // Refuse to delete a machine pinned by any team.
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (workspaceRoot) {
+                    try {
+                        const db = this._getKanbanDb(workspaceRoot);
+                        if (db) {
+                            const groups = await db.getConfigJson?.('terminals.agentGroups', []) as any[];
+                            if (Array.isArray(groups)) {
+                                const pinned = groups.filter(g => g && g.machine === machineId);
+                                if (pinned.length > 0) {
+                                    const names = pinned.map(g => g.name || g.id).join(', ');
+                                    const error = `Machine '${machineId}' is used by team(s): ${names}. Remove or re-pin them first.`;
+                                    this.postMessage({ type: 'deleteMachineResult', error });
+                                    return { success: false, error };
+                                }
+                            }
+                        }
+                    } catch { /* best-effort */ }
+                }
+                const machines = await GlobalIntegrationConfigService.getMachines();
+                const next = machines.filter(m => m.id !== machineId);
+                await GlobalIntegrationConfigService.setMachines(next);
+                const finalMachines = await GlobalIntegrationConfigService.getMachines();
+                this.postMessage({ type: 'deleteMachineResult', machines: finalMachines, selectedMachineId: 'local' });
+                this.postMessage({ type: 'machinesList', machines: finalMachines });
+                return { success: true, machines: finalMachines, selectedMachineId: 'local' };
+            }
+            case 'probeMachine': {
+                const machineId = typeof msg.machineId === 'string' ? msg.machineId : 'local';
+                const machine = await GlobalIntegrationConfigService.getMachineSync(machineId);
+                if (!machine) {
+                    this.postMessage({ type: 'probeMachineResult', machineId, reachable: false, error: 'Machine not found' });
+                    return { success: false, error: 'Machine not found' };
+                }
+                try {
+                    if (machine.transport === 'local' || !machine.transportPrefix) {
+                        this.postMessage({ type: 'probeMachineResult', machineId, reachable: true });
+                        return { success: true, reachable: true };
+                    }
+                    const probeCmd = machine.transport === 'ssh'
+                        ? `ssh ${machine.transportPrefix} true`
+                        : machine.transport === 'mosh'
+                            ? `mosh ${machine.transportPrefix} -- true`
+                            : `true`;
+                    const { exec } = require('child_process');
+                    await new Promise<void>((resolve, reject) => {
+                        exec(probeCmd, { timeout: 15000 }, (err: any) => {
+                            if (err) { reject(err); } else { resolve(); }
+                        });
+                    });
+                    this.postMessage({ type: 'probeMachineResult', machineId, reachable: true });
+                    return { success: true, reachable: true };
+                } catch (err: any) {
+                    const error = err instanceof Error ? err.message : String(err);
+                    this.postMessage({ type: 'probeMachineResult', machineId, reachable: false, error });
+                    return { success: false, reachable: false, error };
+                }
             }
 
             case 'getPromptsConfig': {

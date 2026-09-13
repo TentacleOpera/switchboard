@@ -539,6 +539,16 @@ jobs:
       - name: Tailscale bind-policy contract (second listener, no wildcard bind, scoped token skip)
         run: npm run test:contract:tailscale-bind
 
+      # The Tailscale LocalAPI enforces a Host header as its cross-origin defence
+      # on a world-readable socket. Both probes in tailnetDetect.ts used to omit
+      # it, swallow the 403, and return an empty name list — indistinguishable
+      # from "this machine has no MagicDNS name". The bind policy was then built
+      # with an empty allowlist and the Host guard 403'd the only name a person
+      # types. This test mirrors the exact 403-then-200 behaviour on a mock
+      # unix-socket server: a test that accepts any Host cannot fail on this bug.
+      - name: Tailnet LocalAPI Host-header contract (Host header sent, unavailable distinguished from empty)
+        run: npm run test:contract:tailnet-localapi-host-header
+
       # Cross-file mismatches that are invisible file-by-file, and each one shipped:
       # terminals.js called term.onFocus (an INTERNAL xterm emitter) and the throw took
       # the WebSocket with it — panes read "connecting" forever; tickets.html shipped a
@@ -1129,6 +1139,20 @@ jobs:
       # would make "Load more" collapse a second after it is clicked.
       - name: Board payload compression + render cap contract (gzip negotiated, exclusions honoured, cap uniform)
         run: npm run test:contract:board-payload-compression
+
+      # The Terminals panel was 14.6x the board (1517 KB vs 104 KB) and the first
+      # thing an operator waits on. Three silent-failure shapes this gate bounds:
+      #  - Re-accretion: no size budget meant the panel grew by accretion. The
+      #    byte budget asserts the first-load uncompressed size stays under cap.
+      #  - Eager canvas: addon-canvas.js (95 KB) is the WebGL-unavailable fallback
+      #    and was fetched+parsed+discarded on every WebGL-capable load. The gate
+      #    pins it is NOT an eager <script> and is kicked off lazily instead.
+      #  - Missing validator: no-cache without an ETag is a full re-download on
+      #    every load. The gate pins the static handler emits an ETag and 304s.
+      # The budget measures UNCOMPRESSED parse/compile cost (the real bottleneck),
+      # not compressed transfer — compression is already covered by the test above.
+      - name: Terminals panel payload contract (byte budget, lazy canvas, ETag/304)
+        run: npm run test:contract:terminals-payload
 
       # GPU renderer lifecycle. The failure mode is SILENT SUCCESS: WebglAddon.dispose()
       # leaves the live WebGL2 context to the garbage collector, and the browser charges

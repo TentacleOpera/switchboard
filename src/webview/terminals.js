@@ -1831,24 +1831,29 @@
             id: 'planning-team',
             name: 'Planning team',
             headRole: 'planner',
+            // A team picks ONE machine — head and every delegate spawn on it.
+            // See the plan `agents-are-saved-per-machine-and-a-team-picks-one`.
+            machine: 'local',
             members: [
-                { role: 'planner', count: 2, label: '', startupCommand: '' },
+                { role: 'planner', count: 2, label: '' },
             ],
         },
         {
             id: 'feature-implementation',
             name: 'Lead team',
             headRole: 'lead',
+            machine: 'local',
             members: [
-                { role: 'coder', count: 3, label: '', startupCommand: '' },
+                { role: 'coder', count: 3, label: '' },
             ],
         },
         {
             id: 'review-team',
             name: 'Review team',
             headRole: 'reviewer',
+            machine: 'local',
             members: [
-                { role: 'reviewer', count: 2, label: '', startupCommand: '' },
+                { role: 'reviewer', count: 2, label: '' },
             ],
         },
     ];
