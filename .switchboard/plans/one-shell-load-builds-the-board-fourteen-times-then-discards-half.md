@@ -122,7 +122,7 @@ now 445 KB and 641 cards, so its transfer argument has weakened while this one h
 
 ## Metadata
 
-**Complexity:** 2
+**Complexity:** 3
 **Tags:** performance, standalone, websocket, resync, browser-shell
 **Dependencies:** complements `The Board Renders Every Card It Has Ever Held, So Opening It Takes
 Long Enough to Look Broken`. Independent of it — this is server CPU, that is wire bytes and DOM.

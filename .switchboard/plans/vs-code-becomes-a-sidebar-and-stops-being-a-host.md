@@ -1,152 +1,151 @@
-# VS Code Becomes a Sidebar, and Stops Being a Second Host
+# Stage 1 — The Panels Leave the Editor
 
 kanbanColumn: CREATED
 
 ## Goal
 
-The extension keeps its sidebar and loses everything else: no editor panels, and — the part that
-matters — no board of its own. It spawns or attaches to the standalone host and talks to it over
-HTTP like the browser does. One host, one UI, one implementation.
+Delete the editor panels that have a browser equivalent and redirect their commands to open the
+browser on the running host's URL. The sidebar (`switchboard-view`) stays exactly as it is. This
+is the first stage of the feature "VS Code Becomes a Sidebar, and Stops Being a Second Host" —
+it removes duplicated UI but leaves two hosts (Stage 2 removes the second host).
 
 ### Problem analysis
 
-**The extension costs more than it returns, and the value it removes is the product's main claim.**
-A board inside an editor is not always-on: close the window and the fleet's supervisor goes with it.
-The always-on board is the reason to run Switchboard on a Pi at all, and the extension is the one
-deployment that cannot have it.
+**The extension's UI is worse, and it makes the browser's UI worse too.** The webviews are shared,
+so they must satisfy the VS Code webview sandbox **even when served to a browser**. That sandbox
+is why `confirm()` is a silent no-op, why the frozen webview API killed originator stamping, why
+every page carries CSP nonces, and why the panel font stack has no symbol glyphs. A browser user
+pays for constraints imposed by a host they are not running.
 
-**Its UI is worse, and it makes the browser's UI worse too.** This is the part that is easy to
-miss: the webviews are shared, so they must satisfy the VS Code webview sandbox **even when served
-to a browser**. That sandbox is why `confirm()` is a silent no-op, why the frozen webview API killed
-originator stamping, why every page carries CSP nonces, and why the panel font stack has no symbol
-glyphs. A browser user pays for constraints imposed by a host they are not running.
-
-**Two hosts is the single largest source of defects in this codebase, by its own account.**
-`CLAUDE.md`'s second rule exists only because of the extension, and its worked example is four
-`PlanIngestionEngine` queue seams wired in `extension.ts` alone for a month. Four more divergences
-turned up in one evening. The defence against it is:
-
-```
-standalone-parity:check      parity:check      host-seam-parity:check
-+ 6 parity/standalone test files
-npm test leads with standalone-parity:check
-```
-
-Three gates, and the rule itself records that `standalone-parity:check` is *"scoped to the browser
-read-back path, not the composition root"* — so it does not catch the class it was built for.
-
-**The carrying cost, measured:**
-
-```
-vscodeShim.ts                    608 lines — a fake VS Code API so shared services run headless
-service files importing vscode   32 of 124
-vscode.* call sites              274 in TaskViewerProvider, 103 in KanbanProvider
-editor panels                    8 createWebviewPanel sites across 7 providers
-sidebar                          1 registerWebviewViewProvider (extension.ts:1130)
-```
-
-The density is the encouraging part: 274 call sites in 28,942 lines is about **1%**.
-`TaskViewerProvider` is overwhelmingly host-agnostic logic wearing a thin VS Code veneer.
-
-**And it is the last obstacle to every architectural option.** A Go core, a sidecar, one prompt
-builder — each ends at "but the extension needs it in-process". Remove that and they become
-ordinary engineering decisions.
+Removing the editor panels is the first cut: the browser already serves the same UI without the
+sandbox constraints. Stage 1 is reversible and low-risk — it changes no data, no host ownership,
+no database location.
 
 ## Metadata
 
-- **Complexity:** 9
-- **Tags:** architecture, extension, standalone, ux, both-hosts
+- **Complexity:** 5
+- **Tags:** refactor, ux
 
 ## User Review Required
 
-None. The staging below is the decision; both stages are specified.
+None.
 
-## Proposed Changes
+## Complexity Audit
 
-### Stage 1 — the panels leave the editor
+### Routine
 
-Delete the eight `createWebviewPanel` sites (Kanban, Agent Control, Planning, Project, Setup,
-Tickets, Design, Connections). The commands that opened them **open the browser instead**, on the
-running host's URL. A command that used to open a panel must not disappear — ~4,000 installs have
-muscle memory and keybindings, and a command that silently vanishes reads as a broken upgrade.
+- Deleting `createWebviewPanel` sites in 5 providers that already have browser equivalents (7 sites total). Each is a panel-open method replaced by a `vscode.env.openExternal` call to `http://127.0.0.1:<port>/<route>`.
+- Redirecting commands: every command that opened a panel keeps its palette entry and keybinding, replacing the body with a browser-open call. No command is removed (~4,000 installs have muscle memory).
 
-The sidebar (`switchboard-view`) stays exactly as it is in this stage.
+### Complex / Risky
 
-### Stage 2 — the extension stops being a host
-
-This is the stage that pays. Today the extension constructs `LocalApiServer` in-process and owns its
-own database, fleet and watcher. After this it does neither: it **spawns or attaches to the
-standalone host** and the sidebar talks HTTP, the same endpoints the browser uses.
-
-Then, and only then:
-
-- **The no-divergence rule retires.** There is one composition root. Delete
-  `standalone-parity:check`, `host-seam-parity:check` and the parity test files — but rewrite them
-  as assertions that the extension holds **no** host state, rather than deleting them outright. A
-  deleted guard is how the second host grows back.
-- **`vscodeShim.ts` goes**, along with the vscode imports in the 32 contaminated service files.
-  Those services stop being "shared" and become simply "the product".
-- **The webviews leave the sandbox.** `confirm()`, CSP nonces, the frozen API and the font stack
-  stop being constraints on a browser UI.
-
-Stage 1 without stage 2 removes duplicated UI and leaves two hosts. Do not stop there.
-
-### Stage 3 — what the sidebar is for
-
-Once it is a client, the sidebar should stop imitating the board. Its job is what an editor is
-uniquely good at: **is the host up, what are my seats doing, and take me to the board.** Fleet and
-terminal status, the current workspace, start/attach, open in browser.
-
-It must not become a second board. That is how this grows back.
-
-### Stage 4 — the settings that were VS Code's
-
-88 configuration keys are contributed to VS Code's settings UI. An extension that is no longer the
-host cannot own them.
-
-Most should move to the settings window (`307d08aa`) and its store. Keep in `package.json` only what
-VS Code genuinely needs — how to find or launch the host. **Every key that moves needs a migration
-that reads the old value once**, per the shipped-state rule; ~4,000 installs have these set and
-silently losing them is worse than any UI gain here.
+- **ConnectionsPanelProvider has no browser equivalent.** It is extension-only (absent from `src/standalone/bootstrap.ts`). "Open the browser instead" has no target. It must either be ported to the standalone host's browser surface first, or excluded from this stage and handled separately.
+- **DiagramRenderer is dead code.** Not imported by `extension.ts`, `bootstrap.ts`, or any service file in `src/` (only self-references inside `src/services/DiagramRenderer.ts`). Its two `createWebviewPanel` sites are unreachable. Should be confirmed as dead and deleted outright, not ported.
 
 ## Edge-Case & Dependency Audit
 
-1. **~4,000 installs, and this is the largest migration this product has attempted.** An upgrade
-   must leave a working install: commands still exist and redirect, settings are read once and
-   carried, and no board data is touched. A user who updates and finds an empty editor will not
-   investigate.
-2. **Marketplace discovery is the only channel of its kind.** `apt` and `npx` have no equivalent.
-   Hollowing the extension keeps it; deleting it does not. That is the argument for a sidebar over
-   removal, and it is a distribution argument, not a technical one.
-3. **The extension must handle "no host running".** Today it *is* the host. After stage 2 the
-   sidebar's first job is starting or attaching to one, and the failure mode when it cannot must be
-   explicit rather than an empty panel.
-4. **Which process owns the PTYs.** The fleet moves to the standalone host. Terminals a user
-   expects to see in the editor now live elsewhere — decide what the sidebar shows and how a user
-   reaches a live terminal, before stage 2 lands.
-5. **Do not do stages 1 and 2 in one release.** Stage 1 is reversible and low-risk; stage 2 changes
-   where the database lives for every extension user. Ship them apart so a regression has one cause.
-6. **`DiagramRenderer` and `ConnectionsPanelProvider` are extension-only** — they are among the four
-   service classes absent from the standalone bundle. They have no browser equivalent yet, so
-   deleting their panels deletes the feature unless it is ported first.
-7. **This unblocks the Go work but must not wait for it.** `Go Where It Pays` and a possible sidecar
-   both become simpler once there is one host; neither is a prerequisite here.
+### Race Conditions
+
+- None specific to this stage. The extension is still the host; panels are just redirected.
+
+### Security
+
+- The browser-open call targets `127.0.0.1:<port>` — loopback only. No configurable hostname.
+
+### Side Effects
+
+1. **~4,000 installs have muscle memory and keybindings.** A command that silently vanishes reads as a broken upgrade. Every command must keep its palette entry; only the body changes.
+2. **Marketplace discovery is the only channel of its kind.** Hollowing the extension keeps it; deleting it does not. Stage 1 keeps the extension alive — it just opens the browser instead of a panel.
+
+### Dependencies & Conflicts
+
+3. **ConnectionsPanelProvider** (`src/services/ConnectionsPanelProvider.ts:70`) — extension-only, no browser route. Must be ported or excluded before this stage's delete list is final.
+4. **DiagramRenderer** (`src/services/DiagramRenderer.ts:55`, `:127`) — dead code, not imported anywhere. Delete outright, do not port.
+5. **This stage does not depend on Stage 2.** Stage 1 works whether the extension is the host or a client — it just opens the browser on whatever host is running.
+
+## Dependencies
+
+- None. Stage 1 is the first stage and has no prerequisites.
+
+## Adversarial Synthesis
+
+Key risks: ConnectionsPanelProvider has no browser target (must be excluded or ported first), and DiagramRenderer is dead code (delete, don't port). Mitigations: exclude Connections from the delete list until ported; delete DiagramRenderer outright.
+
+## Proposed Changes
+
+### `src/services/KanbanProvider.ts`
+
+- **Context:** KanbanProvider has two `createWebviewPanel` sites: the kanban board panel (line 1769) and the agent control panel (line 1884). Both have browser equivalents (`/kanban` and the agent control tab).
+- **Logic:** Replace each panel-open method with a call to `vscode.env.openExternal(Uri.parse('http://127.0.0.1:<port>/kanban'))`. The port is obtained from the running `LocalApiServer` (still in-process at this stage).
+- **Implementation:** Delete the `createWebviewPanel` call and the panel lifecycle code (`this._panel`, `onDidDispose`, etc.). Replace with a `_openInBrowser()` method that resolves the port and calls `openExternal`.
+- **Edge Cases:** If no `LocalApiServer` is running (host not started), show a warning — do not silently fail.
+
+### `src/services/PlanningPanelProvider.ts`
+
+- **Context:** Two `createWebviewPanel` sites: project panel (line 676) and planning panel (line 867). Browser equivalents: `/project` and `/planning`.
+- **Logic:** Same pattern as KanbanProvider — replace with `openExternal` calls.
+- **Edge Cases:** Same — warn if no host is running.
+
+### `src/services/SetupPanelProvider.ts`
+
+- **Context:** One `createWebviewPanel` site (line 268). Browser equivalent: `/setup`.
+- **Logic:** Replace with `openExternal` call to `http://127.0.0.1:<port>/setup`.
+- **Edge Cases:** Setup may be needed before a host is running — if no host, the setup command should start one first (or fall back to the existing panel temporarily).
+
+### `src/services/DesignPanelProvider.ts`
+
+- **Context:** One `createWebviewPanel` site (line 691). Browser equivalent: `/design`.
+- **Logic:** Replace with `openExternal` call to `http://127.0.0.1:<port>/design`.
+- **Edge Cases:** Same — warn if no host is running.
+
+### `src/services/TicketsPanelProvider.ts`
+
+- **Context:** One `createWebviewPanel` site (line 1373). Browser equivalent: `/tickets`.
+- **Logic:** Replace with `openExternal` call to `http://127.0.0.1:<port>/tickets`.
+- **Edge Cases:** Same — warn if no host is running.
+
+### `src/services/DiagramRenderer.ts`
+
+- **Context:** Dead code — not imported by any file in `src/` outside itself. Two `createWebviewPanel` sites (lines 55, 127) are unreachable.
+- **Logic:** Delete the file entirely.
+- **Edge Cases:** Confirm no dynamic imports or `require()` calls reference it before deleting.
+
+### `src/services/ConnectionsPanelProvider.ts`
+
+- **Context:** Extension-only, no browser equivalent. Not in `src/standalone/bootstrap.ts`.
+- **Logic:** **Do not delete in this stage.** Either port to the standalone host's browser surface first, or defer to a separate plan. If deferred, leave the `createWebviewPanel` site intact and exclude from the Stage 1 delete list.
+- **Edge Cases:** If ported, the browser route must be designed and implemented before the panel is removed.
+
+### `src/extension.ts`
+
+- **Context:** All commands that opened panels must keep their palette entries and keybindings.
+- **Logic:** No command registration changes — only the command bodies (which now call `openExternal` instead of creating a panel). Verify every command in `package.json`'s `contributes.commands` still exists after the change.
+- **Edge Cases:** A command that opened a panel that no longer exists (DiagramRenderer) should be removed from `contributes.commands` — but only after confirming no keybinding references it.
 
 ## Verification Plan
 
-1. After stage 1, every command that previously opened a panel opens the browser on the running
-   host, and no command has been removed from the palette.
-2. After stage 1, `grep -c createWebviewPanel src/` returns zero outside `DiagramRenderer` and
-   whatever change 6 decided.
-3. After stage 2, the extension constructs no `LocalApiServer`, opens no database, and spawns no
-   PTY — verified by reading `extension.ts`, not by the UI appearing to work.
-4. With no host running, the sidebar offers to start one and says so plainly when it cannot.
-5. With a host already running, the sidebar attaches rather than starting a second — the
-   single-writer refusal is never shown to a user.
-6. `vscodeShim.ts` is deleted and no service file imports `vscode`.
-7. The parity checkers are replaced by assertions that the extension holds no host state, and those
-   assertions fail if a `LocalApiServer` construction is reintroduced.
-8. An upgrade from the current release leaves board data untouched, every migrated setting carrying
-   its previous value, and the sidebar working on first launch with no manual step.
-9. A browser user sees no CSP nonce, no dead `confirm()`, and no sandbox-imposed limitation that
-   only existed for the editor.
+### Automated Tests
+
+> NOTE: Per the dispatching directive, compilation and automated tests are not executed in this
+> review pass. The checks below remain written down for the implementer to run.
+
+1. `npm run compile` — typecheck passes after Stage 1.
+2. `npm test` — existing test suite passes.
+3. `grep -c createWebviewPanel src/` returns zero outside `ConnectionsPanelProvider` (deferred) after Stage 1.
+
+### Goal Invariants
+
+- Assert `createWebviewPanel` is absent from `src/services/KanbanProvider.ts`, `src/services/PlanningPanelProvider.ts`, `src/services/SetupPanelProvider.ts`, `src/services/DesignPanelProvider.ts`, and `src/services/TicketsPanelProvider.ts` after Stage 1. Paired positive: assert `registerWebviewViewProvider` is present in `src/extension.ts` (the sidebar survives).
+- Assert every command in `package.json`'s `contributes.commands` before Stage 1 still exists after Stage 1 (no command removed, only bodies changed).
+- Assert `src/services/DiagramRenderer.ts` does not exist (dead code deleted).
+
+### Manual Verification
+
+1. Every command that previously opened a panel opens the browser on the running host.
+2. No command has been removed from the palette.
+3. The sidebar (`switchboard-view`) is unchanged and functional.
+
+## Outstanding Questions
+
+- **[user]** Is `DiagramRenderer` (`src/services/DiagramRenderer.ts`) confirmed dead code? It is not imported by any file in `src/` outside itself. Proceeding on the assumption that it is dead and should be deleted outright.
+- **[user]** Should `ConnectionsPanelProvider` be ported to the standalone host's browser surface before Stage 1, or deferred to a separate plan? Proceeding on the assumption that it is deferred — the `createWebviewPanel` site stays intact until a browser equivalent is built.

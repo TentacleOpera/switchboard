@@ -145,7 +145,16 @@ below and justified; it needs no product call.
   The parser must inspect `Web.*.Handlers.*.Proxy` and `TCP.*.TCPForward` for port matching,
   and `AllowFunnel` for the funnel-vs-serve distinction. This is a new parser for a
   confirmed schema, but the schema is Tailscale-internal and explicitly unstable — the
-  parser must degrade to "no serve config detected" on any parse failure.
+  parser must degrade to "no serve config detected" on any parse failure. **Specific
+  validation rules:** (1) validate only `Web.*.Handlers.*.Proxy` URLs match
+  `http://127.0.0.1:<port>` or `http://localhost:<port>` where `<port>` equals the board's
+  listening port — ignore `Web` entries that proxy elsewhere; (2) validate `TCP.*.TCPForward`
+  dest port similarly; (3) ignore unknown top-level keys (`Services` nested blocks are
+  traversed for `Web`/`TCP` but unknown keys within are silently skipped); (4) any
+  `JSON.parse` failure, missing `Web`/`TCP` keys, or non-string `Proxy` values → return
+  "no serve config detected" (never throw); (5) `AllowFunnel[hostport] === true` on the
+  matched entry means the endpoint is internet-public (funnel) — the advisory line notes
+  this when the chosen origin is a funnel endpoint.
 - **An HTTPS-capable probe.** The existing `isHostnameReachable`
   (`loopbackHostname.ts:188`) is hardcoded to `http://` and cannot perform a TLS handshake.
   The HTTPS candidate requires a probe that does TLS — which doubles as the cert-liveness
@@ -270,15 +279,23 @@ copy-button reliability**; that claim outran its evidence once already.
   loopback listener, call `resolveTailnetOrigin` with the detected `tailnetAddress`,
   `magicDnsNames`, `instance.port`, and the serve-config detection result. Emit the returned
   URL as the single tailnet URL. If `secure === false`, emit the one advisory line
-  immediately after. The MagicDNS secondary info line may be dropped or kept as a typing hint,
-  but the *primary* URL is the resolver's choice, not the IP.
+  immediately after. **Keep the raw-IP tailnet URL in the banner as a fallback line** (the
+  MagicDNS info line at `cli.ts:4584` already serves this role for the FQDN; the IP is the
+  terminal fallback that needs no DNS resolution). The operator whose resolver-picked URL
+  stops resolving (a Tailscale hiccup) must be able to find the IP in the terminal without
+  re-running the command. The *primary* URL is the resolver's choice; the IP stays as a
+  secondary line, not a candidate the resolver emits.
 - **Implementation:** the serve-config detection runs alongside `detectTailnetAddress` /
   `resolveMagicDnsNames` in the existing tailnet-detection block (`cli.ts:2819-2830`). When
   `--hostname` is explicit, skip the resolver and honour the user's choice verbatim (Edge Case
   7 — already enforced by `resolveHostname` at `cli.ts:175`).
 - **Edge Cases:** detached mode (`cli.ts:2931-2933`) prints the tailnet URL before the child
   boots — the resolver must run in the parent after `findRunningInstance` confirms health, so
-  the printed URL is probed against the live server, not a guess.
+  the printed URL is probed against the live server, not a guess. The parent already calls
+  `detectTailnetAddress` and `resolveMagicDnsNames` (which both probe the LocalAPI socket)
+  before the fork, so the LocalAPI transport is available in the parent. The serve-config
+  detection follows the same transport — confirm the parent has access to the LocalAPI socket
+  (it does: the socket path is platform-fixed, not child-process-specific).
 
 ### `src/extension.ts`
 
@@ -360,6 +377,13 @@ resolver lives in `loopbackHostname.ts` (or a sibling), consumed by both `cli.ts
   `isHostnameReachable` in `loopbackHostname.ts`) and the tailnet detection already shipped
   in `tailnetDetect.ts` (`detectTailnetAddress`, `resolveMagicDnsNames`). Neither is a
   blocking dependency — both are merged and live.
+- **Feature ordering — lands after the Host header fix.** The serve-config detection and
+  CertDomains read both probe the Tailscale LocalAPI socket via `tailnetDetect.ts`. The
+  Host header fix (Subtask 0, `tailnet-localapi-probe-omits-the-host-header`) must land
+  first — without `Host: local-tailscaled.sock`, every LocalAPI probe gets `403 invalid
+  localapi request`, and the serve-config detection silently returns "no serve config"
+  even when one exists. The new functions in this plan must reuse the shared `Host` header
+  constant that Subtask 0 creates.
 - **Downstream consumer, not a blocker:** `board-installs-to-the-home-screen-as-a-standalone-app.md`
   is justified by the secure-origin benefit this plan delivers. That plan ships standalone
   launch over plain `http` via the Apple meta tag today (independent of TLS), but a secure
@@ -471,3 +495,7 @@ Confirmed by web research, 2026-09-01. Do not re-open.
   permissions. On Unix the socket is typically `0600`/`0660` root-owned; the `--operator`
   flag grants the operator's user access. If socket access is denied (`EACCES`/`EPERM`),
   both LocalAPI and CLI fail — fall through to the IP silently. No elevation is attempted.
+
+## Implementation Summary
+
+Implemented the secure-origin resolver for the tailnet URL path. Added `src/utils/tailnetOrigin.ts` exporting `resolveTailnetOrigin` (candidate list HTTPS FQDN → HTTP FQDN → HTTP IP, first-success-wins) and `isHttpsOriginReachable` (a TLS-handshake probe via `https.get` against `/health`, doubling as the cert-liveness check). Extended `src/utils/tailnetDetect.ts` with `readCertDomains` (reads `Self.CertDomains` from `/localapi/v0/status`) and `detectServeConfigMapping` (reads `/localapi/v0/serve-config` via the LocalAPI socket, falls back to `tailscale serve status --json` via the absolute-path CLI, parses `Web.*.Handlers.*.Proxy` for a port match, traverses `Services.*.Web`, and degrades to `null` on any parse failure). Wired the shared resolver into both composition roots: `cli.ts` (foreground + detached emission sites, with an explicit `--hostname` bypass and an IP fallback line) and `extension.ts` (the *Open in Browser* command). Both emit one advisory line when the chosen origin is insecure, naming the Home Screen install cost, and a funnel note when the origin is internet-public. Extended `src/test/tailscale-bind-contract.test.js` with source-level assertions for the resolver presence, probe target (`/health`, never `/?token=`), TLS-capable probe, serve-config transport, CertDomains pre-flight, graceful parse degradation, advisory gating, and the `--hostname` bypass. Compilation and tests were skipped per the run directives.

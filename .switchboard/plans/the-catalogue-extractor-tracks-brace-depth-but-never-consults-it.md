@@ -58,6 +58,37 @@ Both verbs landed in `4df54319` (2026-09-03, *priority as a native card field*).
 **Tags:** tooling, catalogue, ci, bugfix
 **Project:** Browser Switchboard
 
+## User Review Required
+
+None.
+
+## Complexity Audit
+
+### Routine
+
+- Adding a `depthAtLineStart === 1` guard before pushing an arm — one conditional in one function.
+- Regenerating two checked-in files via an existing `npm run catalog:generate` command.
+- Adding a single regression fixture file.
+
+### Complex / Risky
+
+- The depth-measurement ordering (before vs. after the line's braces) is the one subtle correctness point — get it backwards and every block-opening arm disappears. Verification point 6 guards this.
+
+## Edge-Case & Dependency Audit
+
+- **Race Conditions:** None — the catalogue is generated at build time, not at runtime.
+- **Security:** Six phantom verbs currently pass the `POST /kanban/verb/<name>` validation boundary and dispatch to nothing. Removing them tightens the boundary; no new surface is opened.
+- **Side Effects:** Regenerating `protocol-catalog.json` and `verbAllowlist.ts` changes the checked-in files. The parity gate (`check-protocol-parity.js`) regenerates byte-identical as its drift check (`:10`), so the fix and the regenerate cannot ship separately — one commit carries both.
+- **Dependencies & Conflicts:** The stale catalogue (missing `setCardPriority` / `setOrderByMode`) is independently owed from commit `4df54319`. This plan's regenerate resolves both the six-phantom removal and the two-missing-verb addition in one pass. No other provider's arm count changes.
+
+## Dependencies
+
+None.
+
+## Adversarial Synthesis
+
+Key risks: the depth-at-line-start measurement is off-by-one if taken after the brace loop (drops every block-opening arm); the `dynamic` case branch needs the same guard or it re-leaks. Mitigations: verification point 6 pins the `case 'x': {` form at depth 1; the regression fixture pins the exact nested-switch case that was missed.
+
 ## Proposed Changes
 
 1. **Consult depth when recording an arm.** In `extractHandlerArms`, capture `depthAtLineStart` **before** applying the line's braces, and push an arm only when `depthAtLineStart === 1`. Same rule for the `dynamic` branch.
@@ -83,3 +114,11 @@ Deciding what the six names *should* mean. They mean nothing today. If a role-ta
 5. The regression fixture yields one arm, not two. A version of the extractor without the depth check fails it.
 6. An arm of the form `case 'x': {` at depth 1 is still recorded — guards the off-by-one in change #1.
 7. `catalog:check`, `parity:check` and the `verb-returns` gate stay green.
+
+### Goal Invariants
+
+- **Negative:** `KANBAN_VERBS` in `src/generated/verbAllowlist.ts` contains none of: `planner`, `lead`, `coder`, `intern`, `reviewer`, `tester`.
+- **Positive:** `KANBAN_VERBS` in `src/generated/verbAllowlist.ts` contains both `setCardPriority` and `setOrderByMode`.
+- **Positive:** `POST /kanban/verb/coder` is refused as an unknown verb (not dispatched to the `getPromptPreview` arm's nested `case 'coder'`).
+- **Positive:** The regression fixture file yields exactly 1 arm from `extractHandlerArms`.
+- **Positive:** `protocol-catalog.json` Kanban provider verb count equals 174 (178 − 6 phantoms + 2 missing).

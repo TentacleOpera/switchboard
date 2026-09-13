@@ -82,13 +82,40 @@ Turning it on today would write 2,552 rows into a store whose location is an ope
 
 ## Metadata
 
-**Complexity:** 3
+**Complexity:** 4
 **Tags:** archive, settings, database, standalone
 **Dependencies:** the store's placement is decided by `fbdddc53` (Storage topology). This card must not pre-empt it.
 
 ## User Review Required
 
 None.
+
+## Complexity Audit
+
+### Routine
+- The two settings and their defaults are already identified; unifying to one DB-backed key is a config change, not new logic.
+- `AutoArchiveService.getConfig()` already reads the DB `config` table; the contributed VS Code setting just needs to write that key instead of shadowing it.
+- A test asserting the contributed default equals the code default is a single equality check.
+
+### Complex / Risky
+- Existing installs may have toggled the contributed setting believing it did something (the install base is not recorded here per AGENTS.md — do not infer a count). Their intent was "archive my completed cards"; the unification must honour an explicit toggle rather than silently resetting it to the code default.
+- Surfacing "never run" / last-swept state where an operator looks is a new reporting surface, not a config flip — it must read the same value on the standalone host and the extension host.
+- Leaving the effective default off while the store placement is undecided is correct but means the 2,552 completed rows keep sitting in the hot store; the card must not pretend to fix the volume, only the switch.
+
+## Edge-Case & Dependency Audit
+
+- **Race Conditions:** none — the sweep is single-threaded per workspace and already cadenced at 5 minutes.
+- **Security:** none — settings only.
+- **Side Effects:** enabling the setting (deliberately deferred) would write 2,552 rows into a store whose location is undecided; the default-off gate prevents this until `fbdddc53` lands.
+- **Dependencies & Conflicts:** `fbdddc53` (Storage topology) decides where the archive lives; this card must not enable the sweep before that. The dead-row card (`a9e39b4f`) widens the purge to `deleted` rows — complementary, not conflicting: this card fixes the archive switch, that card fixes the column-clearing and the purge.
+
+## Dependencies
+
+- `fbdddc53` — Storage topology: decides the archive's placement. This card lands the setting fix with the effective default off and lets `fbdddc53` decide placement before anything sweeps. State the dependency in the code, not just here.
+
+## Adversarial Synthesis
+
+Key risks: unifying the settings could silently reset an explicit user toggle; a defaults-equality test catches drift after the fact but does not fix the disagreement source. Mitigations: one setting (DB key), the contributed setting writes it, honour existing toggles on unification, and the equality test is the guard against future divergence. Default stays off until placement is decided.
 
 ## Proposed Changes
 
@@ -100,9 +127,10 @@ None.
 - **Implementation:** The DB `config` row is the one the service actually reads and the one that works
   headless; the contributed VS Code setting is the one that does not exist on the Pi at all. Prefer
   the DB key, and have the contributed setting write it rather than shadow it.
-- **Edge cases:** ~4,000 installs may have toggled the contributed setting believing it did something.
-  Their intent was "archive my completed cards"; honour it when the single setting lands rather than
-  silently resetting them to the code default.
+- **Edge cases:** Existing installs may have toggled the contributed setting believing it did
+  something (the install base is not recorded here — do not infer a count). Their intent was
+  "archive my completed cards"; honour it when the single setting lands rather than silently
+  resetting them to the code default.
 
 ### 2. The effective state must be visible
 
@@ -135,7 +163,3 @@ None.
 
 ### Manual
 - On the Pi, read the effective state and confirm it matches what the UI claims.
-
-## Outstanding Questions
-
-- None. Where the archive lives is `fbdddc53`'s question, deliberately not this card's.

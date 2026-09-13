@@ -6,7 +6,9 @@
 
 ## Goal
 
-Correct the 7 references in this repo's agent instructions that send agents to `.switchboard/protocols/` — a directory that has not existed since 2026-08-21 — and add a gate on the contents of `.agents/skills/` so a protocol written to the wrong place fails CI instead of shipping. Leave the 12 `.switchboard/protocols/` occurrences in `src/` alone: those are migration keys, and rewriting them breaks the migration.
+> **Superseded:** "Correct the 7 references in this repo's agent instructions that send agents to `.switchboard/protocols/`"
+> **Reason:** CLAUDE.md has been rewritten since this plan was written and now contains **zero** `.switchboard/protocols/` references (verified 2026-09-11: `grep -rn "\.switchboard/protocols" CLAUDE.md` returns no matches). All six CLAUDE.md corrections the plan specified are already done. Only **one** reference remains — `.agents/plan-authoring-protocol.md:29`.
+> **Replaced with:** Correct the 1 remaining reference in `.agents/plan-authoring-protocol.md`, and add a gate on the contents of `.agents/skills/` so a protocol written to the wrong place fails CI instead of shipping. Leave the 12 `.switchboard/protocols/` occurrences in `src/` alone: those are migration keys, and rewriting them breaks the migration.
 
 ### Problem & background
 
@@ -107,20 +109,27 @@ Two deliverables, one root cause, and neither ships usefully alone: correcting t
 
 ---
 
+## Dependencies
+
+- **`feature-titles-and-prose-must-be-true-of-the-plans-inside.md` Change 5** — previously depended on for the `improve-feature` sync-or-delete decision. Now resolved: this plan deletes the alias (Change 5). That plan's Change 5 should be updated to reflect the deletion, or dropped if its only action was the sync-or-delete question.
+- **Changes 5 and 6 must land before the gate (Change 3)** — the gate's 6-entry expected set assumes `improve-feature` is deleted and `switchboard-orchestration` is moved. If the gate lands first, it fails on the current 8-entry tree.
+- **This plan is self-contained** — both user decisions are resolved. No external dependency blocks landing.
+
+---
+
+## Adversarial Synthesis
+
+Key risks: (1) the expected set drops from 8 to 6 entries — two removals (improve-feature alias deleted, switchboard-orchestration moved to protocols) must land before the gate or it fails on the current tree; (2) deleting the `improve-feature` alias and moving `switchboard-orchestration` creates dead references in `manage-features` (lines 444, 494) and the `switchboard` skill (line 99) — these must be updated to point at protocol paths in the same change; (3) the `agentPromptBuilder.ts` stale mappings at `:1706` and `:1718` reference `switchboard-orchestrator` (with `or`), not `switchboard-orchestration` (with `ion`) — remove them, but leave the migration keys at `:1698-1720` that normalise persisted config values. Mitigations: Changes 5 and 6 land together with the gate; all references updated in the same change; migration keys preserved.
+
+---
+
 ## Proposed Changes
 
-### 1. `CLAUDE.md` — six corrections
+### 1. `CLAUDE.md` — ALREADY DONE (verified 2026-09-11)
 
-Replace `.switchboard/protocols/` with `.agents/protocols/` at:
-
-- `:54` — the protocols sentence in the workflow-registry note (`…live as protocols under .switchboard/protocols/<name>/SKILL.md`)
-- `:93` — the architecture diagram's `improve-plan` annotation
-- `:114` — the Protocols paragraph's closing `These live at …` clause
-- `:116` — the Usage line's `read .switchboard/protocols/improve-plan/SKILL.md` example
-- `:118` — **Skill Files Location**, the trap: the parenthetical pairing a live path with a dead one
-- `:127` — the plan-authoring protocol's `improve-plan` path
-
-No wording changes beyond the directory segment. The one addition worth making is at `:118`: name `.agents/protocols/` as the *only* protocol location, so a future reader cannot infer a second one is also valid.
+> **Superseded:** Six corrections at `:54`, `:93`, `:114`, `:116`, `:118`, `:127` replacing `.switchboard/protocols/` with `.agents/protocols/`.
+> **Reason:** CLAUDE.md has been rewritten since this plan was written. `grep -rn "\.switchboard/protocols" CLAUDE.md` returns zero matches. The corrections are already done — no action needed.
+> **Replaced with:** No change. Verify the zero-match invariant holds (see Goal Invariant 1).
 
 ### 2. `.agents/plan-authoring-protocol.md` — one correction
 
@@ -132,7 +141,11 @@ Follow the shape of `scripts/check-protocol-parity.js`: `#!/usr/bin/env node`, `
 
 **Guarantee:** the top-level entries of `.agents/skills/` equal an explicit expected set exactly — no extras, no missing.
 
-**Expected set** (pending the `switchboard-orchestration` decision): `_lib`, `kanban_operations`, `manage-features`, `query-kanban`, `worktree-cleanup`.
+**Expected set** (after this plan's changes, decided 2026-09-11): `_lib`, `external-team-lead`, `kanban_operations`, `manage-features`, `query-kanban`, `worktree-cleanup` — 6 entries.
+
+**Decisions resolved:**
+- **`improve-feature` — DELETE the alias.** `improve-feature` is only ever dispatched by the extension on a column move to `PLAN REVIEWED`, same as `improve-plan`. `improve-plan` has no `.agents/skills/` alias and never did. `improve-feature` should follow the same pattern — protocols only, no discoverable alias. The alias is deleted by Change 5 below, and the expected set excludes it. `manage-features` lines 444 and 494 reference `improve-feature` by skill name — update them to point at `.agents/protocols/improve-feature/SKILL.md` by path (Change 5).
+- **`switchboard-orchestration` — MOVE to `.agents/protocols/`.** The only skill a user types is `switchboard`, and that skill references `switchboard-orchestration` by name at line 99. A user is not going to type `switchboard-orchestration` directly. It is a reference document, not a dispatched workflow — but it belongs in `.agents/protocols/` alongside the other path-referenced documents, and the `switchboard` skill should reference it by path. Move the directory from `.agents/skills/` to `.agents/protocols/` (Change 6), update the `switchboard` skill line 99 to point at the protocol path (Change 6), and clean up the dead `agentPromptBuilder.ts:1706` mapping that references `switchboard-orchestrator` (with `or`) — a stale path to a directory that never existed (Change 6).
 
 **Failure message** must say why, not just what — that a protocol belongs in `.agents/protocols/`, that an entry here becomes a discoverable skill injected into every agent's system prompt, and that adding one means editing this whitelist on purpose. The message is the only place a future agent will read the rule at the moment it matters.
 
@@ -140,6 +153,25 @@ Follow the shape of `scripts/check-protocol-parity.js`: `#!/usr/bin/env node`, `
 
 - Add `"skills-whitelist:check": "node scripts/check-agent-skills-whitelist.js"`.
 - Wire it into `.github/workflows/integration-tests.yml` adjacent to the `mirror:check` step (currently `:53`), in the same fast-gate group — it needs no compile, so it belongs before the contract tests.
+
+### 5. Delete `.agents/skills/improve-feature/` alias + update `manage-features` references
+
+**Delete the alias:**
+- `git rm -r .agents/skills/improve-feature/` — the canonical copy at `.agents/protocols/improve-feature/SKILL.md` is the sole source. The extension dispatches from the protocols path (`agentPromptBuilder.ts:1683`, `KanbanProvider.ts:7072`); the skills alias was only a discoverable entry in the system prompt's skill registry. `improve-plan` has no alias and never did — `improve-feature` follows the same pattern.
+- Remove the `agentPromptBuilder.ts:1704` mapping: `'.agents/skills/improve-feature/SKILL.md': DEFAULT_FEATURE_PLANNER_WORKFLOW` — the path it maps no longer exists. The migration key at `:1713` (`.switchboard/protocols/improve-feature/SKILL.md`) stays — it normalises a persisted config value from a vintage that predates the move.
+
+**Update `manage-features` references:**
+- `.agents/skills/manage-features/SKILL.md:444` — change `**\`improve-feature\` / \`switchboard-feature\`**` to reference `.agents/protocols/improve-feature/SKILL.md` by path instead of by skill name.
+- `.agents/skills/manage-features/SKILL.md:494` — change "hand off to `improve-feature`" to "hand off to `.agents/protocols/improve-feature/SKILL.md`" (read the protocol by path).
+
+### 6. Move `switchboard-orchestration` to `.agents/protocols/` + update references
+
+**Move the directory:**
+- `git mv .agents/skills/switchboard-orchestration/ .agents/protocols/switchboard-orchestration/` — it is a reference document, not a dispatched workflow, but it belongs in `.agents/protocols/` alongside the other path-referenced documents. A user never types `switchboard-orchestration` directly; the only skill a user types is `switchboard`, which references it by path after this change.
+
+**Update references:**
+- `.claude/skills/switchboard/SKILL.md:99` — change "the `switchboard-orchestration` skill documents every endpoint" to "`.agents/protocols/switchboard-orchestration/SKILL.md` documents every endpoint" (reference by path).
+- `agentPromptBuilder.ts:1706` — remove the dead mapping `'.agents/skills/switchboard-orchestrator/SKILL.md': 'switchboard-mission-control'`. The path references `switchboard-orchestrator` (with `or`), not `switchboard-orchestration` (with `ion`) — a stale path to a directory that never existed. The mapping at `:1718` (`.agents/protocols/switchboard-orchestrator/SKILL.md`) is also stale (same `or` vs `ion` mismatch) — remove it too. The `switchboard-mission-control` workflow is resolved via `GET /protocol/switchboard-mission-control` at runtime, not via these path mappings.
 
 ### Migration
 
@@ -155,6 +187,11 @@ None. Instruction text and a new gate; no persisted state, no user files, no shi
 2. `grep -rc "\.switchboard/protocols" src/services/agentPromptBuilder.ts` still returns **6**; `src/test/planner-workflow-path-migration.test.js` still **5**; `src/test/vsix-packaging-contract.test.js` still **1**. The negative half matters more than the positive half — it is what distinguishes this change from the find-and-replace that breaks the migration.
 3. `npm run skills-whitelist:check` exits 0 on the corrected tree.
 4. `npm run skills-whitelist:check` exits non-zero when a scratch directory is added under `.agents/skills/`, and the message names the offending entry.
+5. `.agents/skills/improve-feature/` does not exist — the alias is deleted.
+6. `.agents/skills/switchboard-orchestration/` does not exist — moved to `.agents/protocols/switchboard-orchestration/`.
+7. `.agents/protocols/switchboard-orchestration/SKILL.md` exists and contains the HTTP contract content.
+8. `manage-features/SKILL.md` contains zero references to `improve-feature` as a skill name — references are by protocol path.
+9. The `switchboard` skill (`.claude/skills/switchboard/SKILL.md`) references `switchboard-orchestration` by protocol path, not by skill name.
 
 ### Automated Tests
 
@@ -170,12 +207,10 @@ None. Instruction text and a new gate; no persisted state, no user files, no shi
 
 ## Outstanding Questions
 
-- **[user]** Is `switchboard-orchestration` a discoverable skill (add to the whitelist) or a protocol that landed in the wrong directory (move to `.agents/protocols/`, gate excludes it)? Blocks the expected set in Change 3.
-- **[user]** `external-team-lead` now exists in **both** `.agents/skills/` and `.agents/protocols/`. Same duplication as `improve-feature` but not covered by the other plan. Fold it into that plan's Change 5, or handle here?
 - Should the gate extend to `.agents/protocols/` as well — asserting every protocol there is referenced by at least one code path or `CLAUDE.md` entry? That would catch the inverse drift (an orphaned protocol nothing dispatches). Deliberately out of scope; worth its own plan if the answer is yes.
 
 ---
 
 ## Recommendation
 
-Do it, and do the `CLAUDE.md` correction first and separately if anything delays the gate. Seven wrong strings in the file every agent reads is the whole cause of a split-brain in a dispatched protocol; that half is five minutes and needs no decision. The gate needs the `switchboard-orchestration` answer, and should land after `feature-titles-and-prose-must-be-true-of-the-plans-inside.md` settles whether the `improve-feature` alias is synced or deleted.
+Do it. The CLAUDE.md corrections are already done (verified zero matches). The remaining work: (1) fix the one reference in `.agents/plan-authoring-protocol.md:29` — five minutes; (2) delete the `.agents/skills/improve-feature/` alias and update `manage-features` lines 444/494 to point at the protocol path (Change 5); (3) move `switchboard-orchestration` to `.agents/protocols/` and update the `switchboard` skill line 99 + clean up stale `agentPromptBuilder.ts` mappings (Change 6); (4) write the whitelist gate with the 6-entry expected set (Change 3). Changes 5 and 6 must land before the gate, or the gate fails on the current 8-entry tree.

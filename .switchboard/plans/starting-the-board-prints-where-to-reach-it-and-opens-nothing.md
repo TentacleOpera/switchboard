@@ -102,7 +102,7 @@ secret, opening the browser, and the wrong address are all independent of it and
 
 ## Metadata
 
-**Complexity:** 2
+**Complexity:** 3
 **Tags:** cli, ux, security, standalone, defaults
 **Dependencies:** phase 2 requires `The browser board is served unauthenticated by the extension
 host — reject cross-site state-changing requests in both hosts` (CREATED, complexity 4, subtask of

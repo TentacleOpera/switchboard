@@ -32,7 +32,11 @@ This is not evenly spread. Measured per file:
 ### Two related things that are NOT in scope
 
 - **`-webkit-font-smoothing: antialiased`** (8 files). Chrome-only and Firefox has no equivalent — the property thins glyphs on macOS, and without it Firefox renders heavier. This is an accepted cross-engine difference, not a defect, and there is nothing to add. Leave it.
-- **`-webkit-text-security: disc`** on token fields (`setup.html`, `design.html`, `tickets.html`). Firefox does not implement it, but this is **already correctly handled** and must not be touched: `transport.js:711` `restoreTokenMaskingFallback()` feature-detects via `CSS.supports('-webkit-text-security','disc')` and restores `type="password"` where unsupported. Verified live — it is invoked on both the `DOMContentLoaded` and already-loaded branches (`:727`, `:730`), all three pages that use the class load `transport.js`, and every masked field is static in the HTML so the load-time pass covers it. Do **not** "fix" this by adding `input-security`: `none` means *reveal*, the opposite, as both call sites' comments warn.
+- **`-webkit-text-security: disc`** on token fields (`setup.html`, `design.html`, `tickets.html`). Firefox does not implement it, but this is **already correctly handled** and must not be touched: `transport.js:884` `restoreTokenMaskingFallback()` feature-detects via `CSS.supports('-webkit-text-security','disc')` and restores `type="password"` where unsupported. Verified live — it is invoked on both the `DOMContentLoaded` and already-loaded branches (`:900`, `:903`), all three pages that use the class load `transport.js`, and every masked field is static in the HTML so the load-time pass covers it. Do **not** "fix" this by adding `input-security`: `none` means *reveal*, the opposite, as both call sites' comments warn.
+
+  > **Superseded:** `transport.js:711` `restoreTokenMaskingFallback()` … branches (`:727`, `:730`)
+  > **Reason:** Line numbers drifted since the plan was authored. Re-verified against HEAD: `restoreTokenMaskingFallback` is defined at `:884`, the `DOMContentLoaded` listener at `:900`, and the already-loaded call at `:903`. The "do not touch" rationale is unchanged; only the citation was stale.
+  > **Replaced with:** `transport.js:884` … branches (`:900`, `:903`) — as above.
 
 ## Metadata
 
@@ -99,6 +103,12 @@ Assert that in every `src/webview/*.html`, each selector carrying a `::-webkit-s
 - `src/test/webview-scrollbar-parity-contract.test.js` — new gate
 
 ## Verification Plan
+
+### Goal Invariants
+
+- **Positive:** every selector in every `src/webview/*.html` that carries a `::-webkit-scrollbar` rule also carries `scrollbar-width` and `scrollbar-color` on that same selector (the pairing contract, asserted per selector — not a file-level total).
+- **Negative (paired):** no selector in any `src/webview/*.html` carries a `::-webkit-scrollbar` rule without a co-located `scrollbar-width`/`scrollbar-color` pair. Paired positive: the four previously zero-coverage files (`kanban.html`, `design.html`, `planning.html`, `implementation.html`) now satisfy the pairing contract.
+- **Negative:** no `input-security` declaration is added anywhere in `src/webview/` — the token-masking fallback in `transport.js` already handles `-webkit-text-security` correctly, and `input-security: none` would *reveal* masked fields. Guards the "do not touch" note in the scope section.
 
 ### Automated
 

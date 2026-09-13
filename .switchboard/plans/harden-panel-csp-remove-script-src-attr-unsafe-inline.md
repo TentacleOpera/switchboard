@@ -2,7 +2,7 @@
 
 ## Goal
 
-Set `script-src-attr 'none'` in all 10 panel CSP definitions across both composition roots, and convert the 3 inline HTML event-handler attributes that currently depend on `'unsafe-inline'` to `addEventListener`. This closes the one CSP directive that permits the exact XSS vector every `innerHTML` sink in the webviews is exposed to.
+Set `script-src-attr 'none'` in all 8 panel CSP definitions that currently carry `'unsafe-inline'` (5 header CSPs in the standalone root + 3 `<meta>` CSPs shared by both hosts), and convert the 3 inline HTML event-handler attributes that currently depend on `'unsafe-inline'` to `addEventListener`. This closes the one CSP directive that permits the exact XSS vector every `innerHTML` sink in the webviews is exposed to.
 
 ### Problem Analysis
 
@@ -27,9 +27,9 @@ The panels are full of `innerHTML` sinks fed by content that is not fully truste
 
 | Site | Handler | Notes |
 | :--- | :--- | :--- |
-| `design.html:4331` | `onerror="console.error(…); window.__sbInspectLoadError = true;"` on the `inspect.js` `<script>` tag | `window.__sbInspectLoadError` is written here and **read nowhere** in `src/` — a dead flag |
-| `planning.js:6720` | `onclick="document.getElementById('prd-project-picker-modal').remove()"` | modal close button |
-| `planning.js:6727` | `onclick="document.getElementById('prd-project-picker-modal').remove()"` | modal Cancel button |
+| `design.html:4345` | `onerror="console.error(…); window.__sbInspectLoadError = true;"` on the `inspect.js` `<script>` tag | `window.__sbInspectLoadError` is written here and **read nowhere** in `src/` — a dead flag (verified: the symbol appears only at this one site) |
+| `planning.js:6710` | `onclick="document.getElementById('prd-project-picker-modal').remove()"` | modal close button |
+| `planning.js:6717` | `onclick="document.getElementById('prd-project-picker-modal').remove()"` | modal Cancel button |
 
 Every other `on<event> =` match in `src/webview/` is a DOM **property** assignment in JS (`btn.onclick = () => …`), which CSP does not govern. Those need no change and must not be touched.
 
@@ -51,7 +51,12 @@ None.
 ## Approach
 
 1. **Convert the 3 inline handlers to `addEventListener`.** Do this *before* tightening the CSP, so no intermediate commit has a silently-dead handler.
-2. **Set `script-src-attr 'none'` in all 10 CSP definitions** — 7 header CSPs in `src/services/headlessPanelHtml.ts` (standalone root) and 3 `<meta>` CSPs in the panel HTML (shared by both hosts).
+2. **Set `script-src-attr 'none'` in all 8 CSP definitions that currently carry `'unsafe-inline'`** — 5 header CSPs in `src/services/headlessPanelHtml.ts` (standalone root) and 3 `<meta>` CSPs in the panel HTML (shared by both hosts).
+
+   > **Superseded:** "Set `script-src-attr 'none'` in all 10 CSP definitions — 7 header CSPs in `src/services/headlessPanelHtml.ts` (standalone root) and 3 `<meta>` CSPs in the panel HTML."
+   > **Reason:** Verified against HEAD by grep: only **5** header CSPs in `headlessPanelHtml.ts` carry `script-src-attr 'unsafe-inline'` — mission-control (`:263`), project (`:301`), planning (`:337`), design (`:373`), tickets (`:522`). The plan's listed `setup` (`:381`) and `connections` (`:490`) **omit the directive entirely** — their CSP is the tighter `script-src 'nonce-${nonce}' 'self'` with no `'unsafe-eval'` and no `script-src-attr` at all. Omission already blocks inline handlers (the directive falls back to `script-src`, which carries a nonce, so `'unsafe-inline'` would be ignored anyway). Replacing a string that is not there is a no-op, and a contract test pinned to "10 exactly" fails on a tree that has only 8. Total is **8**, not 10.
+   > **Replaced with:** 5 header CSPs (mission-control, project, planning, design, tickets) + 3 `<meta>` CSPs (planning.html, project.html, design.html) = **8**. The omitting panels (setup, connections, memo, dock, terminals, linear, …) are already safe by fallback and are out of scope; a follow-up could add `script-src-attr 'none'` to them for explicit intent, but that is hardening, not fixing a hole.
+
 3. **Add a contract test** that fails if `script-src-attr 'unsafe-inline'` reappears in any CSP, or if a new inline handler attribute appears in any webview HTML/JS.
 
 **Use `'none'`, not deletion.** Omitting `script-src-attr` makes it fall back to `script-src`, which currently has a nonce and would therefore also block inline handlers — but that is a chain of inference that silently breaks the day someone adds `'unsafe-inline'` to `script-src` without a nonce. `'none'` states the intent, is immune to `script-src` edits, and is what the contract test asserts.
@@ -61,7 +66,7 @@ None.
 ### Routine
 
 - Replacing two `onclick="…"` attributes in a template literal with an `addEventListener` after the node is inserted.
-- A find-and-replace of `script-src-attr 'unsafe-inline'` → `script-src-attr 'none'` across 10 sites.
+- A find-and-replace of `script-src-attr 'unsafe-inline'` → `script-src-attr 'none'` across 8 sites (5 header + 3 meta).
 
 ### Complex / Risky
 
@@ -93,21 +98,21 @@ The residual risk is a *future* inline handler being added and silently not firi
 
 ## Proposed Changes
 
-### `src/services/headlessPanelHtml.ts` (standalone composition root — 7 CSP strings)
+### `src/services/headlessPanelHtml.ts` (standalone composition root — 5 CSP strings)
 
 **Context.** Each `get<Panel>Html` builds a `csp` string returned to `LocalApiServer`, which sends it as the `Content-Security-Policy` header (`LocalApiServer.ts:1287,1339,1393,1467`, via `_widenCspForRequest`, which only touches `connect-src`).
 
-**Logic.** In each of the 7 CSP template literals, replace `script-src-attr 'unsafe-inline'` with `script-src-attr 'none'`:
+**Logic.** In each of the 5 CSP template literals that carry the directive, replace `script-src-attr 'unsafe-inline'` with `script-src-attr 'none'` (line numbers are HEAD-relative and will drift — match on the `script-src-attr 'unsafe-inline'` string, not the line):
 
-| Line | Panel |
+| Line (HEAD) | Panel |
 | :--- | :--- |
-| `:249` | mission-control |
-| `:275` | project |
-| `:311` | planning |
-| `:347` | design |
-| `:381` | setup |
-| `:461` | tickets |
-| `:490` | connections |
+| `:263` | mission-control |
+| `:301` | project |
+| `:337` | planning |
+| `:373` | design |
+| `:522` | tickets |
+
+**Not edited — `setup`, `connections`, `memo`, `dock`, `terminals`, `linear`.** These panels' header CSPs omit `script-src-attr` entirely (their `script-src` is the tighter `'nonce-${nonce}' 'self'` with no `'unsafe-eval'`). Inline handlers are already blocked by fallback to the nonced `script-src`. Replacing a string that is absent is a no-op; adding `script-src-attr 'none'` to them is explicit-intent hardening, not a fix, and is out of scope for this plan.
 
 No other part of these strings changes.
 
@@ -115,7 +120,7 @@ No other part of these strings changes.
 
 **Logic.** Same substitution in the `<meta http-equiv="Content-Security-Policy">` tag. These are the extension host's policy for these panels, and in standalone they intersect with the header above.
 
-### `src/webview/design.html:4331` (inline `onerror` — remove)
+### `src/webview/design.html:4345` (inline `onerror` — remove)
 
 **Context.**
 
@@ -127,7 +132,7 @@ No other part of these strings changes.
 
 **Justification.** `window.__sbInspectLoadError` is assigned here and read nowhere in `src/` — removing the assignment changes no behavior. The `console.error` is a diagnostic that the browser already reports as a failed resource load in the network panel.
 
-### `src/webview/planning.js:6720, 6727` (inline `onclick` ×2 — convert)
+### `src/webview/planning.js:6710, 6717` (inline `onclick` ×2 — convert)
 
 **Context.** Both are in the PRD project-picker modal's HTML template literal:
 
@@ -164,7 +169,7 @@ modalEl.querySelectorAll('.modal-close-btn, .strip-btn').forEach(btn => {
 
    Confirm exactly 3 hits: `design.html` ×1 `onerror`, `planning.js` ×2 `onclick`. This grep deliberately requires a quote directly after `=`, which excludes DOM property assignments (`btn.onclick = () => …`). If the count is not 3, the plan's scope is stale — re-enumerate before editing.
 2. **After the change, the same grep returns 0 hits.**
-3. **Contract test — CSP.** Assert that no CSP string in `src/services/headlessPanelHtml.ts` and no `<meta http-equiv="Content-Security-Policy">` in `src/webview/*.html` contains `script-src-attr 'unsafe-inline'`, and that all 10 contain `script-src-attr 'none'`. Pin the count to **10** exactly — a test asserting "none contain unsafe-inline" also passes if someone deletes the directive entirely, which is the weaker posture this plan rejects.
+3. **Contract test — CSP.** Assert that no CSP string in `src/services/headlessPanelHtml.ts` and no `<meta http-equiv="Content-Security-Policy">` in `src/webview/*.html` contains `script-src-attr 'unsafe-inline'`, and that all 8 that previously carried it now contain `script-src-attr 'none'`. Pin the count to **8** exactly (5 header + 3 meta) — a test asserting "none contain unsafe-inline" also passes if someone deletes the directive entirely, which is the weaker posture this plan rejects. Do **not** assert that the omitting panels (setup, connections, …) gained the directive; they are out of scope and pinning their count would couple the test to a hardening this plan deliberately defers.
 4. **Contract test — handlers.** Assert the grep in step 1 returns zero matches across `src/webview/`. This is the guard that makes a future inline handler fail the build instead of silently not firing.
 5. **PRD project-picker modal, extension host.** Open the Project panel, trigger the PRD project picker, click the `×` — modal closes. Reopen, click Cancel — modal closes. Reopen a third time to confirm no listener accumulation or duplicate-id breakage.
 6. **PRD project-picker modal, standalone host.** Same three interactions in `npx switchboard`. Both hosts, because the meta CSP is shared and the header CSP is standalone-only — a break could appear in either.
@@ -176,7 +181,7 @@ modalEl.querySelectorAll('.modal-close-btn, .strip-btn').forEach(btn => {
 
 ### Goal Invariants
 
-- **Positive:** all 10 CSP definitions contain `script-src-attr 'none'` (7 in `headlessPanelHtml.ts`, 3 in panel `<meta>` tags).
+- **Positive:** all 8 CSP definitions that previously carried `'unsafe-inline'` now contain `script-src-attr 'none'` (5 in `headlessPanelHtml.ts` — mission-control, project, planning, design, tickets; 3 in panel `<meta>` tags — planning.html, project.html, design.html).
 - **Positive:** an `onerror` attribute injected into a panel `innerHTML` sink does not execute in either host (Verification step 7).
 - **Negative (paired):** zero inline `on<event>="…"` attributes remain in `src/webview/`. Paired positive: the PRD project-picker modal still closes from both its `×` and Cancel buttons in both hosts — a change that removes the attributes without rebinding fails this pair.
 - **Negative:** no DOM property assignment (`el.onclick = …`) was rewritten. These are not CSP-governed; touching them is scope creep and this plan forbids it.

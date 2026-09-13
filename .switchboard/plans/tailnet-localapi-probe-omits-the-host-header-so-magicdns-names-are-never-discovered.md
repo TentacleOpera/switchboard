@@ -80,6 +80,21 @@ Fixing the Host header does not fix either, and neither of them explains the 403
 
 None.
 
+## Complexity Audit
+
+### Routine
+- Adding `Host: local-tailscaled.sock` to two `http.get` options objects — one literal, shared constant.
+- Printing a warning line in the tailnet banner when the result is `unavailable`.
+- Wiring the new contract test into `package.json` and the integration workflow.
+
+### Complex / Risky
+- **Return-type change from `string[]` to `MagicDnsResult`.** Every consumer of `resolveMagicDnsNames()` must unwrap the tagged union to extract `.names` before building the `BindPolicy` (whose `magicDnsNames` field stays `string[]`). Call sites: `cli.ts:4397`, `TaskViewerProvider.ts:4040`. The policy construction at `cli.ts:4550` and `TaskViewerProvider.ts:4042` must receive `string[]`, not `MagicDnsResult`.
+- **Extension-host reporting parity.** The shared probe fix reaches both hosts automatically, but the reporting (surfacing the `unavailable` reason) must be wired in both `cli.ts` and `TaskViewerProvider.ts` / `extension.ts`. Diff the two call sites by hand — the shared module covers the probe, not the reporting.
+
+## Adversarial Synthesis
+
+Key risks: (1) the return-type change ripples to every consumer of `resolveMagicDnsNames()` — a missed call site gets a `MagicDnsResult` where it expects `string[]` and breaks at runtime, not at compile time (the `string[]` field on `BindPolicy` is structurally compatible with a union that has a `names: string[]` member); (2) the `reason` string in the `unavailable` variant must be actionable (name the socket path or HTTP status, not a generic "failed"); (3) the regression test's mock server must 403 on any Host except the expected one — a test that accepts any Host cannot fail on this bug. Mitigations: enumerate every call site in the plan, keep `BindPolicy.magicDnsNames` as `string[]` with unwrapping at the construction site, and the mock-server test mirrors the exact 403-then-200 behaviour measured on the real socket.
+
 ## Proposed Changes
 
 ### 1. Send the `Host` header on every LocalAPI request
@@ -145,6 +160,16 @@ Subtask of the **Tailnet** feature. It lands **first**, before the MagicDNS plan
 
 Each step is a measurement, and the before-values are recorded above from this machine.
 
+### Goal Invariants
+
+- Assert `resolveMagicDnsNames` is exported from `src/utils/tailnetDetect.ts` and returns a `MagicDnsResult` (tagged union), not a bare `string[]`.
+- Assert the `Host: local-tailscaled.sock` header (or a shared constant referencing it) appears in both `probeLocalApiSocket` and `resolveMagicDnsNames` source — two occurrences, not one.
+- Assert `BindPolicy.magicDnsNames` in `src/utils/loopbackHostname.ts` is still typed `string[]` — the unwrapping from `MagicDnsResult.names` happens at the call site, not inside the policy type.
+- Assert that against a server which always 403s, `resolveMagicDnsNames()` returns `source: 'unavailable'` with a non-empty `reason` — NOT an empty `string[]` or a `source: 'localapi'` with `names: []`.
+- Assert that against a server returning a valid `Self.DNSName`, `resolveMagicDnsNames()` returns `source: 'localapi'` with the dot-stripped, lower-cased FQDN in `names`.
+
+### Manual Verification
+
 1. **The reported bug, end to end.** Start the board from the CLI menu's `[2] Start Remote Tailnet Board`. From another tailnet device, open `http://<magicdns-fqdn>:7777/`. It loads the board. Before this fix it returns `403 Access denied: invalid Host header`.
 2. `curl -s http://<magicdns-fqdn>:7777/health` returns 200 rather than 403.
 3. The startup banner lists the MagicDNS name alongside the tailnet address, which today prints the address alone.
@@ -153,3 +178,7 @@ Each step is a measurement, and the before-values are recorded above from this m
 6. `npm run test:contract:tailnet-localapi-host-header` passes, including the negative control.
 7. The raw tailnet IPv4 address still serves, and loopback still serves — neither regresses.
 8. Both hosts agree: with names resolved, the extension host's MagicDNS URL block lists the same name the standalone banner prints.
+
+## Implementation Summary
+
+Added the `Host: local-tailscaled.sock` header (via a shared exported `LOCALAPI_HOST_HEADER` constant) to both LocalAPI probes in `src/utils/tailnetDetect.ts` — `probeLocalApiSocket` and `resolveMagicDnsNames` — fixing the silent 403 that left `magicDnsNames` empty. Changed `resolveMagicDnsNames`'s return type from `string[]` to a `MagicDnsResult` tagged union (`{ names, source: 'localapi' } | { names: [], source: 'unavailable', reason }`) so a refused probe is distinguishable from a machine with no MagicDNS name; `BindPolicy.magicDnsNames` stays `string[]` with unwrapping at the call sites. Both composition roots surface the `unavailable` reason: the standalone CLI (`cli.ts`) prints a four-line warning naming the consequence and the `--hostname` escape hatch (without exiting), and the extension host (`TaskViewerProvider.ts`) logs the reason via `console.warn`. Added a regression test (`src/test/tailnet-localapi-host-header-contract.test.js`) that stands up a mock unix-socket server mirroring the real 403-then-200 behaviour, wired into `package.json` and the integration workflow.

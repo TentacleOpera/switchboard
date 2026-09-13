@@ -144,7 +144,7 @@ has to take.
 
 ## Metadata
 
-**Complexity:** 3
+**Complexity:** 4
 **Tags:** mission-control, backend, api, cli, reports
 **Dependencies:** none — and deliberately so. This no longer waits on
 `mission-control-reads-its-protocols-from-a-directory-nothing-writes` or on whether Mission Control

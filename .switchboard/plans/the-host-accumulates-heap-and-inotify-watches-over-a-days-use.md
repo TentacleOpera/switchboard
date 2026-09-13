@@ -54,9 +54,24 @@ timestamp,pid,rss,heapUsed,heapTotal,external,arrayBuffers,inotifyDescriptors,op
 
 So this is not a missing-instrumentation problem. It is a nobody-is-looking problem.
 
-**And the contract test cannot catch it.** `src/test/resident-memory-budget-contract.test.js` asserts
-that the published document and the gate state the same numbers — it does not sample a running host.
-A host at 493 MB against a documented 350 MB idle ceiling passes today.
+**And the contract test cannot catch the *drift*.** `src/test/resident-memory-budget-contract.test.js`
+has two halves. The **static** half (lines 80-156) asserts the probe schema, the watch roots, and
+that the doc and gate state the same numbers. The **live** half (lines 184-231) DOES sample a
+running host — it asserts `rss < 350 MB` (line 202-207) and `inotify < 8192` (line 209-214) against
+a host answering on the workspace port.
+
+> **Superseded:** "the contract test ... does not sample a running host. A host at 493 MB against a
+> documented 350 MB idle ceiling passes today."
+> **Reason:** The live half *does* sample a running host and *would* fail a 493 MB host — but only if
+> that host were the one it probes. It probes a **freshly started** host (the test starts the host,
+> samples immediately). A fresh host settles at 182 MB and passes; the 493 MB reading was taken after
+> 17 h 44 m of use. So the test catches a *fresh-host* regression but is structurally blind to
+> *uptime drift* — exactly this plan's subject.
+> **Replaced with:** The gap is not "no live sampling" but "no sampling after sustained use." A host
+> at 493 MB passes today because the live half runs against a fresh process, not because no live half
+> exists. Change 3 below is reframed accordingly: the live half already asserts the idle ceiling; what
+> is missing is a drift assertion (sample, exercise, sample again — the leak's signature is that the
+> second reading does not return to the first).
 
 ## Metadata
 
@@ -67,6 +82,63 @@ A host at 493 MB against a documented 350 MB idle ceiling passes today.
 ## User Review Required
 
 None.
+
+## Complexity Audit
+
+### Routine
+- Adding a `v8.writeHeapSnapshot()` verb or `SIGUSR2` handler behind a guard — single call, the
+  guard is the only logic.
+- Running `switchboard probe` on a timer and keeping a bounded rotating series — the probe and
+  its CSV output already exist (`cli.ts:1565`).
+- Adding a drift assertion to the existing live contract half — the harness (`probeRows`,
+  `livePort`) already exists.
+
+### Complex / Risky
+- **The watch leak (change 4) is the hard part.** Watches are armed by `attachDirectoryWatcher`
+  (`directoryWatcher.ts:83`) which returns a handle with `dispose()`. The leak means some
+  registration site is not disposing on a lifecycle event (plan delete, board close, session end).
+  Finding it requires tracing every `attachDirectoryWatcher` caller and confirming each pairs
+  with a `dispose()` — the count's shape (scales with plans touched) points at per-plan or
+  per-board watchers, and the `filterGhostPlans` logging is circumstantial evidence.
+- **The heap retention (change 5) is un-namable without change 1.** A 355 MB `heapUsed` is
+  reachable objects; only a snapshot identifies the retainer. This is correctly sequenced after
+  change 1, not parallelised.
+- **The snapshot pauses the process.** `v8.writeHeapSnapshot()` on a 355 MB heap is a
+  multi-hundred-ms stop-the-world on the event loop. The guard must make it unreachable by
+  accident or it becomes the wedge the CPU-attribution subtask is trying to catch.
+
+## Edge-Case & Dependency Audit
+
+- **Race Conditions:** the periodic probe sampler (change 2) reads `/health` and `/proc/<pid>/...`;
+  a host mid-shutdown could return a stale pid. The sampler must tolerate a failed probe without
+  poisoning the series.
+- **Security:** a heap snapshot contains reachable object contents — potentially secrets, tokens,
+  plan text. The snapshot path must be operator-chosen and the file must not be world-readable;
+  never write it into a served directory.
+- **Side Effects:** `SIGUSR2` may already be used by Node tooling (e.g. `cluster` reload, some
+  profilers). Confirm no existing `SIGUSR2`/`SIGUSR1` handler in the host before claiming it; a
+  collision turns the snapshot trigger into a reload.
+- **Dependencies & Conflicts:** shares `cli.ts` with the log-file subtask (different region) and
+  the CPU-attribution subtask (which may add a watchdog/signal handler of its own — confirm the
+  two do not both claim `SIGUSR2`). The drift test (change 3) and the CPU-attribution baseline
+  capture (its verification step 6) both probe a running host; land the drift test after the
+  attribution sampler if both touch the probe harness, to avoid a merge conflict in the test file.
+- **Ruled out by inspection (from Problem analysis):** `RetentionService` (rotates SQLite, not
+  in-memory); terminal scrollback (held client-side, not host-side). These stay ruled out.
+
+## Dependencies
+
+- None (no session IDs). Internal sequencing: change 1 (snapshot hook) MUST land before change 5
+  (heap retention fix), because the retainer cannot be named without a snapshot. Changes 2 and 3
+  (sampler + drift test) can land in parallel with 1; change 4 (watch leak) is independent of 1.
+
+## Adversarial Synthesis
+
+Key risks: the watch-leak fix is a hunt with no guaranteed registration site until traced, and a
+heap snapshot is a stop-the-world that can itself wedge the loop if the guard is weak. Mitigations:
+change 4 is scoped to tracing `attachDirectoryWatcher` callers (a finite set) rather than guessing;
+the snapshot hook is explicitly guarded and must never be reachable by accident; and the drift
+test gives a binary signal for whether changes 4/5 actually closed the leak rather than moved it.
 
 ## Proposed Changes
 
@@ -88,12 +160,17 @@ None.
 - **Bounded:** the series must itself be small and rotate, or the thing watching for a leak becomes
   one.
 
-### 3. Make the budget contract test sample a live host
+### 3. Add a drift assertion to the live contract half
 
-- **Logic:** the existing test proves the doc and the gate agree. Add an assertion that a host started
-  with no fleet is inside the idle ceiling — a real reading, not a restatement of the document.
+- **Logic:** the live half (`resident-memory-budget-contract.test.js:184-231`) already asserts a
+  fresh host is inside the idle ceiling. What it does NOT do is exercise the host and re-sample —
+  the leak's signature is that `rss` and `inotifyDescriptors` do not return to their starting value
+  after a dispatch cycle. Add an assertion that dispatches N cards, releases them, waits for the
+  reconcile poll, and re-probes: `rss` and `inotifyDescriptors` must be within noise of the pre-cycle
+  reading. This is the test change 4 and 5 are judged against.
 - **Note:** the doc's ~214 MB measured figure is sound; the fresh host settles at 182 MB. The document
-  is not stale, the running process drifts away from it.
+  is not stale, the running process drifts away from it. Do NOT duplicate the existing fresh-host idle
+  assertion — add the drift assertion beside it.
 
 ### 4. Find and fix the watch leak
 
@@ -111,10 +188,15 @@ None.
 
 ### Automated Tests
 
-- `test:contract:host-idle-memory-live` (new): start a host, no fleet, assert `rss` under the
-  documented idle ceiling from an actual reading.
-- `test:contract:watch-descriptors-bounded` (new): dispatch N cards, release them, assert
-  `inotifyDescriptors` returns to its starting value — the leak's signature is that it does not.
+- `test:contract:host-drift-after-dispatch` (new): the existing live half already asserts a fresh
+  host is under the idle ceiling (`resident-memory-budget-contract.test.js:202-207`). Add a drift
+  assertion in the same live block: dispatch N cards, release them, wait for the reconcile poll to
+  clear the registry, re-probe, and assert `rss` and `inotifyDescriptors` are within noise of the
+  pre-cycle reading. Do NOT re-add the fresh-host idle assertion — it exists.
+- `test:contract:watch-descriptors-bounded` (new): the leak's signature — `inotifyDescriptors`
+  after a dispatch cycle does not return to its starting value. (This overlaps with the drift
+  assertion above; keep it as a named, separately-runnable check so a watch-only regression is
+  isolable from a heap-only one.)
 - The heap-snapshot hook is not reachable without explicit invocation.
 
 ### Goal Invariants

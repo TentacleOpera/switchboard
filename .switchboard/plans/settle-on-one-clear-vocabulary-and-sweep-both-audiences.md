@@ -63,21 +63,21 @@ Key risks: (1) the lead prompt must include the `from` field in the new command 
 
 ### 1. Sweep the lead-facing prompt in KanbanProvider.ts
 
-At `KanbanProvider.ts:5939`, replace `ptyClearTerminal` with `POST /terminals/clear` in the stand-down instruction. The current text:
+At `KanbanProvider.ts:5973`, replace `ptyClearTerminal` with `POST /terminals/clear` in the stand-down instruction. The current text:
 
 > "Manual ptyClearTerminal is for the stand-down case only — a terminal you are putting away without dispatching new work to it."
 
 Replace with:
 
-> "Manual `POST /terminals/clear` is for the stand-down case only — a terminal you are putting away without dispatching new work to it. Include `from` (your terminal name) — the endpoint rejects without it."
+> "Manual `POST /terminals/clear` is for the stand-down case only — a terminal you are putting away without dispatching new work to it. Include `from` (your terminal name) — the endpoint rejects without it. Example: `curl -s -X POST "$BASE/terminals/clear" -H "Content-Type: application/json" -d '{"name":"<seat>","from":"<your terminal name>"}'`"
 
-At `KanbanProvider.ts:5943`, replace `ptyClearTerminal` with `POST /terminals/clear`:
+At `KanbanProvider.ts:5977`, replace `ptyClearTerminal` with `POST /terminals/clear`:
 
 > "If standing the terminal down without new work, `POST /terminals/clear` it."
 
-### 2. Confirm the agent-facing surfaces are already correct
+### 2. Verify (no edit) the agent-facing surfaces are already correct
 
-The following already teach `POST /terminals/clear` as canonical — verify they are unchanged and do not reference `ptyClearTerminal` as an agent-facing command:
+The following already teach `POST /terminals/clear` as canonical — verify they are unchanged and do not reference `ptyClearTerminal` as an agent-facing command. No edit expected; this is a confirmation step:
 
 - `.agents/workflows/switchboard.md:82,86,89` — correct, no change needed.
 - `.agents/skills/switchboard-orchestration/SKILL.md:221-256` — correct, already notes `ptyClearTerminal` is internal-only (`:223`). No change needed.

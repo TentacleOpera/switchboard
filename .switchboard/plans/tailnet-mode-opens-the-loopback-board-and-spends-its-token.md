@@ -76,7 +76,11 @@ None. In tailnet mode the tailnet URL is the correct target: it needs no credent
 
 **Side effects:** MagicDNS names are printed at `:3055` when available. Prefer the numeric tailnet address for the browser open (name resolution is one more thing that can fail at launch) and leave the MagicDNS line in the banner as-is.
 
-**Dependencies & conflicts:** None.
+**Dependencies & conflicts:** Subtask of the **Tailnet** feature. Depends on the URL resolver plan (`the-tailnet-url-never-offers-a-secure-origin.md`) landing first — this plan hoists the resolver's `tailnetUrl` output, not a raw-IP construction. The spent-token recovery body (change 3) reads `this._bindPolicy` from the server, which is populated by the Host header fix (Subtask 0) and the MagicDNS names plan (Subtask 1). No conflicts with the CSRF guard (Subtask 4) — the guard is in `_handleRequest`, this plan touches the token-response body and the `openBrowser` call site.
+
+## Dependencies
+
+Subtask of the **Tailnet** feature. Lands after the URL resolver plan (`the-tailnet-url-never-offers-a-secure-origin.md`), which constructs the `tailnetUrl` this plan hoists. The spent-token recovery body reads `this._bindPolicy`, populated by Subtask 0 (Host header fix) and Subtask 1 (MagicDNS names).
 
 ## Adversarial Synthesis
 
@@ -84,17 +88,21 @@ Key risks: (1) "fixing" this by making the one-time token multi-use or longer-li
 
 ## Proposed Changes
 
-**1. Open the URL the mode is for (`cli.ts:3037-3077`).**
+**1. Open the URL the mode is for (`cli.ts:4565-4605`).**
 
-Hoist `tailnetUrl` out of the printing block and introduce `launchUrl = tailnetAddress ? tailnetUrl : boardUrl`. Pass `launchUrl` to `openBrowser` at `:3077`. The banner is unchanged: both URLs are still printed, in the same order, with the same wording.
+After the URL resolver plan (`the-tailnet-url-never-offers-a-secure-origin.md`) lands, the tailnet URL is already the resolver's output (`resolveTailnetOrigin`), not the raw IP. This plan hoists that URL and selects it for `openBrowser`. Introduce `launchUrl = tailnetAddress ? tailnetUrl : boardUrl`, where `tailnetUrl` is whatever the resolver produced (HTTPS FQDN, HTTP FQDN, or HTTP IP — in that trust order). Pass `launchUrl` to `openBrowser` at `:4605`. The banner is unchanged: both URLs are still printed, in the same order, with the same wording — the resolver's primary URL plus the IP fallback line.
 
-**2. Same choice on the detached path (`cli.ts:2968-2977`).**
+> **Superseded:** "Hoist `tailnetUrl` out of the printing block and introduce `launchUrl = tailnetAddress ? tailnetUrl : boardUrl`" — where `tailnetUrl` was `http://${tailnetAddress}:${instance.port}/` (raw IP).
+> **Reason:** The URL resolver plan (Subtask 2, lands before this one per the feature's fixed order) replaces the raw-IP `tailnetUrl` construction with `resolveTailnetOrigin(...)`. By the time this plan is implemented, `tailnetUrl` is already the resolver's output. Constructing the raw IP here would overwrite the resolver's choice and reintroduce the insecure-origin problem the resolver exists to fix.
+> **Replaced with:** Hoist the resolver's `tailnetUrl` (already constructed by Subtask 2) and select it for `openBrowser`. Do not construct a raw-IP URL in this plan.
 
-Where `--detach --open` opens a browser, apply the identical selection so the two arms cannot drift.
+**2. Same choice on the detached path (`cli.ts:4497-4505`).**
+
+Where `--detach --open` opens a browser, apply the identical `launchUrl` selection so the two arms cannot drift. The detached parent already runs the resolver (per Subtask 2's detached-mode handling), so the `tailnetUrl` printed in the detached banner is the resolver's output. The `--detach --open` browser launch must open that same URL, not a raw-IP construction.
 
 **3. Make a spent token recoverable (`LocalApiServer.ts:1293`, `:1345`, `:1399`).**
 
-Replace the bare `Invalid or expired one-time token` with a short body that says the token was single-use and already consumed, and — when a tailnet listener is active — names the tailnet URL as the credential-free way in. An operator who lands here should not have to return to the terminal to find out what to do.
+Replace the bare `Invalid or expired one-time token` with a short body that says the token was single-use and already consumed, and — when a tailnet listener is active — names the tailnet URL as the credential-free way in. The tailnet URL named here is the bind policy's tailnet address (the server knows its own bind policy via `this._bindPolicy`), not the resolver's chosen URL — the server does not run the resolver, and the raw tailnet address is always reachable on the tailnet even when the resolver picked the FQDN. An operator who lands here should not have to return to the terminal to find out what to do.
 
 **4. Say why in a comment.**
 
@@ -102,6 +110,15 @@ At the `launchUrl` line: in tailnet mode the tailnet URL needs no credential and
 
 ## Verification Plan
 
+### Goal Invariants
+
+- Assert `openBrowser` in `src/standalone/cli.ts` receives `launchUrl` (not `boardUrl`) when `tailnetAddress` is set — the `?token=` query string is absent from the URL passed to `openBrowser` in tailnet mode.
+- Assert the `boardUrl` construction (`${instance.url}/?token=${instance.oneTimeToken}`) is still present for `local` mode — the loopback token URL is not removed, only unselected in tailnet mode.
+- Assert the `--detach --open` path applies the same `launchUrl` selection as the foreground path — no `boardUrl` passed to `openBrowser` when `tailnetAddress` is set, on either path.
+- Assert the spent-token response body in `LocalApiServer.ts` names the tailnet URL (from `this._bindPolicy`) when a tailnet listener is active — the bare `Invalid or expired one-time token` string is absent from the three token-exchange sites.
+- Assert the one-time token is still single-use (`consumeOneTimeToken` is unchanged) — the fix is in URL selection, not in token semantics.
+
+### Manual Verification
 1. Run `npx switchboard tailnet` on a machine with Tailscale up. The browser opens `http://<tailnet-ip>:<port>/` — no `?token=` in the address bar — and the board renders.
 2. Run it again immediately without stopping the first. The second launch's browser open still succeeds; there is no token to have been spent.
 3. Run `npx switchboard local`. The browser opens the loopback URL with its one-time token, exactly as today. This is the regression fence for the unchanged mode.
@@ -111,3 +128,7 @@ At the `launchUrl` line: in tailnet mode the tailnet URL needs no credential and
 7. From a second device on the tailnet, open the printed tailnet URL. It loads with no credential — confirming `_checkAuth`'s tailnet bypass is untouched.
 8. With a durable token configured (`npx switchboard token rotate`), repeat 1 and 7. Both still work without a credential on the tailnet path; the loopback board still requires its session.
 9. Both hosts: this is standalone-only (`cli.ts` has no extension counterpart), but confirm `LocalApiServer`'s changed response body is correct under the extension host too, since that file is shared and the extension serves no one-time tokens.
+
+## Implementation Summary
+
+Hoisted the resolver's `tailnetUrl` out of the tailnet print branch in `src/standalone/cli.ts` into a `launchUrl` variable (defaulting to `boardUrl`) and passed `launchUrl` — not `boardUrl` — to `openBrowser`, so tailnet mode opens the credential-free tailnet URL instead of the single-use loopback token URL that a browser prefetch routinely spends before the page loads. The detached child re-enters the same foreground code path, so `--detach --open` makes the identical choice with no second arm to drift. In `src/services/LocalApiServer.ts`, replaced the bare `Invalid or expired one-time token` at all three token-exchange sites (`/`, `/project`, `/`) with a `_spentTokenBody()` helper that names the consequence (single-use, already consumed) and, when a tailnet listener is active, points at the credential-free tailnet URL built from `this._tailnetAddress` — the always-reachable name the server knows without running the resolver. `consumeOneTimeToken` is unchanged; the fix is in URL selection, not token semantics.

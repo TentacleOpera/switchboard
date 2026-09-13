@@ -7,9 +7,23 @@ log writer, cutting a session log by roughly a seventh at no fidelity cost.
 
 ### Problem Analysis
 
-`terminalLogWriter.ts` already strips ANSI and collapses carriage-return redraws, with a carry buffer
-across flush boundaries (`collapseCarriageReturns`, `:115`). It does **not** collapse blank runs or
-immediately-repeated lines.
+> **Superseded:** "`terminalLogWriter.ts` already strips ANSI and collapses carriage-return redraws,
+> with a carry buffer across flush boundaries (`collapseCarriageReturns`, `:115`). It does not collapse
+> blank runs or immediately-repeated lines."
+> **Reason:** `src/standalone/terminalLogWriter.ts` is **retired dead code** — `new TerminalLogWriter(`
+> appears nowhere in `src/` outside its own (now-stale) contract test, and `bootstrap.ts:3978` records
+> that the sibling `terminalWsGateway.ts` it subscribed to "used to, but nothing constructs it." The
+> retired `ptyHost.ts` is a 7-line stub that throws. The **live** terminal log writer is
+> `cmd/switchboard-pty-host/log.go` (Go), called from `publish()` (`main.go:218-219`) on every output
+> event and from `logPrompt` (`prompt.go:250`) on each dispatch. Both composition roots
+> (`bootstrap.ts` and `extension.ts`) use the Go pty host via `PtyHostSupervisor`, so `log.go` is the
+> one writer shared by both hosts — there is no separate extension-side writer.
+> **Replaced with:** The live writer (`log.go`) strips ANSI (`stripAnsi`) and sanitises fences
+> (`sanitizeFence`), opens/closes the `console` code block, writes `##` headings on prompt delivery, and
+> rolls the session at 10 MiB. It does **not** collapse carriage-return redraws, blank runs, or
+> adjacent duplicates — it lacks even the CR collapse the dead TS writer had. The measurements below
+> were taken on a real log file produced by this live Go writer, so they stand; the behaviour they
+> describe is the Go writer's behaviour.
 
 Measured on a real log — `.switchboard/logs/Coding-mtfqqy7v-da8a5n.md`, 7,005,306 bytes,
 108,853 lines:
@@ -39,9 +53,9 @@ for a fraction of the work.
 
 ### Root Cause
 
-The writer's collapsing was scoped to the one artifact that made output actively wrong — a CR redraw
-concatenating drafts on a single line. Whole-line redundancy across lines was never in scope, so
-nothing looks at the previous emitted line.
+The live writer's cleaning was scoped to ANSI stripping and fence safety. Whole-line redundancy
+across lines was never in scope, so nothing looks at the previous emitted line. (The dead TS writer
+had CR collapse but no line-level dedup either; neither writer ever did this.)
 
 ### Non-goals
 
@@ -49,7 +63,10 @@ nothing looks at the previous emitted line.
   repeats and blank runs are reduced.
 - **Do not collapse non-adjacent duplicates.** A repeated line separated by other content is real
   history, and treating it otherwise would silently delete output.
-- Do not change the ANSI stripper or the CR-collapse carry.
+- **Do not add carriage-return collapse.** The live Go writer lacks it, and adding it is a separate
+  decision with its own correctness surface (overlay semantics, carry cap). It is out of scope here;
+  this plan does not inherit the dead TS writer's CR behaviour by reference.
+- Do not change the ANSI stripper or the fence safety logic.
 - Do not change the 10 MiB rotation cap.
 
 ## Metadata
@@ -62,59 +79,101 @@ nothing looks at the previous emitted line.
 
 None.
 
+## Complexity Audit
+
+### Routine
+- Per-line predecessor comparison (exact string equality) after ANSI strip and fence sanitise.
+- Blank-run collapse to a single blank line.
+- Carrying one line of state across `logOutput` calls on the per-terminal `sessionLog`.
+
+### Complex / Risky
+- None. The change is local to `log.go`'s `logOutput`/`appendLog` path and adds one field of state.
+
+## Edge-Case & Dependency Audit
+
+- **Race Conditions:** `logOutput` runs under `f.logMu` (held by `appendLog`), but the
+  predecessor/blank-run state is per-`sessionLog` and mutated on the same lock path. The carry must be
+  flushed on `rollLogLocked` and `closeFenceLocked` so a roll does not leave a stale predecessor that
+  suppresses the new session's first line.
+- **Security:** No change to path handling or auth; logs stay 0o600.
+- **Side Effects:** Fewer bytes on disk and fewer `appendFile` syscalls for duplicate-heavy output.
+- **Dependencies & Conflicts:** None. `log.go` is self-contained; no other package imports its
+  cleaning logic.
+
 ## Dependencies
 
 None.
 
 ## Both Hosts
 
-`TerminalLogWriter` is constructed at both composition roots, wired to the same gateway flush
-observer:
+`log.go` is the live writer for **both** composition roots: standalone (`bootstrap.ts`) and the
+extension (`extension.ts`) both drive the Go pty host via `PtyHostSupervisor`, and `publish()` calls
+`logOutput` regardless of which root spawned the fleet. The change is inside `log.go`, so both hosts
+get it. There is no `ptyHost.ts` to wire (it is retired) and no second writer to keep in sync.
 
-- standalone — `bootstrap.ts:3209-3222` (`onFlush` plus fleet `renamed`/`closed`)
-- extension's pty-host sidecar — `ptyHost.ts:53-61`, the same three subscriptions
+> **Superseded:** "standalone — `bootstrap.ts:3209-3222` (`onFlush` plus fleet `renamed`/`closed`);
+> extension's pty-host sidecar — `ptyHost.ts:53-61`, the same three subscriptions."
+> **Reason:** Those line references are stale. `bootstrap.ts:3209-3222` is tmux terminal lookup, not
+> log-writer wiring; `ptyHost.ts` is a 7-line retired stub. The flush-observer subscription model
+> belonged to the dead `terminalWsGateway.ts`; the live writer is called directly from `publish()`.
+> **Replaced with:** Both hosts reach the one writer through the Go pty host's `publish()`/`logPrompt`.
+> Verify a session that spans a `publish()` boundary (the Go host calls `logOutput` per pty data event
+  with no coalescing window), since that is where the predecessor carry must hold.
 
-The change is inside the writer, so both get it. The rotation cap and the carry state are per-writer
-instance; verify a session that spans a flush boundary in both, since that is where the existing carry
-already lives and a per-line predecessor is new state alongside it.
+## Adversarial Synthesis
+
+Key risks: a duplicate pair split across two `publish()` calls slips through if the predecessor is
+not carried; a session roll leaves a stale predecessor that suppresses the new session's first line.
+Mitigations: carry the predecessor on `sessionLog` (not a local), and reset it on `rollLogLocked`/
+`closeFenceLocked`. The 13% measurement holds because it was taken on the live Go writer's output.
 
 ## Proposed Changes
 
-**1. Carry the last emitted line across flushes.**
+**Target file: `cmd/switchboard-pty-host/log.go`**
 
-Alongside the existing `crCarry`, hold the last line actually written. The carry is essential: a
-duplicate pair split across two flushes would otherwise slip through, which is the same reason
-`collapseCarriageReturns` already carries its trailing line.
+**1. Carry the last emitted line across `logOutput` calls.**
+
+Add a `lastLine string` field to `sessionLog`. The carry is essential: a duplicate pair split across
+two `publish()` calls (the Go host has no flush interval — `logOutput` fires per pty data event)
+would otherwise slip through. Reset `lastLine` on `rollLogLocked` and `closeFenceLocked` so a new
+session does not inherit the old session's predecessor.
 
 **2. Drop a line identical to its immediate predecessor.**
 
-Exact string equality only, after ANSI stripping and CR collapse, so the comparison sees the same text
-the reader will.
+Exact string equality only, after ANSI stripping and fence sanitising, so the comparison sees the same
+text the reader will. Implement in `logOutput` before `appendLog`: split the cleaned text into lines,
+suppress a line equal to `state.lastLine`, update `state.lastLine` to the last non-suppressed line.
 
 **3. Collapse a run of blank lines to one.**
 
-Blank means empty after the strip. One blank is a paragraph break and prose in the original; a run of
-twelve is redraw residue.
+Blank means empty after the strip. One blank is a paragraph break; a run of twelve is redraw residue.
+Collapse within the same line pass as change 2.
 
-**4. Do not touch the fenced-payload safety.** The writer keeps its output fence-safe; the reduction
-must run before or within that logic without changing which content gets fenced.
+**4. Do not touch the fenced-payload safety.**
+
+`sanitizeFence` and the open/close fence logic in `appendLog`/`closeFenceLocked` are unchanged; the
+reduction runs in `logOutput` on the cleaned text before it reaches `appendLog`, so which content
+gets fenced is unaffected.
 
 ## Verification Plan
 
 1. Re-run the writer over a captured pty stream that today produces
    `Coding-mtfqqy7v-da8a5n.md` and confirm ~13% fewer bytes.
-2. A duplicate pair straddling a flush boundary is collapsed — construct the case deliberately.
+2. A duplicate pair straddling a `publish()` boundary is collapsed — construct the case deliberately
+   (two `logOutput` calls, identical line split across them).
 3. Two identical lines separated by one different line are BOTH kept.
 4. A single blank line between paragraphs survives.
-5. Dispatch headings (`##`) still appear at each prompt boundary and are never collapsed into a
-   neighbour.
+5. Dispatch headings (`##` from `logPrompt`) still appear at each prompt boundary and are never
+   collapsed into a neighbour.
 6. A code-fence payload in agent output is still fenced correctly.
-7. **Both hosts:** run 1 and 2 with the writer wired from `bootstrap.ts` and from `ptyHost.ts`.
+7. **Both hosts:** the change is in `log.go`; run 1 and 2 against a fleet spawned from `bootstrap.ts`
+   and from `extension.ts` (both reach the same Go writer via `publish()`).
 
 ### Goal Invariants
 
-- Assert a line equal to its immediate predecessor is dropped.
+- Assert a line equal to its immediate predecessor is dropped (in `log.go`'s `logOutput` output).
 - Assert a line equal to a NON-adjacent earlier line is kept.
 - Assert a blank run collapses to exactly one blank line.
-- Assert the predecessor is carried across a flush boundary.
-- Assert the ANSI stripper and `collapseCarriageReturns` are unchanged.
+- Assert the predecessor (`sessionLog.lastLine`) is carried across a `publish()` boundary.
+- Assert `sessionLog.lastLine` is reset on `rollLogLocked` and `closeFenceLocked`.
+- Assert `stripAnsi` and `sanitizeFence` in `log.go` are unchanged.

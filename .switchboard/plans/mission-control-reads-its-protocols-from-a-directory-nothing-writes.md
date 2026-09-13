@@ -89,22 +89,17 @@ hardcoded path — never surfaces.
 
 **Complexity:** 2
 **Tags:** bugfix, mission-control, protocols, both-hosts
-**Dependencies:** blocks
-`the-host-mirrors-every-turn-end-into-an-inbox-with-no-reader-and-no-listener` — decide this first,
-since whether the mirror has a possible reader depends on Mission Control being able to start.
+**Dependencies:** none blocking other subtasks. The sibling plan
+`the-host-mirrors-every-turn-end-into-an-inbox-with-no-reader-and-no-listener` previously waited on
+this one; it no longer does — the file mirror has no reader in any configuration, so the turn-end
+record moves to `plan_events` regardless of whether Mission Control can start. This plan's own User
+Review decision (keep or delete Mission Control) is self-contained and does not gate any other
+subtask in this feature.
 
 ## User Review Required
 
-**One decision, and it is the operator's:** is Mission Control wanted at all? It has never run, so
-nothing depends on it today.
-
-- **Fix it** — changes 1 to 4 below. Small.
-- **Delete it** — then the four protocols, the 78 KB of prompt text, the kickoff builder, the
-  turn-end mirror, the reports directory and the `missionControlArmed` state all go together, and
-  the sibling plan collapses into that.
-
-Do not leave it as-is. A feature that launches a terminal to tell an agent it has no instructions
-is worse than either outcome.
+**Decision recorded 2026-09-11: Mission Control is wanted — fix it.** The operator confirmed the
+keep-and-fix path. Changes 1 to 4 below are the scope. The delete path is off the table.
 
 ## Proposed Changes
 

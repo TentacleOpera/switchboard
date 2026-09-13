@@ -37,17 +37,24 @@ mis-attributed optimisation is worse than none.
 
 **Every byte of terminal output is handled several times, across three processes.** The path is
 pty `onData` → per-terminal coalescing buffer → a 6ms flush tick → one coalesced frame → append
-to a 256KB scrollback ring (`MAX_SCROLLBACK_BYTES`, `terminalWsGateway.ts:6`) → tee to the
-terminal log writer (`:329`) → serialize → WebSocket to the browser → xterm render, in a
-separate process again. Agent CLIs are full-screen TUIs that redraw continuously — spinners,
-streaming tokens, progress — so this path runs at the CLIs' redraw rate, times the number of
-seats.
+to a 256KB scrollback ring (`MAX_SCROLLBACK_BYTES`, `terminalWsGateway.ts:6`) → tee to flush
+observers (`terminalWsGateway.ts:850-853`, the seam a terminal log writer would attach to) →
+serialize → WebSocket to the browser → xterm render, in a separate process again. Agent CLIs are
+full-screen TUIs that redraw continuously — spinners, streaming tokens, progress — so this path
+runs at the CLIs' redraw rate, times the number of seats.
+
+> **Correction (line refs, verified 2026-09-11).** The original plan cited `terminalWsGateway.ts:635-637`
+> for the encode-then-filter order and `:329` for the log-writer tee. Both are stale: the
+> encode/filter pair is at `:838-839`, and the flush-observer notify (the tee seam) is at `:850-853`.
+> `flushAllPending` is at `:745`, not `~1000-ish`. The `stop`-gating reference (`cli.ts:1147`) is
+> also stale — the stop command's `findRunningInstance` gate is at `cli.ts:3834` (it refuses when
+> `/health` cannot answer, which is exactly the wedge condition).
 
 Nothing measures the volume, so the cost of that fan-out is unknown, and so is its share
 relative to the CLIs themselves, which are independent processes and plausibly the majority.
 
 **Verified NOT a cause — do not spend time here.** `OUTPUT_FLUSH_MS = 6`
-(`terminalWsGateway.ts:92`) looks like a 167Hz wakeup, but `flushAllPending` (`:1000`-ish)
+(`terminalWsGateway.ts:92`) looks like a 167Hz wakeup, but `flushAllPending` (`:745`)
 clears its own interval the moment `pendingFlushTerminals` is empty and re-arms on the next
 output. It is proportional to output, not a permanent tick. Recorded here so the next
 investigation does not re-derive it.
@@ -55,6 +62,65 @@ investigation does not re-derive it.
 **The wedge is invisible while it happens.** A blocked loop starves signal handlers, HTTP
 callbacks and health responses simultaneously, so by the time it is noticed there is nothing
 left that can report on it. Catching it requires something that runs *outside* the blocked loop.
+
+## User Review Required
+
+None. The plan is measure-first; the one no-measurement fix (step 4) is a pure no-behaviour-change
+reorder. The decision to stop after attribution if the CLIs dominate is taken here, not deferred.
+
+## Complexity Audit
+
+### Routine
+- The client-filter hoist (step 4) — a two-line reorder in `flushOutput`, no behaviour change.
+- Per-terminal byte/frame counters through the gateway — additive counters on an existing path.
+
+### Complex / Risky
+- **Per-process CPU attribution (step 1) is the load-bearing step.** Sampling CPU per process
+  across the board, the pty host child, each CLI seat, and the browser without the sampler itself
+  becoming a measurable load — a sampler that costs CPU corrupts the measurement. Must verify the
+  sampler's own cost is negligible at 8 seats (verification step 2).
+- **The event-loop lag detector (step 2) must fire from outside the blocked loop.** A watchdog
+  timer on the same loop starves with it; the mechanism (signal handler or worker thread) must be
+  proven to fire under a deliberately-induced busy loop, and must write to disk (not HTTP) since a
+  blocked loop cannot serve. This is the step that would have caught the 1d14h spin.
+- **The log-writer hypothesis (step 3) is void** — the writer was deliberately removed (e26ac375)
+  as useless and memory-hungry; it is dead code. The step's value collapsed from "name the prime
+  suspect" to "measure what is actually on the path" (ring append + encode + send). Lower risk,
+  and the hypothesis is dropped, not conditional.
+- **Both-hosts scope.** The gateway and pty host are standalone; the extension host runs its own
+  pty host child. Attribution must state which measurements apply to which (verification step 7).
+
+## Edge-Case & Dependency Audit
+
+- **Race Conditions:** the lag detector's stack dump captures the loop mid-spin; if the loop
+  unblocks between trigger and capture, the dump names the wrong frame. Acceptable — a
+  post-hoc dump is still more than today's nothing — but the threshold should favour
+  over-triggering.
+- **Security:** a stack dump written to disk can contain function names, file paths, and argument
+  values. The dump path must be operator-chosen and not world-readable, and never served over HTTP.
+- **Side Effects:** the per-terminal output ceiling (step 3) throttles a pathological seat with a
+  visible notice. Throttling changes what the agent sees — it must be a notice, not a silent drop,
+  or the agent debugs a symptom the host induced.
+- **Dependencies & Conflicts:** shares `cli.ts` with the log-file subtask (the `stop` gate at
+  `:3834`, a different region from `setupFileLogging`) and the heap/inotify subtask (which may add
+  a `SIGUSR2` heap-snapshot handler — confirm the lag detector's signal choice does not collide).
+  The log-writer finding (deliberately removed, e26ac375) is shared with the log-file subtask;
+  both treat it as dead by intent — no subtask revives it.
+
+## Dependencies
+
+- None (no session IDs). The wedged-board survivability plan (merged into
+  `sandbox-surviving-board-liveness-via-unix-socket.md`) is independent — either ships first. The
+  `stop`-ungating note in "Relationship to the wedged-board plan" is a recommendation, not a gate.
+
+## Adversarial Synthesis
+
+Key risks: the plan's central hypothesis (the log writer as per-byte prime suspect) was built on a
+writer that is not wired, so the highest-yield step may measure nothing; and the lag detector is
+the kind of mechanism that looks done but silently never fires if it shares the blocked loop.
+Mitigations: step 3 now requires confirming `flushObservers.size` before timing the writer, and
+verification step 3 requires the dump to land *while* the induced loop is still spinning (not
+after), which is the test that distinguishes a real watchdog from a same-loop timer.
 
 ## Implementation
 
@@ -92,8 +158,26 @@ whether one misbehaving TUI accounts for a disproportionate share.
 
 **Time the terminal log writer separately from the rest of the flush path.** It is the strongest
 hypothesis in this codebase for a real per-byte cost, and a generic "time the flush" measurement
-would bury it. `TerminalLogWriter.onOutput` (`terminalLogWriter.ts:278-279`) does two complete
+would bury it. `TerminalLogWriter.onFlush` (`terminalLogWriter.ts:274-279`) does two complete
 synchronous string passes over every chunk:
+
+> **Superseded:** "the terminal log writer is the strongest hypothesis in this codebase for a real
+> per-byte cost ... it runs for every terminal regardless of viewers."
+> **Reason:** `new TerminalLogWriter(` was **deliberately removed** from both `bootstrap.ts` and
+> `ptyHost.ts` in commit `e26ac375` (2026-09-07, "Go where it pays: static launcher, PTY host, and
+> CLI client verbs") — the writer was cut as useless and memory-hungry during the Go PTY host
+> migration. It is dead by intent, not an accidental divergence. `terminalLogWriter.ts` still
+> exists as leftover dead code, and the gateway's flush-observer seam (`terminalWsGateway.ts:684`,
+> `:850-853`) has zero subscribers at runtime. So `onFlush` never runs, `stripAnsi` and
+> `collapseCarriageReturns` never execute on the live path, and the "prime suspect" does not exist
+> on the running host.
+> **Replaced with:** The per-byte cost on the board's own path is the ring append + encode + send
+> (`terminalWsGateway.ts:824-845`) — that is what step 3 measures. The log-writer hypothesis is
+> **dropped, not conditional** — the writer was removed by design and no sibling change revives it.
+> The real suspects are the CLIs themselves (separate processes, plausibly the majority) and the
+> ring/encode work. The `stripAnsi`/`collapseCarriageReturns` decomposition below is retained only
+> as a record of what the hypothesis was; it is not instrumented. This also resolves the
+> cross-subtask dependency with the log-file subtask, which found the same dead writer.
 
 ```js
 const stripped = stripAnsi(data);
@@ -120,7 +204,8 @@ Record, per terminal per second: bytes in, time in `stripAnsi`, time in
 hypothesis into a number.
 
 Note the scope: `terminalLogWriter.ts` is under `src/standalone/`, so this measures the
-standalone path.
+standalone path — **but the writer was deliberately removed (e26ac375) and is dead code.** The
+decomposition below is a record of the former hypothesis, not something to instrument.
 
 Pair the volume counters with a per-terminal ceiling: a seat producing pathological output should
 be detectable, and ideally throttled with a visible notice, rather than saturating the host
@@ -129,7 +214,7 @@ silently.
 ### 4. One fix that needs no measurement, and the rest that do
 
 **Hoist the client filter above the frame encode.** In `flushOutput`
-(`terminalWsGateway.ts:635-637`) the order is:
+(`terminalWsGateway.ts:838-839`) the order is:
 
 ```js
 const frame = encodeOutputFrame(seq, combined);
@@ -154,7 +239,9 @@ WebSocket clients whose `client.terminalName` matches** — that filter is the o
 board has. It is a weak licence, because three consumers on that path are not viewers and must
 keep running:
 
-- **The log writer** (`terminalWsGateway.ts:329`) — the session log is the record; never skip it.
+- **The log writer** (`terminalWsGateway.ts:850-853`, the flush-observer seam) — the session log
+  is the record; never skip it. **The writer was deliberately removed (e26ac375) and is dead code**,
+  so this consumer is absent on a live host. The licence is moot; no sibling change revives it.
 - **The scrollback ring** — the WS replays from `lastSeq` on connect, so the 256 KB ring exists
   *for* a viewer who has not attached yet. Skipping its maintenance blanks a later attach.
 - **`scanTerminalModes`** — it tracks DEC mode state across the whole stream and runs before the
@@ -174,7 +261,7 @@ Treat it as a question for the instrumentation to size, not a change to make bli
 
 That plan makes a wedge **survivable** (detectable, stoppable, not holding the port). This plan
 makes it **diagnosable**. They are independent and either can ship first — but note the
-survivability half has not shipped: `cli.ts:1147` still gates `stop` on `findRunningInstance`,
+survivability half has not shipped: `cli.ts:3834` still gates `stop` on `findRunningInstance`,
 so a wedged board is still refused before the existing `SIGTERM`→`SIGKILL` escalation can run.
 Given the freeze, that half is worth pulling forward regardless of what this plan finds.
 
@@ -190,10 +277,11 @@ Given the freeze, that half is worth pulling forward regardless of what this pla
 4. Confirm the dump path works when `/health` is already failing, since that is the real
    condition.
 5. Drive one seat to high output (a large `cat`, a fast-redrawing TUI) and confirm the volume
-   instrumentation attributes the spike to that seat, and separates `stripAnsi` and
-   `collapseCarriageReturns` time from the rest of the flush.
-5a. Measure the log writer against ANSI-dense TUI traffic specifically, not plain text — plain
-   text is its best case and would understate it.
+   instrumentation attributes the spike to that seat. (The `stripAnsi`/`collapseCarriageReturns`
+   decomposition is NOT asserted — the log writer was deliberately removed (e26ac375) and is dead
+   code; there is nothing to decompose. The volume counters attribute the spike without it.)
+5a. ~~Measure the log writer against ANSI-dense TUI traffic~~ — **dropped.** The writer is dead
+   code by design (e26ac375); measuring it would instrument a path that never runs.
 5b. With the client filter hoisted, confirm a terminal with zero attached clients no longer
    encodes a frame, and that a terminal with one or more clients is byte-identical to before.
 6. Baseline capture: record the attribution with 1, 4 and 8 seats idle, and again under load, so

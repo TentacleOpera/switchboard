@@ -123,6 +123,15 @@ Ticket previews are the common case here and are already the subject of *Tickets
 
 ## Verification Plan
 
+### Goal Invariants
+
+- **Positive:** in `view-split`, scrolling either pane so that ATX heading *n* sits at the top of one pane places ATX heading *n* at the top of the other pane, for a document with at least four inline images (the headline test — the property that makes image-height divergence stop mattering).
+- **Positive:** the `.md-toolbar` is visible at every scroll position of a long document in all four host panels (planning, tickets, design, project) — the acceptance criterion inherited from the deleted toolbar plan, now met by structure (toolbar sits outside both scrollers), not by `position: sticky`.
+- **Positive:** after a debounced re-render mid-typing, the caret's line is still framed in the preview (the preview `scrollTop` is repositioned to the anchor interval containing the caret line, not restored to a stale pixel offset).
+- **Negative (paired):** no `position: sticky` is added to `.md-toolbar` — the deleted toolbar plan's mechanism is not the mechanism here. Paired positive: the toolbar stays visible by virtue of sitting above `.md-body` in the bounded shell.
+- **Negative:** synchronisation is inactive above the 30,000-character cutoff (the "Live preview paused" placeholder is shown and nothing throws). Paired positive: below the cutoff in `view-split`, sync is always on with no toggle/lock/setting.
+- **Negative:** `renderMarkdown` in `sharedUtils.js` and the 24 client-side call sites are unmodified — this plan couples panes geometrically, it does not change the renderer. A diff touching `sharedUtils.js` has exceeded this plan's scope.
+
 Verification is UAT on an installed VSIX. The live server serves the VSIX's `dist/`, not `src/`, so a source-only change proves nothing here.
 
 1. **The headline test.** Open a ticket with at least four inline images in split view. Scroll the textarea to a heading below the third image. The same heading is at the top of the preview. Repeat driving from the preview.

@@ -59,6 +59,7 @@
         "deleteCustomAgent",
         "deleteFeature",
         "deleteKanbanColumn",
+        "deleteMachine",
         "deleteProject",
         "deleteStandingOrder",
         "deleteStandingOrderDefinition",
@@ -79,6 +80,7 @@
         "getFeatureDetails",
         "getIconPalette",
         "getKanbanStructure",
+        "getMachines",
         "getPersonaForRole",
         "getPromptPreview",
         "getPromptsConfig",
@@ -88,6 +90,7 @@
         "getSetting",
         "getStandingOrders",
         "getStartupCommands",
+        "getStartupCommandsForMachine",
         "getUATData",
         "getWorktreeConfig",
         "getWorktreeStatuses",
@@ -123,6 +126,7 @@
         "pauseLiveSync",
         "phoneAFriendSelected",
         "planner",
+        "probeMachine",
         "promoteToFeature",
         "promptAll",
         "promptOnDrop",
@@ -148,6 +152,7 @@
         "saveDefaultPromptOverrides",
         "saveIntegrationAutoPullSettings",
         "saveKanbanColumn",
+        "saveMachine",
         "savePromptsConfig",
         "saveSetting",
         "saveStartupCommands",
@@ -2762,6 +2767,7 @@
         "createAgentGrid",
         "createAgentGridEditor",
         "createDraftPlanTicket",
+        "deleteMachine",
         "deletePlan",
         "deregisterAllTerminals",
         "dispatchProjectManager",
@@ -2784,6 +2790,8 @@
         "getRecentActivity",
         "getRecoverablePlans",
         "getStartupCommands",
+        "getStartupCommandsForMachine",
+        "getMachines",
         "getVisibleAgents",
         "importPlans",
         "initializeProtocols",
@@ -2816,6 +2824,7 @@
         "openProjectPanel",
         "openSetupPanel",
         "openTerminalGrid",
+        "probeMachine",
         "ready",
         "recoverPlanFromSidebar",
         "registerAllTerminals",
@@ -2827,6 +2836,7 @@
         "runSetup",
         "runSetupIDEs",
         "saveDefaultPromptOverrides",
+        "saveMachine",
         "saveStartupCommands",
         "scaffoldMultiRepo",
         "sendAnalystMessage",
@@ -10624,6 +10634,41 @@
     "saveStartupCommands": {
       "payloadKeys": "dynamic",
       "siteCount": 2
+    },
+    "saveMachine": {
+      "payloadKeys": [
+        "type",
+        "machine",
+        "mode"
+      ],
+      "siteCount": 1
+    },
+    "deleteMachine": {
+      "payloadKeys": [
+        "type",
+        "machineId"
+      ],
+      "siteCount": 1
+    },
+    "getMachines": {
+      "payloadKeys": [
+        "type"
+      ],
+      "siteCount": 1
+    },
+    "getStartupCommandsForMachine": {
+      "payloadKeys": [
+        "type",
+        "machineId"
+      ],
+      "siteCount": 1
+    },
+    "probeMachine": {
+      "payloadKeys": [
+        "type",
+        "machineId"
+      ],
+      "siteCount": 1
     },
     "saveTicketsFolder": {
       "payloadKeys": [

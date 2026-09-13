@@ -4,8 +4,13 @@
 
 Ship one name. The product is LABCOM on the site and Switchboard in the code, the CLI, the package,
 the docs and every instruction handed to an agent — and the site already advertises commands that do
-not exist. Rename the **user- and agent-facing surface** to LABCOM / `lc`, leave the **on-disk and
-config identifiers** alone, and keep an alias so a running fleet does not break mid-flight.
+not exist. Rename the **user- and agent-facing surface** to LABCOM / `lc`, then rename the
+**on-disk `.switchboard/` directory and `switchboard.*` config keys** in a final phase so a bisect
+of the on-disk rename does not also move 2,756 files.
+
+> **Superseded:** "leave the on-disk and config identifiers alone, and keep an alias so a running fleet does not break mid-flight"
+> **Reason:** The operator decided "no alias" (User Review Required: "The command shape is decided: `lc <verb>`, a single binary with subcommands. No hyphenated shims." — operator, 2026-09-09). The fleet-restart rollout (change 3) replaces the alias. The on-disk `.switchboard/` rename and config key migration ARE part of this plan (changes 8-9), sequenced last — not "left alone."
+> **Replaced with:** No alias, no compatibility shim. Roll out by restarting the fleet (change 3). On-disk `.switchboard/` directory and `switchboard.*` config keys are renamed in changes 8-9, sequenced last.
 
 ### Problem analysis
 
@@ -27,7 +32,7 @@ So the page's install instructions are currently wrong, not merely inconsistent.
 | distinct agent-facing verbs in prompts/orders | 5 | **yes — highest risk** |
 | docs files mentioning it | 23 | yes |
 | `switchboard.*` scoped config keys | many | **no** (or migration) |
-| source files referencing `.switchboard/` on disk | 63 | **no** |
+| source files referencing `.switchboard/` on disk | 148 | **no** |
 
 **The agent-facing five are the dangerous ones.** `teamWiring.ts`, `agentPromptBuilder.ts` and
 `bundledProtocols.ts` embed `switchboard --`, `switchboard api`, `switchboard done`,
@@ -54,6 +59,55 @@ copy already says `lc-next`, so both are wrong until this lands.
 
 None. The command shape is decided: **`lc <verb>`**, a single binary with subcommands. No hyphenated
 shims. Operator, 2026-09-09: *"cli hasn't released yet. go with lc next."*
+
+## Complexity Audit
+
+### Routine
+
+- `package.json` name/displayName/bin rename (change 2).
+- CLI usage line and `--help` sweep in `cli.ts` — 58 occurrences, mechanical (change 5).
+- Docs sweep — 23 files, text-only (change 6).
+- Site repo rename and base path change (change 7) — one repo rename, one config line.
+
+### Complex / Risky
+
+- **Agent-facing instruction text** (change 4) — `teamWiring.ts`, `agentPromptBuilder.ts`, `bundledProtocols.ts`, `KanbanProvider.ts` embed `switchboard done`, `switchboard next`, `switchboard api`, `switchboard verb` in text that agents execute. Standing orders already delivered to live seats hold the old strings. A seat re-reads its orders from a prompt, not a registry. Rename the binary without restarting the fleet and every running seat starts issuing commands that do not exist — completion callbacks included, so the queue silently stops draining.
+- **No alias, no compatibility shim** (change 2) — the old name is removed, not deprecated. The CLI has not been released, so nothing external breaks, but any running fleet with old standing orders breaks until restarted (change 3).
+- **Config key migration** (change 8) — 43 keys are constructed at call sites rather than declared as constants, so a literal-string grep finds none. The rename has to follow the key builders, not a list. Migration must be one-pass idempotent with no dual-read path left behind.
+- **`.switchboard/` state directory rename** (change 9) — 2,756 git-tracked files, 148 source files, 1,637+ text files. The plan text itself is affected (plans quote `.switchboard/plans/...` paths). Must be its own commit, after 1-8, so a bisect of the rename does not also move 2,756 files.
+
+## Edge-Case & Dependency Audit
+
+### Race Conditions
+
+- **Fleet restart timing.** Do not land the prompt-text change (4) while seats from before it are still running — that is the same hazard from the other direction. Stop the fleet → land the rename → start teams again. A restarted team is dispatched fresh standing orders containing the new verbs.
+
+### Security
+
+- None. This is a rename, not a behavior change. The no-alias decision is safe because the CLI is unreleased.
+
+### Side Effects
+
+- A seat that is already running holds `switchboard done` (and the other verbs) as text inside its standing orders. After the rename that callback runs a command that no longer exists, and it fails quietly, so the queue stops draining with no error to see. The answer is the fleet restart (change 3), not an alias.
+- `lc-` is already the tmux session prefix, so the short name is in use in exactly the one place where it is cosmetic.
+
+### Dependencies & Conflicts
+
+- **Sequence before** `hero-animation-shows-two-dispatch-paths-linear-then-cli` — that art draws `lc-next`, and the site copy already says `lc-next`, so both are wrong until this lands.
+- **Both hosts must not diverge** (AGENTS.md rule). The rename touches `src/standalone/cli.ts` (standalone host) and `src/extension.ts` (extension host) via the shared `package.json` bin. Verify both hosts resolve the new bin name.
+- **Subtask A (protocol paths)** should land before change 9 — A fixes `.agents/plan-authoring-protocol.md:29` to point at `.agents/protocols/` instead of `.switchboard/protocols/`. If A hasn't landed, change 9's content sweep must handle that reference too.
+- **Subtask B (clear endpoint vocabulary)** is independent — B teaches `POST /terminals/clear` (an HTTP path), not a CLI command. No interaction with the rename.
+
+## Dependencies
+
+- **Sequence before** `hero-animation-shows-two-dispatch-paths-linear-then-cli` — site art and copy reference `lc-next`, wrong until this lands.
+- **Subtask A** should land before change 9 (the `.switchboard/` rename) so the protocol path reference is already corrected to `.agents/protocols/`.
+- **Subtask B** is independent — no ordering constraint.
+- **Change 7 (site repo rename)** should land FIRST — "Free today, expensive later." The repo is PRIVATE with no published links. Once the page goes public, the path is in every shared link, search result, and doc cross-reference.
+
+## Adversarial Synthesis
+
+Key risks: (1) a running fleet holds old verb strings as text in standing orders — rename without restart and the queue silently stops draining with no error; (2) the config key migration follows call-site constructors, not a literal list — a missed constructor leaves a key silently unwritten; (3) the `.switchboard/` rename touches 2,756 files including the plan text itself, so the sweep must include `.switchboard/plans/*.md` (the directory being renamed). Mitigations: fleet restart is the rollout procedure (change 3), not an alias; config migration is one-pass idempotent with no dual-read path; the content sweep runs after `git mv` so paths are already moved.
 
 ## Proposed Changes
 
@@ -87,7 +141,8 @@ shims. Operator, 2026-09-09: *"cli hasn't released yet. go with lc next."*
 
 ### 4. Update the agent-facing instruction text
 
-- `teamWiring.ts`, `agentPromptBuilder.ts`, `bundledProtocols.ts`: the five verbs above.
+- `teamWiring.ts`, `agentPromptBuilder.ts`, `bundledProtocols.ts`, `KanbanProvider.ts`: the five verbs above.
+  `KanbanProvider.ts` contains the lead prompt (137 `switchboard` matches) — it is agent-facing and must be swept.
 - Land this **after** the alias exists, never before.
 - Seats already holding old orders keep working via the alias; they pick up the new text on their next
   clear-and-dispatch, which happens per subtask anyway.
@@ -121,10 +176,10 @@ shims. Operator, 2026-09-09: *"cli hasn't released yet. go with lc next."*
 
 ### 9. Rename the `.switchboard/` state directory — largest, and last
 
-- Scope, measured: **2,716 git-tracked files** under `.switchboard/`, **63 source files** referencing
-  the path, and **770 files whose text mentions `.switchboard/`** (plans and docs quoting paths).
+- Scope, measured (verified 2026-09-11): **2,756 git-tracked files** under `.switchboard/`, **148 source files** referencing
+  the path, and **1,637+ files whose text mentions `.switchboard/`** (plans and docs quoting paths).
 - Do it as its own commit, mechanically: `git mv`, then a path-string sweep across source, then
-  content. Land it after 1-8 so a bisect of the rename does not also move 2,716 files.
+  content. Land it after 1-8 so a bisect of the rename does not also move 2,756 files.
 - Live installs need `mv ~/.switchboard ~/.labcom` before the new build starts. On this box that is one
   command; there is nothing else deployed.
 - **The plan text itself is affected** — these plans quote `.switchboard/plans/...` paths constantly,
@@ -165,8 +220,18 @@ shims. Operator, 2026-09-09: *"cli hasn't released yet. go with lc next."*
 
 ## Outstanding Questions
 
-- **[user]** Command shape — change 1. `lc` plus shims is the recommendation; the operator's `lc-next`
-  suggests hyphenated throughout.
 - The VS Code extension id (`open-vsx.org/extension/TurnZero/switchboard`) is linked from the site's
   nav and CTA. The extension is being deprecated, so the cheapest answer may be to drop the links
-  rather than rename the listing — but that is a decision, not an omission.
+  rather than rename the listing — but that is a decision, not an omission. Proceeding on the
+  assumption that the links are dropped when the extension is deprecated, not renamed.
+- **Split recommendation (not acted on):** This plan covers 9 deliverables across 3 independently
+  shippable phases (site repo rename / surface rename / on-disk rename). The improve-plan protocol
+  flags 3+ deliverables for splitting. The session directive ("single delivery unit") requires
+  keeping it as one plan. If the directive is lifted, split into: (1) site repo rename (change 7),
+  (2) surface rename (changes 1-6, 8), (3) on-disk rename (change 9).
+
+---
+
+## Recommendation
+
+Complexity 7 → **Send to Lead Coder.** The agent-facing text sweep (change 4) and the fleet-restart rollout (change 3) are the load-bearing risks — a mistake there silently stops the queue. The mechanical sweeps (changes 5-6) can be delegated once the rename is decided. Land change 7 (site repo) first — it only gets dearer. Land change 9 (.switchboard/ rename) last, as its own commit, after subtask A has corrected the protocol path reference.

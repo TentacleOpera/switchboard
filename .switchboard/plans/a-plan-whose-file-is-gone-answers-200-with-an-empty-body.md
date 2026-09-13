@@ -65,6 +65,32 @@ returns.
 
 None.
 
+## Complexity Audit
+
+### Routine
+- One change site: the plan-read arm of `GET /kanban/plan` (served by the shared `LocalApiServer`, so both composition roots are covered by one edit).
+- The `status='missing'` discriminator already exists on the row (`markPlanMissingByPlanFile`, `KanbanDatabase.ts`); the response already carries `status`, so no schema addition is needed to surface it.
+- Empty-file vs missing-file are already distinguishable server-side (a zero-byte read vs a read that throws).
+
+### Complex / Risky
+- The response shape is a contract agents consume: changing `content` from `""` to `null` (or failing with 404) can break a caller that treats non-200 as "retry/escalate" rather than "this plan is unreadable." The chosen shape must keep the record metadata an agent was sent to work on reachable.
+- `catch { return '' }` is the exact fallback shape the standing rule forbids; the temptation to re-add it on a permissions error is the regression path.
+
+## Edge-Case & Dependency Audit
+
+- **Race Conditions:** a plan file deleted between the row lookup and the file read must still report the read failure, not a stale cached content.
+- **Security:** the resolved path in `contentError` must not leak absolute paths beyond what the caller already has (the row's `plan_file` is relative); permissions vs not-found are different answers and the caller can act on the difference.
+- **Side Effects:** none — this is a read endpoint; the fix changes the response shape, not the row.
+- **Dependencies & Conflicts:** the purge sweep (`runPurgeSweep`, `PlanIngestionEngine.ts`) is healthy and not in scope; `b9abce15` ages out on its own. The standalone deferred-init gap (`1e5da4ea`) is a separate path, deliberately not merged.
+
+## Dependencies
+
+- None blocking. The endpoint is shared, so one change covers both hosts; confirm by hand, not by verb reachability (`bootstrap.ts`'s `default:` arm makes every verb audit green).
+
+## Adversarial Synthesis
+
+Key risks: a 404 that names a server-resolved path confuses a caller that asked by UUID; a `null` content breaks a caller that only checks string length. Mitigations: keep the record metadata on the failed read and make the absence unmissable via an explicit `contentError`; reserve 404 only if no caller consumes the record on a failed read.
+
 ## Proposed Changes
 
 ### 1. Distinguish "no file" from "empty file" on the plan endpoint
@@ -111,7 +137,3 @@ None.
 ### Manual
 - Rename a plan file out from under an active row, hit the endpoint, and confirm the response names
   the missing path rather than answering 200 with nothing in it.
-
-## Outstanding Questions
-
-- None.

@@ -77,6 +77,24 @@ This is the CLAUDE.md composition-root divergence pattern again. Both hosts wire
 **Complexity:** 4
 **Tags:** security, backend, api, reliability
 
+## User Review Required
+
+None. The 2026-09-10 design correction (header absence no longer allows; positive client marker replaces it) is a breaking change for in-tree local clients, but the direction is correct — failing closed is the safe failure mode, and the client updates are enumerable from the code. The scope decision (metadata guard, not CSRF token; detect-and-advise, not auto-configure) is made and justified in the plan.
+
+## Complexity Audit
+
+### Routine
+- Adding the `Sec-Fetch-Site` / `Origin` check to `_handleRequest` — a single function, after the Host guard, before CORS mirroring. Both hosts share `_handleRequest`, so no per-root wiring.
+- Exempting `/health` from the guard — one route, already identified.
+- Fixing the empty-cookie emission — skip `Set-Cookie` when `expected` is empty, at three sites.
+- Correcting the trust-model comments — documentation only.
+
+### Complex / Risky
+- **The 2026-09-10 positive client marker (`X-Switchboard-Client`).** Every in-tree local client must send the marker or it starts getting 403. The blast radius is wide: `.agents/skills/_lib/cli-call.js`, eight `kanban_operations/*.js` scripts, `switchboard api`, `probeHealth`/`waitForHealth` in `cli.ts`, the Go client, and the standing-order prompt text. The Go client is a separate build; the prompt text is a deployment coordination item, not a code change. Anything missed fails closed (correct direction, still a break).
+- **The trusted-origin set reads the bind policy.** The CSRF guard's allow-set is `isAllowedOriginFor(this._bindPolicy, origin)` — the same predicate the Host guard and the WS upgrade auth use. This means the guard is correct under tailnet mode only if the bind policy's `magicDnsNames` is populated (Subtask 0 + Subtask 1). If the array is empty, the guard rejects every tailnet-board request invisibly (a verb POST has no timeout and a rejection is indistinguishable from a hang). This is the ordering dependency: Subtask 0 and Subtask 1 land first.
+- **The property-based contract test.** The test walks the router's own route table, so a route added tomorrow is covered. But the test must also cover the verb rails (`/kanban/verb/`, `/terminals/verb/`, etc.) — each is a family, not a route. Asserting one route from each verb family is the minimum.
+- **The WebSocket upgrade path.** `authorizeWsUpgrade` in `wsUpgradeAuth.ts:95` already applies `isAllowedOriginFor(policy, origin)` — the same check the CSRF guard proposes for HTTP. A cross-site WS handshake sends `Origin` (always, per the WebSocket spec), and `isAllowedOriginFor` rejects it if the origin is not in the bind policy. **The WS path is already covered; no new code is needed.** The `origin &&` guard at line 95 means a non-browser client with no `Origin` is allowed — correct, because the WS path has its own token auth for non-tailnet upgrades.
+
 ## Proposed Changes
 
 1. **Add a cross-site rejection guard to `_handleRequest`** (`src/services/LocalApiServer.ts`), immediately after the `Host` guard at `:7291` and before the CORS mirroring at `:7295`. Reject with 403 when either signal indicates a cross-site request:
@@ -118,7 +136,7 @@ the node's own names, so it lands **first**. Both plans are subtasks of the **Ta
 
 5. **Exempt `/health` from the guard.** It is the port-discovery probe used by `_lib/cli-call.js`, the `kanban_operations` scripts and `cli.ts`'s `probeHealth`/`waitForHealth`. Those callers send no `Origin`, so they pass the guard anyway — but exempting it explicitly keeps discovery working even from a browser context and documents the intent.
 
-6. **Verify the WebSocket upgrade path is unaffected.** `wsHub.ts:220` calls `authorizeWsUpgrade` on the upgrade event, which does not pass through `_handleRequest`. Either extend the same origin check to `wsUpgradeAuth.ts` (a cross-site page can open a WebSocket — `WebSocket` is not subject to CORS) or document why the existing check suffices. **A cross-site `WebSocket` handshake is a real vector and must not be left unexamined.**
+6. **Verify the WebSocket upgrade path is unaffected.** `wsHub.ts:305` calls `authorizeWsUpgrade` on the upgrade event, which does not pass through `_handleRequest`. **Confirmed by code reading:** `authorizeWsUpgrade` in `wsUpgradeAuth.ts:95` already applies `isAllowedOriginFor(policy, origin)` — the same predicate the CSRF guard uses for HTTP. A cross-site WS handshake sends `Origin` (always, per the WebSocket spec), and `isAllowedOriginFor` rejects it if the origin is not in the bind policy. The `origin &&` guard at line 95 means a non-browser client with no `Origin` is allowed — correct, because the WS path has its own token auth for non-tailnet upgrades. **No new code is needed for the WS path.** The contract test should assert this by confirming `wsUpgradeAuth.ts` imports and calls `isAllowedOriginFor` with the bind policy.
 
 7. **Fix the empty-cookie emission.** In `LocalApiServer.ts:1101-1110` (and the two sibling token-exchange sites at `:994-1005` and `:1046-1057`), skip the `Set-Cookie` entirely when `expected` is empty rather than emitting `sb_session=`. A cookie whose value is the empty string is meaningless and misleads anyone reading the handler into thinking the extension board is session-authenticated.
 
@@ -137,7 +155,11 @@ the node's own names, so it lands **first**. Both plans are subtasks of the **Ta
 
 ## Dependencies
 
-None. This plan is independent of the agent-credential work and can ship first.
+None. This plan is independent of the agent-credential work and can ship first. Within the Tailnet feature, it lands LAST — its allow-set reads `bindPolicy.magicDnsNames`, which is populated by the Host header fix (Subtask 0) and the MagicDNS names plan (Subtask 1). Reversing the order makes the guard reject every tailnet request invisibly.
+
+## Adversarial Synthesis
+
+Key risks: (1) the 2026-09-10 positive client marker is a breaking change for every in-tree local client — anything missed fails closed (correct direction, still a break); (2) the guard's allow-set reads the bind policy, so an empty `magicDnsNames` (from a failed probe) rejects every tailnet-board request invisibly — a verb POST has no timeout and a rejection is indistinguishable from a hang; (3) the property-based test must cover the verb rails, not just enumerated routes, or route 43 ships unprotected. Mitigations: enumerate client updates as a checklist (not prose), land Subtask 0 first to populate the name list, and assert one route from each verb family in the contract test.
 
 ## Verification Plan
 
@@ -148,6 +170,17 @@ Additional cases the measured surface requires:
 - **The verb rails are covered** — assert one route from each of `/kanban/verb/`, `/terminals/verb/`, `/planning/verb/`, `/tickets/verb/`, `/project/verb/`, `/mission-control/verb/`.
 - **`PUT`/`DELETE` stay working** for same-origin callers — they are protected by preflight today, and the new guard must not double-reject them.
 - **In-tree local clients are unaffected** — `sb_api_call.sh` and the `kanban_operations/*.js` scripts send neither `Origin` nor `Sec-Fetch-Site`, and must continue to succeed. This is the non-breaking gate.
+
+### Goal Invariants
+
+- Assert `Sec-Fetch-Site` appears in `src/services/LocalApiServer.ts` source (it does not today — its absence is the bug).
+- Assert the cross-site rejection guard in `_handleRequest` runs BEFORE any route handler — after the Host guard, before CORS mirroring. No state-changing route is reachable without passing it.
+- Assert the guard reads `isAllowedOriginFor(this._bindPolicy, origin)` for the Origin check — the same predicate the Host guard and WS upgrade auth use. No second copy of the allowlist.
+- Assert the guard is UNCONDITIONAL (not gated on `serveStatic`) — the extension host is the one that needs it.
+- Assert `/health` is exempt from the guard — port discovery works before a client knows anything about the server.
+- Assert `wsUpgradeAuth.ts` imports and calls `isAllowedOriginFor` with the bind policy — the WS path is covered by the existing check, not by new code.
+- Assert the `X-Switchboard-Client` marker is checked when neither `Origin` nor `Sec-Fetch-Site` is present (the 2026-09-10 correction) — a request with none of the three is rejected, not allowed.
+- Assert the empty-cookie emission is fixed — `Set-Cookie: sb_session=` is absent from the three token-exchange sites when `expected` is empty.
 
 ### Original verification plan
 
@@ -233,3 +266,7 @@ standalone host is currently in the same unauthenticated state the plan attribut
 host — the `SameSite=Strict` cookie defence it relies on never engages, because `_checkAuth` returns
 `true` on the empty-token branch first. Standalone is not the safe half today.
 
+
+## Implementation Summary
+
+Implemented 2026-09-13. Added an unconditional `_isAllowedCrossSiteRequest` predicate to `LocalApiServer._handleRequest`, placed after the Host guard and before CORS mirroring, so no state-changing route is reachable without passing it. The predicate reuses `isAllowedOriginFor(this._bindPolicy, ...)` — the same list the Host guard and the WS upgrade auth use — and decides via `Sec-Fetch-Site` (reject `cross-site`/`same-site`, allow `none`/`same-origin`), trusted `Origin`, or a positive `X-Switchboard-Client` marker when no browser signal is present; `/health` is exempt so port discovery still works. Fixed the three token-exchange sites to skip `Set-Cookie: sb_session=` when the expected token is empty, corrected the trust-model comments in `_sendUnauthorized` and `bootstrap.ts`, and added the marker to every in-tree HTTP client (`cli.ts` `apiRequest` and `/auth/mint`, the Go `client.Transport`, `TaskViewerProvider`'s pre-check, and the two contract tests that POST to `LocalApiServer`). Added `src/test/board-csrf-guard-contract.test.js` (source invariants + behavioural assertions against a live `LocalApiServer`) and a `test:contract:board-csrf-guard` script. Compilation and automated tests were not run per the active instructions.

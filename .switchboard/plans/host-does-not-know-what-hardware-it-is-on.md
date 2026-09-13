@@ -49,6 +49,42 @@ None. Three scoping decisions are taken here rather than deferred: the ceiling i
 measurement and never asked for as a setting, the guard reports and proceeds rather than blocking,
 and the agent-facing directive says nothing repo-specific.
 
+## Complexity Audit
+
+### Routine
+- Reading `os.totalmem` / `os.freemem` / `os.cpus` / `os.availableParallelism` once at startup —
+  single calls, no state.
+- Reading the cgroup memory limit from `/sys/fs/cgroup/memory.max` (cgroup v2) or
+  `memory.limit_in_bytes` (v1) — a file read with a fallback chain.
+- Adding one directive constant to `agentPromptBuilder.ts` and one `if` in
+  `buildSeatDirectiveBlock`.
+
+### Complex / Risky
+- **Two-root wiring (the load-bearing risk).** Construction in `extension.ts` AND `bootstrap.ts`,
+  plus the dispatch-time report in `TaskViewerProvider.ts` AND `bootstrap.ts`. Four seams across
+  two roots; the standalone-only `unknown` regression is the exact failure mode this codebase has
+  shipped before. No automated gate catches an unwired construction.
+- **cgroup detection across v1/v2 and no-cgroup.** A container on cgroup v1, v2, and a bare-metal
+  Pi all report differently; the source tag (`'cgroup'` / `'os'` / `'unavailable'`) must be correct
+  or the fallback rule is violated.
+- **Per-seat RSS estimate from observed values.** Must sample running seats, not hardcode — a
+  constant is a fallback that behaves like a measurement (the plan's own rule).
+
+## Dependencies
+
+- None (no session IDs). The per-seat RSS estimate (change 3) benefits from the CPU-attribution
+  subtask's per-process sampler if that lands first, but does not require it — `process.memoryUsage()`
+  per seat pid is sufficient.
+
+## Adversarial Synthesis
+
+Key risks: the feature's entire value is destroyed by a single unwired construction in one root
+(the documented precedent), and the cgroup source tag is the kind of fallback that silently
+behaves like a real value if guessed wrong. Mitigations: the composition-root clarification in
+change 2 names all four seams with file+line, and the Verification Plan step 9 requires reading
+both roots by hand rather than trusting a verb check; the `'unavailable'` third state is defined
+to never resolve to a plausible number.
+
 ## Proposed Changes
 
 ### 1. Measure once, and tag the reading
@@ -73,6 +109,25 @@ unknown, unknown means "do not constrain", and the standalone host — *the one 
 a Pi* — is exactly the host that would lose the feature while every gate stayed green.
 
 Diff the two roots by hand. A verb-reachability check will not catch this.
+
+> **Clarification (composition-root seams, verified 2026-09-11).** The two roots do not share a
+> single call site for seat-directive emission; they share a *service*. The precise wiring is:
+> 1. **Construction** — `hostCapability` is built in `extension.ts` (alongside `new KanbanProvider(...)`
+>    at `:607`) and in `bootstrap.ts` (alongside the standalone `kanbanProvider` construction). This is
+>    the divergence-prone seam — construct in BOTH, or one host silently gets `unknown`.
+> 2. **Options resolution** — both roots call `kanbanProvider.resolveSeatPromptOptions(role)`
+>    (standalone `bootstrap.ts:564`; extension `TaskViewerProvider.ts:1249`). The capability reading
+>    must reach this resolver so it can set a `constrainedHost` field on `SeatDirectiveOptions`.
+> 3. **Directive emission** — `buildSeatDirectiveBlock` (`agentPromptBuilder.ts:1467`) is the shared
+>    pure composer; it pushes `CONSTRAINED_HOST_DIRECTIVE` when `opts.constrainedHost` is set. This
+>    seam is shared, so it does NOT diverge — but only if step 1 fed step 2 in both roots.
+> 4. **Dispatch-time ceiling report (change 3)** — runs at the seat-dispatch call site, which is
+>    `bootstrap.ts` (standalone) and `TaskViewerProvider.ts` (extension, around `:1309`). This is a
+>    SECOND two-root seam: the report must be emitted in both dispatch paths or, again, the
+>    standalone host loses it silently.
+>
+> Naming `extension.ts` as the consumer is imprecise: `extension.ts` constructs the service, but the
+> seat-directive *consumption* lives in `TaskViewerProvider.ts`. Audit both files, not one.
 
 ### 3. Report the ceiling at dispatch, and proceed
 

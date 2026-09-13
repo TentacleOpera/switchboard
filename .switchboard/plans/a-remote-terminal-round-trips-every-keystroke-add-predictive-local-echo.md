@@ -27,6 +27,21 @@ This card is the head of that path.
 
 None.
 
+## Complexity Audit
+
+### Routine
+- Rendering a typed character locally the moment it is typed, visually distinguished as unconfirmed.
+- Reconciling a confirmed prediction against the PTY's authoritative echo on arrival.
+- A measured-RTT gate that engages prediction only when the link warrants it.
+
+### Complex / Risky
+- Detecting the states where prediction is unsafe — alternate-screen buffer, password/hidden-input
+  prompt, mid-escape-sequence — each is a distinct xterm.js state query, not one check.
+- Reconciliation that resolves before paint so a wrong prediction never visibly flickers or changes
+  on screen.
+- Backspace, arrows, control characters, and bracketed paste: a naive char-level predictor produces
+  garbage on cursor movement; predict them properly or predict nothing.
+
 ## Proposed Changes
 
 ### 1. Predict the echo, mark it unconfirmed, reconcile on arrival
@@ -58,8 +73,16 @@ Do not make this a setting the operator has to find and reason about. The client
 3. **Full-screen applications.** Editors, pagers and TUIs redraw rather than echo. Prediction must be off in alternate-screen mode.
 4. **Backspace, arrows, control characters.** These do not echo as themselves. Either predict them properly or predict nothing for them; a naive character-level predictor produces garbage on cursor movement.
 5. **Paste and bracketed paste.** A large paste must not generate a prediction per character.
-6. **Both hosts.** The browser cockpit and the extension webview both render terminals and both need this — and it is client-side, so it should be one implementation used by both rather than two.
+6. **Both hosts.** The browser cockpit and the extension webview both render terminals and both need this — and it is client-side, so it should be one implementation used by both rather than two. The single implementation lives in `src/webview/terminalViewport.js` (the shared xterm.js viewport module extracted from `terminals.js`); both embedders reach it through `window.SwitchboardTerminalViewport.create`. Do not duplicate the layer in `terminals.js`.
 7. **Local boards must be unaffected.** The default on a 1 ms link is no prediction and no behaviour change.
+
+## Dependencies
+
+None. Complementary to `a8f75f5d` (frame de-quantization), which lands independently — prediction hides the network, frame de-quantization makes the confirmation land cleanly; neither substitutes for the other.
+
+## Adversarial Synthesis
+
+Key risks: a prediction that flickers (appears then changes) passes a latency metric while failing the real goal (typing that feels right); prediction in a TUI or at a password prompt produces visible garbage or leaks hidden input; a naive char-level predictor corrupts cursor movement. Mitigations: gate prediction on explicit xterm.js state queries (alternate-screen buffer type, bracketed-paste mode, parser escape state), resolve reconciliation before paint, and predict nothing for backspace/arrows/control/paste unless handled explicitly. Default-off on local boards where the RTT gate reads ~1 ms.
 
 ## Verification Plan
 
@@ -70,3 +93,13 @@ Do not make this a setting the operator has to find and reason about. The client
 5. A large paste does not produce per-character predictions.
 6. A local board behaves exactly as it does today, with prediction inactive.
 7. Measured end-to-end: perceived keystroke latency on the operator's own link, before and after, on the same connection.
+
+### Goal Invariants
+
+- Assert a typed character on a 50 ms+ RTT link renders before the PTY echo arrives (in `terminalViewport.js`).
+- Assert the display converges on the PTY's authoritative output when the echo arrives (PTY is source of truth).
+- Assert no prediction is emitted in alternate-screen mode, at a password prompt, or mid-escape-sequence.
+- Assert backspace/arrow/control keys leave no stray predicted character.
+- Assert a large paste does not produce per-character predictions.
+- Assert a local board (1 ms RTT) has prediction inactive and behaves byte-for-byte as today.
+- Assert the prediction layer exists in `terminalViewport.js` only, not duplicated in `terminals.js`.
