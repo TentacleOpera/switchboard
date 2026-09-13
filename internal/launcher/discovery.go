@@ -193,7 +193,27 @@ func HandoffStart(entry, workspaceRoot string, serveTailnet bool, extraArgs []st
 	}
 	args := []string{verb, "--workspace-root", workspaceRoot}
 	args = append(args, extraArgs...)
-	all := append([]string{node, entry}, args...)
+	// --max-old-space-size raises V8's old-space ceiling above the host's
+	// measured heap peak so the board-only host survives its own heap growth
+	// on a 1 GB box (V8's auto-sized ceiling on a 700 MB-available box aborts
+	// at ~342 MB, below the ~355 MB drift). Unconditional: inert on a 4 GB box
+	// (workload stays ~355 MB, never approaches the cap). Must sit between node
+	// and the entry script so V8 parses it before loading the entry. The same
+	// flag is appended in cmd/switchboard/main.go execNode — keep the two in
+	// sync. Never v8.setFlagsFromString (silent no-op, measured) or NODE_OPTIONS
+	// (leaks into every child process, including the Go pty-host).
+	//
+	// The value is env-overridable via SWITCHBOARD_MAX_OLD_SPACE_MB so the
+	// forced-GC split (plan: the-board-must-fit-a-1gb-pi, Change 1) can set a
+	// MEASURED live-at-peak value + headroom without rebuilding the launcher.
+	// The default (512) is a placeholder pending that measurement. Keep this
+	// default and the execNode default identical so the two entry paths
+	// (systemd service and icon launch) cap the heap the same way.
+	mb := os.Getenv("SWITCHBOARD_MAX_OLD_SPACE_MB")
+	if mb == "" {
+		mb = "512"
+	}
+	all := append([]string{node, "--max-old-space-size=" + mb, entry}, args...)
 	if runtime.GOOS != "windows" {
 		return syscall.Exec(node, all, os.Environ())
 	}

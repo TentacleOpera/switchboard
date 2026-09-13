@@ -1221,6 +1221,32 @@ jobs:
       - name: Board payload compression + render cap contract (gzip negotiated, exclusions honoured, cap uniform)
         run: npm run test:contract:board-payload-compression
 
+      # Board payload size + collection-read windowing for the 1 GB Pi target.
+      # Three silent-failure shapes this gate bounds: (1) empty fields — 13,210
+      # null/empty slots across 579 cards shipped as key+null every push;
+      # reverting `?? undefined` to `?? null` compiles and re-adds the tax. (2)
+      # windowing — 317 PLAN REVIEWED + 91 CODE REVIEWED cards materialised on
+      # every full-state push while none were in play; reverting getFullStateMessages
+      # to getBoard compiles and floods the board. (3) the window being an
+      # archive move that flips status to 'archived' — hides live cards. The
+      # static half gates here; the real-store half seeds a dormant card in a
+      # temp workspace and asserts it is excluded from the working set, still
+      # status='active', and still resolvable by id. The live payload-shape half
+      # needs a host and is skipped out loud here.
+      - name: Board payload size + windowing contract (no empty fields, dormant cards not materialised)
+        run: npm run test:contract:board-payload-size
+
+      # Peak-RSS ceiling for the 1 GB Pi (800 MB under load). The static half
+      # gates here: the ceiling is stated, the room-creating changes (working-set
+      # windowing, empty-field omission, explicit V8 old-space limit) are in
+      # place, and the burst probe that distinguishes churn from retention
+      # exists. The live half samples peak RSS via /health under a workload and
+      # fails above 800 MB — skipped out loud when no host answers, mirroring
+      # the resident-memory gate. The full WS-client-against-seeded-board
+      # harness is the target; the HTTP-burst workload is the shipped floor.
+      - name: Board peak-RSS ceiling contract (1 GB Pi, 800 MB under load)
+        run: npm run test:contract:board-peak-rss
+
       # The Terminals panel was 14.6x the board (1517 KB vs 104 KB) and the first
       # thing an operator waits on. Three silent-failure shapes this gate bounds:
       #  - Re-accretion: no size budget meant the panel grew by accretion. The

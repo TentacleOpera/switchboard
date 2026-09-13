@@ -5225,6 +5225,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         this._broadcaster?.setApiServer(this._localApiServer);
         if (this._kanbanProvider) {
             this._kanbanProvider.setApiServer(this._localApiServer);
+            // Burst attribution (Change 5, 1 GB Pi plan): wire the WS
+            // connection-count resolver so the debug-gated burst log names the
+            // client count at each full-state build. Composition-root parity
+            // with the standalone bootstrap wiring. The count is the WS
+            // CONNECTION count, not the seat count.
+            this._kanbanProvider.setBurstAttributionClientCountResolver(() => {
+                try { return this._localApiServer?.getWsConnectionInfo()?.length ?? 0; } catch { return 0; }
+            });
         }
         if (this._setupPanelProvider) {
             this._setupPanelProvider.setApiServer(this._localApiServer);
@@ -21800,9 +21808,17 @@ Each plan file must include:
             // backend scoping concern — pass null for the project argument so a
             // repo scope still applies without project pre-filtering. This keeps
             // the single DB read but sends the unfiltered card set to the board.
+            //
+            // Working-set read (parity with getFullStateMessages): dormant
+            // PLAN REVIEWED / CODE REVIEWED cards older than the hot window are
+            // not materialised. status stays 'active' (read-side filter, not an
+            // archive move); GET /kanban/plan?planId= still resolves them by id.
+            // Both composition roots must window the same way — the standalone
+            // push path (getFullStateMessages) and this editor refresh path
+            // (refreshWithData) share _buildBoardCards, so the read must too.
             const activeRows = repoScope
-                ? await db.getBoardFilteredByProject(workspaceId, null, repoScope)
-                : await db.getBoard(workspaceId);
+                ? await db.getBoardFilteredByProjectWorkingSet(workspaceId, null, repoScope)
+                : await db.getBoardWorkingSet(workspaceId);
             const completedRows = repoScope
                 ? await db.getCompletedPlansFilteredByProject(workspaceId, null, repoScope)
                 : await db.getCompletedPlansInHotWindow(workspaceId);

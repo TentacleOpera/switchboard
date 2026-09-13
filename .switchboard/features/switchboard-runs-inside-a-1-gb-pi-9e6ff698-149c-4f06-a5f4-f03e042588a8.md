@@ -22,8 +22,8 @@ The standalone host runs a real team on a 1 GB device within a stated 800 MB pea
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Two Configurations: Board Only, and Board Plus Agents](../plans/two-configurations-board-only-and-board-plus-agents.md) — **PLAN REVIEWED** — ID: c76ca59b-5ad5-4684-bbd8-0124e85aebde
-- [ ] [The Board Must Fit a 1 GB Pi, and It Is the Peak That Does Not](../plans/the-board-must-fit-a-1gb-pi-and-the-peak-is-what-does-not.md) — **PLAN REVIEWED** — ID: 8b7e5490-ebb5-4782-8467-592cdd03c2c4
+- [ ] [Two Configurations: Board Only, and Board Plus Agents](../plans/two-configurations-board-only-and-board-plus-agents.md) — **LEAD CODED** — ID: c76ca59b-5ad5-4684-bbd8-0124e85aebde
+- [ ] [The Board Must Fit a 1 GB Pi, and It Is the Peak That Does Not](../plans/the-board-must-fit-a-1gb-pi-and-the-peak-is-what-does-not.md) — **LEAD CODED** — ID: 8b7e5490-ebb5-4782-8467-592cdd03c2c4
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -50,3 +50,7 @@ finished work backwards:
 
 *Building and Gating on the Pi* (`b5d07e2b`) is a separate feature and stays separate: it is
 about build time and the toolchain on the Pi, not about what the host costs while running.
+
+## Completion Summary
+
+Both subtasks are implemented and verified. "Two Configurations" stated board-only (1 GB) and board-plus-agents (2 GB min) and wired the unconditional `--max-old-space-size` V8 flag at both Go handoff sites, env-overridable via `SWITCHBOARD_MAX_OLD_SPACE_MB`, plus repo-relative plan paths for remote seats and remote-seats documentation. "The Board Must Fit a 1 GB Pi" shipped the working-set windowing (dormant PLAN REVIEWED / CODE REVIEWED cards past the hot window are read-side filtered, never archived, still resolvable by id), the empty-field omission in the card builder, the forced-GC burst probe, and the 800 MB peak-RSS contract. A mid-run defect — the in-flight SQL referencing `plans.dispatched_at`, a column the V74 migration moved to `plan_runtime_state`, which broke every board read — was fixed with a correlated EXISTS against the runtime-state table. Final verification: `test:contract:board-payload-size` 15/15 and `test:contract:board-peak-rss` 7/7, both including LIVE halves against a freshly built host; Go build/vet and eslint clean. One minor warn-path inconsistency (`_warnIfPlanFileUncommitted` repoRoot choice) is recorded in `.switchboard/orchestrator/reports/` for follow-up.

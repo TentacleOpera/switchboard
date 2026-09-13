@@ -48,6 +48,14 @@ export function warnOnLegacyTicketUpdateMode(mode: string | undefined): void {
 export interface BatchPromptPlan {
     topic: string;
     absolutePath: string;
+    /**
+     * Repo-relative form of absolutePath — the raw DB plan_file value before
+     * absolutization. Carried so a remote agent (whose clone shares the repo
+     * but not the board host's filesystem) can resolve the plan against its
+     * own repo root. Empty/absent when only the absolute form is known; the
+     * dispatch prompt then falls back to absolutePath.
+     */
+    relativePath?: string;
     /** The plan's authoritative DB plan_id, stamped into dispatch prompts as
      * PLAN_ID= so a dispatched agent acts on the exact plan with no lookup or
      * fabrication (Feature A · A3 — push complement to the state-file planId index). */
@@ -629,16 +637,26 @@ export function buildPromptDispatchContext(plans: BatchPromptPlan[]): PromptDisp
         ...plan,
         workingDir: (plan.workingDir || '').trim()
     }));
+    // Prefer the repo-relative path so a remote agent (whose clone shares the
+    // repo but not the board host's filesystem) can resolve the plan against its
+    // own repo root. Falls back to the absolute board-host path only when no
+    // relative form is known — the absolute path is correct for a local seat
+    // and wrong-but-recoverable for a remote one, never silently empty.
+    const anyRelative = normalizedPlans.some(plan => plan.relativePath);
     const planList = normalizedPlans.map(plan => {
+        const planPath = plan.relativePath || plan.absolutePath;
         const planIdLine = plan.planId ? `\nPLAN_ID=${plan.planId}` : '';
         if (plan.isSubtask && plan.featureTopic) {
-            return `  - [SUBTASK] ${plan.topic} Plan File: ${plan.absolutePath}${planIdLine}`;
+            return `  - [SUBTASK] ${plan.topic} Plan File: ${planPath}${planIdLine}`;
         }
         if (plan.featureTopic && !plan.isSubtask) {
-            return `- [FEATURE: ${plan.featureTopic}] Plan File: ${plan.absolutePath}${planIdLine}`;
+            return `- [FEATURE: ${plan.featureTopic}] Plan File: ${planPath}${planIdLine}`;
         }
-        return `- [${plan.topic}] Plan File: ${plan.absolutePath}${planIdLine}`;
+        return `- [${plan.topic}] Plan File: ${planPath}${planIdLine}`;
     }).join('\n');
+    const relativeClause = anyRelative
+        ? '\nPlan File paths are relative to your repo root.'
+        : '';
     const distinctWorkingDirs = [...new Set(normalizedPlans.map(plan => plan.workingDir).filter(Boolean))];
     const allPlansShareDir =
         normalizedPlans.length > 0
@@ -647,7 +665,7 @@ export function buildPromptDispatchContext(plans: BatchPromptPlan[]): PromptDisp
 
     if (allPlansShareDir) {
         return {
-            planList,
+            planList: planList + relativeClause,
             dispatchContextBlock: `WORKING DIRECTORY: ${distinctWorkingDirs[0]}
 All file reads and writes must be relative to this directory unless the plan explicitly states otherwise.`
         };
@@ -655,7 +673,7 @@ All file reads and writes must be relative to this directory unless the plan exp
 
     const anyWorkingDirSet = normalizedPlans.some(plan => !!plan.workingDir);
     if (!anyWorkingDirSet) {
-        return { planList, dispatchContextBlock: '' };
+        return { planList: planList + relativeClause, dispatchContextBlock: '' };
     }
 
     const perPlanDirectories = normalizedPlans.map(plan =>
@@ -665,7 +683,7 @@ All file reads and writes must be relative to this directory unless the plan exp
     ).join('\n');
 
     return {
-        planList,
+        planList: planList + relativeClause,
         dispatchContextBlock: `MULTI-REPO BATCH:
 Do NOT assume a single working directory for every plan in this prompt.
 ${perPlanDirectories}`
@@ -2084,7 +2102,7 @@ export function buildKanbanBatchPrompt(
         }
 
         if (options?.unattended && role === 'planner' && plans.length === 1) {
-            const planPath = plans[0].absolutePath;
+            const planPath = plans[0].relativePath || plans[0].absolutePath;
             plannerPrompt += `
 
 UNATTENDED IMPROVER CONTRACT:
@@ -2389,7 +2407,7 @@ For each plan:
             const effectiveSkipBlock = isDriveMode ? '' : skipBlock;
 
             const featurePlan = plans.find(p => !p.isSubtask);
-            const featureFilePath = featurePlan?.absolutePath || '';
+            const featureFilePath = featurePlan?.relativePath || featurePlan?.absolutePath || '';
             // The feature-file reference itself stays under Drive — it is the coder's
             // discovery path for the subtask list. Only its trailing verb follows the
             // toggle: under Drive the subtask plans are dispatched to seats, not executed

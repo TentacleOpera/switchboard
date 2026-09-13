@@ -229,3 +229,74 @@ filesystem with the host; these are the equivalents for one that does not:
 `<worktreeId>` is the numeric `id` from `GET /worktree/list`. The diff endpoint
 derives its refs from the recorded `base_branch`, not from the caller, and
 returns `{ commitCount, log, diff }`.
+
+## Remote agent seats
+
+The board-only configuration runs the board, the API, and the pty host on a
+small box (1 GB is enough) while the **agents run on other machines**. A seat's
+startup command is a plain shell string executed in a pty, so making a seat
+remote is a transport prefix — the pty stays local on the board host while the
+agent process runs on the other box.
+
+### Worked example
+
+A local seat starts as:
+
+```
+agy --dangerously-skip-permissions
+```
+
+A remote seat on `desktop` becomes:
+
+```
+ssh desktop 'agy --dangerously-skip-permissions'
+```
+
+The board host holds ~5 MB for the ssh client instead of ~250 MB for the agent
+process. Both machines clone the same repo; the agent works its own copy and
+git is the sync (which it already is — the board snapshot is bidirectional
+git-carried).
+
+### Transport: mosh over ssh, with tmux underneath
+
+Prefer **mosh** for the transport over raw `ssh` for a long-lived seat: mosh
+survives network drops and roaming where ssh would kill the session and the
+seat with it. But mosh does **not** give reattach — once the mosh client
+process dies, the session is gone — and it does not survive a server reboot.
+So run **tmux underneath** for true session persistence: mosh handles the
+transport, tmux handles the session.
+
+```
+mosh desktop -- tmux new-session -s seat-coder 'agy --dangerously-skip-permissions'
+```
+
+Neither mosh nor tmux interacts with the V8 heap ceiling on the board host.
+tmux sockets are unix-domain only, so they cannot cross a machine boundary —
+that is why the pty multiplexer stays local and the transport (ssh/mosh)
+crosses it. A plain TCP pty service would be an unauthenticated remote shell on
+the LAN; ssh/mosh is the only sane option even on a tailnet.
+
+### Commit before dispatch
+
+The dispatch prompt hands the agent a **repo-relative** plan path
+(`GET /kanban/board` carries `planFileRelative` alongside the absolute
+`planFile`), and the staging template says it is relative to the agent's repo
+root. The agent's clone resolves that path against its own checkout — so the
+plan **must be committed and pushed** before a remote dispatch, or the path
+resolves to nothing and the agent fails with "file not found".
+
+The host warns (does not block) at dispatch when a plan file is uncommitted or
+untracked in the working tree. A hard block is reserved for seats explicitly
+marked remote, which requires a seat metadata flag not yet added; the default
+is warn-on-all-uncommitted so a local box that writes and dispatches in the
+same breath is not stopped. Commit and push before dispatching to a remote
+seat.
+
+### Callback path
+
+Completion is an HTTP call — `switchboard done --from <seat>` — not a
+filesystem signal. The remote agent must reach the board's API to report
+completion; on a tailnet it already can (the same listener the browser uses).
+The older mtime-based activity signal is filesystem-local and will not fire
+for a remote agent, so the activity light goes quiet even though completion is
+reported — cosmetic, but known rather than discovered.

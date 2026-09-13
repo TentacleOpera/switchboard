@@ -1347,6 +1347,12 @@ export class KanbanProvider implements vscode.Disposable {
         if (!needsKanban) {
             return this._buildCommonOnlySnapshot();
         }
+        // Burst attribution (Change 5): log the trigger source and WS client
+        // count at every full-state build so the ~100 s / ~420 s RSS spikes can
+        // be attributed to a path. Gated behind SWITCHBOARD_DEBUG_BURST=1.
+        const _burstTag = this._burstCallerTag();
+        const _burstEntryHeap = process.memoryUsage?.().heapUsed ?? 0;
+        this._logBurstAttribution('entry', _burstTag, 0, _burstEntryHeap);
         // Prefer the editor board's ACTIVE selection so the browser mirrors what the
         // editor is showing — not the primary/first workspace the caller passes.
         // Fall back to the passed root (standalone, or before any selection).
@@ -1366,14 +1372,31 @@ export class KanbanProvider implements vscode.Disposable {
             // TaskViewerProvider._refreshRunSheetsImpl's query branch exactly: project
             // filter stays client-side (pass null), only repoScope is a backend concern.
             const repoScope = this.getRepoScopeFilter() ?? null;
+            // Working-set read: dormant PLAN REVIEWED / CODE REVIEWED cards older
+            // than the hot window are NOT materialised (read-side filter, not an
+            // archive move — status stays 'active', GET /kanban/plan still resolves
+            // them by id). 317 + 91 of 579 measured cards sat in those columns and
+            // were built into every full-state push while none were in play.
+            // In-flight cards (active worktree / dispatched) are never excluded.
             const activeRows = repoScope
-                ? await db.getBoardFilteredByProject(wsId, null, repoScope)
-                : await db.getBoard(wsId);
+                ? await db.getBoardFilteredByProjectWorkingSet(wsId, null, repoScope)
+                : await db.getBoardWorkingSet(wsId);
             const completedRows = repoScope
                 ? await db.getCompletedPlansFilteredByProject(wsId, null, repoScope)
                 : await db.getCompletedPlansInHotWindow(wsId);
             const timeoutMs = vscode.workspace.getConfiguration('switchboard.activityLight').get<number>('timeoutMs', DEFAULT_WORKING_STATE_TIMEOUT_MS);
             const cards = await this._buildBoardCards(db, wsId, root, activeRows, completedRows, timeoutMs);
+            // Burst attribution exit: now the card count and post-build heap are
+            // known. The delta between entry and exit heap is the build's working
+            // set; the client count says whether the multiplier is clients or the
+            // pipeline itself.
+            this._logBurstAttribution('exit', _burstTag, cards.length, _burstEntryHeap);
+            // Forced-GC split (Change 1): capture pre/post-build/post-GC heap at
+            // the peak of THIS build. Gated by SWITCHBOARD_BURST_GC_SPLIT=1 +
+            // --expose-gc; no-op otherwise. The verdict (churn vs retained) is
+            // recorded to .switchboard/logs/burst-gc-split.jsonl and decides
+            // whether the fix is the working-set window (Change 3) or a retainer.
+            this._recordBurstGcSplit(root, _burstTag, cards.length, _burstEntryHeap, process.memoryUsage?.().heapUsed ?? 0);
             // Columns must reflect the user's CONFIGURED + filtered set (mirror the editor
             // refresh path) — NOT the raw built-in DEFAULT_KANBAN_COLUMNS, which shows
             // columns for agents the user hasn't configured.
@@ -2229,13 +2252,21 @@ export class KanbanProvider implements vscode.Disposable {
                 featureId: row.featureId || undefined,
                 subtaskCount: row.isFeature ? (subtaskCountMap.get(row.planId) || 0) : undefined,
                 working: cardState.working,
-                dispatchedTerminal: row.dispatchedTerminal || '',
-                dispatchedAt: row.dispatchedAt ?? null,
-                queuePosition: row.queuePosition ?? null,
-                columnEnteredAt: row.columnEnteredAt ?? null,
+                // Empty-prone fields emit `undefined` (not null/'' ) so JSON.stringify
+                // drops the key from the board payload. ~13k empty slots across ~579
+                // cards ship as key+null every push; omitting them shrinks the
+                // serialized output and the per-client render cost. Reader audit
+                // (kanban.html, planning.js, agentPromptBuilder.ts) confirmed every
+                // consumer guards with truthiness / nullish-coalescing / explicit
+                // `=== null || === undefined` — none use `in`, `hasOwnProperty`,
+                // `.length`, or `.startsWith` on these fields, so absent == null.
+                dispatchedTerminal: row.dispatchedTerminal || undefined,
+                dispatchedAt: row.dispatchedAt ?? undefined,
+                queuePosition: row.queuePosition ?? undefined,
+                columnEnteredAt: row.columnEnteredAt ?? undefined,
                 priorityStarred: row.priorityStarred ?? 0,
-                priority: row.priority ?? null,
-                columnOrder: row.columnOrder ?? null,
+                priority: row.priority ?? undefined,
+                columnOrder: row.columnOrder ?? undefined,
                 missionId: missionByMember.get(row.planId)?.id,
                 missionName: missionByMember.get(row.planId)?.name,
             };
@@ -2255,10 +2286,10 @@ export class KanbanProvider implements vscode.Disposable {
             isFeature: !!rec.isFeature,
             featureId: rec.featureId || undefined,
             subtaskCount: rec.isFeature ? (subtaskCountMap.get(rec.planId) || 0) : undefined,
-            columnEnteredAt: rec.columnEnteredAt ?? null,
+            columnEnteredAt: rec.columnEnteredAt ?? undefined,
             priorityStarred: rec.priorityStarred ?? 0,
-            priority: rec.priority ?? null,
-            columnOrder: rec.columnOrder ?? null,
+            priority: rec.priority ?? undefined,
+            columnOrder: rec.columnOrder ?? undefined,
         })));
 
         return cards;
@@ -2280,6 +2311,14 @@ export class KanbanProvider implements vscode.Disposable {
             console.warn('[KanbanProvider] refreshWithData: no panel and no broadcaster — skipping');
             return;
         }
+
+        // Burst attribution (Change 5): the extension's refreshWithData path is
+        // a SEPARATE build from the standalone pushFullState/getFullState path.
+        // Logging it here lets the burst be attributed to the right composition
+        // root. Gated behind SWITCHBOARD_DEBUG_BURST=1.
+        const _burstTag = this._burstCallerTag();
+        const _burstEntryHeap = process.memoryUsage?.().heapUsed ?? 0;
+        this._logBurstAttribution('entry', _burstTag, 0, _burstEntryHeap);
 
         try {
             const resolvedWorkspaceRoot = path.resolve(workspaceRoot);
@@ -2345,6 +2384,7 @@ export class KanbanProvider implements vscode.Disposable {
             const cards = await this._buildBoardCards(db, workspaceId ?? '', resolvedWorkspaceRoot, activeRows, completedRows, timeoutMs, ghostExistsCache);
 
             this._lastCards = cards;
+            this._logBurstAttribution('exit', _burstTag, cards.length, _burstEntryHeap);
 
             // Build columns (with fallback to defaults)
             let columns;
@@ -4714,6 +4754,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             out.push({
                 topic: st.topic,
                 absolutePath: resolvedAbsolutePath,
+                relativePath: st.planFileRelative
+                    || (() => { const r = path.relative(workspaceRoot, resolvedAbsolutePath).replace(/\\/g, '/'); return r && !r.startsWith('..') ? r : ''; })(),
                 planId: st.planId,
                 complexity: st.complexity,
                 workingDir: stWorkingDir,
@@ -4767,6 +4809,14 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 console.warn(`[KanbanProvider] buildDispatchPlans: no plan file for ${rec.planId}`);
                 continue;
             }
+            // Warn (do not block) when the plan file is uncommitted/untracked in the
+            // working tree. A remote agent's clone cannot have it, so the dispatch
+            // would fail as "file not found" inside the agent. Blocking is reserved
+            // for seats explicitly marked remote (a seat metadata flag this plan
+            // does not add); the default is warn-on-all-uncommitted so a local box
+            // that writes-and-dispatches in the same breath is not stopped. The
+            // repo root is the plan's worktreePath when assigned, else workspaceRoot.
+            this._warnIfPlanFileUncommitted(workspaceRoot, planFileRel, rec).catch(() => { /* best-effort */ });
             const absolutePath = this._resolvePlanFilePath(workspaceRoot, planFileRel);
             const worktreePath = await this._resolveWorktreeForRecord(workspaceRoot, rec, opts?.worktreePathMap);
             const isFeature = !!rec.isFeature;
@@ -4779,6 +4829,12 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                 sessionId: rec.sessionId || rec.planId,
                 topic: rec.topic || planFileRel || 'Untitled',
                 absolutePath: resolvedAbsolutePath,
+                // Repo-relative form for remote agents: prefer the raw DB value
+                // (rec.planFileRelative), fall back to deriving it from the
+                // resolved absolute path. Empty string here means "unknown" —
+                // buildPromptDispatchContext then falls back to absolutePath.
+                relativePath: rec.planFileRelative
+                    || (() => { const r = path.relative(workspaceRoot, resolvedAbsolutePath).replace(/\\/g, '/'); return r && !r.startsWith('..') ? r : ''; })(),
                 planId: rec.planId,
                 complexity: rec.complexity,
                 workingDir: resolvedWorkingDir,
@@ -5900,7 +5956,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             'Standing orders: callback contract is installed on all workers — they report to you on completion. Do not re-register.',
             '',
             'STAGING (one call per plan):',
-            `node "<cliPath>" verb ptySendPrompt '{"name":"<seat>","data":"Implement the plan at <path>. This plan only.","clearBeforePrompt":false,"origin":"${originVal}","dispatch":{"planId":"<id>","role":"coder"}}'`,
+            `node "<cliPath>" verb ptySendPrompt '{"name":"<seat>","data":"Implement the plan at <path> (relative to your repo root). This plan only.","clearBeforePrompt":false,"origin":"${originVal}","dispatch":{"planId":"<id>","role":"coder"}}'`,
             'origin is your own seat name — it keeps the team-wide context reset from clearing you.',
             '',
             'MESSAGE (fix rounds, questions, verdicts — anything that is not a new subtask):',
@@ -5938,8 +5994,11 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         // with isFeature: true). The lead reads this file for plan IDs, file
         // paths, seat assignments, acceptance criteria, and scope constraints.
         const featurePlan = plans.find(p => p.isFeature);
-        const featureFileLine = featurePlan?.absolutePath
-            ? `FEATURE FILE: ${featurePlan.absolutePath}. Read it — its Subtasks section has plan IDs and file paths; its Team Dispatch Instructions section has seat assignments, acceptance criteria, and scope constraints for each subtask. This is your single source of truth for dispatch and review.`
+        // Prefer the repo-relative path so a remote lead (whose clone shares the
+        // repo but not the board host's filesystem) can open the feature file.
+        const featureFilePath = featurePlan?.relativePath || featurePlan?.absolutePath;
+        const featureFileLine = featureFilePath
+            ? `FEATURE FILE: ${featureFilePath} (relative to your repo root). Read it — its Subtasks section has plan IDs and file paths; its Team Dispatch Instructions section has seat assignments, acceptance criteria, and scope constraints for each subtask. This is your single source of truth for dispatch and review.`
             : 'FEATURE FILE: (not found in prompt). Read the feature plan file for plan IDs, seat assignments, and scope constraints.';
 
         const terminalDirective = head
@@ -5960,7 +6019,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             'Standing orders: callback contract is installed on all workers — they report to you on completion. Do not re-register.',
             '',
             'STAGING (one call per subtask):',
-            `node "<cliPath>" verb ptySendPrompt '{"name":"<seat>","data":"Implement the plan at <path>. This subtask only.","clearBeforePrompt":false,"origin":"${originVal}","dispatch":{"planId":"<id>","role":"coder"}}'`,
+            `node "<cliPath>" verb ptySendPrompt '{"name":"<seat>","data":"Implement the plan at <path> (relative to your repo root). This subtask only.","clearBeforePrompt":false,"origin":"${originVal}","dispatch":{"planId":"<id>","role":"coder"}}'`,
             'origin is your own seat name — it keeps the team-wide context reset from clearing you.',
             '',
             'MESSAGE (fix rounds, questions, verdicts — anything that is not a new subtask):',
@@ -6105,6 +6164,35 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             } catch { /* no commit / timeout / bad repo — contribute nothing */ }
         }
         return [...shas];
+    }
+
+    /**
+     * Warn (never block) when a plan file is uncommitted or untracked in the
+     * working tree. A remote agent's clone cannot resolve an uncommitted plan,
+     * so the dispatch fails as "file not found" inside the agent rather than as
+     * a dispatch error. The default is warn-on-all-uncommitted: a hard block is
+     * reserved for seats explicitly marked remote, which requires a seat
+     * metadata flag this plan does not add. Uses `git status --porcelain` so an
+     * untracked (`??`) or modified (` M`) file both warn. Any git failure
+     * (not a repo, timeout) is swallowed — a missing warn is recoverable, a
+     * false stop is not.
+     */
+    private async _warnIfPlanFileUncommitted(workspaceRoot: string, planFileRel: string, rec: KanbanPlanRecord): Promise<void> {
+        const execFileAsync = promisify(cp.execFile);
+        const repoRoot = rec.repoScope ? path.resolve(workspaceRoot, rec.repoScope) : workspaceRoot;
+        try {
+            const { stdout } = await execFileAsync('git', [
+                'status', '--porcelain', '--', planFileRel,
+            ], { cwd: repoRoot, timeout: 5000 });
+            const status = stdout.trim();
+            if (status) {
+                console.warn(
+                    `[KanbanProvider] plan file uncommitted — a remote agent's clone cannot resolve it: ` +
+                    `${planFileRel} (plan ${rec.planId || '?'}). git status: ${status.split('\n')[0]}. ` +
+                    `Commit and push before dispatching to a remote seat.`
+                );
+            }
+        } catch { /* not a repo / timeout — best-effort, swallow */ }
     }
 
     /**
@@ -9661,9 +9749,124 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
     private _apiServer?: any;
 
+    /**
+     * Burst-attribution client-count resolver. Returns the number of WS
+     * connections currently attached to the board host (wsHub.connectionCount
+     * in standalone; the browser cockpit connection count in the extension).
+     * Wired by both composition roots so the debug-gated burst log can
+     * discriminate "the card-build pipeline runs once per push" from "it runs
+     * once per connected client" — the question the 1 GB Pi plan's Change 5
+     * exists to answer. Null when unwired (the log prints `clients=?`).
+     */
+    private _burstAttributionClientCountResolver: (() => number) | null = null;
+
     public setApiServer(server: any): void {
         this._apiServer = server;
         this._broadcaster?.setApiServer(server);
+    }
+
+    /**
+     * Wire the WS connection-count resolver for the debug-gated burst
+     * attribution log (Change 5 of the 1 GB Pi plan). Both composition roots
+     * wire this so the log can name the client count alongside each build —
+     * the standalone `pushFullState`/`getFullState` path and the extension's
+     * `refreshWithData` path. The count is the WS CONNECTION count, not the
+     * seat count: seats are agent processes on other machines, not board
+     * clients.
+     */
+    public setBurstAttributionClientCountResolver(resolver: (() => number) | null): void {
+        this._burstAttributionClientCountResolver = resolver;
+    }
+
+    /**
+     * Debug-gated burst attribution log. Fires only when
+     * `SWITCHBOARD_DEBUG_BURST=1` is in the environment, so it costs nothing on
+     * a constrained device in normal operation. Records the trigger source (a
+     * short caller tag derived from the stack), the active card count, the WS
+     * connection count, and heap-used at entry and exit — the four numbers
+     * needed to attribute the ~100 s / ~420 s RSS spikes to a path and decide
+     * whether the multiplier is client count or the pipeline's own working set.
+     */
+    private _logBurstAttribution(phase: 'entry' | 'exit', label: string, cardCount: number, heapAtMark: number): void {
+        if (process.env.SWITCHBOARD_DEBUG_BURST !== '1') { return; }
+        const clients = this._burstAttributionClientCountResolver ? this._burstAttributionClientCountResolver() : '?';
+        const heapUsed = Math.round((process.memoryUsage?.().heapUsed ?? 0) / (1024 * 1024));
+        console.log(`[burst] ${label} ${phase} cards=${cardCount} clients=${clients} heap=${heapUsed}MB (mark=${Math.round(heapAtMark / (1024 * 1024))}MB)`);
+    }
+
+    /** Derive a short caller tag from the stack for burst attribution. */
+    private _burstCallerTag(): string {
+        const stack = new Error().stack || '';
+        const lines = stack.split('\n');
+        // lines[0] = 'Error', [1] = _burstCallerTag, [2] = the _logBurstAttribution
+        // caller (getFullStateMessages / refreshWithData), [3] = THAT caller's
+        // caller — the trigger source we want to name.
+        for (let i = 3; i < lines.length; i++) {
+            const m = lines[i].match(/\bat\s+(?:(\w+)\.)?(\w+)\s+\(/);
+            if (m) {
+                const obj = m[1] ? `${m[1]}.` : '';
+                return `${obj}${m[2]}`;
+            }
+        }
+        return 'unknown';
+    }
+
+    /**
+     * Forced-GC split probe (Change 1, 1 GB Pi plan). Arms on the NEXT
+     * getFullStateMessages call — NOT on a timer — so it measures the burst
+     * peak (~100 s / ~420 s into a run), not rest. Captures heap-used pre-build,
+     * post-build, and post-forced-GC, plus RSS post-GC. The churn-vs-retention
+     * verdict (post-build − post-GC = churn; post-GC = live retention) decides
+     * whether the fix is shrinking the pipeline's working set (Change 3) or
+     * finding a retainer.
+     *
+     * Gated by `SWITCHBOARD_BURST_GC_SPLIT=1` AND `--expose-gc` (global.gc).
+     * Writes one JSONL record per armed build to
+     * `<workspaceRoot>/.switchboard/logs/burst-gc-split.jsonl`. The probe must
+     * not perturb the host beyond the forced GC itself — it reads
+     * process.memoryUsage() only, no inspector attach.
+     */
+    private _recordBurstGcSplit(
+        workspaceRoot: string,
+        trigger: string,
+        cardCount: number,
+        preBuildHeap: number,
+        postBuildHeap: number
+    ): void {
+        if (process.env.SWITCHBOARD_BURST_GC_SPLIT !== '1') { return; }
+        const gc = (global as any).gc;
+        if (typeof gc !== 'function') {
+            console.warn('[burst-gc-split] SWITCHBOARD_BURST_GC_SPLIT=1 but global.gc is not exposed — relaunch with --expose-gc');
+            return;
+        }
+        try {
+            gc();
+            const afterGc = process.memoryUsage();
+            const churn = postBuildHeap - afterGc.heapUsed;
+            const liveRetained = afterGc.heapUsed;
+            const verdict = churn > liveRetained * 0.5
+                ? 'mostly-churn'
+                : (liveRetained > preBuildHeap * 1.5 ? 'mostly-retained' : 'mixed');
+            const record = {
+                timestamp: new Date().toISOString(),
+                trigger,
+                cardCount,
+                heapBeforeBytes: preBuildHeap,
+                heapAfterBuildBytes: postBuildHeap,
+                heapAfterGcBytes: afterGc.heapUsed,
+                rssAfterGcBytes: afterGc.rss,
+                churnBytes: churn,
+                liveRetainedBytes: liveRetained,
+                verdict,
+            };
+            const logsDir = path.join(workspaceRoot, '.switchboard', 'logs');
+            try { fs.mkdirSync(logsDir, { recursive: true }); } catch { /* may already exist */ }
+            const file = path.join(logsDir, 'burst-gc-split.jsonl');
+            fs.appendFileSync(file, JSON.stringify(record) + '\n', 'utf8');
+            console.log(`[burst-gc-split] trigger=${trigger} cards=${cardCount} heap: pre=${Math.round(preBuildHeap / 1048576)}MB post-build=${Math.round(postBuildHeap / 1048576)}MB post-gc=${Math.round(afterGc.heapUsed / 1048576)}MB rss-post-gc=${Math.round(afterGc.rss / 1048576)}MB churn=${Math.round(churn / 1048576)}MB live=${Math.round(liveRetained / 1048576)}MB verdict=${verdict}`);
+        } catch (err) {
+            console.warn('[burst-gc-split] capture failed:', err);
+        }
     }
 
     /**

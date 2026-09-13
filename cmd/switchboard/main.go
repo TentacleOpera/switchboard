@@ -306,7 +306,29 @@ func execNode(entry string, args []string) error {
 	if err != nil {
 		return err
 	}
-	all := append([]string{node, entry}, args...)
+	// --max-old-space-size raises V8's old-space ceiling above the host's
+	// measured heap peak so the board-only host survives its own heap growth
+	// on a 1 GB box (V8's auto-sized ceiling on a 700 MB-available box aborts
+	// at ~342 MB, below the ~355 MB drift). Unconditional: inert on a 4 GB box
+	// (workload stays ~355 MB, never approaches the cap). Must sit between node
+	// and the entry script so V8 parses it before loading the entry. The same
+	// flag is appended in internal/launcher/discovery.go HandoffStart — keep
+	// the two in sync. Never v8.setFlagsFromString (silent no-op, measured) or
+	// NODE_OPTIONS (leaks into every child process, including the Go pty-host).
+	//
+	// The value is env-overridable via SWITCHBOARD_MAX_OLD_SPACE_MB so the
+	// forced-GC split (plan: the-board-must-fit-a-1gb-pi, Change 1) can set a
+	// MEASURED live-at-peak value + headroom without rebuilding the client.
+	// The default (512) is a placeholder pending that measurement — the plan
+	// is explicit the number must come from the split, never a guess and never
+	// the development box's value. Note the flag names old space but
+	// heap_size_limit spans new space too: --max-old-space-size=512 reports a
+	// ~700 MB limit.
+	mb := os.Getenv("SWITCHBOARD_MAX_OLD_SPACE_MB")
+	if mb == "" {
+		mb = "512"
+	}
+	all := append([]string{node, "--max-old-space-size=" + mb, entry}, args...)
 	if runtime.GOOS != "windows" {
 		// Process replacement: the child becomes this process. Signals,
 		// stdin/stdout/stderr, and exit status are preserved by the kernel.

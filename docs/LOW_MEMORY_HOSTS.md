@@ -72,7 +72,31 @@ timestamp,pid,rss,heapUsed,heapTotal,external,arrayBuffers,inotifyDescriptors,op
 When running Switchboard standalone on Raspberry Pi OS (64-bit) with 4 GB RAM:
 
 1. **Node.js Memory Configuration**:
-   The default V8 heap ceiling is sufficient for normal standalone operation (~200–350 MB RSS). However, heavy build tooling (such as Webpack bundle recompilation) requires swapping or an explicit memory flag:
+   The standalone host sets `--max-old-space-size=512` **unconditionally** via the
+   Go launcher and CLI — it is appended to the node argv at both handoff sites
+   (`internal/launcher/discovery.go` `HandoffStart` for the icon-launch path,
+   and `cmd/switchboard/main.go` `execNode` for the terminal-typed path), so
+   every `switchboard`/`npx` invocation and every supervised launch gets it
+   with no operator action. The flag sits between `node` and the entry script
+   so V8 parses it at isolate creation (an in-script `v8.setFlagsFromString`
+   call is a silent no-op, measured; `NODE_OPTIONS` is rejected because it
+   leaks into every child process, including the Go pty-host, which has no V8
+   heap).
+
+   The cap **raises** V8's old-space ceiling above the host's measured ~355 MB
+   heap drift, it does not lower it for visibility. On a 700 MB-available box
+   V8's auto-sized ceiling aborts at ~342 MB `heapUsed` — *below* the drift — so
+   an uncapped board-only host crashes during normal operation. Value 512
+   clears the drift with headroom (measured: survived 400 MB `heapUsed` at
+   472 MB RSS). It is inert on a 4 GB box, where the workload stays at ~355 MB
+   and never approaches the cap, so there is no regression. This is a
+   **mitigation** (raises the ceiling past the drift), not a fix for the
+   retention — the heap-drift fix is a separate prerequisite for *sustained*
+   1 GB operation. The flag does not propagate to the Go pty-host (a separate
+   Go process with no V8 heap), which is correct.
+
+   Heavy build tooling (Webpack bundle recompilation) is a separate process
+   that runs outside the host and still needs its own ceiling:
    ```bash
    export NODE_OPTIONS="--max-old-space-size=2048"
    ```

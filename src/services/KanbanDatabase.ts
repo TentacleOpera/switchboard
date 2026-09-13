@@ -74,6 +74,16 @@ export interface KanbanPlanRecord {
     sessionId: string;
     topic: string;
     planFile: string;
+    /**
+     * Repo-relative form of planFile — the raw DB `plan_file` value before
+     * _readRows() absolutizes planFile. Carried alongside planFile so a remote
+     * agent (whose clone shares the repo but not the board host's filesystem)
+     * can resolve the plan against its own repo root. Empty when the stored
+     * value was already absolute (legacy rows); consumers that need the
+     * relative form must fall back to deriving it from planFile, never assume
+     * a non-empty string is present.
+     */
+    planFileRelative?: string;
     kanbanColumn: string;
     status: KanbanPlanStatus;
     complexity: string; // 'Unknown' or string integer '1'-'10'
@@ -4654,6 +4664,120 @@ export class KanbanDatabase {
         return this._readRows(stmt);
     }
 
+    /**
+     * In-flight predicate shared by the working-set read. A card is in-flight
+     * if it has an active worktree row, a live dispatched_at (activity light
+     * — now on plan_runtime_state after the V74 tier split, not plans), or a
+     * worktree_id pointing at an active worktree. `worktree_id IS NOT NULL`
+     * alone is wrong — stale ids after close would pin forever.
+     *
+     * V74 moved `dispatched_at` out of `plans` into `plan_runtime_state`
+     * (keyed by plan_id + device_id). A correlated EXISTS subquery reads it
+     * from there without changing the outer FROM clause. Any device's
+     * dispatched_at being non-null means the card is in flight somewhere —
+     * the same semantics the pre-V74 `dispatched_at IS NOT NULL` had when
+     * plans carried one device's row.
+     *
+     * All column refs are qualified with `plans.` because the subquery
+     * introduces `plan_runtime_state prs`, and an unqualified `plan_id`
+     * would be ambiguous.
+     */
+    private static readonly IN_FLIGHT_SQL =
+        `(plans.worktree_status = 'active' OR EXISTS (SELECT 1 FROM plan_runtime_state prs WHERE prs.plan_id = plans.plan_id AND prs.dispatched_at IS NOT NULL) OR (plans.worktree_id IS NOT NULL AND plans.worktree_id IN (SELECT id FROM worktrees WHERE status = 'active')))`;
+
+    /**
+     * Working-set board read: every `status='active'` row EXCEPT dormant cards
+     * parked in {@link DORMANT_KANBAN_COLUMNS} whose `updated_at` is older than
+     * the hot window AND that are not in-flight. The card stays active and on
+     * the board; the collection read simply does not materialise it. A touched
+     * card (any write bumping `updated_at`) re-enters, and in-flight cards are
+     * never excluded.
+     *
+     * This is the read-side filter the 1 GB Pi plan names: 317 cards in
+     * PLAN REVIEWED + 91 in CODE REVIEWED were materialised on every
+     * full-state push while none were in play. `GET /kanban/plan?planId=`
+     * spans both tiers via `lookupPlanRecord` and continues to resolve a
+     * windowed-out card by id, so the pairing the `board-read-endpoints`
+     * contract pins (record lookups span, collection reads stay windowed)
+     * is preserved.
+     */
+    public async getBoardWorkingSet(workspaceId: string, hotWindowDays?: number): Promise<KanbanPlanRecord[]> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        const days = hotWindowDays ?? KanbanDatabase.getHotWindowDays();
+        const cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - days);
+        const cutoffIso = cutoff.toISOString();
+        const dormant = KanbanDatabase.DORMANT_KANBAN_COLUMNS.map(() => '?').join(', ');
+        const stmt = this._db.prepare(
+            `SELECT ${PLAN_COLUMNS} FROM plans
+             WHERE workspace_id = ? AND status = 'active'
+               AND NOT (
+                   kanban_column IN (${dormant})
+                   AND updated_at < ?
+                   AND NOT (${KanbanDatabase.IN_FLIGHT_SQL})
+               )
+             ORDER BY updated_at DESC`,
+            [workspaceId, ...KanbanDatabase.DORMANT_KANBAN_COLUMNS, cutoffIso]
+        );
+        return this._readRows(stmt);
+    }
+
+    /**
+     * Project/repo-filtered variant of {@link getBoardWorkingSet}. Same dormant
+     * exclusion, scoped by repo (and optionally project) the way
+     * `getBoardFilteredByProject` scopes the unwindowed read. Used by the
+     * browser WS resync when a repo scope is active so the windowing and the
+     * project filter compose without one silently reverting the other.
+     */
+    public async getBoardFilteredByProjectWorkingSet(
+        workspaceId: string,
+        project: string | null,
+        repoScope: string | null,
+        hotWindowDays?: number
+    ): Promise<KanbanPlanRecord[]> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+
+        const isProjectFilter = project !== null
+            && project !== KanbanDatabase.UNASSIGNED_PROJECT_FILTER
+            && project !== '';
+
+        const selectColumns = isProjectFilter
+            ? PLAN_COLUMNS.split(',').map(c => `plans.${c.trim()}`).join(', ')
+            : PLAN_COLUMNS;
+        const fromClause = isProjectFilter
+            ? 'plans LEFT JOIN projects pr ON plans.project_id = pr.id'
+            : 'plans';
+
+        const dormant = KanbanDatabase.DORMANT_KANBAN_COLUMNS.map(() => '?').join(', ');
+        let query = `SELECT ${selectColumns} FROM ${fromClause} WHERE plans.workspace_id = ? AND plans.status = 'active'`;
+        const params: unknown[] = [workspaceId];
+
+        if (repoScope) {
+            query += " AND plans.repo_scope IN (?, '')";
+            params.push(repoScope);
+        }
+
+        if (project === KanbanDatabase.UNASSIGNED_PROJECT_FILTER) {
+            query += ` AND plans.project_id IS NULL`;
+        } else if (isProjectFilter) {
+            query += ` AND pr.name = ?`;
+            params.push(project);
+        }
+
+        // Dormant exclusion (read-side filter, NOT an archive move). Qualified
+        // with `plans.` because the projects JOIN shares column names with plans.
+        const days = hotWindowDays ?? KanbanDatabase.getHotWindowDays();
+        const cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - days);
+        const cutoffIso = cutoff.toISOString();
+        query += ` AND NOT (plans.kanban_column IN (${dormant}) AND plans.updated_at < ? AND NOT (${KanbanDatabase.IN_FLIGHT_SQL}))`;
+        params.push(...KanbanDatabase.DORMANT_KANBAN_COLUMNS, cutoffIso);
+
+        query += ` ORDER BY plans.updated_at DESC`;
+        const stmt = this._db.prepare(query, params);
+        return this._readRows(stmt);
+    }
+
     public async getProjects(workspaceId: string): Promise<string[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
         const stmt = this._db.prepare(
@@ -5391,6 +5515,22 @@ export class KanbanDatabase {
      * Default hot window in days. Overridable via `switchboard.kanban.hotWindowDays`.
      */
     public static readonly DEFAULT_HOT_WINDOW_DAYS = 45;
+
+    /**
+     * Columns whose cards are "dormant" once they age out of the hot window.
+     * A card parked in PLAN REVIEWED or CODE REVIEWED is not in play — it is
+     * waiting on a human/agent action that has not come. 317 + 91 of 579
+     * measured cards sat here, all materialised on every full-state push.
+     *
+     * This is a READ-SIDE filter, not an archive move: `status` stays 'active',
+     * the card stays on the board, and `GET /kanban/plan?planId=` (which spans
+     * both tiers via lookupPlanRecord) still resolves it by id. The collection
+     * read simply does not materialise the dormant row. A card that gets
+     * touched (any write bumping `updated_at`) re-enters the working set, and
+     * in-flight cards (active worktree / dispatched) are never excluded —
+     * mirroring the `inFlight` clause in selectColdEligiblePlanIds.
+     */
+    public static readonly DORMANT_KANBAN_COLUMNS = ['PLAN REVIEWED', 'CODE REVIEWED'] as const;
 
     /**
      * Read the hot-window-days setting from VS Code config (falls back to default 45
@@ -14790,6 +14930,9 @@ FROM plans
                     sessionId: String(row.session_id || ""),
                     topic: String(row.topic || ""),
                     planFile: this._resolveAbsolutePlanFile(String(row.plan_file || "")),
+                    // Raw DB value (relative) kept beside the absolute planFile so a
+                    // remote agent can resolve the plan against its own repo root.
+                    planFileRelative: String(row.plan_file || ""),
                     kanbanColumn: String(row.kanban_column || "CREATED"),
                     status: String(row.status || "active") as KanbanPlanStatus,
                     complexity: String(row.complexity || "Unknown"),

@@ -954,6 +954,8 @@
     "test:contract:terminal-flow-control": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-flow-control-contract.test.js",
     "test:contract:terminal-ws-deflate": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-ws-deflate-contract.test.js",
     "test:contract:board-payload-compression": "node --require ./src/test/bootstrap/sandboxStateHome.js --require ./src/test/bootstrap/vscodeStub.js src/test/board-payload-compression-contract.test.js",
+    "test:contract:board-payload-size": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/board-payload-size-contract.test.js",
+    "test:contract:board-peak-rss": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/board-peak-rss-contract.test.js",
     "test:contract:terminals-payload": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminals-panel-payload-contract.test.js",
     "test:contract:terminal-input-path": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-input-path-contract.test.js",
     "test:contract:terminal-rename-rekey": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-rename-rekey-contract.test.js",

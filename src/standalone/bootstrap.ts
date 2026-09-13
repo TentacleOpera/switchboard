@@ -5356,6 +5356,15 @@ Each plan file must include:
     });
     planningProvider.setApiServer(server);
     kanbanProvider.setApiServer(server);
+    // Burst attribution (Change 5, 1 GB Pi plan): wire the WS connection-count
+    // resolver so the debug-gated burst log can name the client count alongside
+    // each full-state build. The count is the WS CONNECTION count (not the seat
+    // count — seats are agent processes on other machines, not board clients).
+    // Null-safe: server is assigned above, but the resolver is called lazily at
+    // build time, so guard for the boot window where _wsHub is not yet attached.
+    kanbanProvider.setBurstAttributionClientCountResolver(() => {
+        try { return server?.getWsConnectionInfo()?.length ?? 0; } catch { return 0; }
+    });
     // Tickets was missing. Without it _apiServer stays undefined, _buildLocalAssetUrl
     // returns undefined for want of a port, and _rewriteLocalImagePaths falls through to
     // `if (!this._panel) return match` — leaving relative attachments/ paths that 404 in a
