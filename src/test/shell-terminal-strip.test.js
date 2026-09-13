@@ -28,7 +28,12 @@ const path = require('path');
 const assert = require('assert');
 
 const terminalsJs = fs.readFileSync(path.join(__dirname, '../webview/terminals.js'), 'utf8');
-const terminalsHtml = fs.readFileSync(path.join(__dirname, '../webview/terminals.html'), 'utf8');
+// The panel's bulk CSS lives in a linked src/webview/terminals.css (extracted for
+// cacheability, plan: the-terminals-panel-costs-a-megabyte-and-a-half). The two files
+// are one authored surface, so style assertions read both: a rule that MOVED still
+// passes, and a rule that was supposed to DIE still fails if it survived in the CSS.
+const terminalsHtml = fs.readFileSync(path.join(__dirname, '../webview/terminals.html'), 'utf8')
+    + '\n' + fs.readFileSync(path.join(__dirname, '../webview/terminals.css'), 'utf8');
 const shellJs = fs.readFileSync(path.join(__dirname, '../webview/shell.js'), 'utf8');
 const shellHtml = fs.readFileSync(path.join(__dirname, '../webview/shell.html'), 'utf8');
 const localApiServerTs = fs.readFileSync(path.join(__dirname, '../services/LocalApiServer.ts'), 'utf8');

@@ -67,7 +67,12 @@ function test(name, fn) {
     });
 
     test('terminals.html defines required curtain styling and UFO classes', () => {
-        const html = fs.readFileSync(path.join(REPO_ROOT, 'src', 'webview', 'terminals.html'), 'utf8');
+        // The panel's bulk CSS lives in a linked src/webview/terminals.css (extracted for
+        // cacheability, plan: the-terminals-panel-costs-a-megabyte-and-a-half). The two files
+        // are one authored surface, so style assertions read both: a rule that MOVED still
+        // passes, and a rule that was supposed to DIE still fails if it survived in the CSS.
+        const html = fs.readFileSync(path.join(REPO_ROOT, 'src', 'webview', 'terminals.html'), 'utf8')
+            + '\n' + fs.readFileSync(path.join(REPO_ROOT, 'src', 'webview', 'terminals.css'), 'utf8');
         assert.ok(html.includes('.terminal-curtain'), 'Must define .terminal-curtain');
         assert.ok(html.includes('.startup-curtain-sublabel'), 'Must define .startup-curtain-sublabel');
         assert.ok(html.includes('.terminal-curtain-sublabel'), 'Must define .terminal-curtain-sublabel');
@@ -104,8 +109,16 @@ function test(name, fn) {
         const ptyDelivery = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'ptyPromptDelivery.ts'), 'utf8');
         assert.ok(ptyDelivery.includes('cleared?: boolean;'), 'PromptDeliveryReceipt must declare cleared boolean');
 
-        const ptyHost = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'ptyHost.ts'), 'utf8');
-        assert.ok(ptyHost.includes('cleared: receipt.cleared === true'), 'ptyHost ptySendPrompt must return cleared');
+        // "Both hosts" is no longer bootstrap.ts + src/standalone/ptyHost.ts: the
+        // TypeScript PTY host was RETIRED in e26ac375 and is now a 302-byte stub that
+        // throws. The second host is the Go binary, so the assertion follows the
+        // implementation rather than being deleted with the file it pointed at.
+        // `"cleared": cleared` (a real value, not a literal) is the shape that matters:
+        // a hardcoded true is what made the old /clear path report a clear that never
+        // happened — see the note at cmd/switchboard-pty-host/main.go:1105.
+        const goPrompt = fs.readFileSync(path.join(REPO_ROOT, 'cmd', 'switchboard-pty-host', 'prompt.go'), 'utf8');
+        assert.ok(goPrompt.includes('"cleared": cleared'),
+            'the Go host ptySendPrompt must return the REAL cleared value, not a literal');
 
         const bootstrap = fs.readFileSync(path.join(REPO_ROOT, 'src', 'standalone', 'bootstrap.ts'), 'utf8');
         assert.ok(bootstrap.includes('cleared: receipt?.cleared === true'), 'standalone ptySendPrompt must return cleared');

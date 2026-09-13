@@ -417,7 +417,12 @@ async function run() {
 
     // ── 9. terminals.html and terminals.js source contract checks ───────────
     await check('terminals.html and terminals.js contract assertions', async () => {
-        const html = fs.readFileSync(path.join(process.cwd(), 'src', 'webview', 'terminals.html'), 'utf8');
+        // The panel's bulk CSS lives in a linked src/webview/terminals.css (extracted for
+        // cacheability, plan: the-terminals-panel-costs-a-megabyte-and-a-half). The two files
+        // are one authored surface, so style assertions read both: a rule that MOVED still
+        // passes, and a rule that was supposed to DIE still fails if it survived in the CSS.
+        const html = fs.readFileSync(path.join(process.cwd(), 'src', 'webview', 'terminals.html'), 'utf8')
+            + '\n' + fs.readFileSync(path.join(process.cwd(), 'src', 'webview', 'terminals.css'), 'utf8');
         const js = fs.readFileSync(path.join(process.cwd(), 'src', 'webview', 'terminals.js'), 'utf8');
 
         // HTML button is no longer ACKNOWLEDGE COMPLETIONS

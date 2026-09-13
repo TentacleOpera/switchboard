@@ -31,7 +31,12 @@ function test(name, fn) {
 
 const src = fs.readFileSync(TERMINALS_JS, 'utf8');
 const vpSrc = fs.readFileSync(TERMINAL_VIEWPORT_JS, 'utf8');
-const html = fs.readFileSync(TERMINALS_HTML, 'utf8');
+// The panel's bulk CSS lives in a linked src/webview/terminals.css (extracted for
+// cacheability, plan: the-terminals-panel-costs-a-megabyte-and-a-half). The two files
+// are one authored surface, so style assertions read both: a rule that MOVED still
+// passes, and a rule that was supposed to DIE still fails if it survived in the CSS.
+const html = fs.readFileSync(TERMINALS_HTML, 'utf8')
+    + '\n' + fs.readFileSync(TERMINALS_HTML.replace(/\.html$/, '.css'), 'utf8');
 
 /** Extract a top-level `function name(...) { ... }` body by brace matching.
  *  Searches terminals.js first, then terminalViewport.js (where the viewport

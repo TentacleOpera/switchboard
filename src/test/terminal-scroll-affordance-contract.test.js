@@ -21,8 +21,14 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 
+// The panel's bulk CSS lives in a linked src/webview/terminals.css (extracted for
+// cacheability, plan: the-terminals-panel-costs-a-megabyte-and-a-half). The two files
+// are one authored surface, so style assertions read both: a rule that MOVED still
+// passes, and a rule that was supposed to DIE still fails if it survived in the CSS.
 const HTML = fs.readFileSync(
-    path.join(__dirname, '..', 'webview', 'terminals.html'), 'utf8');
+    path.join(__dirname, '..', 'webview', 'terminals.html'), 'utf8')
+    + '\n' + fs.readFileSync(
+    path.join(__dirname, '..', 'webview', 'terminals.css'), 'utf8');
 const JS = fs.readFileSync(
     path.join(__dirname, '..', 'webview', 'terminals.js'), 'utf8');
 const VP = fs.readFileSync(
