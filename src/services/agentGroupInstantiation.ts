@@ -2,13 +2,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { MAX_DELEGATES_PER_PARENT, MAX_LIVE_DELEGATE_PTYS } from './ptyLimits';
 import { GlobalIntegrationConfigService } from './GlobalIntegrationConfigService';
-import { wireSpawnedTeam, AGENT_GROUP_CALLBACK_INSTRUCTION, SEEDED_AGENT_GROUP, type TerminalGroupsSettingsAccessor } from './teamWiring';
+import { wireSpawnedTeam, SEEDED_AGENT_GROUP, type TerminalGroupsSettingsAccessor } from './teamWiring';
 import { bootstrapTeamReportsDirectory } from './ScheduledJobsService';
-
-// Re-exported for downstream consumers (e.g. the team-member-scope preset).
-// The instruction text now lives in teamWiring.ts, where the shared wiring
-// function that installs it resides.
-export { AGENT_GROUP_CALLBACK_INSTRUCTION };
 
 /**
  * Host-agnostic core of "instantiate an agent group".

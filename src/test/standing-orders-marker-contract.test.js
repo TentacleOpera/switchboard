@@ -204,14 +204,13 @@ test('both files exclude the head from team-scoped orders via o.parent check', (
     }
 });
 
-test('both files apply team-pair migration before selection', () => {
-    // The migration recognises pre-rewrite per-member pair rows and folds
-    // them into team-scoped orders. Both the host (migrateTeamPairOrders in
-    // teamWiring.ts, called at the read sites) and the client mirror
-    // (migrateTeamPairOrdersClient in terminals.js, called inside
-    // applyStandingOrdersClient) must implement this. Without parity, the
-    // Shift-drop path renders old pair rows while the host renders the
-    // folded team prompt — divergent delivery to the same terminal.
+test('host applies team-pair cleanup at the read sites; client renders persisted rows as-is', () => {
+    // System team protocol is composed at delivery by the host and never
+    // persisted. The host runs migrateTeamPairOrders (drops legacy port-file
+    // pair rows) at the read sites. The client no longer runs migration
+    // recognisers or composes system bodies — that would make the panel a
+    // second source of system protocol, drifting from the host. The client
+    // renders the persisted rows the host returned (operator-authored only).
     assert.ok(
         /migrateTeamPairOrders/.test(STANDING_ORDERS_SRC) || /migrateTeamPairOrders/.test(fs.readFileSync(
             path.join(__dirname, '..', 'services', 'teamWiring.ts'), 'utf8'
@@ -219,33 +218,19 @@ test('both files apply team-pair migration before selection', () => {
         'host must call migrateTeamPairOrders at the standing-orders read sites'
     );
     assert.ok(
-        /migrateTeamPairOrdersClient/.test(TERMINALS_JS_SRC),
-        'terminals.js must implement migrateTeamPairOrdersClient and call it inside applyStandingOrdersClient (mirror parity)'
+        !/migrateTeamPairOrdersClient/.test(TERMINALS_JS_SRC),
+        'terminals.js must NOT implement migrateTeamPairOrdersClient — the client no longer runs system migrations (host owns composition)'
     );
-    // The migration must match the PRE-rewrite callback text, not the
-    // post-rewrite constant — the rows on disk carry the old wording.
+    assert.ok(
+        !/PRE_REWRITE_CALLBACK_INSTRUCTION/.test(TERMINALS_JS_SRC),
+        'terminals.js must NOT declare PRE_REWRITE_CALLBACK_INSTRUCTION — the client migration recogniser is retired'
+    );
     const teamWiringSrc = fs.readFileSync(
         path.join(__dirname, '..', 'services', 'teamWiring.ts'), 'utf8'
     );
     assert.ok(
-        /PRE_REWRITE_CALLBACK_INSTRUCTION/.test(teamWiringSrc),
-        'teamWiring.ts must declare PRE_REWRITE_CALLBACK_INSTRUCTION for the migration recogniser'
-    );
-    assert.ok(
-        /PRE_REWRITE_CALLBACK_INSTRUCTION/.test(TERMINALS_JS_SRC),
-        'terminals.js must declare PRE_REWRITE_CALLBACK_INSTRUCTION for the client migration recogniser (mirror parity)'
-    );
-    // The migration must NOT be applied at the GET /terminals/standing-orders
-    // fetch level — makeStandingOrder mints fresh uuids per call, so ids
-    // would churn on every request and the Link-up editor delete-by-id would
-    // break. Verify the client applies it inside applyStandingOrdersClient,
-    // not at the fetch level.
-    const fetchIdx = TERMINALS_JS_SRC.indexOf('fetchStandingOrders');
-    const fetchEnd = TERMINALS_JS_SRC.indexOf('standingOrdersAvailable', fetchIdx);
-    const fetchBlock = fetchIdx >= 0 ? TERMINALS_JS_SRC.slice(fetchIdx, fetchEnd) : '';
-    assert.ok(
-        !/migrateTeamPairOrdersClient/.test(fetchBlock),
-        'terminals.js must NOT call migrateTeamPairOrdersClient inside fetchStandingOrders — it would churn ids and break delete-by-id'
+        !/PRE_REWRITE_CALLBACK_INSTRUCTION/.test(teamWiringSrc),
+        'teamWiring.ts must NOT declare PRE_REWRITE_CALLBACK_INSTRUCTION — the legacy recogniser is retired'
     );
 });
 
@@ -307,10 +292,16 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
     assert.ok(hostMatch, 'GIT_SAFETY_DIRECTIVE not found in agentPromptBuilder.ts');
     const gitSafety = hostMatch[1].replace(/\\`/g, '`');
 
-    const cbAnchor = /AGENT_GROUP_CALLBACK_INSTRUCTION\s*=\s*/.exec(TEAM_WIRING_SRC);
-    assert.ok(cbAnchor, 'AGENT_GROUP_CALLBACK_INSTRUCTION not found in teamWiring.ts');
-    const callback = readQuotedChain(TEAM_WIRING_SRC, cbAnchor.index + cbAnchor[0].length);
-    assert.ok(callback, 'could not read AGENT_GROUP_CALLBACK_INSTRUCTION as a quoted chain');
+    // The callback text now lives in the `reports-to-head` preset template in
+    // linkPresets.ts (the surviving canonical copy after AGENT_GROUP_CALLBACK_INSTRUCTION
+    // was retired). Extract it from there.
+    const LINK_PRESETS_SRC = fs.readFileSync(
+        path.join(__dirname, '..', 'services', 'linkPresets.ts'), 'utf8'
+    );
+    const cbAnchor = /id:\s*'reports-to-head'[\s\S]*?template:\s*/.exec(LINK_PRESETS_SRC);
+    assert.ok(cbAnchor, 'reports-to-head preset template not found in linkPresets.ts');
+    const callback = readQuotedChain(LINK_PRESETS_SRC, cbAnchor.index + cbAnchor[0].length);
+    assert.ok(callback, 'could not read reports-to-head template as a quoted chain');
 
     const start = KANBAN_HTML_SRC.indexOf('const SHIPPED_TEAM_TYPES');
     assert.ok(start >= 0, 'SHIPPED_TEAM_TYPES not found in kanban.html');
@@ -336,8 +327,8 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
     for (const p of prompts) {
         assert.ok(
             p.startsWith(callback),
-            'A shipped team prompt does not open with AGENT_GROUP_CALLBACK_INSTRUCTION verbatim.\n' +
-            `teamWiring.ts: "${callback}"\n` +
+            'A shipped team prompt does not open with the reports-to-head callback text verbatim.\n' +
+            `linkPresets.ts: "${callback}"\n` +
             `kanban.html:   "${p.slice(0, callback.length)}"\n` +
             'Without it, a team member is never told how to report back to its head.'
         );
@@ -475,15 +466,19 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
 
     // ── unattended escalation clause ─────────────────────────────────
     // The ladder's terminal rung must carry BOTH forms: attended (stop and
-    // report) and unattended (record the blocked card, take the next queue
-    // item). Without the unattended half, a head driving overnight ends its
-    // turn on the first twice-failed subtask and the queue stalls with cards
-    // behind it — the failure the inlined unattended rules in _buildDrivePrefix
-    // exist to remove. Standing orders survive a /clear, which is what
-    // makes this instruction durable across a head's context resets.
+    // report) and unattended (the host records the blocked card, take the
+    // next queue item). Without the unattended half, a head driving overnight
+    // ends its turn on the first twice-failed subtask and the queue stalls
+    // with cards behind it — the failure the inlined unattended rules in
+    // _buildDrivePrefix exist to remove. Standing orders survive a /clear,
+    // which is what makes this instruction durable across a head's context
+    // resets. The unattended form no longer names a file directory (the
+    // mission-control/reports file mirror is gone — see plan 171); it names
+    // the plan_events row the host records, so the instruction stays true
+    // after the writer was deleted.
     const unattendedEscalationSentence = 'stop and report to the human instead of dispatching again '
-        + '(or unattended: record the blocked card to .switchboard/mission-control/reports/ '
-        + 'and proceed to the next queue item).';
+        + '(or unattended: the host records the blocked card as a plan_events row '
+        + '— proceed to the next queue item).';
     assert.ok(
         tsHeadPrompt.includes(unattendedEscalationSentence),
         'NEW_CODING_HEAD_PROMPT must carry the unattended form of the escalation terminal rung — '
@@ -590,8 +585,8 @@ test('both files carry a team-head scope branch with matching selection logic an
         //
         // Scan EVERY branch and require that ONE of them satisfies the gate,
         // rather than measuring from the first. `team-head` is a scope any
-        // read-side converter may also switch on (terminals.js's
-        // migrateCodingTeamOrdersClient does, and it is declared above the
+        // read-side converter may also switch on (the host's
+        // dropSystemAuthoredRows does, and it is declared above the
         // selection branch), so a first-occurrence anchor fails on correct
         // source the moment a second, legitimate branch is added upstream —
         // the same trap this comment already documents one level up.
@@ -1124,7 +1119,7 @@ new Function('exports', 'module', 'require', tsc.transpileModule(TEAM_WIRING_SRC
     compilerOptions: { module: tsc.ModuleKind.CommonJS, target: tsc.ScriptTarget.ES2020 }
 }).outputText)(teamWiringModule.exports, teamWiringModule, teamWiringRequire);
 
-const { wireSpawnedTeam, TERMINALS_LAYOUT_MODES, CONTEXT_AWARE_COMPLETION_ORDER_BODY, CONTEXT_AWARE_HEAD_COMPLETION_ORDER_BODY, EXTERNAL_HEAD_CALLBACK_INSTRUCTION } = teamWiringModule.exports;
+const { wireSpawnedTeam, TERMINALS_LAYOUT_MODES } = teamWiringModule.exports;
 
 /**
  * The panel's own layout whitelist, read out of terminals.js rather than
@@ -1175,7 +1170,7 @@ const CODER_MEMBERS = [
 ];
 const HEAD_PROMPT = 'Advance finished subtasks to CODE REVIEWED. From: {head}.';
 
-test('wireSpawnedTeam: headPrompt supplied => exactly three orders (team prompt + team-head prompt + team-head completion), same teamId, head order has child === "" and {head} substituted', async () => {
+test('wireSpawnedTeam: headPrompt supplied => exactly two orders (team prompt + team-head prompt), same teamId, head order has child === "" and {head} substituted', async () => {
     const db = makeInMemoryDb();
     await wireSpawnedTeam({
         db, headName: HEAD_NAME, children: CODER_CHILDREN,
@@ -1183,26 +1178,22 @@ test('wireSpawnedTeam: headPrompt supplied => exactly three orders (team prompt 
         headPrompt: HEAD_PROMPT,
     });
     const orders = await db.getConfigJson('terminals.standingOrders', []);
-    assert.strictEqual(orders.length, 3,
-        `expected exactly 3 orders (team + team-head prompt + team-head completion), got ${orders.length}`);
+    assert.strictEqual(orders.length, 2,
+        `expected exactly 2 authored orders (team + team-head prompt), got ${orders.length}`);
 
     const teamOrders = orders.filter(o => o.scope === 'team');
     const headOrders = orders.filter(o => o.scope === 'team-head');
     assert.strictEqual(teamOrders.length, 1, 'exactly one team-scoped order');
-    assert.strictEqual(headOrders.length, 2, 'exactly two team-head-scoped orders');
+    assert.strictEqual(headOrders.length, 1, 'exactly one team-head-scoped order (authored prompt only — system completion is composed at delivery)');
 
     const headPromptOrder = headOrders.find(o => o.instruction.includes(HEAD_NAME));
     assert.ok(headPromptOrder, 'head prompt order must exist');
-    const headCompletionOrder = headOrders.find(o => o.id.startsWith('context-aware-completion:'));
-    assert.ok(headCompletionOrder, 'head completion order must exist');
 
     // Same teamId on both.
     const teamId = teamOrders[0].teamId;
     assert.ok(teamId, 'team order must have a teamId');
     assert.strictEqual(headPromptOrder.teamId, teamId,
         'team-head prompt order must have the same teamId as the team order');
-    assert.strictEqual(headCompletionOrder.teamId, teamId,
-        'team-head completion order must have the same teamId as the team order');
 
     // Head prompt order has child === '' (old-build safety).
     assert.strictEqual(headPromptOrder.child, '',
@@ -1217,9 +1208,13 @@ test('wireSpawnedTeam: headPrompt supplied => exactly three orders (team prompt 
     // parent on the head order is the head name (delivery target).
     assert.strictEqual(headPromptOrder.parent, HEAD_NAME,
         'team-head order parent must be the head name');
+
+    // No system-authored rows persisted.
+    assert.ok(!orders.some(o => o.id && o.id.startsWith('context-aware-completion:')),
+        'no system-authored completion order must be persisted — it is composed at delivery');
 });
 
-test('wireSpawnedTeam: headPrompt absent, empty, or whitespace => exactly two orders (team prompt + team-head completion), no fabricated default', async () => {
+test('wireSpawnedTeam: headPrompt absent, empty, or whitespace => exactly one order (team prompt only), no fabricated default', async () => {
     for (const [label, headPrompt] of [['absent', undefined], ['empty', ''], ['whitespace', '   \t\n  ']]) {
         const db = makeInMemoryDb();
         await wireSpawnedTeam({
@@ -1228,19 +1223,16 @@ test('wireSpawnedTeam: headPrompt absent, empty, or whitespace => exactly two or
             headPrompt,
         });
         const orders = await db.getConfigJson('terminals.standingOrders', []);
-        assert.strictEqual(orders.length, 2,
-            `headPrompt ${label}: expected exactly 2 orders (team prompt + team-head completion), got ${orders.length}`);
+        assert.strictEqual(orders.length, 1,
+            `headPrompt ${label}: expected exactly 1 authored order (team prompt only), got ${orders.length}`);
         assert.strictEqual(orders.filter(o => o.scope === 'team').length, 1,
             `headPrompt ${label}: exactly one team-scoped order`);
-        const headOrders = orders.filter(o => o.scope === 'team-head');
-        assert.strictEqual(headOrders.length, 1,
-            `headPrompt ${label}: exactly one team-head completion order`);
-        assert.ok(headOrders[0].id.startsWith('context-aware-completion:'),
-            `headPrompt ${label}: no team-head prompt order must be fabricated, only completion order installed`);
+        assert.strictEqual(orders.filter(o => o.scope === 'team-head').length, 0,
+            `headPrompt ${label}: no team-head order — system completion is composed at delivery, not persisted`);
     }
 });
 
-test('wireSpawnedTeam: re-run with identical args => still exactly three orders, no duplicate', async () => {
+test('wireSpawnedTeam: re-run with identical args => still exactly two orders, no duplicate', async () => {
     const db = makeInMemoryDb();
     const args = {
         db, headName: HEAD_NAME, children: CODER_CHILDREN,
@@ -1250,12 +1242,12 @@ test('wireSpawnedTeam: re-run with identical args => still exactly three orders,
     await wireSpawnedTeam(args);
     await wireSpawnedTeam(args);
     const orders = await db.getConfigJson('terminals.standingOrders', []);
-    assert.strictEqual(orders.length, 3,
-        `idempotent re-run: expected still exactly 3 orders, got ${orders.length} — duplicate detection failed`);
+    assert.strictEqual(orders.length, 2,
+        `idempotent re-run: expected still exactly 2 authored orders, got ${orders.length} — duplicate detection failed`);
     assert.strictEqual(orders.filter(o => o.scope === 'team').length, 1,
         'idempotent re-run: exactly one team order');
-    assert.strictEqual(orders.filter(o => o.scope === 'team-head').length, 2,
-        'idempotent re-run: exactly two team-head orders');
+    assert.strictEqual(orders.filter(o => o.scope === 'team-head').length, 1,
+        'idempotent re-run: exactly one team-head order');
 });
 
 test('wireSpawnedTeam: children: [] => zero orders written and { ok: true } returned', async () => {
@@ -1349,36 +1341,33 @@ test('wireSpawnedTeam: unknown keys on stored roster row survive upsert', async 
     assert.deepStrictEqual(groups[0].members, [HEAD_NAME, 'lead-1-coder-1', 'lead-1-coder-2', 'lead-1-coder-3']);
 });
 
-test('wireSpawnedTeam: installs context-aware completion orders at team and team-head scopes with groupId and headName baked in', async () => {
+test('wireSpawnedTeam: no system completion orders persisted — composed at delivery from fragments', async () => {
     const db = makeInMemoryDb();
     const args = { db, headName: HEAD_NAME, children: CODER_CHILDREN };
     const res = await wireSpawnedTeam(args);
     assert.strictEqual(res.ok, true);
-    const expectedOrderText = CONTEXT_AWARE_COMPLETION_ORDER_BODY(res.groupId, HEAD_NAME);
-    // The head takes its OWN body. The member body's fallback names the head as
-    // the recipient, so installing it at team-head scope tells the lead to
-    // ptySendPrompt itself and never names the lead's own task/complete.
-    const expectedHeadText = CONTEXT_AWARE_HEAD_COMPLETION_ORDER_BODY(res.groupId);
     let orders = await db.getConfigJson('terminals.standingOrders', []);
-    const teamOrder = orders.find(o => o.scope === 'team' && o.teamId === res.groupId);
-    const headOrder = orders.find(o => o.scope === 'team-head' && o.id === `context-aware-completion:${res.groupId}:team-head`);
-    assert.ok(teamOrder, 'team order must be installed');
-    assert.ok(teamOrder.instruction.includes(expectedOrderText), 'team order must contain context-aware completion text');
-    assert.ok(headOrder, 'team-head completion order must be installed');
-    assert.strictEqual(headOrder.instruction, expectedHeadText, 'team-head completion order must carry the HEAD body, not the member body');
-    assert.notStrictEqual(headOrder.instruction, expectedOrderText, 'the head must not be handed the member body');
+    // No prompt supplied → no team or team-head rows persisted at all.
+    // System protocol (member completion, head completion, etc.) is composed
+    // at delivery by selectOrders from the fragment library, never persisted.
+    assert.strictEqual(orders.length, 0,
+        'no system-authored rows must be persisted — system protocol is composed at delivery');
+    assert.ok(!orders.some(o => o.id && o.id.startsWith('context-aware-completion:')),
+        'no context-aware-completion system row must be persisted');
+    assert.ok(!orders.some(o => o.id && o.id.startsWith('composed-head:')),
+        'no composed-head system row must be persisted');
 });
 
-test('wireSpawnedTeam: external-headed teams keep EXTERNAL_HEAD_CALLBACK_INSTRUCTION and do not install context-aware order', async () => {
+test('wireSpawnedTeam: external-headed teams write no system rows — external callback composed at delivery', async () => {
     const db = makeInMemoryDb();
     const args = { db, headName: HEAD_NAME, children: CODER_CHILDREN, externalHead: true };
     const res = await wireSpawnedTeam(args);
     assert.strictEqual(res.ok, true);
-    const expectedExternalText = EXTERNAL_HEAD_CALLBACK_INSTRUCTION.replace(/\{teamId\}/g, res.groupId).replace(/\{child\}/g, HEAD_NAME);
     let orders = await db.getConfigJson('terminals.standingOrders', []);
-    const teamOrder = orders.find(o => o.scope === 'team' && o.teamId === res.groupId);
-    assert.ok(teamOrder, 'team order must be installed for external-headed team');
-    assert.ok(teamOrder.instruction.includes(expectedExternalText), 'team order must contain EXTERNAL_HEAD_CALLBACK_INSTRUCTION');
+    // No prompt supplied → no team or team-head rows persisted.
+    // The external-member-callback fragment is composed at delivery.
+    assert.strictEqual(orders.length, 0,
+        'no system-authored rows must be persisted for external-headed teams');
     const headOrder = orders.find(o => o.scope === 'team-head' && o.id === `context-aware-completion:${res.groupId}:team-head`);
     assert.strictEqual(headOrder, undefined, 'team-head completion order must not be installed for external heads');
 });

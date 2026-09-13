@@ -9,7 +9,9 @@
  *  3. Card movement is stated as unconditional, with no named exception.
  *  4. The completion post uses the subtask's planId, not the FEATURE planId.
  *  5. The prompt states POST /kanban/queue/next as the "ask for the next card" call.
- *  6. teamWiring.ts, terminals.js, and kanban.html copies are byte-identical.
+ *  6. teamWiring.ts and kanban.html copies are byte-identical. The terminals.js
+ *     client mirror (NEW_CODING_HEAD_PROMPT_CLIENT) was retired when system
+ *     protocol composition moved to delivery-time fragment composition.
  *
  * Run with:
  *   node --require ./src/test/bootstrap/sandboxStateHome.js src/test/coding-head-prompt-contract.test.js
@@ -65,11 +67,11 @@ function run() {
     const twPrompt = readQuotedChain(TEAM_WIRING_SRC, twAnchor.index + twAnchor[0].length);
     assert.ok(twPrompt, 'could not extract NEW_CODING_HEAD_PROMPT from teamWiring.ts');
 
-    // Extract NEW_CODING_HEAD_PROMPT_CLIENT from terminals.js
-    const tjAnchor = /NEW_CODING_HEAD_PROMPT_CLIENT\s*=\s*/.exec(TERMINALS_JS_SRC);
-    assert.ok(tjAnchor, 'NEW_CODING_HEAD_PROMPT_CLIENT not found in terminals.js');
-    const tjPrompt = readQuotedChain(TERMINALS_JS_SRC, tjAnchor.index + tjAnchor[0].length);
-    assert.ok(tjPrompt, 'could not extract NEW_CODING_HEAD_PROMPT_CLIENT from terminals.js');
+    // The client mirror (NEW_CODING_HEAD_PROMPT_CLIENT) is retired.
+    assert.ok(
+        !/NEW_CODING_HEAD_PROMPT_CLIENT/.test(TERMINALS_JS_SRC),
+        'terminals.js must NOT declare NEW_CODING_HEAD_PROMPT_CLIENT — the client mirror is retired'
+    );
 
     // Extract Coding headPrompt from kanban.html
     const khStart = KANBAN_HTML_SRC.indexOf("name: 'Coding'");
@@ -79,14 +81,17 @@ function run() {
     const khPrompt = readQuotedChain(KANBAN_HTML_SRC, khStart + khHpAnchor.index + khHpAnchor[0].length);
     assert.ok(khPrompt, 'could not extract Coding headPrompt from kanban.html');
 
-    // ── 1. Byte-identity across all 3 source files ──────────────────────
-
-    check('NEW_CODING_HEAD_PROMPT in teamWiring.ts and NEW_CODING_HEAD_PROMPT_CLIENT in terminals.js are byte-identical', () => {
-        assert.strictEqual(twPrompt, tjPrompt, 'teamWiring.ts and terminals.js must be byte-identical');
-    });
+    // ── 1. Byte-identity across the 2 surviving source files ──────────
 
     check('NEW_CODING_HEAD_PROMPT in teamWiring.ts and Coding headPrompt in kanban.html are byte-identical', () => {
         assert.strictEqual(twPrompt, khPrompt, 'teamWiring.ts and kanban.html must be byte-identical');
+    });
+
+    check('NEW_CODING_HEAD_PROMPT_CLIENT is absent from terminals.js (client mirror retired)', () => {
+        assert.ok(
+            !/NEW_CODING_HEAD_PROMPT_CLIENT/.test(TERMINALS_JS_SRC),
+            'terminals.js must NOT declare NEW_CODING_HEAD_PROMPT_CLIENT — system protocol is composed at delivery'
+        );
     });
 
     // ── 2. Reviewer roster check and targetColumn removed ───────────────

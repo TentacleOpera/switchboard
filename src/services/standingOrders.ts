@@ -477,7 +477,18 @@ function selectOrders(
             });
         }
     }
-    const pool = synthetic.length > 0 ? [...orders, ...synthetic] : orders;
+    // System orders FIRST, persisted rows after. The operator's text adds to the
+    // protocol, so the protocol has to be the thing it is added to — a head whose
+    // definition carries a `headPrompt` would otherwise read the operator's
+    // instructions before the contract they modify.
+    //
+    // This is the same rule `resolveStandingOrderInstruction` applies WITHIN a
+    // row (fragments, then the body); appending synthetic orders last applied the
+    // opposite rule BETWEEN rows, and the two levels disagreed. The head case is
+    // the one that exposes it, because a head's operator text lives on a separate
+    // persisted row from its system fragments, while a member's system half has no
+    // persisted row to be ordered against.
+    const pool = synthetic.length > 0 ? [...synthetic, ...orders] : orders;
 
     const selected = pool.filter(o => {
         const scope = scopeOf(o);

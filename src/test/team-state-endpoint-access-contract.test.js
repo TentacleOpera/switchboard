@@ -8,9 +8,10 @@
  *     SWITCHBOARD STATUS (liveness / port) line when apiPort > 0.
  *  2. No active agent-facing instruction in teamWiring.ts, standingOrderFragments.ts,
  *     agentPromptBuilder.ts, or agentGroupInstantiation.ts names .switchboard/api-server-port.txt
- *     or kanban.db, except for the explicit allowlist (legacy recognisers and host-side code).
- *  3. Stale installed orders carrying legacy port-file bodies are rewritten on read
- *     by migrateCodingTeamOrders.
+ *     or kanban.db, except for the explicit allowlist (host-side code).
+ *  3. Stale installed orders carrying legacy port-file bodies are DROPPED on read
+ *     by loadEffectiveStandingOrders (system rows are never persisted; the
+ *     persisted store holds only what a human authored).
  *  4. Endpoints named in order bodies match real LocalApiServer endpoints.
  *
  * Run with:
@@ -29,10 +30,7 @@ const {
 } = require('../../out/services/agentPromptBuilder');
 
 const {
-    migrateCodingTeamOrders,
     NEW_CODING_HEAD_PROMPT,
-    CONTEXT_AWARE_HEAD_COMPLETION_ORDER_BODY,
-    CONTEXT_AWARE_COMPLETION_ORDER_BODY,
 } = require('../../out/services/teamWiring');
 
 const {
@@ -160,8 +158,6 @@ function run() {
         ];
 
         const ALLOWED_PATTERNS = [
-            // teamWiring.ts: legacy recogniser constant for migration matching (multi-line)
-            /export const PRE_REWRITE_CALLBACK_INSTRUCTION =[\s\S]*?;\s*$/m,
             // agentGroupInstantiation.ts: explicit negative prohibition for external head
             /Do not read `\.switchboard\/api-server-port\.txt`\./,
             // agentPromptBuilder.ts: documentation comments explaining the migration
@@ -206,9 +202,9 @@ function run() {
         }
     });
 
-    // ── 4. Installed orders migration rewrites legacy bodies ────────────
+    // ── 4. System rows with legacy port-file bodies are dropped on read ──
 
-    check('migrateCodingTeamOrders rewrites stale port-file order bodies on read', () => {
+    check('dropSystemAuthoredRows drops stale port-file order bodies on read', () => {
         const legacyBody = 'When you finish a task, route your completion report based on where the work came from:\n\n'
             + '1. If you have a PLAN_ID from your dispatch, call GET /kanban/plan?planId=<your planId>\n'
             + '   against the port in .switchboard/api-server-port.txt.\n'
@@ -243,21 +239,36 @@ function run() {
             }
         ];
 
-        const migrated = migrateCodingTeamOrders(testOrders);
-        assert.strictEqual(migrated.length, 1, 'migrated order should survive');
-        assert.strictEqual(
-            migrated[0].instruction,
-            CONTEXT_AWARE_HEAD_COMPLETION_ORDER_BODY('team_test'),
-            'legacy port-file head order must be rewritten to modern CONTEXT_AWARE_HEAD_COMPLETION_ORDER_BODY'
-        );
-        assert.ok(
-            !migrated[0].instruction.includes('api-server-port.txt'),
-            'migrated instruction must not name api-server-port.txt'
-        );
-        assert.ok(
-            migrated[0].instruction.includes('SWITCHBOARD STATUS'),
-            'migrated instruction must point at SWITCHBOARD STATUS line'
-        );
+        const { dropSystemAuthoredRows } = require('../../out/services/teamWiring');
+        const effective = dropSystemAuthoredRows(testOrders);
+        assert.strictEqual(effective.length, 0,
+            'legacy port-file system row must be dropped, not rewritten');
+    });
+
+    check('dropSystemAuthoredRows preserves operator-authored rows', () => {
+        const { dropSystemAuthoredRows } = require('../../out/services/teamWiring');
+        const authored = [
+            {
+                id: 'operator-link-up-1',
+                parent: 'lead-1',
+                child: 'coder-1',
+                instruction: 'Review my work before I commit.',
+                scope: 'pair',
+            },
+            {
+                id: 'operator-team-prompt-1',
+                parent: 'lead-1',
+                child: '',
+                instruction: 'Do good work.',
+                scope: 'team',
+                teamId: 'team_lead_1',
+            },
+        ];
+        const effective = dropSystemAuthoredRows(authored);
+        assert.strictEqual(effective.length, 2,
+            'operator-authored rows must be preserved');
+        assert.strictEqual(effective, authored,
+            'returns input by reference when nothing changed');
     });
 
     // ── 5. Endpoints cover order reads ──────────────────────────────────

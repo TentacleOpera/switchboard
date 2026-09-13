@@ -22,8 +22,6 @@ const {
     resolveHeadForTerminal,
     resolveLiveGroupHeads,
     wireSpawnedTeam,
-    migrateCodingTeamOrders,
-    CONTEXT_AWARE_COMPLETION_ORDER_VERSION,
     TERMINALS_GROUPS_KEY,
 } = require('../../out/services/teamWiring');
 const { STANDING_ORDERS_CONFIG_KEY } = require('../../out/services/standingOrders');
@@ -394,18 +392,14 @@ testAsync('no team without delegates: a head-only start is a no-op even on a boa
         'a member-less start must leave the registered groups byte-identical');
 });
 
-// ── the version stamp must not become a licence to overwrite ─────────────
+// ── system rows are not persisted; authored rows are additive ─────────────
 //
-// The frozen-body recognisers were deleted in favour of a `version` stamp. The
-// trap that replaces them: an OPERATOR-authored team prompt (a definition's
-// `prompt`) is persisted under the SAME `context-aware-completion:<gid>:team`
-// id, with its text in `instruction`. Keying the rewrite on "has an instruction
-// and is not at the current version" therefore clobbers the operator's words —
-// which is exactly why the retired matchers compared exact bodies. The stamp is
-// written only on the system-default install, and the migrator rewrites only
-// what carries it.
+// System team protocol is composed at delivery from the fragment library and
+// never persisted. The persisted store holds only what a human authored. A
+// team with no operator prompt writes NO team/team-head row; a team WITH an
+// operator prompt writes one authored row carrying the prompt text.
 
-testAsync('a definition-authored team prompt is installed UNSTAMPED and survives migration', async () => {
+testAsync('a definition-authored team prompt is persisted as an authored row', async () => {
     const db = makeGroupsDb();
     await wireSpawnedTeam({
         db, headName: 'lead-1', children: [{ friendlyName: 'lead-1-coder-1', role: 'coder' }],
@@ -414,19 +408,14 @@ testAsync('a definition-authored team prompt is installed UNSTAMPED and survives
     });
     const orders = await db.getConfigJson(STANDING_ORDERS_CONFIG_KEY, []);
     const teamOrder = orders.find(o => o.scope === 'team');
-    assert.ok(teamOrder, 'a team-scoped order must be installed');
+    assert.ok(teamOrder, 'a team-scoped order must be installed for an authored prompt');
     assert.ok(typeof teamOrder.instruction === 'string' && teamOrder.instruction.includes('OPERATOR TEAM PROMPT'),
         'the definition prompt is carried as the order instruction');
-    assert.strictEqual(teamOrder.version, undefined,
-        'an operator-authored row must NOT carry the system version stamp');
-
-    const migrated = migrateCodingTeamOrders(orders);
-    const after = migrated.find(o => o.scope === 'team');
-    assert.strictEqual(after.instruction, teamOrder.instruction,
-        'migrateCodingTeamOrders must never rewrite an operator-authored team prompt');
+    assert.ok(!Array.isArray(teamOrder.fragments) || teamOrder.fragments.length === 0,
+        'an authored row carries no system fragments — they are composed at delivery');
 });
 
-testAsync('the system default install IS stamped, so a future body revision can migrate it', async () => {
+testAsync('a team with NO operator prompt writes no team or team-head row', async () => {
     const db = makeGroupsDb();
     await wireSpawnedTeam({
         db, headName: 'lead-2', children: [{ friendlyName: 'lead-2-coder-1', role: 'coder' }],
@@ -434,23 +423,11 @@ testAsync('the system default install IS stamped, so a future body revision can 
     });
     const orders = await db.getConfigJson(STANDING_ORDERS_CONFIG_KEY, []);
     const teamOrder = orders.find(o => o.scope === 'team');
-    assert.strictEqual(teamOrder.version, CONTEXT_AWARE_COMPLETION_ORDER_VERSION,
-        'the default install carries the current version stamp');
-});
-
-test('an unstamped legacy body that names the port file still heals', () => {
-    const legacy = {
-        id: 'context-aware-completion:team_x:team',
-        parent: 'lead-1', child: '', scope: 'team', teamId: 'team_x',
-        instruction: 'Route your report. Read the port in .switchboard/api-server-port.txt and POST there.',
-    };
-    const out = migrateCodingTeamOrders([legacy]);
-    assert.ok(!out[0].instruction.includes('api-server-port.txt'),
-        'the port-file body is the one legacy shape that must still be rewritten');
-    assert.strictEqual(out[0].version, CONTEXT_AWARE_COMPLETION_ORDER_VERSION,
-        'a healed row is stamped so the next read is a no-op');
-    assert.deepStrictEqual(migrateCodingTeamOrders(out), out,
-        'second pass must return the input by reference (idempotent)');
+    const headOrder = orders.find(o => o.scope === 'team-head');
+    assert.strictEqual(teamOrder, undefined,
+        'no team-scoped row is persisted when the definition has no prompt');
+    assert.strictEqual(headOrder, undefined,
+        'no team-head row is persisted when the definition has no headPrompt');
 });
 
 // ── a head seat is never named after its definition ──────────────────────

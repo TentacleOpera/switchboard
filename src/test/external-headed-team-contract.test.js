@@ -26,8 +26,11 @@ const {
     wireSpawnedTeam,
     resolveTeamMembersForHead,
     resolveTeamScopedRoleTerminal,
-    EXTERNAL_HEAD_CALLBACK_INSTRUCTION,
 } = require('../../out/services/teamWiring');
+const {
+    STANDING_ORDER_FRAGMENT_IDS,
+    getStandingOrderFragment,
+} = require('../../out/services/standingOrderFragments');
 const { LocalApiServer } = require('../../out/services/LocalApiServer');
 
 let passed = 0;
@@ -365,12 +368,20 @@ function makeMockDb(initialState = {}) {
     });
 
     await test('7. No dispatch path can target the external head', async () => {
-        // The callback instruction must never name ptySendPrompt: a worker that is
-        // told to report to a terminal which does not exist gets a dead click
-        // (both hosts answer `No such terminal: <name>`), and the report is lost.
+        // The external-member-callback fragment body must never name ptySendPrompt:
+        // a worker that is told to report to a terminal which does not exist
+        // gets a dead click (both hosts answer `No such terminal: <name>`), and
+        // the report is lost. The fragment is composed at delivery from the
+        // fragment library — the body is an inline function in
+        // STANDING_ORDER_FRAGMENTS.
+        const extCallbackFragment = getStandingOrderFragment(STANDING_ORDER_FRAGMENT_IDS.externalMemberCallback);
+        assert.ok(extCallbackFragment, 'external-member-callback fragment must exist in the fragment library');
+        const sampleBody = typeof extCallbackFragment.body === 'function'
+            ? extCallbackFragment.body({ teamId: 'team_test', headName: 'ExternalLead', inTeam: true, isHead: false, externalHead: true } )
+            : '';
         assert.ok(
-            !/ptySendPrompt/i.test(EXTERNAL_HEAD_CALLBACK_INSTRUCTION),
-            'External-head callback instruction must not route reports through ptySendPrompt');
+            !/ptySendPrompt/i.test(sampleBody),
+            'External-head callback fragment body must not route reports through ptySendPrompt');
 
         // And role resolution must never hand back the head's own name, even when a
         // live terminal happens to carry it — the roster is what resolvers read.

@@ -27,6 +27,27 @@ export function readConfigValueSync(workspaceRoot: string, key: string): unknown
     if (direct !== undefined && direct !== null) return direct;
     const prefixed = db.getConfigJsonSync<unknown>(`config.switchboard.${key}`, undefined as unknown);
     if (prefixed !== undefined && prefixed !== null) return prefixed;
+    // Third shape: `switchboard.<key>`, with no `config.` prefix. This is what the
+    // PANEL writes. `saveSetting`/`getSetting` persist an ABSOLUTE `switchboard.*`
+    // key verbatim through the scoped-settings path, so a contributed setting
+    // toggled in the UI lands here — in this same table, under a key neither
+    // lookup above matched.
+    //
+    // The result was a checkbox that lied by construction: it wrote
+    // `switchboard.terminal.tmux.enabled` and read the same key back, so it always
+    // displayed its own value correctly, while every host read
+    // (`getConfigBoolean('terminal.tmux.enabled')`, both `bootstrap.ts` sites and
+    // `cli.ts:4752`) resolved undefined and took the `true` default. Unticking tmux
+    // seating did nothing, repeatedly, and the UI insisted it had worked.
+    //
+    // Read-side fix, deliberately: the writers are three different subsystems
+    // (the bridge, the scoped-settings verbs, the VS Code settings mirror) and
+    // repointing any one of them silently abandons whatever an operator has
+    // already stored under the old shape. Accepting the shape costs one lookup on
+    // a miss and fixes the whole class of contributed settings the panel writes,
+    // not just this toggle.
+    const bare = db.getConfigJsonSync<unknown>(`switchboard.${key}`, undefined as unknown);
+    if (bare !== undefined && bare !== null) return bare;
     return undefined;
 }
 

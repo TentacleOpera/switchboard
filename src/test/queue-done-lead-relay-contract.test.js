@@ -244,8 +244,8 @@ async function run() {
     await check('an external-headed team does not ptySendPrompt its non-terminal head', async () => {
         // An external head (Antigravity / Cursor / IDE chat) owns no pty seat,
         // so the send is a dead click. Those workers already report through
-        // EXTERNAL_HEAD_CALLBACK_INSTRUCTION, which writes into the team's
-        // reports inbox — the head's real channel.
+        // the external-member-callback fragment (composed at delivery), which
+        // writes into the team's reports inbox — the head's real channel.
         const { server, calls } = makeServer(boardHeldBy('Coder 1'), {
             groups: [group('External Lead', ['Coder 1'], { externalHead: true })],
             resolveTeamMembers: async () => ['Coder 1'],
@@ -369,10 +369,11 @@ async function run() {
         }
     });
 
-    await check('both host twins gate on liveDelivery AFTER writing the report mirror', async () => {
-        // The mirror is a non-pty Mission Control's ONLY channel. A gate placed
-        // above it would suppress the durable record along with the prompt, and
-        // the two hosts are parallel implementations — fixing one is drift.
+    await check('both host twins gate on liveDelivery AFTER recording the plan_events row', async () => {
+        // The plan_events record is a non-pty Mission Control's ONLY durable
+        // channel. A gate placed above it would suppress the durable record
+        // along with the prompt, and the two hosts are parallel
+        // implementations — fixing one is drift.
         const fs = require('fs');
         for (const [label, file] of [
             ['extension host', 'src/services/TaskViewerProvider.ts'],
@@ -381,10 +382,10 @@ async function run() {
             const src = fs.readFileSync(path.join(process.cwd(), file), 'utf8');
             const gate = src.indexOf('info.liveDelivery === false');
             assert.ok(gate > 0, `${label}: must honour liveDelivery === false`);
-            const mirror = src.indexOf('writeMissionControlReport(info.workspaceRoot');
-            assert.ok(mirror > 0, `${label}: must write the Mission Control report mirror`);
-            assert.ok(mirror < gate,
-                `${label}: the report mirror must be written BEFORE the liveDelivery gate — a suppressed prompt must never suppress the durable record`);
+            const record = src.indexOf('recordTurnEndEvent(');
+            assert.ok(record > 0, `${label}: must record the turn-end as a plan_events row`);
+            assert.ok(record < gate,
+                `${label}: the plan_events record must be written BEFORE the liveDelivery gate — a suppressed prompt must never suppress the durable record`);
         }
     });
 

@@ -175,8 +175,8 @@ async function run() {
     // ── queue/done is not completion ─────────────────────────────────────
 
     await check('context-aware completion order routes to queue/done without mtime guess', async () => {
-        const { CONTEXT_AWARE_COMPLETION_ORDER_BODY } = require(path.join(process.cwd(), 'out', 'services', 'teamWiring.js'));
-        const body = CONTEXT_AWARE_COMPLETION_ORDER_BODY('test-group', 'lead-1');
+        const { buildMemberCompletionFragment } = require(path.join(process.cwd(), 'out', 'services', 'standingOrderFragments.js'));
+        const body = buildMemberCompletionFragment({ teamId: 'test-group', headName: 'lead-1' });
         assert.ok(body.includes('done --from "<your terminal name>"'),
             'order must instruct coder to signal completion with the bundled CLI\'s done command');
         assert.ok(body.includes('/terminals/teams/test-group/queue/done'), 'order must instruct fallback queue/done');
@@ -202,14 +202,13 @@ async function run() {
             'head order must instruct using POST /kanban/task/complete');
     });
 
-    // ── Context-aware completion orders at team and team-head scopes ──────
+    // ── System completion orders are composed at delivery, not persisted ──
 
-    await check('wireSpawnedTeam installs context-aware completion order at team and team-head scopes', async () => {
+    await check('wireSpawnedTeam persists no system completion orders — composed at delivery from fragments', async () => {
         const tw = require(path.join(process.cwd(), 'out', 'services', 'teamWiring.js'));
-        // Key-AWARE store. wireSpawnedTeam writes three config keys (orders,
-        // order definitions, terminal groups); a stub that returns one shared
-        // array for every key lets the groups write clobber the orders and the
-        // assertions below read a groups array.
+        // Key-AWARE store. wireSpawnedTeam writes config keys (orders, order
+        // definitions, terminal groups); a stub that returns one shared array
+        // for every key lets the groups write clobber the orders.
         const store = {};
         const db = {
             getConfigJson: async (k, d) => (store[k] !== undefined ? store[k] : d),
@@ -219,13 +218,13 @@ async function run() {
             db, headName: 'lead-1', children: [{ friendlyName: 'coder-1' }], teamId: 'g1',
         });
         const stored = store['terminals.standingOrders'] || [];
-        const member = stored.find(o => o.scope === 'team' && o.teamId === 'g1');
-        const head = stored.find(o => o.scope === 'team-head' && o.id === 'context-aware-completion:g1:team-head');
-        assert.ok(member && head, 'both the team and team-head orders must be installed');
-        assert.ok(member.instruction.includes(tw.CONTEXT_AWARE_COMPLETION_ORDER_BODY('g1', 'lead-1')),
-            'team order must carry context-aware completion body');
-        assert.strictEqual(head.instruction, tw.CONTEXT_AWARE_HEAD_COMPLETION_ORDER_BODY('g1'),
-            'head order must carry the HEAD completion body, not the member body');
+        // No prompt supplied → no team or team-head rows persisted at all.
+        // System protocol (member completion, head completion) is composed at
+        // delivery by selectOrders from the fragment library, never persisted.
+        assert.strictEqual(stored.length, 0,
+            'no system-authored rows must be persisted — system protocol is composed at delivery');
+        assert.ok(!stored.some(o => o.id && o.id.startsWith('context-aware-completion:')),
+            'no context-aware-completion system row must be persisted');
     });
 
     // ── The head's own order is the LEAD's, not the members' ─────────────
@@ -234,10 +233,10 @@ async function run() {
     // one post only a lead can make. `completed_at` is the single fact that
     // releases a team; an order on the head that omits it releases nothing.
 
-    await check('the team-head body tells the LEAD to post task/complete and not to prompt itself', async () => {
-        const tw = require(path.join(process.cwd(), 'out', 'services', 'teamWiring.js'));
-        const head = tw.CONTEXT_AWARE_HEAD_COMPLETION_ORDER_BODY('test-group');
-        const member = tw.CONTEXT_AWARE_COMPLETION_ORDER_BODY('test-group', 'lead-1');
+    await check('the head completion fragment tells the LEAD to post task/complete and not to prompt itself', async () => {
+        const { buildHeadCompletionFragment, buildMemberCompletionFragment } = require(path.join(process.cwd(), 'out', 'services', 'standingOrderFragments.js'));
+        const head = buildHeadCompletionFragment();
+        const member = buildMemberCompletionFragment({ teamId: 'test-group', headName: 'lead-1' });
         assert.notStrictEqual(head, member, 'the head must not be handed the member body');
         assert.ok(head.includes('POST /kanban/task/complete'),
             'the lead\'s own order must name POST /kanban/task/complete');
@@ -268,17 +267,18 @@ async function run() {
     const kanbanHtmlSrc = readSrc('src/webview/kanban.html');
     const terminalsJsSrc = readSrc('src/webview/terminals.js');
 
-    await check('context-aware completion order body exists in teamWiring', async () => {
-        const fnStart = teamWiringSrc.indexOf('export function CONTEXT_AWARE_COMPLETION_ORDER_BODY');
-        assert.ok(fnStart >= 0, 'CONTEXT_AWARE_COMPLETION_ORDER_BODY not found');
-        const fnEnd = teamWiringSrc.indexOf('\n}', fnStart);
-        const fnBody = teamWiringSrc.slice(fnStart, fnEnd);
-        assert.ok(fnBody.includes('POST /kanban/queue/done'),
-            'context-aware completion order must route to queue/done');
+    await check('member completion fragment body exists in standingOrderFragments', async () => {
+        const fragmentsSrc = readSrc('src/services/standingOrderFragments.ts');
+        const fnStart = fragmentsSrc.indexOf('export function buildMemberCompletionFragment');
+        assert.ok(fnStart >= 0, 'buildMemberCompletionFragment not found in standingOrderFragments.ts');
+        const fnEnd = fragmentsSrc.indexOf('\n}', fnStart);
+        const fnBody = fragmentsSrc.slice(fnStart, fnEnd);
+        assert.ok(fnBody.includes('POST /kanban/queue/done') || fnBody.includes('/terminals/teams/'),
+            'member completion fragment must route to queue/done or team queue/done');
         assert.ok(!fnBody.includes('kanban/dispatch'),
-            'the order body must not instruct a seat to dispatch a feature');
+            'the fragment body must not instruct a seat to dispatch a feature');
         assert.ok(!fnBody.includes('CODE REVIEWED'),
-            'the order body must not instruct a seat to move work to CODE REVIEWED');
+            'the fragment body must not instruct a seat to move work to CODE REVIEWED');
     });
 
     await check('column transitions clear dispatch state for cards and feature cascades', async () => {

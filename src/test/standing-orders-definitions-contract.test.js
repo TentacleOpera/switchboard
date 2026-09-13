@@ -21,7 +21,6 @@ const {
     loadEffectiveStandingOrders,
     wireSpawnedTeam,
     installGlobalQueueDoneOrder,
-    reconcileSystemFragmentRows,
 } = require('../../out/services/teamWiring');
 const { STANDING_ORDER_FRAGMENT_IDS } = require('../../out/services/standingOrderFragments');
 const {
@@ -440,54 +439,33 @@ test('both assignment-update writers detach the row from its definition', () => 
 // reconciliation, a fragment id added to those lists reaches only names that
 // have never been wired — inert on every existing install.
 
-test('reconcile: an existing global queue row gains a newly-required fragment', () => {
-    const before = [{
-        id: 'global-queue-done:global',
-        parent: '', child: '',
-        fragments: [STANDING_ORDER_FRAGMENT_IDS.globalCompletion],
-        createdAt: Date.now(),
-        scope: 'global',
-    }];
-    const after = reconcileSystemFragmentRows(before);
-    assert.notStrictEqual(after, before, 'a stale row must produce a new array');
-    assert.deepStrictEqual(after[0].fragments, [
-        STANDING_ORDER_FRAGMENT_IDS.globalCompletion,
-        STANDING_ORDER_FRAGMENT_IDS.subagentPolicy,
-    ]);
-});
+// System fragment rows are no longer persisted — system protocol is composed
+// at delivery from the fragment library. The persisted store holds only what a
+// human authored. dropSystemAuthoredRows removes any stale system rows on read.
 
-test('reconcile: team and team-head fragment rows gain it too', () => {
-    const rows = [
+test('dropSystemAuthoredRows: system rows with fragments are dropped (composed at delivery)', () => {
+    const { dropSystemAuthoredRows } = require('../../out/services/teamWiring');
+    const before = [
         { id: 'context-aware-completion:team_x:team', parent: 'lead-1', child: '', scope: 'team', teamId: 'team_x', createdAt: 1, fragments: [STANDING_ORDER_FRAGMENT_IDS.memberCompletion, STANDING_ORDER_FRAGMENT_IDS.gitSafety] },
         { id: 'composed-head:team_x', parent: 'lead-1', child: '', scope: 'team-head', teamId: 'team_x', createdAt: 1, fragments: [STANDING_ORDER_FRAGMENT_IDS.headCompletion] },
     ];
-    const after = reconcileSystemFragmentRows(rows);
-    for (const row of after) {
-        assert.ok(row.fragments.includes(STANDING_ORDER_FRAGMENT_IDS.subagentPolicy),
-            `${row.id} must carry the subagent-policy fragment after reconciliation`);
-    }
+    const after = dropSystemAuthoredRows(before);
+    assert.strictEqual(after.length, 0,
+        'all system fragment rows must be dropped — system protocol is composed at delivery');
 });
 
-test('reconcile: an operator/definition instruction row is never touched', () => {
+test('dropSystemAuthoredRows: an operator/definition instruction row is never touched', () => {
+    const { dropSystemAuthoredRows } = require('../../out/services/teamWiring');
     const rows = [
-        // A team created from a definition carrying a custom prompt. This is the
-        // row `migrateSystemOrdersToFragments` would strip — reconciliation must not.
-        { id: 'context-aware-completion:team_y:team', parent: 'lead-1', child: '', scope: 'team', teamId: 'team_y', createdAt: 1, instruction: 'Custom team prompt authored by the operator' },
+        // A team created from a definition carrying a custom prompt.
+        { id: 'operator-team-y:team', parent: 'lead-1', child: '', scope: 'team', teamId: 'team_y', createdAt: 1, instruction: 'Custom team prompt authored by the operator' },
         // A pair row is not a system row.
         { id: 'pair-1', parent: 'lead-1', child: 'coder-1', createdAt: 1, fragments: [STANDING_ORDER_FRAGMENT_IDS.gitSafety] },
     ];
-    const after = reconcileSystemFragmentRows(rows);
-    assert.strictEqual(after, rows, 'nothing to reconcile must return the same array (no write)');
+    const after = dropSystemAuthoredRows(rows);
+    assert.strictEqual(after, rows, 'nothing to drop must return the same array (no write)');
     assert.strictEqual(after[0].instruction, 'Custom team prompt authored by the operator');
     assert.deepStrictEqual(after[1].fragments, [STANDING_ORDER_FRAGMENT_IDS.gitSafety]);
-});
-
-test('reconcile: already-current rows are returned unchanged (no needless write)', () => {
-    const rows = [{
-        id: 'global-queue-done:global', parent: '', child: '', scope: 'global', createdAt: 1,
-        fragments: [STANDING_ORDER_FRAGMENT_IDS.globalCompletion, STANDING_ORDER_FRAGMENT_IDS.subagentPolicy],
-    }];
-    assert.strictEqual(reconcileSystemFragmentRows(rows), rows);
 });
 
 test('installGlobalQueueDoneOrder upgrades a pre-existing row instead of skipping it', async () => {

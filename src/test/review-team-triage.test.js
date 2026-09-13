@@ -23,10 +23,10 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const {
-    CONTEXT_AWARE_COMPLETION_ORDER_BODY,
     NEW_REVIEW_TEAM_HEAD_PROMPT,
     migrateAgentGroups,
 } = require('../../out/services/teamWiring');
+const { buildMemberCompletionFragment } = require('../../out/services/standingOrderFragments');
 const { buildKanbanBatchPrompt } = require('../../out/services/agentPromptBuilder');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
@@ -66,22 +66,22 @@ async function runTests() {
         assert.ok(/Never move a card backwards/.test(p), 'the card-movement rule is present');
     });
 
-    // 2. The context-aware completion order body exists and routes completions.
-    test('the context-aware completion order body exists and routes completions', () => {
-        const order = CONTEXT_AWARE_COMPLETION_ORDER_BODY('team-review', 'lead-1');
+    // 2. The member completion fragment body exists and routes completions.
+    test('the member completion fragment body exists and routes completions', () => {
+        const order = buildMemberCompletionFragment({ teamId: 'team-review', headName: 'lead-1' });
         assert.ok(order.includes('done --from "<your terminal name>"'),
-            'the context-aware order routes completions through the bundled CLI\'s done command');
+            'the member completion fragment routes completions through the bundled CLI\'s done command');
         assert.ok(order.includes('/terminals/teams/team-review/queue/done'),
-            'the context-aware order routes to team queue/done for prompt items');
-        // A review team's seats read this same order. The board-position clause
+            'the member completion fragment routes to team queue/done for prompt items');
+        // A review team's seats read this same fragment. The board-position clause
         // the review variant existed to exclude must not come back through it:
         // handing a feature to review is the lead's call, and a column advances
         // when work STARTS, so "all subtasks in a coding column" evidences
         // nothing.
         assert.ok(!order.includes('kanban/dispatch'),
-            'the order must not instruct a reviewer to dispatch the feature');
+            'the fragment must not instruct a reviewer to dispatch the feature');
         assert.ok(!order.includes('CODE REVIEWED'),
-            'the order must not instruct a reviewer to move the feature to CODE REVIEWED');
+            'the fragment must not instruct a reviewer to move the feature to CODE REVIEWED');
     });
 
     // 3. A two-plan assignment is one batched dispatch, not two.

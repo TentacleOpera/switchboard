@@ -41,19 +41,15 @@ const {
 } = require('../../out/services/agentPromptBuilder');
 const {
     migrateAgentGroups,
-    migrateCodingTeamOrders,
     migrateTeamPairOrders,
+    dropSystemAuthoredRows,
     loadEffectiveStandingOrders,
-    describeStandingOrderMigrations,
     NEW_CODING_HEAD_PROMPT,
     TEAM_HEAD_COMMIT_INSTRUCTION,
     NEW_REVIEW_TEAM_HEAD_PROMPT,
-    PRE_REWRITE_CALLBACK_INSTRUCTION,
     STANDING_ORDERS_PREMIGRATION_BAK_KEY,
     TEAM_CODER_QUEUE_DONE_INSTRUCTION,
-    AGENT_GROUP_CALLBACK_INSTRUCTION
 } = require('../../out/services/teamWiring');
-const { resolvePreset } = require('../../out/services/linkPresets');
 const { STANDING_ORDERS_CONFIG_KEY } = require('../../out/services/standingOrders');
 
 const SRC = (...p) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
@@ -353,10 +349,14 @@ function readConcat(src, decl) {
     return eval('(' + seg.slice(0, seg.indexOf(';\n')) + ')');
 }
 
-test('NEW headPrompt constants are byte-identical across host and webview mirror', () => {
-    const newClient = readConcat(TERMINALS_JS_SRC, 'var NEW_CODING_HEAD_PROMPT_CLIENT =');
-    assert.strictEqual(newClient, NEW_CODING_HEAD_PROMPT,
-        'terminals.js NEW constant drifted — the webview renders different order text than the host delivers');
+test('NEW_CODING_HEAD_PROMPT_CLIENT is retired from terminals.js — system protocol is composed at delivery', () => {
+    // The client mirror was retired when system protocol composition moved to
+    // delivery-time fragment composition. The host constant NEW_CODING_HEAD_PROMPT
+    // remains as the canonical parity reference for kanban.html's Coding headPrompt.
+    assert.ok(
+        !/NEW_CODING_HEAD_PROMPT_CLIENT/.test(TERMINALS_JS_SRC),
+        'terminals.js must NOT declare NEW_CODING_HEAD_PROMPT_CLIENT — the client mirror is retired'
+    );
 });
 
 test('the shipped kanban.html headPrompt is byte-identical to NEW_CODING_HEAD_PROMPT', () => {
@@ -418,28 +418,37 @@ test('migrateAgentGroups is idempotent — second pass returns null', () => {
 
 const order = (o) => ({ id: o.id, parent: o.parent, child: o.child, instruction: o.instruction, createdAt: 1, scope: o.scope, teamId: o.teamId });
 
-test('migrateCodingTeamOrders drops the reviewer pair row and preserves other orders', () => {
+// Rows that the cleanup targets: system-authored rows (context-aware-completion
+// / composed-head prefixes) and pair rows carrying port-file routing text.
+const cleanupRows = () => [
+    order({ id: 'context-aware-completion:team_x:team', parent: 'lead-1', child: '', scope: 'team', teamId: 'team_x', instruction: 'system body' }),
+    order({ id: 'x1', parent: 'a', child: 'b', scope: 'pair', instruction: 'operator wrote this by hand' }),
+];
+
+test('dropSystemAuthoredRows drops system-id rows and preserves operator-authored rows', () => {
     const orders = [
-        order({ id: 'p1', parent: 'lead-1', child: 'reviewer-1', instruction: resolvePreset('reviewer', 'lead-1', 'reviewer-1'), scope: 'pair' }),
+        order({ id: 'context-aware-completion:team_x:team', parent: 'lead-1', child: '', instruction: 'system body', scope: 'team', teamId: 'team_x' }),
+        order({ id: 'composed-head:team_x', parent: 'lead-1', child: '', instruction: 'system head body', scope: 'team-head', teamId: 'team_x' }),
         order({ id: 'x1', parent: 'lead-1', child: 'coder-1', instruction: 'hand-written ad-hoc link-up', scope: 'pair' })
     ];
-    const out = migrateCodingTeamOrders(orders);
-    assert.ok(!out.some(o => o.id === 'p1'), 'the stale reviewer pair row must be dropped');
+    const out = dropSystemAuthoredRows(orders);
+    assert.ok(!out.some(o => o.id === 'context-aware-completion:team_x:team'), 'system team row must be dropped');
+    assert.ok(!out.some(o => o.id === 'composed-head:team_x'), 'system head row must be dropped');
     assert.ok(out.some(o => o.id === 'x1' && o.instruction === 'hand-written ad-hoc link-up'),
         'an unrecognised operator row must pass through untouched');
 });
 
-test('migrateCodingTeamOrders is idempotent and pure', () => {
+test('dropSystemAuthoredRows is idempotent and pure', () => {
     const orders = [
-        order({ id: 'p1', parent: 'lead-1', child: 'reviewer-1', instruction: resolvePreset('reviewer', 'lead-1', 'reviewer-1'), scope: 'pair' })
+        order({ id: 'context-aware-completion:team_x:team', parent: 'lead-1', child: '', instruction: 'system body', scope: 'team', teamId: 'team_x' })
     ];
     const snapshot = JSON.stringify(orders);
-    const once = migrateCodingTeamOrders(orders);
+    const once = dropSystemAuthoredRows(orders);
     assert.strictEqual(JSON.stringify(orders), snapshot, 'the converter must not mutate its input');
-    assert.deepStrictEqual(migrateCodingTeamOrders(once), once, 'second pass must be a no-op');
+    assert.deepStrictEqual(dropSystemAuthoredRows(once), once, 'second pass must be a no-op');
 });
 
-test('every host read site uses loadEffectiveStandingOrders and client mirror composes converters', () => {
+test('every host read site uses loadEffectiveStandingOrders; client renders persisted rows as-is', () => {
     const sites = [
         // Three in TaskViewerProvider (prompt composition, delivery, and the
         // turn-end/standing-orders read) plus one in the standalone bootstrap.
@@ -454,8 +463,16 @@ test('every host read site uses loadEffectiveStandingOrders and client mirror co
         assert.strictEqual(n, count,
             `${file}: expected ${count} loadEffectiveStandingOrders call site(s), found ${n}`);
     }
-    assert.ok(TERMINALS_JS_SRC.includes('migrateCodingTeamOrdersClient(migrateTeamPairOrdersClient(orders))'),
-        'terminals.js must mirror the composition or the webview renders orders the host no longer delivers');
+    // The client no longer runs migration recognisers — system protocol is
+    // composed at delivery by the host. The client renders persisted rows as-is.
+    assert.ok(
+        !/migrateCodingTeamOrdersClient/.test(TERMINALS_JS_SRC),
+        'terminals.js must NOT call migrateCodingTeamOrdersClient — the client no longer runs system migrations'
+    );
+    assert.ok(
+        !/migrateTeamPairOrdersClient/.test(TERMINALS_JS_SRC),
+        'terminals.js must NOT call migrateTeamPairOrdersClient — the client no longer runs system migrations'
+    );
 });
 
 /** Every .ts/.js file under src/, excluding the test tree and build output. */
@@ -530,25 +547,17 @@ function fakeDb(seed = {}) {
     };
 }
 
-const staleRows = (head = 'lead-1') => [
-    order({
-        id: 'p1', parent: head, child: 'Coding-reviewer', scope: 'pair',
-        instruction: resolvePreset('reviewer', head, 'Coding-reviewer')
-    }),
-    order({ id: 'x1', parent: 'a', child: 'b', scope: 'pair', instruction: 'operator wrote this by hand' }),
-];
-
 testAsync('loadEffectiveStandingOrders rewrites the config key once and backs it up once', async () => {
-    const before = staleRows();
+    const before = cleanupRows();
     const db = fakeDb({ [STANDING_ORDERS_CONFIG_KEY]: before });
 
     const first = await loadEffectiveStandingOrders(db);
-    assert.ok(!first.some(o => o.id === 'p1'), 'the stale reviewer pair row must be absent from delivery');
+    assert.ok(!first.some(o => o.id === 'context-aware-completion:team_x:team'), 'the system row must be absent from delivery');
     assert.ok(first.some(o => o.id === 'x1'), 'an operator-authored ad-hoc order must survive untouched');
 
-    // Persisted: the stale reviewer pair row is gone from DISK, not just from the render.
+    // Persisted: the system row is gone from DISK, not just from the render.
     const persisted = await db.getConfigJson(STANDING_ORDERS_CONFIG_KEY, []);
-    assert.ok(!persisted.some(o => o.id === 'p1'), 'the persisted row must no longer contain p1');
+    assert.ok(!persisted.some(o => o.id === 'context-aware-completion:team_x:team'), 'the persisted row must no longer contain the system row');
 
     // Backup holds the pre-migration array verbatim.
     const onDisk = (v) => JSON.parse(JSON.stringify(v));
@@ -566,11 +575,11 @@ testAsync('loadEffectiveStandingOrders rewrites the config key once and backs it
         'the effective set must be stable across passes');
 });
 
-testAsync('a failed persist still delivers a migrated prompt', async () => {
-    const db = fakeDb({ [STANDING_ORDERS_CONFIG_KEY]: staleRows() });
+testAsync('a failed persist still delivers a cleaned prompt', async () => {
+    const db = fakeDb({ [STANDING_ORDERS_CONFIG_KEY]: cleanupRows() });
     db.failSet = true;
     const effective = await loadEffectiveStandingOrders(db);
-    assert.ok(!effective.some(o => o.id === 'p1'), 'the stale pair row must still be filtered');
+    assert.ok(!effective.some(o => o.id === 'context-aware-completion:team_x:team'), 'the system row must still be filtered');
 });
 
 testAsync('an install with nothing stale is never written to', async () => {
@@ -581,37 +590,25 @@ testAsync('an install with nothing stale is never written to', async () => {
     assert.deepStrictEqual(db.writes, [], 'no recogniser fired, so nothing may be written — not even a backup');
 });
 
-// ── The read endpoint's markers: derived, additive, identity-stable ────────
-test('describeStandingOrderMigrations marks stale/dropped without minting an id', () => {
-    const raw = staleRows();
-    const notes = describeStandingOrderMigrations(raw);
-
-    assert.deepStrictEqual(notes.get('p1'), { stale: true, dropped: true },
-        'the reviewer pair row exists on disk and contributes nothing — it must read as dropped');
-    assert.strictEqual(notes.has('x1'), false, 'an untouched operator order carries no marker');
-
-    // Identity stability: two calls, same keys — no crypto.randomUUID() leaks out.
-    assert.deepStrictEqual(
-        [...describeStandingOrderMigrations(raw).keys()].sort(),
-        [...notes.keys()].sort(),
-        'markers must be keyed on ON-DISK ids only, or the endpoint churns ids and breaks delete-by-id');
+// ── The read endpoint returns persisted rows as-is — no staleness markers ──
+// System orders are composed at delivery and never persisted, so the persisted
+// store holds only what a human authored. There is no staleness to surface: the
+// endpoint returns rows as-is, and the cleanup transforms (dropSystemAuthoredRows,
+// migrateTeamPairOrders) run once in loadEffectiveStandingOrders and persist.
+test('dropSystemAuthoredRows + migrateTeamPairOrders drop system rows and preserve operator rows', () => {
+    const raw = cleanupRows();
+    const cleaned = migrateTeamPairOrders(dropSystemAuthoredRows(raw));
+    assert.ok(!cleaned.some(o => o.id === 'context-aware-completion:team_x:team'),
+        'the system row must be dropped by the cleanup');
+    assert.ok(cleaned.some(o => o.id === 'x1'),
+        'an untouched operator order must survive the cleanup');
 });
 
-test('describeStandingOrderMigrations covers the pair-fold drop, not just the Coding rows', () => {
-    const instruction = PRE_REWRITE_CALLBACK_INSTRUCTION;
-    assert.ok(typeof instruction === 'string' && instruction.length > 0,
-        'PRE_REWRITE_CALLBACK_INSTRUCTION must be exported from teamWiring');
-
-    const raw = [order({ id: 'm1', parent: 'coder-1', child: 'lead-1', scope: 'pair', instruction })];
-    const notes = describeStandingOrderMigrations(raw);
-    assert.deepStrictEqual(notes.get('m1'), { stale: true, dropped: true },
-        'a folded per-member pair row must read as dropped — it is filtered from every delivered prompt');
-});
-
-test('describeStandingOrderMigrations is empty once the persist has run', () => {
-    const migrated = migrateCodingTeamOrders(migrateTeamPairOrders(staleRows()));
-    assert.strictEqual(describeStandingOrderMigrations(migrated).size, 0,
-        'no recogniser fires post-persist — permanently absent markers are the correct end state');
+test('cleanup is empty once the persist has run', () => {
+    const clean = [order({ id: 'x1', parent: 'a', child: 'b', scope: 'pair', instruction: 'hand-written' })];
+    const out = migrateTeamPairOrders(dropSystemAuthoredRows(clean));
+    assert.strictEqual(out, clean,
+        'no recogniser fires on clean rows — returns input by reference (no write)');
 });
 
 // ── 9. REVIEW UNIT: the reviewer is told what to review ───────────────

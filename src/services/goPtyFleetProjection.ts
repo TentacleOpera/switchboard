@@ -436,7 +436,30 @@ export class GoPtyFleetProjection {
                 // unambiguous. `select-window -t ${view}:${wid}` pins the VIEW
                 // session's current window (grouped sessions each keep their own);
                 // `set-window-option -t ${wid}` targets the window directly.
-                + `tmux set-option -t ${view} window-size manual 2>/dev/null; `
+                // `smallest`, not `manual`. `manual` was chosen when control mode
+                // arbitrated pane geometry and the browser needed sole authority
+                // over it. Control mode is gone, and what `manual` does now is pin
+                // a window at whatever size it was born at and refuse every other
+                // client — so a second client (an SSH session, a phone) attached
+                // to a window TALLER than its terminal sees the top of it and
+                // nothing else. The agent's composer is drawn at the BOTTOM, so
+                // the operator types into a line that is off the bottom of the
+                // screen: input arrives, nothing appears, and the terminal reads
+                // as broken. Measured 2026-09-13: window `Coding` was 48x41 with
+                // an SSH client at 59x25 — sixteen rows, including the composer,
+                // below the fold.
+                //
+                // `smallest` sizes the window to the smallest attached client, so
+                // every client sees the whole thing. That is the right trade for a
+                // window several people watch: a clipped view that silently eats
+                // typing is worse than a narrower one everybody can read.
+                //
+                // Set on BOTH the view and the base: grouped sessions share one
+                // window list, so a `manual`/`smallest` split across the group
+                // leaves whichever session holds the stricter policy pinning the
+                // window for everyone.
+                + `tmux set-option -t ${view} window-size smallest 2>/dev/null; `
+                + `tmux set-option -t ${session} window-size smallest 2>/dev/null; `
                 + `tmux set-window-option -t $wid automatic-rename off 2>/dev/null; `
                 + `tmux select-window -t ${view}:$wid; `
                 // `-u` forces UTF-8 mode so `utf8_sanitize` does not replace

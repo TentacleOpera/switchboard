@@ -215,6 +215,16 @@ func (f *fleet) project(t *terminal) map[string]any {
 		"promptCount": t.promptCount, "hidden": t.hidden,
 		"startupCommandInner": t.startupCommandInner,
 		"machineId":           t.machineId,
+		// The seat's tmux identity. Set at create from the payload and used by
+		// every tmux path in this host (resizeTmuxWindow, ensureTmuxRouting,
+		// close's kill-window) — but never REPORTED, so `ptyListTerminals`
+		// showed `tmuxSession: null` for four seats that were plainly seated in
+		// tmux. That makes the board unable to tell a tmux-backed seat from a
+		// plain pty, and makes "is this seat in tmux?" unanswerable from the
+		// outside while the host knew the answer all along.
+		"tmuxSession":     t.tmuxSession,
+		"tmuxWindow":      t.tmuxWindow,
+		"tmuxViewSession": t.tmuxViewSession,
 	}
 }
 
