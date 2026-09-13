@@ -82,24 +82,24 @@ and it is the difference between an audit log and a log that agrees with itself.
 One action restores every card in the operation to its recorded prior column, in full or not at
 all. A partial undo is worse than none: the operator cannot see which half came back.
 
-**Where it lives.** The surface already exists: `#status-message` in the kanban sub-bar
-(`kanban.html:3049`, `role="status"`, `aria-live="polite"`), driven by `showStatusBarMessage()`
-(`kanban.html:8264`). A bulk move already has a place to announce itself, and the undo rides the
-same announcement rather than introducing a surface of its own:
+**Where it lives.** A global button in `#kanban-sub-bar` (`kanban.html:3044`) — the top strip that
+already carries `strip-btn` controls (`btn-chat-copy-prompt`, `btn-suggest-features`,
+`btn-project-manager`, `btn-feature-action`). It sits there as one more `strip-btn`, hidden when
+there is nothing to undo and shown when there is:
 
 ```
-Moved 172 cards to LEAD CODED · UNDO
+UNDO LAST MOVE (172)
 ```
 
-This is not a dialog. It appears **after** the move, interrupts nothing, and is ignorable.
+One button, board-wide, in the same place every time. It is not per-column and not attached to the
+move that created it: an operator recovering from a press they did not mean to make should not have
+to remember which column it came from.
 
-One change to that helper is required. `showStatusBarMessage` clears itself after **5000 ms** —
-correct for a status flash, wrong for a recovery affordance: an operator who looks away loses the
-only cheap way back. An undo offer persists until it is superseded by the next bulk move or
-dismissed. The timeout stays the default for every other caller; this is an opt-out, not a change
-to the shared behaviour.
+It is **not** a dialog and not `#status-message`. The status bar self-clears after 5000 ms, which
+is right for a flash and wrong for a recovery affordance — look away and the only cheap way back is
+gone. The button persists until it is used, or until the next bulk move replaces what it offers.
 
-### 5. The button says what it is about to move — by dropping a gate, not adding a feature
+### 5. The Move All button says what it is about to move — by dropping a gate, not adding a feature
 
 This is already built. `updateCapLabels()` (`kanban.html:9572`) renders a `.cap-label` onto the
 Move All button reading `SEND 5 OF 172`, with the styling (`column-icon-btn-labeled`) and the
@@ -117,9 +117,42 @@ in it. A button reading `MOVE 33` for an operation that moves 172 is worse than 
 This is a label, not a gate: it does not interrupt, does not ask, and does not require a second
 click.
 
-### 6. Both composition roots
+### 6. Undo interrupts the seats the move dispatched to
 
-The move path is shared; the surface that offers the undo is not. `extension.ts` and
+A forward move is not only a column change. `Move Selected` is tooltipped *"Move selected plans to
+next stage (triggers CLI if enabled)"* — an accidental press fires prompts at live agents, and
+restoring the columns while twenty seats keep working on prompts nobody meant to send is not a
+recovery. Undo must reach the terminals.
+
+So the operation records **which seats it delivered to**, and undo sends each of them an interrupt.
+
+**This cannot be a blanket ESC.** Measured 2026-08-23 across eight CLIs: ESC is not a
+"dismiss and continue" key — after typing, the text survives on claude, devin and agy, and
+**copilot echoes ESC as a literal `^[` into its input box**. Those measurements were taken with
+nothing submitted, so they describe a seat sitting at an idle prompt, which is precisely the seat
+that must not receive one: there ESC is not an interrupt, it is garbage typed into the box.
+
+The distinction is *is this seat mid-turn*, and it is the same distinction the delivery path already
+gets wrong — it knows only `status` and `lastDataAt`, which is why it presses Enter into surfaces it
+cannot see. An interrupt sent on that basis inherits the same defect.
+
+Therefore:
+
+- Send only to seats this operation actually delivered to, recorded at delivery — never to every
+  terminal, and never inferred afterwards from liveness.
+- Send only to a seat observed to be mid-turn. The echo probe already identified for this
+  (`handle.onData(cb)` on the handle `sendPromptToPty` holds, `ptyBackend.ts`) distinguishes a live
+  input box from a busy or blocked one without a per-CLI pattern list.
+- The interrupt key is per family and **must not** default. An unrecognised family is reported by
+  name and left alone — guessing ESC for it is how copilot's box gets `^[` typed into it. A static
+  family→key table pretending to be a runtime probe is the mistake `CLI_AGENT_REGEX` was deleted for.
+- Report what was interrupted and what was not. A seat that could not be interrupted is a seat
+  still working on an unwanted prompt, and the operator has to know which.
+
+### 7. Both composition roots
+
+The move path is shared; the surface that offers the undo, and the pty seam the interrupt
+rides, are not. `extension.ts` and
 `src/standalone/bootstrap.ts` must both wire it, and both be verified — an undo affordance present
 on one host and absent on the other is the divergence `CLAUDE.md` names, and it fails silently.
 
@@ -138,9 +171,14 @@ on one host and absent on the other is the divergence `CLAUDE.md` names, and it 
    column.
 4. Assert the advertised count equals the number of cards the operation actually moves, cascaded
    subtasks included — a feature with subtasks must not advertise only the feature.
-5. Assert the undo offer survives the 5000 ms `showStatusBarMessage` timeout, and that an ordinary
-   status message still clears at 5000 ms.
-6. Assert no `confirm()`, `window.confirm()` or modal gate exists on the move path, on either host.
+5. Assert the advertised undo count matches the number of cards the undo restores.
+6. Assert the undo button lives in `#kanban-sub-bar` and survives longer than the 5000 ms
+   `showStatusBarMessage` timeout, while an ordinary status message still clears at 5000 ms.
+7. Assert undo interrupts only seats this operation delivered to — a seat that was busy on
+   unrelated work receives nothing.
+8. Assert an unrecognised CLI family is reported and **not** sent an interrupt key, and that no
+   family→key default exists for one.
+9. Assert no `confirm()`, `window.confirm()` or modal gate exists on the move path, on either host.
 
 ### Goal Invariants
 
@@ -149,4 +187,7 @@ on one host and absent on the other is the divergence `CLAUDE.md` names, and it 
 - The event log distinguishes a card the operator moved from a card its feature moved.
 - Pressing "advance all" by accident costs the operator one action, not a rollback of the board.
 - No confirmation dialog exists anywhere on this path.
-- The undo offer is still on screen a minute after the move that created it.
+- The undo button is still on screen a minute after the move that created it, in the same place
+  every time.
+- Undoing a move stops the agents that move set working, and says which ones it could not stop.
+- No seat is ever sent an interrupt key chosen by a default.
