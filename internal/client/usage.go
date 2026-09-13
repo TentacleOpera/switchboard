@@ -50,7 +50,7 @@ Board commands (drive the board from a terminal — served by this Go client):
   next                Pull the next card from the queue for a seat.
   reports             List host turn-end reports (blocked/finished) read from
                       plan_events, joined to each card's current kanban column.
-                      `--kind blocked` filters to blocked turn-ends.
+                      --kind blocked filters to blocked turn-ends.
   clear               Clear a terminal seat (or --all seats).
   fleet               Show live terminal seats, roles, and assigned plans.
   verb                Call any protocol verb directly: switchboard verb <name> <json>
