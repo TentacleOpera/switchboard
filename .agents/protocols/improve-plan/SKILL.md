@@ -87,6 +87,24 @@ If the target file is under `.switchboard/features/` or contains an auto-generat
        - Every item states the question **and** the assumption you proceeded under, so the plan stays coherent and codeable before anyone answers.
        - You **continue and complete the work regardless**. Never block waiting for an answer.
        - This section is additive and must never displace a required section — in particular the problem / root-cause analysis that belongs in or below `## Goal` stays where it is.
+       - **A `[user]` item costs a human turn. Earn it.** Before you write one, clear all four:
+         1. **Is it verifiable?** If the answer is in the code, the schema, the git history, or the
+            board, go and read it. A question you could have answered by grepping is not a decision.
+         2. **Is it already decided?** Search the **contents** of `.switchboard/plans/`, not the
+            titles — the same idea is often filed under different vocabulary (a design filed under
+            "streams" will not match a search for "steps"). If a sibling plan settles it, cite that
+            plan and proceed. If a sibling plan *contradicts* it, the sibling's premise wins and the
+            conflict belongs in that plan, not as a fresh question here.
+         3. **Is the premise true?** Confirm the thing you are asking about actually exists and
+            behaves as you assume. Most rejected questions were asking about behaviour that was
+            never there.
+         4. **Is it in scope?** A question about work this plan does not do is scope drift. Drop it.
+       - **Never re-ask what this plan was built from.** When a plan was written from an operator's
+         stated decision, questions generated while drafting it are yours to resolve from that
+         statement — putting them back to the operator is a loop with no exit.
+       - **A `[user]` item is a genuine fork**: two defensible options, different outcomes, and no
+         fact in the repo picks between them. Everything else you decide, record as a stated
+         assumption in the plan body, and move on.
 
    **Complexity Criteria:**
    - **Routine (1-4):** Single-file, localized changes. Reuses existing patterns. Low risk. Small scope.

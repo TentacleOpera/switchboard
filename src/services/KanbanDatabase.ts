@@ -726,14 +726,17 @@ export const SCHEMA_INDEX_STATEMENTS: string[] = [
     `CREATE INDEX IF NOT EXISTS idx_coding_rounds_feature ON coding_rounds(feature_id)`,
     `CREATE INDEX IF NOT EXISTS idx_coding_rounds_workspace ON coding_rounds(workspace_id)`,
     `CREATE INDEX IF NOT EXISTS idx_plan_runtime_state_workspace ON plan_runtime_state(workspace_id)`,
-    // device_id-leading index. The PK autoindex on (plan_id, device_id) cannot
-    // serve a device_id-leading predicate (SQLite composite indexes require the
-    // leading column constrained), so any `WHERE device_id = ?` query is a full
-    // scan without this. NOTE: the _readRows runtime overlay does NOT use it —
-    // that overlay is row-scoped and chunked (see RUNTIME_OVERLAY_CHUNK), and the
-    // device-scoped form was measured no faster with this index than without it.
-    // Kept for device-scoped maintenance queries.
-    `CREATE INDEX IF NOT EXISTS idx_plan_runtime_state_device ON plan_runtime_state(device_id)`,
+    // NO device_id-leading index here, deliberately. V78 added one to mitigate a
+    // device-scoped runtime overlay (`WHERE device_id = ?`, no plan_id list); that
+    // form was measured 222x slower than the row-scoped one it replaced (5,111 us
+    // vs 23 us per _readRows call) and the index made no difference, because the
+    // cost is materialising every runtime row this device owns, not the scan. The
+    // overlay stayed row-scoped and chunked (see RUNTIME_OVERLAY_CHUNK), which
+    // left the index with no reader: every other device_id predicate in this file
+    // is also constrained by plan_id (the PK autoindex serves it) or workspace_id
+    // (idx_plan_runtime_state_workspace serves it), and the one bare
+    // `WHERE device_id = ?` count runs inside the V74 migration, which on an
+    // upgrade executes before V78 ever created the index. V79 drops it.
     `CREATE INDEX IF NOT EXISTS idx_plan_tickets_workspace ON plan_tickets(workspace_id)`,
     `CREATE INDEX IF NOT EXISTS idx_plan_tickets_external ON plan_tickets(workspace_id, provider, external_id)`,
     `CREATE INDEX IF NOT EXISTS idx_plan_tickets_plan ON plan_tickets(plan_id)`,
@@ -1217,6 +1220,19 @@ const MIGRATION_V77_SQL = [
 // that ran SCHEMA_INDEX_STATEMENTS then re-entered the runner).
 const MIGRATION_V78_SQL = [
     `CREATE INDEX IF NOT EXISTS idx_plan_runtime_state_device ON plan_runtime_state(device_id)`,
+];
+
+// V79: drop idx_plan_runtime_state_device. V78 created it one day earlier to make
+// a device-scoped runtime overlay viable; review measured that overlay at 222x the
+// row-scoped cost WITH the index in place, so the overlay stayed row-scoped and the
+// index was left with no reader. Dropping it rather than leaving it costs one B-tree
+// write less per plan_runtime_state upsert and, more importantly, stops the schema
+// asserting a device-leading access pattern that no query has. V78 shipped only in
+// unreleased dev work, so this is a clean break, not a user-data migration — but it
+// is a separate version because boards that already ran V78 are past it and would
+// never re-enter an edited V78 body.
+const MIGRATION_V79_SQL = [
+    `DROP INDEX IF EXISTS idx_plan_runtime_state_device`,
 ];
 
 /**
@@ -11276,6 +11292,18 @@ export class KanbanDatabase {
             }
             await this.setMigrationVersion(78);
             console.log('[KanbanDatabase] V78 migration completed: device_id index added to plan_runtime_state');
+        }
+
+        // V79: drop the V78 device_id index — the device-scoped overlay it was added
+        // for was rejected on measurement, leaving it with no reader. See
+        // MIGRATION_V79_SQL. `DROP INDEX IF EXISTS` is idempotent.
+        const v79 = await this.getMigrationVersion();
+        if (v79 < 79) {
+            for (const sql of MIGRATION_V79_SQL) {
+                try { this._db.exec(sql); } catch { /* index already absent */ }
+            }
+            await this.setMigrationVersion(79);
+            console.log('[KanbanDatabase] V79 migration completed: dropped idx_plan_runtime_state_device (no reader; the device-scoped overlay it served was rejected)');
         }
 
         // Runtime-tier orphan sweep, once per open. Not version-gated: orphans accrue

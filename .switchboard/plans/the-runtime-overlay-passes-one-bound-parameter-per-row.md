@@ -234,16 +234,47 @@ Run `npm run compile-tests` before any `test:contract:*` script.
 
 ### Goal Invariants
 
-1. The overlay binds exactly one parameter regardless of read size.
+1. The overlay's bound-parameter count is capped by a constant and never grows with
+   the read: `RUNTIME_OVERLAY_CHUNK` is declared, is below 32,766, and `_readRows`
+   iterates its plan-id list in chunks of it.
 2. A board read of 40,000 active plans succeeds.
 3. The merged output is unchanged for every case the current overlay handles.
 4. A missing `plan_runtime_state` is still tolerated; a present-but-failing one still throws.
-5. `idx_plan_runtime_state_device` exists on both fresh and migrated databases.
+5. `idx_plan_runtime_state_device` is absent from a fresh database, and
+   `idx_plan_runtime_state_workspace` is still present.
 
-## Outstanding Questions
+> **Superseded:** Invariant 1 read "The overlay binds exactly one parameter regardless of
+> read size", and Invariant 5 required `idx_plan_runtime_state_device` to exist on both
+> fresh and migrated databases.
+> **Reason:** "Exactly one" named an *implementation* (`WHERE device_id = ?`, no plan-id
+> list), not the Goal. The Goal above asks that the count "stops scaling with the size of
+> the read" and that "the SQLite variable ceiling stops being reachable" — chunking at 500
+> satisfies both. The device-scoped form that "exactly one" required was measured at 5,111 µs
+> per `_readRows` call against 23 µs for the row-scoped one — 222x, paid on every single-plan
+> lookup — because it materialises all 1,402 runtime rows this device owns every time.
+> Invariant 5's index existed only to mitigate that form and was measured not to (5,268 µs
+> with it, 5,111 µs without: the cost is row materialisation, not the scan). With the form
+> rejected the index has no reader — every other `device_id` predicate in `KanbanDatabase`
+> is also constrained by `plan_id` (PK autoindex) or `workspace_id`
+> (`idx_plan_runtime_state_workspace`), and the one bare `WHERE device_id = ?` count runs
+> inside the V74 migration, which on an upgrade path executes before V78 created the index.
+> **Replaced with:** the invariants above — a capped parameter count, and the index pinned
+> *absent* (V79 drops it, the fresh-DB path no longer creates it) so it cannot be re-added
+> without a query that reads it.
 
-- **[user]** Whether `''` should clear a string field (e.g. `dispatched_terminal = ''` releasing a stale seat) — proceeding on the assumption that current behaviour is preserved exactly in this change (see User Review Required). The asymmetry is recorded, not resolved.
-- **[user]** Whether the `device_id` index addition (Change 5) should be a separate plan or part of this one — proceeding on the assumption that it is part of this change, since the device-scoped query is the change that makes the index necessary.
+## Resolved Questions
+
+Both items previously here were closed on 2026-09-15 without a human turn; neither was a
+decision only the operator could make.
+
+- **The `''`-does-not-clear asymmetry** is out of scope for this plan and always was. This
+  change is about a bound-parameter ceiling; it preserves merge semantics byte-for-byte by
+  requirement, and the asymmetry is now *pinned* by Invariant 3's test rather than left
+  emergent. Whether `dispatched_terminal = ''` should release a stale seat is a real question
+  about seat lifecycle, and it belongs to the seat-release work, not here.
+- **Whether the `device_id` index belonged in this plan** is moot: the index is gone. It was
+  only ever a mitigation for the device-scoped overlay this plan rejected on measurement.
+  See the superseded callout above.
 
 ## Completion Report
 

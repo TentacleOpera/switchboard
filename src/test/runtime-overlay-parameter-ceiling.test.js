@@ -19,7 +19,9 @@
  *    does overlay, and `dispatched_at IS NULL` DOES overlay.
  * 3. Runtime rows belonging to another `device_id` never appear in the merge.
  * 4. A database with no `plan_runtime_state` table still reads (pre-V74 arm).
- * 5. `idx_plan_runtime_state_device` exists (V78, fresh-DB path).
+ * 5. `idx_plan_runtime_state_device` does NOT exist: V78 created it for a
+ *    device-scoped overlay that was rejected on measurement, and V79 drops it.
+ *    The index is pinned absent so nobody re-adds it without a reader.
  * 6. The overlay's parameter count is capped, not merely large — a source-level
  *    guard so a future edit cannot quietly reintroduce an unbounded IN list, and
  *    cannot replace it with a device-scoped scan that materialises every runtime
@@ -47,7 +49,7 @@ async function run() {
         await test_merge_semantics_unchanged(tmpRoot);
         await test_other_device_rows_never_merge(tmpRoot);
         await test_missing_runtime_table_still_reads(tmpRoot);
-        await test_device_index_exists(tmpRoot);
+        await test_device_index_absent(tmpRoot);
 
         console.log('\nAll runtime-overlay-ceiling contract tests passed.');
     } finally {
@@ -234,7 +236,7 @@ async function test_missing_runtime_table_still_reads(tmpRoot) {
 }
 
 /** Invariant 5 — V78's device_id index exists on a fresh database. */
-async function test_device_index_exists(tmpRoot) {
+async function test_device_index_absent(tmpRoot) {
     const wsRoot = path.join(tmpRoot, 'ws-idx');
     const wsId = 'ceiling000000005';
     const db = await buildWorkspace(wsRoot, wsId);
@@ -242,11 +244,22 @@ async function test_device_index_exists(tmpRoot) {
     const idx = db.getDriver().all(
         `SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='plan_runtime_state'`
     ).map(r => String(r.name));
-    assert.ok(idx.includes('idx_plan_runtime_state_device'),
-        `idx_plan_runtime_state_device must exist on a fresh DB (found: ${idx.join(', ')})`);
+
+    // Negative half: the index V78 added has no reader, so it must not be created.
+    assert.ok(!idx.includes('idx_plan_runtime_state_device'),
+        `idx_plan_runtime_state_device must NOT exist — the device-scoped overlay it ` +
+        `was added for was rejected on measurement (222x slower WITH the index), and ` +
+        `no remaining query is device_id-leading (found: ${idx.join(', ')})`);
+
+    // Paired positive half: a negative assertion alone passes if someone drops the
+    // whole table's indexing, so pin the index that DOES have readers — every
+    // `workspace_id = ? AND device_id = ?` query in KanbanDatabase leans on it.
+    assert.ok(idx.includes('idx_plan_runtime_state_workspace'),
+        `idx_plan_runtime_state_workspace must still exist — it is what serves the ` +
+        `workspace-scoped runtime queries (found: ${idx.join(', ')})`);
 
     await KanbanDatabase.invalidateWorkspace(wsRoot);
-    console.log('Pass: idx_plan_runtime_state_device exists on a fresh database');
+    console.log('Pass: idx_plan_runtime_state_device is absent; idx_plan_runtime_state_workspace remains');
 }
 
 run().catch(err => {
