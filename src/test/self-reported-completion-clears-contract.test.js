@@ -290,10 +290,20 @@ async function run() {
         assert.ok(clears.includes('Coder 1'), 'the attributed coder is cleared');
     });
 
-    await check('multi-seat clear: two attributed coding seats both clear, minus from', async () => {
-        // No-op #3: clear every coding seat attributed to the subtask, not
-        // just the accepted one. The escalation ladder can put a second seat
-        // on a subtask; both must be cleared on acceptance.
+    await check('multi-seat clear: every attributed coding seat the resolver returns is cleared', async () => {
+        // No-op #3: the clear LOOP handles every seat the resolver returns,
+        // not just the accepted one.
+        //
+        // LIMIT OF THIS TEST — read before trusting it as evidence for the
+        // escalation-ladder case. The stub below returns TWO rows carrying the
+        // same planId. `getLiveDispatchAttribution` reads `plans`, whose
+        // `plan_id` is a PRIMARY KEY, so production can never produce that
+        // shape: one plan row carries one `dispatched_terminal`. What this
+        // asserts is that the loop clears every seat it is GIVEN. It does NOT
+        // assert that a subtask touched by two seats resolves two seats —
+        // nothing in the current attribution path records the seat a subtask
+        // was moved OFF, so that half of the plan's acceptance criteria is a
+        // recorded deferred finding, not something proven here.
         const { server, plans, clears, fakeDb } = makeServer({
             db: {
                 getLiveDispatchAttribution: async () => [
@@ -308,7 +318,11 @@ async function run() {
         assert.strictEqual(r.cleared, true);
         assert.ok(clears.includes('Coder 1'), 'the primary coder is cleared');
         assert.ok(clears.includes('Coding-intern'), 'the attributed intern is also cleared');
-        assert.ok(!clears.includes('Coding'), 'the lead in `from` is never cleared');
+        // `from` is NOT excluded by name (commit 1073bb1a deleted that guard);
+        // the lead escapes the clear because CODING_ROLES gates the resolver,
+        // not because it is the poster. Wording it as a `from` exclusion would
+        // read as proof of a guard that no longer exists.
+        assert.ok(!clears.includes('Coding'), 'a non-coding lead is not cleared (CODING_ROLES gate, not a `from` guard)');
     });
 
     await check('a coder that IS the poster is cleared (self-reported-completion-clears supersedes plan no-op #4)', async () => {

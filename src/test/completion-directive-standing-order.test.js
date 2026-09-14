@@ -189,6 +189,31 @@ function makeDb(initialOrders) {
             'The interpolated terminal name must appear in the done --from command');
     });
 
+    // 7b. The CLI path token is the repo-wide `<cliPath>`, substituted on the
+    // way out by substituteCliPath. A `${cliPath}` spelling is substituted by
+    // NOTHING and reaches the agent as a literal — the directive then names a
+    // command that cannot run, which is the failure this assertion exists for.
+    await check('the CLI path is substituted, not left as a literal placeholder', () => {
+        assert.ok(!/\$\{cliPath\}/.test(COMPLETION_DIRECTIVE_ORDER_INSTRUCTION),
+            'COMPLETION_DIRECTIVE_ORDER_INSTRUCTION must not use ${cliPath} — nothing substitutes that spelling');
+        const orders = [{
+            id: 'completion-directive:role:coder',
+            parent: '',
+            child: '',
+            instruction: COMPLETION_DIRECTIVE_ORDER_INSTRUCTION,
+            createdAt: Date.now(),
+            scope: 'role',
+            role: 'coder',
+        }];
+        const roleMap = new Map([['MyCoder', 'coder']]);
+        const live = new Set(['MyCoder']);
+        const rendered = applyStandingOrders('task', 'MyCoder', orders, live, [], roleMap, {}, { terminalName: 'MyCoder' });
+        assert.ok(!rendered.includes('<cliPath>'),
+            'the <cliPath> token must be substituted for a real path at delivery time');
+        assert.ok(!/\$\{cliPath\}/.test(rendered),
+            'no ${cliPath} placeholder may survive to the delivered order');
+    });
+
     // 8. Orders without placeholders are unchanged when no interpolation context.
     await check('orders without placeholders are unchanged without interpolation context', () => {
         const orders = [{

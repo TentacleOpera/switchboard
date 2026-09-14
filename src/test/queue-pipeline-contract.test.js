@@ -356,10 +356,17 @@ async function run() {
         // caused the defect.
         const fs = require('fs');
         const src = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'LocalApiServer.ts'), 'utf8');
-        // Locate the release select inside _runQueueDone.
-        const selIdx = src.indexOf('const candidates = board');
+        // Locate the release select inside _runQueueDone. Anchor on the
+        // FUNCTION first: `const candidates = board` also names the STAGING
+        // pick in dispatchNextFromQueue, and a bare indexOf found that one —
+        // so the guard was reading a block with no holder predicate in it and
+        // could never fail on the drift it exists to catch.
+        const fnIdx = src.indexOf('private _runQueueDone(');
+        assert.notStrictEqual(fnIdx, -1, '_runQueueDone must exist');
+        const selIdx = src.indexOf('const candidates = board', fnIdx);
         assert.notStrictEqual(selIdx, -1, 'the ordered candidates select must exist in _runQueueDone');
-        const selEnd = src.indexOf(';', src.indexOf('candidates[0];', selIdx));
+        const selEnd = src.indexOf('held = candidates[0];', selIdx);
+        assert.notStrictEqual(selEnd, -1, 'the no-planId fallback must select candidates[0]');
         const selBlock = src.slice(selIdx, selEnd);
         // The release select matches on dispatched_terminal (and optionally
         // planId for disambiguation). dispatched_terminal is the load-bearing

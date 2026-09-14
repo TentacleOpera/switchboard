@@ -6966,10 +6966,22 @@ export class LocalApiServer {
                     // the most recently dispatched wins — deliberate, and the
                     // completion directives send planId so it is a transitional
                     // case only.
+                    //
+                    // `!p.completedAt` keeps the select a strict SUBSET of
+                    // heldByTeam. A completed card keeps its dispatched_terminal
+                    // stamp — the lead's acceptance post writes completed_at and
+                    // clears the seat's CONTEXT, it never nulls the holder — so
+                    // without this a finished card with a newer dispatchedAt sorts ahead
+                    // of the orphan the seat is actually still holding — the
+                    // post releases the wrong row and the team stays blocked,
+                    // which is the exact defect this select exists to repair.
+                    // heldByTeam already ignores completed cards, so nothing is
+                    // left un-released by skipping them here.
                     const candidates = board
                         .filter((p: any) =>
                             p && typeof p.dispatchedTerminal === 'string'
-                            && p.dispatchedTerminal === from)
+                            && p.dispatchedTerminal === from
+                            && !p.completedAt)
                         .sort((a: any, b: any) =>
                             (b.dispatchedAt || '').localeCompare(a.dispatchedAt || ''));
                     let held: any;

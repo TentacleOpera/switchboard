@@ -592,8 +592,11 @@ function compositionContext(
 /**
  * The completion-protocol handshake as a standing order. Tells the agent to
  * run `switchboard done --from` when ALL work is complete. Stored with
- * `${terminalName}` and `${cliPath}` placeholders, interpolated at delivery
- * time with the terminal's own name — no "check this txt file" and no
+ * a `${terminalName}` placeholder (interpolated at delivery time with the
+ * terminal's own name) and the repo-wide `<cliPath>` token (substituted by
+ * `substituteCliPath` on the way out of `renderStandaloneOrdersBlock` — a
+ * `${cliPath}` spelling is NOT substituted by anything and reaches the agent
+ * literally) — no "check this txt file" and no
  * "<your terminal name>" placeholder.
  *
  * This replaced the prompt-injected CODING_COMPLETION_REPORT_DIRECTIVE. Copy-
@@ -604,7 +607,7 @@ function compositionContext(
  * `POST /kanban/queue/done` form — the CLI resolves the port itself, so no
  * `${port}` interpolation is needed for this order.
  */
-export const COMPLETION_DIRECTIVE_ORDER_INSTRUCTION = `COMPLETION REPORT: When you have finished implementing ALL parts of the plan, run \`\${cliPath} done --from "\${terminalName}"\` (or \`switchboard done --from "\${terminalName}"\`). This signals task completion to the kanban board — the system clears your card's activity light and notifies your lead. Do NOT report after finishing individual parts — only when ALL work is complete. Also append a brief summary (3-5 sentences) to the END of the original plan file for the record. Do NOT skip the completion report.`;
+export const COMPLETION_DIRECTIVE_ORDER_INSTRUCTION = `COMPLETION REPORT: When you have finished implementing ALL parts of the plan, run \`node "<cliPath>" done --from "\${terminalName}"\` (or \`switchboard done --from "\${terminalName}"\`). This signals task completion to the kanban board — the system clears your card's activity light and notifies your lead. Do NOT report after finishing individual parts — only when ALL work is complete. Also append a brief summary (3-5 sentences) to the END of the original plan file for the record. Do NOT skip the completion report.`;
 
 const COMPLETION_DIRECTIVE_ORDER_ID_PREFIX = 'completion-directive:role:';
 
@@ -612,8 +615,8 @@ const COMPLETION_DIRECTIVE_ORDER_ID_PREFIX = 'completion-directive:role:';
  * Install (or update) the completion-directive standing order for a role.
  * Called when a terminal is created or a role is assigned, and during upgrade
  * migration. Idempotent — uses a deterministic ID so re-installation replaces,
- * not duplicates. The order text carries `${terminalName}` and `${cliPath}`
- * placeholders interpolated at delivery time, so no terminal name is needed
+ * not duplicates. The order text carries `${terminalName}` and `<cliPath>`
+ * placeholder interpolated at delivery time, so no terminal name is needed
  * at install time. Installs once per role (not per terminal) — `parent` is
  * `''` because a role-scoped order applies to all terminals with that role.
  */

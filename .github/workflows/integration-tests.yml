@@ -598,6 +598,14 @@ jobs:
       - name: self-reported completion clears the seat (both at-rest paths)
         run: npm run test:contract:self-completion-clear
 
+      # The completion directive moved out of buildKanbanBatchPrompt and into a
+      # role-scoped standing order. Two halves have to stay true at once — the
+      # copy-prompt path must NOT carry it and the ptySendPrompt path must — and
+      # each half looks fine on its own, so only a gate that asserts both catches
+      # a directive that quietly reaches nobody.
+      - name: completion directive is a standing order, not prompt-injected
+        run: npm run test:contract:completion-directive-standing-order
+
       # The host injects SWITCHBOARD_TERMINAL into every seat it creates, in
       # both composition roots, and the CLI never read it — so every completion
       # instruction made the agent type its own name back. A field an agent must

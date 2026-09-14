@@ -1070,6 +1070,7 @@
     "test:contract:paste-attribution": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/paste-attribution-contract.test.js",
     "test:contract:dispatch-analysis-scope": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/dispatch-analysis-scope-contract.test.js",
     "test:contract:standing-orders-marker": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/standing-orders-marker-contract.test.js",
+    "test:contract:completion-directive-standing-order": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/completion-directive-standing-order.test.js",
     "test:contract:no-curl-in-generated-prompts": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/no-curl-in-generated-prompts-contract.test.js",
     "test:contract:standing-orders-fleet-root": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/standing-orders-fleet-root-contract.test.js",
     "test:contract:seat-safeguards": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/seat-safeguards-fleet-prompt-path.test.js",
