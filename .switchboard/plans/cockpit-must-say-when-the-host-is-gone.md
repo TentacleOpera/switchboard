@@ -26,7 +26,7 @@ Three things then happen, none of them visible at the shell level:
 
 **Feature:** 01c83b6c-f9aa-4991-a51a-4748faccc150
 **Complexity:** 3
-**Tags:** frontend, reliability, bugfix, ux
+**Tags:** frontend, reliability, bugfix, ux, performance
 
 ## User Review Required
 

@@ -106,7 +106,7 @@ watcher seams each wires.
 ## Metadata
 
 **Complexity:** 3
-**Tags:** backend, reliability, standalone, memory, watchers
+**Tags:** backend, reliability, standalone, memory, watchers, performance
 **Project:** Browser Switchboard
 
 ## User Review Required

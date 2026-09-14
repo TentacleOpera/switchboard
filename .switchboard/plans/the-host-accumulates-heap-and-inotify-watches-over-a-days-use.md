@@ -76,7 +76,7 @@ a host answering on the workspace port.
 ## Metadata
 
 **Complexity:** 5
-**Tags:** reliability, memory, observability
+**Tags:** reliability, memory, observability, performance
 **Dependencies:** none.
 
 ## User Review Required
