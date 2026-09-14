@@ -382,9 +382,21 @@ const LEAD_TEAM = { id: 'feature-implementation', name: 'Lead team', headRole: '
     // 22. migrateAgentGroups is idempotent: a group without startOnLoad
     //     returns null (no change), so the clear-on-read does not loop.
     await test('migrateAgentGroups is idempotent after startOnLoad strip', async () => {
-        const clean = { id: 't1', name: 'Team 1', headRole: 'lead', members: [] };
+        // Fully-migrated shape: no startOnLoad AND the `machine` pin every team
+        // now carries (plan: agents-are-saved-per-machine-and-a-team-picks-one).
+        // A clear-on-read converter that keeps reporting `changed` rewrites the
+        // store on every read forever — that is what this pins.
+        const clean = { id: 't1', name: 'Team 1', headRole: 'lead', machine: 'local', members: [] };
         assert.strictEqual(migrateAgentGroups([clean]), null,
-            'a group without startOnLoad must not be re-flagged');
+            'a fully-migrated group must not be re-flagged');
+        // And the machine stamp itself is ONE-TIME: a group missing it is
+        // flagged once, and the result of that pass is then stable.
+        const unstamped = { id: 't2', name: 'Team 2', headRole: 'lead', members: [] };
+        const stamped = migrateAgentGroups([unstamped]);
+        assert.ok(Array.isArray(stamped), 'a group without `machine` must be flagged once');
+        assert.strictEqual(stamped[0].machine, 'local');
+        assert.strictEqual(migrateAgentGroups(stamped), null,
+            'the stamped result must not be re-flagged on the next read');
     });
 
     // 23. Field-carry guard: teamsTabSaveAgentGroup must still carry

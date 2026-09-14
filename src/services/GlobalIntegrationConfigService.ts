@@ -601,9 +601,10 @@ export class GlobalIntegrationConfigService {
 
     /**
      * Persist the machines list. `local` is forced to the front and is never
-     * removable — a caller that omits it gets it re-added. Returns the names of
-     * teams (by machine id) that pin a machine no longer in the list, so the UI
-     * can refuse the deletion rather than orphaning teams.
+     * removable — a caller that omits it gets it re-added. The team-pin check
+     * (refusing to delete a machine a team still pins) lives at the
+     * `deleteMachine` verb, which is the only caller that can read the team
+     * store; this method does not perform it.
      */
     public static async setMachines(machines: AgentMachine[]): Promise<void> {
         const filtered = Array.isArray(machines) ? machines.filter(m => m && typeof m.id === 'string') : [];
@@ -632,11 +633,34 @@ export class GlobalIntegrationConfigService {
         const globalConfig = await this.loadGlobal();
         const agents = globalConfig.agents || {};
         const perMachine = { ...(agents.machineStartupCommands || {}) };
+
+        // WIPE GUARD — the same one `setAgentConfig` applies to the legacy flat
+        // key, applied here too. This path is reached by the ordinary Agents-tab
+        // save (`saveStartupCommands`), whose command map is built from the
+        // webview's DOM inputs: a panel that posts before those inputs are
+        // populated sends `{}`. Writing that straight through would blank the
+        // machine's real command map AND, for `local`, the legacy key the guard
+        // was added to protect — the exact reinstall-blanking the guard exists
+        // to stop. An all-blank incoming map over a populated stored one is
+        // refused loudly; emptying a set deliberately is done by deleting the
+        // machine.
+        const incoming = this.agentConfigMeaningfulCount('startupCommands', commands);
+        const existingPerMachine = this.agentConfigMeaningfulCount('startupCommands', perMachine[machineId]);
+        const existingLegacy = machineId === 'local'
+            ? this.agentConfigMeaningfulCount('startupCommands', agents.startupCommands)
+            : 0;
+        if (incoming === 0 && (existingPerMachine > 0 || existingLegacy > 0)) {
+            console.warn(`[GlobalIntegrationConfigService] Refusing to overwrite non-empty startup commands for machine '${machineId}' with an empty value (wipe guard).`);
+            return;
+        }
+
         perMachine[machineId] = commands;
         const nextAgents: any = { ...agents, machineStartupCommands: perMachine };
         if (machineId === 'local') {
-            // Mirror to legacy flat key (transition fallback). Bypass the
-            // setAgentConfig wipe guard — an explicit empty local set is valid.
+            // Mirror to legacy flat key (transition fallback). Written directly
+            // rather than through `setAgentConfig` so the two keys land in ONE
+            // save — the wipe guard above already covers the case that guard
+            // protects against.
             nextAgents.startupCommands = commands;
         }
         globalConfig.agents = nextAgents;

@@ -13878,24 +13878,34 @@ ${FOCUS_DIRECTIVE}`;
                 if (!machineId || machineId === 'local') {
                     return { success: false, error: 'The local machine cannot be deleted' };
                 }
-                // Refuse to delete a machine pinned by any team.
+                // Refuse to delete a machine pinned by any team. An UNREADABLE
+                // team store refuses the delete too: "no teams pin it" and "the
+                // pins could not be read" must not look the same, or the one
+                // failure this guard exists to prevent (orphaning a team onto a
+                // machine that no longer exists) is exactly the one it lets
+                // through.
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (workspaceRoot) {
-                    try {
-                        const db = this._getKanbanDb(workspaceRoot);
-                        if (db) {
-                            const groups = await db.getConfigJson?.('terminals.agentGroups', []) as any[];
-                            if (Array.isArray(groups)) {
-                                const pinned = groups.filter(g => g && g.machine === machineId);
-                                if (pinned.length > 0) {
-                                    const names = pinned.map(g => g.name || g.id).join(', ');
-                                    const error = `Machine '${machineId}' is used by team(s): ${names}. Remove or re-pin them first.`;
-                                    this.postMessage({ type: 'deleteMachineResult', error });
-                                    return { success: false, error };
-                                }
-                            }
-                        }
-                    } catch { /* best-effort */ }
+                let groups: any[] | undefined;
+                try {
+                    const db = workspaceRoot ? this._getKanbanDb(workspaceRoot) : undefined;
+                    if (db) {
+                        const raw = await db.getConfigJson?.('terminals.agentGroups', []) as any[];
+                        if (Array.isArray(raw)) { groups = raw; }
+                    }
+                } catch (err) {
+                    console.warn('[KanbanProvider] deleteMachine: team-pin check failed:', err);
+                }
+                if (!groups) {
+                    const error = `Cannot verify which teams pin machine '${machineId}' (team definitions unreadable); refusing to delete it.`;
+                    this.postMessage({ type: 'deleteMachineResult', error });
+                    return { success: false, error };
+                }
+                const pinned = groups.filter(g => g && g.machine === machineId);
+                if (pinned.length > 0) {
+                    const names = pinned.map(g => g.name || g.id).join(', ');
+                    const error = `Machine '${machineId}' is used by team(s): ${names}. Remove or re-pin them first.`;
+                    this.postMessage({ type: 'deleteMachineResult', error });
+                    return { success: false, error };
                 }
                 const machines = await GlobalIntegrationConfigService.getMachines();
                 const next = machines.filter(m => m.id !== machineId);
@@ -13917,14 +13927,24 @@ ${FOCUS_DIRECTIVE}`;
                         this.postMessage({ type: 'probeMachineResult', machineId, reachable: true });
                         return { success: true, reachable: true };
                     }
-                    const probeCmd = machine.transport === 'ssh'
-                        ? `ssh ${machine.transportPrefix} true`
-                        : machine.transport === 'mosh'
-                            ? `mosh ${machine.transportPrefix} -- true`
-                            : `true`;
-                    const { exec } = require('child_process');
+                    // argv, never a shell string: `transportPrefix` is stored
+                    // config that reaches this host over the verb surface, and
+                    // `exec` would hand it to `/bin/sh`. `execFile` passes it as
+                    // ONE argument, so a prefix can never become a command.
+                    //
+                    // BatchMode + ConnectTimeout are the probe (plan change 5):
+                    // without BatchMode ssh blocks on a password/host-key prompt
+                    // it can never answer here, and the "probe" then reports the
+                    // overall timeout instead of the real reason.
+                    const BATCH_SSH = 'ssh -o BatchMode=yes -o ConnectTimeout=5';
+                    const probeArgv: [string, string[]] = machine.transport === 'ssh'
+                        ? ['ssh', ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5', machine.transportPrefix, 'true']]
+                        : ['mosh', [`--ssh=${BATCH_SSH}`, machine.transportPrefix, '--', 'true']];
+                    const { execFile } = require('child_process');
                     await new Promise<void>((resolve, reject) => {
-                        exec(probeCmd, { timeout: 15000 }, (err: any) => {
+                        // 10s overall ceiling — a hung probe is a warning, never
+                        // a block on the save (plan change 5, Edge Cases).
+                        execFile(probeArgv[0], probeArgv[1], { timeout: 10000 }, (err: any) => {
                             if (err) { reject(err); } else { resolve(); }
                         });
                     });

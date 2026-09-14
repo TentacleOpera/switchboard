@@ -596,9 +596,10 @@ export class PtyFleetService {
         });
 
         // Resolve the startup command AND its provenance. The explicit argument
-        // wins; a team-member argument came from the team definition
-        // (`spawnDelegates` passes `d.startupCommand`); otherwise the global file
-        // is the source of truth; otherwise nothing. The source is recorded on
+        // wins; a team-member argument no longer comes from the team definition
+        // (per-member `startupCommand` is retired — `spawnDelegates` passes
+        // `undefined`), so for a team seat the per-machine map IS the source;
+        // otherwise the global file is the source of truth; otherwise nothing. The source is recorded on
         // the handle so a seat that launched the wrong binary can be traced to
         // the store that produced the string — see the plan
         // `two-stores-hold-agent-startup-commands-and-they-disagree`.

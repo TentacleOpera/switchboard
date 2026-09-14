@@ -1160,13 +1160,22 @@ export function isUntouchedSeed(group: any): boolean {
         // no startupCommand key; an authored one may still carry a stale empty
         // string from a prior release, which is the same as absent.
         if ((m.startupCommand || '') !== (sm.startupCommand || '')) { return false; }
-        // The team's machine must match the seed's (`local`).
-        if ((group.machine || 'local') !== (SEEDED_AGENT_GROUP.machine || 'local')) { return false; }
         // Keys beyond the seed's own are allowed ONLY for the two converter
-        // defaults, and only at their default values.
+        // defaults (at their default values) and for the RETIRED
+        // `startupCommand` key at its blank seed value. The retired key has to
+        // be tolerated: every release before
+        // `agents-are-saved-per-machine-and-a-team-picks-one` seeded members
+        // with `startupCommand: ''` and PERSISTED them, so a strict key-set
+        // match reads every already-written seed as authored — the phantom-seed
+        // bug this predicate exists to prevent. A NON-blank value is the
+        // operator's edit and still fails the match (the check above).
         const smKeys = new Set(Object.keys(sm));
         for (const key of Object.keys(m)) {
             if (smKeys.has(key)) { continue; }
+            if (key === 'startupCommand') {
+                if ((m[key] || '') !== '') { return false; }
+                continue;
+            }
             if (!(key in SEED_MEMBER_MIGRATION_DEFAULTS)) { return false; }
             if (m[key] !== SEED_MEMBER_MIGRATION_DEFAULTS[key]) { return false; }
         }
@@ -1178,8 +1187,15 @@ export function isUntouchedSeed(group: any): boolean {
     // Check for extra keys on the group itself (e.g. scope, relationship
     // already added by a prior partial migration — those mean it was
     // touched, even if the members matched).
-    const gKeys = Object.keys(group).filter(k => k !== 'members').sort().join(',');
-    const sKeys = Object.keys(SEEDED_AGENT_GROUP).filter(k => k !== 'members').sort().join(',');
+    // The team's machine must match the seed's (`local`). Compared BY VALUE
+    // with an absent key defaulting to `local`, and excluded from the key-set
+    // match below: a seed persisted before the machine field existed has no
+    // `machine` key, and a strict key-set match would read it as authored (the
+    // phantom-seed bug). `migrateAgentGroups` stamps the key on read, so both
+    // shapes are live at once.
+    if ((group.machine || 'local') !== (SEEDED_AGENT_GROUP.machine || 'local')) { return false; }
+    const gKeys = Object.keys(group).filter(k => k !== 'members' && k !== 'machine').sort().join(',');
+    const sKeys = Object.keys(SEEDED_AGENT_GROUP).filter(k => k !== 'members' && k !== 'machine').sort().join(',');
     return gKeys === sKeys;
 }
 

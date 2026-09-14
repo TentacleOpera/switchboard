@@ -5153,8 +5153,11 @@ Each plan file must include:
                                     spec.cwd,
                                     undefined,
                                     undefined,
-                                    d.startupCommand,
-                                    { _isTeamMember: true }
+                                    // Per-member startupCommand is retired — the
+                                    // team's machine resolves every role. See the
+                                    // plan `agents-are-saved-per-machine-and-a-team-picks-one`.
+                                    undefined,
+                                    { _isTeamMember: true, machineId: spec.machineId }
                                 );
                                 delegates.push({
                                     friendlyName: created.friendlyName,

@@ -191,8 +191,10 @@ console.log('\n--- Team start reports commandless seats ---');
 test('instantiateAgentGroupCore pre-flights startup commands and returns commandlessRoles', () => {
     const body = functionBody(agentGroupInstantiationTs, 'export async function instantiateAgentGroupCore(');
     assert.ok(
-        /GlobalIntegrationConfigService\.getAgentStartupCommands\(\)/.test(body),
-        'instantiateAgentGroupCore must read GlobalIntegrationConfigService.getAgentStartupCommands()'
+        /GlobalIntegrationConfigService\.getAgentStartupCommands\(teamMachineId\)/.test(body),
+        'instantiateAgentGroupCore must read GlobalIntegrationConfigService.getAgentStartupCommands(teamMachineId) — '
+        + 'the advisory has to resolve from the SAME machine the spawn path will read, or it reports the local set '
+        + 'for a team pinned elsewhere (plan: agents-are-saved-per-machine-and-a-team-picks-one)'
     );
     assert.ok(
         /commandlessRoles\s*=/.test(body),
@@ -204,11 +206,19 @@ test('instantiateAgentGroupCore pre-flights startup commands and returns command
     );
 });
 
-test('instantiateAgentGroupCore pre-flight skips members with own command or shared scope', () => {
+test('instantiateAgentGroupCore pre-flight skips shared members and never reads a per-member command', () => {
     const body = functionBody(agentGroupInstantiationTs, 'export async function instantiateAgentGroupCore(');
     assert.ok(
-        /m\?\.startupCommand\s*\|\|\s*m\?\.scope\s*===\s*'shared'/.test(body),
-        'the pre-flight must skip members carrying their own startupCommand and members with scope: "shared"'
+        /m\?\.scope\s*===\s*'shared'/.test(body),
+        'the pre-flight must skip members with scope: "shared" — a shared member reusing a live terminal is never re-injected'
+    );
+    // Per-member startupCommand is RETIRED (plan:
+    // agents-are-saved-per-machine-and-a-team-picks-one). A pre-flight that
+    // still skipped on it would under-report commandless seats for exactly the
+    // members whose stored field is now always absent.
+    assert.ok(
+        !/m\?\.startupCommand/.test(body),
+        'the pre-flight must NOT consult a per-member startupCommand (retired)'
     );
 });
 

@@ -6484,13 +6484,7 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
           vscode.postMessage({ type: 'getStartupCommandsForMachine', machineId: agentsTabSelectedMachineId });
         });
         document.getElementById('agents-tab-btn-add-machine')?.addEventListener('click', () => agentsTabShowMachineForm('add'));
-        document.getElementById('agents-tab-btn-edit-machine')?.addEventListener('click', () => {
-          if (agentsTabSelectedMachineId === 'local') {
-            agentsTabShowMachineForm('edit');
-          } else {
-            agentsTabShowMachineForm('edit');
-          }
-        });
+        document.getElementById('agents-tab-btn-edit-machine')?.addEventListener('click', () => agentsTabShowMachineForm('edit'));
         document.getElementById('agents-tab-btn-delete-machine')?.addEventListener('click', agentsTabDeleteMachine);
         document.getElementById('agents-tab-btn-probe-machine')?.addEventListener('click', agentsTabProbeMachine);
         document.getElementById('agents-tab-btn-save-machine')?.addEventListener('click', agentsTabSaveMachine);

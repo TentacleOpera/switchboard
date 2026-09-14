@@ -1529,6 +1529,34 @@ jobs:
       - name: TEAMS tab adopt-only contract (one start entry point)
         run: npm run test:contract:teams-tab-no-start
 
+      # The per-member command field the TEAMS tab grew (label + free-text
+      # command per member row) became the only way to say WHICH MACHINE a seat
+      # runs on, so one field meant two unrelated things. It is deleted; a team
+      # picks one machine instead. This test was rewritten to guard the deletion
+      # and was never wired to a gate — the regression guard for the very field
+      # being removed sat green because nothing ran it.
+      - name: TEAMS tab member-editor contract (no per-member command, machine selector present)
+        run: npm run test:contract:teams-tab-member-editor
+
+      # Agents are saved PER MACHINE and a team picks one. Every failure in this
+      # mechanism is silent:
+      #  - a decorative selector: the machine id must thread config-read -> spawn,
+      #    reaching the HEAD seat and not only the delegates, or every team still
+      #    spawns locally while the dropdown says otherwise.
+      #  - a dumb concat: `ssh` quote-wraps the CLI, `mosh` uses `--`. One string
+      #    format is a broken command on the other transport.
+      #  - a wrapped identity: deriveCliFamily over `ssh host 'claude'` reads the
+      #    binary as `ssh` and classifies `unknown`, whose readiness branch has NO
+      #    onData subscription — a remote Claude seat would flat-wait the Devin
+      #    ceiling on every prompt, forever. Pinned at all three derivation sites.
+      #  - a blanked config: the per-machine write path is the ordinary Agents-tab
+      #    save, so it carries the same wipe guard as the legacy flat key.
+      #  - a phantom seed: the seed gained a `machine` key and lost the member
+      #    `startupCommand` key, and `isUntouchedSeed` compares key sets exactly —
+      #    every already-persisted seed must still read as untouched.
+      - name: Agent machines contract (transport composition, migration, head threading, inner-CLI identity)
+        run: npm run test:contract:agent-machines
+
       # Adding or launching an agent while a team was selected appended it to that
       # team's saved roster. The two stores must never be written together: custom
       # agents are machine-global (integration-config.json), teams are per-workspace

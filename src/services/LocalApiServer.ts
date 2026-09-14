@@ -7654,6 +7654,11 @@ export class LocalApiServer {
                                     role: d.role,
                                     name,
                                     cwd: spec.cwd,
+                                    // A team is one machine — every worker of an
+                                    // external-headed team spawns on the team's
+                                    // machine. See the plan
+                                    // `agents-are-saved-per-machine-and-a-team-picks-one`.
+                                    machineId: spec.machineId,
                                 });
                                 if (res?.success && res.terminal) {
                                     delegates.push({

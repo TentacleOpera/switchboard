@@ -457,6 +457,13 @@ export interface InstantiateExternalHeadedTeamOptions {
         cwd: string;
         delegates: any[];
         teamName?: string;
+        /**
+         * Machine id the team is pinned to. Every worker spawns on it —
+         * an external-headed team has no head seat, but its workers are still
+         * one team on one machine. See the plan
+         * `agents-are-saved-per-machine-and-a-team-picks-one`.
+         */
+        machineId?: string;
     }) => Promise<{
         success: boolean;
         delegates?: Array<{ friendlyName: string; role?: string; [k: string]: any }>;
@@ -508,6 +515,10 @@ export async function instantiateExternalHeadedTeam(
         cwd,
         delegates: members,
         teamName: headName,
+        // A team is one machine — the workers of an external-headed team
+        // resolve their CLI from the team's machine, not from the local set.
+        // See the plan `agents-are-saved-per-machine-and-a-team-picks-one`.
+        machineId: (typeof group?.machine === 'string' && group.machine) ? group.machine : 'local',
     });
     if (!result?.success) {
         return { success: false, error: result?.error || 'Failed to spawn delegate terminals' };
