@@ -198,3 +198,7 @@ fallback that behaves like a configured value.
 8. `SKIP_COMPILATION_DIRECTIVE` is unchanged and still follows only its operator toggle.
 9. The service is constructed in both `extension.ts` and `bootstrap.ts`, verified by reading both
    composition roots — not by checking that a verb answers.
+
+## Implementation Summary
+
+Implemented host capability measurement and ceiling reporting for small devices and constrained deployments. Created `HostCapabilityService` measuring memory, cores, and Linux cgroup limits tagged with source (`'cgroup' | 'os' | 'unavailable'`), treating unavailable as unconstrained to avoid false throttling. Wired the service across both composition roots (`extension.ts` and `bootstrap.ts`), propagating constraints into `resolveSeatPromptOptions` and injecting `CONSTRAINED_HOST_DIRECTIVE` in `buildSeatDirectiveBlock`. At dispatch in both roots, headroom is evaluated using running seats and observed process RSS, emitting non-blocking warnings without dialogs. Surfaced host capability in `LocalApiServer` `/health` and the terminals config readout.

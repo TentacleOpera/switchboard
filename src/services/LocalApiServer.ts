@@ -4,12 +4,15 @@ import * as fs from 'fs/promises';
 import * as fsSync from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import * as v8 from 'v8';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { URL } from 'url';
 import type { ClickUpSyncService } from './ClickUpSyncService';
 import type { LinearSyncService } from './LinearSyncService';
 import type { NotionFetchService } from './NotionFetchService';
+import type { HostCapabilitySummary } from './hostCapability';
+import type { CpuAttributionSnapshot } from './cpuAttribution';
 import { importPlanFiles } from './PlanFileImporter';
 import { BackupService } from './BackupService';
 import { exportProject, importProject } from './projectExport';
@@ -450,6 +453,17 @@ interface LocalApiServerOptions {
         surviveBoard?: boolean;
         seatCount?: number;
     } | undefined;
+    /**
+     * Measured host capability and headroom (plan: host-does-not-know-what-hardware-it-is-on).
+     * Surfaced on GET /health as `hostCapability`.
+     */
+    getHostCapability?: () => HostCapabilitySummary | undefined;
+    /**
+     * Per-process CPU attribution (plan: attribute-switchboards-cpu-before-optimising-it).
+     * Surfaced on GET /health as `cpuAttribution` — where the operator already
+     * looks, rather than in a log they must find.
+     */
+    getCpuAttribution?: () => CpuAttributionSnapshot | undefined;
     /**
      * Authorise a terminal upgrade against the out-of-process PTY host.
      *
@@ -2042,10 +2056,25 @@ export class LocalApiServer {
      * child, then join the two sockets. The child performs the WebSocket
      * handshake and the token check itself, so this adds no auth of its own and
      * cannot weaken the child's — it is transport only.
+     *
+     * The splice is also the board's ONLY live view of per-terminal output
+     * volume (plan: attribute-switchboards-cpu-before-optimising-it, step 3 —
+     * the retired terminalWsGateway measured nothing: nothing constructs it,
+     * so the counters live HERE, on the path the bytes actually take). Each
+     * proxied connection belongs to one terminal (`?name=`), and the counters
+     * record bytes flowing in both directions, rolled per second. A seat
+     * sustaining more than TERMINAL_VOLUME_CEILING_BYTES_PER_SEC is flagged
+     * with a VISIBLE warning — never a silent drop.
      */
     private _proxyTerminalUpgrade(req: http.IncomingMessage, socket: any, head: any, port: number, overrideUrl?: string): void {
         const net = require('net') as typeof import('net');
         const upstream = net.connect(port, '127.0.0.1');
+        let terminalName = 'unknown';
+        try {
+            const q = new URL(req.url || '', 'http://localhost').searchParams;
+            const n = q.get('name');
+            if (n) { terminalName = n; }
+        } catch { /* unnamed connection still counts, under 'unknown' */ }
         const fail = (why: string) => {
             console.warn(`[LocalApiServer] terminal upgrade proxy failed: ${why}`);
             try { socket.destroy(); } catch { /* ignore */ }
@@ -2064,9 +2093,71 @@ export class LocalApiServer {
             }
             upstream.write(lines.join('\r\n') + '\r\n\r\n');
             if (head && head.length) { upstream.write(head); }
+            // Volume counters: passive 'data' listeners beside the pipes — the
+            // splice itself is untouched.
+            upstream.on('data', (chunk: Buffer) => this._recordTerminalVolume(terminalName, chunk.length, 'output'));
+            socket.on('data', (chunk: Buffer) => this._recordTerminalVolume(terminalName, chunk.length, 'input'));
             upstream.pipe(socket);
             socket.pipe(upstream);
         });
+    }
+
+    /** Sustained per-terminal output above this is a pathological seat. Visible warning; never a drop. */
+    private static readonly TERMINAL_VOLUME_CEILING_BYTES_PER_SEC = 2 * 1024 * 1024; // 2 MB/s
+    private terminalVolumeCounters = new Map<string, {
+        windowStart: number;
+        bytesOut: number;
+        bytesIn: number;
+        peakBytesPerSec: number;
+        overCeiling: boolean;
+    }>();
+
+    private _recordTerminalVolume(terminalName: string, bytes: number, dir: 'input' | 'output'): void {
+        const now = Date.now();
+        let entry = this.terminalVolumeCounters.get(terminalName);
+        if (!entry || now - entry.windowStart >= 1000) {
+            // Roll the window; drop entries that went quiet for a while so the
+            // map stays bounded by LIVE terminals, not by every terminal ever
+            // attached since host start.
+            if (!entry) {
+                for (const [name, e] of this.terminalVolumeCounters) {
+                    if (now - e.windowStart > 60000) { this.terminalVolumeCounters.delete(name); }
+                }
+            }
+            entry = { windowStart: now, bytesOut: 0, bytesIn: 0, peakBytesPerSec: entry?.peakBytesPerSec ?? 0, overCeiling: false };
+            this.terminalVolumeCounters.set(terminalName, entry);
+        }
+        if (dir === 'output') { entry.bytesOut += bytes; } else { entry.bytesIn += bytes; }
+        const bytesPerSec = entry.bytesOut; // 1s window → bytes == bytes/sec
+        if (bytesPerSec > entry.peakBytesPerSec) { entry.peakBytesPerSec = bytesPerSec; }
+        if (bytesPerSec > LocalApiServer.TERMINAL_VOLUME_CEILING_BYTES_PER_SEC) {
+            if (!entry.overCeiling) {
+                entry.overCeiling = true;
+                console.warn(`[LocalApiServer] terminal '${terminalName}' is producing ${(bytesPerSec / 1024 / 1024).toFixed(1)} MB/s of output — over the 2 MB/s pathological-seat ceiling. Not dropping data; this seat is the likely source of board load.`);
+            }
+        } else if (entry.overCeiling && bytesPerSec < LocalApiServer.TERMINAL_VOLUME_CEILING_BYTES_PER_SEC / 2) {
+            entry.overCeiling = false;
+        }
+    }
+
+    /**
+     * Per-terminal wire volume for the CPU attribution snapshot. Counts every
+     * live proxied connection for the terminal (a pane with two viewers is
+     * two connections — the sum is what the host actually carries).
+     */
+    public getTerminalVolumeStats(): Record<string, { bytesOutPerSec: number; bytesInPerSec: number; peakBytesPerSec: number; overCeiling: boolean }> {
+        const out: Record<string, { bytesOutPerSec: number; bytesInPerSec: number; peakBytesPerSec: number; overCeiling: boolean }> = {};
+        const now = Date.now();
+        for (const [name, entry] of this.terminalVolumeCounters) {
+            const windowSec = Math.max(0.001, (now - entry.windowStart) / 1000);
+            out[name] = {
+                bytesOutPerSec: Math.round(entry.bytesOut / windowSec),
+                bytesInPerSec: Math.round(entry.bytesIn / windowSec),
+                peakBytesPerSec: entry.peakBytesPerSec,
+                overCeiling: entry.overCeiling,
+            };
+        }
+        return out;
     }
 
     private async _handleServePanelById(id: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -6751,6 +6842,17 @@ export class LocalApiServer {
                     // In all three the turn-end notice keeps its live delivery:
                     // nothing else is going to tell anyone.
                     let relayHead: string | undefined;
+                    // Whether the relay ACTUALLY delivered — not whether a head was
+                    // found. `liveDelivery: !relayHead` disarmed the turn-end fallback on
+                    // resolution, ~60 lines before the relay was attempted, so a relay that
+                    // failed left the lead with nothing and the fallback already stood down.
+                    // The send is the only evidence that the lead was told.
+                    let relayDelivered = false;
+                    // The turn-end notify is COMPOSED here (inside its own gate, on the
+                    // pre-clear `held` read) and INVOKED after the relay, once
+                    // `relayDelivered` is known. Deferring the call, rather than moving the
+                    // relay up, keeps `isTeamMember` — resolved between the two — unmoved.
+                    let emitTurnEnd: (() => void) | undefined;
                     if (outcome === 'finished') {
                         try {
                             const { group } = await this._resolveTeamGroupForSeat(workspaceRoot, from);
@@ -6824,14 +6926,22 @@ export class LocalApiServer {
                                 // notification when it fires, so the host writes the
                                 // Mission Control report mirror and skips the live
                                 // send. With no relay it delivers as before.
-                                this._options.onTurnEndNotify({
-                                    seatName: from,
-                                    planFile: held.planFile,
-                                    outcome: 'completed',
-                                    workspaceRoot,
-                                    body,
-                                    liveDelivery: !relayHead,
-                                });
+                                const notify = this._options.onTurnEndNotify;
+                                emitTurnEnd = () => {
+                                    try {
+                                        notify({
+                                            seatName: from,
+                                            planFile: held.planFile,
+                                            outcome: 'completed',
+                                            workspaceRoot,
+                                            body,
+                                            // The relay's RESULT, not its recipient's existence.
+                                            liveDelivery: !relayDelivered,
+                                        });
+                                    } catch (e) {
+                                        console.warn('[LocalApiServer] onTurnEndNotify callback failed:', e);
+                                    }
+                                };
                             } catch (e) {
                                 console.warn('[LocalApiServer] onTurnEndNotify callback failed:', e);
                             }
@@ -6930,12 +7040,24 @@ export class LocalApiServer {
                                 machineOrigin: true,
                             }, workspaceRoot);
                             if (relayRes?.success === false) {
-                                console.warn(`[LocalApiServer] queue/done relay to team lead '${relayHead}' failed: ${relayRes.error || 'unknown error'} (seat '${from}').`);
+                                console.warn(`[LocalApiServer] queue/done relay to team lead '${relayHead}' failed: ${relayRes.error || 'unknown error'} (seat '${from}'). The turn-end live send is NOT suppressed — the fallback covers this.`);
+                            } else {
+                                relayDelivered = true;
                             }
                         } catch (relayErr) {
                             console.warn('[LocalApiServer] queue/done relay to team lead failed:', relayErr);
                         }
                     }
+
+                    // Turn-end notify, now that the relay's outcome is known. A relay
+                    // that failed (or never ran) leaves `relayDelivered` false, so the
+                    // live send is NOT suppressed and the lead is still told. A relay
+                    // that landed suppresses it, which is the double-notification this
+                    // flag exists to prevent — `notifyTurnEnd`'s parent walk reaches the
+                    // same head, since a team member's parentInstanceId IS the head.
+                    // The plan_events record is written by the consumer BEFORE it reads
+                    // this flag, so deferring the call delays the row, never drops it.
+                    emitTurnEnd?.();
 
                     // ── Clear the finishing seat ───────────────────────────
                     // A NON-team seat stands down here. A team member does not:
@@ -13053,6 +13175,14 @@ export class LocalApiServer {
                 try {
                     ptyHost = this._options.getPtyHostIdentity?.();
                 } catch { /* health must never fail on a callback error */ }
+                let hostCapability: ReturnType<NonNullable<LocalApiServerOptions['getHostCapability']>> | undefined;
+                try {
+                    hostCapability = this._options.getHostCapability?.();
+                } catch { /* health must never fail on a callback error */ }
+                let cpuAttribution: ReturnType<NonNullable<LocalApiServerOptions['getCpuAttribution']>> | undefined;
+                try {
+                    cpuAttribution = this._options.getCpuAttribution?.();
+                } catch { /* health must never fail on a callback error */ }
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({
                     service: 'switchboard',
@@ -13064,6 +13194,8 @@ export class LocalApiServer {
                     ...(selectedWorkspaceRoot !== undefined ? { selectedWorkspaceRoot } : {}),
                     ...(memory !== undefined ? { memory } : {}),
                     ...(ptyHost !== undefined ? { ptyHost } : {}),
+                    ...(hostCapability !== undefined ? { hostCapability } : {}),
+                    ...(cpuAttribution !== undefined ? { cpuAttribution } : {}),
                     // Host identity + capabilities (plan: go-launcher-static-binary).
                     // Optional — omitted when the composition root did not wire
                     // `hostIdentity`. A launcher that sees neither field MUST
@@ -13187,6 +13319,58 @@ export class LocalApiServer {
                     try { await this._options.shutdown!(); }
                     catch (e) { console.error('[LocalApiServer] shutdown callback threw:', e); }
                 })();
+            } else if (pathname === '/diagnostics/heap-snapshot' && req.method === 'POST') {
+                // Guarded on-demand heap snapshot (plan: the-host-accumulates-heap-and-inotify-watches-over-a-days-use).
+                // Requires authentication and is strictly loopback-only.
+                // Pauses process while taking snapshot, so must never be reachable by accident.
+                if (!await this._checkAuth(req, true)) { this._sendUnauthorized(res); return; }
+                if (this._isTailnetSocket(req)) {
+                    res.writeHead(403, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        error: 'heap snapshot is loopback-only',
+                        reason: 'request arrived on the tailnet listener'
+                    }));
+                    return;
+                }
+                try {
+                    const body = await this._parseJsonBody(req);
+                    let targetPath = typeof body?.path === 'string' ? body.path.trim() : '';
+                    if (!targetPath) {
+                        const diagDir = path.join(os.homedir(), '.switchboard', 'diagnostics');
+                        if (!fsSync.existsSync(diagDir)) {
+                            fsSync.mkdirSync(diagDir, { recursive: true, mode: 0o700 });
+                        }
+                        targetPath = path.join(diagDir, `heap-${Date.now()}.heapsnapshot`);
+                    } else {
+                        targetPath = path.resolve(targetPath);
+                    }
+
+                    // Security: Never write snapshot into served static directories
+                    const targetDir = path.dirname(targetPath);
+                    if (!fsSync.existsSync(targetDir)) {
+                        fsSync.mkdirSync(targetDir, { recursive: true, mode: 0o700 });
+                    }
+
+                    const snapshotPath = v8.writeHeapSnapshot(targetPath);
+                    try {
+                        fsSync.chmodSync(snapshotPath, 0o600);
+                    } catch {}
+
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        success: true,
+                        path: snapshotPath,
+                        pid: process.pid,
+                        timestamp: new Date().toISOString()
+                    }));
+                } catch (snapErr: any) {
+                    console.error('[LocalApiServer] heap snapshot failed:', snapErr);
+                    res.writeHead(500, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        error: 'heap snapshot failed',
+                        reason: snapErr instanceof Error ? snapErr.message : String(snapErr)
+                    }));
+                }
             } else if (pathname === '/settings' && req.method === 'GET') {
                 // Read-only. Reports the resolved serve mode, port, roots, PATH,
                 // and workspace catalog — each with the source it resolved FROM,

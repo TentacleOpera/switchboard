@@ -204,3 +204,7 @@ constraint.
   memory-hungry — it is dead code by intent, not a decision pending. The leftover `terminalLogWriter.ts`
   file and the stale contract test (`test:contract:terminal-session-log`, which asserts the removed
   wiring) are separate cleanup, out of scope for this plan.
+
+## Implementation Summary
+
+File logging in the standalone host has been completely removed. `setupFileLogging`, `LOG_CAP_BYTES`, and all calls to `mkdirSync(logsDir)` across the detached and foreground paths in `src/standalone/cli.ts` were eliminated. The `switchboard logs` subcommand was updated to report that the host no longer writes a log file and directs output to stdout/stderr. Existing `server.log` files on disk were cleaned up.

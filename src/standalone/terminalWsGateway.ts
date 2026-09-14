@@ -835,11 +835,13 @@ export class TerminalWsGateway {
             }
         }
 
-        const frame = encodeOutputFrame(seq, combined);
         const targetClients = Array.from(this.clients).filter(c => c.terminalName === terminalName);
-        for (const client of targetClients) {
-            this.safeSendBinary(client.ws, frame);
-            client.unackedChars += combined.length;
+        if (targetClients.length > 0) {
+            const frame = encodeOutputFrame(seq, combined);
+            for (const client of targetClients) {
+                this.safeSendBinary(client.ws, frame);
+                client.unackedChars += combined.length;
+            }
         }
 
         this.checkBackpressure(terminalName, targetClients);

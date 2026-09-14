@@ -219,3 +219,8 @@ test gives a binary signal for whether changes 4/5 actually closed the leak rath
 - `fs.inotify.max_user_watches` is 30517 on this box, not the 8192 the budget assumes. Was that raised
   deliberately? If so the doc's premise needs revisiting; if not, the box is masking a limit the
   target hardware would hit.
+
+## Implementation Summary
+
+Implemented a secure, loopback-authenticated heap snapshot hook via `POST /diagnostics/heap-snapshot` and the `switchboard heap-snapshot` CLI subcommand. Added the periodic probe sampling watchdog service `ProbeSamplingService` to track and warn on host RSS and inotify descriptor drift, wired into both standalone and extension composition roots. Fixed the inotify descriptor leak in `KanbanProvider` by deduplicating and cleaning up `_movesFsWatchers` with a directory-keyed map. Added drift and bounded inotify assertion checks to `src/test/resident-memory-budget-contract.test.js`.
+

@@ -203,15 +203,14 @@ func HandoffStart(entry, workspaceRoot string, serveTailnet bool, extraArgs []st
 	// sync. Never v8.setFlagsFromString (silent no-op, measured) or NODE_OPTIONS
 	// (leaks into every child process, including the Go pty-host).
 	//
-	// The value is env-overridable via SWITCHBOARD_MAX_OLD_SPACE_MB so the
-	// forced-GC split (plan: the-board-must-fit-a-1gb-pi, Change 1) can set a
-	// MEASURED live-at-peak value + headroom without rebuilding the launcher.
-	// The default (512) is a placeholder pending that measurement. Keep this
-	// default and the execNode default identical so the two entry paths
-	// (systemd service and icon launch) cap the heap the same way.
+	// The value is env-overridable via SWITCHBOARD_MAX_OLD_SPACE_MB.
+	// Default (310) is derived from 800 MB RSS budget - 300 MB measured non-heap - 190 MB offset.
+	// Replaces the placeholder 512, which licensed ~700 MB heap and breached the 800 MB budget.
+	// Keep this default in sync with cmd/switchboard/main.go, bin/switchboard, and
+	// src/standalone/cli.ts.
 	mb := os.Getenv("SWITCHBOARD_MAX_OLD_SPACE_MB")
 	if mb == "" {
-		mb = "512"
+		mb = "310"
 	}
 	all := append([]string{node, "--max-old-space-size=" + mb, entry}, args...)
 	if runtime.GOOS != "windows" {

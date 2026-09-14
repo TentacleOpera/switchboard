@@ -28,6 +28,7 @@ import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, pa
 import { substituteCliPath } from '../utils/cliPathToken';
 import type { ProtocolResolution } from './protocolDirectives';
 import { renderPlannerWorkflowRef } from './protocolDirectives';
+import { HostCapabilityService } from './hostCapability';
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord, type WorktreeRow, type ColumnUpdateOutcome } from './KanbanDatabase';
 import { compareByPrecedence, type SortMode } from './kanbanOrdering';
 import type { FeatureWatchRecord } from './PlanIngestionEngine';
@@ -232,6 +233,25 @@ export function normalizeFeatureWorktreeMode(value: unknown): 'none' | 'per-feat
  */
 export class KanbanProvider implements vscode.Disposable {
     private static readonly _AUTO_PULL_INTERVALS = new Set<number>([5, 15, 30, 60]);
+    /** Ceilings for bulk moves (plan: a-bulk-move-cannot-outgrow-the-board). */
+    public static readonly BULK_MOVE_MAX_CARDS = 500;
+    private static _bulkMoveActive = false;
+
+    public static isBulkMoveActive(): boolean {
+        return KanbanProvider._bulkMoveActive;
+    }
+
+    public static setBulkMoveActive(active: boolean): void {
+        KanbanProvider._bulkMoveActive = active;
+    }
+
+    public isBulkMoveActive(): boolean {
+        return KanbanProvider._bulkMoveActive;
+    }
+
+    public setBulkMoveActive(active: boolean): void {
+        KanbanProvider._bulkMoveActive = active;
+    }
     private _panel?: vscode.WebviewPanel;
     /**
      * Secondary editor panel rendering the Agent Control view of the same Kanban
@@ -325,7 +345,7 @@ export class KanbanProvider implements vscode.Disposable {
     private _plannerPromptWriter: any | null = null;
     private _outputChannel?: vscode.OutputChannel;
     private _nativeFsWatchers?: FSWatcher[];
-    private _movesFsWatchers: FSWatcher[] = [];
+    private _movesFsWatchers: Map<string, FSWatcher> = new Map();
     private _workspaceSaveTimeout: NodeJS.Timeout | null = null;
     private _globalPlanWatcher?: import('./GlobalPlanWatcherService').GlobalPlanWatcherService;
     // Root-recovery state for the startup race where workspace folders / identity
@@ -1019,13 +1039,18 @@ export class KanbanProvider implements vscode.Disposable {
                 // are applied live while Switchboard is running, not just on open.
                 const movesDir = path.join(folder, '.switchboard', 'instructions', 'moves');
                 if (fs.existsSync(movesDir)) {
+                    const existingWatcher = this._movesFsWatchers.get(folder);
+                    if (existingWatcher) {
+                        try { existingWatcher.close(); } catch {}
+                        this._movesFsWatchers.delete(folder);
+                    }
                     const watcher = fs.watch(movesDir, (_event: any, filename: any) => {
                         if (typeof filename === 'string' && filename.endsWith('.md')) {
                             // Give the writing agent a moment to finish.
                             setTimeout(() => { void processDeclaredMoves(folder, this); }, 150);
                         }
                     });
-                    this._movesFsWatchers.push(watcher);
+                    this._movesFsWatchers.set(folder, watcher);
                 }
                 // One-time complexity-column backfill for pre-fix installs.
                 // Runs after the scan so freshly-imported rows are also
@@ -1778,7 +1803,7 @@ export class KanbanProvider implements vscode.Disposable {
         this._movesFsWatchers.forEach(w => {
             try { w.close(); } catch { }
         });
-        this._movesFsWatchers = [];
+        this._movesFsWatchers.clear();
         this._stopRootRecovery();
         this._integrationAutoPull.dispose();
         this._remoteControls.forEach(rc => rc.dispose());
@@ -2119,6 +2144,11 @@ export class KanbanProvider implements vscode.Disposable {
      * Called by GlobalPlanWatcherService to avoid unnecessary refreshes.
      */
     public refreshIfShowing(workspaceRoot: string): void {
+        if (KanbanProvider._bulkMoveActive) {
+            // Bulk move in progress: suppress intermediate full board refreshes.
+            // A single explicit refresh will fire when the bulk move completes.
+            return;
+        }
         const resolved = path.resolve(workspaceRoot).toLowerCase();
         if (this._currentWorkspaceRoot && path.resolve(this._currentWorkspaceRoot).toLowerCase() === resolved) {
             this._scheduleBoardRefresh(this._currentWorkspaceRoot);
@@ -6833,6 +6863,16 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         return built;
     }
 
+    private _hostCapabilityService?: HostCapabilityService;
+
+    public setHostCapability(service: HostCapabilityService): void {
+        this._hostCapabilityService = service;
+    }
+
+    public getHostCapability(): HostCapabilityService | undefined {
+        return this._hostCapabilityService;
+    }
+
     /**
      * Resolve the seat-scoped subset of addon config for a role. Sources the
      * same `_getPromptsConfig` maps and defaults as `generateUnifiedPrompt`'s
@@ -6860,6 +6900,22 @@ If the user asks a question in a comment, post it as a comment on the issue. The
         else if (customSubagentName) { subagentPolicy = 'customSubagent'; }
         else if (useSubagents) { subagentPolicy = 'useSubagents'; }
 
+        let constrainedHost = false;
+        let hostMemoryGb: string | undefined;
+        let hostCores: number | string | undefined;
+        if (this._hostCapabilityService) {
+            const summary = this._hostCapabilityService.getSummary();
+            if (summary.isConstrained) {
+                constrainedHost = true;
+                if (summary.totalMemoryBytes !== null) {
+                    hostMemoryGb = (summary.totalMemoryBytes / (1024 * 1024 * 1024)).toFixed(1);
+                }
+                if (summary.cores !== null) {
+                    hostCores = summary.cores;
+                }
+            }
+        }
+
         return {
             subagentPolicy,
             customSubagentName,
@@ -6872,6 +6928,9 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             cavemanOutput: promptsConfig.cavemanOutputByRole?.[role] ?? false,
             suppressWalkthrough: promptsConfig.suppressWalkthroughByRole?.[role] ?? false,
             accurateCoding: promptsConfig.accurateCodingEnabledByRole?.[role] ?? false,
+            constrainedHost,
+            hostMemoryGb,
+            hostCores,
             // stage is resolved ONCE here from the seat's role via STAGE_BY_ROLE,
             // so both hosts receive it free — no second STAGE_BY_ROLE read in
             // either host. An unmapped role (tester, analyst, '') yields
@@ -8853,24 +8912,33 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 await this.queueIntegrationSyncForSession(workspaceRoot, sessionId, targetColumn);
                 // Exact sync: fan out integration sync for subtasks so Linear/ClickUp
                 // reflect the cascaded subtask status. Mirrors moveCardToColumnByPlanFile.
+                // Apply in bounded chunks (plan: a-bulk-move-cannot-outgrow-the-board Change 3)
+                // so peak memory remains bounded regardless of subtask count.
+                const FANOUT_CHUNK_SIZE = 20;
                 if (subtaskSessionIds.length > 0) {
-                    await Promise.allSettled(
-                        subtaskSessionIds.map(sid =>
-                            this.queueIntegrationSyncForSession(workspaceRoot, sid, targetColumn)
-                        )
-                    );
+                    for (let i = 0; i < subtaskSessionIds.length; i += FANOUT_CHUNK_SIZE) {
+                        const chunk = subtaskSessionIds.slice(i, i + FANOUT_CHUNK_SIZE);
+                        await Promise.allSettled(
+                            chunk.map(sid =>
+                                this.queueIntegrationSyncForSession(workspaceRoot, sid, targetColumn)
+                            )
+                        );
+                    }
                 }
                 // Fan out runsheet events to subtasks so plan_events stay in sync with
                 // the cascaded DB column. Without this, subtask plan_events only show
                 // their original 'unknown' start event, and any code path that calls
                 // deriveKanbanColumn(events) on a subtask sees a stale column — the
-                // root cause of the bounce-back.
+                // root cause of the bounce-back. Apply in bounded chunks.
                 if (subtaskKeys.length > 0) {
-                    await Promise.allSettled(
-                        subtaskKeys.map(key =>
-                            this._taskViewerProvider?.recordRunSheetForColumnMove(key, targetColumn, 'forward', workspaceRoot)
-                        )
-                    );
+                    for (let i = 0; i < subtaskKeys.length; i += FANOUT_CHUNK_SIZE) {
+                        const chunk = subtaskKeys.slice(i, i + FANOUT_CHUNK_SIZE);
+                        await Promise.allSettled(
+                            chunk.map(key =>
+                                this._taskViewerProvider?.recordRunSheetForColumnMove(key, targetColumn, 'forward', workspaceRoot)
+                            )
+                        );
+                    }
                 }
                 // V60: a card leaving STAGING drops its queue_position so a later
                 // re-stage does not jump the queue on a stale position. Covers both
@@ -12007,133 +12075,149 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 }
                 const column: string = msg.column;
 
-                // PLAN REVIEWED and STAGING use dynamic complexity routing per-session
-                if (column === 'PLAN REVIEWED' || column === 'STAGING') {
-                    const { filtered: knownIds, skippedCount } = this._filterUnknownComplexitySessions(msg.sessionIds);
-                    if (knownIds.length === 0) {
-                        this._notifySkippedUnknownComplexity(skippedCount, 0);
-                        return { success: false, error: 'All selected plans have unknown complexity' };
-                    }
-                    const groups = await this._partitionByComplexityRoute(workspaceRoot, knownIds);
-                    const visibleAgents = await this._getVisibleAgents(workspaceRoot);
-                    if (['lead', 'coder', 'intern'].every(r => visibleAgents[r] === false)) {
-                        void this._seams().ui.showErrorMessage('No coding agent is currently enabled. Enable a coding agent in Setup or move manually.');
-                        return { success: false, error: 'No coding agent is currently enabled.' };
-                    }
-                    const movedParts: string[] = [];
-                    for (const [role, sids] of groups) {
-                        if (sids.length === 0) { continue; }
-                        const targetCol = this._targetColumnForDispatchRole(role, visibleAgents);
-                        const dispatchRole = this._columnToRole(targetCol) || role;
-                        const movedSids: string[] = [];
-                        const dispatchSids: string[] = [];
-                        const failures: { id: string; sourceColumn: string; reason: string }[] = [];
-                        for (const sid of sids) {
-                            const outcome = await this.moveCardToColumnWithReason(workspaceRoot, sid, targetCol);
-                            if (outcome.ok) {
-                                await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
-                                const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
-                                movedSids.push(...cascadeIds);
-                                dispatchSids.push(sid);
-                            } else {
-                                failures.push({ id: sid, sourceColumn: column, reason: outcome.detail });
-                            }
+                if (msg.sessionIds.length > KanbanProvider.BULK_MOVE_MAX_CARDS) {
+                    const error = `Bulk move refused: selection contains ${msg.sessionIds.length} cards, which exceeds the limit of ${KanbanProvider.BULK_MOVE_MAX_CARDS}.`;
+                    void this._seams().ui.showErrorMessage(error);
+                    this.postMessage({ type: 'showStatusMessage', message: error, isError: true });
+                    return { success: false, error };
+                }
+
+                KanbanProvider.setBulkMoveActive(true);
+                try {
+                    // PLAN REVIEWED and STAGING use dynamic complexity routing per-session
+                    if (column === 'PLAN REVIEWED' || column === 'STAGING') {
+                        const { filtered: knownIds, skippedCount } = this._filterUnknownComplexitySessions(msg.sessionIds);
+                        if (knownIds.length === 0) {
+                            this._notifySkippedUnknownComplexity(skippedCount, 0);
+                            return { success: false, error: 'All selected plans have unknown complexity' };
                         }
-                        if (movedSids.length > 0) {
-                            this.postMessage({ type: 'moveCards', sessionIds: movedSids, targetColumn: targetCol });
+                        const groups = await this._partitionByComplexityRoute(workspaceRoot, knownIds);
+                        const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+                        if (['lead', 'coder', 'intern'].every(r => visibleAgents[r] === false)) {
+                            void this._seams().ui.showErrorMessage('No coding agent is currently enabled. Enable a coding agent in Setup or move manually.');
+                            return { success: false, error: 'No coding agent is currently enabled.' };
                         }
-                        if (failures.length > 0) {
-                            this.postMessage({ type: 'moveCardsFailed', failures });
-                        }
-                        if (this._cliTriggersEnabled) {
-                            if (dispatchSids.length === 1) {
-                                await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', dispatchRole, dispatchSids[0], undefined, workspaceRoot, undefined);
-                            } else {
-                                await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', dispatchRole, dispatchSids, undefined, workspaceRoot, undefined);
-                            }
-                        }
-                        movedParts.push(`${sids.length} → ${targetCol}`);
-                    }
-                    if (movedParts.length > 0) {
-                        const skippedSuffix = skippedCount > 0 ? ` (${skippedCount} skipped — unknown complexity)` : '';
-                        this.postMessage({ type: 'showStatusMessage', message: `Moved ${knownIds.length} plans from ${column}: ${movedParts.join(', ')}.${skippedSuffix}`, isError: false });
-                    }
-                } else {
-                    const nextCol = await this._getNextColumnId(column, workspaceRoot);
-                    if (!nextCol) { return { success: false, error: `No next column after '${column}'` }; }
-                    const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, nextCol, msg.initiatorProject);
-                    if (dispatchSpec?.source === 'custom-user' && this._taskViewerProvider) {
-                        const allMovedIds: string[] = [];
-                        for (const sid of msg.sessionIds) {
-                            const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
-                            allMovedIds.push(...cascadeIds);
-                        }
-                        this.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn: nextCol });
-                        if (dispatchSpec.dragDropMode === 'prompt' || this._cliTriggersEnabled) {
-                            const instruction = dispatchSpec.role === 'planner' ? 'improve-plan' : undefined;
-                            const dispatched = await this._taskViewerProvider.dispatchConfiguredKanbanColumnAction(dispatchSpec.role, msg.sessionIds, {
-                                targetColumn: nextCol,
-                                dragDropMode: dispatchSpec.dragDropMode,
-                                additionalInstructions: dispatchSpec.triggerPrompt,
-                                instruction,
-                                workspaceRoot: workspaceRoot || undefined
-                            });
-                            if (dispatched && dispatchSpec.role === 'lead') {
-                                const leadCards = this._lastCards.filter(card =>
-                                    card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds)
-                                ).filter(card => !this._isLowComplexity(card) && card.complexity !== 'Unknown');
-                                if (leadCards.length > 0) {
-                                    await this._dispatchWithPairProgrammingIfNeeded(leadCards, workspaceRoot);
-                                }
-                            }
-                        } else {
-                            await this._seams().commands.executeCommand('switchboard.kanbanForwardMove', msg.sessionIds, nextCol, workspaceRoot);
-                        }
-                    } else {
-                        const role = this._columnToRole(nextCol);
-                        if (role === 'planner' && this._cliTriggersEnabled) {
-                            const selectedCards = this._lastCards.filter(card =>
-                                card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds)
-                            );
-                            await this._distributePlannerDispatch(workspaceRoot, selectedCards, nextCol, { skipLimit: true });
-                        } else {
-                            const movedIds: string[] = [];
-                            const dispatchIds: string[] = [];
+                        const movedParts: string[] = [];
+                        for (const [role, sids] of groups) {
+                            if (sids.length === 0) { continue; }
+                            const targetCol = this._targetColumnForDispatchRole(role, visibleAgents);
+                            const dispatchRole = this._columnToRole(targetCol) || role;
+                            const movedSids: string[] = [];
+                            const dispatchSids: string[] = [];
                             const failures: { id: string; sourceColumn: string; reason: string }[] = [];
-                            for (const sid of msg.sessionIds) {
-                                const outcome = await this.moveCardToColumnWithReason(workspaceRoot, sid, nextCol);
+                            for (const sid of sids) {
+                                const outcome = await this.moveCardToColumnWithReason(workspaceRoot, sid, targetCol);
                                 if (outcome.ok) {
-                                    await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
+                                    await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
                                     const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
-                                    movedIds.push(...cascadeIds);
-                                    dispatchIds.push(sid);
+                                    movedSids.push(...cascadeIds);
+                                    dispatchSids.push(sid);
                                 } else {
                                     failures.push({ id: sid, sourceColumn: column, reason: outcome.detail });
                                 }
                             }
-                            if (movedIds.length > 0) {
-                                this.postMessage({ type: 'moveCards', sessionIds: movedIds, targetColumn: nextCol });
+                            if (movedSids.length > 0) {
+                                this.postMessage({ type: 'moveCards', sessionIds: movedSids, targetColumn: targetCol });
                             }
                             if (failures.length > 0) {
                                 this.postMessage({ type: 'moveCardsFailed', failures });
                             }
-                            if (this._cliTriggersEnabled && role) {
-                                const instruction = role === 'planner' ? 'improve-plan' : undefined;
-                                if (dispatchIds.length === 1) {
-                                    await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', role, dispatchIds[0], instruction, workspaceRoot, undefined);
+                            if (this._cliTriggersEnabled) {
+                                if (dispatchSids.length === 1) {
+                                    await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', dispatchRole, dispatchSids[0], undefined, workspaceRoot, undefined);
                                 } else {
-                                    await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, dispatchIds, instruction, workspaceRoot, undefined);
+                                    await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', dispatchRole, dispatchSids, undefined, workspaceRoot, undefined);
                                 }
-                            } else if (!role) {
-                                console.log(`[Kanban] Column '${nextCol}' has no role mapping, using visual move only`);
+                            }
+                            movedParts.push(`${sids.length} → ${targetCol}`);
+                        }
+                        if (movedParts.length > 0) {
+                            const skippedSuffix = skippedCount > 0 ? ` (${skippedCount} skipped — unknown complexity)` : '';
+                            this.postMessage({ type: 'showStatusMessage', message: `Moved ${knownIds.length} plans from ${column}: ${movedParts.join(', ')}.${skippedSuffix}`, isError: false });
+                        }
+                    } else {
+                        const nextCol = await this._getNextColumnId(column, workspaceRoot);
+                        if (!nextCol) { return { success: false, error: `No next column after '${column}'` }; }
+                        const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, nextCol, msg.initiatorProject);
+                        if (dispatchSpec?.source === 'custom-user' && this._taskViewerProvider) {
+                            const allMovedIds: string[] = [];
+                            for (const sid of msg.sessionIds) {
+                                const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                                allMovedIds.push(...cascadeIds);
+                            }
+                            this.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn: nextCol });
+                            if (dispatchSpec.dragDropMode === 'prompt' || this._cliTriggersEnabled) {
+                                const instruction = dispatchSpec.role === 'planner' ? 'improve-plan' : undefined;
+                                const dispatched = await this._taskViewerProvider.dispatchConfiguredKanbanColumnAction(dispatchSpec.role, msg.sessionIds, {
+                                    targetColumn: nextCol,
+                                    dragDropMode: dispatchSpec.dragDropMode,
+                                    additionalInstructions: dispatchSpec.triggerPrompt,
+                                    instruction,
+                                    workspaceRoot: workspaceRoot || undefined
+                                });
+                                if (dispatched && dispatchSpec.role === 'lead') {
+                                    const leadCards = this._lastCards.filter(card =>
+                                        card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds)
+                                    ).filter(card => !this._isLowComplexity(card) && card.complexity !== 'Unknown');
+                                    if (leadCards.length > 0) {
+                                        await this._dispatchWithPairProgrammingIfNeeded(leadCards, workspaceRoot);
+                                    }
+                                }
+                            } else {
+                                await this._seams().commands.executeCommand('switchboard.kanbanForwardMove', msg.sessionIds, nextCol, workspaceRoot);
+                            }
+                        } else {
+                            const role = this._columnToRole(nextCol);
+                            if (role === 'planner' && this._cliTriggersEnabled) {
+                                const selectedCards = this._lastCards.filter(card =>
+                                    card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds)
+                                );
+                                await this._distributePlannerDispatch(workspaceRoot, selectedCards, nextCol, { skipLimit: true });
+                            } else {
+                                const movedIds: string[] = [];
+                                const dispatchIds: string[] = [];
+                                const failures: { id: string; sourceColumn: string; reason: string }[] = [];
+                                for (const sid of msg.sessionIds) {
+                                    const outcome = await this.moveCardToColumnWithReason(workspaceRoot, sid, nextCol);
+                                    if (outcome.ok) {
+                                        await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
+                                        const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                                        movedIds.push(...cascadeIds);
+                                        dispatchIds.push(sid);
+                                    } else {
+                                        failures.push({ id: sid, sourceColumn: column, reason: outcome.detail });
+                                    }
+                                }
+                                if (movedIds.length > 0) {
+                                    this.postMessage({ type: 'moveCards', sessionIds: movedIds, targetColumn: nextCol });
+                                }
+                                if (failures.length > 0) {
+                                    this.postMessage({ type: 'moveCardsFailed', failures });
+                                }
+                                if (this._cliTriggersEnabled && role) {
+                                    const instruction = role === 'planner' ? 'improve-plan' : undefined;
+                                    if (dispatchIds.length === 1) {
+                                        await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', role, dispatchIds[0], instruction, workspaceRoot, undefined);
+                                    } else {
+                                        await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, dispatchIds, instruction, workspaceRoot, undefined);
+                                    }
+                                } else if (!role) {
+                                    console.log(`[Kanban] Column '${nextCol}' has no role mapping, using visual move only`);
+                                }
                             }
                         }
                     }
+                    // No full refresh — every branch above (PLAN REVIEWED per-group, custom-user,
+                    // planner distribute, and the general path) posts its own targeted moveCards
+                    // delta. The move persists immediately and does not wait on dispatch.
+                    return { success: true, column };
+                } finally {
+                    KanbanProvider.setBulkMoveActive(false);
+                    if (this._panel) {
+                        this._scheduleBoardRefresh(workspaceRoot);
+                    }
+                    await this._seams().commands.executeCommand('switchboard.refreshUI', workspaceRoot);
                 }
-                // No full refresh — every branch above (PLAN REVIEWED per-group, custom-user,
-                // planner distribute, and the general path) posts its own targeted moveCards
-                // delta. The move persists immediately and does not wait on dispatch.
-                return { success: true, column };
             }
             case 'moveAll': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
@@ -12149,133 +12233,151 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     void this._seams().ui.showInformationMessage(`No plans in ${column} to move.`);
                     return { success: false, error: `No plans in ${column} to move.` };
                 }
+                if (sourceCards.length > KanbanProvider.BULK_MOVE_MAX_CARDS) {
+                    const error = `Bulk move refused: column '${column}' contains ${sourceCards.length} cards, which exceeds the limit of ${KanbanProvider.BULK_MOVE_MAX_CARDS}.`;
+                    void this._seams().ui.showErrorMessage(error);
+                    this.postMessage({ type: 'showStatusMessage', message: error, isError: true });
+                    return { success: false, error };
+                }
                 const sessionIds = sourceCards.map(card => this._cardId(card));
 
-                // PLAN REVIEWED and STAGING use dynamic complexity routing per-session
-                if (column === 'PLAN REVIEWED' || column === 'STAGING') {
-                    const { filtered: knownIds, skippedCount } = this._filterUnknownComplexitySessions(sessionIds);
-                    if (knownIds.length === 0) {
-                        this._notifySkippedUnknownComplexity(skippedCount, 0);
-                        return { success: false, error: 'All plans have unknown complexity' };
-                    }
-                    const groups = await this._partitionByComplexityRoute(workspaceRoot, knownIds);
-                    const visibleAgents = await this._getVisibleAgents(workspaceRoot);
-                    if (['lead', 'coder', 'intern'].every(r => visibleAgents[r] === false)) {
-                        void this._seams().ui.showErrorMessage('No coding agent is currently enabled. Enable a coding agent in Setup or move manually.');
-                        return { success: false, error: 'No coding agent is currently enabled.' };
-                    }
-                    const movedParts: string[] = [];
-                    for (const [role, sids] of groups) {
-                        if (sids.length === 0) { continue; }
-                        const targetCol = this._targetColumnForDispatchRole(role, visibleAgents);
-                        const dispatchRole = this._columnToRole(targetCol) || role;
-                        const movedSids: string[] = [];
-                        const dispatchSids: string[] = [];
-                        const failures: { id: string; sourceColumn: string; reason: string }[] = [];
-                        for (const sid of sids) {
-                            const outcome = await this.moveCardToColumnWithReason(workspaceRoot, sid, targetCol);
-                            if (outcome.ok) {
-                                await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
-                                const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
-                                movedSids.push(...cascadeIds);
-                                dispatchSids.push(sid);
-                            } else {
-                                failures.push({ id: sid, sourceColumn: column, reason: outcome.detail });
-                            }
+                KanbanProvider.setBulkMoveActive(true);
+                try {
+                    // PLAN REVIEWED and STAGING use dynamic complexity routing per-session
+                    if (column === 'PLAN REVIEWED' || column === 'STAGING') {
+                        const { filtered: knownIds, skippedCount } = this._filterUnknownComplexitySessions(sessionIds);
+                        if (knownIds.length === 0) {
+                            this._notifySkippedUnknownComplexity(skippedCount, 0);
+                            return { success: false, error: 'All plans have unknown complexity' };
                         }
-                        if (movedSids.length > 0) {
-                            this.postMessage({ type: 'moveCards', sessionIds: movedSids, targetColumn: targetCol });
+                        const groups = await this._partitionByComplexityRoute(workspaceRoot, knownIds);
+                        const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+                        if (['lead', 'coder', 'intern'].every(r => visibleAgents[r] === false)) {
+                            void this._seams().ui.showErrorMessage('No coding agent is currently enabled. Enable a coding agent in Setup or move manually.');
+                            return { success: false, error: 'No coding agent is currently enabled.' };
                         }
-                        if (failures.length > 0) {
-                            this.postMessage({ type: 'moveCardsFailed', failures });
-                        }
-                        if (this._cliTriggersEnabled) {
-                            if (dispatchSids.length === 1) {
-                                await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', dispatchRole, dispatchSids[0], undefined, workspaceRoot, undefined);
-                            } else {
-                                await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', dispatchRole, dispatchSids, undefined, workspaceRoot, undefined);
-                            }
-                        }
-                        movedParts.push(`${sids.length} → ${targetCol}`);
-                    }
-                    // No full refresh — each complexity group already posted its own targeted
-                    // moveCards delta above (one per target column). N small deltas, not a redraw.
-                    const skippedSuffix = skippedCount > 0 ? ` (${skippedCount} skipped — unknown complexity)` : '';
-                    this.postMessage({ type: 'showStatusMessage', message: `Moved ${knownIds.length} plans from ${column}: ${movedParts.join(', ')}.${skippedSuffix}`, isError: false });
-                } else {
-                    const nextCol = await this._getNextColumnId(column, workspaceRoot);
-                    if (!nextCol) { return { success: false, error: `No next column after '${column}'` }; }
-                    const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, nextCol, msg.initiatorProject);
-                    if (dispatchSpec?.source === 'custom-user' && this._taskViewerProvider) {
-                        const allMovedIds: string[] = [];
-                        for (const sid of sessionIds) {
-                            const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
-                            allMovedIds.push(...cascadeIds);
-                        }
-                        this.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn: nextCol });
-                        if (dispatchSpec.dragDropMode === 'prompt' || this._cliTriggersEnabled) {
-                            const instruction = dispatchSpec.role === 'planner' ? 'improve-plan' : undefined;
-                            const dispatched = await this._taskViewerProvider.dispatchConfiguredKanbanColumnAction(dispatchSpec.role, sessionIds, {
-                                targetColumn: nextCol,
-                                dragDropMode: dispatchSpec.dragDropMode,
-                                additionalInstructions: dispatchSpec.triggerPrompt,
-                                instruction,
-                                workspaceRoot: workspaceRoot || undefined
-                            });
-                            if (dispatched && dispatchSpec.role === 'lead') {
-                                const leadCards = sourceCards
-                                    .filter(card => !this._isLowComplexity(card) && card.complexity !== 'Unknown');
-                                if (leadCards.length > 0) {
-                                    await this._dispatchWithPairProgrammingIfNeeded(leadCards, workspaceRoot);
-                                }
-                            }
-                        } else {
-                            await this._seams().commands.executeCommand('switchboard.kanbanForwardMove', sessionIds, nextCol, workspaceRoot);
-                        }
-                    } else {
-                        const role = this._columnToRole(nextCol);
-                        if (role === 'planner' && this._cliTriggersEnabled) {
-                            await this._distributePlannerDispatch(workspaceRoot, sourceCards, nextCol);
-                            // _distributePlannerDispatch persists + posts its own targeted
-                            // moveCards echo (and moveCardsFailed for any failed write) BEFORE
-                            // the slow /clear+send chain, and posts its own accurate status
-                            // message (including limit-held count). No trailing full refresh —
-                            // that is what reverted the move to NEW until dispatch finished.
-                            return { success: true, column, targetColumn: nextCol };
-                        } else {
-                            const movedIds: string[] = [];
-                            const dispatchIds: string[] = [];
+                        const movedParts: string[] = [];
+                        for (const [role, sids] of groups) {
+                            if (sids.length === 0) { continue; }
+                            const targetCol = this._targetColumnForDispatchRole(role, visibleAgents);
+                            const dispatchRole = this._columnToRole(targetCol) || role;
+                            const movedSids: string[] = [];
+                            const dispatchSids: string[] = [];
                             const failures: { id: string; sourceColumn: string; reason: string }[] = [];
-                            for (const sid of sessionIds) {
-                                const outcome = await this.moveCardToColumnWithReason(workspaceRoot, sid, nextCol);
+                            for (const sid of sids) {
+                                const outcome = await this.moveCardToColumnWithReason(workspaceRoot, sid, targetCol);
                                 if (outcome.ok) {
-                                    await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
+                                    await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
                                     const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
-                                    movedIds.push(...cascadeIds);
-                                    dispatchIds.push(sid);
+                                    movedSids.push(...cascadeIds);
+                                    dispatchSids.push(sid);
                                 } else {
                                     failures.push({ id: sid, sourceColumn: column, reason: outcome.detail });
                                 }
                             }
-                            if (movedIds.length > 0) {
-                                this.postMessage({ type: 'moveCards', sessionIds: movedIds, targetColumn: nextCol });
+                            if (movedSids.length > 0) {
+                                this.postMessage({ type: 'moveCards', sessionIds: movedSids, targetColumn: targetCol });
                             }
                             if (failures.length > 0) {
                                 this.postMessage({ type: 'moveCardsFailed', failures });
                             }
-                            if (this._cliTriggersEnabled && role) {
-                                await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, dispatchIds, undefined, workspaceRoot, undefined);
-                            } else if (!role) {
-                                console.log(`[Kanban] Column '${nextCol}' has no role mapping, using visual move only`);
+                            if (this._cliTriggersEnabled) {
+                                if (dispatchSids.length === 1) {
+                                    await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', dispatchRole, dispatchSids[0], undefined, workspaceRoot, undefined);
+                                } else {
+                                    await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', dispatchRole, dispatchSids, undefined, workspaceRoot, undefined);
+                                }
+                            }
+                            movedParts.push(`${sids.length} → ${targetCol}`);
+                        }
+                        // No full refresh — each complexity group already posted its own targeted
+                        // moveCards delta above (one per target column). N small deltas, not a redraw.
+                        const skippedSuffix = skippedCount > 0 ? ` (${skippedCount} skipped — unknown complexity)` : '';
+                        this.postMessage({ type: 'showStatusMessage', message: `Moved ${knownIds.length} plans from ${column}: ${movedParts.join(', ')}.${skippedSuffix}`, isError: false });
+                    } else {
+                        const nextCol = await this._getNextColumnId(column, workspaceRoot);
+                        if (!nextCol) { return { success: false, error: `No next column after '${column}'` }; }
+                        const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, nextCol, msg.initiatorProject);
+                        if (dispatchSpec?.source === 'custom-user' && this._taskViewerProvider) {
+                            const allMovedIds: string[] = [];
+                            for (const sid of sessionIds) {
+                                const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                                allMovedIds.push(...cascadeIds);
+                            }
+                            this.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn: nextCol });
+                            if (dispatchSpec.dragDropMode === 'prompt' || this._cliTriggersEnabled) {
+                                const instruction = dispatchSpec.role === 'planner' ? 'improve-plan' : undefined;
+                                const dispatched = await this._taskViewerProvider.dispatchConfiguredKanbanColumnAction(dispatchSpec.role, sessionIds, {
+                                    targetColumn: nextCol,
+                                    dragDropMode: dispatchSpec.dragDropMode,
+                                    additionalInstructions: dispatchSpec.triggerPrompt,
+                                    instruction,
+                                    workspaceRoot: workspaceRoot || undefined
+                                });
+                                if (dispatched && dispatchSpec.role === 'lead') {
+                                    const leadCards = sourceCards
+                                        .filter(card => !this._isLowComplexity(card) && card.complexity !== 'Unknown');
+                                    if (leadCards.length > 0) {
+                                        await this._dispatchWithPairProgrammingIfNeeded(leadCards, workspaceRoot);
+                                    }
+                                }
+                            } else {
+                                await this._seams().commands.executeCommand('switchboard.kanbanForwardMove', sessionIds, nextCol, workspaceRoot);
+                            }
+                        } else {
+                            const role = this._columnToRole(nextCol);
+                            if (role === 'planner' && this._cliTriggersEnabled) {
+                                await this._distributePlannerDispatch(workspaceRoot, sourceCards, nextCol);
+                                // _distributePlannerDispatch persists + posts its own targeted
+                                // moveCards echo (and moveCardsFailed for any failed write) BEFORE
+                                // the slow /clear+send chain, and posts its own accurate status
+                                // message (including limit-held count). No trailing full refresh —
+                                // that is what reverted the move to NEW until dispatch finished.
+                                return { success: true, column, targetColumn: nextCol };
+                            } else {
+                                const movedIds: string[] = [];
+                                const dispatchIds: string[] = [];
+                                const failures: { id: string; sourceColumn: string; reason: string }[] = [];
+                                for (const sid of sessionIds) {
+                                    const outcome = await this.moveCardToColumnWithReason(workspaceRoot, sid, nextCol);
+                                    if (outcome.ok) {
+                                        await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
+                                        const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
+                                        movedIds.push(...cascadeIds);
+                                        dispatchIds.push(sid);
+                                    } else {
+                                        failures.push({ id: sid, sourceColumn: column, reason: outcome.detail });
+                                    }
+                                }
+                                if (movedIds.length > 0) {
+                                    this.postMessage({ type: 'moveCards', sessionIds: movedIds, targetColumn: nextCol });
+                                }
+                                if (failures.length > 0) {
+                                    this.postMessage({ type: 'moveCardsFailed', failures });
+                                }
+                                if (this._cliTriggersEnabled && role) {
+                                    await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, dispatchIds, undefined, workspaceRoot, undefined);
+                                } else if (!role) {
+                                    console.log(`[Kanban] Column '${nextCol}' has no role mapping, using visual move only`);
+                                }
                             }
                         }
+                        // No full refresh — the custom-user and general branches each posted their
+                        // own targeted moveCards delta. Persist already happened; the move sticks
+                        // independent of dispatch.
+                        this.postMessage({ type: 'showStatusMessage', message: `Moved ${sourceCards.length} plans from ${column} to ${nextCol}.`, isError: false });
                     }
-                    // No full refresh — the custom-user and general branches each posted their
-                    // own targeted moveCards delta. Persist already happened; the move sticks
-                    // independent of dispatch.
-                    this.postMessage({ type: 'showStatusMessage', message: `Moved ${sourceCards.length} plans from ${column} to ${nextCol}.`, isError: false });
+                    return { success: true, column, moved: sessionIds.length };
+                } finally {
+                    KanbanProvider.setBulkMoveActive(false);
+                    // Single final refresh after the entire bulk move has completed.
+                    // Mirrors both composition roots: extension via _scheduleBoardRefresh,
+                    // standalone via switchboard.refreshUI / schedulePushFullState.
+                    if (this._panel) {
+                        this._scheduleBoardRefresh(workspaceRoot);
+                    }
+                    await this._seams().commands.executeCommand('switchboard.refreshUI', workspaceRoot);
                 }
-                return { success: true, column, moved: sessionIds.length };
             }
             case 'chatCopyPrompt': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);

@@ -228,6 +228,43 @@ function livePort() {
             const growthMb = (after.rss - before.rss) / (1024 * 1024);
             assert(growthMb < 25, `workload grew RSS by ${growthMb.toFixed(1)} MB in one pass`);
         });
+
+        await asyncTest('host-drift-after-dispatch: RSS and inotify return to starting baseline across workload', async () => {
+            const before = probeRows('--samples 1')[0];
+            // Exercise the host with round-trip requests
+            for (let i = 0; i < 15; i++) {
+                await new Promise((resolve, reject) => {
+                    http.get(`http://127.0.0.1:${port}/health`, res => {
+                        res.resume();
+                        res.on('end', resolve);
+                    }).on('error', reject);
+                });
+            }
+            // Allow event loop and GC / reconcile to settle
+            await new Promise(r => setTimeout(r, 100));
+            const after = probeRows('--samples 1')[0];
+
+            const rssDriftMb = (after.rss - before.rss) / (1024 * 1024);
+            assert(rssDriftMb < 20, `host drifted by ${rssDriftMb.toFixed(2)} MB RSS after workload (ceiling 20 MB)`);
+
+            const watchDelta = after.inotify - before.inotify;
+            assert(watchDelta <= 2, `watch count drifted by ${watchDelta} descriptors after workload (ceiling <= 2)`);
+        });
+
+        await asyncTest('watch-descriptors-bounded: inotify watch count does not accumulate over repeated cycles', async () => {
+            const initial = probeRows('--samples 1')[0];
+            for (let cycle = 0; cycle < 5; cycle++) {
+                await new Promise((resolve, reject) => {
+                    http.get(`http://127.0.0.1:${port}/health`, res => {
+                        res.resume();
+                        res.on('end', resolve);
+                    }).on('error', reject);
+                });
+            }
+            const settled = probeRows('--samples 1')[0];
+            const watchGrowth = settled.inotify - initial.inotify;
+            assert(watchGrowth <= 1, `inotify watch descriptors grew by ${watchGrowth} over cycles (must remain bounded)`);
+        });
     }
 
     console.log(`\nTests passed: ${passed}, failed: ${failed}`);

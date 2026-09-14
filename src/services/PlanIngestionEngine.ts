@@ -1726,8 +1726,8 @@ export class PlanIngestionEngine {
                 const nudgeLines: string[] = [
                     `[switchboard:turn-end] Queue stall (seat pacing) — you have gone idle holding card '${heldCard.planId}' with ${queueCards.length} card(s) staged in the dispatch queue.`,
                     `  You have been silent for ${silentFor}s.`,
-                    `  When you finish the card, run \`node "<cliPath>" done --from "${pacerSeat}"\` (or \`switchboard done --from "${pacerSeat}"\`).`,
-                    `  If you cannot complete it, run \`node "<cliPath>" done --from "${pacerSeat}" --outcome failed\` with a one-line reason.`,
+                    `  When you finish the card, run \`node "<cliPath>" done\` (or \`switchboard done\`).`,
+                    `  If you cannot complete it, run \`node "<cliPath>" done --outcome failed\` with a one-line reason.`,
                 ];
                 const nudgeBody = substituteCliPath(nudgeLines.join('\n'));
 
@@ -2266,7 +2266,7 @@ export class PlanIngestionEngine {
             try { ordersFileExists = fs.existsSync(ordersPath); } catch { /* unreadable → treat as absent */ }
             const route = team.externalHead
                 ? `write your report file to ${path.join(folder, '.switchboard', 'teams', team.teamId, 'reports')}`
-                : `run node "<cliPath>" done --from "${seatName}" (or switchboard done --from "${seatName}")`;
+                : `run node "<cliPath>" done (or switchboard done)`;
             const body = substituteCliPath(
                 `[switchboard:turn-end] You have gone idle holding card '${card.planId}'. `
                 + (ordersFileExists

@@ -1874,6 +1874,11 @@ jobs:
       - name: inotify watch topology contract (per-directory arming, close on dispose)
         run: npm run test:contract:inotify-watch-topology
 
+      # Bulk move cost contract — ensures bulk card moves coalesce to 1 refresh
+      # across both composition roots and cannot outgrow the board.
+      - name: Bulk move cost and invariant contract
+        run: npm run test:contract:bulk-move-cost
+
       - name: Run integration suite
         run: npm run test:integration:all
 

@@ -41,6 +41,9 @@ import * as crypto from 'crypto';
 import * as https from 'https';
 import { PTY_IDE_NAME, PtyHostSupervisor } from './ptyHostSupervisor';
 import { ManualGroupStore } from './ManualGroupStore';
+import { HostCapabilityService, sampleProcessRss, type HeadroomCheckResult } from './hostCapability';
+import { CpuAttributionService } from './cpuAttribution';
+import { startEventLoopWatchdog, type EventLoopWatchdogHandle } from './eventLoopWatchdog';
 import { DEVIN_DEFAULT_TIMEOUT_MS, CLAUDE_DEFAULT_TIMEOUT_MS, ANTIGRAVITY_DEFAULT_TIMEOUT_MS } from '../standalone/clearReadiness';
 import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExternalTeamTemplate, InstantiateAgentGroupResult } from './agentGroupInstantiation';
 // The pure migrators are deliberately NOT imported here: every standing-orders
@@ -54,6 +57,7 @@ import { resolveWorkContext, resolveTeamGroupForTerminal, computeRosterClearTarg
 import { ORIENTATION_PREAMBLE, waitForSeatQuiescence } from './startupOrientation';
 import { detectSyncFolder } from './cloudSyncMigration';
 import { attachDirectoryWatcher, type DirectoryWatcherHandle } from './directoryWatcher';
+import { ProbeSamplingService } from './ProbeSamplingService';
 
 import * as cp from 'child_process';
 import { promisify } from 'util';
@@ -1376,6 +1380,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         let opId: string | undefined;
         let isBooting = false;
         let startAt = 0;
+        let headroomWarning: string | undefined;
         if (verb === 'ptySendPrompt' && typeof payload?.name === 'string') {
             // Boot phase off the SAME fleet rows the composition block fetched —
             // never a second round-trip. When that block was skipped (a
@@ -1405,6 +1410,28 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 this.postMessage(prepMsg, SURFACES.terminals);
                 this._broadcaster?.push(prepMsg, SURFACES.terminals);
             }
+        if (verb === 'ptySendPrompt' && this._hostCapabilityService) {
+            try {
+                const activeSeats = (fleetListed?.terminals || []).filter((t: any) => t.status === 'active');
+                const observedRssList: number[] = [];
+                for (const t of activeSeats) {
+                    const sampled = sampleProcessRss(t.pid);
+                    if (sampled !== null) {
+                        observedRssList.push(sampled);
+                    }
+                }
+                const headroom = this._hostCapabilityService.checkDispatchHeadroom(activeSeats.length, observedRssList);
+                if (headroom && headroom.exceeded) {
+                    const usedGb = (headroom.memoryUsedBytes / (1024 * 1024 * 1024)).toFixed(2);
+                    const totalGb = (headroom.memoryTotalBytes / (1024 * 1024 * 1024)).toFixed(2);
+                    const estMb = Math.round(headroom.estimatedPerSeatBytes / (1024 * 1024));
+                    headroomWarning = `Dispatch headroom warning: starting seat on constrained host. Running seats: ${headroom.runningSeats}, Memory used: ${usedGb} GB, Total memory: ${totalGb} GB (${headroom.source}), Per-seat estimate: ${estMb} MB. Ceiling exceeded.`;
+                    console.warn(`[TaskViewerProvider] ${headroomWarning}`);
+                }
+            } catch (err) {
+                // Measurement check must never suppress or block dispatch
+            }
+        }
         }
 
         let result: any = null;
@@ -1472,6 +1499,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return {
                     ...result,
                     directivesAttached,
+                    ...(headroomWarning ? { headroomWarning } : {}),
                     ...(foldedAttributionResult ? {
                         attributed: foldedAttributionResult.attributed,
                         skipped: foldedAttributionResult.skipped
@@ -5220,6 +5248,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             // performs a validated, revision-checked atomic update.
             readHostSettings: () => this._resolveHostSettingsForApi(),
             writeHostSettings: (patch, expectedRevision) => this._writeHostSettingsForApi(patch, expectedRevision),
+            // Host capability and headroom reporting
+            getHostCapability: () => this._hostCapabilityService?.getSummary(),
+            // Per-process CPU attribution (plan: attribute-switchboards-cpu-before-optimising-it)
+            getCpuAttribution: () => this._cpuAttributionService?.getLatest(),
         });
 
         this._broadcaster?.setApiServer(this._localApiServer);
@@ -5285,6 +5317,36 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 }
             }
             this._apiServerDiagnosticsChannel.appendLine(`[TaskViewerProvider] Local API server started on port ${port}.`);
+            ProbeSamplingService.getInstance({
+                getActiveTerminalCount: () => this._ptyTerminalNames?.length ?? 0,
+                log: (m) => this._apiServerDiagnosticsChannel.appendLine(`[ProbeSamplingService] ${m}`),
+                warn: (m) => this._apiServerDiagnosticsChannel.appendLine(`[ProbeSamplingService] [WARN] ${m}`),
+            }).start();
+            // Per-process CPU attribution + event-loop watchdog (plan:
+            // attribute-switchboards-cpu-before-optimising-it). Composition-root
+            // parity with standalone bootstrap: the extension host runs its own
+            // pty host child and its own board process, so it attributes its
+            // own tree. Seat pids come from the Go child's roster (async here,
+            // sync in standalone — the service takes either).
+            this._cpuAttributionService = new CpuAttributionService({
+                hostScope: 'extension',
+                getPtyHostPid: () => this._ptyHostSupervisor?.getHostPid(),
+                getSeats: async () => {
+                    const listed = await this._ptyHostVerb('ptyListTerminals', {});
+                    const rows = [...(listed?.terminals || []), ...(listed?.hiddenTerminals || [])];
+                    return rows
+                        .filter((t: any) => t?.pid && t?.status === 'active')
+                        .map((t: any) => ({ name: String(t.friendlyName ?? t.name ?? ''), pid: Number(t.pid) }));
+                },
+                getVolumeStats: () => this._localApiServer?.getTerminalVolumeStats(),
+                log: (m) => this._apiServerDiagnosticsChannel.appendLine(`[cpuAttribution] ${m}`),
+            });
+            this._cpuAttributionService.start();
+            this._eventLoopWatchdog = startEventLoopWatchdog({
+                diagnosticsDir: path.join(effectiveRoot, '.switchboard', 'diagnostics'),
+                log: (m) => this._apiServerDiagnosticsChannel.appendLine(`[eventloop-watchdog] ${m}`),
+                warn: (m) => this._apiServerDiagnosticsChannel.appendLine(`[eventloop-watchdog] [WARN] ${m}`),
+            });
             this._startApiServerWatchdog();
         } catch (err) {
             // Do NOT swallow — log to the dedicated diagnostics channel so a dead server is
@@ -5356,6 +5418,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             clearInterval(this._apiServerWatchdogTimer);
             this._apiServerWatchdogTimer = undefined;
         }
+        try {
+            ProbeSamplingService.getInstance().stop();
+            try { this._cpuAttributionService?.stop(); } catch { /* ignore */ }
+            try { this._eventLoopWatchdog?.stop(); } catch { /* ignore */ }
+        } catch { /* ignore */ }
         if (this._localApiServer) {
             try {
                 const allRoots = this._filterMappedRoots(this._getWorkspaceRoots());
@@ -6462,6 +6529,19 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             }
         }
     }
+
+    private _hostCapabilityService?: HostCapabilityService;
+
+    public setHostCapability(service: HostCapabilityService): void {
+        this._hostCapabilityService = service;
+    }
+
+    public getHostCapability(): HostCapabilityService | undefined {
+        return this._hostCapabilityService;
+    }
+
+    private _cpuAttributionService?: CpuAttributionService;
+    private _eventLoopWatchdog?: EventLoopWatchdogHandle;
 
     public setRegisteredTerminals(map: Map<string, vscode.Terminal>) {
         this._registeredTerminals = map;

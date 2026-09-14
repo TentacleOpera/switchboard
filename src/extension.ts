@@ -57,6 +57,7 @@ import { resolveDisplayHostname, isTailnetPolicy } from './utils/loopbackHostnam
 import { readCertDomains, detectServeConfigMapping } from './utils/tailnetDetect';
 import { resolveTailnetOrigin } from './utils/tailnetOrigin';
 import { PtyHostSupervisor } from './services/ptyHostSupervisor';
+import { HostCapabilityService } from './services/hostCapability';
 
 /**
  * Verb Engine · 1 — register a `switchboard.*` command in BOTH the host-agnostic
@@ -606,7 +607,11 @@ export async function activate(context: vscode.ExtensionContext) {
         outputChannel?.appendLine(`[Switchboard] Mapping index/migration FAILED: ${err}`);
     }
 
+    // Host capability measurement and headroom tracking (plan: host-does-not-know-what-hardware-it-is-on)
+    const hostCapability = new HostCapabilityService();
+
     kanbanProvider = new KanbanProvider(context.extensionUri, context, outputChannel);
+    kanbanProvider.setHostCapability(hostCapability);
     const workspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
 
     // Machine-global secrets store setup & one-way mirror from VS Code SecretStorage
@@ -1028,6 +1033,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // 1. REGISTER SIDEBAR (Task Viewer)
     const taskViewerProvider = new TaskViewerProvider(context.extensionUri, context);
+    taskViewerProvider.setHostCapability(hostCapability);
     const surviveBoard = vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.fleet.surviveBoard', false);
     taskViewerProvider.setPtyHostSupervisor(new PtyHostSupervisor({
         installRoot: context.extensionPath,

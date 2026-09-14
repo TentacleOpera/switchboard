@@ -9,6 +9,10 @@ import createDOMPurify = require('dompurify');
 import { LocalApiServer, readLauncherWorkspaceMappings } from '../services/LocalApiServer';
 import { BackupService } from '../services/BackupService';
 import { RetentionService } from '../services/RetentionService';
+import { HostCapabilityService, sampleProcessRss } from '../services/hostCapability';
+import { CpuAttributionService } from '../services/cpuAttribution';
+import { startEventLoopWatchdog } from '../services/eventLoopWatchdog';
+import { ProbeSamplingService } from '../services/ProbeSamplingService';
 import { DEFAULT_KANBAN_COLUMNS } from '../services/agentConfig';
 import { KanbanDatabase } from '../services/KanbanDatabase';
 import {
@@ -1229,6 +1233,12 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         // the host died on V8's 4288MB heap ceiling.
         // `schedulePushFullState` chains pushes so they never overlap and collapses a
         // burst into one, which is the whole reason it exists.
+        if (KanbanProvider.isBulkMoveActive()) {
+            // Bulk move in progress: suppress intermediate full board state pushes.
+            // A single explicit refreshUI / schedulePushFullState will fire when
+            // the bulk move completes. (plan: a-bulk-move-cannot-outgrow-the-board Change 5).
+            return;
+        }
         schedulePushFullState();
     });
     // Completion push. Fires from the explicit-completion clear site — POST
@@ -1667,6 +1677,9 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     // saveLinearAutomation, enableTriagePipeline, linearBrowseProjects and
     // getIntegrationSetupStates. The editor host wires it at extension.ts:1275.
     ticketsProvider.setTaskViewerProvider(taskViewerProvider);
+    // Host capability measurement and headroom tracking (plan: host-does-not-know-what-hardware-it-is-on)
+    const hostCapability = new HostCapabilityService();
+    taskViewerProvider.setHostCapability(hostCapability);
 
     // Kanban: constructed the same way as Design/Setup/TaskViewer/Planning — shim context,
     // seams and broadcaster injected post-construction to pre-empt _initKanbanService's
@@ -1677,6 +1690,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         undefined,
         undefined
     );
+    kanbanProvider.setHostCapability(hostCapability);
     (kanbanProvider as any)._hostSeams = headlessSeams;
     (kanbanProvider as any)._broadcaster = headlessBroadcaster;
     (kanbanProvider as any)._currentWorkspaceRoot = workspaceRoot;
@@ -2736,6 +2750,27 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     if (payload.kind !== undefined && payload.kind !== 'dispatch' && payload.kind !== 'message') {
                         return { success: false, error: `Invalid payload kind "${payload.kind}" (must be "dispatch" or "message")` };
                     }
+                    let headroomWarning: string | undefined;
+                    try {
+                        const activeSeats = ptyFleetService.listActive();
+                        const observedRssList: number[] = [];
+                        for (const seat of activeSeats) {
+                            const sampled = sampleProcessRss(seat.pty?.pid);
+                            if (sampled !== null) {
+                                observedRssList.push(sampled);
+                            }
+                        }
+                        const headroom = hostCapability.checkDispatchHeadroom(activeSeats.length, observedRssList);
+                        if (headroom && headroom.exceeded) {
+                            const usedGb = (headroom.memoryUsedBytes / (1024 * 1024 * 1024)).toFixed(2);
+                            const totalGb = (headroom.memoryTotalBytes / (1024 * 1024 * 1024)).toFixed(2);
+                            const estMb = Math.round(headroom.estimatedPerSeatBytes / (1024 * 1024));
+                            headroomWarning = `Dispatch headroom warning: starting seat on constrained host. Running seats: ${headroom.runningSeats}, Memory used: ${usedGb} GB, Total memory: ${totalGb} GB (${headroom.source}), Per-seat estimate: ${estMb} MB. Ceiling exceeded.`;
+                            console.warn(`[bootstrap] ${headroomWarning}`);
+                        }
+                    } catch {
+                        // Measurement check must never suppress or block dispatch
+                    }
                     // Strip host-only fields an HTTP caller must not set — same
                     // boundary strip as TaskViewerProvider.handlePtyVerb.
                     // `addonsComposed` and `seatBlock` are host-settable only;
@@ -3079,6 +3114,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             bootPhase,
                             directivesAttached,
                             cleared: receipt?.cleared === true,
+                            ...(headroomWarning ? { headroomWarning } : {}),
                             // Thread the delivery reason and readiness so the caller
                             // distinguishes delivered-and-confirmed from
                             // delivered-on-a-timeout instead of a bare success.
@@ -5351,7 +5387,30 @@ Each plan file must include:
         // atomic update of ~/.switchboard/host-settings.json.
         readHostSettings: () => hostSettingsService.resolve(opts.hostSettingsContext ?? {}),
         writeHostSettings: (patch: Partial<HostSettingsDocument>, expectedRevision: string) => hostSettingsService.update(patch, expectedRevision, opts.hostSettingsContext),
+        // Host capability and headroom reporting
+        getHostCapability: () => hostCapability.getSummary(),
+        // Per-process CPU attribution (plan: attribute-switchboards-cpu-before-optimising-it).
+        // `server` is assigned at :5392 — the volume-stats closure reads it
+        // lazily, so ordering is safe.
+        getCpuAttribution: () => cpuAttribution.getLatest(),
     };
+
+    // ── CPU attribution + event-loop watchdog (plan: attribute-switchboards-cpu-before-optimising-it) ──
+    const cpuAttribution = new CpuAttributionService({
+        hostScope: 'standalone',
+        getPtyHostPid: () => ptyHostSupervisor?.getHostPid(),
+        getSeats: () => (ptyFleetService?.listActive() ?? [])
+            .filter(t => t?.pty?.pid)
+            .map(t => ({ name: t.friendlyName, pid: t.pty.pid })),
+        getVolumeStats: () => server?.getTerminalVolumeStats(),
+        log: (m) => log(opts, m),
+    });
+    cpuAttribution.start();
+    const eventLoopWatchdog = startEventLoopWatchdog({
+        diagnosticsDir: path.join(switchboardDir, 'diagnostics'),
+        log: (m) => log(opts, m),
+        warn: (m) => log(opts, m),
+    });
 
     server = new LocalApiServer(options);
     // Point the headless providers' broadcaster at the live WS hub so verb arms
@@ -5405,6 +5464,13 @@ Each plan file must include:
     });
     const retentionService = RetentionService.getInstance({ workspaceRoot });
     retentionService.startScheduledRotation();
+
+    const probeSampler = ProbeSamplingService.getInstance({
+        getActiveTerminalCount: () => ptyFleetService?.listActive()?.length ?? 0,
+        log: (m) => log(opts, m),
+        warn: (m) => log(opts, m),
+    });
+    probeSampler.start();
 
     // Write the discovery port file for external skills/scripts
     const portFile = path.join(switchboardDir, 'api-server-port.txt');
@@ -5512,6 +5578,9 @@ Each plan file must include:
             try { (planningProvider as any).dispose?.(); } catch { /* ignore */ }
             try { await backupService.shutdown(); } catch { /* ignore */ }
             try { retentionService.stopScheduledRotation(); } catch { /* ignore */ }
+            try { probeSampler.stop(); } catch { /* ignore */ }
+            try { cpuAttribution.stop(); } catch { /* ignore */ }
+            try { eventLoopWatchdog.stop(); } catch { /* ignore */ }
             try { await server.stop(); } catch { /* ignore */ }
             try { if (fs.existsSync(portFile)) fs.unlinkSync(portFile); } catch { /* ignore */ }
             try { if (fs.existsSync(pidFile)) fs.unlinkSync(pidFile); } catch { /* ignore */ }

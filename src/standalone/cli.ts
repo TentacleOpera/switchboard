@@ -361,79 +361,6 @@ function emitOfflineGuidance(jsonFlag: boolean): never {
     return exitFlushed(1);
 }
 
-/**
- * Size cap before the active log file is rotated to `server.log.1`.
- *
- * 10 MiB is enough for a multi-day orchestration run of startup banners,
- * status lines, and error output — the high-volume PTY chatter goes through
- * the WS gateway, not console.log. One rotation keeps the cap at ~20 MiB
- * total (active + .1) rather than growing without bound.
- */
-const LOG_CAP_BYTES = 10 * 1024 * 1024;
-
-/**
- * Wrap every console channel to also write to `.switchboard/logs/server.log`.
- *
- * In foreground mode (`alsoStdout = true`) output goes to both the terminal
- * and the file, so the two modes report identically. In detached mode
- * (`alsoStdout = false`, stdout is /dev/null) only the file is written.
- *
- * Rotation: on each write the current file size is checked. If it exceeds
- * `LOG_CAP_BYTES`, the existing file is renamed to `server.log.1` (replacing
- * any previous rotation) and a fresh file is opened. The write stream is
- * reopened on every line via `appendFileSync`, so rotation never loses the
- * active handle — there is no long-lived fd to reopen.
- */
-function setupFileLogging(logFile: string, alsoStdout: boolean): void {
-    const origLog = console.log.bind(console);
-    const origInfo = console.info.bind(console);
-    const origDebug = console.debug.bind(console);
-    const origWarn = console.warn.bind(console);
-    const origError = console.error.bind(console);
-
-    const writeToFile = (msg: string): void => {
-        try {
-            try {
-                const stat = fs.statSync(logFile);
-                if (stat.size > LOG_CAP_BYTES) {
-                    try { fs.unlinkSync(`${logFile}.1`); } catch { /* no prior rotation */ }
-                    try { fs.renameSync(logFile, `${logFile}.1`); } catch { /* rename failed — keep writing */ }
-                }
-            } catch { /* file does not exist yet */ }
-            fs.appendFileSync(logFile, msg);
-        } catch { /* logging must never crash the server */ }
-    };
-
-    const wrap = (orig: (...args: unknown[]) => void): ((...args: unknown[]) => void) => {
-        return (...args: unknown[]) => {
-            const msg = `${util.format(...args)}\n`;
-            writeToFile(msg);
-            // The terminal mirror is best-effort. Once the controlling terminal is
-            // gone (SIGHUP — closed window, dropped SSH session) these writes EPIPE,
-            // and a server that survives SIGHUP would otherwise die on its next log
-            // line instead — externally indistinguishable from the bug the SIGHUP
-            // handler fixes. The file sink stays live either way.
-            if (alsoStdout) {
-                try { orig(...args); } catch { /* terminal gone */ }
-            }
-        };
-    };
-
-    // Node delivers a mid-write EPIPE as a stream 'error' event, not a synchronous
-    // throw, and an unhandled 'error' on stdout/stderr is an uncaught exception.
-    // Same reasoning as the try/catch above: losing the terminal must not stop the
-    // process.
-    process.stdout.on('error', () => { /* terminal gone */ });
-    process.stderr.on('error', () => { /* terminal gone */ });
-
-    // log, info, and debug all write to stdout in Node — wrap all three so the
-    // file captures everything routeLogsToStderr would redirect.
-    console.log = wrap(origLog);
-    console.info = wrap(origInfo);
-    console.debug = wrap(origDebug);
-    console.warn = wrap(origWarn);
-    console.error = wrap(origError);
-}
 
 async function flushWorkspaceDb(workspaceRoot: string): Promise<void> {
     try {
@@ -1670,6 +1597,48 @@ async function cmdProbe(workspaceRoot: string, argv: string[]): Promise<void> {
     exitFlushed(0);
 }
 
+/**
+ * `switchboard heap-snapshot [--destination <path>] [--json]`
+ *
+ * Requests the running host to capture a V8 heap snapshot.
+ */
+async function cmdHeapSnapshot(workspaceRoot: string, argv: string[]): Promise<void> {
+    const jsonFlag = argv.includes('--json');
+    if (jsonFlag) { routeLogsToStderr(); }
+
+    const port = await findRunningInstance(workspaceRoot);
+    if (port === null) {
+        emitOfflineGuidance(jsonFlag);
+    }
+
+    let destination: string | undefined;
+    const destIdx = argv.indexOf('--destination');
+    if (destIdx !== -1 && destIdx + 1 < argv.length) {
+        destination = argv[destIdx + 1];
+    }
+
+    const payload: { destination?: string } = {};
+    if (destination) { payload.destination = destination; }
+
+    const res = await apiPost(port, '/diagnostics/heap-snapshot', workspaceRoot, payload);
+    const body = res.json();
+    if (res.status !== 200 || !body?.success) {
+        const errMsg = body?.error || `HTTP ${res.status}`;
+        if (jsonFlag) {
+            emitJson({ success: false, error: errMsg });
+        } else {
+            console.error(`[switchboard] Heap snapshot failed: ${errMsg}`);
+        }
+        exitFlushed(1);
+    }
+
+    if (jsonFlag) {
+        emitJson({ success: true, destination: body.destination, writtenBytes: body.writtenBytes });
+    } else {
+        console.log(`[switchboard] Heap snapshot written to ${body.destination}`);
+    }
+    exitFlushed(0);
+}
 
 /**
  * `switchboard fleet [--json]`
@@ -3445,6 +3414,51 @@ async function cmdBoardConsole(workspaceRoot: string): Promise<void> {
 }
 
 async function main() {
+    // ── Heap ceiling re-exec (plan: the-heap-ceiling-is-set-by-the-launcher-so-the-npx-install-never-gets-it) ──
+    // Default derived from 800 MB budget - 300 MB measured non-heap - 190 MB offset = 310 MB.
+    // Replaces the placeholder 512, which licensed ~700 MB heap and breached the 800 MB RSS budget.
+    // Env override SWITCHBOARD_MAX_OLD_SPACE_MB still wins.
+    const DEFAULT_MAX_OLD_SPACE_MB = '310';
+    const heapMarker = process.env.SWITCHBOARD_HEAP_FLAG_APPLIED === '1';
+    if (heapMarker) {
+        delete process.env.SWITCHBOARD_HEAP_FLAG_APPLIED;
+    }
+    const hasHeapArg = process.execArgv.some(a => a.startsWith('--max-old-space-size='));
+    const envHeapMb = process.env.SWITCHBOARD_MAX_OLD_SPACE_MB;
+    const effectiveHeapMb = envHeapMb || DEFAULT_MAX_OLD_SPACE_MB;
+    let heapSource: 'cli-reexec' | 'go-launcher' | 'env' | 'absent';
+    if (hasHeapArg) {
+        heapSource = heapMarker ? 'cli-reexec' : 'go-launcher';
+    } else if (envHeapMb) {
+        heapSource = 'env';
+    } else {
+        heapSource = 'absent';
+    }
+
+    if (!hasHeapArg && !heapMarker) {
+        // Plain node invocation without the flag (e.g. npx switchboard or node cli.js).
+        // Re-exec once with the flag so the board process runs with the required ceiling.
+        const child = spawn(
+            process.execPath,
+            [...process.execArgv, `--max-old-space-size=${effectiveHeapMb}`, ...process.argv.slice(1)],
+            {
+                stdio: 'inherit',
+                env: {
+                    ...process.env,
+                    SWITCHBOARD_HEAP_FLAG_APPLIED: '1',
+                },
+            }
+        );
+        child.on('exit', (code, signal) => {
+            if (signal) {
+                process.kill(process.pid, signal);
+            } else {
+                process.exit(code ?? 0);
+            }
+        });
+        return;
+    }
+
     // ── Serve-mode whitelist ──────────────────────────────────────
     //
     // 'local' and 'tailnet' are the two serve subcommands. No subcommand (the
@@ -4382,52 +4396,15 @@ async function main() {
         await cmdProbe(workspaceRoot, process.argv.slice(3));
     }
 
+    // ── heap-snapshot ───────────────────────────────────────────────
+    if (process.argv[2] === 'heap-snapshot') {
+        await cmdHeapSnapshot(workspaceRoot, process.argv.slice(3));
+    }
+
     // ── logs ───────────────────────────────────────────────────────
     if (process.argv[2] === 'logs') {
-        const follow = process.argv.slice(3).some(a => a === '-f' || a === '--follow');
-        const logFile = path.join(switchboardDir, 'logs', 'server.log');
-        if (!fs.existsSync(logFile)) {
-            console.error(`[switchboard] No log file found at ${logFile}.`);
-            console.error('[switchboard] The server may not have been started, or may be running in an older version without file logging.');
-            process.exit(1);
-        }
-
-        // Print existing content.
-        const content = fs.readFileSync(logFile, 'utf8');
-        process.stdout.write(content);
-
-        if (!follow) { exitFlushed(0); }
-
-        // Follow: poll for new content. Polling (not fs.watch) handles rotation
-        // transparently — when the file shrinks (rotated), we restart from 0.
-        let size = fs.statSync(logFile).size;
-        process.on('SIGINT', () => process.exit(0));
-        process.on('SIGTERM', () => process.exit(0));
-
-        const interval = setInterval(() => {
-            try {
-                const stat = fs.statSync(logFile);
-                if (stat.size < size) {
-                    // File was rotated or truncated — restart from the beginning.
-                    size = 0;
-                }
-                if (stat.size > size) {
-                    const fd = fs.openSync(logFile, 'r');
-                    try {
-                        const buf = Buffer.alloc(stat.size - size);
-                        fs.readSync(fd, buf, 0, buf.length, size);
-                        process.stdout.write(buf.toString());
-                    } finally {
-                        fs.closeSync(fd);
-                    }
-                    size = stat.size;
-                }
-            } catch { /* file may not exist momentarily during rotation */ }
-        }, 500);
-        interval.unref();
-
-        // Keep the process alive for the interval.
-        await new Promise(() => { /* never resolves */ });
+        console.log('[switchboard] The host no longer keeps a log file. Console output is printed directly to stdout/stderr.');
+        exitFlushed(0);
     }
 
     // ── help ──────────────────────────────────────────────────────
@@ -4715,10 +4692,6 @@ async function main() {
     // success for a server that failed to boot — the failure this prevents is
     // a detached launch returning 0 and a URL for a dead process.
     if (args.detach) {
-        const logsDir = path.join(switchboardDir, 'logs');
-        fs.mkdirSync(logsDir, { recursive: true });
-        const logFile = path.join(logsDir, 'server.log');
-
         // Build the child's argv: same args minus --detach, plus --no-open
         // unless --open was passed explicitly (a detached launch on a headless
         // host has no browser to open). Re-inject the serve subcommand so the
@@ -4766,7 +4739,6 @@ async function main() {
 
         if (detachPort === null) {
             console.error(`[switchboard] Detached server failed to start within ${DETACH_TIMEOUT_MS / 1000}s.`);
-            console.error(`[switchboard] Check the log file: ${logFile}`);
             process.exit(1);
         }
 
@@ -4802,22 +4774,11 @@ async function main() {
             console.log(`  URL:   http://127.0.0.1:${detachPort}`);
         }
         // Bare `switchboard --detach` prints no address.
-        console.log(`  Logs:  ${logFile}`);
         console.log(`[switchboard] Use 'npx switchboard status' to check, or 'npx switchboard stop' to shut down.`);
         process.exit(0);
     }
 
-    // ── Foreground or detached child: set up file logging ──────────
-    //
-    // In foreground mode, console output goes to both the terminal and the file.
-    // In detached mode (SWITCHBOARD_DETACHED=1), stdout is /dev/null so only the
-    // file is written. This must happen before startHeadlessSwitchboard so the
-    // bootstrap log() calls are captured.
     const isDetachedChild = isDetachedChildProcess();
-    const logsDir = path.join(switchboardDir, 'logs');
-    fs.mkdirSync(logsDir, { recursive: true });
-    const logFile = path.join(logsDir, 'server.log');
-    setupFileLogging(logFile, !isDetachedChild);
 
     // Default port is 7777 (parseArgs). If it is taken, fall back to ephemeral
     // (port 0) and log the fallback. `--port 0` is an explicit opt-in to ephemeral.
@@ -4897,6 +4858,7 @@ async function main() {
     } else if (addressMode === 'local') {
         console.log(`\nSwitchboard is running at ${instance.url}`);
     }
+    console.log(`  Heap ceiling: ${effectiveHeapMb} MB (source: ${heapSource})`);
     // Bare `switchboard` prints no address — the operator did not name a mode.
     if (isDetachedChild) {
         console.log('Running detached. Use \'npx switchboard stop\' to shut down.\n');

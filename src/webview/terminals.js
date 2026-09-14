@@ -740,6 +740,27 @@
             if (ptyHost.startedAt) {
                 lines.push(`Started At:     ${ptyHost.startedAt}`);
             }
+            const cap = health.hostCapability;
+            if (cap) {
+                const memStr = cap.totalMemoryBytes ? `${(cap.totalMemoryBytes / (1024 * 1024 * 1024)).toFixed(2)} GB (${cap.totalMemorySource})` : `unknown (${cap.totalMemorySource})`;
+                const coresStr = cap.cores !== null ? `${cap.cores} (${cap.coresSource})` : `unknown (${cap.coresSource})`;
+                lines.push(`Host Memory:    ${memStr}`);
+                lines.push(`Host Cores:     ${coresStr}`);
+                lines.push(`Constrained:    ${cap.isConstrained ? 'yes' : 'no'}`);
+            }
+            const cpu = health.cpuAttribution;
+            if (cpu) {
+                lines.push(`Machine CPU:    ${cpu.osCpuPercent.toFixed(1)}% total, ${cpu.attributedPercent.toFixed(1)}% attributed, ${cpu.residualPercent.toFixed(1)}% other (sampler ${cpu.samplerSelfMs} ms)`);
+                for (const p of (cpu.processes || [])) {
+                    const label = p.role === 'seat' ? `seat ${p.name}` : p.role;
+                    lines.push(`  ${label}: ${p.cpuPercent.toFixed(1)}% CPU, ${(p.rssBytes / (1024 * 1024)).toFixed(0)} MB RSS`);
+                }
+                const vol = cpu.volumeStats || {};
+                const busy = Object.entries(vol).filter(([, v]) => v.bytesOutPerSec > 0).sort((a, b) => b[1].bytesOutPerSec - a[1].bytesOutPerSec).slice(0, 5);
+                for (const [name, v] of busy) {
+                    lines.push(`  volume ${name}: ${(v.bytesOutPerSec / 1024).toFixed(0)} KB/s out${v.overCeiling ? ' (OVER CEILING)' : ''}`);
+                }
+            }
             readout.textContent = lines.join('\n');
         } catch (err) {
             readout.textContent = `Failed to fetch PTY host status: ${err instanceof Error ? err.message : String(err)}`;

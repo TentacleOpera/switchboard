@@ -12,6 +12,8 @@ Consolidated 2026-09-10: measured on a Pi 400 — the host grows +256 MB RSS and
 - **Switchboard Does Not Know What Hardware It Is On, So Nothing Warns Before a Small Box Runs Out**: reads host capability (memory, cores, cgroup limit) once at startup with a tagged source, reports a ceiling at dispatch without blocking, and injects a constrained-host directive to agents on a small box. Closes the fallback-rule gap where "no capability read" is indistinguishable from "infinite capability."
 - **The Host Accumulates Heap and inotify Watches Over a Day's Use**: stops the standalone host drifting from its published budget — adds a heap-snapshot hook, a periodic drift sampler, a drift assertion to the live contract test, and fixes the watch leak and (after a snapshot) the heap retention.
 - **The Standalone Host Writes a Log File on Every Start, and Nothing Can Turn It Off**: deletes the unconditional `setupFileLogging` and every `logs/` creator, so the host no longer writes a synchronous per-line log file the operator cannot turn off.
+- **The Heap Ceiling Is Set by the Launcher, So the npx Install Never Gets It**: `--max-old-space-size` is applied only at the two Go handoff sites, so a board installed via npm/npx — the documented route, and how this Pi runs — gets no ceiling at all. Adds a one-shot re-exec from the standalone entry, derives the default from `budget - measured_non_heap - offset` instead of the placeholder `512`, and logs which path supplied the value. Same theme as the hardware-capability subtask: a limit that is silently absent is indistinguishable from one that is set.
+- **A Bulk Move Cannot Outgrow the Board**: 172 cards moved in 16 seconds OOM'd the host (`Mark-Compact 4095.4`) because a bulk move costs one full board refresh *per card*. Makes the burst cost one refresh. This is the concrete failure the other subtasks measure in the abstract — the heap ceiling governs the limit it hit, and the drift sampler is what would have shown it coming.
 
 ## Dependencies & sequencing
 
@@ -26,6 +28,13 @@ Consolidated 2026-09-10: measured on a Pi 400 — the host grows +256 MB RSS and
     wiring) are separate cleanup, not blocking this feature.
 - **Internal to the heap/inotify subtask**: the heap-snapshot hook (change 1) MUST land before the heap-retention fix (change 5), because the retainer cannot be named without a snapshot.
 - No prerequisites or guards outside this feature's subtasks.
+
+- **Added 2026-09-14 (two subtasks).** Both are host-cost failures and neither blocks the original
+  four. Ordering that matters: *The Heap Ceiling* should land **before** *A Bulk Move*, because the
+  bulk-move OOM was hit against V8's default ceiling on a 16 GB box — re-measuring the burst under a
+  deliberately set ceiling is what tells you whether the refresh fix is sufficient or merely moves the
+  cliff. *Attribute Switchboard's CPU* and the drift sampler are the instruments for both; run them
+  first if the bulk-move cause is not already understood.
 
 ## Reconciliation outcome (2026-09-11)
 
@@ -75,9 +84,15 @@ Consolidated 2026-09-10: measured on a Pi 400 — the host grows +256 MB RSS and
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Attribute Switchboard's CPU before optimising it, and catch the wedge in the act](../plans/attribute-switchboards-cpu-before-optimising-it.md) — **PLAN REVIEWED** — ID: 1023d997-626c-445b-9637-24a6088dafba
-- [ ] [Switchboard Does Not Know What Hardware It Is On, So Nothing Warns Before a Small Box Runs Out](../plans/host-does-not-know-what-hardware-it-is-on.md) — **PLAN REVIEWED** — ID: 1f191a51-71d2-4694-9f3a-533b082b277f
-- [ ] [The Host Accumulates Heap and inotify Watches Over a Day's Use](../plans/the-host-accumulates-heap-and-inotify-watches-over-a-days-use.md) — **PLAN REVIEWED** — ID: 209ce349-00ca-413f-9742-ccf6bc9ee8c2
-- [ ] [The Standalone Host Writes a Log File on Every Start, and Nothing Can Turn It Off](../plans/the-standalone-host-writes-a-log-file-and-nothing-can-turn-it-off.md) — **PLAN REVIEWED** — ID: ba9a9807-da23-4d01-a7cc-b506ab0cdf71
+- [ ] [Attribute Switchboard's CPU before optimising it, and catch the wedge in the act](../plans/attribute-switchboards-cpu-before-optimising-it.md) — **LEAD CODED** — ID: 1023d997-626c-445b-9637-24a6088dafba
+- [ ] [Switchboard Does Not Know What Hardware It Is On, So Nothing Warns Before a Small Box Runs Out](../plans/host-does-not-know-what-hardware-it-is-on.md) — **LEAD CODED** — ID: 1f191a51-71d2-4694-9f3a-533b082b277f
+- [ ] [The Host Accumulates Heap and inotify Watches Over a Day's Use](../plans/the-host-accumulates-heap-and-inotify-watches-over-a-days-use.md) — **LEAD CODED** — ID: 209ce349-00ca-413f-9742-ccf6bc9ee8c2
+- [ ] [The Standalone Host Writes a Log File on Every Start, and Nothing Can Turn It Off](../plans/the-standalone-host-writes-a-log-file-and-nothing-can-turn-it-off.md) — **LEAD CODED** — ID: ba9a9807-da23-4d01-a7cc-b506ab0cdf71
+- [ ] [A Bulk Move Cannot Outgrow the Board](../plans/a-bulk-move-cannot-outgrow-the-board.md) — **LEAD CODED** — ID: 40fb3702-2280-4508-b918-06842c9a1f33
+- [ ] [The Heap Ceiling Is Set by the Launcher, So the npx Install Never Gets It](../plans/the-heap-ceiling-is-set-by-the-launcher-so-the-npx-install-never-gets-it.md) — **LEAD CODED** — ID: 072a002b-6fc8-4aa6-98ff-1468b2c93354
 <!-- END SUBTASKS -->
+
+## Completion Summary
+
+All six subtasks landed and verified. The host now attributes CPU per process (board, PTY host, each seat, browser) with OS-total cross-check, residual, and sampler self-cost on `/health` and the terminals panel; an out-of-loop worker-plus-gdb watchdog writes a stack dump naming a blocked loop while it is still spinning, surviving the `/health`-failing condition. Hardware capability (memory, cores, cgroup limit) is read once at startup with tagged sources, reported at dispatch without blocking, and injected as a constrained-host directive only when measured constrained — no plausible substitute on unread values. The heap ceiling is derived (310 MB from 800 MB budget − 300 MB measured non-heap − 190 MB offset) across the cli re-exec, npm shim, and Go launcher, with source logging and env override; a guarded loopback-only heap-snapshot hook and a bounded rotating drift sampler catch what the ceiling governs. The inotify watch leak in `KanbanProvider._movesFsWatchers` is fixed (array → folder-keyed Map), bulk moves cost one refresh not one-per-card, and the unconditional standalone log file is gone. Contract tests cover the watchdog dump, drift bounds, and frame-encoding parity; compile is clean (only pre-existing TS2835 import-extension errors in unmodified files).
 

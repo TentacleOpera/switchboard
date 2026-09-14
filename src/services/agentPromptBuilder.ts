@@ -1212,7 +1212,7 @@ export const STAGGERED_IMPLEMENTATION_DIRECTIVE = `STAGGERED IMPLEMENTATION: Aft
 // treat this as prose, move it before the override application, or remove the post-override
 // placement — the consumers above will break silently (cards never clear, oversight
 // passes time out on work that succeeded).
-export const CODING_COMPLETION_REPORT_DIRECTIVE = `COMPLETION REPORT: When you have finished implementing ALL parts of the plan, run \`node "<cliPath>" done --from "<your terminal name>"\` (or \`switchboard done --from "<your terminal name>"\`). This signals task completion to the kanban board — the system clears your card's activity light and notifies your lead. Do NOT report after finishing individual parts — only when ALL work is complete. Also append a brief summary (3-5 sentences) to the END of the original plan file for the record. Do NOT skip the completion report.`;
+export const CODING_COMPLETION_REPORT_DIRECTIVE = `COMPLETION REPORT: When you have finished implementing ALL parts of the plan, run \`node "<cliPath>" done\` (or \`switchboard done\`). This signals task completion to the kanban board — the system clears your card's activity light and notifies your lead. Do NOT report after finishing individual parts — only when ALL work is complete. Also append a brief summary (3-5 sentences) to the END of the original plan file for the record. Do NOT skip the completion report.`;
 
 export const GATE_WIRING_AUDIT_STEP = `Gate-wiring audit: for every automated check named in the plan's
    \`### Automated\` verification subsection, verify it is actually invoked by CI
@@ -1279,9 +1279,9 @@ export const DELEGATION_ANTI_LEAKAGE_STEP = `ANTI-LEAKAGE RULE (delegation) — 
 // scale would lose that distinction while inviting translation errors.
 export const DEFERRED_FINDINGS_SECTION_INSTRUCTION = `Append a \`## Deferred Findings\` section to the plan file listing every finding you chose NOT to fix now, one per line, each carrying its severity (CRITICAL/MAJOR/NIT) and a \`file:line\` reference. If nothing was deferred, write \`None\` under the heading — do not omit the section, so a missing section always means "not answered" and never "nothing found".`;
 
-export const COMPLETION_STEP_FULL = `COMPLETION REPORT: When you have finished ALL parts of the review, run \`node "<cliPath>" done --from "<your terminal name>"\` (or \`switchboard done --from "<your terminal name>"\`). This signals task completion to the kanban board — the system clears your card's activity light and notifies your lead. Do NOT report after finishing individual parts — only when ALL work is complete. Also update the original plan file with fixed items, files changed, validation results, and remaining risks. ${DEFERRED_FINDINGS_SECTION_INSTRUCTION} Do NOT truncate, summarize, or delete existing implementation steps. Do NOT skip the completion report.`;
+export const COMPLETION_STEP_FULL = `COMPLETION REPORT: When you have finished ALL parts of the review, run \`node "<cliPath>" done\` (or \`switchboard done\`). This signals task completion to the kanban board — the system clears your card's activity light and notifies your lead. Do NOT report after finishing individual parts — only when ALL work is complete. Also update the original plan file with fixed items, files changed, validation results, and remaining risks. ${DEFERRED_FINDINGS_SECTION_INSTRUCTION} Do NOT truncate, summarize, or delete existing implementation steps. Do NOT skip the completion report.`;
 
-export const COMPLETION_STEP_COMPACT = `COMPLETION REPORT: When you have finished ALL parts of the review, run \`node "<cliPath>" done --from "<your terminal name>"\` (or \`switchboard done --from "<your terminal name>"\`). This signals task completion to the kanban board — the system clears your card's activity light and notifies your lead. Do NOT report after finishing individual parts — only when ALL work is complete. Also update the original plan file by appending a brief summary (≤ 5 sentences) under \`## Review Findings\` — list files changed, validation results, and remaining risks. The ≤ 5 sentence budget applies to the \`## Review Findings\` prose summary ONLY and does NOT bound the deferred-findings list. ${DEFERRED_FINDINGS_SECTION_INSTRUCTION} Do NOT reproduce the full implementation steps or copy large blocks of the original plan. Do NOT skip the completion report.`;
+export const COMPLETION_STEP_COMPACT = `COMPLETION REPORT: When you have finished ALL parts of the review, run \`node "<cliPath>" done\` (or \`switchboard done\`). This signals task completion to the kanban board — the system clears your card's activity light and notifies your lead. Do NOT report after finishing individual parts — only when ALL work is complete. Also update the original plan file by appending a brief summary (≤ 5 sentences) under \`## Review Findings\` — list files changed, validation results, and remaining risks. The ≤ 5 sentence budget applies to the \`## Review Findings\` prose summary ONLY and does NOT bound the deferred-findings list. ${DEFERRED_FINDINGS_SECTION_INSTRUCTION} Do NOT reproduce the full implementation steps or copy large blocks of the original plan. Do NOT skip the completion report.`;
 
 /**
  * Idempotent completion-directive guard. Appends CODING_COMPLETION_REPORT_DIRECTIVE to
@@ -1307,7 +1307,7 @@ export function ensureCompletionDirective(text: string): string {
 // that carry it do not break, but the body no longer instructs agents to
 // write report files — the completion POST (POST /kanban/queue/done) is the
 // only signal that clears a card, and `switchboard reports` is the read path.
-export const MISSION_CONTROL_REPORT_DIRECTIVE = `MISSION CONTROL REPORT: The host records every turn-end (finished, blocked, stalled) as a plan_events row — queryable via \`switchboard reports [--kind blocked]\`. You do NOT need to write a report file. This is IN ADDITION TO, never INSTEAD OF, the completion POST (POST /kanban/queue/done via \`switchboard done --from "<your terminal name>"\`) — the completion POST is the signal that clears your card. Do NOT skip the completion POST. If you are blocked and cannot continue, report the block in your status and stop; the host records the turn-end and the card stays parked for review.`;
+export const MISSION_CONTROL_REPORT_DIRECTIVE = `MISSION CONTROL REPORT: The host records every turn-end (finished, blocked, stalled) as a plan_events row — queryable via \`switchboard reports [--kind blocked]\`. You do NOT need to write a report file. This is IN ADDITION TO, never INSTEAD OF, the completion POST (POST /kanban/queue/done via \`switchboard done\`) — the completion POST is the signal that clears your card. Do NOT skip the completion POST. If you are blocked and cannot continue, report the block in your status and stop; the host records the turn-end and the card stays parked for review.`;
 
 /**
  * Idempotent report-directive guard. Appends MISSION_CONTROL_REPORT_DIRECTIVE to
@@ -1414,6 +1414,8 @@ export const NO_SUBAGENTS_DIRECTIVE = "SUBAGENT POLICY: You are strictly forbidd
 export const CUSTOM_SUBAGENT_DIRECTIVE_TEMPLATE = (name: string) =>
     `SUBAGENT POLICY: You are authorized to use the "${name}" subagent for this task. Do not spawn or invoke any other subagents.`;
 export const WORKTREES_PER_PLAN_DIRECTIVE = 'Where possible, process each plan as an isolated unit, creating a dedicated git worktree per plan to prevent file conflicts between concurrent tasks.';
+export const CONSTRAINED_HOST_DIRECTIVE = (memoryGb: string, cores: number | string) =>
+    `CONSTRAINED HOST: Host machine is resource-constrained (${memoryGb} GB RAM, ${cores} cores). Prefer the cheapest verification that satisfies the plan. Decline expensive redundant build, lint, and test cycles, and state your reason when doing so.`;
 
 /**
  * Seat-scoped directive options — the subset of addon config that is true of a
@@ -1445,6 +1447,10 @@ export interface SeatDirectiveOptions {
     cavemanOutput?: boolean;
     suppressWalkthrough?: boolean;
     accurateCoding?: boolean;
+    /** Constrained host flag and measured figures for CONSTRAINED_HOST_DIRECTIVE injection. */
+    constrainedHost?: boolean;
+    hostMemoryGb?: string;
+    hostCores?: number | string;
     /** Worktree signals for buildGitPolicyBlock — dispatch-scoped, default false on the seat path. */
     worktreeActive?: boolean;
     worktreePerPlanActive?: boolean;
@@ -1509,6 +1515,16 @@ export function buildSeatDirectiveBlock(opts: SeatDirectiveOptions, existingProm
     if (opts.cavemanOutput) { parts.push(CAVEMAN_OUTPUT_DIRECTIVE); }
     if (opts.suppressWalkthrough) { parts.push(SUPPRESS_WALKTHROUGH_DIRECTIVE); }
     if (opts.accurateCoding) { parts.push(buildAccuracyDirective(opts.resolvedProtocols)); }
+
+    // Constrained host directive — injected only when host is measured as constrained.
+    // An unread figure renders as 'unknown', never a plausible machine number:
+    // per the fallback rule, a substituted 4 or 4.0 would present an unreadable
+    // capability read as a measured one inside a behaviour-changing directive.
+    if (opts.constrainedHost) {
+        const memStr = opts.hostMemoryGb ?? 'unknown';
+        const coresVal = opts.hostCores ?? 'unknown';
+        parts.push(CONSTRAINED_HOST_DIRECTIVE(memStr, coresVal));
+    }
 
     // A board-composed prompt already carries these constants verbatim
     // (KanbanProvider._generatePromptForColumn → agentPromptBuilder). The
