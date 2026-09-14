@@ -22,8 +22,8 @@ The standalone host runs a real team on a 1 GB device within a stated 800 MB pea
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Two Configurations: Board Only, and Board Plus Agents](../plans/two-configurations-board-only-and-board-plus-agents.md) — **LEAD CODED** — ID: c76ca59b-5ad5-4684-bbd8-0124e85aebde
-- [ ] [The Board Must Fit a 1 GB Pi, and It Is the Peak That Does Not](../plans/the-board-must-fit-a-1gb-pi-and-the-peak-is-what-does-not.md) — **LEAD CODED** — ID: 8b7e5490-ebb5-4782-8467-592cdd03c2c4
+- [ ] [Two Configurations: Board Only, and Board Plus Agents](../plans/two-configurations-board-only-and-board-plus-agents.md) — **CODE REVIEWED** — ID: c76ca59b-5ad5-4684-bbd8-0124e85aebde
+- [ ] [The Board Must Fit a 1 GB Pi, and It Is the Peak That Does Not](../plans/the-board-must-fit-a-1gb-pi-and-the-peak-is-what-does-not.md) — **CODE REVIEWED** — ID: 8b7e5490-ebb5-4782-8467-592cdd03c2c4
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -54,3 +54,30 @@ about build time and the toolchain on the Pi, not about what the host costs whil
 ## Completion Summary
 
 Both subtasks are implemented and verified. "Two Configurations" stated board-only (1 GB) and board-plus-agents (2 GB min) and wired the unconditional `--max-old-space-size` V8 flag at both Go handoff sites, env-overridable via `SWITCHBOARD_MAX_OLD_SPACE_MB`, plus repo-relative plan paths for remote seats and remote-seats documentation. "The Board Must Fit a 1 GB Pi" shipped the working-set windowing (dormant PLAN REVIEWED / CODE REVIEWED cards past the hot window are read-side filtered, never archived, still resolvable by id), the empty-field omission in the card builder, the forced-GC burst probe, and the 800 MB peak-RSS contract. A mid-run defect — the in-flight SQL referencing `plans.dispatched_at`, a column the V74 migration moved to `plan_runtime_state`, which broke every board read — was fixed with a correlated EXISTS against the runtime-state table. Final verification: `test:contract:board-payload-size` 15/15 and `test:contract:board-peak-rss` 7/7, both including LIVE halves against a freshly built host; Go build/vet and eslint clean. One minor warn-path inconsistency (`_warnIfPlanFileUncommitted` repoRoot choice) is recorded in `.switchboard/orchestrator/reports/` for follow-up.
+
+## Review Findings
+
+Both subtasks reviewed in place against commits `8300a014` + `8839c514`. Two defects were fixed in
+`src/services/KanbanDatabase.ts` and `src/services/KanbanProvider.ts`, with gates added/repaired in
+`src/test/board-payload-size-contract.test.js` and `src/test/board-read-endpoints-contract.test.js`:
+the working-set window had no feature-unit cohesion, so a dormant feature row was dropped from under
+its live subtasks and — because the webview rolls subtasks up under their parent and filters every
+card carrying a `featureId` out of the column view — the whole unit including in-flight work
+rendered nowhere; and `board-read-endpoints`, the gate the budget subtask named as must-stay-green,
+was RED because `_resolveBoard` moved to `getBoardWorkingSet` without the test double following.
+The feature's stated goal — a 800 MB peak-RSS budget, enforced — is met and gated (live peak 479 MB),
+but the room-making half is not yet real: the windowing excludes **zero** of 456 dormant cards on the
+actual board because it keys on the 45-day cold-archive hot window, and Change 1's forced-GC split,
+which the budget subtask declares a prerequisite gate, was never executed. Verification:
+`compile-tests` clean, `board-payload-size` 18/18, `board-peak-rss` 7/7, `board-read-endpoints` 36/37
+(sole failure a pre-existing, unrelated skill-bundle drift), Go vet/build clean, eslint 0 errors.
+
+## Deferred Findings
+
+- CRITICAL — the working-set window excludes 0 of 456 dormant cards on the real board (45-day hot window vs a newest-dormant age of ~18 days), so the 408-card reduction the feature is built on is not realised. `src/services/KanbanDatabase.ts:4704`. Full reasoning on the budget subtask's own Deferred Findings.
+- MAJOR — the forced-GC churn-vs-retention split (Change 1, declared a PREREQUISITE GATE) was never run, leaving the burst unattributed and the 512 MB V8 old-space value an admitted placeholder. `src/services/KanbanProvider.ts` (`_recordBurstGcSplit`).
+- MAJOR — `selectColdEligiblePlanIds` reads `dispatched_at` off `plans`, removed by V74; the prepare throws, the catch returns `[]`, and cold partitioning has silently never run post-V74. Pre-existing, outside both subtasks. `src/services/KanbanDatabase.ts:6072`.
+- MAJOR — `_warnIfPlanFileUncommitted` passes a workspace-relative path with a repo-scope-relative cwd, so a scoped repo's git query silently finds nothing and silence reads as "committed". `src/services/KanbanProvider.ts`.
+- MAJOR — the LIVE half of the windowing gate (`staleDormant < 10`) cannot discriminate on this board; the real-store half is the actual gate. `src/test/board-payload-size-contract.test.js:384`.
+- NIT — windowing `_resolveBoard` degrades custom-column discovery for columns held only by dormant cards. `src/services/LocalApiServer.ts:10404`.
+- NIT — `_warnIfPlanFileUncommitted` spawns one `git status` subprocess per plan per dispatch. `src/services/KanbanProvider.ts`.

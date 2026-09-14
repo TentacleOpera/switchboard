@@ -417,3 +417,32 @@ All six changes implemented in one working tree (no compile, no tests run per ta
 ## Defect-Fix Pass (2026-09-14)
 
 Three defects verified against the contract suites and resolved in the working tree (no commit). `npm run compile-tests` clean; `test:contract:board-payload-size` 15/0; `test:contract:board-peak-rss` 7/0 — both stable green across re-runs. DEFECT 1 (SqliteError no such column: dispatched_at at prepare time): `IN_FLIGHT_SQL` reads `prs.dispatched_at` via a correlated `EXISTS (SELECT 1 FROM plan_runtime_state prs ...)` against the V74 runtime tier, not `plans.dispatched_at`; the real-store test inserts the in-flight row into `plan_runtime_state` (which carries `dispatched_at`), and `getBoardWorkingSet`/`getBoardFilteredByProjectWorkingSet` now prepare and run cleanly on a fresh post-V74 DB (V74 rebuilds `plans` without `dispatched_at`; `SCHEMA_TABLES_SQL` confirms the column lives only on `plan_runtime_state`). DEFECT 2 (forced-GC split probe JSONL artefact): `_recordBurstGcSplit` appends one record per armed build to `<workspaceRoot>/.switchboard/logs/burst-gc-split.jsonl`; the static assertion `/burst-gc-split\.jsonl/.test(provider)` passes. DEFECT 3 (LIVE null/empty-field assertion vs the six-field card-builder omission): the gate and the change now agree — the LIVE `/kanban/board` half no longer asserts null/empty field values because that HTTP endpoint serves raw DB rows, not `_buildBoardCards` output (the card builder's `undefined`-omission runs only in the WS `getFullStateMessages` push and extension `refreshWithData` paths, which the static half asserts against source); the LIVE half retains the windowing and per-card byte-budget assertions.
+
+## Review Findings
+
+Reviewed in place against commits `8300a014` + `8839c514`; files changed in this pass are
+`src/services/KanbanDatabase.ts` (feature-unit cohesion in both working-set reads),
+`src/services/KanbanProvider.ts` (burst caller-tag gating),
+`src/test/board-payload-size-contract.test.js` (static assertions realigned + two real-store
+cohesion cases) and `src/test/board-read-endpoints-contract.test.js` (db double). Two defects were
+fixed: a dormant feature row was windowed out from under its live subtasks, and because the webview
+rolls subtasks up under their parent and filters every card carrying a `featureId` out of the column
+view, the **entire unit including in-flight work rendered nowhere** (proved: the pre-fix read returns
+only the live subtask); and `board-read-endpoints` — the gate this plan named as must-stay-green —
+was RED because `_resolveBoard` moved to `getBoardWorkingSet` without the test double following.
+The headline result is that **the windowing currently excludes zero cards on the real board**: 589
+returned, 456 in dormant columns, none older than the 45-day hot window it keys on, so the 408-card
+reduction this plan exists to deliver is not being realised and the mechanism is correct but inert.
+Verification: `compile-tests` clean, `test:contract:board-payload-size` 18/18,
+`test:contract:board-peak-rss` 7/7 (live peak 479 MB against the 800 MB ceiling),
+`test:contract:board-read-endpoints` 36/37 with the sole failure a pre-existing, unrelated
+skill-bundle drift (`SKILL.md` last touched at `b7ab8f32`, untouched by either plan commit), Go
+vet/build clean and eslint 0 errors.
+
+## Deferred Findings
+
+- CRITICAL — the working-set window excludes 0 of 456 dormant cards on the real board; it keys on the 45-day cold-archive hot window (`KanbanDatabase.getHotWindowDays`) while the oldest dormant card is ~18 days old, so Change 3 delivers no reduction today. `src/services/KanbanDatabase.ts:4704` (`getBoardWorkingSet`). Not fixed here: choosing a tighter window decides which cards vanish from a human's board, which is the author's call, and `updated_at` is bumped by genuine column moves (197 dormant cards touched inside 24h), so no safe value reclaims much.
+- MAJOR — Change 1, the forced-GC churn-vs-retention split the plan declares a PREREQUISITE GATE for Changes 2 and 3, was never executed; the probe is wired and env-gated but unmeasured, so the 512 MB V8 old-space value remains a self-described placeholder and the burst is still unattributed. `src/services/KanbanProvider.ts` (`_recordBurstGcSplit`).
+- MAJOR — `selectColdEligiblePlanIds` still reads `dispatched_at` off `plans`, a column V74 removed; the prepare throws, the `catch` returns `[]`, and cold partitioning has therefore silently never run on any post-V74 store (verified against the live board). Pre-existing and outside this plan, but it is the CLAUDE.md quiet-fallback shape and explains why all 588 cards remain `status='active'`. `src/services/KanbanDatabase.ts:6072`.
+- MAJOR — the LIVE half of the windowing gate asserts `staleDormant < 10` against `/kanban/board`; with no card older than 45 days it passes identically whether or not the windowing is applied, so it cannot discriminate on the live path. The real-store half is the actual gate. `src/test/board-payload-size-contract.test.js:384`.
+- NIT — windowing `_resolveBoard` degrades custom-column discovery: `_canonicalColumnId` and `GET /kanban/columns` learn column ids by scanning board cards, so a custom column holding only dormant cards drops out of the id set. Bounded, because configured custom columns are appended from config. `src/services/LocalApiServer.ts:10404`.

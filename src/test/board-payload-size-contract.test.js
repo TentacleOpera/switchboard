@@ -131,8 +131,41 @@ test('a working-set read exists and excludes dormant cards older than the hot wi
     const body = src.slice(src.indexOf('public async getBoardWorkingSet'), src.indexOf('public async getBoardFilteredByProjectWorkingSet'));
     assert.ok(/status = 'active'/.test(body), 'the working-set read must keep status=\'active\' — windowing is a read-side filter, not an archive move');
     assert.ok(/DORMANT_KANBAN_COLUMNS/.test(body), 'the dormant exclusion must reference the named constant, not an inline list');
-    assert.ok(/updated_at < \?/.test(body), 'the exclusion must key on updated_at vs the hot-window cutoff');
-    assert.ok(/IN_FLIGHT_SQL/.test(body), 'in-flight cards must be pinned (never excluded) — mirroring selectColdEligiblePlanIds');
+    // The predicates live in shared helpers (_dormantEligibleSql / _inFlightSql /
+    // _unitCohesionSql) so the same text applies to the outer row and to a
+    // feature-unit sibling. Assert the helpers define the rule and that the read
+    // applies both of them — greping the method body alone would miss a helper
+    // that silently stopped being called.
+    assert.ok(/_dormantEligibleSql\('plans'\)/.test(body), 'the working-set read must apply the dormant-eligible predicate');
+    assert.ok(/_unitCohesionSql\('plans'\)/.test(body), 'the working-set read must apply the feature-unit cohesion guard');
+    const dormHelper = src.slice(src.indexOf('private static _dormantEligibleSql'), src.indexOf('private static _unitCohesionSql'));
+    assert.ok(/updated_at < \?/.test(dormHelper), 'the exclusion must key on updated_at vs the hot-window cutoff');
+    assert.ok(/_inFlightSql/.test(dormHelper), 'in-flight cards must be pinned (never excluded) — mirroring selectColdEligiblePlanIds');
+    const inFlightHelper = src.slice(src.indexOf('private static _inFlightSql'), src.indexOf('private static _dormantEligibleSql'));
+    assert.ok(/plan_runtime_state/.test(inFlightHelper) && /dispatched_at IS NOT NULL/.test(inFlightHelper),
+        'dispatched_at must be read from plan_runtime_state — V74 moved it off plans, and plans.dispatched_at throws at prepare time');
+});
+
+test('the working-set window moves a feature and its subtasks as one unit', () => {
+    // A dormant feature row windowed out from under its live subtasks hides the
+    // WHOLE unit: the webview rolls subtasks up under their feature and filters
+    // every card carrying a featureId out of the column view (kanban.html's
+    // `!card.featureId` clauses), so with the parent absent neither renders.
+    // Cohesion is what keeps in-flight work visible as a board ages past the
+    // hot window on the DEFAULT setting — not only when someone lowers it.
+    const src = readSource('src', 'services', 'KanbanDatabase.ts');
+    const helper = src.slice(src.indexOf('private static _unitCohesionSql'), src.indexOf('public async getBoardWorkingSet'));
+    assert.ok(/FROM plans sib/.test(helper), 'cohesion must check the row\'s unit siblings');
+    assert.ok(/is_feature = 1 AND sib\.feature_id/.test(helper), 'a feature must be pinned by any non-dormant subtask');
+    assert.ok(/sib\.plan_id = \$\{alias\}\.feature_id OR sib\.feature_id = \$\{alias\}\.feature_id/.test(helper),
+        'a subtask must be pinned by its feature and by its sibling subtasks');
+    assert.ok(/NOT \$\{KanbanDatabase\._dormantEligibleSql\('sib'\)\}/.test(helper),
+        'the sibling test must use the SAME dormant-eligible predicate as the outer row');
+    // Both windowed reads must carry the guard — the repo-scoped variant is the
+    // one a browser resync with a repo filter takes.
+    const scoped = src.slice(src.indexOf('public async getBoardFilteredByProjectWorkingSet'), src.indexOf('public async getProjects'));
+    assert.ok(/_unitCohesionSql\('plans'\)/.test(scoped),
+        'the repo-scoped working-set read must apply cohesion too — otherwise a repo filter reintroduces the orphaned-unit bug');
 });
 
 test('both composition roots wire the working-set read (no parity divergence)', () => {
@@ -208,12 +241,13 @@ function insertPlan(db, wsId, planId, overrides) {
     const o = overrides || {};
     db.getDriver().run(
         `INSERT INTO plans (plan_id, session_id, topic, plan_file, kanban_column, status,
-             complexity, workspace_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             complexity, workspace_id, created_at, updated_at, is_feature, feature_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [planId, o.sessionId || '', o.topic || `topic ${planId}`,
             o.planFile || `.switchboard/plans/${planId}.md`, o.column || 'CREATED',
             o.status || 'active', o.complexity || '3', wsId,
-            o.createdAt || new Date().toISOString(), o.updatedAt || new Date().toISOString()]
+            o.createdAt || new Date().toISOString(), o.updatedAt || new Date().toISOString(),
+            o.isFeature ? 1 : 0, o.featureId || null]
     );
 }
 
@@ -252,6 +286,51 @@ function isoDaysAgo(days) {
             const working = await db.getBoardWorkingSet(wsId);
             assert.ok(working.map(r => r.planId).includes('touched-1'),
                 'a dormant-column card with a fresh updated_at must be in the working set — any write that bumps updated_at promotes it');
+        } finally {
+            await KanbanDatabase.invalidateWorkspace(root);
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+
+    await asyncTest('a dormant feature is NOT windowed out from under a live subtask (unit cohesion)', async () => {
+        // The orphaned-unit bug: the feature ages past the window while a
+        // subtask is still being worked. Windowing the feature alone hides the
+        // WHOLE unit from the board, because the webview filters every card
+        // carrying a featureId out of the column view and rolls it up under a
+        // parent that is no longer in the payload. Live work goes invisible.
+        const { root, db } = await makeWorkspace('cohesion');
+        try {
+            const wsId = await db.getWorkspaceId();
+            insertPlan(db, wsId, 'feat-1', { column: 'CODE REVIEWED', updatedAt: isoDaysAgo(60), isFeature: true });
+            insertPlan(db, wsId, 'sub-live', { column: 'CODED', updatedAt: new Date().toISOString(), featureId: 'feat-1' });
+            insertPlan(db, wsId, 'sub-dormant', { column: 'PLAN REVIEWED', updatedAt: isoDaysAgo(60), featureId: 'feat-1' });
+            const ids = (await db.getBoardWorkingSet(wsId)).map(r => r.planId);
+            assert.ok(ids.includes('feat-1'),
+                'a dormant feature with a live subtask must stay in the working set — windowing it hides the whole unit');
+            assert.ok(ids.includes('sub-dormant'),
+                'a dormant subtask of a unit that is still in play must stay too — otherwise the feature expansion desyncs from subtaskCount');
+            assert.ok(ids.includes('sub-live'), 'the live subtask must be present');
+        } finally {
+            await KanbanDatabase.invalidateWorkspace(root);
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+
+    await asyncTest('a fully dormant feature unit IS windowed out as a whole', async () => {
+        // Cohesion must not become "features are never windowed" — a unit with
+        // no member in play is exactly what the window exists to drop.
+        const { root, db } = await makeWorkspace('cohesion-all');
+        try {
+            const wsId = await db.getWorkspaceId();
+            insertPlan(db, wsId, 'keep-1', { column: 'CREATED' });
+            insertPlan(db, wsId, 'old-feat', { column: 'CODE REVIEWED', updatedAt: isoDaysAgo(60), isFeature: true });
+            insertPlan(db, wsId, 'old-sub-a', { column: 'PLAN REVIEWED', updatedAt: isoDaysAgo(60), featureId: 'old-feat' });
+            insertPlan(db, wsId, 'old-sub-b', { column: 'CODE REVIEWED', updatedAt: isoDaysAgo(60), featureId: 'old-feat' });
+            const ids = (await db.getBoardWorkingSet(wsId)).map(r => r.planId);
+            assert.ok(ids.includes('keep-1'), 'the unrelated live card must remain');
+            assert.ok(!ids.includes('old-feat'), 'a fully dormant feature must be windowed out');
+            assert.ok(!ids.includes('old-sub-a') && !ids.includes('old-sub-b'),
+                'its subtasks must be windowed out with it — the unit moves together');
         } finally {
             await KanbanDatabase.invalidateWorkspace(root);
             fs.rmSync(root, { recursive: true, force: true });

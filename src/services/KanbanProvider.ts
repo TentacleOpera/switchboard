@@ -9794,8 +9794,24 @@ This step is what moves the plan forward in the Switchboard pipeline.
         console.log(`[burst] ${label} ${phase} cards=${cardCount} clients=${clients} heap=${heapUsed}MB (mark=${Math.round(heapAtMark / (1024 * 1024))}MB)`);
     }
 
-    /** Derive a short caller tag from the stack for burst attribution. */
+    /**
+     * Derive a short caller tag from the stack for burst attribution.
+     *
+     * Gated on the SAME debug flag as {@link _logBurstAttribution}: this is
+     * called from the top of every full-state build, and `new Error().stack`
+     * captures and materialises the whole stack as a string on each call. In a
+     * change whose purpose is to cut allocation on a 1 GB device, an
+     * always-on stack capture on the burst path is the wrong trade — the plan
+     * is explicit that the attribution costs nothing when the flag is off.
+     *
+     * Either probe flag arms it: the attribution log
+     * (SWITCHBOARD_DEBUG_BURST) and the forced-GC split
+     * (SWITCHBOARD_BURST_GC_SPLIT) both record the trigger, and the split can
+     * be run on its own.
+     */
     private _burstCallerTag(): string {
+        if (process.env.SWITCHBOARD_DEBUG_BURST !== '1'
+            && process.env.SWITCHBOARD_BURST_GC_SPLIT !== '1') { return 'off'; }
         const stack = new Error().stack || '';
         const lines = stack.split('\n');
         // lines[0] = 'Error', [1] = _burstCallerTag, [2] = the _logBurstAttribution

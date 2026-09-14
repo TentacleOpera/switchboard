@@ -172,3 +172,28 @@ Both external uncertainties from the initial improve pass were resolved by measu
 ## Implementation Summary
 
 Implemented #1, #2, #3 in-repo (#4 is external scope, recorded only). Change #1 appends `--max-old-space-size=512` unconditionally to the node argv at both Go handoff sites (`internal/launcher/discovery.go` `HandoffStart` and `cmd/switchboard/main.go` `execNode`), between `node` and the entry script, with cross-referencing comments; it raises V8's old-space ceiling above the ~355 MB drift and is inert on a 4 GB box. Change #2 is additive: `KanbanPlanRecord.planFileRelative?` (optional, populated in `_readRows` from the raw DB `plan_file`) carries the repo-relative path on `GET /kanban/board` alongside the unchanged absolute `planFile`; `BatchPromptPlan.relativePath?` threads it through `buildDispatchPlans`/`expandFeatureSubtaskPlans`, and `buildPromptDispatchContext` plus the drive-mode staging templates and FEATURE FILE line now emit the relative path with a "relative to your repo root" clause (falling back to absolute only when no relative form is known). A warn-on-all-uncommitted guard (`_warnIfPlanFileUncommitted`, `git status --porcelain`) fires at dispatch without blocking. Change #3 adds a "Remote agent seats" section to `docs/REMOTE_ACCESS.md` (mosh+tmux recipe, commit-before-dispatch rule, callback path) and `docs/LOW_MEMORY_HOSTS.md` documents the unconditional heap flag. Both composition roots share `KanbanProvider.buildDispatchPlans`, so the relative-path and warn land on standalone and the extension with no divergence; the heap flag is standalone-only by nature (the extension host runs in VS Code's node). Compilation and tests skipped per session directive.
+
+## Review Findings
+
+Reviewed in place against commit `8300a014`; no source changes were needed for this subtask — the
+fixes this pass applied land in the sibling budget subtask. All three in-repo deliverables verify:
+`--max-old-space-size` is between `node` and the entry script at **both** Go handoff sites
+(`cmd/switchboard/main.go` `execNode`, `internal/launcher/discovery.go` `HandoffStart`), unconditional
+and env-overridable via `SWITCHBOARD_MAX_OLD_SPACE_MB`, never `v8.setFlagsFromString` and never
+`NODE_OPTIONS`; the repo-relative path change is genuinely additive — `planFileRelative` is populated
+from the raw DB `plan_file` beside an unchanged absolute `planFile`, confirmed live on
+`GET /kanban/board`, with `_readRows`'s absolutization untouched — and the dispatch prompt now emits
+the relative form plus the "relative to your repo root" clause, which this review's own dispatch
+prompt demonstrates end to end; `docs/REMOTE_ACCESS.md` carries the "Remote agent seats" section and
+`docs/LOW_MEMORY_HOSTS.md` documents the flag. Verification: `compile-tests` clean, Go vet/build
+clean, eslint 0 errors, and the prompt suites (`reviewer-prompt`, `minimal-prompt`,
+`unattended-batch`, `feature-drive-prompt`, `drive-mode-prompt-overhaul`, `coding-head-prompt`,
+`batch-move-team-prompt`) all pass, so the relative-path switch regressed no prompt consumer.
+Change #4 (site copy) remains external scope as the plan records, and the 512 MB value is still the
+plan's own admitted placeholder pending the sibling subtask's forced-GC measurement.
+
+## Deferred Findings
+
+- MAJOR — `_warnIfPlanFileUncommitted` resolves `repoRoot` from `rec.repoScope` but passes `planFileRel`, which is relative to `workspaceRoot`; when a repo scope is set git is asked about a path that does not exist under that cwd, returns empty, and the silence is indistinguishable from "committed". The CLAUDE.md quiet-fallback shape, bounded only because the guard is warn-only. `src/services/KanbanProvider.ts` (`_warnIfPlanFileUncommitted`).
+- NIT — the same guard spawns one fire-and-forget `git status` subprocess per plan per dispatch, on the device this feature is trying to fit inside 1 GB; a batch dispatch of N plans is N subprocesses. Worth batching into a single `git status --porcelain` over all plan paths. `src/services/KanbanProvider.ts` (`buildDispatchPlans`).
+- NIT — the 512 MB `--max-old-space-size` default is a placeholder by the plan's own account; the measured live-at-peak value that should replace it depends on the forced-GC split recorded as deferred on the sibling subtask. `cmd/switchboard/main.go`, `internal/launcher/discovery.go`.

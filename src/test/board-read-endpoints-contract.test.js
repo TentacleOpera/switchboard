@@ -115,6 +115,15 @@ function dbDouble(opts) {
             return (o.lookup ? o.lookup(id) : { outcome: 'absent' });
         },
         async getBoard() { return o.board || []; },
+        // The collection reads go through LocalApiServer._resolveBoard, which
+        // takes the WINDOWED read (dormant PLAN REVIEWED / CODE REVIEWED cards
+        // past the hot window are not materialised). A double that only answers
+        // getBoard() makes every collection handler throw and return 500 — which
+        // is how this suite went red when _resolveBoard was switched over. The
+        // double must mirror the read surface the server actually calls.
+        async getBoardWorkingSet() { return o.board || []; },
+        async getBoardFilteredByProject() { return o.board || []; },
+        async getBoardFilteredByProjectWorkingSet() { return o.board || []; },
         async getWorktrees() { return o.worktrees || []; },
         async getSubtasksByFeatureId() { return o.subtasks || []; },
         getConfigJsonSync() { return []; },
