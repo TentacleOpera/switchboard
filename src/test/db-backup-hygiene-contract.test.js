@@ -8,7 +8,9 @@
  * 1. Every backup set has a manifest.json with the required fields.
  * 2. Failed sets are marked with `.FAILED` suffix and never counted toward
  *    retention (they don't evict good sets).
- * 3. Retention prunes oldest-first, keeping at most maxHourly + maxDaily sets.
+ * 3. Retention prunes oldest-first to a byte ceiling; the newest set is never
+ *    evicted even if it alone exceeds the budget, and sets predating the
+ *    retention epoch (operator backups) are never auto-evicted at all.
  * 4. `listBackups` distinguishes verified from failed sets.
  * 5. Backup sets are created with 0o600 permissions on the DB file.
  *
@@ -30,6 +32,7 @@ async function run() {
         await test_backup_set_has_manifest_with_required_fields(tmpRoot);
         await test_failed_sets_not_counted_toward_retention(tmpRoot);
         await test_retention_prunes_oldest_first(tmpRoot);
+        await test_pre_epoch_sets_are_never_auto_evicted(tmpRoot);
         await test_listBackups_distinguishes_verified_and_failed(tmpRoot);
 
         console.log('\nAll db-backup-hygiene contract tests passed.');
@@ -109,8 +112,8 @@ async function test_failed_sets_not_counted_toward_retention(tmpRoot) {
     await fs.promises.mkdir(failedDir, { recursive: true });
     await fs.promises.writeFile(path.join(failedDir, 'manifest.json'), '{}');
 
-    const svc = new BackupService({ workspaceRoot: wsRoot, backupDir, maxHourly: 2, maxDaily: 2 });
-    // Create 3 good backups — retention cap is 4 (2+2), so all should survive.
+    const svc = new BackupService({ workspaceRoot: wsRoot, backupDir, maxBackupBytes: 1024 * 1024 * 1024 });
+    // Create 3 good backups — byte budget (1 GB) is large enough that all survive.
     for (let i = 0; i < 3; i++) {
         await svc.createBackup({ type: 'manual', workspaceRoot: wsRoot });
     }
@@ -134,9 +137,13 @@ async function test_retention_prunes_oldest_first(tmpRoot) {
     await buildWorkspace(wsRoot, wsId);
 
     const backupDir = path.join(wsRoot, '.switchboard', 'dbbackup');
-    const svc = new BackupService({ workspaceRoot: wsRoot, backupDir, maxHourly: 1, maxDaily: 1 });
+    // Byte-budget retention: set a tiny budget (1 byte). The effective budget
+    // is max(budget, newestSet), so only the newest set survives —
+    // every older set is evicted oldest-first. This tests both "oldest-first
+    // eviction" and "newest is never evicted".
+    const svc = new BackupService({ workspaceRoot: wsRoot, backupDir, maxBackupBytes: 1 });
 
-    // Create 4 backups — retention cap is 2 (1+1), so oldest should be pruned.
+    // Create 4 backups — only the newest should survive.
     const created = [];
     for (let i = 0; i < 4; i++) {
         const info = await svc.createBackup({ type: 'manual', workspaceRoot: wsRoot });
@@ -147,17 +154,62 @@ async function test_retention_prunes_oldest_first(tmpRoot) {
 
     const list = await svc.listBackups(wsRoot);
     const good = list.filter(b => !b.failed);
-    // Retention cap is 2, so at most 2 good backups survive (there may be
-    // a pre-migration backup that also counts, so we check <= 2 for the
-    // ones we created, but the total good should be at most 2 + any pre-migration).
-    assert.ok(good.length <= 3, `at most 3 good backups after retention (got ${good.length})`);
-    // The newest 2 of our created backups should be among the survivors.
+    // Only the newest set survives the tiny byte budget.
+    assert.ok(good.length >= 1, `at least 1 good backup survives (got ${good.length})`);
     const survivingIds = good.map(g => g.id);
-    assert.ok(survivingIds.includes(created[3].id), 'newest backup survived');
-    assert.ok(survivingIds.includes(created[2].id), 'second-newest backup survived');
+    assert.ok(survivingIds.includes(created[3].id), 'newest backup survived (never evicted)');
+    // The oldest backups were evicted.
+    assert.ok(!survivingIds.includes(created[0].id), 'oldest backup was evicted');
 
     await KanbanDatabase.invalidateWorkspace(wsRoot);
-    console.log('Pass: retention prunes oldest-first, keeps newest');
+    console.log('Pass: byte-budget retention prunes oldest-first, keeps newest');
+}
+
+/**
+ * Goal invariant 4: no automatic process deletes operator backups. Sets that
+ * predate the retention epoch (i.e. existed before byte-budget retention was
+ * introduced) are never counted toward the budget and never evicted — they are
+ * reported for review instead. The 1.8 GB of Sep 9-10 sets on the reference
+ * machine are exactly this case, and they are the sets that were consulted
+ * during the 2026-09-14 corruption recovery.
+ */
+async function test_pre_epoch_sets_are_never_auto_evicted(tmpRoot) {
+    const wsRoot = path.join(tmpRoot, 'ws-e');
+    const wsId = 'eeeeeeeeeeeeeeee';
+    await buildWorkspace(wsRoot, wsId);
+
+    const backupDir = path.join(wsRoot, '.switchboard', 'dbbackup');
+    await fs.promises.mkdir(backupDir, { recursive: true });
+
+    // Seed a pre-existing operator set, dated well before the service is
+    // constructed (so before the retention epoch it will seed).
+    const legacyId = '2020-01-01T00-00-00-000Z';
+    const legacyDir = path.join(backupDir, legacyId);
+    await fs.promises.mkdir(legacyDir, { recursive: true });
+    await fs.promises.writeFile(
+        path.join(legacyDir, 'manifest.json'),
+        JSON.stringify({ version: 1, id: legacyId, timestamp: '2020-01-01T00:00:00.000Z', type: 'scheduled', reason: 'hourly' })
+    );
+    // Non-trivial payload so it would blow any sane budget if it were counted.
+    await fs.promises.writeFile(path.join(legacyDir, 'kanban.db'), Buffer.alloc(64 * 1024, 1));
+    const old = new Date('2020-01-01T00:00:00.000Z');
+    await fs.promises.utimes(legacyDir, old, old);
+
+    // Tiny budget: every eligible set past the newest must be evicted.
+    const svc = new BackupService({ workspaceRoot: wsRoot, backupDir, maxBackupBytes: 1 });
+    const created = [];
+    for (let i = 0; i < 3; i++) {
+        created.push(await svc.createBackup({ type: 'manual', workspaceRoot: wsRoot }));
+        await new Promise(r => setTimeout(r, 50));
+    }
+
+    assert.ok(fs.existsSync(legacyDir), 'pre-epoch operator backup set was NOT auto-evicted');
+    const names = await fs.promises.readdir(backupDir);
+    assert.ok(names.includes(created[2].id), 'newest backup survived');
+    assert.ok(!names.includes(created[0].id), 'oldest post-epoch backup was evicted');
+
+    await KanbanDatabase.invalidateWorkspace(wsRoot);
+    console.log('Pass: pre-epoch operator backup sets are never auto-evicted');
 }
 
 async function test_listBackups_distinguishes_verified_and_failed(tmpRoot) {

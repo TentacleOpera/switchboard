@@ -55,6 +55,20 @@ export interface RotationReport {
     error?: string;
 }
 
+/**
+ * Control-plane directory attribution (Change 5). One entry per subdirectory
+ * under `~/.switchboard`, with the writer that owns it (or null if unowned)
+ * and whether the directory matches a known writer in the registry.
+ */
+export interface ControlPlaneDirInfo {
+    name: string;
+    sizeBytes: number;
+    /** The component that owns this subdirectory, or null if unowned. */
+    writer: string | null;
+    /** True when the directory matches a known writer in the registry. */
+    attributable: boolean;
+}
+
 export interface RetentionServiceDeps {
     workspaceRoot?: string;
     getDb?: () => KanbanDatabase | null;
@@ -247,6 +261,90 @@ export class RetentionService {
             source: resolvedCfg.source,
         };
         return stats;
+    }
+
+    // ─── Control-plane directory owner (Change 5) ──────────────────────────
+    //
+    // A component that knows every subdirectory a Switchboard writer may
+    // create and reports the total. `configbackup/` and `dbbackup/` already
+    // bound themselves and need only to be DECLARED. The two unowned cases —
+    // `backups/` (writer deleted) and `board-backups/` (writer never found) —
+    // are the work. Any directory the owner cannot attribute to a live writer
+    // is reported as `unattributed` rather than silently tolerated, which is
+    // what would have surfaced `board-backups/` the day it appeared.
+    //
+    // The writer registry is a static map: name → writer (or null for
+    // unowned). Any subdir not in the map is `unattributed`.
+
+    /**
+     * Static registry of `~/.switchboard` subdirectories and the writers that
+     * own them. `null` means the directory is a known artifact but no live
+     * writer in the tree owns it (e.g. `board-backups/` — its writer was never
+     * in the repo). A subdir absent from this map is `unattributed`.
+     */
+    public static readonly CONTROL_PLANE_WRITER_REGISTRY: Record<string, string | null> = {
+        'backups': 'BackupService',
+        'configbackup': 'GlobalIntegrationConfigService',
+        'dbbackup': 'KanbanDatabase.writeDbBackup',
+        'board-backups': null,
+        'boards': 'KanbanDatabase',
+        'locks': 'storeLock',
+    };
+
+    /**
+     * Enumerate every subdirectory under `~/.switchboard`, attribute each to a
+     * live writer from the registry, and report the size. Called from the
+     * existing scheduled rotation and from the standalone startup report
+     * (Change 6). The scan is best-effort: a writer creating a subdir mid-scan
+     * produces a transient unattributed entry; the owner reports a snapshot
+     * and never fails the boot on an unattributed dir.
+     */
+    public async enumerateControlPlaneDirs(): Promise<ControlPlaneDirInfo[]> {
+        const home = os.homedir();
+        const root = path.join(home, '.switchboard');
+        const results: ControlPlaneDirInfo[] = [];
+        if (!fs.existsSync(root)) return results;
+        let entries: fs.Dirent[];
+        try {
+            entries = await fs.promises.readdir(root, { withFileTypes: true });
+        } catch (err) {
+            this._log(`Failed to enumerate control-plane dir ${root}: ${err}`);
+            return results;
+        }
+        for (const entry of entries) {
+            if (!entry.isDirectory()) continue;
+            const fullPath = path.join(root, entry.name);
+            let sizeBytes = 0;
+            try {
+                sizeBytes = await this._getDirSize(fullPath);
+            } catch { /* best effort */ }
+            const writer = RetentionService.CONTROL_PLANE_WRITER_REGISTRY[entry.name];
+            const attributable = entry.name in RetentionService.CONTROL_PLANE_WRITER_REGISTRY;
+            results.push({
+                name: entry.name,
+                sizeBytes,
+                writer: writer ?? null,
+                attributable,
+            });
+        }
+        return results;
+    }
+
+    private async _getDirSize(dirPath: string): Promise<number> {
+        let total = 0;
+        const files = await fs.promises.readdir(dirPath, { withFileTypes: true });
+        for (const f of files) {
+            const fp = path.join(dirPath, f.name);
+            if (f.isDirectory()) {
+                total += await this._getDirSize(fp);
+            } else if (f.isFile()) {
+                try {
+                    const s = await fs.promises.stat(fp);
+                    total += s.size;
+                } catch { /* ignore */ }
+            }
+        }
+        return total;
     }
 
     // ─── Maintenance: control-plane prune + VACUUM ───
