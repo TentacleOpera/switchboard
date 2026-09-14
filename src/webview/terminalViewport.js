@@ -98,6 +98,9 @@
      *   {function} startFitLadder     — (name) => void
      *   {function} refreshInputState  — (name) => void
      *   {function} notifyInputDropped — (entry) => void
+     *   {function} [transformInput]   — OPTIONAL (data, entry) => string: rewrite a
+     *                                   keystroke before framing. Omit for identity;
+     *                                   the mobile key bar's sticky Ctrl uses it.
      *   {function} showPaneToast      — (text) => void
      *   {function} clearCaretRing     — () => void
      *   {function} focusPaneTerminal  — (index) => void
@@ -1650,6 +1653,20 @@
             // never swallowed.
             if (entry.suppressAnswerback && isAnswerback(data)) {
                 return;
+            }
+
+            // Optional embedder hook: rewrite a keystroke before it is attributed
+            // or framed. Guarded and absent by default — the terminals panel and
+            // the dock pass nothing, so this is identity there. The mobile command
+            // view uses it for the key bar's sticky Ctrl: a phone keyboard has no
+            // chord, so Ctrl is a latch and the NEXT character typed on the soft
+            // keyboard must become its control code on the way out. Placed after
+            // the answerback guard (which must see the raw reply) and before the
+            // paste scan (which must see what is actually sent).
+            if (typeof deps.transformInput === 'function') {
+                const rewritten = deps.transformInput(data, entry);
+                if (typeof rewritten === 'string') { data = rewritten; }
+                if (!data) { return; }
             }
 
             // Paste attribution: a copied dispatch prompt carries its own identity.

@@ -5115,7 +5115,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             // `connecting` forever. The supervisor has known the port all along;
                             // nothing asked it. Both hosts now read the same value.
                             const resolvedPtyHostPort = this._ptyHostPort ?? this._ptyHostSupervisor?.getReady()?.port;
-                            const ptyOriginAttr = resolvedPtyHostPort ? ` data-pty-host-origin="ws://127.0.0.1:${resolvedPtyHostPort}"` : '';
+                            // NEVER for the command panel. That surface is opened on a
+                            // PHONE, over the LAN — `ws://127.0.0.1:<ptyPort>` resolves to
+                            // the phone itself and the socket dies with no route. The
+                            // terminals/dock panels are opened on the serving machine (or
+                            // proxied), so loopback is right for them; command.js falls
+                            // back to `ws://location.host`, which the board proxies to the
+                            // same Go pty host from anywhere. Same reasoning as
+                            // bootstrap.ts's "NO data-pty-host-origin here, deliberately".
+                            const ptyOriginAttr = (resolvedPtyHostPort && id !== 'command')
+                                ? ` data-pty-host-origin="ws://127.0.0.1:${resolvedPtyHostPort}"` : '';
                             // Silence threshold for the "working, no output" signal — the same
                             // knob the server-side nudge sweeps read (bootstrap.ts injects it too).
                             const silenceMs = vscode.workspace.getConfiguration('switchboard').get<number>('activityLight.turnEndSilenceMs', 90000);

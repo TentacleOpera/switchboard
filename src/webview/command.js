@@ -2096,6 +2096,51 @@
     let terminalFitLadderGen = null;
     let terminalWorkingSilenceShown = null;
 
+    /** Frames the layout takes to settle after a soft-keyboard show/hide or a
+     *  rotation. Each step re-fits; a newer ladder for the same seat supersedes
+     *  the older one through the shared fitLadderGen map, which the viewport's
+     *  own ResizeObserver also reads to avoid running a second ladder for the
+     *  same reflow (terminalViewport.js:1588). */
+    const TERMINAL_FIT_LADDER_STEPS_MS = [0, 60, 200, 500];
+
+    /**
+     * Re-fit the open terminal to its container and re-report the size to the
+     * pty. Generation-guarded: a resize that lands mid-ladder bumps the gen and
+     * the older steps drop out rather than fighting the newer box.
+     */
+    function runTerminalFitLadder(name) {
+        if (!terminalViewport || !terminalFitLadderGen || !terminalTerminalsMap) { return; }
+        const gen = (terminalFitLadderGen.get(name) || 0) + 1;
+        terminalFitLadderGen.set(name, gen);
+        for (const delay of TERMINAL_FIT_LADDER_STEPS_MS) {
+            setTimeout(() => {
+                if (terminalFitLadderGen.get(name) !== gen) { return; }
+                const entry = terminalTerminalsMap.get(name);
+                if (!entry || entry.disposed) { return; }
+                try { terminalViewport.fitAndReportSize(entry); } catch { /* disposed mid-fit */ }
+            }, delay);
+        }
+    }
+
+    /**
+     * Repaint the terminal's renderer after a grid resize. Same body as the
+     * terminals panel's resyncPaneRenderer — it reads only entry.container and
+     * entry.term, so there is nothing panel-specific to drop. `rebuildAtlas`
+     * defaults to true so callers that pass no options behave as the panel's do.
+     */
+    function resyncTerminalRenderer(entry, verdict, options) {
+        if (!entry || !entry.term) { return; }
+        try { void entry.container.getBoundingClientRect(); } catch { /* ignore */ }
+        if (!options || options.rebuildAtlas !== false) {
+            try { entry.term.clearTextureAtlas(); } catch { /* ignore */ }
+        }
+        try { entry.term.refresh(0, Math.max(0, entry.term.rows - 1)); } catch { /* ignore */ }
+        if (verdict !== 'stale-canvas') { return; }
+        try {
+            entry.term._core._renderService.handleResize(entry.term.cols, entry.term.rows);
+        } catch { /* ignore */ }
+    }
+
     /**
      * Build the deps bag for the shared terminal viewport. The viewport
      * module (terminalViewport.js) is embedder-independent: every
@@ -2148,16 +2193,42 @@
             },
             markReplayGap: () => {},
             clearWorkingSilence: () => {},
-            // Fit ladder — the viewport drives xterm fit through this. The
-            // command view has no multi-pane coordination, so a no-op gen
-            // bump is sufficient: the per-entry ResizeObserver runs its own
-            // fit ladder.
-            startFitLadder: () => {},
+            // Fit ladder — the viewport drives EVERY post-resize re-fit through
+            // this. A no-op is not "sufficient": the viewport's ResizeObserver
+            // calls ensureSizeVote first, and ensureSizeVote returns early once
+            // entry.sizeVoteActive is set (terminalViewport.js:443), so after the
+            // first successful vote this callback is the only thing left that
+            // re-measures the box. On a phone that is the whole game — the soft
+            // keyboard opening and closing, and rotation, resize the viewport
+            // constantly, and a no-op would pin the terminal at its first
+            // cols/rows for the life of the session and never re-report the size
+            // to the pty. The panel's ladder re-inspects the painted grid across
+            // a pane assignment table; the command view has one terminal and no
+            // grid, so the honest minimum is a generation-guarded re-fit across
+            // the frames the layout takes to settle.
+            startFitLadder: (name) => runTerminalFitLadder(name),
             cancelDetachTimer: () => {},
-            // Renderer resync — the command view has no pane grid reflow, so
-            // a no-op is correct: the viewport's own ResizeObserver handles
-            // renderer swaps for the single pane.
-            resyncPaneRenderer: () => {},
+            // Renderer resync — NOT a no-op. fitAndReportSize calls this on every
+            // resize that actually changed cols/rows, because xterm's WebGL
+            // GlyphRenderer sizes its vertex array by cols*rows and never
+            // reallocates it on resize: every row the pty app does not go on to
+            // rewrite keeps glyph quads at the OLD column stride and overprints
+            // (see the comment at terminalViewport.js:386). clearTextureAtlas +
+            // a full refresh is the only repair. The panel's implementation
+            // touches nothing but entry.container and entry.term — there is no
+            // pane-grid concept in it — so the command view runs the same body.
+            resyncPaneRenderer: (entry, verdict, options) => resyncTerminalRenderer(entry, verdict, options),
+            // Sticky Ctrl. The key bar owns the latch; this is where it is
+            // consumed, because the character it modifies is typed on the SOFT
+            // KEYBOARD and reaches the pty through the viewport's own onData —
+            // the bar never sees it. Reads `terminalKeyBar` at call time, not at
+            // create time: the deps bag is built before the bar exists.
+            transformInput: (data) => {
+                if (terminalKeyBar && typeof terminalKeyBar.applyCtrlLatch === 'function') {
+                    return terminalKeyBar.applyCtrlLatch(data);
+                }
+                return data;
+            },
             // Seating — the command view's single terminal is always
             // "seated" (it is the only thing on the pane), so the suspend
             // path's transient-0x0 guard arms the renderer-release timer
@@ -2196,25 +2267,44 @@
      * attach goes stale; the key bar reads it on every press. Returns
      * 'application' or 'normal'.
      *
-     * xterm does not expose DECCKM through its public options API. The
-     * state lives on the internal CoreService's decPrivateModes map
-     * (`term._core.coreService.decPrivateModes.applicationCursorKeys`).
-     * This is a private API, but the vendored xterm bundle is pinned, so
-     * the path is stable for this codebase. The fallback chain guards
-     * against a disposed term or a moved private field.
+     * xterm DOES expose this publicly: `term.modes.applicationCursorKeysMode`
+     * (IModes, xterm.d.ts:1869), and the vendored bundle implements it as a
+     * getter over the same coreService state. The public getter is read first;
+     * the private `term._core.coreService.decPrivateModes.applicationCursorKeys`
+     * is kept only as a second chance for a bundle that predates IModes.
+     *
+     * When NEITHER answers we must not quietly return 'normal': a wrong arrow
+     * form makes the bar look correct and do nothing in exactly the full-screen
+     * menus it exists for, which is invisible on a desktop and unreportable
+     * from a phone. So the miss is logged once with the seat name — the value
+     * still has to be something, and 'normal' is the ESC [ form every non-TUI
+     * shell reads, so a wrong guess there is recoverable typing rather than a
+     * dead key.
      */
+    let cursorModeUnreadableWarned = false;
     function getCursorMode() {
         if (!terminalTerminalsMap) { return 'normal'; }
         for (const entry of terminalTerminalsMap.values()) {
             if (entry && entry.term) {
                 try {
+                    const modes = entry.term.modes;
+                    if (modes && typeof modes.applicationCursorKeysMode === 'boolean') {
+                        return modes.applicationCursorKeysMode ? 'application' : 'normal';
+                    }
                     const core = entry.term._core;
                     if (core && core.coreService && core.coreService.decPrivateModes
                         && typeof core.coreService.decPrivateModes.applicationCursorKeys === 'boolean') {
                         return core.coreService.decPrivateModes.applicationCursorKeys
                             ? 'application' : 'normal';
                     }
-                } catch { /* disposed or private API moved */ }
+                } catch { /* disposed mid-read */ }
+                if (!cursorModeUnreadableWarned) {
+                    cursorModeUnreadableWarned = true;
+                    console.error('[Command] DECCKM unreadable for seat "' + entry.name
+                        + '" — neither term.modes.applicationCursorKeysMode nor '
+                        + 'coreService.decPrivateModes answered. Key-bar arrows will send the '
+                        + 'ESC [ form and will not move a full-screen menu.');
+                }
             }
             break;
         }
@@ -2256,7 +2346,10 @@
                     claimed.add(m.friendlyName);
                 }
             }
-            if (seats.length > 0) { byTeam.set(team.name, seats); }
+            // Keyed by id, not name: `resolveTeamSeats` is id-keyed and two
+            // teams may carry the same display name, in which case a name key
+            // would drop one team's seats and render the other's twice.
+            if (seats.length > 0) { byTeam.set(team.id, seats); }
         }
         const ungrouped = live.filter(t => t.friendlyName && !claimed.has(t.friendlyName));
         return { byTeam, ungrouped };
@@ -2383,7 +2476,7 @@
 
         // Team sections first, in declared order.
         for (const team of teamRoster) {
-            const seats = byTeam.get(team.name);
+            const seats = byTeam.get(team.id);
             if (!seats || seats.length === 0) { continue; }
             const label = document.createElement('span');
             label.style.cssText = 'font-size:9px;font-weight:600;color:var(--text-secondary);'

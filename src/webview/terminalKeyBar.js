@@ -124,17 +124,46 @@
                 case 'ctrl-z':   deliver(ctrlLetter('z')); setCtrlArmed(false); break;
                 default: return;
             }
-            // A non-Ctrl key press consumes the latch (Ctrl+arrow, Ctrl+enter).
-            // The Ctrl key itself returns early above so the latch survives.
+            // A bar key consumes the latch. The latch's real target is the NEXT
+            // character typed on the SOFT KEYBOARD — see applyCtrlLatch — because
+            // that is the half of the keyboard the bar does not own and the half
+            // that has no chord. A bar key pressed while armed delivered its own
+            // plain sequence above (the Ctrl variants of the arrows and Enter are
+            // not worth a second row of buttons on a phone), so all that is left
+            // is to drop the latch rather than leave it armed for a keystroke the
+            // operator no longer expects it to modify.
             if (key !== 'ctrl' && ctrlArmed) {
-                // The latch was armed and a non-Ctrl key was pressed: this
-                // branch is reached only for keys that do not have their own
-                // ctrl-* case, so re-deliver as the Ctrl chord. Arrows and
-                // Enter already delivered their plain sequence above; for
-                // those the Ctrl variant is uncommon enough on a phone that
-                // we do not synthesize it — the latch simply clears.
                 setCtrlArmed(false);
             }
+        }
+
+        /**
+         * Consume the sticky-Ctrl latch against a character on its way to the pty.
+         *
+         * The embedder installs this on the terminal's outgoing data path (the
+         * viewport's `transformInput` seam), so a letter typed on the soft
+         * keyboard while Ctrl is armed leaves as its control code — which is the
+         * whole point of a latch on a keyboard with no chord. Returns `data`
+         * unchanged when the latch is not armed, so it is identity on every
+         * keystroke but the one immediately after a Ctrl tap.
+         *
+         * Only a single character is rewritten: a paste or a multi-byte escape
+         * sequence arriving while armed is passed through untouched (and clears
+         * the latch), because Ctrl+<a whole paste> is not a thing an operator can
+         * have meant.
+         */
+        function applyCtrlLatch(data) {
+            if (disposed || !ctrlArmed || typeof data !== 'string' || data.length === 0) { return data; }
+            setCtrlArmed(false);
+            if (data.length !== 1) { return data; }
+            // Ctrl maps @A-Z[\]^_ (0x40-0x5F) to 0x00-0x1F; lowercase letters
+            // fold to their uppercase first. Space is the conventional Ctrl-@
+            // (NUL). Anything else has no control code and is sent as typed.
+            const upper = data.toUpperCase();
+            const code = upper.charCodeAt(0);
+            if (code >= 0x40 && code <= 0x5f) { return String.fromCharCode(code & 0x1f); }
+            if (data === ' ') { return '\x00'; }
+            return data;
         }
 
         function makeButton(label, key, opts) {
@@ -202,6 +231,9 @@
             // Re-evaluate coarse-pointer visibility (call after a viewport
             // resize or pointer-type change).
             refresh: syncVisibility,
+            // Install on the terminal's outgoing data path so a soft-keyboard
+            // character typed while Ctrl is armed leaves as its control code.
+            applyCtrlLatch,
             // Tear down listeners and empty the container. Idempotent.
             dispose() {
                 if (disposed) return;

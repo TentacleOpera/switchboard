@@ -621,7 +621,18 @@ export function getCommandHtml(repoRoot: string, workspaceRoot: string, capabili
     // them without parser-blocking <script> tags.
     const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="command" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}" data-xterm-uri="/static/webview/vendor/xterm/xterm.js" data-xterm-fit-uri="/static/webview/vendor/xterm/addon-fit.js" data-xterm-webgl-uri="/static/webview/vendor/xterm/addon-webgl.js" data-canvas-addon-uri="/static/webview/vendor/xterm/addon-canvas.js"`;
     content = injectBodyAttributes(content, bodyAttr);
-    content = applyThemeClass(content, themeClass);
+    // `is-solo` is carried THROUGH applyThemeClass, not left on the template's
+    // own `<body class="is-solo">`. applyThemeClass strips the existing class
+    // attribute and writes the theme class in its place, and both hosts always
+    // pass a non-empty theme class (bootstrap's getTheme() and the extension's
+    // both fall back to 'cyber-theme-enabled'), so the template literal was
+    // erased on every real render. terminalViewport.js reads that class at
+    // connect time to append `&solo=1`, which is what makes the phone the
+    // gateway's primary size voter for the seat it has open — the command view
+    // is a single-terminal viewer for its whole life. Without it the viewer
+    // still renders, so nothing fails loudly; it just silently stops
+    // outranking the desktop grid.
+    content = applyThemeClass(content, themeClass ? `${themeClass} is-solo` : 'is-solo');
     return { html: content, csp };
 }
 

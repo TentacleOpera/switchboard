@@ -95,12 +95,18 @@ test('Ctrl-C emits \\x03', () => {
 
 test('every key goes through deliver(), not paste', () => {
     // deliver() is the single send path. No term.paste call may exist.
-    assert.ok(!keyBarJs.includes('term.paste'),
+    // A CALL, not a mention: the module's own header comment says "never
+    // term.paste", so a bare substring test can never pass and pins nothing.
+    const keyBarCode = keyBarJs.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    assert.ok(!/\.paste\s*\(/.test(keyBarCode),
         'the key bar must never paste — a paste lands as bracketed-paste text, not a keystroke, and a TUI reading a single arrow sees the whole bracketed block');
     assert.ok(keyBarJs.includes('function deliver(bytes)'),
         'deliver() must be the single send path for every synthesized key');
     // Every key case routes through deliver.
-    const cases = block(keyBarJs, 'function handlePress(key)', 'function setCtrlArmed(');
+    // End marker is the function that FOLLOWS handlePress. `setCtrlArmed` is
+    // declared above it, so it was never found after the start marker and
+    // block() threw on correct code.
+    const cases = block(keyBarJs, 'function handlePress(key)', 'function applyCtrlLatch(');
     for (const key of ['up', 'down', 'left', 'right', 'enter', 'esc', 'tab', 'ctrl-c']) {
         assert.ok(cases.includes(`case '${key}'`),
             `handlePress must have a case for ${key}`);
@@ -161,7 +167,70 @@ test('command.js reads DECCKM at press time for the key bar', () => {
     assert.ok(commandJs.includes('function getCursorMode()'),
         'command.js must expose getCursorMode() so the key bar reads DECCKM at press time');
     assert.ok(commandJs.includes('applicationCursorKeys'),
-        'getCursorMode must read xterm\'s decPrivateModes.applicationCursorKeys — the DECCKM state lives on coreService.decPrivateModes, not the public options API');
+        'getCursorMode must read the DECCKM state');
+});
+
+test('getCursorMode prefers the PUBLIC xterm modes API and does not miss silently', () => {
+    // term.modes.applicationCursorKeysMode is public (IModes, xterm.d.ts) and is
+    // implemented by the vendored bundle. Reading only the private
+    // coreService.decPrivateModes path and returning 'normal' on a miss is the
+    // banned fallback shape: a wrong arrow form looks correct and does nothing
+    // in exactly the full-screen menus the bar exists for.
+    const fn = block(commandJs, 'function getCursorMode()', 'function buildFleetRoster()');
+    assert.ok(fn.includes('modes.applicationCursorKeysMode'),
+        'getCursorMode must read the public term.modes.applicationCursorKeysMode first');
+    const publicAt = fn.indexOf('modes.applicationCursorKeysMode');
+    const privateAt = fn.indexOf('decPrivateModes');
+    assert.ok(publicAt !== -1 && privateAt !== -1 && publicAt < privateAt,
+        'the public modes read must come BEFORE the private decPrivateModes fallback');
+    assert.ok(/console\.(error|warn)/.test(fn),
+        'a DECCKM read that neither API answers must be logged, not silently defaulted to normal');
+    // The vendored bundle must actually implement the public getter.
+    const vendored = fs.readFileSync(path.join(REPO_ROOT, 'src', 'webview', 'vendor', 'xterm', 'xterm.js'), 'utf8');
+    assert.ok(vendored.includes('applicationCursorKeysMode'),
+        'the vendored xterm bundle must implement modes.applicationCursorKeysMode');
+});
+
+test('the command view supplies a REAL fit ladder and renderer resync, not no-ops', () => {
+    // ensureSizeVote returns early once entry.sizeVoteActive is set, so
+    // deps.startFitLadder is the only path that re-measures the box after a
+    // settled resize — and on a phone the soft keyboard resizes the viewport on
+    // every interaction. deps.resyncPaneRenderer is what rebuilds xterm's WebGL
+    // glyph atlas after a cols/rows change; a no-op leaves overprinted glyphs.
+    const bag = block(commandJs, 'function buildTerminalViewportDeps()', 'function sendTerminalInput(');
+    assert.ok(!/startFitLadder:\s*\(\s*\)\s*=>\s*\{\s*\}/.test(bag),
+        'startFitLadder must not be a no-op — nothing else re-fits the terminal after the soft keyboard opens or the phone rotates');
+    assert.ok(!/resyncPaneRenderer:\s*\(\s*\)\s*=>\s*\{\s*\}/.test(bag),
+        'resyncPaneRenderer must not be a no-op — fitAndReportSize calls it to rebuild the glyph atlas after every real resize');
+    assert.ok(commandJs.includes('function runTerminalFitLadder('),
+        'command.js must implement a fit ladder');
+    assert.ok(commandJs.includes('terminalViewport.fitAndReportSize('),
+        'the fit ladder must re-fit through the viewport\'s fitAndReportSize');
+    assert.ok(commandJs.includes('clearTextureAtlas'),
+        'the renderer resync must rebuild the texture atlas, as the terminals panel does');
+});
+
+test('sticky Ctrl is consumed on the outgoing data path, not left as a highlight', () => {
+    assert.ok(keyBarJs.includes('function applyCtrlLatch(data)'),
+        'the key bar must expose applyCtrlLatch — a Ctrl latch that only highlights is a UI lie');
+    assert.ok(/code & 0x1f/.test(keyBarJs),
+        'applyCtrlLatch must map the latched character to its control code');
+    assert.ok(viewportJs.includes('deps.transformInput'),
+        'the viewport must offer the transformInput seam the latch is consumed on');
+    assert.ok(/if \(typeof deps\.transformInput === 'function'\)/.test(viewportJs),
+        'transformInput must be OPTIONAL and guarded — the terminals panel passes none');
+    assert.ok(commandJs.includes('applyCtrlLatch(data)'),
+        'command.js must install the key bar latch on the viewport\'s transformInput seam');
+});
+
+test('the extension host does not hand the phone surface a loopback pty origin', () => {
+    // data-pty-host-origin="ws://127.0.0.1:<port>" resolves to the PHONE when the
+    // command view is opened over the LAN, which is the only way it is opened.
+    const site = taskViewerSrc.indexOf('ptyOriginAttr');
+    assert.ok(site > -1, 'TaskViewerProvider.ts must compute ptyOriginAttr');
+    const arm = taskViewerSrc.slice(site - 400, site + 400);
+    assert.ok(/id !== 'command'/.test(arm),
+        'the extension host must omit data-pty-host-origin for the command panel — loopback is unreachable from the phone the surface exists for');
 });
 
 test('command.js builds the seat switcher from the full fleet, with ungrouped seats', () => {
@@ -205,6 +274,26 @@ test('command.html body carries is-solo so the viewport adds &solo=1', () => {
         'command.html body must carry is-solo so the viewport module adds &solo=1 to the WS URL (single-terminal viewer)');
 });
 
+test('the RENDERED command panel keeps is-solo once a theme class is applied', () => {
+    // The source-file check above is not sufficient and was green while the
+    // served page was wrong: applyThemeClass REPLACES the body class attribute
+    // wholesale, and both hosts always pass a non-empty theme class, so the
+    // template's own class="is-solo" was erased on every real render and the
+    // phone silently stopped sending &solo=1.
+    const { getPanelHtmlById } = require(path.join(REPO_ROOT, 'out', 'services', 'headlessPanelHtml.js'));
+    for (const theme of [undefined, 'cyber-theme-enabled', 'theme-claudify']) {
+        const result = getPanelHtmlById('command', REPO_ROOT, REPO_ROOT, {}, theme);
+        const headEnd = result.html.search(/<\/head\s*>/i);
+        const tag = /<body\b[^>]*>/i.exec(result.html.slice(headEnd))[0];
+        assert.ok(/class="[^"]*\bis-solo\b[^"]*"/.test(tag),
+            `the rendered command body must keep is-solo (themeClass=${theme}); got: ${tag.slice(0, 200)}`);
+        if (theme) {
+            assert.ok(tag.includes(theme),
+                `the rendered command body must still carry the theme class ${theme}`);
+        }
+    }
+});
+
 test('command.html has no read-only <pre> stream box', () => {
     assert.ok(!commandHtml.includes('id="terminal-stream-output"'),
         'the read-only <pre> stream box (#terminal-stream-output) must be gone');
@@ -216,7 +305,10 @@ test('command.html has no read-only <pre> stream box', () => {
 
 test('getCommandHtml substitutes the xterm CSS URI', () => {
     const fn = block(headlessSrc, 'export function getCommandHtml(', 'export interface PanelManifestEntry');
-    assert.ok(fn.includes('{{XTERM_CSS_URI}}'),
+    // Matched WITHOUT braces: the substitution is written as an escaped regex
+    // literal (/\{\{XTERM_CSS_URI\}\}/g), so the literal text "{{XTERM_CSS_URI}}"
+    // never appears in the TypeScript source.
+    assert.ok(fn.includes('XTERM_CSS_URI'),
         'getCommandHtml must substitute the xterm CSS URI');
     assert.ok(fn.includes('/static/webview/vendor/xterm/xterm.css'),
         'getCommandHtml must resolve the xterm CSS URI to the vendor path');
@@ -241,8 +333,11 @@ test('the standalone host injects the terminal token for the command panel', () 
         'bootstrap.ts must include the command panel in the terminal token injection (id === \'command\')');
     const site = bootstrapSrc.indexOf("id === 'command'");
     assert.ok(site > -1, 'bootstrap.ts must reference the command panel id');
-    // The token injection arm must include data-terminal-token.
-    const arm = bootstrapSrc.slice(site - 200, site + 800);
+    // Scoped to the whole injection arm, not a hand-guessed byte window: the
+    // attribute sits ~2.6 KB past the id test, behind the block comment that
+    // explains the CSP reasoning. A 800-byte window stopped short and the
+    // assertion failed on correct code.
+    const arm = bootstrapSrc.slice(site, site + 4000);
     assert.ok(/data-terminal-token/.test(arm),
         'the standalone host must inject data-terminal-token for the command panel — without it every /ws/terminal upgrade 401s');
 });
@@ -252,7 +347,9 @@ test('the extension host injects the terminal token for the command panel', () =
         'TaskViewerProvider.ts must include the command panel in the terminal token injection');
     const site = taskViewerSrc.indexOf("id === 'command'");
     assert.ok(site > -1, 'TaskViewerProvider.ts must reference the command panel id');
-    const arm = taskViewerSrc.slice(site - 200, site + 1200);
+    // Same reasoning as the standalone check above: the attribute is ~3.2 KB
+    // past the id test, behind the CSP block comment.
+    const arm = taskViewerSrc.slice(site, site + 4000);
     assert.ok(/data-terminal-token/.test(arm),
         'the extension host must inject data-terminal-token for the command panel');
 });

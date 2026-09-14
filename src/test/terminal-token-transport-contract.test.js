@@ -185,7 +185,12 @@ function get(port, pathname, headers) {
         // data-attribute the moment a second one is added above it — a false
         // regression that says "the token is gone" when the token is right there.
         // Comments are stripped AFTER the slice, so prose counts against it.
-        const block = src.slice(site, site + 2600)
+        // Raised 2600 -> 4000 when the pty-host-origin attribute gained the
+        // rationale for excluding the command panel (loopback is unreachable from
+        // the phone that surface exists for): the arm grew ~700 bytes of prose
+        // ABOVE the token and this assertion reported the token missing — exactly
+        // the false regression the paragraph above describes.
+        const block = src.slice(site, site + 4000)
             .replace(/\/\*[\s\S]*?\*\//g, '')
             .replace(/^\s*\/\/.*$/gm, '');
 
