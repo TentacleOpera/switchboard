@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import { KanbanDatabase, ControlPlaneEntry } from './KanbanDatabase';
 import { ProtocolService } from './ProtocolService';
+import { seedStandingOrderFragments } from './standingOrderFragments';
 
 /**
  * ClaudeCodeMirrorService
@@ -282,6 +283,18 @@ export async function seedControlPlaneFromBundle(
         console.warn('[ClaudeCodeMirrorService] ProtocolService.seedProtocols failed:', e);
     }
 
+    // Seed static standing-order fragment bodies into control_plane as
+    // kind: 'standing-order-fragment' rows — same seed path protocols use.
+    // An operator's override_body survives re-seeds via seedControlPlane's
+    // COALESCE logic. See standingOrderFragments.ts.
+    try {
+        const fragRes = await seedStandingOrderFragments(db);
+        seeded += fragRes.seeded;
+        updated += fragRes.updated;
+    } catch (e) {
+        console.warn('[ClaudeCodeMirrorService] seedStandingOrderFragments failed:', e);
+    }
+
     return { seeded, updated };
 }
 
@@ -329,6 +342,13 @@ export async function projectControlPlane(
             targetPath = entry.name.endsWith('SKILL.md')
                 ? path.join(agentsDir, entry.name)
                 : path.join(agentsDir, 'protocols', entry.name, 'SKILL.md');
+        } else if (entry.kind === 'standing-order-fragment') {
+            // Standing-order fragment bodies are consumed by the registry at
+            // delivery (composeStandingOrderFragments reads the in-memory
+            // cache), not projected to the workspace filesystem. Projecting
+            // them would create junk files like .agents/team.head.commit on
+            // every host start.
+            continue;
         } else {
             targetPath = path.join(agentsDir, entry.name);
         }
@@ -375,7 +395,7 @@ export async function projectControlPlane(
         const ledger = {
             version: currentVersion,
             projectedAt: new Date().toISOString(),
-            files: entries.filter(e => e.kind !== 'doc').map(e => e.name)
+            files: entries.filter(e => e.kind !== 'doc' && e.kind !== 'standing-order-fragment').map(e => e.name)
         };
         fs.writeFileSync(ledgerPath, JSON.stringify(ledger, null, 2), 'utf8');
     } catch {}

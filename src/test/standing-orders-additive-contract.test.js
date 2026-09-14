@@ -6,8 +6,15 @@
  * Invariants (from the plan's Goal Invariants):
  *  1. Filling in a team definition's prompt box ADDS to what seats are told.
  *     There is no input to that box that removes a required fragment.
- *  2. Editing a fragment body in src/ changes what an already-started team is
- *     told, on the next prompt, with no migration and no restart.
+ *  2. Editing a fragment body changes what an already-started team is told, on
+ *     the next prompt, with no migration and no restart. For a DYNAMIC fragment
+ *     the live source is src/ (the body function in standingOrderFragments.ts).
+ *     For a STATIC fragment (body does not reference ctx) the live source is
+ *     the `control_plane` store (kind: 'standing-order-fragment') — a src edit
+ *     to a moved static body is no longer the live source; the store is. The
+ *     executed assertions below test a dynamic fragment (memberCompletion), so
+ *     they still pass; the static-fragment store path is covered by the
+ *     standing-order-fragment-store contract test.
  *  3. No standing-order row on disk carries system-authored text. Every
  *     persisted row is something a human wrote.
  *  4. A team with no authored prompt still receives every required fragment

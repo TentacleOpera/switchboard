@@ -1,4 +1,6 @@
+import * as crypto from 'crypto';
 import { GIT_SAFETY_DIRECTIVE, NO_SUBAGENTS_DIRECTIVE, CUSTOM_SUBAGENT_DIRECTIVE_TEMPLATE } from './agentPromptBuilder';
+import type { KanbanDatabase } from './KanbanDatabase';
 
 export type StandingOrderWorkKind = 'feature' | 'plan';
 export type StandingOrderPacing = 'head' | 'seat';
@@ -234,7 +236,7 @@ const CODING_HEAD_WORK_WITH_ROUNDS =
     + 'Never move a card backwards to an earlier pipeline stage — only Mission Control may do that. '
     + 'Never move a card to a new column yourself — that is not your role.';
 
-const REVIEW_HEAD_WORK =
+export const REVIEW_HEAD_WORK =
     'Never move a card backwards to an earlier pipeline stage — only Mission Control may do that. '
     + 'Never move a card to a new column yourself. You lead this review team. When a feature lands in your terminal, '
     + 'assign its subtask plans to your reviewer seats in batches of up to two per reviewer. The review turn is read-only: '
@@ -254,11 +256,47 @@ export const GLOBAL_QUEUE_COMPLETION_FRAGMENT_BODY =
     + 'and do not report success you cannot evidence. Output reporting the queue is empty means '
     + 'the run is over — say so and stop. Do not run the `next` command, and do not move cards.';
 
+export const ORCHESTRATOR_REPORT_FRAGMENT_BODY =
+    'When blocked during unattended orchestration, the host records the blocked card as a plan_events row — proceed to the next queue item.';
+
+/**
+ * In-memory cache of static fragment bodies resolved from the `control_plane`
+ * store. The composition→delivery path is synchronous; the store is async.
+ * The cache is warmed at startup (`loadStaticFragmentBodies`, called from
+ * `bootstrap.ts` after `seedControlPlaneFromBundle`) and invalidated on every
+ * fragment-kind `override_body`/`upsert` write (see `KanbanDatabase.ts`), so an
+ * operator's override reaches the next delivered prompt with no restart.
+ *
+ * Entry shape: `{ body, source }` where `source` is `'store'` (the row was found
+ * and its `override_body` or `body` used) or `'compiled-default'` (no row — the
+ * compiled constant from `COMPILED_DEFAULTS` was used). The source is recorded
+ * per delivery in `composeStandingOrderFragments`'s `sources` map, satisfying
+ * the repo's fallback rule ("records which source answered").
+ *
+ * Assignment is a single Map operation, atomic in Node's single-threaded event
+ * loop, so an in-flight delivery sees either the old or the new body — never a
+ * torn read.
+ */
+const staticFragmentBodyCache = new Map<string, { body: string; source: 'store' | 'compiled-default' }>();
+
+/**
+ * Resolve a static fragment's body synchronously from the cache, falling back
+ * to the compiled default when the cache is cold or the store row is absent.
+ * This is the sync-path read — the cache is populated asynchronously by
+ * `loadStaticFragmentBodies` and invalidated synchronously by
+ * `invalidateStaticFragmentBody`.
+ */
+function resolveStaticFragmentBody(id: string): { body: string; source: 'store' | 'compiled-default' } {
+    const cached = staticFragmentBodyCache.get(id);
+    if (cached) { return cached; }
+    return { body: COMPILED_DEFAULTS[id] ?? '', source: 'compiled-default' };
+}
+
 export const STANDING_ORDER_FRAGMENTS: ReadonlyArray<StandingOrderFragment> = [
     { id: STANDING_ORDER_FRAGMENT_IDS.memberCompletion, name: 'Route member completion', order: 10, obligation: 'completion', applies: ctx => ctx.inTeam && !ctx.isHead && !ctx.externalHead, body: buildMemberCompletionFragment },
     { id: STANDING_ORDER_FRAGMENT_IDS.memberWork, name: 'Team member work', order: 20, obligation: 'work', applies: ctx => ctx.inTeam && !ctx.isHead && !ctx.externalHead, body: ctx => ctx.headRole === 'lead' ? `Work your assigned subtask to completion.${ctx.reviewerSeat ? ' The shared reviewer reviews finished work before it ships.' : ''}` : '' },
     { id: STANDING_ORDER_FRAGMENT_IDS.externalMemberCallback, name: 'External head callback', order: 10, obligation: 'callback', applies: ctx => ctx.inTeam && !ctx.isHead && ctx.externalHead, body: ctx => `${ctx.headName} is your head agent. When you finish a task, report to it — write a report file to .switchboard/teams/${ctx.teamId}/reports/ named report-<UTC-compact>-<kind>-<5 digits>.md with frontmatter (from: <your seat name>, kind: finished|blocked|question|status, planId: <plan id>, created: <UTC timestamp>) and a one-line message body. Do not wait to be asked.\n\nBefore reporting, re-read your full orders at .switchboard/teams/${ctx.teamId}/member-orders.md` },
-    { id: STANDING_ORDER_FRAGMENT_IDS.gitSafety, name: 'Team git safety', order: 30, obligation: 'safety', applies: ctx => ctx.inTeam && !ctx.isHead, body: () => GIT_SAFETY_DIRECTIVE },
+    { id: STANDING_ORDER_FRAGMENT_IDS.gitSafety, name: 'Team git safety', order: 30, obligation: 'safety', applies: ctx => ctx.inTeam && !ctx.isHead, body: () => resolveStaticFragmentBody(STANDING_ORDER_FRAGMENT_IDS.gitSafety).body },
     // Subagent policy — gated on the seat's RESOLVED policy, not on team
     // membership, so heads and standalone (non-team) seats whose policy is set
     // are covered too. `default` and `useSubagents` emit nothing (applies
@@ -268,8 +306,8 @@ export const STANDING_ORDER_FRAGMENTS: ReadonlyArray<StandingOrderFragment> = [
     // delivery channels cannot drift apart — one string, two channels.
     { id: STANDING_ORDER_FRAGMENT_IDS.subagentPolicy, name: 'Seat subagent policy', order: 31, obligation: 'safety', applies: ctx => ctx.subagentPolicy === 'noSubagents' || (ctx.subagentPolicy === 'customSubagent' && !!ctx.customSubagentName), body: ctx => ctx.subagentPolicy === 'noSubagents' ? NO_SUBAGENTS_DIRECTIVE : (ctx.subagentPolicy === 'customSubagent' && ctx.customSubagentName ? CUSTOM_SUBAGENT_DIRECTIVE_TEMPLATE(ctx.customSubagentName) : '') },
     { id: STANDING_ORDER_FRAGMENT_IDS.codingHead, name: 'Coding head work', order: 10, obligation: 'work', applies: ctx => ctx.inTeam && ctx.isHead && ctx.headRole === 'lead', body: ctx => ctx.hasRegisteredRounds ? CODING_HEAD_WORK_WITH_ROUNDS : CODING_HEAD_WORK },
-    { id: STANDING_ORDER_FRAGMENT_IDS.reviewHead, name: 'Review head work', order: 10, obligation: 'work', applies: ctx => ctx.inTeam && ctx.isHead && ctx.headRole === 'reviewer', body: () => REVIEW_HEAD_WORK },
-    { id: STANDING_ORDER_FRAGMENT_IDS.headCommit, name: 'Team head commit', order: 30, obligation: 'commit', applies: ctx => ctx.inTeam && ctx.isHead && (ctx.headRole === 'lead' || ctx.headRole === 'reviewer'), body: () => TEAM_HEAD_COMMIT_FRAGMENT_BODY },
+    { id: STANDING_ORDER_FRAGMENT_IDS.reviewHead, name: 'Review head work', order: 10, obligation: 'work', applies: ctx => ctx.inTeam && ctx.isHead && ctx.headRole === 'reviewer', body: () => resolveStaticFragmentBody(STANDING_ORDER_FRAGMENT_IDS.reviewHead).body },
+    { id: STANDING_ORDER_FRAGMENT_IDS.headCommit, name: 'Team head commit', order: 30, obligation: 'commit', applies: ctx => ctx.inTeam && ctx.isHead && (ctx.headRole === 'lead' || ctx.headRole === 'reviewer'), body: () => resolveStaticFragmentBody(STANDING_ORDER_FRAGMENT_IDS.headCommit).body },
     { id: STANDING_ORDER_FRAGMENT_IDS.headCompletion, name: 'Close out subtasks', order: 40, obligation: 'completion', applies: ctx => ctx.inTeam && ctx.isHead && ctx.headRole === 'lead', body: buildHeadCompletionFragment },
     // headNext tells the head to pop the next item via `done --from` / queue/done.
     // For a lead head with REGISTERED rounds, the round owns the advance —
@@ -288,9 +326,168 @@ export const STANDING_ORDER_FRAGMENTS: ReadonlyArray<StandingOrderFragment> = [
     // it from emitting for an operator-authored row too. The body points at
     // the plan_events row the host now records, not the deleted file
     // directory — so if the gate is ever opened the instruction stays true.
-    { id: STANDING_ORDER_FRAGMENT_IDS.orchestratorReport, name: 'Report blocked work to Mission Control', order: 60, obligation: 'report', applies: ctx => ctx.inTeam && ctx.isHead && ctx.orchestratorPresent, body: () => 'When blocked during unattended orchestration, the host records the blocked card as a plan_events row — proceed to the next queue item.' },
-    { id: STANDING_ORDER_FRAGMENT_IDS.globalCompletion, name: 'Standalone queue completion', order: 10, obligation: 'completion', applies: ctx => !ctx.inTeam, body: () => GLOBAL_QUEUE_COMPLETION_FRAGMENT_BODY },
+    { id: STANDING_ORDER_FRAGMENT_IDS.orchestratorReport, name: 'Report blocked work to Mission Control', order: 60, obligation: 'report', applies: ctx => ctx.inTeam && ctx.isHead && ctx.orchestratorPresent, body: () => resolveStaticFragmentBody(STANDING_ORDER_FRAGMENT_IDS.orchestratorReport).body },
+    { id: STANDING_ORDER_FRAGMENT_IDS.globalCompletion, name: 'Standalone queue completion', order: 10, obligation: 'completion', applies: ctx => !ctx.inTeam, body: () => resolveStaticFragmentBody(STANDING_ORDER_FRAGMENT_IDS.globalCompletion).body },
 ];
+
+/**
+ * The static/dynamic census. A fragment is **static** when its `body` function
+ * does not reference the `ctx` parameter — it returns the same string on every
+ * call, so its text is store-eligible (it can move into `control_plane` as a
+ * `kind: 'standing-order-fragment'` row without losing anything). A fragment
+ * whose `body` reads `ctx` is **dynamic** and must stay in source — the store
+ * holds text, not executable logic.
+ *
+ * The split is enforced by a contract test that scans every fragment's `body`
+ * source for `ctx` references and asserts the result matches this set, so a
+ * future fragment authored as `() => someConst` is automatically store-eligible
+ * and a fragment that starts reading `ctx` is automatically removed.
+ *
+ * Five of the twelve fragments are static: `gitSafety`, `reviewHead`,
+ * `headCommit`, `orchestratorReport`, `globalCompletion`. The other seven read
+ * `ctx` (team id, head name, head role, subagent policy, registered-rounds
+ * flag, etc.) and stay in source.
+ */
+export const STATIC_STANDING_ORDER_FRAGMENT_IDS: ReadonlySet<string> = new Set([
+    STANDING_ORDER_FRAGMENT_IDS.gitSafety,
+    STANDING_ORDER_FRAGMENT_IDS.reviewHead,
+    STANDING_ORDER_FRAGMENT_IDS.headCommit,
+    STANDING_ORDER_FRAGMENT_IDS.orchestratorReport,
+    STANDING_ORDER_FRAGMENT_IDS.globalCompletion,
+]);
+
+/** True when a fragment id is in the static set (store-eligible body). */
+export function isStaticFragment(id: string): boolean {
+    return STATIC_STANDING_ORDER_FRAGMENT_IDS.has(id);
+}
+
+/**
+ * The compiled-default body for each static fragment — the string the fragment
+ * returned before the store existed. Used both as the seed source (so the
+ * `control_plane` row starts with the same text the compiled constant had) and
+ * as the sync fallback when the cache is cold or the store row is absent.
+ * A static fragment whose cache entry is missing falls back to this with
+ * `source: 'compiled-default'` — a visible, safe degradation.
+ */
+export const STATIC_FRAGMENT_BODIES: Readonly<Record<string, string>> = {
+    [STANDING_ORDER_FRAGMENT_IDS.gitSafety]: GIT_SAFETY_DIRECTIVE,
+    [STANDING_ORDER_FRAGMENT_IDS.reviewHead]: REVIEW_HEAD_WORK,
+    [STANDING_ORDER_FRAGMENT_IDS.headCommit]: TEAM_HEAD_COMMIT_FRAGMENT_BODY,
+    [STANDING_ORDER_FRAGMENT_IDS.orchestratorReport]: ORCHESTRATOR_REPORT_FRAGMENT_BODY,
+    [STANDING_ORDER_FRAGMENT_IDS.globalCompletion]: GLOBAL_QUEUE_COMPLETION_FRAGMENT_BODY,
+};
+
+/** Alias for {@link STATIC_FRAGMENT_BODIES} — the sync-path fallback table. */
+export const COMPILED_DEFAULTS = STATIC_FRAGMENT_BODIES;
+
+/** The `control_plane` kind used for standing-order fragment rows. */
+export const STANDING_ORDER_FRAGMENT_KIND = 'standing-order-fragment';
+
+/**
+ * Bundled standing-order fragments — the seed table, mirroring
+ * `BUNDLED_PROTOCOLS` in `bundledProtocols.ts`. Each entry carries the
+ * fragment id, its compiled-default body, a version, and a sha256 content
+ * hash computed at module load. Seeded into `control_plane` by
+ * `seedStandingOrderFragments` (called from `seedControlPlaneFromBundle`),
+ * where an operator's `override_body` survives re-seeds via the existing
+ * `seedControlPlane` COALESCE logic.
+ */
+export const BUNDLED_STANDING_ORDER_FRAGMENTS: Record<string, { name: string; body: string; version: string; contentHash: string }> = {};
+for (const id of STATIC_STANDING_ORDER_FRAGMENT_IDS) {
+    const body = STATIC_FRAGMENT_BODIES[id];
+    BUNDLED_STANDING_ORDER_FRAGMENTS[id] = {
+        name: id,
+        body,
+        version: '1.0.0',
+        contentHash: crypto.createHash('sha256').update(body, 'utf8').digest('hex'),
+    };
+}
+
+/**
+ * Seed all bundled static standing-order fragments into the `control_plane`
+ * table. Mirrors `ProtocolService.seedProtocols`. Idempotent —
+ * `seedControlPlane` preserves `override_body` across re-seeds, so an
+ * operator's override survives an upgrade that re-seeds.
+ */
+export async function seedStandingOrderFragments(db: KanbanDatabase): Promise<{ seeded: number; updated: number }> {
+    const entries = Object.values(BUNDLED_STANDING_ORDER_FRAGMENTS).map(f => ({
+        name: f.name,
+        kind: STANDING_ORDER_FRAGMENT_KIND,
+        version: f.version,
+        contentHash: f.contentHash,
+        body: f.body,
+        delivery: 'inline' as 'inline' | 'materialize',
+        updatedAt: new Date().toISOString(),
+    }));
+    return await db.seedControlPlane(entries);
+}
+
+/**
+ * Warm the in-memory cache of static fragment bodies from the `control_plane`
+ * store. Called at startup (from `bootstrap.ts` after `seedControlPlaneFromBundle`)
+ * so the first delivery already sees store-backed bodies. For each static id:
+ * if the row has `overrideBody`, use it with `source: 'store'`; else use `body`
+ * with `source: 'store'`; if no row, leave the cache entry absent (the
+ * `resolveStaticFragmentBody` fallback returns the compiled default with
+ * `source: 'compiled-default'`).
+ *
+ * If the read fails (DB not ready), the cache stays empty and every static
+ * fragment falls back to its compiled default — a visible, safe degradation.
+ */
+export async function loadStaticFragmentBodies(db: KanbanDatabase): Promise<void> {
+    for (const id of STATIC_STANDING_ORDER_FRAGMENT_IDS) {
+        try {
+            const entry = await db.getControlPlaneEntry(id, STANDING_ORDER_FRAGMENT_KIND);
+            if (entry) {
+                const body = (entry.overrideBody ?? entry.workspaceOverride) || entry.body;
+                if (body) {
+                    staticFragmentBodyCache.set(id, { body, source: 'store' });
+                }
+            }
+        } catch (err) {
+            console.warn(`[standingOrderFragments] loadStaticFragmentBodies: failed to read '${id}' from control_plane:`, err);
+        }
+    }
+}
+
+/**
+ * Invalidate a single cache entry — the next delivery re-reads from the store
+ * via `resolveStaticFragmentBody`'s compiled-default fallback until
+ * `loadStaticFragmentBodies` is called again. Called by
+ * `KanbanDatabase.setControlPlaneOverride` and `upsertControlPlaneEntry` for
+ * `kind: 'standing-order-fragment'` rows, satisfying the "no restart"
+ * invariant: an operator's override reaches the next delivered prompt
+ * without a host restart.
+ */
+export function invalidateStaticFragmentBody(id: string): void {
+    staticFragmentBodyCache.delete(id);
+}
+
+/** Invalidate all cached static fragment bodies. */
+export function invalidateAllStaticFragmentBodies(): void {
+    staticFragmentBodyCache.clear();
+}
+
+/**
+ * Reload a single cache entry from the store. Called after an
+ * `upsertControlPlaneEntry` or `setControlPlaneOverride` on a fragment-kind
+ * row so the next delivery sees the new value without a full reload.
+ */
+export async function reloadStaticFragmentBody(db: KanbanDatabase, id: string): Promise<void> {
+    if (!STATIC_STANDING_ORDER_FRAGMENT_IDS.has(id)) { return; }
+    staticFragmentBodyCache.delete(id);
+    try {
+        const entry = await db.getControlPlaneEntry(id, STANDING_ORDER_FRAGMENT_KIND);
+        if (entry) {
+            const body = (entry.overrideBody ?? entry.workspaceOverride) || entry.body;
+            if (body) {
+                staticFragmentBodyCache.set(id, { body, source: 'store' });
+            }
+        }
+    } catch (err) {
+        console.warn(`[standingOrderFragments] reloadStaticFragmentBody: failed to read '${id}' from control_plane:`, err);
+    }
+}
 
 const FRAGMENTS_BY_ID = new Map(STANDING_ORDER_FRAGMENTS.map(fragment => [fragment.id, fragment]));
 
@@ -298,7 +495,7 @@ export function getStandingOrderFragment(id: string): StandingOrderFragment | un
     return FRAGMENTS_BY_ID.get(id);
 }
 
-export function composeStandingOrderFragments(ids: string[], ctx: StandingOrderCompositionContext): { text: string; unknown: string[]; applied: string[] } {
+export function composeStandingOrderFragments(ids: string[], ctx: StandingOrderCompositionContext): { text: string; unknown: string[]; applied: string[]; sources: Record<string, 'store' | 'compiled-default'> } {
     const unknown: string[] = [];
     const fragments: StandingOrderFragment[] = [];
     for (const id of ids) {
@@ -307,9 +504,22 @@ export function composeStandingOrderFragments(ids: string[], ctx: StandingOrderC
         if (fragment.applies(ctx)) { fragments.push(fragment); }
     }
     fragments.sort((a, b) => a.order - b.order);
-    const bodies = fragments.map(fragment => fragment.body(ctx).trim()).filter(Boolean);
+    const sources: Record<string, 'store' | 'compiled-default'> = {};
+    const bodies: string[] = [];
+    for (const fragment of fragments) {
+        // For a static fragment, record whether the body came from the store
+        // cache or the compiled default — satisfying the repo's fallback rule
+        // ("records which source answered"). For a dynamic fragment, the body
+        // is always from source (no store read), so no source is recorded.
+        if (isStaticFragment(fragment.id)) {
+            const resolved = resolveStaticFragmentBody(fragment.id);
+            sources[fragment.id] = resolved.source;
+        }
+        const body = fragment.body(ctx).trim();
+        if (body) { bodies.push(body); }
+    }
     if (unknown.length) {
         bodies.push(...unknown.map(id => `[Unknown standing-order fragment: ${id}]`));
     }
-    return { text: bodies.join('\n\n'), unknown, applied: fragments.map(fragment => fragment.id) };
+    return { text: bodies.join('\n\n'), unknown, applied: fragments.map(fragment => fragment.id), sources };
 }

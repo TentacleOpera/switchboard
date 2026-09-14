@@ -26,6 +26,7 @@ import { discoverAndMergeDatabases } from '../services/dbMerge';
 import { adoptPresetDbOnLaunch, isKnownPresetDbPath } from '../services/cloudSyncMigration';
 import { WorkspaceExcludeService } from '../services/WorkspaceExcludeService';
 import { seedControlPlaneFromBundle, projectControlPlane } from '../services/ClaudeCodeMirrorService';
+import { loadStaticFragmentBodies } from '../services/standingOrderFragments';
 import { scaffoldProtocolLayers } from '../services/protocolScaffolder';
 import {
     columnToPromptRole,
@@ -878,6 +879,12 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
             await seedControlPlaneFromBundle(bundleDir, db, version);
             const projection = await projectControlPlane(workspaceRoot, db, version);
             console.log(`[standalone] Control-plane projection: ${projection.status} — ${projection.reason}`);
+            // Warm the in-memory static-fragment cache so the first delivery
+            // already sees store-backed bodies. Fire-and-forget: a delivery
+            // that races the warm falls back to compiled defaults (safe).
+            void loadStaticFragmentBodies(db).catch(e =>
+                console.warn('[standalone] loadStaticFragmentBodies failed (non-fatal):', e)
+            );
         }
     } catch (projErr) {
         console.warn('[standalone] Control-plane projection failed (non-fatal):', projErr);

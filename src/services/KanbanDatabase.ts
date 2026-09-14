@@ -23,6 +23,7 @@ import {
     CustomKanbanColumnConfig
 } from './agentConfig';
 import { deriveAgentDisplayName } from './cliIdentity';
+import { invalidateStaticFragmentBody, reloadStaticFragmentBody } from './standingOrderFragments';
 import type {
     PlanTicketAttachment,
     PlanTicketComment,
@@ -7308,6 +7309,18 @@ export class KanbanDatabase {
             ]
         );
         await this._persist();
+        // Reload the in-memory static-fragment cache for a fragment-kind row
+        // so the next delivery sees the new value from the store. Satisfies
+        // the "no restart" invariant: an operator's override reaches the next
+        // delivered prompt without a host restart. (Invalidate-then-reload:
+        // the delete drops the stale entry synchronously, the reload reads
+        // the fresh row asynchronously. A delivery that races the reload sees
+        // the compiled default — safe, and the next delivery after the
+        // reload resolves sees the store value.)
+        if (entry.kind === 'standing-order-fragment') {
+            invalidateStaticFragmentBody(entry.name);
+            void reloadStaticFragmentBody(this, entry.name);
+        }
     }
 
     public async setControlPlaneOverride(name: string, kind: string, override: string | null): Promise<void> {
@@ -7317,6 +7330,12 @@ export class KanbanDatabase {
             [override, new Date().toISOString(), name, kind]
         );
         await this._persist();
+        // Reload the in-memory static-fragment cache for a fragment-kind row
+        // so the next delivery sees the new override from the store.
+        if (kind === 'standing-order-fragment') {
+            invalidateStaticFragmentBody(name);
+            void reloadStaticFragmentBody(this, name);
+        }
     }
 
     public async seedControlPlane(entries: ControlPlaneEntry[]): Promise<{ seeded: number; updated: number }> {
