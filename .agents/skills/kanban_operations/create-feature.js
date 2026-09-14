@@ -2,24 +2,10 @@
 //
 // Create a feature from a set of subtask plans and link those plans to it.
 //
-// Routes through the running Switchboard extension's local API server
-// (POST /kanban/feature). The extension performs the create via KanbanProvider, so it
-// inherits the DB upsert, subtask linking, feature-file write, and board refresh.
+//   node create-feature.js <name> <planIdsJson> [workspaceRoot] [description]
 //
-// NOTE on sync: feature creation DOES fan out to Linear/ClickUp. createFeatureFromPlanIds
-// ends in _syncFeatureOutbound (KanbanProvider.ts), which pushes the feature as a parent
-// issue/task and links each subtask as a child. It is gated per tracker on BOTH
-// `setupComplete` and `realTimeSyncEnabled` being true — with either off, that tracker is
-// skipped silently. A subtask is only linked if its own issue/task already exists; ones
-// that don't are skipped and get linked on a later feature-sync trigger. Sync is
-// best-effort and never blocks creation. This script inherits all of that via the API.
-//
-// NOTE on fallback: when the extension is reachable, it is authoritative (handling
-// project inheritance, column resolution, Linear/ClickUp sync, and immediate board refresh).
-// When unreachable or on stale/alien port collision, create-feature.js falls back to
-// writing the feature markdown file directly with <!-- BEGIN SUBTASKS --> subtask links.
-// This fallback is safe because PlanIngestionEngine parses declarative subtask links and
-// synchronizes kanban.db automatically upon file ingestion.
+// POSTs /kanban/feature to the running board; falls back to writing the feature
+// markdown directly when the board is unreachable.
 //
 const fs = require('fs');
 const path = require('path');
