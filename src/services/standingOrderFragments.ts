@@ -128,10 +128,10 @@ export function buildHeadCompletionFragment(ctx: Pick<StandingOrderCompositionCo
             + 'Until you accept, that seat is not cleared and the round does not advance. Your accept '
             + 'is the only fact that releases a seat.\n\n'
             + 'The system closes the round when the last subtask in it is accepted, dispatches the '
-            + 'next registered round, and completes the feature when the last round closes. You do '
-            + 'NOT post round/complete or feature/complete — those are the system\'s job, derived '
-            + 'from your accepts. An idle lead is the correct resting state between rounds, not a '
-            + 'failure.';
+            + 'next registered round, and completes the feature when the last round closes. Closing '
+            + 'a round and completing the feature are the system\'s job, derived from your accepts — '
+            + 'you post nothing for either, and there is no round-boundary or feature-end call for '
+            + 'you to make. An idle lead is the correct resting state between rounds, not a failure.';
     }
 
     // The stateless variant: a lead whose team registered no rounds keeps the

@@ -307,6 +307,40 @@ async function run() {
         assert.strictEqual(ctx.getReleaseCount(), 1, 'onTeamReleased fired EXACTLY once — not twice');
     });
 
+    // ── 3b. A FAILED feature-complete delegation still releases the team once ──
+    //
+    // `_completeFeatureCore` returns before its own `onTeamReleased` when it
+    // resolves no subtasks. If the accept path kept `roundAdvanced` set on that
+    // branch it would suppress the caller's fire-and-forget too, and the team
+    // would be released ZERO times behind a `success: true` response.
+
+    await check('a FAILED feature-complete delegation still releases the team exactly once and says so', async () => {
+        const ctx = makeServer({
+            db: {
+                // The delegation resolves no subtasks for the feature → it
+                // returns success:false and releases nothing.
+                getSubtasksByFeatureId: async (featureId) => (featureId === 'feat-1' ? [] : []),
+            },
+        });
+        seedTwoRoundFeature(ctx);
+        ctx.rounds.get('r1').state = 'closed';
+        ctx.rounds.get('r2').state = 'dispatched';
+        ctx.rounds.get('r2').subtaskSeats.subC = { seat: 'Coder-1', delivered: true, delivered_at: '2026-09-14T00:20:02Z' };
+        ctx.plans.get('subA').completedAt = '2026-09-14T00:10:00Z';
+        ctx.plans.get('subB').completedAt = '2026-09-14T00:15:00Z';
+
+        const r = await postAccept(ctx.server, { from: 'Coding', planId: 'subC', workspaceRoot: WS }, 'test-token');
+        assert.strictEqual(r.status, 200);
+        assert.strictEqual(r.body.roundClosed, 2, 'the last round still closed');
+        assert.strictEqual(r.body.featureComplete, false,
+            'featureComplete is present and FALSE — never omitted, which would read as a non-last-round accept');
+        assert.ok(r.body.featureCompleteError, 'the failure names itself on the wire');
+        // The fire-and-forget is async; let it run.
+        await new Promise(resolve => setTimeout(resolve, 20));
+        assert.strictEqual(ctx.getReleaseCount(), 1,
+            'the team is released exactly once — by the caller’s own check, since the delegation released nothing');
+    });
+
     // ── 4. Two concurrent accepts close the round once and dispatch once ───────
 
     await check('two concurrent accepts of the last two subtasks close the round once and dispatch the next once', async () => {
@@ -329,6 +363,27 @@ async function run() {
         assert.strictEqual(nextCount, 1, 'exactly one accept dispatched round 2');
         assert.strictEqual(ctx.rounds.get('r2').state, 'dispatched', 'round 2 was dispatched');
         assert.strictEqual(ctx.getReleaseCount(), 0, 'team NOT released — next round in flight');
+    });
+
+    // ── 4b. A store with no compare-and-swap says so; it does not fake a loss ──
+
+    await check('a store without closeCodingRoundIfOpen advances nothing and is NOT reported as a lost race', async () => {
+        const ctx = makeServer();
+        // Simulate a store that predates the guard. `?.` on a missing method
+        // returns undefined, which is falsy — the loser's signal. Reporting
+        // that as roundAlreadyClosed would suppress this caller's release on
+        // the strength of a winner that never ran.
+        delete ctx.fakeDb.closeCodingRoundIfOpen;
+        seedTwoRoundFeature(ctx);
+        ctx.plans.get('subA').completedAt = '2026-09-14T00:10:00Z';
+
+        const r = await postAccept(ctx.server, { from: 'Coding', planId: 'subB', workspaceRoot: WS }, 'test-token');
+        assert.strictEqual(r.status, 200, 'the accept itself still succeeds — the card is completed');
+        assert.strictEqual(r.body.roundClosed, undefined, 'nothing was closed');
+        assert.strictEqual(r.body.roundAlreadyClosed, undefined,
+            'and it is NOT reported as a lost race — no concurrent accept closed anything');
+        assert.strictEqual(ctx.rounds.get('r1').state, 'dispatched', 'round 1 stays open — a visible stall');
+        assert.strictEqual(ctx.rounds.get('r2').state, 'registered', 'nothing dispatched');
     });
 
     // ── 5. A lead whose team has no registered rounds gets today's behaviour ───

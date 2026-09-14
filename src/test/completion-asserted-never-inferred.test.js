@@ -422,9 +422,19 @@ async function run() {
         for (const [name, src] of [['kanban.html', kanbanHtmlSrc], ['terminals.js', terminalsJsSrc]]) {
             assert.ok(!src.includes('Post a finished report to .switchboard/mission-control/reports/ naming the feature'),
                 `${name} must not instruct posting a completion report file`);
-            assert.ok(src.includes('accept --plan'),
-                `${name} must instruct using the accept --plan CLI verb`);
         }
+        // Only kanban.html still CARRIES the Coding headPrompt. The terminals.js
+        // client mirror (NEW_CODING_HEAD_PROMPT_CLIENT) was retired when system
+        // protocol composition moved to delivery-time fragment composition —
+        // `coding-head-prompt-contract.test.js` pins its absence. Demanding the
+        // completion verb from a file that carries no prompt at all is a gate
+        // that can only ever be red, so assert what is actually true of each:
+        // kanban.html names the verb, terminals.js declares no mirror.
+        assert.ok(kanbanHtmlSrc.includes('accept --plan'),
+            'kanban.html must instruct using the accept --plan CLI verb');
+        assert.ok(!terminalsJsSrc.includes('NEW_CODING_HEAD_PROMPT_CLIENT'),
+            'terminals.js must declare NO Coding headPrompt mirror — the client mirror is retired, '
+            + 'and a reinstated one would drift from teamWiring.ts the moment the verb changes');
     });
 
     // ── Summary ──────────────────────────────────────────────────────────

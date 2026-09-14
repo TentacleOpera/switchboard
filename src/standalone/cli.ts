@@ -2196,8 +2196,13 @@ async function cmdAccept(workspaceRoot: string, argv: string[]): Promise<void> {
         if (data?.nextRound) {
             console.log(`  Next round ${data.nextRound.ordinal} dispatched (state: ${data.nextRound.state}).`);
         }
-        if (data?.featureComplete) {
+        if (data?.featureComplete === true) {
             console.log('  Feature complete — team released.');
+        } else if (data?.featureComplete === false) {
+            // The last round closed but the feature-complete delegation did not
+            // run. Say so: a silent "accepted" here reads exactly like a
+            // mid-feature accept, and the feature is left half-closed.
+            console.log(`  Last round closed, but the feature did NOT complete: ${data.featureCompleteError || 'feature-complete delegation failed'}`);
         }
     } else {
         const errMsg = String(data?.error || res.body || 'accept failed');

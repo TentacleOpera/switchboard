@@ -4741,6 +4741,12 @@ export class LocalApiServer {
             let roundAlreadyClosed: number | null = null;
             let nextRoundInfo: { ordinal: number; roundId: string; state: string; dispatched: boolean; partial?: boolean; error?: string } | null = null;
             let featureComplete = false;
+            // Set on the last-round branch whether the delegation succeeded or
+            // not, so `featureComplete` is present (true OR false) on every
+            // accept that closed the last round. An omitted key there would read
+            // exactly like a non-last-round accept.
+            let featureCompleteAttempted = false;
+            let featureCompleteError: string | null = null;
 
             try {
                 const teamId = 'team_' + encodeURIComponent(from).replace(/[^a-zA-Z0-9_]/g, '_');
@@ -4784,7 +4790,18 @@ export class LocalApiServer {
                             // Last accept in the round. Close it conditionally —
                             // the compare-and-swap is the idempotence guard.
                             const now = new Date().toISOString();
-                            const closed = await db.closeCodingRoundIfOpen?.(currentRound.roundId, now);
+                            // `?.` on a missing method yields `undefined`, which
+                            // reads exactly like "a concurrent accept beat me" —
+                            // and would suppress this caller's release on the
+                            // strength of a winner that never existed. A store
+                            // without the compare-and-swap has no guard at all,
+                            // so say so and advance nothing: the round stays
+                            // open (a visible stall) and today's release path
+                            // runs, rather than the round silently wedging.
+                            if (typeof db.closeCodingRoundIfOpen !== 'function') {
+                                throw new Error(`store has no closeCodingRoundIfOpen — the round-advance compare-and-swap is unavailable, so round ${currentRound.ordinal} of feature '${currentRound.featureId}' was NOT closed`);
+                            }
+                            const closed = await db.closeCodingRoundIfOpen(currentRound.roundId, now);
                             if (!closed) {
                                 // Lost the race: a concurrent accept already
                                 // closed this round. Dispatch nothing. The
@@ -4817,6 +4834,15 @@ export class LocalApiServer {
                                     roster = await this._options.resolveTeamMembers(workspaceRoot, from);
                                 }
                                 if (!roster || roster.length === 0) {
+                                    // Membership read with no answer. The team HAS registered
+                                    // rounds (round/register 400s on a null roster), so an
+                                    // unresolved roster here means the seats are gone — not that
+                                    // the lead works alone. Say which source answered, or a
+                                    // fabricated one-name roster is indistinguishable from a real
+                                    // solo team: the dispatch below records every subtask
+                                    // `seat: null` and the round goes `partial` with no
+                                    // explanation of why.
+                                    console.warn(`[LocalApiServer] task/complete: roster UNRESOLVED for lead '${from}' (resolveTeamMembers ${this._options.resolveTeamMembers ? 'returned nothing' : 'not wired'}) — falling back to the lead alone for round ${currentRound.ordinal} of feature '${currentRound.featureId}'.`);
                                     roster = [from];
                                 }
 
@@ -4830,7 +4856,20 @@ export class LocalApiServer {
                                         clearLead: true,
                                     });
                                     featureComplete = featureResult.success;
+                                    featureCompleteAttempted = true;
                                     if (!featureResult.success) {
+                                        // The delegation released NOTHING — `_completeFeatureCore`
+                                        // returns before its `onTeamReleased` call when it resolves
+                                        // no subtasks. Leaving `roundAdvanced` set would suppress
+                                        // the caller's own release too, so the round closes, the
+                                        // feature does not complete, and the team is released ZERO
+                                        // times with `success: true` on the wire. Hand release back
+                                        // to the existing fire-and-forget and say so in the
+                                        // response — `featureComplete: false` is emitted below on
+                                        // every last-round accept, so "the delegation failed" is
+                                        // never indistinguishable from "not the last round".
+                                        featureCompleteError = featureResult.error || 'feature-complete delegation failed';
+                                        roundAdvanced = false;
                                         console.warn(`[LocalApiServer] task/complete: feature-complete delegation failed for feature '${currentRound.featureId}': ${featureResult.error}`);
                                     }
                                 } else {
@@ -4897,7 +4936,8 @@ export class LocalApiServer {
                 ...(roundClosed !== null ? { roundClosed } : {}),
                 ...(roundAlreadyClosed !== null ? { roundAlreadyClosed } : {}),
                 ...(nextRoundInfo !== null ? { nextRound: nextRoundInfo } : {}),
-                ...(featureComplete ? { featureComplete } : {}),
+                ...(featureCompleteAttempted ? { featureComplete } : {}),
+                ...(featureCompleteError ? { featureCompleteError } : {}),
             }));
         } catch (err) {
             console.error('[LocalApiServer] kanbanTaskComplete error:', err);
