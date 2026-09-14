@@ -75,5 +75,6 @@ Attach & lifecycle ─────┘
 ## Subtasks
 - [ ] [Feature B · B4 — npx Distribution (publish the standalone CLI to npm)](../plans/b4-npx-distribution-publish.md) — **PLAN REVIEWED** — ID: 9329d926-0999-442c-9b00-47e32f490f11
 - [ ] [Standalone CLI: attach to a running server, and give a detached server a way to die](../plans/standalone-cli-attach-and-lifecycle.md) — **PLAN REVIEWED** — ID: 1924d598-f384-496b-a31e-17e00440a42f
+- [ ] [Scaffolding Installs a CLI Dependency It Never Checks](../plans/scaffolding-installs-a-cli-dependency-it-never-checks.md) — **CREATED** — ID: aef9bed6-fdba-4041-badf-22a0e2be4e61
 <!-- END SUBTASKS -->
 
