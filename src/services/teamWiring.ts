@@ -19,6 +19,7 @@ import {
 } from './standingOrderFragments';
 import { resolvePreset, resolvePresetMeta, DEFAULT_MEMBER_RELATIONSHIP } from './linkPresets';
 import { substituteCliPath } from '../utils/cliPathToken';
+import { bootstrapTeamReportsDirectory } from './ScheduledJobsService';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -629,12 +630,17 @@ export const NEW_CODING_HEAD_PROMPT =
     + 'is not a membership test, and a standalone seat of the same role is not yours to drive. Take the '
     + 'subtask\'s recommendedRole as the routing decision; do not invent complexity tiers. Before sending any '
     + 'seat a revert or stand-down, confirm with git diff that the state you are undoing exists. When a seat fails '
-    + 'review on the same subtask twice, do not send that subtask to it a third time — escalate '
-    + 'one rung along intern → coder → lead, name the specific defects in the dispatch, and say '
-    + 'in your status report which seat you moved it to and why; if the seat that failed twice is '
-    + 'a lead, or your team has no seat above it, stop and report to the human instead of '
-    + 'dispatching again (or unattended: the host records the blocked card as a plan_events row '
-    + '— proceed to the next queue item). When a coder reports a subtask finished, note it and '
+    + 'review on the same subtask twice, do not send that subtask to that seat in that same context again. '
+    + 'Work down this ladder and take the first rung that applies, naming the specific defects in every dispatch: '
+    + '(1) clear that seat\'s context — POST /terminals/verb/ptyClearTerminal with {"name":"<the seat>"} — then '
+    + 're-dispatch the subtask to it with a prompt naming exactly what to fix; a cleared seat is a fresh attempt, '
+    + 'not a third one, and you may do this once per seat per subtask; (2) hand the subtask to an idle seat on your '
+    + 'team that has not worked on it, clearing it first if it holds unrelated context; (3) escalate one rung along '
+    + 'intern → coder → lead; (4) if the outstanding fix is small and localized, make it yourself; (5) only when every '
+    + 'rung above is exhausted, stop and report to the human instead of dispatching again (or unattended: the host '
+    + 'records the blocked card as a plan_events row — proceed to the next queue item). Say in your status report '
+    + 'which rung you took and why. Never report a subtask blocked for want of a higher seat without having tried '
+    + 'rungs 1, 2 and 4. When a coder reports a subtask finished, note it and '
     + 'dispatch the next subtask to an idle seat that has not already worked on it — do not stack '
     + 'subtasks on the same coder, or it will hit its context limit mid-task. One subtask per '
     + 'cleared seat before rotation. When a coder finishes its turn, the system delivers a '
@@ -1829,6 +1835,20 @@ export async function wireSpawnedTeam(opts: WireSpawnedTeamOptions): Promise<Wir
                 pacing: opts.pacing,
             });
         } catch (err) { console.warn('[teamWiring] writeMemberOrdersFile failed:', err); }
+
+        // Bootstrap the team reports directory for normal (terminal-lead)
+        // teams. The memberCompletion standing order fragment tells workers to
+        // write report files to .switchboard/teams/<teamId>/reports/ — the
+        // status pane reads this inbox. Without the directory the write fails
+        // silently and the pane reads idle even while the seat is working.
+        // External-headed teams already bootstrap this in
+        // instantiateExternalHeadedTeam; this is the twin for terminal-lead
+        // teams. Same lazy guard: returns null when .switchboard is absent.
+        if (!opts.externalHead) {
+            try {
+                await bootstrapTeamReportsDirectory(opts.workspaceRoot, groupId);
+            } catch (err) { console.warn('[teamWiring] bootstrapTeamReportsDirectory failed:', err); }
+        }
     }
 
     return { ok: true, groupId };

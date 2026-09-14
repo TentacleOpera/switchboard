@@ -402,6 +402,23 @@ test('NEW_CODING_HEAD_PROMPT keeps every load-bearing literal', () => {
         'card movement is never described as moving the card');
     assert.ok(!/advanc/i.test(NEW_REVIEW_TEAM_HEAD_PROMPT) && !NEW_REVIEW_TEAM_HEAD_PROMPT.includes('moves the card'),
         'the Review headPrompt must carry no card-movement language either');
+    // ── Recovery ladder (plan: team-lead-escalation-dead-end-recovery-ladder) ──
+    // The old terminal branch ("if the seat that failed twice is a lead, or
+    // your team has no seat above it, stop and report to the human") is gone.
+    // The replacement is a five-rung ladder that exhausts cheap recovery
+    // before declaring blocked. The prompt must name ptyClearTerminal as a
+    // recovery action (rung 1), must not contain the old dead-end fragment,
+    // and "stop and report to the human" must appear only as the last rung.
+    assert.ok(NEW_CODING_HEAD_PROMPT.includes('ptyClearTerminal'),
+        'the recovery ladder must name ptyClearTerminal as a recovery action (rung 1)');
+    assert.ok(!NEW_CODING_HEAD_PROMPT.includes('if the seat that failed twice is a lead, or your team has no seat above it, stop and report to the human'),
+        'the old dead-end terminal-branch fragment must be gone — the ladder replaces it');
+    assert.ok(NEW_CODING_HEAD_PROMPT.includes('recovery ladder') || NEW_CODING_HEAD_PROMPT.includes('Work down this ladder'),
+        'the prompt must reference the recovery ladder');
+    assert.ok(NEW_CODING_HEAD_PROMPT.includes('rung 1') || NEW_CODING_HEAD_PROMPT.includes('(1) clear'),
+        'the prompt must name rung 1 (clear and retry)');
+    assert.ok(!NEW_CODING_HEAD_PROMPT.includes('against the port in .switchboard/api-server-port.txt'),
+        'the head prompt must not reference the port file — host-neutral language only');
 });
 
 const oldSeedGroup = () => ({

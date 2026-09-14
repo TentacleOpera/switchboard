@@ -93,8 +93,8 @@ async function run() {
         'Expected the reviewer prompt to forbid creating separate review artifact files.'
     );
     assert.ok(
-        builderSource.includes('per the COMPLETION REPORT step'),
-        'Expected the directive to redirect findings to the existing plan file via the COMPLETION REPORT step.'
+        builderSource.includes('per the review-completion step'),
+        'Expected the directive to redirect findings to the existing plan file via the review-completion step.'
     );
 
     assert.ok(

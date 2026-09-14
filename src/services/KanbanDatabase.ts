@@ -13973,6 +13973,16 @@ FROM plans
         routedTo: string;
         dispatchedAgent: string;
         dispatchedIde: string;
+        /**
+         * The terminal name the card was dispatched to. Forwarded to
+         * `updateDispatchInfoByPlanFile` which stamps `dispatched_terminal`.
+         * Without it the column stamps `''`, and `attributePlansToTerminals`
+         * name tier skips the row — so planTitle reads null on the fleet
+         * list even though the card IS dispatched. The standalone host
+         * passes this directly; the extension's `_recordDispatchIdentity`
+         * is the caller that was omitting it.
+         */
+        dispatchedTerminal?: string;
     }): Promise<boolean> {
         const plan = await this.getPlanBySessionId(sessionId);
         if (!plan) { return false; }

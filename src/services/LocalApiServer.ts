@@ -22,6 +22,7 @@ import { readScheduleState } from './scheduleState';
 // path has to honour, so the balance pass ships with the writer rather than
 // being re-derived (and drifting) here.
 import { normalizeLogSlice } from './terminalLogUtils';
+import { attributePlansToTerminals } from './terminalPlanAttribution';
 import {
     STANDING_ORDERS_CONFIG_KEY,
     STANDING_ORDER_DEFINITIONS_CONFIG_KEY,
@@ -119,6 +120,23 @@ export function enqueueOnQueueChain<T>(fn: () => Promise<T>): Promise<T> {
  * the conflation fix that lets the dispatch-stall nudge and the dispatch timeout
  * see silent seats. This predicate does not read `dispatched_at`, so the longer-
  * lived stamp the conflation fix produces does not change `heldByTeam`'s result.
+ *
+ * `dispatched_at` is INTENTIONALLY absent from this predicate. It serves two
+ * unrelated jobs: the activity-light source ("an agent is working on this now")
+ * and a join key the release path could use to find a seat's card. Column moves
+ * legitimately clear the first meaning and would destroy the second if the
+ * release path depended on it. The release path (`_runQueueDone`'s candidates
+ * select) is keyed on the SAME field this predicate is — `dispatched_terminal`
+ * — so the two cannot drift apart on what "held" means: every card this
+ * predicate counts as in flight is one the seat's own `queue/done` post can
+ * reach, in any column.
+ *
+ * `queue/done` releasing a hold WITHOUT writing `completed_at` is correct, not
+ * a gap. `completed_at` is the LEAD's assertion that a plan is finished
+ * (`POST /kanban/task/complete`), a different fact from *this seat is no longer
+ * working on it*. A seat that posts `queue/done` and never `task/complete`
+ * leaves `completed_at` NULL — the team is unblocked (the holder is cleared)
+ * but the card is not asserted finished, which is the existing contract.
  */
 export function heldByTeam(p: any, teamSet: Set<string>): boolean {
     return !!p
@@ -3365,11 +3383,24 @@ export class LocalApiServer {
         //     → none. `unknown`, IDE-shaped names and bare role words are not
         //     terminal names. `record` is the PRE-move read (step 1): after step 4
         //     these fields name the reviewer, not the coder.
+        //
+        // Feature dispatch invariant: a feature dispatch seats exactly one agent —
+        // the lead of the originating team. It is never fanned to a set, and never
+        // falls back to workspace-wide resolution. If exactly one lead seat cannot
+        // be resolved, the dispatch is refused with the relevant teamRouting
+        // string. This inverts restrictToOriginTeam for feature dispatch ONLY:
+        // team-scoped resolution refuses on a miss instead of falling through. The
+        // queue/next path (restrictToOriginTeam: true) is unchanged — it already
+        // refuses. Non-feature dispatch keeps the fall-through behaviour.
+        const isFeatureDispatch = !!(record?.isFeature);
         let teamOverride: string | undefined = dispatchOptions?.targetTerminalOverride;
         let teamRouting: string | undefined;
         if (!teamOverride && this._options.resolveTeamRoleTerminal) {
             if (!gate?.role) {
                 teamRouting = 'team-scoped: dispatch role unavailable on this host — fell back to workspace-wide';
+                if (isFeatureDispatch) {
+                    return fail(409, `Feature dispatch refused: dispatch role unavailable on this host. A feature dispatch seats exactly one lead — workspace-wide resolution is not a fallback for it. Add the role seat to this host, or dispatch the card yourself with an explicit target.`);
+                }
             } else {
                 const origin = (dispatchOptions?.originTerminal || '').trim()
                     || this._plausibleOriginTerminal(record);
@@ -3378,17 +3409,30 @@ export class LocalApiServer {
                     if (hit) {
                         teamOverride = hit;
                         teamRouting = `team-scoped: ${origin} → ${hit}`;
-                    } else if (dispatchOptions?.restrictToOriginTeam) {
-                        // Opt-in (the external-headed queue/next branch): a miss is a
-                        // refusal, never a fall-through to workspace-wide routing.
+                    } else if (dispatchOptions?.restrictToOriginTeam || isFeatureDispatch) {
+                        // Opt-in (the external-headed queue/next branch) OR a feature
+                        // dispatch (the invariant): a miss is a refusal, never a
+                        // fall-through to workspace-wide routing.
                         return fail(409, `No ${gate.role} on ${origin}'s team — the card stays staged. Dispatching workspace-wide would hand this team's card to another team's terminal. Add a ${gate.role} seat to the team, or dispatch the card yourself with an explicit target.`);
                     } else {
                         teamRouting = `team-scoped: no ${gate.role} on ${origin}'s team — fell back to workspace-wide`;
                     }
                 } else {
                     teamRouting = 'team-scoped: no origin terminal — fell back to workspace-wide';
+                    if (isFeatureDispatch) {
+                        return fail(409, `Feature dispatch refused: no origin terminal — the originating team could not be identified. A feature dispatch seats exactly one lead — add a ${gate.role} seat to the team, or dispatch the card yourself with an explicit target.`);
+                    }
                 }
             }
+        }
+
+        // Safety-net count check: a feature dispatch must resolve to exactly one
+        // terminal. teamOverride is set (exactly one) or the chain above refused.
+        // An explicit targetTerminalOverride is exactly one by definition. If
+        // neither path set a target (e.g. resolveTeamRoleTerminal not wired), refuse
+        // rather than falling through to workspace-wide set resolution downstream.
+        if (isFeatureDispatch && !teamOverride) {
+            return fail(409, `Feature dispatch refused: no lead seat resolved. A feature dispatch seats exactly one lead — add a ${gate?.role ?? 'lead'} seat to the team, or dispatch the card yourself with an explicit target.`);
         }
 
         return {
@@ -4332,6 +4376,91 @@ export class LocalApiServer {
     }
 
     /**
+     * Resolve ALL coding seats currently attributed to a plan via live dispatch
+     * attribution. Used by `completeCardInternal`'s multi-seat clear (plan
+     * no-op #3) and as the fallback when the plan row's `dispatchedTerminal`
+     * is empty (no-op #2).
+     *
+     * `getLiveDispatchAttribution` returns one row per active plan with
+     * `dispatched_at IS NOT NULL` — the CURRENT dispatch, not historical. A
+     * seat that worked the subtask, released, and took a NEW subtask appears
+     * under the NEW plan's row, not this one, so it is never cleared mid-turn
+     * on its new work (the "released and moved on" guard the plan's Complexity
+     * Audit requires).
+     *
+     * Two tiers, matching `attributePlansToTerminals`:
+     *   1. name — row.dispatchedTerminal === a live terminal's friendlyName
+     *   2. path — worktree-path matching for rows with no dispatchedTerminal
+     *      (extension-host dispatch does not record a terminal name)
+     *
+     * Each seat is gated on `CODING_ROLES` (coder/intern) via the live fleet
+     * role lookup — a reviewer/lead seat is never returned by this helper
+     * (reviewer clearing is deferred; see the plan's Outstanding Questions).
+     */
+    private async _resolveAttributedCodingSeats(
+        db: any,
+        workspaceRoot: string,
+        planId: string
+    ): Promise<string[]> {
+        const CODING_ROLES = new Set(['coder', 'intern']);
+        const seats: string[] = [];
+        try {
+            const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
+            if (!wsId || typeof db.getLiveDispatchAttribution !== 'function') return seats;
+            const rows = await db.getLiveDispatchAttribution(wsId);
+            const matching = (rows || []).filter((r: any) => r && r.planId === planId);
+
+            // Tier 1 — direct name match. Rows that name their terminal.
+            for (const r of matching) {
+                const name = String(r.dispatchedTerminal || '').trim();
+                if (name && !seats.includes(name)) seats.push(name);
+            }
+
+            // Tier 2 — worktree-path match for rows with no dispatchedTerminal.
+            // Uses the same `attributePlansToTerminals` projection
+            // `ptyListTerminals` carries, so the server-side clear and the UI
+            // attribution agree on which seat holds the card.
+            const unnamed = matching.filter((r: any) => !r.dispatchedTerminal);
+            if (unnamed.length > 0 && this._options.terminalVerb) {
+                const listed = await this._options.terminalVerb('ptyListTerminals', {}, workspaceRoot);
+                const terminals = (listed?.terminals || []).map((t: any) => ({
+                    friendlyName: t.friendlyName,
+                    worktreePath: t.worktreePath,
+                    status: t.status,
+                }));
+                const worktrees = typeof db.getWorktrees === 'function' ? (await db.getWorktrees()) : [];
+                const planMap = attributePlansToTerminals(rows, worktrees, terminals);
+                for (const [name, attr] of planMap) {
+                    if (attr.planId === planId && !seats.includes(name)) {
+                        seats.push(name);
+                    }
+                }
+            }
+
+            // Gate every seat on CODING_ROLES via the live fleet role lookup.
+            // A reviewer/lead attributed to the plan is not cleared by this
+            // path (reviewer clearing deferred — see plan Outstanding Questions).
+            if (seats.length > 0 && this._options.terminalVerb) {
+                const listed = await this._options.terminalVerb('ptyListTerminals', {}, workspaceRoot);
+                const roleMap = new Map<string, string>();
+                for (const t of (listed?.terminals || [])) {
+                    if (t?.friendlyName) roleMap.set(t.friendlyName, String(t.role || '').toLowerCase());
+                }
+                return seats.filter(name => {
+                    const role = roleMap.get(name);
+                    // If the role is unknown (terminal not in the fleet list),
+                    // keep the seat — the primary `_resolveAcceptedCodingSeat`
+                    // already role-checked the dispatchedTerminal case, and a
+                    // name-match from attribution is a stronger signal than
+                    // a missing role entry.
+                    return !role || CODING_ROLES.has(role);
+                });
+            }
+        } catch { /* best effort — attribution failure does not block completion */ }
+        return seats;
+    }
+
+    /**
      * Shared completion helper for both POST /kanban/task/complete and POST /kanban/team/release.
      * Performs:
      *   1. Idempotency check via getPlanByPlanId.
@@ -4431,54 +4560,104 @@ export class LocalApiServer {
             });
         }
 
-        // 5. Clear the accepted coding seat if its current dispatched card is this planId.
+        // 5. Clear every coding seat currently attributed to this plan. The
+        // primary accepted seat (from `dispatchedTerminal` + `CODING_ROLES`)
+        // is the first candidate; attribution evidence
+        // (`getLiveDispatchAttribution`) adds any other seat currently holding
+        // this card — the escalation-ladder case where a second seat touched
+        // the subtask. Each seat is gated on `_isSeatCurrentDispatchedCard`
+        // so a seat that released and took a NEW subtask is not cleared
+        // mid-turn on its new work (the "released and moved on" guard the
+        // plan's Complexity Audit requires).
+        //
+        // No-op #1 (idempotency returns before the clear) is already closed:
+        // the clear runs regardless of `isIdempotent`. The comment below
+        // `_isSeatCurrentDispatchedCard` states the invariant — a seat at rest
+        // or moved on returns `shouldClear: false`, which is the whole guard.
         let cleared = false;
         let clearError: string | undefined;
         let clearReason: string | undefined;
-        if (acceptedCodingSeat && this._options.clearTerminalContext) {
-            const check = await this._isSeatCurrentDispatchedCard(
-                db,
-                workspaceRoot,
-                acceptedCodingSeat,
-                planId,
-                existing.dispatchedAt
-            );
-            if (!check.shouldClear) {
-                cleared = false;
-                clearReason = check.reason;
-                if (check.movedTo) {
-                    clearError = check.reason;
-                }
-            } else {
-                // NO idempotency gate here. "Did this request write completed_at?"
-                // is not "is this seat still holding a finished card?" — binding the
-                // stand-down to the write transition is the defect this feature
-                // exists to remove. _isSeatCurrentDispatchedCard above is the whole
-                // idempotency guard: a seat already at rest, or one that has moved
-                // on to another card, returns shouldClear: false. A seat that is
-                // still holding THIS finished card is cleared, however many
-                // completion reports arrive.
-                const clr = await this.clearSeatAtRest(workspaceRoot, acceptedCodingSeat, planId, 'completeCardInternal');
-                cleared = clr.cleared;
-                if (clr.error) { clearError = clr.error; clearReason = clr.error; }
-                else if (clr.reason) { clearReason = clr.reason; }
-            }
-        } else if (!acceptedCodingSeat) {
+
+        const seatsToClear = new Set<string>();
+        if (acceptedCodingSeat) seatsToClear.add(acceptedCodingSeat);
+        // No-op #2: when `dispatchedTerminal` is empty, `_resolveAcceptedCodingSeat`
+        // returns undefined. The attribution fallback finds the seat via live
+        // dispatch evidence instead.
+        const attributed = await this._resolveAttributedCodingSeats(db, workspaceRoot, planId);
+        for (const s of attributed) seatsToClear.add(s);
+
+        // Note: `from` is NOT excluded from the clear. The plan's no-op #4
+        // ("keep excluding `from`") is superseded by the self-reported-
+        // completion-clears fix (commit 1073bb1a), which deleted the name guard
+        // that suppressed self-report clears. A coder posting its own
+        // completion via `task/complete` IS cleared — the `CODING_ROLES` gate
+        // in `_resolveAcceptedCodingSeat` is the sole protection against
+        // clearing a non-coding seat, and it is sufficient: a lead
+        // (`role: lead_coder`) is never resolved as a coding seat.
+
+        if (seatsToClear.size === 0) {
             cleared = false;
-            if (dispatchedSeat === from) {
-                // The poster IS the dispatched seat — a self-report, not a lead
-                // accepting someone else's work. This branch used to call that
-                // seat a "Lead", which is false for every coder that posts its
-                // own completion (the dispatch prompt tells it to), and sends
-                // anyone reading the receipt looking for a lead that was never
-                // involved. No clear happens here by design: the proactive clear
-                // is owed to a LEAD's acceptance post, and that post has not
-                // arrived. Say that, so "why was this seat never cleared?" is
-                // answerable from the receipt.
-                clearReason = `Seat '${from}' posted its own completion — a self-report does not clear context; the proactive clear runs when a lead posts acceptance for this seat`;
-            } else {
-                clearReason = 'No coding seat attributed to plan';
+            if (!acceptedCodingSeat && attributed.length === 0) {
+                if (dispatchedSeat === from) {
+                    // The poster IS the dispatched seat — a self-report, not
+                    // a lead accepting someone else's work. This branch used to
+                    // call that seat a "Lead", which is false for every coder
+                    // that posts its own completion (the dispatch prompt tells
+                    // it to), and sends anyone reading the receipt looking for
+                    // a lead that was never involved. No clear happens here by
+                    // design: the proactive clear is owed to a LEAD's
+                    // acceptance post, and that post has not arrived. Say that,
+                    // so "why was this seat never cleared?" is answerable from
+                    // the receipt.
+                    clearReason = `Seat '${from}' posted its own completion — a self-report does not clear context; the proactive clear runs when a lead posts acceptance for this seat`;
+                } else {
+                    clearReason = 'No coding seat attributed to plan';
+                }
             }
+        } else if (this._options.clearTerminalContext) {
+            // No-op #3: clear every attributed coding seat, not just the
+            // accepted one. Each seat is independently gated on
+            // `_isSeatCurrentDispatchedCard` — a seat that moved on to a
+            // different card returns `shouldClear: false` and is skipped.
+            const clearedSeats: string[] = [];
+            const failedClears: Array<{ name: string; reason: string }> = [];
+            for (const seat of seatsToClear) {
+                const check = await this._isSeatCurrentDispatchedCard(
+                    db,
+                    workspaceRoot,
+                    seat,
+                    planId,
+                    existing.dispatchedAt
+                );
+                if (!check.shouldClear) {
+                    failedClears.push({ name: seat, reason: check.reason || 'seat moved on' });
+                    continue;
+                }
+                const clr = await this.clearSeatAtRest(workspaceRoot, seat, planId, 'completeCardInternal');
+                if (clr.cleared) {
+                    clearedSeats.push(seat);
+                } else {
+                    failedClears.push({ name: seat, reason: clr.error || clr.reason || 'clear returned false' });
+                    // Root cause 2: surface the failure. A resolved seat whose
+                    // clear returned `cleared: false` was silently dropped
+                    // before this fix — the lead was told "your POST is the
+                    // only fact that releases a seat", posted, got
+                    // `success: true`, and moved on. The warning makes the
+                    // failure visible in the log; the response carries
+                    // `cleared: false` and `clearError` so the caller can act.
+                    console.warn(`[LocalApiServer] completeCardInternal: seat '${seat}' clear returned cleared:false — ${clr.error || clr.reason || 'no reason given'}`);
+                }
+            }
+            cleared = clearedSeats.length > 0;
+            if (failedClears.length > 0 && clearedSeats.length === 0) {
+                clearError = failedClears.map(f => `${f.name}: ${f.reason}`).join('; ');
+                clearReason = clearError;
+            } else if (failedClears.length > 0) {
+                clearReason = `Cleared ${clearedSeats.length} seat(s); failed: ${failedClears.map(f => f.name).join(', ')}`;
+            }
+        } else {
+            cleared = false;
+            clearReason = 'clearTerminalContext not available';
         }
 
         return {
@@ -6764,16 +6943,52 @@ export class LocalApiServer {
                     const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
                     const board: any[] = await db.getBoard?.(wsId) || [];
 
-                    // Find the active card this seat holds: dispatchedTerminal
-                    // === from AND dispatched_at set. A seat cannot release
-                    // another seat's card. (A card returning to the queue has
-                    // its holder released via releaseDispatchHolder; turn-end
-                    // backstop here uses clearWorkingState).
-                    const held = board.find((p: any) =>
-                        p && typeof p.dispatchedTerminal === 'string'
-                        && p.dispatchedTerminal === from
-                        && !!p.dispatchedAt
-                    );
+                    // Find the active card this seat holds. Keyed on the HOLDER
+                    // (dispatched_terminal), NOT on dispatched_at: every column
+                    // move nulls dispatched_at and deliberately keeps the holder
+                    // stamp (KanbanDatabase.ts:2664, :6810), so requiring the
+                    // timestamp here made a card unreleasable by its own seat the
+                    // moment the board advanced it — while heldByTeam (above),
+                    // which reads only dispatched_terminal + completed_at, went on
+                    // counting it as in flight. 569 of 571 blocked cards were in
+                    // that state. A seat cannot release another seat's card
+                    // (dispatched_terminal === from is unchanged).
+                    //
+                    // This is NOT the deleted column-release valve
+                    // (LocalApiServer.ts:2040-2056, the comment at :3645-3663).
+                    // Board position still releases nothing; the seat's explicit
+                    // post is still the only release. The post can now find its
+                    // card, which is all that changes.
+                    //
+                    // Ordering: a live card (dispatched_at set) wins over an
+                    // orphaned one, so a seat holding exactly one live card
+                    // behaves exactly as before. With only orphans and no planId,
+                    // the most recently dispatched wins — deliberate, and the
+                    // completion directives send planId so it is a transitional
+                    // case only.
+                    const candidates = board
+                        .filter((p: any) =>
+                            p && typeof p.dispatchedTerminal === 'string'
+                            && p.dispatchedTerminal === from)
+                        .sort((a: any, b: any) =>
+                            (b.dispatchedAt || '').localeCompare(a.dispatchedAt || ''));
+                    let held: any;
+                    if (planId) {
+                        held = candidates.find((p: any) => p.planId === planId);
+                        // planId named a card the seat does not hold. The
+                        // filter is dispatched_terminal === from, so another
+                        // seat's card never enters candidates — a missing
+                        // match means the seat holds OTHER cards but not
+                        // this one, which is a mismatch (refused), NOT a
+                        // duplicate (silent no-op). Distinguishing the two is
+                        // the guard's job now that planId drives selection.
+                        if (!held && candidates.length > 0) {
+                            resolve(fail(400, `planId mismatch: seat '${from}' does not hold '${planId}' (holds '${candidates[0].planId}'). A seat cannot release another seat's card.`));
+                            return;
+                        }
+                    } else {
+                        held = candidates[0];
+                    }
 
                     // No active card → duplicate. A retried report (network
                     // retry) or the mtime watcher clearing first both land
@@ -6782,12 +6997,6 @@ export class LocalApiServer {
                     if (!held) {
                         const prior = _lastSeatPop.get(`${workspaceRoot}\0${from}`);
                         resolve(dup(prior ? prior.dispatched : null));
-                        return;
-                    }
-
-                    // planId, when given, must match the card the seat holds.
-                    if (planId && held.planId !== planId) {
-                        resolve(fail(400, `planId mismatch: seat '${from}' holds '${held.planId}', not '${planId}'. A seat cannot release another seat's card.`));
                         return;
                     }
 
@@ -6800,6 +7009,26 @@ export class LocalApiServer {
                         transitioned = await db.clearWorkingState(held.planFile, held.workspaceId || wsId);
                     } catch (clrErr) {
                         console.error('[LocalApiServer] clearWorkingState failed:', clrErr);
+                    }
+                    // Orphan fallback. clearWorkingState's WHERE clause
+                    // requires `dispatched_at IS NOT NULL`, so an orphaned
+                    // card (column move nulled dispatched_at, kept
+                    // dispatched_terminal) is a no-op for it — the UPDATE
+                    // matches 0 rows and it returns false. Without this
+                    // fallback the orphan is found by the select above but
+                    // never released, so the defect this card repairs would
+                    // persist. releaseDispatchHolder nulls dispatched_terminal
+                    // (the field heldByTeam reads) with no IS NOT NULL gate,
+                    // so it clears the holder stamp and the card leaves the
+                    // in-flight predicate. For a live card (dispatched_at
+                    // set) clearWorkingState already transitioned and this
+                    // branch is skipped — live-card behaviour is unchanged.
+                    if (!transitioned) {
+                        try {
+                            transitioned = await db.releaseDispatchHolder?.(held.planFile, held.workspaceId || wsId);
+                        } catch (relErr) {
+                            console.error('[LocalApiServer] releaseDispatchHolder orphan fallback failed:', relErr);
+                        }
                     }
                     if (!transitioned) {
                         // Already cleared (mtime watcher got there first, or a

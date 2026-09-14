@@ -8145,6 +8145,12 @@
                 // the last output THIS CLIENT saw, not the last the pty produced.
                 // Rendered with that wording; never as "silent for N minutes".
                 lastOutputAt: entry ? (entry.lastPrintableAt || entry.firstFrameAt || 0) : 0,
+                // The fleet payload's lastDataAt — the HOST's record of the last
+                // byte the pty produced, not the client's. A seat with recent
+                // lastDataAt and no plan/report reads as active-but-unattributed,
+                // not idle. 0 means no heartbeat data ("no evidence" is not "at
+                // rest", matching the sweep's own guard).
+                lastDataAt: typeof fleetItem.lastDataAt === 'number' ? fleetItem.lastDataAt : 0,
                 listening: Boolean(entry && !entry.suspended && entry.ws && entry.ws.readyState === WebSocket.OPEN),
                 replayGap: terminalReplayGaps.has(name)
             }
@@ -8269,7 +8275,18 @@
             // this client can read for this seat. Only the middle one is an
             // alarm — the last is a known limit, not a failure.
             if (state.reportsSource === 'team') {
-                none.textContent = 'nothing declared';
+                // The inbox answered and this seat has said nothing. If the host
+                // sees recent pty output (lastDataAt within the liveness window),
+                // the seat is working but has not declared yet — say so rather
+                // than "nothing declared", which reads as idle. A seat with no
+                // recent lastDataAt stays "nothing declared" honestly.
+                const lastDataAt = state.signals.lastDataAt || 0;
+                const recent = lastDataAt > 0 && (Date.now() - lastDataAt) < WORKING_SILENCE_MS;
+                if (recent) {
+                    none.textContent = 'working, no report yet';
+                } else {
+                    none.textContent = 'nothing declared';
+                }
             } else if (state.reportsSource === 'unreachable') {
                 none.textContent = 'declarations unavailable — the report inbox did not answer';
                 none.classList.add('is-unreachable');

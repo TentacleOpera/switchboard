@@ -112,14 +112,19 @@ If you are remote:
   subagent policy) and the dispatch directives. Use `"message"` for a fix
   round, a question, a verdict or a relayed note: the text is delivered alone.
   Omitting `kind` on a payload that carries no `dispatch` object is read as a
-  message, so a dispatch must say so.
+  message, so a dispatch must say so. **Pass `dispatch: { planId, role }`** on
+  a dispatch — the host stamps `dispatched_terminal` and `dispatched_at` on
+  the card, which lights up `planTitle` on the status pane and gives the
+  release paths a holder to act on. Without it the card has no holder and the
+  pane reads idle even while the seat is working.
   ```bash
   switchboard api POST /terminals/verb/ptySendPrompt '{
     "name": "<workerName>",
     "data": "<instructions>",
     "origin": "<your-agent-name>",
     "clearBeforePrompt": false,
-    "kind": "dispatch"
+    "kind": "dispatch",
+    "dispatch": { "planId": "<subtaskPlanId>", "role": "coder" }
   }'
   ```
 - **Hand whole feature to review when all subtasks pass — ONLY if your team has a reviewer seat:**

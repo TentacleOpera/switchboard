@@ -358,3 +358,7 @@ scripts or workflow steps.
   pair even though it "fixes" the symptom.
 - **Negative:** `dispatched_at` is not written by any new code path; the activity light keeps its
   current behaviour.
+
+## Implementation Summary
+
+Server-side fix only. `_runQueueDone` now selects the held card by `dispatchedTerminal === from` (the same field `heldByTeam` reads), not by `dispatchedAt`, so a column move that nulls `dispatched_at` no longer strands the holder. Candidates are sorted so a live card (timestamp set) wins over orphans when no `planId` is supplied; a `planId` naming another seat's card is refused with 400, not silently treated as a duplicate. Because `clearWorkingState`'s WHERE clause requires `dispatched_at IS NOT NULL` and is a no-op for an orphan, an `releaseDispatchHolder` fallback nulls `dispatched_terminal` when `clearWorkingState` returns false — live-card behaviour is unchanged. `heldByTeam`'s comment now records that `dispatched_at` is intentionally absent and that `queue/done` clearing a holder without writing `completed_at` is correct (completion is the lead's separate assertion). Contract tests cover orphan release, predicate-agreement drift guard, live-card priority, `planId` orphan selection, wrong-seat refusal, and column-move invariance. Compilation and automated tests were intentionally skipped per user directive; the checks remain written in the Verification Plan above.

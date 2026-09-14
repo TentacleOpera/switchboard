@@ -19,12 +19,12 @@ Nine loose plans that are one lifecycle: a seat given work must have a holder, a
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Completion Directive Becomes a Standing Order, Not a Prompt-Injected Section](../plans/feature_plan_20260827172158_completion-directive-becomes-standing-order.md) — **PLAN REVIEWED** — ID: c0302557-8abf-404e-ab46-f0422003d5de
-- [ ] [The lead's acceptance post is the only thing that releases a seat, and it silently releases nothing](../plans/lead-acceptance-post-silently-releases-no-seat.md) — **PLAN REVIEWED** — ID: 4431d447-b8ee-4969-9283-0354c76bee75
-- [ ] [Team lead escalation must exhaust cheap recovery before declaring a subtask blocked](../plans/team-lead-escalation-dead-end-recovery-ladder.md) — **PLAN REVIEWED** — ID: 3b387cf6-07a6-4d4b-952e-9b5f2fd873ee
-- [ ] [A column move orphans the dispatch holder, and the seat can never release it](../plans/a-column-move-orphans-the-dispatch-holder.md) — **PLAN REVIEWED** — ID: bf23c37f-d3d3-44b4-9378-340746214016
-- [ ] [Status panes render an empty model — nothing records what a seat is working on](../plans/status-panes-render-an-empty-model-nothing-records-what-a-seat-is-doing.md) — **PLAN REVIEWED** — ID: 1b481ce7-bdba-4f6b-959e-a83b2713faeb
-- [ ] [A feature dispatch seats exactly one lead — make it an invariant, not an outcome](../plans/a-feature-dispatch-seats-one-lead-never-a-set.md) — **PLAN REVIEWED** — ID: 6a025695-3d8d-4a63-822b-5755cc6a2a6b
+- [ ] [Completion Directive Becomes a Standing Order, Not a Prompt-Injected Section](../plans/feature_plan_20260827172158_completion-directive-becomes-standing-order.md) — **LEAD CODED** — ID: c0302557-8abf-404e-ab46-f0422003d5de
+- [ ] [The lead's acceptance post is the only thing that releases a seat, and it silently releases nothing](../plans/lead-acceptance-post-silently-releases-no-seat.md) — **LEAD CODED** — ID: 4431d447-b8ee-4969-9283-0354c76bee75
+- [ ] [Team lead escalation must exhaust cheap recovery before declaring a subtask blocked](../plans/team-lead-escalation-dead-end-recovery-ladder.md) — **LEAD CODED** — ID: 3b387cf6-07a6-4d4b-952e-9b5f2fd873ee
+- [ ] [A column move orphans the dispatch holder, and the seat can never release it](../plans/a-column-move-orphans-the-dispatch-holder.md) — **LEAD CODED** — ID: bf23c37f-d3d3-44b4-9378-340746214016
+- [ ] [Status panes render an empty model — nothing records what a seat is working on](../plans/status-panes-render-an-empty-model-nothing-records-what-a-seat-is-doing.md) — **LEAD CODED** — ID: 1b481ce7-bdba-4f6b-959e-a83b2713faeb
+- [ ] [A feature dispatch seats exactly one lead — make it an invariant, not an outcome](../plans/a-feature-dispatch-seats-one-lead-never-a-set.md) — **LEAD CODED** — ID: 6a025695-3d8d-4a63-822b-5755cc6a2a6b
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing (2026-09-04, Board Collapse 08)

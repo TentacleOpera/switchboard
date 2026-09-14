@@ -90,6 +90,8 @@ import {
     resolveTeamStanding,
     removeReviewerCallbackOrder,
     resolveHasRegisteredRoundsForSeat,
+    installCompletionDirectiveOrder,
+    COMPLETION_DIRECTIVE_ROLES,
 } from '../services/standingOrders';
 import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExternalTeamTemplate } from '../services/agentGroupInstantiation';
 // The pure migrators are deliberately NOT imported here — see the note at the
@@ -671,7 +673,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                         subagentPolicy: seatOpts?.subagentPolicy,
                         customSubagentName: seatOpts?.customSubagentName,
                         hasRegisteredRounds: await resolveHasRegisteredRoundsForSeat(db, handle.friendlyName, effectiveOrders, groups || []).catch(() => false),
-                    });
+                    }, { terminalName: handle.friendlyName });
                     soBlockAdded = out !== beforeSO;
                 }
             } catch { /* a degraded prompt beats a lost dispatch */ }
@@ -2456,6 +2458,15 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     // (In the extension host, standing orders write to the latched
                     // _apiServerWorkspaceRoot rather than the spawn or definition root.)
                     const wired = await wireSpawnedTeam({ db, settings, headName: terminal.friendlyName, children: spawned.children, members: rawDelegates, workspaceRoot });
+                    // Install the completion-directive standing order for the
+                    // terminal's role. Idempotent — re-installation replaces, not
+                    // duplicates. Covers standalone (non-team) terminals too.
+                    try {
+                        const role = (terminal.role || payload.role || 'coder').trim().toLowerCase();
+                        if (COMPLETION_DIRECTIVE_ROLES.includes(role)) {
+                            await installCompletionDirectiveOrder(db, role);
+                        }
+                    } catch { /* best-effort — the dispatch payload gate is the fallback */ }
                     let wiringError: string | undefined;
                     let teamGroupId: string | undefined;
                     if (!wired.ok) {
@@ -4076,7 +4087,7 @@ Each plan file must include:
         // rounds so the lead-head fragments switch to the register/mark-done
         // loop. Reads coding_rounds DIRECTLY; false is the safe default.
         const hasRegisteredRounds = await resolveHasRegisteredRoundsForSeat(db, targetName, orders, groups || []).catch(() => false);
-        return applyStandingOrders(text, targetName, orders, liveNames, groups || [], undefined, { hasRegisteredRounds });
+        return applyStandingOrders(text, targetName, orders, liveNames, groups || [], undefined, { hasRegisteredRounds }, { terminalName: targetName });
     });
     // Default for every create() path that passes no explicit claudeInlineRendering.
     // The two ptyCreateTerminal / ptyCreateBatch arms below resolve it themselves, but
@@ -5465,8 +5476,54 @@ Each plan file must include:
             console.warn('[standalone] databaseRestored broadcast failed:', e);
         }
     });
+    // Change 1: the stranded `.in-progress` startup sweep runs from the
+    // BackupService constructor (fire-and-forget), so both composition roots
+    // get it with no extension-specific wiring. No explicit call here.
+
     const retentionService = RetentionService.getInstance({ workspaceRoot });
     retentionService.startScheduledRotation();
+
+    // ── Change 6: report control-plane directory total at startup ──────────
+    // The climb from 786 MB (Sep 6) to 1.9 GB (Sep 14) happened over eight days
+    // with nothing surfacing it. Enumerate every subdirectory under
+    // `~/.switchboard`, attribute each to a live writer, and log the total
+    // against the configured budget. Standalone-only — the appliance's
+    // startup is the operator's surface; the extension does not own it.
+    try {
+        const dirs = await retentionService.enumerateControlPlaneDirs();
+        const totalBytes = dirs.reduce((sum, d) => sum + d.sizeBytes, 0);
+        const budget = await backupService.getBackupBudgetBytes();
+        for (const d of dirs) {
+            const writerLabel = d.attributable
+                ? (d.writer ? `writer=${d.writer}` : 'writer=none (unowned artifact)')
+                : 'UNATTRIBUTED';
+            log(opts, `  control-plane dir ~/.switchboard/${d.name}: ${d.sizeBytes} bytes (${writerLabel})`);
+        }
+        log(opts, `Control-plane total: ${(totalBytes / (1024 * 1024)).toFixed(1)} MB (backup budget ${budget.value} bytes, source ${budget.source})`);
+    } catch (e) {
+        log(opts, `Control-plane dir report failed: ${e}`);
+    }
+
+    // ── Change 2 + 7: opt-in scheduled backups, standalone-only ───────────
+    // Read the source-tagged config. "Absent" (source 'default',
+    // enabled=false) and "explicitly false" (source 'config_store',
+    // enabled=false) must be distinguishable in the log — a bare
+    // `getConfigJson(key, false)` default is an indistinguishable fallback and
+    // is the exact bug pattern AGENTS.md bans. The scheduled path is
+    // standalone-only: the extension host is being removed in a hard cutover,
+    // and the Pi is where the disk budget actually exists. Do NOT wire this
+    // into src/extension.ts — that is throwaway work in a host that is going
+    // away.
+    try {
+        const resolved = await backupService.getScheduledBackupConfig();
+        log(opts, `Scheduled backups: enabled=${resolved.config.enabled} intervalMs=${resolved.config.intervalMs} source=${resolved.source}`);
+        if (resolved.config.enabled) {
+            backupService.startScheduledBackups(resolved.config.intervalMs);
+            log(opts, `Scheduled backups ARMED (interval ${resolved.config.intervalMs}ms, source ${resolved.source})`);
+        }
+    } catch (e) {
+        log(opts, `Scheduled backup config read failed: ${e}`);
+    }
 
     const probeSampler = ProbeSamplingService.getInstance({
         getActiveTerminalCount: () => ptyFleetService?.listActive()?.length ?? 0,

@@ -1198,9 +1198,9 @@ export const WRITE_FEATURE_DESCRIPTION_IF_EMPTY_DIRECTIVE = `FEATURE DESCRIPTION
 If all four sections already exist with substantive content, leave them untouched. If only some are missing, backfill only the missing ones. Treat a section titled "## Dependencies" (without "& sequencing") as present — do not duplicate it. Do NOT modify the auto-generated "<!-- BEGIN SUBTASKS -->" block or the "<!-- BEGIN WORKTREES -->" block — write your sections between the title/complexity and the BEGIN SUBTASKS marker. Read each subtask plan file to ground the Goal, How bullets, and dependency analysis in the actual plan content, not just titles.`;
 export const CAVEMAN_OUTPUT_DIRECTIVE = `CAVEMAN MODE: Talk like caveman. Drop filler, keep substance. Use fragments. Technical terms exact. Code unchanged. Pattern: [thing] [action] [reason]. [next step].`;
 export const SUPPRESS_WALKTHROUGH_DIRECTIVE = `SUPPRESS WALKTHROUGH: Do NOT generate a walkthrough.md artifact at the end of this task. Omit the walkthrough creation step entirely.`;
-export const NO_SEPARATE_REVIEW_ARTIFACTS_DIRECTIVE = `NO SEPARATE REVIEW ARTIFACTS: Do NOT create separate review artifact files (review.md, review_notes.md, review_artifact.md, grumpy_critique.md, balanced_review.md, or any similarly-named new file) at any point in this task. Omit the review-artifact creation step entirely. Record your findings in your response and in the existing target plan file, per the COMPLETION REPORT step. A new .md file in the workspace is imported as a duplicate card on the kanban board.`;
+export const NO_SEPARATE_REVIEW_ARTIFACTS_DIRECTIVE = `NO SEPARATE REVIEW ARTIFACTS: Do NOT create separate review artifact files (review.md, review_notes.md, review_artifact.md, grumpy_critique.md, balanced_review.md, or any similarly-named new file) at any point in this task. Omit the review-artifact creation step entirely. Record your findings in your response and in the existing target plan file, per the review-completion step above. A new .md file in the workspace is imported as a duplicate card on the kanban board.`;
 export const REVIEWER_RISKS_TO_MEMO_DIRECTIVE = `REMAINING RISKS TO MEMO: After completing your review, append each remaining risk as a separate entry to the workspace root's .switchboard/memo.md (create the file if it does not exist). If a MEMO FILE line follows this paragraph, that absolute path is authoritative — use it verbatim. Otherwise resolve .switchboard/memo.md against the main workspace checkout, never a worktree-local .switchboard/ — a worktree's copy is discarded on cleanup, which loses the risks. Separate each entry from the preceding content by a blank line so the memo parser can split them into distinct entries. Each entry should be a concise, actionable description of the risk (1-3 sentences) — enough context for a future planning pass to understand the issue without re-reading the review. If there are no remaining risks, skip this step. Do NOT clear or truncate existing memo content — append only.`;
-export const STAGGERED_IMPLEMENTATION_DIRECTIVE = `STAGGERED IMPLEMENTATION: After completing each subtask, append a brief summary (3-5 sentences) to a ## Implementation Notes section at the END of the feature overview file — the feature file is the entry tagged [FEATURE: ...] Plan File: in PLANS TO PROCESS above. Place the ## Implementation Notes section AFTER the auto-generated Subtasks and Worktrees blocks; if it does not exist, create it. For each subtask note include: what you implemented, files changed, and any issues or decisions the next subtask's agent needs to know. These notes are a context relay — they let the next subtask pick up where you left off without re-reading your code changes. If you are handling subtasks in parallel via subagents/worktrees, do NOT have parallel subtasks append individually — instead, after all subtasks complete and their worktrees merge back, append a single consolidated note for the batch. If the feature file is not present, skip this step. This is in addition to the per-plan completion POST (POST /kanban/queue/done, which signals task completion to the kanban board); do not skip either. Do NOT skip this step.`;
+export const STAGGERED_IMPLEMENTATION_DIRECTIVE = `STAGGERED IMPLEMENTATION: After completing each subtask, append a brief summary (3-5 sentences) to a ## Implementation Notes section at the END of the feature overview file — the feature file is the entry tagged [FEATURE: ...] Plan File: in PLANS TO PROCESS above. Place the ## Implementation Notes section AFTER the auto-generated Subtasks and Worktrees blocks; if it does not exist, create it. For each subtask note include: what you implemented, files changed, and any issues or decisions the next subtask's agent needs to know. These notes are a context relay — they let the next subtask pick up where you left off without re-reading your code changes. If you are handling subtasks in parallel via subagents/worktrees, do NOT have parallel subtasks append individually — instead, after all subtasks complete and their worktrees merge back, append a single consolidated note for the batch. If the feature file is not present, skip this step. This is in addition to the per-plan completion POST (\`switchboard done --from\`, which signals task completion to the kanban board); do not skip either. Do NOT skip this step.`;
 // CODING_COMPLETION_REPORT_DIRECTIVE is the completion-protocol handshake. It
 // tells the dispatched agent to POST /kanban/queue/done when ALL work is complete.
 // The API endpoint calls clearWorkingState (activity-light off-switch) and fires
@@ -1279,9 +1279,9 @@ export const DELEGATION_ANTI_LEAKAGE_STEP = `ANTI-LEAKAGE RULE (delegation) — 
 // scale would lose that distinction while inviting translation errors.
 export const DEFERRED_FINDINGS_SECTION_INSTRUCTION = `Append a \`## Deferred Findings\` section to the plan file listing every finding you chose NOT to fix now, one per line, each carrying its severity (CRITICAL/MAJOR/NIT) and a \`file:line\` reference. If nothing was deferred, write \`None\` under the heading — do not omit the section, so a missing section always means "not answered" and never "nothing found".`;
 
-export const COMPLETION_STEP_FULL = `COMPLETION REPORT: When you have finished ALL parts of the review, run \`node "<cliPath>" done\` (or \`switchboard done\`). This signals task completion to the kanban board — the system clears your card's activity light and notifies your lead. Do NOT report after finishing individual parts — only when ALL work is complete. Also update the original plan file with fixed items, files changed, validation results, and remaining risks. ${DEFERRED_FINDINGS_SECTION_INSTRUCTION} Do NOT truncate, summarize, or delete existing implementation steps. Do NOT skip the completion report.`;
+export const COMPLETION_STEP_FULL = `REVIEW COMPLETION: When you have finished ALL parts of the review, update the original plan file with fixed items, files changed, validation results, and remaining risks. ${DEFERRED_FINDINGS_SECTION_INSTRUCTION} Do NOT truncate, summarize, or delete existing implementation steps.`;
 
-export const COMPLETION_STEP_COMPACT = `COMPLETION REPORT: When you have finished ALL parts of the review, run \`node "<cliPath>" done\` (or \`switchboard done\`). This signals task completion to the kanban board — the system clears your card's activity light and notifies your lead. Do NOT report after finishing individual parts — only when ALL work is complete. Also update the original plan file by appending a brief summary (≤ 5 sentences) under \`## Review Findings\` — list files changed, validation results, and remaining risks. The ≤ 5 sentence budget applies to the \`## Review Findings\` prose summary ONLY and does NOT bound the deferred-findings list. ${DEFERRED_FINDINGS_SECTION_INSTRUCTION} Do NOT reproduce the full implementation steps or copy large blocks of the original plan. Do NOT skip the completion report.`;
+export const COMPLETION_STEP_COMPACT = `REVIEW COMPLETION: When you have finished ALL parts of the review, update the original plan file by appending a brief summary (≤ 5 sentences) under \`## Review Findings\` — list files changed, validation results, and remaining risks. The ≤ 5 sentence budget applies to the \`## Review Findings\` prose summary ONLY and does NOT bound the deferred-findings list. ${DEFERRED_FINDINGS_SECTION_INSTRUCTION} Do NOT reproduce the full implementation steps or copy large blocks of the original plan.`;
 
 /**
  * Idempotent completion-directive guard. Appends CODING_COMPLETION_REPORT_DIRECTIVE to
@@ -2199,18 +2199,16 @@ UNATTENDED IMPROVER CONTRACT:
         if (cavemanOutputEnabled && !reviewerConciseModeEnabled) {
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
-        // The reviewer's base text now carries the `COMPLETION REPORT:` sentinel itself,
-        // via the completion-report step (COMPLETION_STEP_FULL / COMPLETION_STEP_COMPACT)
-        // in the composed steps array. So ensureCompletionDirective is a no-op on the
-        // normal path — it fires ONLY when a `replace`-mode defaultPromptOverride wipes the
-        // composed base, dropping the sentinel so the generic directive is appended exactly
-        // as for coder/lead/intern. INVARIANT: both completion-step constants MUST keep the
-        // literal `COMPLETION REPORT:` prefix — lose it and the duplicate append silently
-        // returns (the guard matches on that token, not on step name or position). The
-        // override-proofing this call provides MUST survive: without it a reviewer `replace`
-        // override silently breaks completion detection and the card's working-state light
-        // never clears.
-        baseInstructions = ensureDispatchProtocolDirectives(baseInstructions, options?.missionControlActive !== false);
+        // The reviewer's base text now carries the `REVIEW COMPLETION:` sentinel
+        // itself, via the completion-report step (COMPLETION_STEP_FULL /
+        // COMPLETION_STEP_COMPACT) in the composed steps array. The completion
+        // directive (the `switchboard done --from` instruction) is now a
+        // role-scoped standing order delivered at the ptySendPrompt layer, not
+        // prompt-injected here. Copy-prompt buttons produce clean prompts
+        // without it. The dispatch payload gate
+        // (ensureDispatchProtocolDirectives at the pty verb) remains as a
+        // fallback for the race condition where the standing order is not yet
+        // installed.
 
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
 
@@ -2361,7 +2359,8 @@ For each plan:
         if (cavemanOutputEnabled) {
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
-        baseInstructions = ensureDispatchProtocolDirectives(baseInstructions, options?.missionControlActive !== false);
+        // The completion directive is now a role-scoped standing order delivered
+        // at the ptySendPrompt layer, not prompt-injected here.
 
 
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
@@ -2448,7 +2447,8 @@ For each plan:
             if (cavemanOutputEnabled) {
                 baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
             }
-            baseInstructions = ensureDispatchProtocolDirectives(baseInstructions, options?.missionControlActive !== false);
+            // The completion directive is now a role-scoped standing order
+            // delivered at the ptySendPrompt layer, not prompt-injected here.
 
 
             // §10 — No FOCUS (single file path, no ambiguity), no batch rules,
@@ -2503,7 +2503,8 @@ For each plan:
         if (cavemanOutputEnabled) {
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
-        baseInstructions = ensureDispatchProtocolDirectives(baseInstructions, options?.missionControlActive !== false);
+        // The completion directive is now a role-scoped standing order delivered
+        // at the ptySendPrompt layer, not prompt-injected here.
 
 
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.
@@ -2542,7 +2543,8 @@ For each plan:
         if (cavemanOutputEnabled) {
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
-        baseInstructions = ensureDispatchProtocolDirectives(baseInstructions, options?.missionControlActive !== false);
+        // The completion directive is now a role-scoped standing order delivered
+        // at the ptySendPrompt layer, not prompt-injected here.
 
 
         // §1 — safetySessionBlock loop deleted; worktree info now in shared dispatchPrefixCore.

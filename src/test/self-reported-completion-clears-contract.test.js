@@ -129,7 +129,7 @@ function makeServer(opts = {}) {
             if (verb === 'ptyListTerminals') { return { success: true, terminals: FLEET }; }
             return { success: true };
         },
-        clearTerminalContext: async (_ws, term) => { clears.push(term); return { cleared: true }; },
+        clearTerminalContext: opts.clearTerminalContext || (async (_ws, term) => { clears.push(term); return { cleared: true }; }),
         armQueueWatch: async () => {},
     });
 
@@ -269,6 +269,99 @@ async function run() {
         await server.completeCardInternal(fakeDb, 'd1', 'Coder 1', { workspaceRoot: WS });
         await server.completeCardInternal(fakeDb, 'd1', 'Coder 1', { workspaceRoot: WS });
         assert.deepStrictEqual(clears, ['Coder 1'], 'markSeatAtRest / isSeatAtRest make the clear idempotent');
+    });
+
+    // ── 3b. Attribution fallback + multi-seat clear (lead-acceptance plan) ─
+
+    await check('attribution fallback: empty dispatchedTerminal resolves via getLiveDispatchAttribution', async () => {
+        // No-op #2: when the plan row has no dispatchedTerminal, the seat is
+        // found via live dispatch attribution instead of being silently lost.
+        const { server, plans, clears, fakeDb } = makeServer({
+            db: {
+                getLiveDispatchAttribution: async () => [
+                    { planId: 'a1', topic: 'a1', dispatchedTerminal: 'Coder 1', dispatchedAt: '2026-09-14T00:00:00Z', featureId: '', project: '' },
+                ],
+            },
+        });
+        plans.set('a1', card('a1', { dispatchedTerminal: '', routedTo: '' }));
+        const r = await server.completeCardInternal(fakeDb, 'a1', 'Coding', { workspaceRoot: WS });
+        assert.strictEqual(r.success, true);
+        assert.strictEqual(r.cleared, true, 'attribution fallback must find and clear the seat');
+        assert.ok(clears.includes('Coder 1'), 'the attributed coder is cleared');
+    });
+
+    await check('multi-seat clear: two attributed coding seats both clear, minus from', async () => {
+        // No-op #3: clear every coding seat attributed to the subtask, not
+        // just the accepted one. The escalation ladder can put a second seat
+        // on a subtask; both must be cleared on acceptance.
+        const { server, plans, clears, fakeDb } = makeServer({
+            db: {
+                getLiveDispatchAttribution: async () => [
+                    { planId: 'm1', topic: 'm1', dispatchedTerminal: 'Coder 1', dispatchedAt: '2026-09-14T01:00:00Z', featureId: '', project: '' },
+                    { planId: 'm1', topic: 'm1', dispatchedTerminal: 'Coding-intern', dispatchedAt: '2026-09-14T02:00:00Z', featureId: '', project: '' },
+                ],
+            },
+        });
+        plans.set('m1', card('m1', { dispatchedTerminal: 'Coder 1', routedTo: 'coder' }));
+        const r = await server.completeCardInternal(fakeDb, 'm1', 'Coding', { workspaceRoot: WS });
+        assert.strictEqual(r.success, true);
+        assert.strictEqual(r.cleared, true);
+        assert.ok(clears.includes('Coder 1'), 'the primary coder is cleared');
+        assert.ok(clears.includes('Coding-intern'), 'the attributed intern is also cleared');
+        assert.ok(!clears.includes('Coding'), 'the lead in `from` is never cleared');
+    });
+
+    await check('a coder that IS the poster is cleared (self-reported-completion-clears supersedes plan no-op #4)', async () => {
+        // The plan's no-op #4 ("keep excluding `from`") is superseded by the
+        // self-reported-completion-clears fix (commit 1073bb1a), which deleted
+        // the name guard. A coder posting its own completion IS cleared — the
+        // CODING_ROLES gate is the sole protection, and it is sufficient.
+        const { server, plans, clears, fakeDb } = makeServer({
+            db: {
+                getLiveDispatchAttribution: async () => [
+                    { planId: 'e1', topic: 'e1', dispatchedTerminal: 'Coder 1', dispatchedAt: '2026-09-14T00:00:00Z', featureId: '', project: '' },
+                ],
+            },
+        });
+        plans.set('e1', card('e1', { dispatchedTerminal: 'Coder 1', routedTo: 'coder' }));
+        const r = await server.completeCardInternal(fakeDb, 'e1', 'Coder 1', { workspaceRoot: WS });
+        assert.strictEqual(r.success, true);
+        assert.strictEqual(r.cleared, true, 'the self-reporting coder is cleared (name guard stays deleted)');
+        assert.ok(clears.includes('Coder 1'), 'clearTerminalContext ran for the poster');
+    });
+
+    await check('a seat that moved on to a different card is not cleared', async () => {
+        // The "released and moved on" guard: a seat that worked the subtask,
+        // released, and took a NEW subtask must not be cleared mid-turn.
+        // _isSeatCurrentDispatchedCard returns shouldClear:false when the
+        // seat's current dispatch is a different planId.
+        const { server, plans, clears, fakeDb } = makeServer({
+            db: {
+                getLiveDispatchAttribution: async () => [
+                    { planId: 'm1', topic: 'm1', dispatchedTerminal: 'Coder 1', dispatchedAt: '2026-09-14T01:00:00Z', featureId: '', project: '' },
+                ],
+                getActiveDispatchedByTerminal: async () => ({ planId: 'other-plan', dispatchedTerminal: 'Coder 1' }),
+            },
+        });
+        plans.set('m1', card('m1', { dispatchedTerminal: 'Coder 1', routedTo: 'coder' }));
+        const r = await server.completeCardInternal(fakeDb, 'm1', 'Coding', { workspaceRoot: WS });
+        assert.strictEqual(r.success, true);
+        assert.strictEqual(r.cleared, false, 'a seat that moved on is not cleared');
+        assert.deepStrictEqual(clears, [], 'no clear runs for a moved-on seat');
+        assert.ok(r.clearReason && r.clearReason.length > 0, 'the failure is surfaced with a reason');
+    });
+
+    await check('a failed clear (cleared:false) is surfaced with a warning, not silently dropped', async () => {
+        // Root cause 2: a resolved seat whose clear returns cleared:false was
+        // silently dropped before this fix. The response must carry the failure.
+        const { server, plans, clears, fakeDb } = makeServer({
+            clearTerminalContext: async () => ({ cleared: false, reason: 'terminal not found' }),
+        });
+        plans.set('f1', card('f1', { dispatchedTerminal: 'Coder 1', routedTo: 'coder' }));
+        const r = await server.completeCardInternal(fakeDb, 'f1', 'Coding', { workspaceRoot: WS });
+        assert.strictEqual(r.success, true);
+        assert.strictEqual(r.cleared, false, 'the failed clear is reported as cleared:false');
+        assert.ok(r.clearError || r.clearReason, 'the failure reason is surfaced in the response');
     });
 
     // ── 4. Negative invariant: the name guard is gone ────────────────────

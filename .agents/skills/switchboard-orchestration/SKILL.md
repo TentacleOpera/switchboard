@@ -357,7 +357,9 @@ switchboard api POST /terminals/verb/ptySendPrompt "{
   \"name\":\"<lead terminal friendlyName>\",
   \"data\":\"You are leading the <feature name> feature. Your PLAN REVIEWED subtasks are: <list>. Implement each, commit, and report back when done.\",
   \"origin\":\"<your own terminal friendlyName>\",
-  \"clearBeforePrompt\":false}"
+  \"clearBeforePrompt\":false,
+  \"kind\":\"dispatch\",
+  \"dispatch\":{\"planId\":\"<featurePlanId>\",\"role\":\"lead\"}}"
 
 # 4. On each wake: VERIFY VIA GIT, not self-report. A subtask is "coded" only when its worktree
 #    branch is ahead of base with committed work. Use the base_branch from GET /worktree/list.

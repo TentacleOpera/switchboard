@@ -589,6 +589,58 @@ function compositionContext(
     };
 }
 
+/**
+ * The completion-protocol handshake as a standing order. Tells the agent to
+ * run `switchboard done --from` when ALL work is complete. Stored with
+ * `${terminalName}` and `${cliPath}` placeholders, interpolated at delivery
+ * time with the terminal's own name — no "check this txt file" and no
+ * "<your terminal name>" placeholder.
+ *
+ * This replaced the prompt-injected CODING_COMPLETION_REPORT_DIRECTIVE. Copy-
+ * prompt buttons produce clean prompts without this directive; the standing
+ * order delivers it only to terminals connected to Switchboard.
+ *
+ * Uses the CLI form (`switchboard done --from`), NOT the old
+ * `POST /kanban/queue/done` form — the CLI resolves the port itself, so no
+ * `${port}` interpolation is needed for this order.
+ */
+export const COMPLETION_DIRECTIVE_ORDER_INSTRUCTION = `COMPLETION REPORT: When you have finished implementing ALL parts of the plan, run \`\${cliPath} done --from "\${terminalName}"\` (or \`switchboard done --from "\${terminalName}"\`). This signals task completion to the kanban board — the system clears your card's activity light and notifies your lead. Do NOT report after finishing individual parts — only when ALL work is complete. Also append a brief summary (3-5 sentences) to the END of the original plan file for the record. Do NOT skip the completion report.`;
+
+const COMPLETION_DIRECTIVE_ORDER_ID_PREFIX = 'completion-directive:role:';
+
+/**
+ * Install (or update) the completion-directive standing order for a role.
+ * Called when a terminal is created or a role is assigned, and during upgrade
+ * migration. Idempotent — uses a deterministic ID so re-installation replaces,
+ * not duplicates. The order text carries `${terminalName}` and `${cliPath}`
+ * placeholders interpolated at delivery time, so no terminal name is needed
+ * at install time. Installs once per role (not per terminal) — `parent` is
+ * `''` because a role-scoped order applies to all terminals with that role.
+ */
+export async function installCompletionDirectiveOrder(
+    db: any,
+    role: string
+): Promise<void> {
+    const id = COMPLETION_DIRECTIVE_ORDER_ID_PREFIX + role;
+    const instruction = COMPLETION_DIRECTIVE_ORDER_INSTRUCTION;
+    await mutateStandingOrders(db, async (orders) => {
+        const filtered = orders.filter(o => o.id !== id);
+        filtered.push({
+            id,
+            parent: '',
+            child: '',
+            instruction,
+            createdAt: Date.now(),
+            scope: 'role',
+            role,
+        });
+        return filtered;
+    });
+}
+
+/** Coding roles that receive the completion-directive standing order. */
+export const COMPLETION_DIRECTIVE_ROLES = ['coder', 'intern', 'lead', 'reviewer'];
+
 export function resolveStandingOrderInstruction(o: StandingOrder, ctx: StandingOrderCompositionContext): string {
     // A body ADDS to the fragments; it never replaces them. Compose fragments
     // first, then append the operator-authored `instruction` after them. A
@@ -644,13 +696,19 @@ export function stripStandingOrdersBlock(prompt: string): string {
  * The `roleMap` parameter (terminal name → role) is used to resolve
  * `role`-scoped orders. When absent, role-scoped orders are skipped.
  */
+export interface StandingOrderInterpolationContext {
+    /** The terminal's own name, interpolated into `${terminalName}` placeholders. */
+    terminalName: string;
+}
+
 export function renderStandaloneOrdersBlock(
     orders: StandingOrder[],
     targetName: string,
     liveNames: Set<string>,
     groups: TerminalGroup[],
     roleMap?: Map<string, string>,
-    options: StandingOrderRenderOptions = {}
+    options: StandingOrderRenderOptions = {},
+    interpolationContext?: StandingOrderInterpolationContext
 ): string | null {
     const selected = selectOrders(orders, targetName, liveNames, groups, roleMap);
     if (selected.orders.length === 0) {
@@ -671,7 +729,18 @@ export function renderStandaloneOrdersBlock(
     const sorted = [...selected.orders].sort(
         (a, b) => scopeRank[scopeOf(a)] - scopeRank[scopeOf(b)]
     );
-    const rendered = sorted.map(o => renderOrder(o, ctx)).filter(Boolean);
+    // Interpolate ${terminalName} placeholders at delivery time. The completion
+    // directive standing order stores the placeholder; it is replaced with the
+    // actual terminal name here. Orders without placeholders are unchanged.
+    const interpolated = interpolationContext
+        ? sorted.map(o => ({
+              ...o,
+              instruction: typeof o.instruction === 'string'
+                  ? o.instruction.replace(/\$\{terminalName\}/g, interpolationContext.terminalName)
+                  : o.instruction,
+          }))
+        : sorted;
+    const rendered = interpolated.map(o => renderOrder(o, ctx)).filter(Boolean);
     if (rendered.length === 0) { return null; }
 
     let block = `\n\n${STANDING_ORDERS_MARKER}\n`;
@@ -705,7 +774,8 @@ export function applyStandingOrders(
     liveNames: Set<string>,
     groups: TerminalGroup[] = [],
     roleMap?: Map<string, string>,
-    options: StandingOrderRenderOptions = {}
+    options: StandingOrderRenderOptions = {},
+    interpolationContext?: StandingOrderInterpolationContext
 ): string {
     if (!prompt) { return prompt; }
 
@@ -719,7 +789,7 @@ export function applyStandingOrders(
     // contain the marker.
     const cleanPrompt = stripStandingOrdersBlock(prompt);
 
-    const block = renderStandaloneOrdersBlock(orders, targetName, liveNames, groups, roleMap, options);
+    const block = renderStandaloneOrdersBlock(orders, targetName, liveNames, groups, roleMap, options, interpolationContext);
     if (block === null) {
         if (groups.some(g => Array.isArray(g?.members) && g.members.includes(targetName))) {
             const rejected = orders.map(o => ({

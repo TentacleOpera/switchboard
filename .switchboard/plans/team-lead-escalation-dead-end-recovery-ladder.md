@@ -286,3 +286,7 @@ code that later migrations have to keep matching against.
 
 The KanbanProvider drive block is runtime-composed (not stored), so it needs no migration —
 the next feature dispatch picks up the new text automatically.
+
+## Implementation Summary
+
+The terminal branch in the coding head prompt's escalation clause was replaced with a five-rung recovery ladder (clear-and-retry, lateral hand-off, vertical escalation, lead self-fix, stop) in both byte-identical copies (`teamWiring.ts:632-643` and `kanban.html:5059-5070`). The KanbanProvider drive block was reconciled: the REVIEW line now references the ladder, and the two clear-terminal RULES permit rung 1's clear-and-re-dispatch. The `standingOrderFragments.ts` copies (`CODING_HEAD_WORK` and `CODING_HEAD_WORK_WITH_ROUNDS`) were NOT edited — they are outside this plan's scope and carry the old vertical-only clause; a follow-up plan should reconcile them. Five new assertions were added to `stage-marker-commit-contract.test.js` pinning the ladder's presence and the old fragment's absence. The `coding-head-prompt-contract.test.js` byte-identity check passes; the `standing-orders-marker-contract.test.js` Coding headPrompt byte-identity check passes (3 pre-existing unrelated failures remain). The one-reset-per-seat cap is prose only — no host-level enforcement. No migration (teams are unreleased dev work). Compilation was intentionally skipped per the constrained-host directive; the source-based contract tests were run directly.

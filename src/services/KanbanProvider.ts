@@ -3922,6 +3922,15 @@ If the user asks a question in a comment, post it as a comment on the issue. The
                     routedTo: role,
                     dispatchedAgent: agentName,
                     dispatchedIde: ideName,
+                    // Stamp the terminal name so attributePlansToTerminals'
+                    // name tier matches — without it the column stamps '' and
+                    // planTitle reads null on the fleet list even though the
+                    // card IS dispatched. The standalone host passes this
+                    // directly to updateDispatchInfoByPlanFile; this is the
+                    // extension's twin. Only pass when a real terminal name
+                    // was resolved (not the IDE-dispatch or 'unknown' arms),
+                    // so those paths keep stamping '' as before.
+                    ...(terminalName ? { dispatchedTerminal: terminalName } : {}),
                 });
             }
         } catch (err) {
@@ -6073,7 +6082,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             'No dispatch field on a message — it would make the recipient write a plan file and report a false completion.',
             'The response tells you it landed: promptSeq is that seat\'s delivery ordinal and bytesWritten is what was written to it. bytesWritten counts the host\'s appended directives too, so it is larger than your data — that is normal.',
             '',
-            'REVIEW: On callback, review git diff — not the coder\'s self-report. Coder self-report does not clear context; resend fixes to the same terminal (context preserved). Escalate after two failures on the same subtask: intern → coder → lead.',
+            'REVIEW: On callback, review git diff — not the coder\'s self-report. Coder self-report does not clear context; resend fixes to the same terminal (context preserved). After two failures on the same subtask, follow the recovery ladder in your standing orders (clear and retry, lateral hand-off, vertical escalation, lead self-fix, stop) — do not escalate vertically without trying the cheaper rungs first.',
             '',
             `CLOSE OUT EVERY SUBTASK — ALWAYS, no judgement call. When you are finished with a subtask, commit, then POST /kanban/task/complete with {"from":"${originVal}","planId":"<that SUBTASK's planId>","workspaceRoot":"<your cwd>"} against the API base named in your SWITCHBOARD STATUS line. Accepting and rejecting are not two different endings: you reject by sending a fix round FIRST, then you post when the subtask is done. Post per subtask, with that subtask's planId — never the feature's. Nothing downstream happens until you post: the coder is not cleared and you cannot be handed the next subtask.`,
             '',
@@ -6085,8 +6094,8 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             '- Do NOT rewrite or edit plan files, and do NOT open individual subtask plans — the FEATURE FILE is what you dispatch and review from. The plan is the source of truth for the coder that receives it; never modify its content.',
             '- Do NOT query kanban.db directly. The plan IDs are in the FEATURE FILE\'s Subtasks section; use the API for anything else.',
             '- Do NOT verify work before dispatching. The kanban column is the system\'s record, not a coder\'s claim.',
-            '- Clear a terminal only when at rest (completion received AND next work goes elsewhere).',
-            '- The host auto-clears the full team roster once when a new feature run starts, and clears the accepted coder when you POST /kanban/task/complete. Coder self-report does not clear context — do not manually clear between subtasks or fixes. Manual ptyClearTerminal is for the stand-down case only — a terminal you are putting away without dispatching new work to it.',
+            '- Clear a terminal when at rest (completion received AND next work goes elsewhere), or when following rung 1 of the recovery ladder (clear and re-dispatch the same subtask with named defects). The ladder is in your standing orders.',
+            '- The host auto-clears the full team roster once when a new feature run starts, and clears the accepted coder when you POST /kanban/task/complete. Coder self-report does not clear context — do not manually clear between subtasks or fixes. Manual ptyClearTerminal is for the stand-down case, or for rung 1 of the recovery ladder (clear a twice-failed seat and re-dispatch with named defects) — not for routine between-subtask clearing.',
             '- You do NOT move cards. A card enters a column when it reaches this team and stays there while the team works it. Column position records nothing about your progress — your completion posts do.',
             '- clearBeforePrompt stays false on every dispatch — the host issues no clear at dispatch time. The caller\'s contract is unchanged.',
             '- Every new feature run gets a fresh team context. Context is preserved across coder reports, review, fixes, and handoffs until your completion post clears the coder.',
@@ -11336,6 +11345,39 @@ This step is what moves the plan forward in the Switchboard pipeline.
             case 'triggerBatchAction': {
                 const { sessionIds, targetColumn } = msg;
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+
+                // Distribution invariant: no member of a distribution set may be a
+                // feature. Features are never fanned — not as the thing being
+                // distributed, and not as a member of a distributed set. A feature
+                // dispatch always resolves to one lead (the rule enforced in
+                // _resolveKanbanDispatchPreDelivery); putting a feature into a
+                // distribution set would route around it. Refuse the WHOLE batch
+                // naming the feature rather than silently skipping it, so the
+                // operator learns their selection was not what they thought.
+                if (Array.isArray(sessionIds) && sessionIds.length > 1 && workspaceRoot) {
+                    const featureNames: string[] = [];
+                    try {
+                        const db = this._getKanbanDb(workspaceRoot);
+                        if (db && await db.ensureReady()) {
+                            for (const sid of sessionIds) {
+                                const rec = await db.getPlanByPlanId(sid) || await db.getPlanBySessionId(sid);
+                                if (rec?.isFeature) {
+                                    featureNames.push(rec.topic || rec.planId || sid);
+                                }
+                            }
+                        }
+                    } catch { /* DB lookup is best-effort; the per-card path catches it */ }
+                    if (featureNames.length > 0) {
+                        const names = featureNames.map(n => `'${n}'`).join(', ');
+                        this._seams().ui.showWarningMessage(
+                            `Selection contains a feature (${names}). Features are never distributed — dispatch each feature to its lead individually.`);
+                        return {
+                            success: false,
+                            error: `Selection contains a feature (${names}). Features are never distributed — dispatch each feature to its lead individually.`,
+                            targetColumn
+                        };
+                    }
+                }
 
                 // CODED_AUTO: delegate to _advanceCards for per-card complexity
                 // routing. The webview sends 'CODED_AUTO' as intent (not a

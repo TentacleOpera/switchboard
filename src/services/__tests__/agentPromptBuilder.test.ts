@@ -190,7 +190,12 @@ suite('agentPromptBuilder', () => {
                 gitProhibitionEnabled: false
             });
             assert.ok(prompt.includes('NO SEPARATE REVIEW ARTIFACTS'), 'Should include noSeparateReviewArtifacts directive');
-            assert.ok(prompt.includes('COMPLETION REPORT:'), 'Should include completion report directive');
+            // The completion directive (the `switchboard done --from` instruction)
+            // is now a role-scoped standing order, not prompt-injected. The
+            // reviewer's step carries `REVIEW COMPLETION:` (the plan-file update
+            // header), not `COMPLETION REPORT:` (the completion handshake).
+            assert.ok(!prompt.includes('COMPLETION REPORT:'), 'Should NOT include the prompt-injected completion report directive');
+            assert.ok(prompt.includes('REVIEW COMPLETION:'), 'Should include the review-completion step');
         });
 
         test('reviewerRisksToMemo directive is injected by default for reviewer', () => {
@@ -289,8 +294,11 @@ suite('agentPromptBuilder', () => {
     suite('buildKanbanBatchPrompt — reviewer role behaviour', () => {
         test('exactly one occurrence of COMPLETION REPORT: in default configuration', () => {
             const prompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {});
+            // The completion directive is now a role-scoped standing order, not
+            // prompt-injected. The reviewer's step uses `REVIEW COMPLETION:` (the
+            // plan-file update header), not `COMPLETION REPORT:` (the handshake).
             const count = (prompt.match(/COMPLETION REPORT:/g) || []).length;
-            assert.strictEqual(count, 1, `Expected exactly 1 COMPLETION REPORT: occurrence, found ${count}`);
+            assert.strictEqual(count, 0, `Expected 0 COMPLETION REPORT: occurrences (moved to standing order), found ${count}`);
         });
 
         test('exactly one occurrence of COMPLETION REPORT: with reviewerCompactPlanUpdateEnabled: true', () => {
@@ -298,7 +306,7 @@ suite('agentPromptBuilder', () => {
                 reviewerCompactPlanUpdateEnabled: true
             });
             const count = (prompt.match(/COMPLETION REPORT:/g) || []).length;
-            assert.strictEqual(count, 1, `Expected exactly 1 COMPLETION REPORT: occurrence, found ${count}`);
+            assert.strictEqual(count, 0, `Expected 0 COMPLETION REPORT: occurrences (moved to standing order), found ${count}`);
         });
 
         test('exactly one occurrence of COMPLETION REPORT: with replace-mode defaultPromptOverride', () => {
@@ -307,7 +315,7 @@ suite('agentPromptBuilder', () => {
                 defaultPromptOverrides: { reviewer: { text: overrideText, mode: 'replace' } }
             });
             const count = (prompt.match(/COMPLETION REPORT:/g) || []).length;
-            assert.strictEqual(count, 1, `Expected exactly 1 COMPLETION REPORT: occurrence in replace override mode, found ${count}`);
+            assert.strictEqual(count, 0, `Expected 0 COMPLETION REPORT: occurrences in replace override mode (moved to standing order), found ${count}`);
         });
 
         // Discriminating assertions — the count-of-token tests above are invariant
@@ -320,16 +328,16 @@ suite('agentPromptBuilder', () => {
         // cannot silently un-pin these.
         test('default config: base step carries sentinel, generic directive body absent', () => {
             const prompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {});
-            assert.ok(prompt.includes(COMPLETION_STEP_FULL), 'Reviewer base step (COMPLETION_STEP_FULL) must carry the COMPLETION REPORT: sentinel in default config');
-            assert.ok(!prompt.includes(CODING_COMPLETION_REPORT_DIRECTIVE), 'Generic CODING_COMPLETION_REPORT_DIRECTIVE must NOT be appended when the base step already carries the sentinel (would be the duplicate)');
+            assert.ok(prompt.includes(COMPLETION_STEP_FULL), 'Reviewer base step (COMPLETION_STEP_FULL) must be present in default config');
+            assert.ok(!prompt.includes(CODING_COMPLETION_REPORT_DIRECTIVE), 'Generic CODING_COMPLETION_REPORT_DIRECTIVE must NOT be appended (completion directive is now a standing order)');
         });
 
         test('reviewerCompactPlanUpdateEnabled: compact base step carries sentinel, generic directive body absent', () => {
             const prompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {
                 reviewerCompactPlanUpdateEnabled: true
             });
-            assert.ok(prompt.includes(COMPLETION_STEP_COMPACT), 'Reviewer compact base step (COMPLETION_STEP_COMPACT) must carry the COMPLETION REPORT: sentinel when compact mode is on');
-            assert.ok(!prompt.includes(CODING_COMPLETION_REPORT_DIRECTIVE), 'Generic CODING_COMPLETION_REPORT_DIRECTIVE must NOT be appended when the compact base step already carries the sentinel (would be the duplicate)');
+            assert.ok(prompt.includes(COMPLETION_STEP_COMPACT), 'Reviewer compact base step (COMPLETION_STEP_COMPACT) must be present when compact mode is on');
+            assert.ok(!prompt.includes(CODING_COMPLETION_REPORT_DIRECTIVE), 'Generic CODING_COMPLETION_REPORT_DIRECTIVE must NOT be appended (completion directive is now a standing order)');
         });
 
         test('replace-mode defaultPromptOverride: generic directive appended, base step absent (override-proofing)', () => {
@@ -337,20 +345,31 @@ suite('agentPromptBuilder', () => {
             const prompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {
                 defaultPromptOverrides: { reviewer: { text: overrideText, mode: 'replace' } }
             });
-            assert.ok(prompt.includes(CODING_COMPLETION_REPORT_DIRECTIVE), 'Generic CODING_COMPLETION_REPORT_DIRECTIVE MUST be appended when a replace override wipes the base step (override-proofing direction)');
+            // The completion directive is now a standing order, not prompt-injected.
+            // The generic directive is no longer appended by buildKanbanBatchPrompt;
+            // the dispatch payload gate (ensureDispatchProtocolDirectives at the
+            // pty verb) is the fallback.
+            assert.ok(!prompt.includes(CODING_COMPLETION_REPORT_DIRECTIVE), 'Generic CODING_COMPLETION_REPORT_DIRECTIVE must NOT be appended (completion directive is now a standing order)');
             assert.ok(!prompt.includes(COMPLETION_STEP_FULL), 'Base step (COMPLETION_STEP_FULL) must be absent after a replace override wipes the composed base');
             assert.ok(!prompt.includes(COMPLETION_STEP_COMPACT), 'Compact base step (COMPLETION_STEP_COMPACT) must be absent after a replace override wipes the composed base');
         });
 
-        test('completion directives contain POST /kanban/queue/done and do NOT contain file watcher mtime phrasing', () => {
-            for (const directive of [CODING_COMPLETION_REPORT_DIRECTIVE, COMPLETION_STEP_FULL, COMPLETION_STEP_COMPACT]) {
-                assert.ok(directive.includes('POST /kanban/queue/done'), `Directive should reference POST /kanban/queue/done: ${directive}`);
+        test('completion directives use CLI form and do NOT contain file watcher mtime phrasing', () => {
+            // The completion directive now uses `switchboard done --from` (CLI form),
+            // not `POST /kanban/queue/done`. The reviewer steps carry the plan-file
+            // update instruction, not the completion handshake.
+            for (const directive of [CODING_COMPLETION_REPORT_DIRECTIVE]) {
+                assert.ok(directive.includes('done'), `Directive should reference the done command: ${directive}`);
                 assert.ok(!directive.includes('the file watcher detects it'), `Directive should not reference file watcher: ${directive}`);
                 assert.ok(directive.startsWith('COMPLETION REPORT:'), `Directive must keep sentinel: ${directive}`);
             }
+            for (const step of [COMPLETION_STEP_FULL, COMPLETION_STEP_COMPACT]) {
+                assert.ok(step.startsWith('REVIEW COMPLETION:'), `Reviewer step must use REVIEW COMPLETION: sentinel: ${step.slice(0, 40)}`);
+            }
             assert.ok(MISSION_CONTROL_REPORT_DIRECTIVE.includes('the completion POST'), 'MISSION_CONTROL_REPORT_DIRECTIVE should reference completion POST');
             assert.ok(!MISSION_CONTROL_REPORT_DIRECTIVE.includes('the plan-file completion report'), 'MISSION_CONTROL_REPORT_DIRECTIVE should not say the plan-file completion report');
-            assert.ok(STAGGERED_IMPLEMENTATION_DIRECTIVE.includes('POST /kanban/queue/done'), 'STAGGERED_IMPLEMENTATION_DIRECTIVE should reference POST /kanban/queue/done');
+            assert.ok(STAGGERED_IMPLEMENTATION_DIRECTIVE.includes('switchboard done --from'), 'STAGGERED_IMPLEMENTATION_DIRECTIVE should reference switchboard done --from');
+            assert.ok(!STAGGERED_IMPLEMENTATION_DIRECTIVE.includes('POST /kanban/queue/done'), 'STAGGERED_IMPLEMENTATION_DIRECTIVE should NOT reference the old POST form');
             assert.ok(!STAGGERED_IMPLEMENTATION_DIRECTIVE.includes('the per-plan completion report (which still goes to each subtask\'s own plan file)'), 'STAGGERED_IMPLEMENTATION_DIRECTIVE should not reference per-plan completion report');
         });
 
@@ -389,19 +408,17 @@ suite('agentPromptBuilder', () => {
 
         test('completion-step sentinels survive the deferred-findings addition', () => {
             for (const directive of [COMPLETION_STEP_FULL, COMPLETION_STEP_COMPACT]) {
-                assert.ok(directive.startsWith('COMPLETION REPORT:'),
+                assert.ok(directive.startsWith('REVIEW COMPLETION:'),
                     `Sentinel must remain at the start of the completion step: ${directive.slice(0, 40)}...`);
-                assert.ok(directive.includes('POST /kanban/queue/done'),
-                    'POST /kanban/queue/done handshake must survive the addition');
             }
-            // ensureCompletionDirective recognises the composed text (sentinel
-            // present) and does NOT double-append the generic directive.
+            // The completion directive is now a standing order. The generic
+            // directive is NOT appended by buildKanbanBatchPrompt.
             const fullPrompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {});
             assert.ok(!fullPrompt.includes(CODING_COMPLETION_REPORT_DIRECTIVE),
-                'Generic CODING_COMPLETION_REPORT_DIRECTIVE must NOT be appended when the base step already carries the sentinel (would be the duplicate)');
+                'Generic CODING_COMPLETION_REPORT_DIRECTIVE must NOT be appended (completion directive is now a standing order)');
             const compactPrompt = buildKanbanBatchPrompt('reviewer', makePlans(1), { reviewerCompactPlanUpdateEnabled: true });
             assert.ok(!compactPrompt.includes(CODING_COMPLETION_REPORT_DIRECTIVE),
-                'Generic CODING_COMPLETION_REPORT_DIRECTIVE must NOT be appended in compact mode when the base step already carries the sentinel');
+                'Generic CODING_COMPLETION_REPORT_DIRECTIVE must NOT be appended in compact mode (completion directive is now a standing order)');
         });
 
         test('reviewer prompt surfaces the deferred-findings section in both modes', () => {

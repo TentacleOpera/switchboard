@@ -16,6 +16,8 @@ import {
     resolveTeamStanding,
     renderStandaloneOrdersBlock,
     resolveHasRegisteredRoundsForSeat,
+    installCompletionDirectiveOrder,
+    COMPLETION_DIRECTIVE_ROLES,
 } from './standingOrders';
 import { recordTurnEndEvent, writeInstruction, bootstrapInstructionsDirectory, ingestJobActivity, migrateLegacyOrchestratorDir } from './ScheduledJobsService';
 import * as vscode from 'vscode';
@@ -1357,7 +1359,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                 subagentPolicy: seatOpts?.subagentPolicy,
                                 customSubagentName: seatOpts?.customSubagentName,
                                 hasRegisteredRounds,
-                            });
+                            }, { terminalName: payload.name });
                             soBlockAdded = data !== beforeSO;
                         }
                     }
@@ -4507,6 +4509,20 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             await rewriteTeamGroupHeadForRename(ordersDb, payload.name, payload.alias);
                         }
                     })().catch((err: any) => console.warn('[TaskViewerProvider] Standing-orders rename rewrite failed:', err));
+                }
+                if (verb === 'ptyCreateTerminal' && result && result.success !== false && result.terminal) {
+                    // Install the completion-directive standing order for the
+                    // terminal's role. Idempotent — re-installation replaces,
+                    // not duplicates. Covers standalone (non-team) terminals.
+                    try {
+                        const role = (result.terminal.role || payload.role || 'coder').trim().toLowerCase();
+                        if (COMPLETION_DIRECTIVE_ROLES.includes(role)) {
+                            const installDb = await this._getKanbanDb(this._apiServerWorkspaceRoot || root || effectiveRoot);
+                            if (installDb) {
+                                await installCompletionDirectiveOrder(installDb, role);
+                            }
+                        }
+                    } catch { /* best-effort — the dispatch payload gate is the fallback */ }
                 }
                 // Wire the team (standing orders + group registration) for a
                 // ptyCreateTerminal that produced children. Runs HERE, not in
