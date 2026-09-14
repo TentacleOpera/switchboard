@@ -44,6 +44,7 @@ Two defects in one endpoint:
 
 ## Metadata
 
+**Feature:** 4b69fe8b-8bdb-4669-82dc-06e5460c184a
 **Complexity:** 4
 **Tags:** bugfix, database, api
 **Project:** Browser Switchboard

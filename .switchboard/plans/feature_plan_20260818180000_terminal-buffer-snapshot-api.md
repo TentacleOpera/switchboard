@@ -28,6 +28,7 @@ This plan adds a **read-only observation endpoint**. It does not modify the term
 
 ## Metadata
 
+**Feature:** 902c8bd3-ba26-49a6-bca2-f161c022ae59
 - **Complexity:** 5
 - **Tags:** backend, api, feature
 - **Project:** Browser Switchboard

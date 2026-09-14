@@ -15,6 +15,7 @@ Stop host-to-UI broadcasts being delivered to every panel in the browser cockpit
 ## Subtasks
 - [ ] [Design panel pushes leak into the Planning panel — tag DesignPanelProvider's broadcasts with a surface](../plans/feature_plan_20260817105257_design-panel-pushes-leak-into-the-planning-panel.md) — **PLAN REVIEWED** — ID: c4574993-d11c-454b-a966-33ad0ea16b55
 - [ ] [Kanban and Setup broadcast untagged to every panel — tag them, and fix the dependencies that make the one-liner unsafe](../plans/feature_plan_20260817110713_kanban-and-setup-broadcast-untagged-to-every-panel.md) — **PLAN REVIEWED** — ID: 102bc49e-61c4-49a7-a1d1-ce0143c05cd8
+- [ ] [The Project Panel Waits for a Push the Standalone Host Never Sends](../plans/the-project-panel-waits-for-a-push-the-standalone-host-never-sends.md) — **PLAN REVIEWED** — ID: ee89f285-61af-4118-89ad-7e26f6500e87
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

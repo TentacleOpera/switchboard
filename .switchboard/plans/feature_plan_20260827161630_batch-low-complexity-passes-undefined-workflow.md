@@ -20,6 +20,7 @@ The codebase already documents this as a known scenario: the comment at lines 79
 
 ## Metadata
 
+**Feature:** badd5314-aa97-426b-a397-38754be9d3f3
 **Complexity:** 3
 **Tags:** bugfix, backend, ui
 **Project:** Browser Switchboard

@@ -1,6 +1,6 @@
 # The CLI Is the Control Surface, Including From a Phone
 
-**Complexity:** 5
+**Complexity:** 6
 
 ## Goal
 
@@ -76,5 +76,6 @@ Four plans making the CLI a peer surface rather than a convenience: pull your ow
 - [ ] [`--json` output is not machine-parseable: an interactive prompt is appended, and stdout truncates on exit](../plans/json-output-is-not-machine-parseable.md) — **PLAN REVIEWED** — ID: aeb05236-5ee0-4417-bfb8-1db798b3492a
 - [ ] [The CLI is a peer control surface — every board operation with terminal meaning is a named command, for agents and humans alike](../plans/agents-need-a-named-operation-set-not-the-whole-ui-message-bus.md) — **PLAN REVIEWED** — ID: ef40963b-b7c0-46d2-9656-3c090a0407dc
 - [ ] [`/switchboard-next <guidance>` — an Unseated Terminal Pulls Its Own Work, in Plain Words](../plans/switchboard-next-a-seat-asks-for-its-own-card.md) — **PLAN REVIEWED** — ID: aa20329f-5563-40a4-8a4e-373bc78fa6e7
+- [ ] [A Team Is One Command From a Terminal](../plans/a-team-is-one-command-from-a-terminal.md) — **PLAN REVIEWED** — ID: 70e8ffd8-429f-49cd-8e4a-f9a71da9d9d2
 <!-- END SUBTASKS -->
 

@@ -15,6 +15,7 @@ A green gate that asserts nothing is worse than a red one. 95 of 208 test files 
 - [ ] [Give the 12 BDD-Style Dark Test Files a Runner](../plans/give-the-bdd-style-dark-tests-a-runner.md) — **PLAN REVIEWED** — ID: c1ceb6aa-dc09-4b15-a87b-c79acfc3a93b
 - [ ] [A composition-root parity gate that actually fails](../plans/a-composition-root-parity-gate-that-actually-fails.md) — **PLAN REVIEWED** — ID: a82e0a62-9e12-4997-839a-2151c4d49f68
 - [ ] [Nine Gates That Pass Without Asserting Their Own Mechanism](../plans/memo-nine-gates-that-pass-without-asserting-their-own-mechanism.md) — **PLAN REVIEWED** — ID: a8423707-87cd-4d7d-86e8-bab1ebff0e4a
+- [ ] [Nothing Asserts That the Go PTY Host and the Webview Agree on a Wire Format](../plans/nothing-asserts-the-go-pty-host-and-the-webview-agree-on-a-wire-format.md) — **PLAN REVIEWED** — ID: a9f93848-f991-4fd5-8b11-828bfc1100e9
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing (2026-09-04, Board Collapse 09)
@@ -36,5 +37,8 @@ A green gate that asserts nothing is worse than a red one. 95 of 208 test files 
    and `ws-surface-scoping-contract.test.js`, all three of which are being repaired there.
 
 **Shared contention.** Five or more cards across this feature and others add a `test:contract:*`
+script to `package.json` and a step to `.github/workflows/integration-tests.yml`. Expect merge
+conflicts in those two files and serialise the landings rather than authoring in parallel.
+* Five or more cards across this feature and others add a `test:contract:*`
 script to `package.json` and a step to `.github/workflows/integration-tests.yml`. Expect merge
 conflicts in those two files and serialise the landings rather than authoring in parallel.

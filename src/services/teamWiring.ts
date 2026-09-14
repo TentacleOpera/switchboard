@@ -1500,6 +1500,14 @@ export async function writeMemberOrdersFile(
     };
 
     const composed = composeStandingOrderFragments(memberFragments, ctx);
+    // Record which source answered for each static fragment. member-orders.md is
+    // a SNAPSHOT written to disk, so a body that resolved from the compiled
+    // default (cold cache, no store row) is frozen into the file until the team
+    // is re-wired — "which store answered?" has to be answerable after the fact.
+    const fragmentSources = Object.entries(composed.sources);
+    if (fragmentSources.length) {
+        console.log(`[teamWiring] member-orders fragment sources for team '${teamId}': ${fragmentSources.map(([id, src]) => `${id}=${src}`).join(', ')}`);
+    }
     const ordersText = substituteCliPath(composed.text);
 
     const content = `# Member Orders — Team ${headName}

@@ -146,6 +146,7 @@ Any of these is a separate plan with its own justification if wanted later, not 
 ## Metadata
 
 **Tags:** protocol, docs, board, agents
+**Feature:** 4b69fe8b-8bdb-4669-82dc-06e5460c184a
 **Complexity:** 2
 
 ## Verification Plan

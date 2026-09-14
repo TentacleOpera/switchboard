@@ -30,6 +30,7 @@ So this section is what proves the trim has to be **host-conditional, not a dele
 
 ## Metadata
 
+**Feature:** 497b83ac-da27-4cc9-b862-dbe37ed3718b
 - **Complexity:** 3
 - **Tags:** bugfix, backend, reliability
 

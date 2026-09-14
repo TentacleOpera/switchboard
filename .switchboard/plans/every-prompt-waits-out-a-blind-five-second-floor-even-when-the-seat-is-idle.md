@@ -121,6 +121,7 @@ short-circuit the backstop; it does not replace `waitReadiness` or `devinReady`.
 
 ## Metadata
 
+**Feature:** 1797113d-a0e7-4ad6-99f3-dd8886223ab6
 - **Complexity:** 6
 - **Tags:** backend, performance, reliability, bugfix
 

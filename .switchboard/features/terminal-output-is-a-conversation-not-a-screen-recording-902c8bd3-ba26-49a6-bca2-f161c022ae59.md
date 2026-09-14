@@ -53,5 +53,9 @@ A fourth subtask — reading each CLI's native on-disk JSONL transcript instead 
 - [ ] [Terminal logs keep every blank run and every immediately-repeated line](../plans/terminal-logs-keep-every-blank-run-and-repeated-line.md) — **PLAN REVIEWED** — ID: 77bc8f5c-e7d5-400f-b081-d03141394bd7
 - [ ] [A Remote Terminal Round-Trips Every Keystroke — Add Predictive Local Echo](../plans/a-remote-terminal-round-trips-every-keystroke-add-predictive-local-echo.md) — **PLAN REVIEWED** — ID: 1ee5b5fa-9776-4c61-9bf9-808bafa379a1
 - [ ] [The Terminal Streams Every Byte, Including Output That Has Already Scrolled Away](../plans/the-terminal-streams-every-byte-including-output-already-scrolled-away.md) — **PLAN REVIEWED** — ID: ac14e43b-aa8a-4dec-b223-3f24f34b2cb2
+- [ ] [Terminal Logs Record Every Repaint, Not Every Event](../plans/terminal-logs-record-every-repaint-not-every-event.md) — **PLAN REVIEWED** — ID: b6bc1534-67f7-43aa-842b-8103606cb47d
+<!-- END SUBTASKS -->
+
+[Terminal Logs Record Every Repaint, Not Every Event](../plans/terminal-logs-record-every-repaint-not-every-event.md) — **PLAN REVIEWED** — ID: b6bc1534-67f7-43aa-842b-8103606cb47d
 <!-- END SUBTASKS -->
 

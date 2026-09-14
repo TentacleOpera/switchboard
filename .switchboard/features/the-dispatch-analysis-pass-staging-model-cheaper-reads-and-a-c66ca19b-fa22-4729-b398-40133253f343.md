@@ -28,6 +28,7 @@ Rework the dispatch-analysis pass end to end: how it models staged-ness, how it 
 - [ ] [Dispatch-Analysis Reads the Per-Column Board Mirror Instead of Pulling the Whole Board as JSON](../plans/feature_plan_20260810173147_dispatch-analysis-reads-the-board-mirror-not-a-full-json-board-dump.md) — **PLAN REVIEWED** — ID: a0fd641d-7b2d-4d7c-a474-f4352afadf81
 - [ ] [Cache plan write-sets in kanban.db so dispatch-analysis stops re-reading the whole backlog](../plans/feature_plan_20260811094600_cache-plan-write-sets-for-dispatch-analysis.md) — **PLAN REVIEWED** — ID: c7750989-c3ca-48fc-b42b-0574bd8ff7ba
 - [ ] [Dispatch analysis should recommend (and be able to create) per-feature worktrees when candidates are too entangled](../plans/feature_plan_20260811143000_dispatch-analysis-worktree-recommendation.md) — **PLAN REVIEWED** — ID: 19ea4704-27e9-4011-a0a5-e24c39a13bb4
+- [ ] [Analysis writes a durable dependency graph, and the column filters to the batch that can go now](../plans/analysis-writes-a-durable-graph-and-the-column-filters-to-what-can-go-now.md) — **PLAN REVIEWED** — ID: d2e20f6d-beaa-4f02-a2af-dadf75f92102
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

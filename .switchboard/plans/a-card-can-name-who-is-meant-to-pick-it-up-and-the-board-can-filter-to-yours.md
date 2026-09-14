@@ -64,6 +64,7 @@ person who has to do it.
 
 ## Metadata
 
+**Feature:** 90b5ad18-7e5e-431d-9c05-f9b33387a243
 **Complexity:** 6
 **Tags:** feature, database, api, ui, backend
 **Dependencies:** none. Deliberately not part of `Launch Gate` — this is new

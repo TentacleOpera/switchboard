@@ -54,6 +54,7 @@ introducing its own. Nothing forced the question, because a single boolean that 
 ## Metadata
 
 **Tags:** config, terminals, tmux, standalone
+**Feature:** 44798142-bd27-4408-9f95-9873c781dcef
 **Complexity:** 3
 
 ## User Review Required

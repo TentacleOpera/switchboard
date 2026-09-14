@@ -104,6 +104,7 @@ owner, and the ordering constraint recorded here.
 ## Subtasks
 - [ ] [Audit the openExternal channel — standalone returns `true` and opens nothing](../plans/feature_plan_20260811160000_audit-openexternal-channel-reports-success-opens-nothing.md) — **PLAN REVIEWED** — ID: 0e351db7-c00f-4e66-a4c2-9873f5bf8062
 - [ ] [Audit the command seam — unbridged commands are dead and their failures are swallowed](../plans/feature_plan_20260811160001_audit-command-seam-62-unbridged-commands-swallowed.md) — **PLAN REVIEWED** — ID: 26839f25-39c2-47dc-b86b-6e90399419e8
+- [ ] [The Browser Shell Polls a Dead Host Forever Without Saying So](../plans/cockpit-must-say-when-the-host-is-gone.md) — **PLAN REVIEWED** — ID: 046e5e5c-7fa3-47c3-b364-cbb4f8b42bc0
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

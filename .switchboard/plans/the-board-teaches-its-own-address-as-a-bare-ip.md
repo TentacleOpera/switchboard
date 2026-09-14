@@ -78,6 +78,7 @@ tells an operator a better form exists.
 
 ## Metadata
 
+**Feature:** 224042f4-92bd-4dc0-82e8-996deb9e2bdc
 - **Complexity:** 4
 - **Tags:** cli, docs, ux
 

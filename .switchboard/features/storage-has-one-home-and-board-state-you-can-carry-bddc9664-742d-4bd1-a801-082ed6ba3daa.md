@@ -1,6 +1,6 @@
 # Storage Has One Home, and Board State You Can Carry
 
-**Complexity:** 6
+**Complexity:** 7
 
 ## Goal
 
@@ -15,8 +15,9 @@ Give storage a single operator-facing surface, and make board state survivable w
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
 - [ ] [Board state cannot survive machine loss without a third-party account — surface the state file as an explicit export/import](../plans/portable-board-state-export-import.md) — **PLAN REVIEWED** — ID: afe4fd67-0786-4aea-80cd-822dc6704dcb
-- [ ] [Board state backup works and nobody knows it exists — document it, and stop telling only git that the state is unrecoverable](../plans/board-state-backup-discoverability.md) — **PLAN REVIEWED** — ID: 73eaecb7-c038-4f5f-aab9-1de2ec417e0b
+- [ ] [Board state backup works and nobody knows it exists — document it, and stop telling only git that the state is unrecoverable](../plans/board-state-backup-discoverability.md) — **BACKLOG** — ID: 73eaecb7-c038-4f5f-aab9-1de2ec417e0b
 - [ ] [A Database panel in the shell rail that owns storage, and the retirement of the Setup tab that half-owns it today](../plans/database-panel-in-the-shell-rail.md) — **CODER CODED** — ID: 3e1f6644-9398-424f-99b3-c8995d1adbb6
+- [ ] [One File Configures a Workspace, and It Is the File the Docs Show](../plans/one-file-workspace-config.md) — **PLAN REVIEWED** — ID: d46abada-0475-4ee1-b50d-33a98b30edec
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -33,4 +34,6 @@ The cross-subtask reconciliation audit (improve-feature pass) resolved one contr
 - **`restoreFromBackup` is the single import path:** Subtask 1 extends the existing method (richer return type, workspace-id mismatch surfacing, separated skip counts) rather than creating a second import method.
 - **Both hosts share the panel manifest:** `getPanelsManifest()` and `getPanelHtmlById()` in `headlessPanelHtml.ts` plus one route arm in `LocalApiServer.ts` serve both the extension and the standalone host. No divergence risk for the panel itself.
 - **Stale analysis corrected:** `DATABASE_OPERATIONS_ANALYSIS.md` claimed the Setup panel's database handlers were missing. They exist and work at `TaskViewerProvider.ts:15814-15893`. The controls are in `setup.html`, not `implementation.html`. All file/line references in subtask 3 have been corrected.
+
+ the Setup panel's database handlers were missing. They exist and work at `TaskViewerProvider.ts:15814-15893`. The controls are in `setup.html`, not `implementation.html`. All file/line references in subtask 3 have been corrected.
 

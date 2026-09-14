@@ -17,6 +17,7 @@ Workspace mappings persist a machine's folder layout into state that outlives th
 - [ ] [The mapping prune logs once per fleet refresh, forever — move the line to the edge and drop the read-path debug print](../plans/prune-and-mapping-read-log-spam.md) — **PLAN REVIEWED** — ID: d8009809-5922-4fa5-91a6-7537953e396f
 - [ ] [The committed workspace-id file carries a machine-local database path that no reader consumes and no writer can ever correct](../plans/committed-workspace-id-carries-a-foreign-db-path-nothing-reads.md) — **PLAN REVIEWED** — ID: 2e30c6d8-5fc1-47e8-b5d3-5b1f74490a22
 - [ ] [The workspace dropdown lists every mapped child alongside its parent, and selecting one filters the board by a repo — a dimension plans are not organised on](../plans/workspace-dropdown-lists-every-child-with-the-parents-projects.md) — **PLAN REVIEWED** — ID: d9cadeea-f2b7-487e-a4b2-e7ff3a78d3ed
+- [ ] [A Machine-Foreign Path in `workspace-id` Silently Routes Agents to the Wrong Database](../plans/a-machine-foreign-path-in-workspace-id-routes-agents-to-the-wrong-database.md) — **PLAN REVIEWED** — ID: 879ceb0f-6eb2-4050-86f8-1e50908016fe
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing
@@ -65,7 +66,6 @@ The other two predate that: the `workspace-id` second line arrived in `dd7d5b85`
   - A stored child selection resolves to its parent on upgrade (no blank picker); the board re-pushes on every workspace/project/column switch (cache keys intact).
   - `control-plane-repo-scope.test.js` passes after its source-text assertions on the filter are removed; the DB-level `repo_scope` assertions stay green.
 - **Must not touch:** the mapping config / setup panel; `_getKnownRoots` (the API's accepted-root set stays — child paths remain valid API arguments); the `repo_scope` column; `buildWorkspaceItems`'s contract for non-picker callers (TicketsPanelProvider, PlanningPanelProvider, TaskViewerProvider memo) — the picker-only derivation is separate.
-
 
 ## Addendum (2026-09-10): the leak survives on the wire, not in storage
 

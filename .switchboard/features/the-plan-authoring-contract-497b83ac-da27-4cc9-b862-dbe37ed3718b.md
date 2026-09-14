@@ -23,6 +23,7 @@ Fix what authoring agents are required to do, and what their output must contain
 - [ ] [Enforce Mandatory Split Gate in improve-plan Protocol](../plans/enforce-mandatory-split-gate-in-improve-plan-protocol.md) — **PLAN REVIEWED** — ID: 37738533-d288-4c80-9735-78776a4212ea
 - [ ] [Split-Gate Return Routing via Standing Orders](../plans/split-gate-return-routing-for-automation.md) — **PLAN REVIEWED** — ID: df13a9ad-3e47-46f5-971b-ae2e2e301b79
 - [ ] [Replace agent-authored project pinning with a sticky-project UI setting](../plans/replace-agent-project-pinning-with-a-sticky-ui-setting.md) — **PLAN REVIEWED** — ID: 03ed0e7a-c916-4cba-9024-0276a6987961
+- [ ] [The Accuracy Protocol Inlines Host-Workflow Scaffolding a Coder Cannot Use](../plans/accuracy-protocol-inlines-host-workflow-scaffolding.md) — **PLAN REVIEWED** — ID: 8ed2df59-e817-40b9-b6e6-387cea2f4b9a
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

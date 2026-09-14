@@ -289,7 +289,15 @@ const staticFragmentBodyCache = new Map<string, { body: string; source: 'store' 
 function resolveStaticFragmentBody(id: string): { body: string; source: 'store' | 'compiled-default' } {
     const cached = staticFragmentBodyCache.get(id);
     if (cached) { return cached; }
-    return { body: COMPILED_DEFAULTS[id] ?? '', source: 'compiled-default' };
+    const fallback = COMPILED_DEFAULTS[id];
+    if (fallback === undefined) {
+        // A static id with no compiled default has no safe answer: returning ''
+        // would silently drop the fragment from every prompt and read exactly
+        // like a fragment that legitimately emits nothing. Say so loudly.
+        console.error(`[standingOrderFragments] static fragment '${id}' has no compiled default and no store row — delivering nothing. Add it to STATIC_FRAGMENT_BODIES.`);
+        return { body: '', source: 'compiled-default' };
+    }
+    return { body: fallback, source: 'compiled-default' };
 }
 
 export const STANDING_ORDER_FRAGMENTS: ReadonlyArray<StandingOrderFragment> = [
@@ -423,13 +431,31 @@ export async function seedStandingOrderFragments(db: KanbanDatabase): Promise<{ 
 }
 
 /**
+ * Resolve a `control_plane` row into the body the cache should serve.
+ *
+ * An EMPTY body is a value, not an absence. A row whose `override_body` is the
+ * empty string is an operator deliberately suppressing that fragment; reading
+ * it as "unconfigured" and serving the compiled constant instead would make a
+ * suppressed fragment indistinguishable from an unconfigured one — the exact
+ * quiet-wrong-answer the repo's fallback rule forbids, and the opposite of what
+ * the plan specifies ("an empty body is a valid store row that suppresses the
+ * fragment"). So the presence of the row decides, and only `NULL` falls through:
+ * `override_body IS NULL` means "no override", and the seeded `body` is used.
+ */
+function resolveStoredBody(entry: { overrideBody?: string | null; workspaceOverride?: string | null; body: string }): string {
+    const override = entry.overrideBody ?? entry.workspaceOverride;
+    return override !== null && override !== undefined ? override : entry.body;
+}
+
+/**
  * Warm the in-memory cache of static fragment bodies from the `control_plane`
  * store. Called at startup (from `bootstrap.ts` after `seedControlPlaneFromBundle`)
  * so the first delivery already sees store-backed bodies. For each static id:
- * if the row has `overrideBody`, use it with `source: 'store'`; else use `body`
- * with `source: 'store'`; if no row, leave the cache entry absent (the
- * `resolveStaticFragmentBody` fallback returns the compiled default with
- * `source: 'compiled-default'`).
+ * if a row exists, cache `override_body` when it is non-NULL and the seeded
+ * `body` otherwise, both with `source: 'store'` — an empty string included, so
+ * an operator can suppress a fragment. If no row exists, leave the cache entry
+ * absent and `resolveStaticFragmentBody` returns the compiled default with
+ * `source: 'compiled-default'`.
  *
  * If the read fails (DB not ready), the cache stays empty and every static
  * fragment falls back to its compiled default — a visible, safe degradation.
@@ -439,10 +465,7 @@ export async function loadStaticFragmentBodies(db: KanbanDatabase): Promise<void
         try {
             const entry = await db.getControlPlaneEntry(id, STANDING_ORDER_FRAGMENT_KIND);
             if (entry) {
-                const body = (entry.overrideBody ?? entry.workspaceOverride) || entry.body;
-                if (body) {
-                    staticFragmentBodyCache.set(id, { body, source: 'store' });
-                }
+                staticFragmentBodyCache.set(id, { body: resolveStoredBody(entry), source: 'store' });
             }
         } catch (err) {
             console.warn(`[standingOrderFragments] loadStaticFragmentBodies: failed to read '${id}' from control_plane:`, err);
@@ -451,13 +474,13 @@ export async function loadStaticFragmentBodies(db: KanbanDatabase): Promise<void
 }
 
 /**
- * Invalidate a single cache entry — the next delivery re-reads from the store
- * via `resolveStaticFragmentBody`'s compiled-default fallback until
- * `loadStaticFragmentBodies` is called again. Called by
- * `KanbanDatabase.setControlPlaneOverride` and `upsertControlPlaneEntry` for
- * `kind: 'standing-order-fragment'` rows, satisfying the "no restart"
- * invariant: an operator's override reaches the next delivered prompt
- * without a host restart.
+ * Drop a single cache entry. Until `reloadStaticFragmentBody` (or a full
+ * `loadStaticFragmentBodies`) repopulates it, `resolveStaticFragmentBody`
+ * serves the COMPILED DEFAULT for that id, tagged `source: 'compiled-default'`
+ * — this is a drop, not a re-read. Callers that want the store value must pair
+ * it with a reload; `KanbanDatabase.setControlPlaneOverride` and
+ * `upsertControlPlaneEntry` do exactly that for `kind: 'standing-order-fragment'`
+ * rows, which is what satisfies the "no restart" invariant.
  */
 export function invalidateStaticFragmentBody(id: string): void {
     staticFragmentBodyCache.delete(id);
@@ -479,10 +502,7 @@ export async function reloadStaticFragmentBody(db: KanbanDatabase, id: string): 
     try {
         const entry = await db.getControlPlaneEntry(id, STANDING_ORDER_FRAGMENT_KIND);
         if (entry) {
-            const body = (entry.overrideBody ?? entry.workspaceOverride) || entry.body;
-            if (body) {
-                staticFragmentBodyCache.set(id, { body, source: 'store' });
-            }
+            staticFragmentBodyCache.set(id, { body: resolveStoredBody(entry), source: 'store' });
         }
     } catch (err) {
         console.warn(`[standingOrderFragments] reloadStaticFragmentBody: failed to read '${id}' from control_plane:`, err);

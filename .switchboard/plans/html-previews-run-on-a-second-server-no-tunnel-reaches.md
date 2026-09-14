@@ -97,6 +97,7 @@ second server is the part that breaks remoting.
 
 ## Metadata
 
+**Feature:** 224042f4-92bd-4dc0-82e8-996deb9e2bdc
 **Complexity:** 6
 **Tags:** bugfix, backend, security, infrastructure, ui
 

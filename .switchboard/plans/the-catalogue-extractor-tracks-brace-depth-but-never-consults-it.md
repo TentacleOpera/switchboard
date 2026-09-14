@@ -54,6 +54,7 @@ Both verbs landed in `4df54319` (2026-09-03, *priority as a native card field*).
 
 ## Metadata
 
+**Feature:** d2996735-56de-4e00-ac77-9170be1235f6
 **Complexity:** 2
 **Tags:** tooling, catalogue, ci, bugfix
 **Project:** Browser Switchboard

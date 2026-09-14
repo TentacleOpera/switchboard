@@ -384,6 +384,22 @@ jobs:
       - name: Standing-orders additive (operator prompt adds, never replaces protocol)
         run: npm run test:contract:standing-orders-additive
 
+      # The five STATIC fragment bodies (body does not read ctx) live in the
+      # control_plane store, not in src/. This suite is the only check that can
+      # discriminate on whether the store is actually the live source: it drives
+      # the REAL sync delivery path (renderStandaloneOrdersBlock) after writing
+      # an override_body, so a cache that is seeded but never read — the failure
+      # mode the whole change exists to avoid — fails here and nowhere else.
+      # Also pins the census gate (the static/dynamic split is a body-source
+      # scan, not a hand-maintained list), the compiled-default fallback and its
+      # source tag, that an EMPTY override suppresses rather than falling back,
+      # that override_body survives a re-seed, and that fragment rows are not
+      # projected as junk files into .agents/.
+      # Loads the compiled services from out/ — must stay AFTER "Compile test
+      # outputs".
+      - name: Standing-order fragment store (store is the live source, not src/)
+        run: npm run test:contract:standing-order-fragment-store
+
       # A seat safeguard configured on a terminal must ride EVERY prompt that seat
       # receives, not only board-composed ones. The failure this pins is silent by
       # construction: a lead relays a subtask over ptySendPrompt, the coder's

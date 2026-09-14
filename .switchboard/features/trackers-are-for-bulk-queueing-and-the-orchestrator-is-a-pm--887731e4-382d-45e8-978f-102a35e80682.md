@@ -21,6 +21,7 @@ ClickUp, Linear and Notion are used here for bulk moves and long-running queues 
 - [ ] [Remote staging auto-seats the orchestrator, in the one path the code says must hold no judgement — delete the flag, the dead constant, and the stale docblocks](../plans/retire-queue-sequencing-auto-orchestrator.md) — **PLAN REVIEWED** — ID: bc38bc9f-8bbb-4182-9274-dc100ffe35d5
 - [ ] [Two orchestrator entry points are dead or inconsistent, and one concept has four names — delete, and settle the vocabulary](../plans/orchestrator-entry-points-cleanup-and-naming.md) — **PLAN REVIEWED** — ID: 2e684007-a9e5-41af-8534-99ca73df2e95
 - [ ] [The standalone clipboard payload is unusable by the hosts it exists for, and the create-race guard is patched in one client instead of the server](../plans/orchestrator-start-clipboard-payload-and-seat-guard.md) — **PLAN REVIEWED** — ID: aa726321-f524-490b-a689-3a9f505ab650
+- [ ] [Dedup Imports From the Local Link, Not a Tag Written Into the User's Tracker](../plans/dedup-imports-from-the-local-link-not-a-tag-in-the-users-tracker.md) — **PLAN REVIEWED** — ID: 4aa33a28-c2e0-42fd-9544-87a1a0c6511b
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

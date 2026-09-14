@@ -92,6 +92,7 @@ same code path — deleting the input without rewiring the buttons leaves six de
 
 ## Metadata
 
+**Feature:** 2b621be1-366c-4bf5-8aaf-183c3f852742
 - **Complexity:** 6
 - **Tags:** frontend, backend, ui, ux, api, security, mobile
 

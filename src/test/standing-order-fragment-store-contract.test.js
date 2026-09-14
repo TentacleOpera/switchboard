@@ -34,6 +34,7 @@ const { KanbanDatabase } = require(path.join(process.cwd(), 'out', 'services', '
 const {
     STANDING_ORDER_FRAGMENTS,
     STANDING_ORDER_FRAGMENT_IDS,
+    composeStandingOrderFragments,
     STATIC_STANDING_ORDER_FRAGMENT_IDS,
     isStaticFragment,
     STATIC_FRAGMENT_BODIES,
@@ -95,6 +96,19 @@ async function test_census_gate() {
     }
     assert.strictEqual(scannedStatic.size, STATIC_STANDING_ORDER_FRAGMENT_IDS.size,
         `census size mismatch: scanned ${scannedStatic.size} vs declared ${STATIC_STANDING_ORDER_FRAGMENT_IDS.size}`);
+    // Every static id MUST carry a compiled default and a bundled seed entry.
+    // A static id missing from STATIC_FRAGMENT_BODIES resolves to '' on a cold
+    // cache — the fragment silently vanishes from every prompt and reads exactly
+    // like one that legitimately emits nothing. The census set alone does not
+    // catch that, so pin it here.
+    for (const id of STATIC_STANDING_ORDER_FRAGMENT_IDS) {
+        assert.strictEqual(typeof STATIC_FRAGMENT_BODIES[id], 'string',
+            `static id '${id}' must have a compiled default in STATIC_FRAGMENT_BODIES`);
+        assert.ok(STATIC_FRAGMENT_BODIES[id].length > 0,
+            `static id '${id}' compiled default must be non-empty`);
+        assert.ok(BUNDLED_STANDING_ORDER_FRAGMENTS[id],
+            `static id '${id}' must have a bundled seed entry`);
+    }
     console.log('Pass: census gate — STATIC_STANDING_ORDER_FRAGMENT_IDS matches body-source scan');
 }
 
@@ -120,7 +134,6 @@ async function test_compiled_default_fallback() {
         attended: true,
         externalHead: false,
     };
-    const { composeStandingOrderFragments } = require(path.join(process.cwd(), 'out', 'services', 'standingOrderFragments.js'));
     const composed = composeStandingOrderFragments([STANDING_ORDER_FRAGMENT_IDS.headCommit], ctx);
     assert.ok(composed.sources[STANDING_ORDER_FRAGMENT_IDS.headCommit] === 'compiled-default',
         `headCommit source must be 'compiled-default' when cache is cold, got '${composed.sources[STANDING_ORDER_FRAGMENT_IDS.headCommit]}'`);
@@ -191,7 +204,6 @@ async function test_store_backed_delivery_and_reseed(tmpRoot) {
         'the override text must appear in the delivered block (store-backed delivery via the sync path)');
 
     // The composed source must be 'store' for the overridden fragment.
-    const { composeStandingOrderFragments } = require(path.join(process.cwd(), 'out', 'services', 'standingOrderFragments.js'));
     const composed = composeStandingOrderFragments([STANDING_ORDER_FRAGMENT_IDS.headCommit], ctx);
     assert.ok(composed.sources[STANDING_ORDER_FRAGMENT_IDS.headCommit] === 'store',
         `headCommit source must be 'store' after override+reload, got '${composed.sources[STANDING_ORDER_FRAGMENT_IDS.headCommit]}'`);
@@ -203,8 +215,30 @@ async function test_store_backed_delivery_and_reseed(tmpRoot) {
     assert.strictEqual(entryAfterReseed.overrideBody, overrideText,
         'override_body must survive a re-seed (seedControlPlane COALESCE)');
 
+    // ── An EMPTY override suppresses the fragment; it is not read as "unset" ──
+    // The failure this pins: an operator empties a fragment body to switch it
+    // off, the store read treats '' as absent, and the compiled constant is
+    // delivered instead — a suppressed fragment indistinguishable from an
+    // unconfigured one.
+    await db.setControlPlaneOverride(STANDING_ORDER_FRAGMENT_IDS.headCommit, STANDING_ORDER_FRAGMENT_KIND, '');
+    await loadStaticFragmentBodies(db);
+    const emptied = composeStandingOrderFragments([STANDING_ORDER_FRAGMENT_IDS.headCommit], ctx);
+    assert.strictEqual(emptied.sources[STANDING_ORDER_FRAGMENT_IDS.headCommit], 'store',
+        'an emptied fragment row must still report source: store, not compiled-default');
+    assert.strictEqual(emptied.text, '',
+        'an empty override must suppress the fragment, not fall back to the compiled default');
+
+    // Clearing the override (NULL) restores the seeded body, still from the store.
+    await db.setControlPlaneOverride(STANDING_ORDER_FRAGMENT_IDS.headCommit, STANDING_ORDER_FRAGMENT_KIND, null);
+    await loadStaticFragmentBodies(db);
+    const cleared = composeStandingOrderFragments([STANDING_ORDER_FRAGMENT_IDS.headCommit], ctx);
+    assert.strictEqual(cleared.sources[STANDING_ORDER_FRAGMENT_IDS.headCommit], 'store',
+        'a cleared override must resolve the seeded body from the store');
+    assert.ok(cleared.text.includes(STATIC_FRAGMENT_BODIES[STANDING_ORDER_FRAGMENT_IDS.headCommit]),
+        'a cleared override must deliver the seeded body');
+
     await KanbanDatabase.invalidateWorkspace(wsRoot);
-    console.log('Pass: store-backed delivery + override survives re-seed');
+    console.log('Pass: store-backed delivery + override survives re-seed + empty override suppresses');
 }
 
 // ── 5. Projection skip ──────────────────────────────────────────────────────
@@ -242,13 +276,13 @@ async function test_projection_skip(tmpRoot) {
 async function run() {
     console.log('\nstanding-order-fragment-store-contract\n');
 
-    await test_census_gate();
-    await test_compiled_default_fallback();
+    await test('census gate', () => test_census_gate());
+    await test('compiled-default fallback', () => test_compiled_default_fallback());
 
     const tmpRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sb-sof-store-'));
     try {
-        await test_store_backed_delivery_and_reseed(tmpRoot);
-        await test_projection_skip(tmpRoot);
+        await test('store-backed delivery + override survives re-seed', () => test_store_backed_delivery_and_reseed(tmpRoot));
+        await test('projection skip', () => test_projection_skip(tmpRoot));
     } finally {
         await KanbanDatabase.disposeAll();
         try { global.gc && global.gc(); } catch {}

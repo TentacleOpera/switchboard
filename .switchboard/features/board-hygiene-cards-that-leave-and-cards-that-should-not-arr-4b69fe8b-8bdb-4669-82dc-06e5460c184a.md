@@ -1,6 +1,6 @@
 # Board Hygiene — Cards That Leave, and Cards That Should Not Arrive
 
-**Complexity:** 4
+**Complexity:** 6
 
 ## Goal
 
@@ -74,5 +74,10 @@ Five plans on board population: stars that never expire, completed cards that ne
 - [ ] [Reviewer Findings Become Short Backlog Cards, Not a Memo Nobody Drains](../plans/reviewer-findings-become-backlog-cards-instead-of-piling-into-a-memo.md) — **PLAN REVIEWED** — ID: c5818617-62e1-4eae-8e06-c2c443db9d87
 - [ ] [Add a Resident Rule: Never File a New Plan Into an Already-Coded Feature](../plans/add-a-resident-rule-against-filing-plans-into-coded-features.md) — **PLAN REVIEWED** — ID: 3fe13494-1df2-4c90-97b1-221b1ea8bcae
 - [ ] [Archive on Startup What Has Been in Completed Two Weeks](../plans/archive-on-startup-what-has-been-completed-two-weeks.md) — **PLAN REVIEWED** — ID: ccffc96a-1451-464b-8380-0285c6a14c54
+- [ ] [The plan-delete endpoint hits a foreign-key wall and then fails to unlink the file](../plans/the-plan-delete-endpoint-hits-a-foreign-key-wall-and-then-fails-to-unlink-the-file.md) — **PLAN REVIEWED** — ID: bd5d2a2c-1530-4a2f-abe5-0cd69e8a2f8b
+- [ ] [A Reviewer Defers What It Should Fix, and Escalates Backwards](../plans/a-reviewer-defers-what-it-should-fix-and-escalates-backwards.md) — **PLAN REVIEWED** — ID: 73a271e9-c47b-42d9-8db3-afe4f177fe23
+<!-- END SUBTASKS -->
+
+ix, and Escalates Backwards](../plans/a-reviewer-defers-what-it-should-fix-and-escalates-backwards.md) — **PLAN REVIEWED** — ID: 73a271e9-c47b-42d9-8db3-afe4f177fe23
 <!-- END SUBTASKS -->
 

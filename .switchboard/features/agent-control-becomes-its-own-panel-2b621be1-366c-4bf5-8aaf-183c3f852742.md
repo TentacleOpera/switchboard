@@ -1,6 +1,6 @@
 # Agent Control becomes its own panel
 
-**Complexity:** 5
+**Complexity:** 6
 
 ## Goal
 
@@ -17,6 +17,8 @@ Move Agent Control out of kanban.html into a panel file of its own, give it an O
 - [ ] [Add an Orders tab to Agent Control](../plans/add-an-orders-tab-to-agent-control.md) — **PLAN REVIEWED** — ID: 6b9d97ce-60da-43d2-b1ab-6e574f27e1b7
 - [ ] [Extract Agent Control into its own panel file](../plans/extract-agent-control-into-its-own-panel-file.md) — **PLAN REVIEWED** — ID: 1e9a9b79-abd5-46ef-9b78-31beb778cd77
 - [ ] [Retire the agent tabs from kanban.html](../plans/retire-the-agent-tabs-from-kanban-html.md) — **PLAN REVIEWED** — ID: 02aa2bd1-26cc-492f-b3b4-7d826eede6f6
+- [ ] [Surface a Build Target in Agent Control](../plans/surface-a-build-target-in-agent-control.md) — **PLAN REVIEWED** — ID: c4475ad5-4222-4ccd-b009-7ce44ee60e0e
+- [ ] [The Agent Control Surface Cannot Be Configured, and Is Driven by Typing](../plans/the-agent-control-surface-cannot-be-configured-and-is-driven-by-typing.md) — **PLAN REVIEWED** — ID: 00e0d1f0-6e70-4d9f-843c-d8433daa6e6f
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing

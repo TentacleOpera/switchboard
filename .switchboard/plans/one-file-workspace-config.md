@@ -61,6 +61,7 @@ source cannot be identified after the fact.
 
 ## Metadata
 
+**Feature:** bddc9664-742d-4bd1-a801-082ed6ba3daa
 - **Complexity:** 7
 - **Tags:** ux, cli, infrastructure, feature, docs
 

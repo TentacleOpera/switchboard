@@ -97,6 +97,7 @@ which is exactly what makes "my agent said something an hour ago" unanswerable t
 
 ## Metadata
 
+**Feature:** 44798142-bd27-4408-9f95-9873c781dcef
 - **Complexity:** 6
 - **Tags:** cli, feature, refactor
 

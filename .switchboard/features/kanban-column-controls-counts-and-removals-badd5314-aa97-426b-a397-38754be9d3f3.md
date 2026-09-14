@@ -1,6 +1,6 @@
 # Kanban Column Controls, Counts and Removals
 
-**Complexity:** 3
+**Complexity:** 6
 
 ## Goal
 
@@ -13,4 +13,10 @@ Consolidated 2026-09-10: column counts ignoring the project filter, the STAGING 
 - [ ] [Remove redundant COMPLETED column read in PlanIngestionEngine feature sweep and move its contract pin](../plans/feature_plan_20260827161638_remove-redundant-completed-column-read-feature-sweep.md) — **PLAN REVIEWED** — ID: 46ea21bd-f2ac-40e1-afe7-0ca02fdaf97d
 - [ ] [Remove stale setup.html startup-command references from docs and comments](../plans/feature_plan_20260827161642_remove-stale-setup-html-startup-command-references.md) — **PLAN REVIEWED** — ID: 9c69a61d-f7fd-45cd-83f7-809db61cb915
 - [ ] [Remove starred-count indicator from kanban control rail](../plans/feature_plan_20260827161643_remove-starred-count-indicator-from-kanban-rail.md) — **PLAN REVIEWED** — ID: ecc549fd-ad5c-4e53-ba9e-958ee02372cc
+- [ ] [A Mass Move Is One Undoable Operation](../plans/a-mass-move-is-one-undoable-operation.md) — **PLAN REVIEWED** — ID: 13190a3f-4e9c-4443-9ce2-1cc262bd2cf7
 <!-- END SUBTASKS -->
+
+**PLAN REVIEWED** — ID: ecc549fd-ad5c-4e53-ba9e-958ee02372cc
+- [ ] [A Mass Move Is One Undoable Operation](../plans/a-mass-move-is-one-undoable-operation.md) — **PLAN REVIEWED** — ID: 13190a3f-4e9c-4443-9ce2-1cc262bd2cf7
+<!-- END SUBTASKS -->
+

@@ -31,6 +31,7 @@ await fs.promises.rename(tempPath, filePath);
 
 ## Metadata
 
+**Feature:** bddc9664-742d-4bd1-a801-082ed6ba3daa
 - **Complexity:** 6
 - **Tags:** backend, database, reliability, refactor, devops
 

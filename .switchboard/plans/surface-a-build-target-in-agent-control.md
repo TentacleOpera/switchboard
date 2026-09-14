@@ -32,6 +32,7 @@ its options.
 
 ## Metadata
 
+**Feature:** 2b621be1-366c-4bf5-8aaf-183c3f852742
 **Complexity:** 4
 **Tags:** ci, agents, ux, performance
 **Project:** Browser Switchboard
