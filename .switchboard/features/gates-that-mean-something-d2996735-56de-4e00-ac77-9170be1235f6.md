@@ -8,13 +8,13 @@ A green gate that asserts nothing is worse than a red one. 95 of 208 test files 
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [55 hand-rolled source-span extractions treat a failed marker lookup as a valid span — one silently swallows the file, another silently collapses to nothing](../plans/source-span-extraction-guard-shared-helper.md) — **CREATED** — ID: f944fb1d-b9a3-4b51-bd84-80462fda37d0
-- [ ] [Source-Regex Test Assertions Must Pin Behaviour, Not Spelling](../plans/test-assertions-pin-behaviour-not-spelling.md) — **CREATED** — ID: 0d37839b-53e9-4959-9fac-8e9afc90bb5f
-- [ ] [Test Reachability Ratchet, and Wire the Dark Tests That Already Pass](../plans/test-reachability-ratchet-and-wire-green-tests.md) — **CREATED** — ID: aefc01bb-4df5-4d95-ad4f-387888be7dd8
-- [ ] [Triage the 45 Dark Test Files That Fail When Actually Run](../plans/triage-the-failing-dark-tests.md) — **CREATED** — ID: 38f01993-6e18-40d6-86fe-0a145f33cdc9
-- [ ] [Give the 12 BDD-Style Dark Test Files a Runner](../plans/give-the-bdd-style-dark-tests-a-runner.md) — **CREATED** — ID: c1ceb6aa-dc09-4b15-a87b-c79acfc3a93b
-- [ ] [A composition-root parity gate that actually fails](../plans/a-composition-root-parity-gate-that-actually-fails.md) — **CREATED** — ID: a82e0a62-9e12-4997-839a-2151c4d49f68
-- [ ] [Nine Gates That Pass Without Asserting Their Own Mechanism](../plans/memo-nine-gates-that-pass-without-asserting-their-own-mechanism.md) — **CREATED** — ID: a8423707-87cd-4d7d-86e8-bab1ebff0e4a
+- [ ] [55 hand-rolled source-span extractions treat a failed marker lookup as a valid span — one silently swallows the file, another silently collapses to nothing](../plans/source-span-extraction-guard-shared-helper.md) — **PLAN REVIEWED** — ID: f944fb1d-b9a3-4b51-bd84-80462fda37d0
+- [ ] [Source-Regex Test Assertions Must Pin Behaviour, Not Spelling](../plans/test-assertions-pin-behaviour-not-spelling.md) — **PLAN REVIEWED** — ID: 0d37839b-53e9-4959-9fac-8e9afc90bb5f
+- [ ] [Test Reachability Ratchet, and Wire the Dark Tests That Already Pass](../plans/test-reachability-ratchet-and-wire-green-tests.md) — **PLAN REVIEWED** — ID: aefc01bb-4df5-4d95-ad4f-387888be7dd8
+- [ ] [Triage the 45 Dark Test Files That Fail When Actually Run](../plans/triage-the-failing-dark-tests.md) — **PLAN REVIEWED** — ID: 38f01993-6e18-40d6-86fe-0a145f33cdc9
+- [ ] [Give the 12 BDD-Style Dark Test Files a Runner](../plans/give-the-bdd-style-dark-tests-a-runner.md) — **PLAN REVIEWED** — ID: c1ceb6aa-dc09-4b15-a87b-c79acfc3a93b
+- [ ] [A composition-root parity gate that actually fails](../plans/a-composition-root-parity-gate-that-actually-fails.md) — **PLAN REVIEWED** — ID: a82e0a62-9e12-4997-839a-2151c4d49f68
+- [ ] [Nine Gates That Pass Without Asserting Their Own Mechanism](../plans/memo-nine-gates-that-pass-without-asserting-their-own-mechanism.md) — **PLAN REVIEWED** — ID: a8423707-87cd-4d7d-86e8-bab1ebff0e4a
 <!-- END SUBTASKS -->
 
 ## Dependencies & sequencing (2026-09-04, Board Collapse 09)

@@ -1,21 +1,27 @@
 #!/bin/sh
 # npm `bin` entry for the standalone host.
 #
-# WHY THIS EXISTS: `--max-old-space-size` is applied by the Go front controller
-# (cmd/switchboard/main.go) and the Go launcher (internal/launcher/discovery.go),
-# and the .deb puts that controller on PATH. An npm/npx install does not — its
-# PATH entry came from package.json's `bin`, which pointed straight at the
-# bundle, so the board ran on V8's auto-sized ceiling. On a 1 GB box that
-# ceiling lands BELOW the board's working set and the host aborts with RAM to
-# spare. This shim closes that gap for every npm-installed launch.
+# This shim exists ONLY to resolve npm's bin symlink and exec the bundle.
+# It sets NO memory ceiling.
 #
-# `exec` REPLACES this shell: no wrapper process survives. That is the whole
-# reason this is sh and not a re-exec inside cli.js, where the parent would
-# linger holding the 18 MB bundle (~40 MB RSS) on the device we are sizing for.
+# HISTORY, so nobody adds one back: on 2026-09-14 this shim hardcoded
+# `--max-old-space-size` (512, later 310). Both values were derived from a
+# board-only Pi estimate and were far below the real working peak. The result
+# on an ordinary host was a fatal abort mid-run:
 #
-# Not NODE_OPTIONS: it leaks into every child process, including the Go pty
-# host. Not v8.setFlagsFromString: a measured silent no-op — V8 parses this
-# flag once, at startup, before this file could run.
+#   pid 653387, 3.7 GB host: Mark-Compact 517.0 -> 516.4 MB
+#   FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of
+#   memory  (inside better_sqlite3 Statement::JS_all, i.e. a board read)
+#
+# The flag's only legitimate use is to RAISE V8's auto-sized ceiling on a host
+# so small that the automatic limit falls below the board's working set. On any
+# host where the automatic limit is already adequate, setting it can only lower
+# it -- it adds a kill condition and buys nothing. A default value cannot know
+# which case it is in, so there is no safe default and none is set here.
+#
+# If a specific device genuinely needs a raised ceiling, set it explicitly on
+# that device, at a measured value:
+#   SWITCHBOARD_MAX_OLD_SPACE_MB=<measured> switchboard tailnet
 set -e
 
 # Resolve through npm's bin symlink to this file's real directory.
@@ -29,14 +35,4 @@ while [ -L "$target" ]; do
 done
 dir=$(cd "$(dirname "$target")" && pwd)
 
-# Same default (800 MB budget - 300 MB non-heap - 190 MB offset = 310 MB)
-# and same override the other paths use, so all agree.
-mb=${SWITCHBOARD_MAX_OLD_SPACE_MB:-310}
-case $mb in
-    ''|*[!0-9]*)
-        echo "switchboard: SWITCHBOARD_MAX_OLD_SPACE_MB must be an integer, got '$mb'" >&2
-        exit 64
-        ;;
-esac
-
-exec node "--max-old-space-size=$mb" "$dir/../dist/standalone/cli.js" "$@"
+exec node "$dir/../dist/standalone/cli.js" "$@"

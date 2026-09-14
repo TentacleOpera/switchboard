@@ -147,5 +147,33 @@ Key risks: ConnectionsPanelProvider has no browser target (must be excluded or p
 
 ## Outstanding Questions
 
-- **[user]** Is `DiagramRenderer` (`src/services/DiagramRenderer.ts`) confirmed dead code? It is not imported by any file in `src/` outside itself. Proceeding on the assumption that it is dead and should be deleted outright.
-- **[user]** Should `ConnectionsPanelProvider` be ported to the standalone host's browser surface before Stage 1, or deferred to a separate plan? Proceeding on the assumption that it is deferred — the `createWebviewPanel` site stays intact until a browser equivalent is built.
+- **[ANSWERED 2026-09-14 — YES, verified. Delete outright.]** `DiagramRenderer`
+  (`src/services/DiagramRenderer.ts`, 142 lines) has **no references anywhere in `src/` outside
+  itself**, and appears in **neither built bundle** — `dist/standalone/cli.js` and `dist/extension.js`
+  both contain zero occurrences, so webpack already tree-shakes it out. It ships in no host today.
+  Deleting it changes no behaviour and shrinks neither bundle, because it was never in them.
+- **[ANSWERED 2026-09-14 — the question's premise is false. Nothing to port or defer.]**
+  Connections is **not** a panel lacking a browser equivalent. The browser surface already exists and
+  is fully wired:
+
+  | Piece | Where |
+  | :--- | :--- |
+  | Manifest entry + route | `headlessPanelHtml.ts:709` — `{ id: 'connections', route: '/connections', enabled: connectionsEnabled }` |
+  | HTML | `headlessPanelHtml.ts:750` — `case 'connections': return getConnectionsHtml(...)` |
+  | Verb endpoint | `LocalApiServer.ts:13960` — `POST /connections/verb/*` |
+  | WebSocket | `LocalApiServer.ts:14119` — `GET /ws/connections` |
+
+  It serves the **same** `src/webview/connections.html` / `connections.js` the extension panel hosts —
+  which is what `ConnectionsPanelProvider`'s own docblock says it exists to guarantee: *"it owns no
+  verb arms — it only forwards each posted verb to either SetupPanelProvider or PlanningPanelProvider
+  … avoids forking the shared HTML."* A thin host over shared HTML whose logic lives in two providers
+  that both already have browser surfaces.
+
+  **The two gates check out too.** `connectionsEnabled` is `availability?.connections !== false` —
+  on by default. `railHidden: true` is not a problem: `shell.js:774` skips those when drawing the
+  rail, and Connections shares that flag with **Setup** and **Memo** — panels reached by an action
+  rather than a permanent rail icon, which is the correct category for one a command opens.
+
+  So Connections is an ordinary Stage 1 panel: delete the editor host, redirect its command to
+  `/connections` on the running host's URL. No port, no deferral, no `createWebviewPanel` site left
+  behind.

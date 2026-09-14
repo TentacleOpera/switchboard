@@ -362,10 +362,60 @@ Key risks: the decomposition's "no content lost" check (verification 5) is headi
 
 ## Outstanding Questions
 
-- **[user]** What are the menu's entries at launch? The plan's decomposition implies: *what's ready*,
-  *run a batch now*, *watch an armed run*, *merge a finished feature*, *remote batch*. Planning,
-  features and card moves already have their own skills and could be named by the menu or left to the
-  launcher's existing closing list. Missions are absent until they exist.
-- **[user]** Should the menu offer to *resume* a handed-off session? `handed off` is a real session
-  state (Mission Control exited; queue and watch remain), and an operator returning to a handed-off
-  pipeline currently has no documented door back in.
+- **[ANSWERED 2026-09-14 — the menu is the wrong shape. The question does not have entries.]**
+  Operator: *"why include actions unrelated to missions"*, then: *"this doesn't make sense because
+  there's already tons of kanban buttons for general actions."*
+
+  Both land. Checked against `kanban.html`, four of the five proposed entries already have a board
+  control:
+
+  | Proposed menu entry | Already exists as |
+  | :--- | :--- |
+  | run a batch now | `btn-run-queue` — **Run queue** |
+  | merge a finished feature | `btn-feature-action` — **PROMOTE TO FEATURE** |
+  | (grouping, implied) | `btn-suggest-features` — **SUGGEST FEATURES** |
+  | the persona itself | `btn-project-manager` — **MANAGE** |
+
+  So a launch menu listing them is a **second door to things that already have one**, reached by
+  typing `/switchboard` instead of clicking. That is duplication, not decomposition — and it is the
+  same failure as `organize-the-board-is-a-protocol-not-a-manual-pass.md`, where a button was asked
+  for and an audit service was built behind it.
+
+  **Two naming facts that make the menu look arbitrary, and are worth separating from the fix.**
+  *Rename the orchestrator to Mission Control* is COMPLETED, so this persona is the old orchestrator —
+  *"you keep two lanes fed — coding and planning"* — and has **nothing to do with the `missions`
+  table**, which is a separate, currently-empty feature for sequencing features and plans. The name
+  collides; the concepts do not overlap. That is the third vocabulary collision found on 2026-09-14,
+  after *step* vs *stream* and `sb:` vs `switchboard:`. `Two orchestrator entry points are dead or
+  inconsistent, and one concept has four names` (PLAN REVIEWED) settles what the persona is called but
+  predates the collision with `missions`, and should be re-read against it.
+
+  **What the plan should do instead.** The stated problem is real and unchanged: step 2 hands the
+  agent 619 lines and tells it to become an unattended overnight dispatcher. The fix is to **load only
+  the part that applies** — ask one question, or infer the branch from board state — not to build a
+  menu of actions the board already exposes. Re-cut the plan to that before coding, the way the
+  organize protocol was.
+
+- **[ANSWERED 2026-09-14 — no menu entry, and probably no code. It is a documentation gap.]**
+  `handed-off` is real — `_missionControlSessionState: 'none' | 'interviewing' | 'armed' |
+  'handed-off'` (`TaskViewerProvider.ts:2145`) — but it is a one-way latch and **nothing else reads
+  it**. Its entire behaviour is two refusals:
+
+  ```
+  confirmMissionControlSession  → 409 "Session already handed off — cannot confirm after handoff"
+  handoff (again)               → 409 "Session already handed off — cannot hand off twice"
+  ```
+
+  So after a handoff the queue and watch keep running and nothing is broken. The operator simply
+  cannot re-confirm or re-hand-off *that* session, because it is finished. To intervene they click
+  **MANAGE** (`btn-project-manager`) and start a fresh session — which works today.
+
+  The question's premise — *"no documented door back in"* — is therefore about **documentation, not
+  capability**. One line in the persona's protocol ("a handed-off session is finished; start a new one
+  via MANAGE") closes it. No menu entry, consistent with the menu itself being the wrong shape.
+
+  **Two facts that shrink it further.** `_missionControlSessionState` is **private and in-memory**, so
+  it does not survive a restart — "returning to a handed-off session" only means within one process
+  lifetime. And it lives on `TaskViewerProvider`, the **extension** host's provider, which is being
+  deleted; standalone's own `missionControlHandoff` (`bootstrap.ts:5114`) was not traced and may not
+  have this state at all.

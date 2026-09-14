@@ -376,5 +376,24 @@ Register the test in `package.json` under the test script section (matching the 
 9. **Unset → default ON:** On a fresh install with no per-folder or global `ticketsAutoSync` value set, verify the toggle is ON and the delta-pull timer fires. This tests the `getTicketsAutoSyncRaw() === undefined` → `true` path.
 
 ## Outstanding Questions
-- **[user]** Should the auto-sync default flip from OFF to ON for existing ~4,000 installs? PRD contract #2 says "behaviour-preserving" — the flip changes behavior for users who never touched the toggle. — proceeding on the assumption that the flip is desired (the edit-mode suppression makes it safe, and the plan's Goal explicitly calls for it), but this is a product decision that the User Review Required section surfaces.
-- **[user]** Should direct push on save fire when auto-sync is OFF? This changes behavior for users who turned auto-sync OFF to control push timing. — proceeding on the assumption that autopush-on-save should always fire (the plan's Goal says "reliable autopush on save" as a standalone behavior), but some users may want manual push control when auto-sync is OFF.
+- **[ANSWERED 2026-09-14 — YES, flip it ON by default.]** Edit-mode suppression is what made leaving
+  it on unsafe; with that fixed the default should reflect the intended behaviour rather than preserve
+  a workaround.
+
+  **The "~4,000 installs" caution in the question is stale.** `CLAUDE.md` now states the install base
+  is *deliberately* not recorded there, that the number was a marketplace fact about the legacy host,
+  and that it must not be inferred from that file. The migration rule it was being used to invoke
+  turns on **shipped versus unreleased**, not on a count. Do not re-derive a number from this plan.
+
+  The behaviour-preserving contract still applies in the form that matters: the flip must be a
+  **default** change, not an override. An install that explicitly set the toggle OFF keeps it OFF —
+  only "never touched" becomes ON. A migration that overwrites an explicit `false` with `true` is the
+  fallback-rule failure in its usual shape: an unset value and a configured one treated alike.
+- **[ANSWERED 2026-09-14 — YES, push on save always fires.]** Autopush-on-save is a standalone
+  behaviour, independent of the delta-pull timer. So the toggle means **"do not pull on a timer"**,
+  not "do not sync at all".
+
+  **That naming matters and should follow the decision.** A control labelled "auto-sync" that still
+  pushes on save is describing itself wrongly, and the next person to read it will assume OFF means
+  nothing leaves the machine. Whatever the toggle is called in the UI should say *pull*, not *sync* —
+  otherwise this answer becomes a surprise rather than a design.

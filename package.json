@@ -10,6 +10,7 @@
     "multi-agent"
   ],
   "version": "1.7.13",
+  "private": true,
   "main": "./dist/extension.js",
   "bin": {
     "switchboard": "./bin/switchboard"

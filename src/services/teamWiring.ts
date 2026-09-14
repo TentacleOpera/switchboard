@@ -2050,10 +2050,27 @@ export function dropSystemAuthoredRows(orders: StandingOrder[]): StandingOrder[]
     const next = orders.filter(o => {
         if (!o || typeof o !== 'object') { return true; }
         const id = typeof o.id === 'string' ? o.id : '';
+        // Synthetic ids are unambiguous — these rows are system-minted by
+        // construction, at any scope.
         if (id.startsWith('context-aware-completion:') || id.startsWith('composed-head:')) {
             changed = true;
             return false;
         }
+        // SCOPE GUARD. The port-file recogniser is a heuristic on TEXT, not proof
+        // of authorship, so it is confined to `pair` rows — the per-member callback
+        // rows it was written for.
+        //
+        // Without this guard it reached every scope. On 2026-09-14 it removed an
+        // operator's `team` and `team-head` rows, including the lead's
+        // dispatch-by-recommendedRole rule and its two-failure escalation ladder,
+        // because those instructions happened to mention the port file too. A rule
+        // about per-member pair rows must not be able to take a team's orchestration
+        // order as collateral.
+        //
+        // `migrateTeamPairOrders` has always guarded this way (`scope !== 'pair'` →
+        // keep). This function did not, and the asymmetry was the whole defect.
+        const scope = o.scope || 'pair';
+        if (scope !== 'pair') { return true; }
         if (typeof o.instruction === 'string' && o.instruction.includes('.switchboard/api-server-port.txt')) {
             changed = true;
             return false;
@@ -2081,17 +2098,31 @@ export async function loadEffectiveStandingOrders(db: any): Promise<StandingOrde
         return [];
     }
     const raw = await db.getConfigJson(STANDING_ORDERS_CONFIG_KEY, []) as StandingOrder[];
-    let effective = migrateTeamPairOrders(dropSystemAuthoredRows(raw));
-    if (effective !== raw) {
-        try {
-            await backupOnce(db, raw);
-            await mutateStandingOrders(db, async (current) =>
-                migrateTeamPairOrders(dropSystemAuthoredRows(current))
-            );
-        } catch (err) {
-            console.warn('[teamWiring] standing-order cleanup persist failed:', err);
-        }
-    }
+
+    // READ-TIME ONLY. The droppers below filter what is DELIVERED; they must never
+    // be written back over the stored rows.
+    //
+    // This previously persisted the filtered array through `mutateStandingOrders`,
+    // and on 2026-09-14 that deleted all six of an operator's standing orders —
+    // including a `team-head` order carrying the lead's dispatch-by-recommendedRole
+    // rule and its escalation ladder. `a-stale-standing-order-can-still-reach-a-live-agent.md`
+    // had named this exact hazard before it happened:
+    //
+    //   "Persisting is destructive... Today they survive on disk and are only
+    //    filtered at render — reversible. Persisting deletes them irreversibly."
+    //
+    // and recorded that `standing-orders-marker-contract.test.js:238-249` exists
+    // specifically to assert the migration is NOT applied at the fetch level.
+    //
+    // Filtering at read is not a weaker fix: delivery applies the transforms every
+    // time regardless, so an agent never receives a dropped row either way. The only
+    // difference is whether the operator can get their rows back. They can now.
+    //
+    // Note `dropSystemAuthoredRows` has NO scope guard — it drops any row whose
+    // instruction mentions the port file, `pair`, `team` and `team-head` alike. That
+    // is why a rule about per-member pair rows removed team-scoped ones too.
+    const effective0 = migrateTeamPairOrders(dropSystemAuthoredRows(raw));
+    let effective = effective0;
 
     // Definitions migration (lazy, self-healing).
     try {

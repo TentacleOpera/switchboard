@@ -125,7 +125,37 @@ None.
 
 ## Outstanding Questions
 
-- **[user]** Read + delete only, or authoring in v1?
+- **[ANSWERED 2026-09-14 — READ ONLY. Not delete, not authoring.]**
+  Operator: *"read only. the intention was to allow custom add ons but not actually replace the core
+  ones that get sent."*
+
+  The tab inspects; it does not mutate. Delete is excluded along with authoring — a system-composed
+  order has no persisted row to delete, so a delete control would either do nothing or remove an
+  operator add-on under the guise of removing a core order.
+
+  **The model this reflects, already encoded as a contract** in
+  `src/test/standing-orders-additive-contract.test.js`:
+
+  > 1. Filling in a team definition's prompt box **ADDS** to what seats are told. There is no input to
+  >    that box that removes a required fragment.
+  > 3. No standing-order row **on disk** carries system-authored text. Every persisted row is
+  >    something a human wrote.
+  > 4. A team with no authored prompt still receives every required fragment (system protocol is
+  >    composed at delivery, never persisted).
+
+  So there are two populations and the tab must show both as such: **core** orders, system-composed at
+  delivery and not stored; and **add-ons**, human-authored and persisted. Invariant 3 is about where
+  system text lives, not whether it exists — the core orders are the substance, they are simply
+  regenerated each time rather than kept as a stale copy.
+
+  **Why read-only still earns its place, and urgently.** On 2026-09-14 all six of an operator's
+  persisted orders were deleted by a migration and neither the operator nor an agent noticed until
+  someone went looking hours later. A read-first list would have shown it immediately. Inspection is
+  the whole value; mutation is what the contract exists to prevent.
+
+  **Display requirement that follows:** the tab must distinguish core from add-on, or an operator
+  reading it cannot tell which lines they can change. Showing a composed core order with no marking
+  invites exactly the edit-and-replace this model forbids.
 - **[user]** Agent Control only, or should the board keep an Orders view too? Default assumption is Agent Control only — the board is being narrowed to the board, not widened.
 - Does any order body today contain anything that should not be displayed? The credential-injection design says no, but the tab makes bodies visible for the first time, so it is worth one pass over the installed set before shipping rather than after.
 - Is there a server-side "which orders reach terminal X" resolve worth exposing, so the tab can answer that without mirroring the resolver? `resolveTeamStanding` (`standingOrders.ts:101`) suggests the logic is already factored for it.

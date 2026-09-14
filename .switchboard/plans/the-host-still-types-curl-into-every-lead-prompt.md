@@ -1,5 +1,32 @@
 # The Host Still Types curl Into Every Lead Prompt
 
+> **Additional site found 2026-09-14 — the RESEARCHER HAND-OFF directive.**
+>
+> `agentPromptBuilder.ts:1184` (`RESEARCHER_HANDOFF`-style directive) still instructs an agent to
+> *"Read the port from `.switchboard/api-server-port.txt` (relative to the workspace root)"* and then
+> POST to `http://127.0.0.1:<port>/research/dispatch`, including guidance on building the JSON with
+> `jq -Rs` or `python3 -c` — i.e. exactly the port-discovery-plus-hand-rolled-HTTP shape this plan
+> exists to remove.
+>
+> **It contradicts the codebase's own stated rule.** `agentGroupInstantiation.ts:345` already tells
+> agents: *"Base URL: `http://127.0.0.1:${apiPort}` — resolved at prompt-generation time. **Do not
+> read `.switchboard/api-server-port.txt`.**"* Two prompt-building sites, opposite instructions.
+>
+> **The distinction to preserve while fixing it** — it is not "nothing may read the port file":
+>
+> | Reader | Port file | Why |
+> | :--- | :--- | :--- |
+> | The CLI / launcher | **reads it** — `internal/client/transport.go:288-293`, `internal/launcher/discovery.go:130` | it *is* local host discovery |
+> | An agent | **must not** | the CLI already knows the port and carries the transport's headers |
+>
+> So the fix is the same as the one applied to standing orders on 2026-09-14: replace the
+> port-read-plus-POST with the CLI form (`switchboard api POST /research/dispatch '<json>'`), which
+> also removes the `jq`/`python3` JSON-escaping advice entirely.
+>
+> **Scope note:** this site is in the **prompt builder**, so it was not covered by the standing-order
+> cleanup (`migrateTeamPairOrders` / `dropSystemAuthoredRows` only filter persisted order rows). A
+> sweep for this plan must cover `agentPromptBuilder.ts` as well as the order fragments.
+
 ## Goal
 
 No prompt the host generates tells an agent to run `curl` or to discover a port. Team leads and

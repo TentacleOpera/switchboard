@@ -299,11 +299,34 @@ Outstanding Question rather than silently expanding scope.
   (same member, same slot) — and note the round-trip limitation in Outstanding Questions.
 
 ## Outstanding Questions
-- **[user]** Per-seat vs per-slot mode persistence across group page round-trips. Today `paneModes`
-  is keyed by slot index and rebuilt per page in `seatActiveGroupPage`; the change preserves a
-  toggle only when the same member stays in the same slot, so a member that moves slots on a re-page
-  resets to the default. True per-seat persistence (keying mode by member name) would fix this but
-  rewrites ~23 `paneModes[i]` read sites plus the save/restore path — a larger change than this
-  complexity-5 plan. Proceeding on the assumption that per-slot persistence with occupant-change
-  detection is acceptable for now and that per-seat persistence is a follow-up if the round-trip
-  reset is felt in practice.
+- **[ANSWERED 2026-09-14 — PER-SEAT. And it is a smaller change than the question assumes.]**
+  A seat's view mode follows the seat, not the slot it happened to occupy.
+
+  **Why the rewrite is smaller than "~23 `paneModes[i]` read sites".** `paneModes` is **overloaded** —
+  one slot-indexed array holding two different kinds of value:
+
+  ```js
+  paneModes[0] = 'kanban'          // a property of the SLOT  — this pane shows the board
+  paneModes[slot] === 'status'     // a property of the SEAT  — this agent shows status vs terminal
+  ```
+
+  And a family of parallel slot-indexed arrays hangs off the first kind — `kanbanPaneColumn`,
+  `kanbanPaneWorkspace`, `kanbanPaneProject`, `kanbanPaneCards`, `kanbanPaneSelection` — each
+  documented as *"only meaningful when `paneModes[i]==='kanban'`"*. Those are genuinely slot
+  properties: a kanban pane is not a seat, it is a board view occupying a slot.
+
+  **So the change is to separate the two concerns, not to re-key everything:**
+
+  | Value | Keyed by | Persisted as |
+  | :--- | :--- | :--- |
+  | seat view mode (`status` ↔ terminal) | **member name** | new per-seat map |
+  | slot mode (`kanban`, empty) + the `kanbanPane*` family | slot index, unchanged | `terminals.paneModes` as today |
+
+  That fixes the cause rather than the symptom. A seat's mode resets on re-page because it is stored
+  in an array indexed by **where it was sitting**, which was never the right key for it. Re-keying the
+  whole array — including the kanban entries, which *should* be slot-scoped — would be the wrong
+  correction and is what makes the job look like 23 sites.
+
+  **Consequence for `seatActiveGroupPage`:** it rebuilds `paneModes` per page. After the split it
+  rebuilds only the slot half; the seat half is looked up by occupant and needs no rebuild, which is
+  what makes the toggle survive a round trip.

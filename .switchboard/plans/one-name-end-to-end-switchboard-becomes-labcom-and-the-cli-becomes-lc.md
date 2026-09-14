@@ -47,6 +47,46 @@ do not exist — completion callbacks included, so the queue silently stops drai
 nothing a user can see. `lc-` is already the tmux session prefix, so the short name is in use in
 exactly the one place where it is cosmetic.
 
+### Tracker label namespaces are in scope (added 2026-09-14)
+
+This plan covers the CLI, docs and the tmux prefix but does not mention the Linear/ClickUp label
+namespaces. There are two, with different costs, and both were checked against the code on
+2026-09-14 rather than against plan prose:
+
+- **Inbound switches — NO LONGER APPLIES (corrected 2026-09-14, same day it was written).** An
+  earlier revision of this section said the `sb:` namespace should be renamed to `lc:` before it
+  ships. The operator has since retired that vocabulary entirely: tracker interaction is by column
+  mapping, the Tickets panel's assignee filter, the LabCom agent, and an optional assignee/custom-tag
+  auto-sync — *"i don't want to get crazy with tags no one will remember how to use"*. There is no
+  inbound switch namespace, so there is nothing here to rename. The fourth path's matcher uses an
+  **operator-chosen** tag, not a reserved prefix.
+- **Outbound tracking, `switchboard` / `switchboard:<planId>` — the two trackers differ, and only
+  one is safe.** Corrected 2026-09-14 after the operator's fact that **nobody configures the ClickUp
+  planId custom field**.
+
+  - **Linear — safe to rename, or to delete outright.** `LinearSyncService.ts:3369` is
+    `.filter(n => n !== 'switchboard')`, which only strips the label from the displayed tags string.
+    It carries no identity and gates no import. It is a visual marker for humans.
+  - **ClickUp — DO NOT rename or remove without a dual-read.** The tag has two jobs, and the second
+    is load-bearing. `ClickUpSyncService.ts` extracts the planId from the custom field **and falls
+    back to parsing it out of the `switchboard:<planId>` tag** when that field is empty
+    (`:3205-3214`). Since `planIdCustomFieldId` is **not configured in practice**, the tag is the
+    *only* planId carrier on ClickUp — not a backstop. The later `hasSwitchboardTag` skip (`:3240`)
+    is a second use of the same tag.
+
+    Consequence: renaming the prefix orphans every previously-created task. Its planId becomes
+    unreadable, the skip stops matching, and it re-imports as a new card. The title fallback does not
+    save it — that only fires while `_pendingCreateSessions` is non-empty, i.e. within the session
+    that created the task.
+
+    If the outbound prefix is renamed, the reader must accept **both** prefixes indefinitely. The
+    alternative, and the cheaper one, is to leave `switchboard:` alone: it is an internal identifier
+    no user reads, and it does not have to match the product name.
+
+> **Supersedes an earlier note in this section** which stated this was "not a duplicate-import
+> hazard and needs no external re-tagging". That was written before the custom-field fact was known
+> and is true only for Linear.
+
 ## Metadata
 
 **Complexity:** 7

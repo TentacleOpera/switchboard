@@ -1,5 +1,50 @@
 # The Heap Ceiling Is Set by the Launcher, So the npx Install Never Gets It
 
+> **RETRACTED 2026-09-14 — this plan was wrong, it was implemented, and it crashed the board.**
+>
+> **What happened.** The plan argued that `--max-old-space-size` should reach every launch path, and
+> derived a default of 310 MB (800 MB budget − 300 MB measured non-heap − 190 MB offset). It was
+> implemented at four entry paths, plus a contract test asserting they all agree. A board started
+> with the earlier 512 placeholder then aborted mid-run:
+>
+> ```
+> pid 653387, 3.7 GB host, 8 seats, 3207-plan board
+> Mark-Compact 517.0 (523.0) -> 516.4 (519.3) MB
+> FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory
+>   at Statement::JS_all  (better_sqlite3) — i.e. during a board read
+> ```
+>
+> 310 would have aborted sooner. The plan's own hazard table named this exact outcome — *"set below
+> the real peak → converts the burst into a crash at the cap"* — and it was written anyway.
+>
+> **The error in reasoning.** The flag's only legitimate use is to **RAISE** V8's auto-sized ceiling
+> on a host so small that the automatic limit falls below the board's working set. On every host where
+> the automatic limit is already adequate — which is every ordinary machine — setting it can only
+> **LOWER** the ceiling. It adds a kill condition and buys nothing. A compiled-in constant cannot tell
+> the two cases apart, so it is wrong on one of them by construction. There is no safe default, which
+> means the correct number of defaults is zero, not a smaller one.
+>
+> **Second error: the derivation was not a measurement.** 310 came from one `/health` sample plus
+> arithmetic. The governing plan (*The Board Must Fit a 1 GB Pi*, Change 6) is explicit that the value
+> *"comes from change 1's measurement of what is genuinely live at peak, plus headroom — never from a
+> guess"*. Change 1's forced-GC split has never been run; `.switchboard/logs/burst-gc-split.jsonl`
+> does not exist. The real peak is now known to exceed 517 MB under an ordinary workload, which is
+> itself evidence the 800 MB RSS budget is tighter than assumed.
+>
+> **What was reverted.** No default at any of the four sites: `bin/switchboard` sets no flag at all;
+> `cli.ts`'s `DEFAULT_MAX_OLD_SPACE_MB` is `''` and the re-exec is gated on an explicit value;
+> `cmd/switchboard/main.go` and `internal/launcher/discovery.go` omit the flag entirely when unset.
+> `SWITCHBOARD_MAX_OLD_SPACE_MB` still works for a device that genuinely needs a raised ceiling, at a
+> measured value. `src/test/heap-ceiling-contract.test.js`, its npm script and its CI step are deleted
+> — that test asserted the defaults agreed, so it encoded the bug and would have blocked the fix.
+>
+> **Also noted:** the implementation used `spawn`, not `exec`, so the re-exec left a parent process
+> alive holding the 18 MB bundle — roughly 40 MB of idle RSS on the device the ceiling was meant to
+> protect. This plan argued against exactly that and its implementation reintroduced it.
+>
+> **Do not re-derive a default from this document.** The real gap it described — that an npm install
+> never reaches the Go front controller — is real, but the answer is not a compiled-in ceiling.
+
 ## Goal
 
 `--max-old-space-size` reaches V8 however the board is started — including the `npx` / global-npm

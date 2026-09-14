@@ -1,5 +1,41 @@
 # Tracker labels select from Switchboard-owned registries — an import filter, a queue switch, and preset selectors
 
+> **SUPERSEDED IN LARGE PART — operator decision, 2026-09-14. Do not build the label vocabulary.**
+>
+> **Reason given:** *"i don't want to get crazy with tags no one will remember how to use"*, and
+> *"they won't work well with team tags"*. A real Linear or ClickUp workspace already uses labels for
+> its own taxonomy; an `lc:` switch vocabulary competes for that namespace and asks people to
+> memorise a second one. **Assignee is the affordance that already carries meaning** — "assign it to
+> the LabCom user" is a gesture people perform without being taught.
+>
+> **The four supported paths, in place of the label vocabulary:**
+>
+> | Want | Use | Status |
+> | :--- | :--- | :--- |
+> | Automated sync | **Turn on column mapping** (`columnToStateId` / `statusMappings`) | exists |
+> | Pull an issue in | **Tickets panel**, filtered by assignee (`tickets-assignee-filter`, shared across Linear and ClickUp) | exists |
+> | Push an issue out | **The LabCom agent** | exists |
+> | Selective automated sync | **Config option: auto-sync issues matching an assignee or a single custom tag** | NEW — the only build item |
+>
+> **What this retires from this plan:** the `sb:`/`lc:` switch vocabulary as a whole — the import
+> filter label, the `lc:queue` switch, and the `lc:prompt:<name>` preset selectors. The unconfigured
+> workspace case that reopened the queue question is answered by row 2: the Tickets panel pulls by
+> assignee and needs no column mapping at all.
+>
+> **What survives, and is worth keeping:** the *rule*, not the vocabulary — **a label may name a
+> preset; it may never be one.** If the fourth row's custom-tag matcher is built, an unrecognised tag
+> must be ignored rather than interpreted, and tag text must never reach prompt input. That is the
+> closed-vocabulary argument from `the-remote-command-vocabulary-is-closed.md` and it still applies to
+> the one tag that remains.
+>
+> **Also unaffected:** the existing `switchboard` / `switchboard:<planId>` outbound namespace. That is
+> dedup bookkeeping, not an operator-facing switch, and nothing here touches it.
+>
+> **Remaining question for the fourth row:** assignee-matching and tag-matching are different
+> ergonomics — an assignee is a person-shaped field a tracker already enforces one of, while a tag is
+> free-form and many. If only one is built, assignee is the one consistent with the reasoning above.
+
+
 ## Goal
 
 Give Linear and ClickUp labels a job that fits Switchboard's actual model: **selecting** from registries Switchboard owns. An opt-in import filter so a workspace's hundreds of issues do not all become cards, a closed-vocabulary switch to enqueue, and selectors that name a prompt preset or skill set. Labels never carry content — only a choice from a fixed set.
@@ -170,6 +206,53 @@ The user was advised to run web research to confirm the following external API b
 
 ## Outstanding Questions
 
-- **[user]** Should the import filter support a negative form (`sb:ignore`) for workspaces that would rather opt out of a broad existing scope than re-label everything? — proceeding on the assumption that it will not, and the opt-in `sb:switchboard` is the only filter direction in the first cut.
+- **[SUPERSEDED by the four-path decision above — moot]** ~~No negative form.~~ The import filter
+  label is retired entirely, so there is no direction to negate. Kept only to show the question was
+  reached and closed, not skipped.
+- ~~**[ANSWERED 2026-09-14 — NO]** No negative form.~~ The import filter is opt-in only: an issue is out
+  of scope unless labelled in. Project/list scope already handles the broad case, and the filter is a
+  second, finer sieve behind it — so `lc:ignore` would only earn its place if broad auto-import with
+  carve-outs were wanted, and it is not. One direction, no precedence rule to define.
+- **[SUPERSEDED by the four-path decision above]** There is no inbound switch namespace to rename:
+  the `sb:`/`lc:` vocabulary is not being built. The fourth path's matcher uses an **operator-chosen**
+  tag, not a reserved prefix, so nothing here needs a product-name prefix at all.
+- ~~**[ANSWERED 2026-09-14] The prefix is `lc:`, not `sb:`.**~~ The product is being renamed Switchboard →
+  LABCOM (`one-name-end-to-end-switchboard-becomes-labcom-and-the-cli-becomes-lc.md`), and `lc-` is
+  already the tmux session prefix. Every `sb:` switch in this plan is `lc:` — `lc:switchboard`
+  becomes `lc:import` or equivalent under the new name, `lc:queue`, `lc:prompt:<name>`. This costs
+  nothing: the `sb:` namespace is inbound-only and **has never shipped**, so no tracker issue anywhere
+  carries one.
 - **[user]** Do preset selectors belong on the issue at all, or on the plan once imported — where the operator can see them beside the plan they affect? — proceeding on the assumption that they belong on the issue (as a selection from a registry), deferred to the second cut regardless.
-- **[user]** Is there a case for the queue switch carrying a target (`sb:queue:review`), and does that reintroduce the routing problem this plan retired? — proceeding on the assumption that `sb:queue` is a bare boolean with no target, and target-bearing variants are out of scope.
+- **[REOPENED 2026-09-14 — the first answer assumed a configured workspace]**
+  An earlier answer here said `lc:queue` should be a bare boolean because a starting column is
+  already expressible natively via the column↔workflow-state mapping — `columnToStateId`
+  (`LinearSyncService.ts:112`) and `statusMappings` (`ClickUpSyncService.ts:1642`). **That holds only
+  where tracker setup has been run.** `columnToStateId` defaults to `{}` (`:298`) and is populated
+  solely by the setup flow (`:2699-2711`); `setupComplete` and `realTimeSyncEnabled` are separate
+  booleans, both defaulting `false`.
+
+  So there are two workspaces, and the answer differs:
+
+  | Workspace | How "start this at review" is said |
+  | :--- | :--- |
+  | Column sync configured | Move the card. Native, bidirectional, and it survives the issue being moved again later. |
+  | **No column sync** | **No mechanism at all.** |
+
+  This matters because the governing model
+  (`trackers-are-for-bulk-queueing-and-the-orchestrator-is-a-pm`) is explicitly *"you check a project
+  while away, **advance cards into a column**, and let the teams drain it"* — a gesture that presumes
+  the mapping exists. A workspace that never ran setup cannot perform it.
+
+  **The real question is therefore not "boolean or target".** It is: **are `lc:` labels intended to
+  serve workspaces that never configured column sync?**
+
+  - If **yes**, a target-bearing form is not redundant — it is the only way such a workspace can
+    express a starting column, and a bare boolean leaves them unable to say it at all.
+  - If **no** — labels are a convenience layered on a configured sync — then the bare boolean stands
+    and the native mapping is the answer, as first recorded.
+
+  Note the design constraint either way: a label is a one-shot assertion evaluated at import, while a
+  status keeps describing the card as it moves. A target-bearing label must therefore be defined as
+  *where this card enters*, never as *where this card belongs*, or it becomes stale the moment the
+  card advances — the same failure that retired the `lead:coder` team-routing design at the top of
+  this plan.

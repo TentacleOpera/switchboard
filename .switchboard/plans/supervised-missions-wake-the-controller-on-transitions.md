@@ -1,5 +1,32 @@
 # A supervised mission has no supervision: `type` is stored, shown and reported, but nothing wakes on a transition
 
+> **Operator correction, 2026-09-14 — transitions are not what was asked for.**
+>
+> **Stated intent:** *"missions was meant to have an option to have controller wake regularly"*, and
+> separately, the definition that governs the whole area: *"attended means the controller agent is set
+> to wake."*
+>
+> This plan wakes the controller at **transition points** (`not-started → in-flight → completed`).
+> That is event-driven. What was asked for is a **regular interval** — the controller wakes on a
+> cadence while the mission runs, which is what makes a mission *attended* rather than merely
+> instrumented.
+>
+> The two are complementary, not alternatives: transitions tell the controller *something changed*, an
+> interval tells it *go and look*. Only the second survives a mission that silently stops producing
+> transitions — which is the failure an attended mission exists to catch.
+>
+> **Nothing carries the interval today.** The `missions` table is
+> `id · name · type · goal · ready · team · max_extra_worktrees · workspace_id` — no interval, no
+> cadence, no wake configuration of any kind. `type` (`mission` | `operation`) carries supervisedness
+> as a label only; this plan's own Goal says the distinction is *"fully modelled and entirely inert"*.
+> Mission Control's **Schedules** tab is a different surface (its own jobs, its own defects — see
+> `memo-mission-control-schedules-writes-four-fields-nothing-reads.md`) and is not mission supervision.
+>
+> **So this plan should be re-scoped or paired**: a mission needs a persisted wake cadence, and
+> `UNATTENDED` should be derived from whether that cadence is armed — see the matching answer in
+> `the-mission-control-front-door-delivers-twice-and-lies-about-the-posture.md`, where the same
+> definition settles which entry points count as attended.
+
 ## Goal
 
 Give `type: 'operation'` its behaviour: wake the controller agent at a supervised mission's

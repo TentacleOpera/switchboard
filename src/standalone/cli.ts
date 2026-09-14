@@ -3414,11 +3414,33 @@ async function cmdBoardConsole(workspaceRoot: string): Promise<void> {
 }
 
 async function main() {
-    // ── Heap ceiling re-exec (plan: the-heap-ceiling-is-set-by-the-launcher-so-the-npx-install-never-gets-it) ──
-    // Default derived from 800 MB budget - 300 MB measured non-heap - 190 MB offset = 310 MB.
-    // Replaces the placeholder 512, which licensed ~700 MB heap and breached the 800 MB RSS budget.
-    // Env override SWITCHBOARD_MAX_OLD_SPACE_MB still wins.
-    const DEFAULT_MAX_OLD_SPACE_MB = '310';
+    // ── Heap ceiling re-exec — NO DEFAULT. Opt-in only. ──
+    //
+    // There is deliberately no default value here. Two were tried and both were
+    // kill conditions:
+    //
+    //   512  (placeholder, from the Go launcher)
+    //   310  (derived: 800 MB budget - 300 MB non-heap - 190 MB offset)
+    //
+    // On 2026-09-14 a board running with 512 aborted mid-read:
+    //   pid 653387, 3.7 GB host, 8 seats, 3207-plan board
+    //   Mark-Compact 517.0 -> 516.4 MB
+    //   FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out
+    //   of memory   (inside better_sqlite3 Statement::JS_all, i.e. a board read)
+    // 310 would have aborted sooner.
+    //
+    // WHY NO DEFAULT CAN BE CORRECT: this flag's only legitimate use is to RAISE
+    // V8's auto-sized ceiling on a host so small that the automatic limit falls
+    // below the board's working set. On every host where the automatic limit is
+    // already adequate, setting it can only LOWER the ceiling — it adds a kill
+    // condition and buys nothing. A compiled-in constant cannot tell the two
+    // cases apart, so it is wrong on one of them by construction. Unset, node
+    // sizes the heap from the machine it is actually on, which is correct
+    // everywhere and is what every install had before this was added.
+    //
+    // A device that genuinely needs a raised ceiling sets it explicitly, at a
+    // measured value:  SWITCHBOARD_MAX_OLD_SPACE_MB=<measured>
+    const DEFAULT_MAX_OLD_SPACE_MB = '';
     const heapMarker = process.env.SWITCHBOARD_HEAP_FLAG_APPLIED === '1';
     if (heapMarker) {
         delete process.env.SWITCHBOARD_HEAP_FLAG_APPLIED;
@@ -3457,7 +3479,9 @@ async function main() {
         || heapFirstArg.startsWith('-')
         || !HEAP_REEXEC_EXEMPT_SUBCOMMANDS.has(heapFirstArg);
 
-    if (mayStartBoard && !hasHeapArg && !heapMarker) {
+    // `effectiveHeapMb` is empty unless the operator set one — no value, no re-exec,
+    // no ceiling, no extra process.
+    if (effectiveHeapMb && mayStartBoard && !hasHeapArg && !heapMarker) {
         // Plain node invocation without the flag (e.g. npx switchboard or node cli.js).
         // Re-exec once with the flag so the board process runs with the required ceiling.
         const child = spawn(

@@ -283,11 +283,51 @@ pending the liveness rebuild.
 
 ## Outstanding Questions
 
-- **[user]** Why does the operator still nudge seats forward by hand when the predicate-based
-  `_runDispatchStallSweep` (30 min default) and `_runMemberCompletionReminderSweep` already fire for
-  board-dispatched cards and quiet team members without any arming? — proceeding on the assumption
-  that the liveness freeze (frozen-positive `lastDataAt`) caused the predicate-based sweeps to
-  over-fire into working seats, which the operator learned to ignore, masking the real signal; the
-  rebuild + the feature-watch widening should be verified against the operator's actual workflow
-  before declaring the symptom fixed. If the operator's seats routinely stall under 30 min, the
-  dispatch-stall threshold (not the arming) is the lever — but that is a separate, post-data question.
+- **[ANSWERED 2026-09-14 — neither arming nor over-firing. The LEAD is polling.]**
+  The assumption below (liveness freeze causing the predicate sweeps to over-fire, masking the real
+  signal) is **not** what the operator is seeing. Observed verbatim, delivered into a working coder:
+
+  ```
+  Status check: report current progress on the feature-dispatch-seats-one-lead subtask.
+  Are you blocked on anything?
+  ```
+
+  That text exists **nowhere in Switchboard**. Not in `src/`, not in `.agents/`, and standing orders
+  are empty (`terminals.standingOrders` is `[]`). No sweep composed it — **the team lead wrote it
+  itself**, and Switchboard delivered it as a prompt.
+
+  **Why that is worse than noise.** A prompt costs the recipient its turn. The coder in the observed
+  case was mid-context-gathering and had to stop, summarise, and end its turn to answer a question
+  about whether it was working. The board is the delivery mechanism for an interruption that
+  destroys the work it is asking about.
+
+  **Root cause: the lead has no cheap way to read seat state, so it uses the expensive one.** The
+  cheap ones already ship — `switchboard fleet [--json]` and `switchboard reports` are Go-client
+  verbs the lead can run in its own terminal, reading the board instead of prompting a colleague.
+  Nothing in the lead's prompt tells it they exist, so it does the only thing it knows.
+
+  **Consequences for this plan.** The arming work remains valid for the feature-drive and queue-pace
+  sweeps, but it is **not** the cause of the operator's manual intervention and must not be sold as
+  the fix for it. Two separate additions are wanted:
+
+  1. **Tell the lead not to poll.** In the lead's assembled prompt: never prompt a seat for status —
+     it costs that seat its turn; to see what a seat is doing, run `switchboard fleet --json`. This is
+     a prompt change, not code.
+  2. **Detect the failure the operator actually described** — an agent that fails a tool call and then
+     sits idle. Do **not** try to detect the tool error: that means pattern-matching agent output per
+     CLI, which is the control-mode parser mistake again. Detect the symptom instead, with two signals
+     that are both parse-free and already available per seat:
+     - `lastDataAt` has not advanced (already read by these sweeps), **and**
+     - the seat's process is burning ~no CPU (`/proc/<pid>/stat` utime+stime delta; `pid` is already
+       on the fleet record, and `sampleProcessRss(pid)` established the per-process sampling pattern).
+
+     Silence alone over-fires on a *thinking* agent — measured 2026-09-14, a working seat sat at
+     **7.7% CPU while emitting no output**. CPU alone over-fires on a seat blocked on a slow network
+     call. Together they are specific, and specific enough to drop the threshold well below
+     `dispatchStallMs` (30 min), which is far too late to be useful.
+
+     **Known limitation to state in the nudge, not hide:** a seat waiting at an interactive prompt
+     (permission dialog, expired login) is also silent with no CPU, and is indistinguishable from a
+     crashed one by these signals. Both need the operator, so the nudge should say *"quiet, not
+     working"* and never claim to know why.
+

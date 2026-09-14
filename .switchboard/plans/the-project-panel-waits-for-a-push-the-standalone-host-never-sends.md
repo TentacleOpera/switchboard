@@ -259,14 +259,15 @@ mechanism, no transport change, no parity-guard ratchet needed.
 
 ## Outstanding Questions
 
-- **[user]** Does the operator's "nothing happens" report still reproduce on the current standalone
-  build? The code shows the push reaches the Project panel and `markdown.api.render` is registered —
-  proceeding on the assumption that the report was filed against an older version before the
-  broadcaster and `markdown.api.render` wiring landed, and that the only live defect is the surface
-  mismatch. If the report DOES reproduce, the root cause is elsewhere and this plan's Change 1 is a
-  cosmetic fix, not the bug the operator reported.
-- **[user]** Is the surface-mismatch fix (Change 1) worth landing if the operator's bug does not
-  reproduce? The cross-delivery is already rejected by the planning panel's requestId guard —
-  proceeding on the assumption that correctness of the surface tag is worth the one-line change
-  regardless, because a future planning-panel handler that drops the requestId guard would start
-  rendering stale previews from Project-panel clicks.
+- **[ANSWERED 2026-09-14 — it does NOT reproduce.]** Operator, testing against the current standalone
+  build: *"i can see subtasks now"*. Clicking a subtask in the Project panel shows its plan.
+
+  So the plan's assumption was correct: the original report was filed before the broadcaster and the
+  `markdown.api.render` wiring landed, and **the only live defect is the surface mismatch**. Change 1
+  is a correctness fix, not the cure for the reported symptom — and the card should not claim to fix
+  a bug that no longer exists.
+- **[ANSWERED 2026-09-14 — yes, land it.]** The reasoning in the question is sound and is the whole
+  justification: the cross-delivery is rejected today **only** by the planning panel's `requestId`
+  guard. A future planning-panel handler that drops that guard would start rendering stale previews
+  from Project-panel clicks, and the failure would look like a rendering bug rather than a mis-tagged
+  surface. One line to make the tag correct is worth it independently of the original report.

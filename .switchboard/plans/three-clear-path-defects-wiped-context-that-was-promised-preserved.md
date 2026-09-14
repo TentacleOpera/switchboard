@@ -195,5 +195,14 @@ the body (`:4179`). With none outstanding: the original message, unchanged
 
 ## Outstanding Questions
 
-- **[user]** Should `_resolveTeamGroupForSeat` correctness be hardened on a separate card? The agreement fix closes the reported incident but a wrong membership resolution still yields a self-consistent wrong clear. Proceeding on the assumption that it is out of scope for this bugfix card and recorded as a residual risk.
-- **[user]** Is there a documented programmatic consumer of `outstandingSubtasks` on the `task/complete` 400 body, or is the count decoration? Proceeding on the assumption that the textual error branch is the load-bearing fix and the count is a secondary signal of unproven consumership.
+- **[ANSWERED 2026-09-14 — yes, separate card.]** Out of scope for this bugfix, recorded as residual
+  risk. A wrong membership resolution still yields a self-consistent wrong clear, but absorbing an
+  adjacent correctness risk into a bugfix card is how a reviewable change becomes an unreviewable one.
+- **[ANSWERED 2026-09-14 — NO consumer exists. Verified.]** `outstandingSubtasks` is written exactly
+  once, at `LocalApiServer.ts:4960`, and read **nowhere** — not in `src/`, not in `.agents/`, not in
+  `.claude/`. Nothing parses it.
+
+  So the assumption holds: the **textual error branch is the load-bearing fix** and the count is
+  decoration. Worth going one step further than the question asked — it is decoration that has never
+  had a consumer, so it is a deletion candidate rather than something to preserve. Anything that does
+  want the count later should ask for it deliberately rather than inherit it from a 400 body.

@@ -96,4 +96,32 @@ None — this plan creates a standing order configuration entry via the existing
 - **Scenario D (planner running non-improve-plan workflow):** Planner receives the standing order in its prompt → reads "When the improve-plan split gate halts..." → condition is not met (not running improve-plan) → instruction is inert. Correct.
 
 ## Outstanding Questions
-- **[user]** When the orchestrator picks up the `kind: blocked` report, what exactly does it do? The working assumption is: log a note to its session file (`.switchboard/orchestrator/session.md`) recording that the plan is blocked — needs split, awaiting human review — then skip it and move on. This behavior likely belongs in the orchestrator persona protocol (`.agents/protocols/switchboard-orchestrator/`), not in the planner's standing order. This plan does not modify the orchestrator protocol — the orchestrator's handling of `kind: blocked` reports is defined elsewhere and is out of scope. The exact logic is still to be finalised.
+- **[ANSWERED 2026-09-14 — already defined, and it is the OPPOSITE of this plan's assumption.]**
+  The assumption recorded here was *"log a note to its session file … then skip it and move on."*
+  The defined behaviour does not include skipping.
+
+  **Where it actually lives.** This plan points at `.agents/protocols/switchboard-orchestrator/`,
+  which **does not exist on disk** — `.agents/protocols/` holds only `improve-feature` and
+  `improve-plan`. The control plane moved into the `control_plane` store (33 protocols, 17 skills),
+  and the orchestrator was renamed Mission Control (*Rename the orchestrator to Mission Control*,
+  COMPLETED). The handling is in `control_plane` under `switchboard-mission-control`, and also appears
+  in `switchboard-mission-control-http` and `skills/switchboard-orchestration/SKILL.md`:
+
+  > - **Blocked with a question** → answer it if you know the answer; **escalate to the human via the
+  >   session log** if you don't.
+  > - **`blocked`** (seat went quiet without a completion report) → check the terminal. If it is
+  >   asking a question, answer it or escalate. If it crashed or ran out of context, re-dispatch the
+  >   work to the same lead.
+
+  **So a split proposal routes as "blocked with a question" and escalates.** Splitting a plan is a
+  human judgement the orchestrator cannot make, so it takes the second arm: escalate via the session
+  log. It is never logged-and-skipped.
+
+  **Why the difference matters rather than being pedantry.** Log-and-skip leaves a blocked plan with
+  nobody told — the same failure shape as the queue/done relay on 2026-09-14, where the durable record
+  was written, the live notification was suppressed, and the lead heard nothing. If the planner's
+  standing order is written against the skip assumption while Mission Control implements escalate, the
+  two halves never meet and the plan sits blocked silently.
+
+  **Still out of scope for this plan** — correctly. But the assumption must be corrected before the
+  planner's standing order is authored against it.

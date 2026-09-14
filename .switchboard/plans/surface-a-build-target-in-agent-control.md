@@ -116,5 +116,33 @@ Key risks: the build-result-to-commit-SHA storage and reviewer-injection path ar
 
 ## Outstanding Questions
 
-- **[user]** Should the target be per-workspace or per-team? Per-team allows a heavy repo to offload while a light one stays local, but it is another dimension to configure. — proceeding on the assumption that the target is per-workspace, matching the granularity of `startupCommands` and the existing agent-config state.
+- **[ANSWERED 2026-09-14 — per-workspace. And it reaches the agent as a standing-order fragment.]**
+  Per-workspace, matching `startupCommands` and the existing agent-config granularity. Not per-team:
+  teams are gaining work-shape configuration elsewhere (accepted kinds, complexity band — see
+  `a-team-declares-what-work-it-accepts.md`), and where a build *runs* is a property of the machine
+  and repo, not of who is doing the work.
+
+  **The operator's follow-up is the more important half:** *"but wouldn't this be a standing order?"*
+  Yes — and the pattern already exists. `seat.subagent-policy`
+  (`standingOrderFragments.ts:269`) is a fragment whose `applies` and `body` both read a **config
+  value** (`subagentPolicy`, set per role in `roleConfig_*`) and render the directive at delivery:
+
+  ```ts
+  { id: 'seat.subagent-policy', order: 31, obligation: 'safety',
+    applies: ctx => ctx.subagentPolicy === 'noSubagents' || …,
+    body:    ctx => ctx.subagentPolicy === 'noSubagents' ? NO_SUBAGENTS_DIRECTIVE : … }
+  ```
+
+  So the build target is the same shape: **config carries the choice, a `seat.build-target` fragment
+  does the telling.** Composed at delivery, never a hand-authored row — consistent with the additive
+  model (`standing-orders-additive-contract.test.js`).
+
+  **This is a gap in the plan, not a detail.** As written it delivers the config half — *"one place to
+  see and choose where a build runs"* — and never says how the agent learns the answer. Without the
+  fragment the setting is inert: visible in Agent Control and reaching nobody. That is the same
+  stored-value-with-no-reader failure as `outstandingSubtasks`, `vector_clock` and
+  `topology.runtime.path`. The fragment is required scope, not a follow-up.
+
+  (Its body branches on the target, so it is a *dynamic* fragment and stays in source under the split
+  in `standing-order-fragments-belong-in-the-store-….md`.)
 - **[user]** Which type-gate mechanism covers `npm run package` and `npm run watch` after `transpileOnly` is enabled in the webpack feature-mate? — proceeding on the assumption that `fork-ts-checker-webpack-plugin` is attached to both configs (see webpack plan's Outstanding Questions).

@@ -248,11 +248,30 @@ Key risks: the `ATTENDED=true`/`UNATTENDED=true` substring overlap can silently 
 
 ## Outstanding Questions
 
-- **[user]** Should the panel's Start button (`POST /mission-control/start`) count as attended? It is
-  a deliberate human click and its interview says the user will answer in the terminal, so this plan
-  treats it as attended by virtue of its mode — the same as `/switchboard`. If a panel start is meant
-  to mean "set it going and walk away", that door needs its own signal rather than inheriting the
-  mode's.
+- **[ANSWERED 2026-09-14 — the question is mis-framed. Attended is not about the door.]**
+  Operator definition, verbatim: **"attended means the controller agent is set to wake."**
+
+  So attendedness is a property of **whether a wake is armed**, not of which entry point was used and
+  not of whether a human is judged to be present. The plan's reasoning — *"a deliberate human click…
+  attended by virtue of its mode"* — infers it from intent, which is the wrong source.
+
+  **Consequences:**
+
+  1. `UNATTENDED` must be **derived from the armed wake state**, not from the session mode and not
+     hardcoded. A door that arms a wake is attended; one that does not, is not. Both `/switchboard`
+     and `POST /mission-control/start` are then answered by the same rule rather than by two separate
+     judgement calls, and a future third door inherits it for free.
+  2. **This question and the `deliveryMode` question below are the same question.** If the host
+     cannot wake, no session on that host can be attended, whichever button started it. Answering
+     them separately produces a session labelled attended by its door and unwoken by its host — which
+     is exactly the posture lie in this plan's title.
+
+  **Open, and blocking both:** standalone's three kickoff sites (`bootstrap.ts:5045`, `:5078`,
+  `:5099`) pass no `deliveryMode`, and `deliveryMode` is defined on `TaskViewerProvider.ts:13017` —
+  the *extension's* provider. Whether standalone arms a wake at all could not be determined from the
+  source on 2026-09-14; no wake loop was found under any obvious name in either composition root.
+  That fact decides both questions and should be established before either is implemented.
+
 - **[user]** Does the standalone host deliver wakes via `ptySendPrompt`? If not, its three call sites
   need `deliveryMode: 'self'` so the agent receives the external runsheet and arms its own wake loop —
   otherwise a standalone Mission Control session is told not to self-wake by a host that will never

@@ -208,11 +208,28 @@ func HandoffStart(entry, workspaceRoot string, serveTailnet bool, extraArgs []st
 	// Replaces the placeholder 512, which licensed ~700 MB heap and breached the 800 MB budget.
 	// Keep this default in sync with cmd/switchboard/main.go, bin/switchboard, and
 	// src/standalone/cli.ts.
+	// NO DEFAULT. Opt-in only.
+	//
+	// Two defaults were tried here and both were kill conditions: 512 (placeholder)
+	// and 310 (derived from an 800 MB RSS budget). On 2026-09-14 a board running
+	// with 512 aborted mid-read on a 3.7 GB host:
+	//   Mark-Compact 517.0 -> 516.4 MB
+	//   FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory
+	// 310 aborts sooner.
+	//
+	// This flag's only legitimate use is to RAISE V8's auto-sized ceiling on a host
+	// small enough that the automatic limit falls below the board's working set. On
+	// every host where the automatic limit is already adequate, setting it can only
+	// LOWER the ceiling -- a kill condition that buys nothing. A compiled-in constant
+	// cannot distinguish the two cases, so it is wrong on one of them by construction.
+	// Unset, node sizes the heap from the machine it is on.
 	mb := os.Getenv("SWITCHBOARD_MAX_OLD_SPACE_MB")
-	if mb == "" {
-		mb = "310"
+	argv := []string{node}
+	if mb != "" {
+		argv = append(argv, "--max-old-space-size="+mb)
 	}
-	all := append([]string{node, "--max-old-space-size=" + mb, entry}, args...)
+	argv = append(argv, entry)
+	all := append(argv, args...)
 	if runtime.GOOS != "windows" {
 		return syscall.Exec(node, all, os.Environ())
 	}
