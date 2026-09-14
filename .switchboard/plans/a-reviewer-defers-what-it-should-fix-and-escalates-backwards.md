@@ -188,6 +188,18 @@ new column. Nothing here needs a decision the operator has not already given.
     acceptance tester is active. `ESCALATED` needs no equivalent — it has no role, so there is no
     agent whose absence would make it meaningless.
 
+## Dependencies
+
+- **Supersedes** `goal-invariant-verification-and-review-escalation.md` (COMPLETED) — its
+  plan-file-state-plus-board-move escalation mechanism is kept intact; this plan supersedes only
+  its choice of escalation *destination* (`PLAN REVIEWED` → `ESCALATED`).
+- **Extends** `deferred-findings-become-a-structured-record.md` (COMPLETED) — preserves its
+  severity scale, `file:line` convention, and explicit-empty-case rule verbatim; adds `effort`
+  and `why deferred` fields alongside them.
+- **Adjacent to** `completion-testing-stage-checks-acceptance-criteria.md` — independent; if it
+  lands first, `ESCALATED` still sits before whatever occupies order 350.
+- Independent of the missions, automation, and worktree work.
+
 ## Adversarial Synthesis
 
 **Risk summary.** The prompt changes are low-risk and reversible; the column addition is the risk,
@@ -256,9 +268,11 @@ state nobody can see is a worse failure than the backwards move it replaces.
 - **Context:** the escalation currently leaves `last_action` reading `move-to-code-reviewed` while
   writing a different column.
 - **Logic:** the move must stamp a distinct action — `escalated-by-reviewer` — so the row is
-  self-describing. Establish first whether `last_action` is derived from the workflow name inside
-  `moveCard`, or passed by the caller; fix at whichever layer sets it, and do not special-case the
-  reviewer if the bug is general to `POST /kanban/move` with an explicit target.
+  self-describing. **Investigation step (do this before choosing the fix layer):** trace
+  `last_action` derivation inside `moveCard` — is it derived from the workflow name, passed by
+  the caller, or stamped from the target column? The fix goes at whichever layer sets it. If the
+  bug is general to `POST /kanban/move` with an explicit target (not reviewer-specific), fix it
+  generally — do not special-case the reviewer.
 - **Edge case:** `last_action` is read by board queries and by the reconcile preset. Adding a value
   must not break a consumer that switches on known actions — grep every reader before choosing the
   string.
@@ -401,3 +415,9 @@ only the converse, so the column does not appear on boards that run no reviewer.
    empty paired column, never one holding work.)*
 9. `GET /kanban/columns` reports `ESCALATED` with `enabledSource: 'paired'` and an `enabled` value
    that tracks `CODE REVIEWED`, never a hardcoded `true`.
+
+---
+
+## Implementation Summary
+
+Improve-plan pass completed. Added the missing `## Dependencies` section (supersedes `goal-invariant-verification-and-review-escalation.md`, extends `deferred-findings-become-a-structured-record.md`, adjacent to `completion-testing-stage-checks-acceptance-criteria.md`). Made the `last_action` investigation step in Change B explicit — the plan now directs the coder to trace `last_action` derivation inside `moveCard` before choosing the fix layer, rather than leaving "establish first" as an open instruction. Architecture review confirmed the role-less + visibility-paired approach is the best of three alternatives; the goal-vs-appearance probe found no gap. Adversarial critique identified the `last_action` underspecification as the real finding; balanced synthesis converged on making the investigation step explicit. No superseded conclusions — the plan's approach was validated, not corrected.
