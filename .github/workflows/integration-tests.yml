@@ -1879,6 +1879,19 @@ jobs:
       - name: Bulk move cost and invariant contract
         run: npm run test:contract:bulk-move-cost
 
+      # Event-loop watchdog contract — proves the stall dump is written from
+      # OUTSIDE the blocked loop, while the loop is still spinning, and that the
+      # dump path survives the /health-failing condition. Reads
+      # out/services/eventLoopWatchdog.js, so it needs compile-tests first.
+      - name: Event-loop watchdog contract (out-of-loop dump while spinning)
+        run: npm run test:contract:eventloop-watchdog
+
+      # Heap ceiling contract — the four entry paths (cli re-exec, npm bin shim,
+      # Go front controller, Go launcher) must not drift apart, must not set
+      # NODE_OPTIONS, and must not re-exec short-lived client verbs.
+      - name: Heap ceiling contract (four entry paths agree)
+        run: npm run test:contract:heap-ceiling
+
       - name: Run integration suite
         run: npm run test:integration:all
 

@@ -235,14 +235,30 @@ export class KanbanProvider implements vscode.Disposable {
     private static readonly _AUTO_PULL_INTERVALS = new Set<number>([5, 15, 30, 60]);
     /** Ceilings for bulk moves (plan: a-bulk-move-cannot-outgrow-the-board). */
     public static readonly BULK_MOVE_MAX_CARDS = 500;
-    private static _bulkMoveActive = false;
+    /**
+     * Depth, not a boolean. Two bulk moves can overlap — a browser `moveAll` and
+     * an API-driven `moveSelected`, or two tabs — and with a plain flag the first
+     * one to reach its `finally` cleared the guard while the second was still
+     * mid-loop, handing that one back the per-card refresh storm the guard exists
+     * to stop. The suppression lifts when the LAST bulk move finishes.
+     */
+    private static _bulkMoveDepth = 0;
+    private static get _bulkMoveActive(): boolean {
+        return KanbanProvider._bulkMoveDepth > 0;
+    }
 
     public static isBulkMoveActive(): boolean {
         return KanbanProvider._bulkMoveActive;
     }
 
     public static setBulkMoveActive(active: boolean): void {
-        KanbanProvider._bulkMoveActive = active;
+        if (active) {
+            KanbanProvider._bulkMoveDepth++;
+        } else {
+            // Never below zero: an unbalanced `false` must not leave the counter
+            // negative, where a later legitimate bulk move would read as inactive.
+            KanbanProvider._bulkMoveDepth = Math.max(0, KanbanProvider._bulkMoveDepth - 1);
+        }
     }
 
     public isBulkMoveActive(): boolean {
@@ -250,7 +266,7 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     public setBulkMoveActive(active: boolean): void {
-        KanbanProvider._bulkMoveActive = active;
+        KanbanProvider.setBulkMoveActive(active);
     }
     private _panel?: vscode.WebviewPanel;
     /**
@@ -12213,9 +12229,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     return { success: true, column };
                 } finally {
                     KanbanProvider.setBulkMoveActive(false);
-                    if (this._panel) {
-                        this._scheduleBoardRefresh(workspaceRoot);
-                    }
+                    // ONE refresh for the whole burst, not two. `switchboard.refreshUI`
+                    // is registered in BOTH roots — extension.ts:1870 (webview push) and
+                    // bootstrap.ts:1799 (schedulePushFullState) — and `_refreshBoard`
+                    // does nothing but call it, so scheduling a board refresh HERE as
+                    // well bought the extension host a second full rebuild of the same
+                    // board. The plan's invariant is one refresh per bulk move.
                     await this._seams().commands.executeCommand('switchboard.refreshUI', workspaceRoot);
                 }
             }
@@ -12370,12 +12389,11 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     return { success: true, column, moved: sessionIds.length };
                 } finally {
                     KanbanProvider.setBulkMoveActive(false);
-                    // Single final refresh after the entire bulk move has completed.
-                    // Mirrors both composition roots: extension via _scheduleBoardRefresh,
-                    // standalone via switchboard.refreshUI / schedulePushFullState.
-                    if (this._panel) {
-                        this._scheduleBoardRefresh(workspaceRoot);
-                    }
+                    // Single final refresh after the entire bulk move has completed —
+                    // exactly one, at both composition roots. `switchboard.refreshUI` is
+                    // registered in extension.ts:1870 and bootstrap.ts:1799, and
+                    // `_refreshBoard` is nothing but a call to it, so pairing this with
+                    // `_scheduleBoardRefresh` rebuilt the extension host's board twice.
                     await this._seams().commands.executeCommand('switchboard.refreshUI', workspaceRoot);
                 }
             }

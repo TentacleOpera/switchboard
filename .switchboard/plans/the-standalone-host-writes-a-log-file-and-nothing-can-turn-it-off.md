@@ -208,3 +208,12 @@ constraint.
 ## Implementation Summary
 
 File logging in the standalone host has been completely removed. `setupFileLogging`, `LOG_CAP_BYTES`, and all calls to `mkdirSync(logsDir)` across the detached and foreground paths in `src/standalone/cli.ts` were eliminated. The `switchboard logs` subcommand was updated to report that the host no longer writes a log file and directs output to stdout/stderr. Existing `server.log` files on disk were cleaned up.
+
+## Review Findings
+
+No files changed for this subtask — the removal is complete and correct. Verified by grep: `setupFileLogging` and every `mkdirSync(...logs...)` in `src/standalone/cli.ts` are gone (both the foreground site and the `--detach` parent), the `logs` subcommand now states the host keeps no log file instead of tailing one that is never written, and the `Logs:` / "Check the log file" banner lines are removed. No `console.*` wrapper performs a synchronous filesystem write anywhere in `src/standalone/`. The per-terminal session-log read endpoints and `terminalLogWriter.ts` were correctly left untouched. `npx tsc --noEmit` is clean apart from four pre-existing TS2835 errors.
+
+## Deferred Findings
+
+- NIT — `src/standalone/terminalLogWriter.ts:39` — the plan's acceptance grep `grep -rn "setupFileLogging\|LOG_CAP_BYTES" src/` still returns two hits, because `terminalLogWriter.ts` declares its own unrelated `LOG_CAP_BYTES`. That file is explicitly out of scope ("must not touch"), so the grep as written can never come back empty; it is the acceptance criterion that is wrong, not the code.
+- NIT — no automated gate exists for this subtask. Nothing in CI asserts that a started host creates no `.switchboard/logs/`, so a future reintroduction of file logging would be caught only by hand. The plan's Automated section is a list of greps, not a suite.

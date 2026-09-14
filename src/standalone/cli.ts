@@ -3435,7 +3435,29 @@ async function main() {
         heapSource = 'absent';
     }
 
-    if (!hasHeapArg && !heapMarker) {
+    // Only a BOARD launch needs the ceiling, and only a board launch can afford
+    // the re-exec. `main()` runs for every client verb too — `switchboard done`,
+    // `next`, `probe`, `verb`, and the `node "<cliPath>" done` form every agent
+    // directive tells seats to use. Re-execing those doubled the process count and
+    // the startup cost of the single most frequent command on the box, for a heap
+    // ceiling a process that exits in 200 ms never approaches.
+    //
+    // The list is of CLIENT subcommands, not board ones: anything unrecognised
+    // (including a future subcommand) re-execs, because guessing "client" for a
+    // board launch loses the ceiling silently, while guessing "board" for a client
+    // costs one process start. Visible-or-safe, per the fallback rule.
+    const HEAP_REEXEC_EXEMPT_SUBCOMMANDS = new Set([
+        'stop', 'status', 'logs', 'init', 'scaffold', 'control-plane', 'secrets',
+        'token', 'export', 'import', 'plans', 'ready', 'dispatch', 'done', 'accept',
+        'next', 'reports', 'clear', 'fleet', 'probe', 'heap-snapshot', 'verb', 'api',
+        'help', 'about', 'version', 'launcher-state',
+    ]);
+    const heapFirstArg = process.argv[2];
+    const mayStartBoard = !heapFirstArg
+        || heapFirstArg.startsWith('-')
+        || !HEAP_REEXEC_EXEMPT_SUBCOMMANDS.has(heapFirstArg);
+
+    if (mayStartBoard && !hasHeapArg && !heapMarker) {
         // Plain node invocation without the flag (e.g. npx switchboard or node cli.js).
         // Re-exec once with the flag so the board process runs with the required ceiling.
         const child = spawn(
@@ -4712,10 +4734,16 @@ async function main() {
             childArgv.push('--import-bundle', pendingBundlePath);
         }
 
-        const child = spawn(process.execPath, [__filename, ...childArgv], {
+        // Hand the detached child the ceiling directly. Without the flag in its
+        // execArgv the child re-execs itself on entry, and the wrapper parent then
+        // lingers for the life of the board holding the whole bundle (~40 MB RSS)
+        // — on the 1 GB box this ceiling exists for, that is the cost we are trying
+        // to avoid. The marker makes the child report `cli-reexec`, which is true:
+        // the CLI, not a Go launcher, supplied the value.
+        const child = spawn(process.execPath, [`--max-old-space-size=${effectiveHeapMb}`, __filename, ...childArgv], {
             detached: true,
             stdio: 'ignore',
-            env: { ...process.env, SWITCHBOARD_DETACHED: '1' },
+            env: { ...process.env, SWITCHBOARD_DETACHED: '1', SWITCHBOARD_HEAP_FLAG_APPLIED: '1' },
         });
         child.unref();
         child.on('error', (err) => {

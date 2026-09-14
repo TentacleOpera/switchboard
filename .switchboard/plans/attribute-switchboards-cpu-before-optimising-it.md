@@ -294,3 +294,16 @@ Given the freeze, that half is worth pulling forward regardless of what this pla
 
 **Complexity:** 5
 **Tags:** backend, performance, reliability, devops
+
+## Review Findings
+
+Reviewed `cpuAttribution.ts`, `eventLoopWatchdog.ts`, the `/health` surface and volume counters in `LocalApiServer.ts`, the `terminals.js` readout, and the `flushOutput` hoist. The out-of-loop watchdog was verified live — `src/test/eventloop-watchdog-contract.test.js` passes 4/4, including the dump landing while the loop is still spinning and the `/health`-failing condition — but it was defined with **no npm script and no CI step**, so it was not a gate; a `test:contract:eventloop-watchdog` script and a workflow step were added (`package.json`, `.github/workflows/integration-tests.yml`). Seat pid provenance was traced to the persisted literal: `cmd/switchboard-pty-host/main.go:229` emits `"pid": t.pid` and `goPtyFleetProjection.ts:1011` stores it as `pty.pid`, so seat attribution has a real source. `npx tsc --noEmit` is clean apart from four pre-existing TS2835 import-extension errors in unmodified regions.
+
+## Deferred Findings
+
+- MAJOR — `src/standalone/terminalWsGateway.ts:838` — the plan's step-4 client-filter hoist landed in a class nothing constructs (`grep "new TerminalWsGateway"` over `src/` returns nothing), so the hoist is inert and verification 5b ("zero attached clients no longer encodes a frame") cannot be observed on a running host. The coder compensated correctly by putting the volume counters on the live `_proxyTerminalUpgrade` splice, but the plan's cited line region is dead code.
+- MAJOR — `src/services/cpuAttribution.ts:186` — verification steps 1, 2 and 6 (attribution sums to the OS total with 4–8 seats; sampler self-cost negligible at 8 seats; the 1/4/8-seat baseline capture) are manual and were NOT executed in this pass. No automated check discriminates on attribution correctness; passing the watchdog and memory suites is not evidence that the CPU decomposition is right.
+- MAJOR — `src/services/cpuAttribution.ts:145` — `scanBrowserPids()` reads `comm` for every entry in `/proc` on every 5 s tick. `samplerSelfMs` makes the cost visible but nothing bounds it, and it was never measured under the plan's 8-seat condition.
+- NIT — `src/services/cpuAttribution.ts:196` — a first-seen pid reports `cpuPercent: 0` because it has no delta baseline yet, which is indistinguishable from a genuinely idle seat. A `null`/`pending` on the first sample would read honestly.
+- NIT — `src/services/eventLoopWatchdog.ts:160` — `statusSab` is written by the worker and never read by the main thread; it is currently dead shared state.
+- NIT — `src/services/LocalApiServer.ts:2131` — the volume window only rolls when a chunk arrives, so `bytesOut` is treated as bytes/sec even when the window is far shorter than 1 s; the ceiling check under-reports on bursty output. The quiet-entry sweep also only runs when a brand-new terminal name appears.

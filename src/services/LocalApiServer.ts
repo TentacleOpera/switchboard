@@ -13334,7 +13334,14 @@ export class LocalApiServer {
                 }
                 try {
                     const body = await this._parseJsonBody(req);
-                    let targetPath = typeof body?.path === 'string' ? body.path.trim() : '';
+                    // `destination` is what `switchboard heap-snapshot --destination`
+                    // sends (cli.ts cmdHeapSnapshot); `path` is accepted as an alias for
+                    // a hand-rolled curl. Reading only `path` silently ignored every
+                    // operator-chosen destination and wrote to the default instead.
+                    const rawTarget = typeof body?.destination === 'string'
+                        ? body.destination
+                        : (typeof body?.path === 'string' ? body.path : '');
+                    let targetPath = rawTarget.trim();
                     if (!targetPath) {
                         const diagDir = path.join(os.homedir(), '.switchboard', 'diagnostics');
                         if (!fsSync.existsSync(diagDir)) {
@@ -13355,11 +13362,17 @@ export class LocalApiServer {
                     try {
                         fsSync.chmodSync(snapshotPath, 0o600);
                     } catch {}
+                    let writtenBytes: number | null = null;
+                    try { writtenBytes = fsSync.statSync(snapshotPath).size; } catch { /* size is best-effort */ }
 
                     res.writeHead(200, { 'Content-Type': 'application/json' });
                     res.end(JSON.stringify({
                         success: true,
+                        // `destination` is the field the CLI prints; `path` is kept as an
+                        // alias so an existing caller reading either keeps working.
+                        destination: snapshotPath,
                         path: snapshotPath,
+                        writtenBytes,
                         pid: process.pid,
                         timestamp: new Date().toISOString()
                     }));

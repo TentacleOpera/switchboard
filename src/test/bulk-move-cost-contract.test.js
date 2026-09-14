@@ -97,33 +97,53 @@ async function runAsyncTest(name, fn) {
         );
     });
 
+    // The moveAll arm is ~4.5 KB of source, so a fixed-width slice cut the
+    // `finally` block off the end and the assertion failed against a correct
+    // implementation. Bound the window by the NEXT `case '` label instead.
+    function caseBlock(src, label) {
+        const start = src.indexOf(`case '${label}':`);
+        assert.ok(start !== -1, `${label} case must exist`);
+        const next = src.indexOf("case '", start + 8);
+        return src.slice(start, next === -1 ? src.length : next);
+    }
+
     test('moveAll handler uses try/finally to manage bulkMoveActive and fires single refresh at end', () => {
-        const moveAllIndex = kanbanProviderSrc.indexOf("case 'moveAll':");
-        assert.ok(moveAllIndex !== -1, 'moveAll case must exist');
-        const moveAllBlock = kanbanProviderSrc.slice(moveAllIndex, moveAllIndex + 4000);
+        const moveAllBlock = caseBlock(kanbanProviderSrc, 'moveAll');
 
         assert.ok(moveAllBlock.includes('setBulkMoveActive(true)'), 'moveAll must set bulk move active true');
         assert.ok(moveAllBlock.includes('finally {'), 'moveAll must use try/finally');
         assert.ok(moveAllBlock.includes('setBulkMoveActive(false)'), 'moveAll finally must reset bulk move active to false');
         assert.ok(
-            moveAllBlock.includes("executeCommand('switchboard.refreshUI'") ||
-            moveAllBlock.includes('_scheduleBoardRefresh'),
-            'moveAll finally must trigger final refresh'
+            moveAllBlock.includes("executeCommand('switchboard.refreshUI'"),
+            'moveAll finally must trigger the final refresh through switchboard.refreshUI (registered at BOTH roots)'
         );
     });
 
+    // The whole point of the guard is ONE rebuild. `_refreshBoard` is nothing
+    // but a call to `switchboard.refreshUI`, so a finally that also schedules a
+    // board refresh buys the extension host a second full board build per burst.
+    test('bulk-move finally fires exactly one refresh, not a scheduled board refresh as well', () => {
+        for (const label of ['moveSelected', 'moveAll']) {
+            const block = caseBlock(kanbanProviderSrc, label);
+            const finallyIdx = block.lastIndexOf('finally {');
+            assert.ok(finallyIdx !== -1, `${label} must use try/finally`);
+            const finallyBlock = block.slice(finallyIdx);
+            assert.ok(
+                !finallyBlock.includes('_scheduleBoardRefresh('),
+                `${label} finally must not ALSO call _scheduleBoardRefresh — that is a second full board build`
+            );
+            const refreshCalls = finallyBlock.split("executeCommand('switchboard.refreshUI'").length - 1;
+            assert.strictEqual(refreshCalls, 1, `${label} finally must call switchboard.refreshUI exactly once (got ${refreshCalls})`);
+        }
+    });
+
     test('moveAll and moveSelected check BULK_MOVE_MAX_CARDS and refuse if exceeded', () => {
-        const moveAllIndex = kanbanProviderSrc.indexOf("case 'moveAll':");
-        const moveAllBlock = kanbanProviderSrc.slice(moveAllIndex, moveAllIndex + 1200);
         assert.ok(
-            moveAllBlock.includes('BULK_MOVE_MAX_CARDS'),
+            caseBlock(kanbanProviderSrc, 'moveAll').includes('BULK_MOVE_MAX_CARDS'),
             'moveAll must enforce BULK_MOVE_MAX_CARDS'
         );
-
-        const moveSelectedIndex = kanbanProviderSrc.indexOf("case 'moveSelected':");
-        const moveSelectedBlock = kanbanProviderSrc.slice(moveSelectedIndex, moveSelectedIndex + 1200);
         assert.ok(
-            moveSelectedBlock.includes('BULK_MOVE_MAX_CARDS'),
+            caseBlock(kanbanProviderSrc, 'moveSelected').includes('BULK_MOVE_MAX_CARDS'),
             'moveSelected must enforce BULK_MOVE_MAX_CARDS'
         );
     });

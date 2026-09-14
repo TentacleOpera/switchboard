@@ -10,7 +10,6 @@
     "multi-agent"
   ],
   "version": "1.7.13",
-  "private": true,
   "main": "./dist/extension.js",
   "bin": {
     "switchboard": "./bin/switchboard"
@@ -1121,7 +1120,9 @@
     "test:contract:bare-completion": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/bare-completion-contract.test.js",
     "test:contract:lead-accept": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/lead-accept-advances-contract.test.js",
     "test:contract:team-pane-order": "node src/test/team-pane-order-contract.test.js",
-    "test:contract:bulk-move-cost": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/bulk-move-cost-contract.test.js"
+    "test:contract:bulk-move-cost": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/bulk-move-cost-contract.test.js",
+    "test:contract:eventloop-watchdog": "node src/test/eventloop-watchdog-contract.test.js",
+    "test:contract:heap-ceiling": "node src/test/heap-ceiling-contract.test.js"
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.0.0",

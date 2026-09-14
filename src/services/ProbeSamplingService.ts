@@ -23,8 +23,16 @@ export interface ProbeSample {
     heapTotal: number;
     external: number;
     arrayBuffers: number;
-    inotifyDescriptors: number;
-    openFds: number;
+    /**
+     * `null` means the watch count could NOT be read — never 0. A zero here is a
+     * real measurement of a host holding no watches, which is a healthy reading;
+     * substituting it for an unreadable probe is the fallback that behaves like a
+     * value (CLAUDE.md), and it would silently satisfy every drift assertion the
+     * sampler exists to fail.
+     */
+    inotifyDescriptors: number | null;
+    /** `null` means unreadable — same reasoning as `inotifyDescriptors`. */
+    openFds: number | null;
 }
 
 export interface ProbeSamplerOptions {
@@ -86,24 +94,31 @@ export class ProbeSamplingService {
         }
     }
 
-    public sample(): ProbeSample {
+    /**
+     * Take one sample. Returns `undefined` when the memory probe itself failed —
+     * the series is left untouched rather than gaining a row of zeroes, because a
+     * failed probe that reads as `rss: 0` is indistinguishable from a real reading
+     * and would drag any drift comparison against it to a pass.
+     */
+    public sample(): ProbeSample | undefined {
         let mem: NodeJS.MemoryUsage;
         try {
             mem = process.memoryUsage();
-        } catch {
-            mem = { rss: 0, heapUsed: 0, heapTotal: 0, external: 0, arrayBuffers: 0 };
+        } catch (e) {
+            this._warn(`probe skipped: process.memoryUsage() failed (${e instanceof Error ? e.message : String(e)}); series not advanced`);
+            return undefined;
         }
 
         const pid = process.pid;
-        let inotify = 0;
+        let inotify: number | null = null;
         try {
-            inotify = getInotifyWatchCount(pid) ?? 0;
-        } catch {}
+            inotify = getInotifyWatchCount(pid) ?? null;
+        } catch { inotify = null; }
 
-        let openFds = 0;
+        let openFds: number | null = null;
         try {
-            openFds = getOpenFdCount(pid) ?? 0;
-        } catch {}
+            openFds = getOpenFdCount(pid) ?? null;
+        } catch { openFds = null; }
 
         const sample: ProbeSample = {
             timestamp: new Date().toISOString(),
@@ -142,6 +157,12 @@ export class ProbeSamplingService {
             this._warn(`DRIFT WARNING: host RSS ${rssMb.toFixed(1)} MB exceeds idle ceiling of ${this._idleRssCeilingMb} MB with 0 terminals active`);
         }
 
+        if (sample.inotifyDescriptors === null) {
+            // Unreadable, not zero. Say so instead of comparing a substituted
+            // number against the ceiling and reporting an all-clear.
+            this._warn('inotify watch count is unreadable on this host — the watch ceiling is NOT being checked');
+            return;
+        }
         const watchCeiling = getInotifyCeiling();
         if (sample.inotifyDescriptors >= watchCeiling) {
             this._warn(`DRIFT WARNING: inotify watch count ${sample.inotifyDescriptors} has reached or exceeded ceiling of ${watchCeiling}`);
