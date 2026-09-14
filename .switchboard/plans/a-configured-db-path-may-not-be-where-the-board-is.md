@@ -3,121 +3,109 @@
 ## Goal
 
 Establish, before either storage migration runs, that the database a workspace *resolves to* is not
-necessarily the database holding that workspace's plans. Relocation has been failing silently for an
-unknown number of installs, leaving the board in the old in-repo file while the configured path points at
-an empty or absent one. Both the N-to-1 merge and the preset retirement currently assume the configured
-path is authoritative.
+necessarily the database holding that workspace's plans. Relocation has been failing silently, leaving the
+board in the old in-repo file while the configured path points at an empty or absent one. Both the N-to-1
+merge and the preset retirement currently assume the configured path is authoritative.
 
-### Problem analysis (verified against HEAD 58c0030)
+> **Superseded — most of this plan's problem analysis describes a world the consolidation programme has demolished.**
+> **Reason:** The storage consolidation (`single-global-database-in-home-store.md`) has shipped: `switchboardLocationGuard.ts` is deleted, `handleSetPresetDbPath` is removed, `migrateIfNeeded` is rewritten (no location guard, no `invalid_target_location` skip reason), and `db-pointer` is retired. The orphan-creation mechanism this plan was built around — "guard refuses relocation, caller repoints anyway, board left behind" — can no longer happen via `invalid_target_location` because that skip reason no longer exists.
+> **Replaced with:** The remaining valid work is narrowed to the silent-repoint hazard in the two surviving relocation handlers (`handleSetCustomDbPath`, `handleSetLocalDb`), which still fall through to unconditional `config.update` when migration reports `migration_in_progress` or `error`. The diagnostic audit and source-selection rule (steps 1-2) are likely moot given the consolidation has shipped — verify before discarding.
 
-**Relocation to any target outside the source workspace is refused, and the callers repoint anyway.**
+### Problem analysis (re-verified against HEAD ead33f59)
 
-`KanbanDatabase.migrateIfNeeded(sourcePath, targetPath)` guards the copy by deriving a "workspace root"
-from the target by path arithmetic — `path.dirname(path.dirname(targetPath))` — and passing it to
-`isAllowedSwitchboardLocation` alongside a source root derived the same way. That guard's final fallback is
-`resolvedCandidate === resolvedWorkspaceRoot` (`src/utils/switchboardLocationGuard.ts`), and its earlier
-tiers do not apply: the mapping index is empty unless the extension built it, and `hasOwnControlPlane`
-tests for `<dir>/.switchboard/kanban.db` or `<dir>/.switchboard/db-pointer`, which no cloud-sync folder
-has. So for any target outside the source workspace the comparison is between two different directories,
-and the result is `{ migrated: false, skipped: 'invalid_target_location' }`.
+> **Superseded:** `KanbanDatabase.migrateIfNeeded` guards the copy by deriving a "workspace root" from the target by path arithmetic and passing it to `isAllowedSwitchboardLocation`. For any target outside the source workspace the result is `{ migrated: false, skipped: 'invalid_target_location' }`.
+> **Reason:** The location guard (`switchboardLocationGuard.ts`) has been deleted. `migrateIfNeeded` (`KanbanDatabase.ts:2177-2218`) now copies the source to any target without a location check. The `invalid_target_location` skip reason no longer exists.
+> **Replaced with:** `migrateIfNeeded` now has these skip reasons: `same_path` (:2182), `migration_in_progress` (:2185), `source_not_found` (:2190), `source_empty` (:2194), `target_has_data` (:2200), and `error: <message>` (:2214). On success it copies source to target and renames source to `.backup.<timestamp>` (:2207-2208).
 
-The arithmetic is not an accident — `permanent_fix_child_switchboard_pollution.md` introduced it
-deliberately, recording the assumption in its own text: *"`sourcePath` is always of the form
-`<workspaceRoot>/.switchboard/kanban.db`"*. True of the source. Never true of a Dropbox or iCloud target,
-where `path.dirname(path.dirname(...))` yields `~/Dropbox`, not a workspace root.
+> **Superseded:** Three handlers (`handleSetCustomDbPath`, `handleSetPresetDbPath`, `handleSetLocalDb`) each branch on `target_has_data` and `migrated` and fall through unconditionally to `config.update`.
+> **Reason:** `handleSetPresetDbPath` has been removed (only referenced in `workspace-identity-precedence.test.ts:223` as a historical needle). Two handlers survive: `handleSetCustomDbPath` (`TaskViewerProvider.ts:14721`) and `handleSetLocalDb` (`:14681`).
+> **Replaced with:** Both surviving handlers still have the silent-repoint pattern. `handleSetCustomDbPath` falls through to `config.update` at `:14769` regardless of skip reason. `handleSetLocalDb` falls through to config clear at `:14714` regardless of skip reason. The remaining skip reasons that fall through silently are `migration_in_progress` (migration didn't run) and `error: <message>` (migration threw, data may be partial). `source_not_found` and `source_empty` falling through is correct — there is nothing to migrate. `same_path` falling through is harmless.
 
-Worked example. Preset `dropbox` builds `~/Dropbox/Switchboard/kanban.db`. The guard is asked whether
-`~/Dropbox` may own a `.switchboard` directory *on behalf of the repo's workspace root*. It may not.
-Migration skipped.
+**Resulting on-disk state (remaining hazard).** For an affected install where migration reports `migration_in_progress` or `error`:
 
-**Then the result is discarded.** `handleSetCustomDbPath` (`TaskViewerProvider.ts:13612`),
-`handleSetPresetDbPath` (`:13656`) and `handleSetLocalDb` (`:13573`) each branch on exactly two outcomes —
-`skipped === 'target_has_data'` and `migrated === true` — and fall through unconditionally to
-`config.update('kanban.dbPath', newPath, …)` (`:13649`, `:13798`) plus `invalidateWorkspace`.
-`invalid_target_location`, `source_not_found` and `migration_in_progress` all take the silent-success path,
-complete with a confirmation notification.
+- `switchboard.kanban.dbPath` (or `storage.pathOverride`) points at the target path.
+- That file may not exist (error before copy) or may be partial (error during copy).
+- The real board is still at the source path, renamed to `.backup.<timestamp>` only on success — so a failed migration leaves the source untouched but the config repointed.
+- The user saw a success notification (the `migrated` branch shows one; the fall-through doesn't show an error).
 
-**Resulting on-disk state, which is what the migrations will meet.** For an affected install:
+Nothing here is destroyed. The hazard is that the board reads from an empty or absent target while the real data sits at the source.
 
-- `switchboard.kanban.dbPath` points at a synced or custom path.
-- That file is empty, or does not exist at all.
-- The real board — every plan, column position, priority order, `plan_events` row, worktree row — is still
-  at `<repo>/.switchboard/kanban.db`, untouched, because nothing ever deleted it.
-- The user saw a success message and, if they looked, an empty board.
+### Why this blocks the two migrations (partially superseded)
 
-Nothing here is destroyed. The hazard is entirely in what a migration concludes about it.
+> **Superseded:** `retire-cloud-file-sync-db-path-presets.md` resolves to "adopt the synced database into the global store" and its integrity handling covers a synced file that is partial, locked or corrupt. It does not cover the case where the synced file is valid and empty while the board is somewhere else.
+> **Reason:** The consolidation programme has shipped. The preset retirement and the N-to-1 merge appear to have run (the guard is deleted, `db-pointer` is retired, `handleSetPresetDbPath` is removed, a `globalStore` module exists). The specific hazard this section describes — adopting an empty synced file while the real board sits elsewhere — may already be moot if the consolidation migrations used evidence-based source selection.
+> **Replaced with:** Verify whether the consolidation migrations have already run with the configured path as authoritative. If they have, this section is historical context. If they haven't (e.g. the migration is lazy, triggered on next boot per workspace), the source-selection rule is still relevant.
 
-### Why this blocks the two migrations
+## User Review Required
 
-**`retire-cloud-file-sync-db-path-presets.md`** resolves to *"adopt the synced database into the global
-store, archive the original as `kanban.db.migrated.bak` in place"*, and its integrity handling covers a
-synced file that is partial, locked or corrupt. It does not cover the case where the synced file is
-**valid and empty** while the board is somewhere else. Adopting it succeeds, verifies clean, and lands an
-empty board in the global store — with the real one left behind looking like a superseded leftover.
+None.
 
-**`single-global-database-in-home-store.md`** lists source discovery candidates as the mapping index,
-`_instancesByDbPath`, recent workspaces, and a filesystem scan for `.switchboard/kanban.db`. The scan
-would find the orphan, which is good — but discovery is framed per *workspace*, and if a workspace's
-source is taken as "the DB this workspace resolves to", the empty configured file is what gets merged. If
-both are found, the merge's newest-`updated_at` conflict rule can let the empty file's rows win for any
-overlapping id, since a repointed-and-then-touched database can carry newer timestamps than the board it
-shadowed.
+## Complexity Audit
 
-### Proposed changes
+### Routine
 
-This is deliberately small: establish the facts, then hand them to the plans that own the migrations.
+- Adding skip-reason checks to two handler functions (`handleSetCustomDbPath`, `handleSetLocalDb`) — refuse `config.update` when `migResult.skipped === 'migration_in_progress'` or `migResult.skipped?.startsWith('error:')`.
+- Showing an error notification instead of a success notification when migration failed.
 
-1. **Measure it.** A read-only audit that, for each discoverable workspace, resolves the configured path
-   and also probes `<root>/.switchboard/kanban.db`, then reports plan counts on both via the existing
-   `countPlansInFile` (`KanbanDatabase.ts:1599`). Ship it as a diagnostic first — the population size is
-   currently unknown, and it decides how much the two migrations need to care.
-2. **Make source selection evidence-based, not configuration-based.** State the rule both migrations should
-   adopt: for each workspace, consider *every* candidate file — configured path, legacy in-repo path, and
-   any `db-pointer` target — and choose by content (plan count, then `max(updated_at)`), never by which
-   one the setting names. When two candidates both hold plans, that is the existing reconciliation case,
-   not a silent pick.
-3. **Stop the silent repoint now.** Have the three handlers refuse to update the setting when the
-   migration reported anything other than success or a benign empty source. This is worth doing even though
-   the consolidation plan later deletes these handlers and the guard: until it lands, every relocation is
-   a chance to create another orphan for the migration to trip over.
-4. **Do not fix the guard.** `single-global-database-in-home-store.md` deletes
-   `switchboardLocationGuard.ts`, `db-pointer` and the DB-resolution half of the mapping subsystem
-   outright, and `retire-cloud-file-sync-db-path-presets.md:63` already notes that the sync-folder warning
-   must not be built inside it. Repairing the arithmetic would be work thrown away — the correct scope here
-   is refusing to act on its refusal, not making it permissive.
+### Complex / Risky
 
-### Verification plan
+- **Determining whether the consolidation migrations have already run.** If they have, the diagnostic audit and source-selection rule (steps 1-2) are moot. If they haven't (lazy per-workspace migration), the source-selection rule is still needed. This needs verification against the `globalStore` module and the consolidation migration's trigger mechanism.
+- **The `source_not_found` and `source_empty` cases.** These fall through to `config.update` today, and that is correct — there is nothing to migrate. The fix must not over-correct by refusing these.
 
-1. **Reproduce the orphan.** Seed an in-repo DB with plans, relocate to an absolute path outside the
-   workspace. Assert today: `invalid_target_location`, setting updated, board empty, plans still in the old
-   file. This is the fixture every other test below uses.
-2. **Audit reports it.** Run the diagnostic against that fixture; assert it names both files with their
-   plan counts and flags the configured path as empty-but-configured.
-3. **Refusal after the fix.** Same relocation; assert the setting is *not* updated and the board still
-   reads the populated file.
-4. **Evidence-based selection.** Hand the fixture to the merge-source chooser; assert it selects the
-   populated in-repo file, not the configured empty one.
-5. **Both populated.** Plans in both files; assert the reconciliation path is taken rather than either being
-   silently preferred.
-6. **No false positives.** A workspace with a legitimately relocated, populated DB and an absent in-repo
-   file: assert the audit reports nothing anomalous and selection picks the configured path.
+## Edge-Case & Dependency Audit
+
+**Race Conditions:** `migration_in_progress` is itself a race — two concurrent migrations. The fix refuses the config update, which is correct: the caller should retry, not repoint.
+
+**Security:** No security surface — this is config-update gating.
+
+**Side Effects:** Refusing the config update on `error` means the user sees an error and the board stays on the old path. That is the intended behaviour — the old path still has the data.
+
+**Dependencies & Conflicts:** The consolidation programme (`single-global-database-in-home-store.md`, `retire-cloud-file-sync-db-path-presets.md`) has largely shipped. This plan's steps 1-2 (diagnostic audit, source-selection rule) may be moot. Step 3 (stop the silent repoint) is independent and still valid. Step 4 (do not fix the guard) is moot — the guard is deleted.
 
 ## Dependencies
 
-- **Input to** `retire-cloud-file-sync-db-path-presets.md` and `single-global-database-in-home-store.md`.
-  Neither depends on this shipping first, but both need its source-selection rule, and the preset plan's
-  "adopt the synced database" step is unsafe without it. Steps 1 and 3 can ship immediately and
-  independently; step 2 belongs to whichever migration lands first.
+- **Was input to** `retire-cloud-file-sync-db-path-presets.md` and `single-global-database-in-home-store.md`. Both appear to have shipped (guard deleted, `db-pointer` retired, `handleSetPresetDbPath` removed, `globalStore` module exists). The source-selection rule may have been adopted during consolidation — verify before discarding steps 1-2.
+
+## Adversarial Synthesis
+
+Key risks: (1) The plan's primary concern (the `invalid_target_location` orphan) is gone — the guard is deleted, `migrateIfNeeded` now copies to any target. (2) The remaining silent-repoint hazard is narrow: `migration_in_progress` and `error` in two surviving handlers. (3) Over-correcting by refusing `source_not_found` or `source_empty` would break legitimate relocations where the old DB doesn't exist or is empty. (4) The diagnostic audit and source-selection rule may be moot if the consolidation has shipped. Mitigations: narrow the fix to `migration_in_progress` and `error` only; verify consolidation state before discarding steps 1-2; the two-handler fix is independently shippable regardless.
+
+## Proposed changes
+
+1. **LIKELY MOOT — Measure it.** A read-only audit that resolves the configured path and probes `<root>/.switchboard/kanban.db`, reporting plan counts on both. **Verify whether the consolidation has already run before investing here** — if the global store is the single source of truth, the configured-vs-in-repo divergence may no longer exist.
+
+2. **LIKELY MOOT — Evidence-based source selection.** State the rule both migrations should adopt: consider every candidate file and choose by content. **Verify whether the consolidation migrations already adopted this** — if they shipped with the configured path as authoritative and no orphan reports came in, the rule may have been unnecessary.
+
+3. **Stop the silent repoint — STILL VALID.** In `handleSetCustomDbPath` (`TaskViewerProvider.ts:14721`) and `handleSetLocalDb` (`:14681`), refuse to update the config when `migResult.skipped === 'migration_in_progress'` or `migResult.skipped?.startsWith('error:')`. Show an error notification instead. Do NOT refuse `source_not_found` or `source_empty` — those are legitimate "nothing to migrate" cases.
+
+4. **MOOT — Do not fix the guard.** The guard is already deleted. No action needed.
+
+## Verification plan
+
+### Automated Tests
+
+1. **Reproduce the remaining hazard.** Trigger a relocation where `migrateIfNeeded` returns `migration_in_progress` (set `_migrationInProgress = true` via a concurrent call). Assert today: config is updated, board reads from the target which has no data. After the fix: config is NOT updated, error notification shown.
+2. **Error case.** Trigger a relocation where `migrateIfNeeded` returns `error: <message>` (e.g. unwritable target). Assert the config is NOT updated after the fix.
+3. **Legitimate cases still work.** `source_not_found` and `source_empty` still fall through to `config.update` — the relocation succeeds because there is nothing to migrate.
+4. **Successful migration.** `migrated: true` still shows the success notification and updates the config.
+5. **`target_has_data` still offers reconciliation.** The existing branch is unchanged.
+
+### Goal Invariants
+
+- `handleSetCustomDbPath` does NOT call `config.update` when `migResult.skipped === 'migration_in_progress'`.
+- `handleSetCustomDbPath` does NOT call `config.update` when `migResult.skipped` starts with `error:`.
+- `handleSetLocalDb` does NOT call `config.update` when `migResult.skipped === 'migration_in_progress'`.
+- `handleSetLocalDb` does NOT call `config.update` when `migResult.skipped` starts with `error:`.
+- `handleSetCustomDbPath` DOES call `config.update` when `migResult.skipped === 'source_not_found'` (legitimate relocation).
+- `handleSetCustomDbPath` DOES call `config.update` when `migResult.migrated === true` (successful migration).
 
 ## Out of scope
 
-- Repairing the location guard or the relocation UI — both are deleted by the consolidation programme.
+- Repairing the location guard or the relocation UI — both are deleted by the consolidation programme (which has shipped).
 - Any change to the storage engine, topology, or the global store itself.
 - The standalone host's inability to persist a relocation at all (the shim's `Configuration.update` is a
-  no-op, `vscodeShim.ts:218` onward). Already filed as
-  `feature_plan_20260811150200_cloud_db_preset_silently_aborts_on_standalone_host.md`, and moot once paths
-  stop being the interface — but it means standalone users cannot have created this orphan, which usefully
-  bounds the affected population to extension hosts.
+  no-op). Already filed and moot once paths stop being the interface — but it means standalone users cannot
+  have created this orphan, which bounds the affected population to extension hosts.
 
 ## Metadata
 - **Tags:** database, bugfix, reliability

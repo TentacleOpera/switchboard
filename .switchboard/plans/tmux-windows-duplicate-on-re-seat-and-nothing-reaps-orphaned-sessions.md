@@ -1,5 +1,11 @@
 # tmux Windows Duplicate on Re-Seat, and Nothing Reaps Orphaned Sessions
 
+> **Superseded: do not build — pending the seating decision. 2026-09-14.**
+> **Context:** tmux *seating* (the board wrapping its own seats in `new-session` / `new-window` / `exec tmux -u attach`) is being removed. The tmux *bridge* — dispatching into panes a human created — is unaffected and stays. See `tmux-seating-and-the-tmux-bridge-are-separate-switches` for why those were ever one switch, and `attach-a-seat-from-any-terminal-client-without-tmux` for the replacement.
+> **Decision basis:** persistence was tmux seating's only remaining justification, and Switchboard clears agent context at regular checkpoints — so a preserved session is one the next checkpoint deletes. `re-seat-a-running-terminal-into-tmux` already states this in its own Non-goals: *"Team members are cleared regularly, so this costs nothing that is not already routinely spent."* What survives a crash is the CLI **boot** (8s Claude / 20s Devin readiness ceilings), not the work.
+> **Why this one specifically:** both halves are board-owned-session problems. Duplicate windows come from re-seating into a session that outlived its seat; the reaper exists to prune `lc-*` sessions no live seat owns. If the board never creates a session, it never appends to a stale one and has nothing to reap. Its goal statement — *"an operator who believes they have shut idle terminals down and has not"* — is the complaint that drove this decision; it is being answered by removal rather than by a reaper.
+
+
 ## Goal
 
 Make what the operator sees the whole truth about what is running. Closing a terminal must close

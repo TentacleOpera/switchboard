@@ -1,5 +1,34 @@
 # A Pty-Host Death Empties the Board While tmux Still Holds the Agents
 
+> **Host scope note, 2026-09-14.** Change 8 below ("wire it in both roots") and the Superseded block
+> reasoning about the extension taking the `lost` arm both predate the `CLAUDE.md` change of
+> 2026-09-14: the extension host is being removed in a hard cutover, and new code must not be written
+> into it to keep it compatible. Its removal is the board feature *VS Code Becomes a Sidebar, and
+> Stops Being a Second Host* (Stages 1, 2, 2b, 3 — all PLAN REVIEWED, none built).
+>
+> The reviewed text is left intact rather than rewritten. When this plan is picked up, land the
+> restore pass in `GoPtyFleetProjection` and `PtyHostSupervisor` — which both roots already share, so
+> the fix is not throwaway — and **skip the extension-specific wiring in change 8**. The extension
+> never wires `setTmuxSeatingResolver`, so it had no recoverable tmux session to restore even before
+> seating was retired; there is nothing there worth building.
+
+
+> **Rescope, not closed. 2026-09-14.** tmux seating is being removed (see
+> `attach-a-seat-from-any-terminal-client-without-tmux`). That splits this plan in two:
+>
+> - **Dies with seating** — the tmux-restore arm. "Reattach to the still-running agent" has no
+>   subject once no seat is tmux-backed; a host death takes its children with it, and the honest
+>   outcome is `lost`, not recovery. Defect 3's tombstone problem persists, but its fix is the
+>   roster, not a tmux probe.
+> - **Survives, and is the real bug** — defects 1 and 2. A freshly respawned host answers
+>   `ptyListTerminals` with an empty array, `refresh()` cannot distinguish "these seats are gone"
+>   from "the host has just started and knows nothing yet", and `updateRegistryState()` purges every
+>   persisted pty row before rewriting from the emptied cache. That is a durable-record problem with
+>   no tmux in it at all, and it is what actually emptied the board.
+>
+> Rewrite the Goal around the roster as the record of record. The second-trigger section below keeps
+> its value as evidence that the board's liveness signal is wrong in more than one way.
+
 ## Goal
 
 When the pty host dies and is respawned, the board's seat list tells the truth: a
@@ -92,6 +121,58 @@ whose state file lacks `surviveParent: true`, logging `State file records a non-
 host; not adopting.` That gate is correct and unrelated: adoption reuses a *living* host, and
 after a panic there is no host to adopt. Adoption and restore are different mechanisms for
 different events, and no setting of `surviveBoard` makes a crashed host adoptable.
+
+> **Superseded:** "A tmux-backed seat's startup command is `tmux has-session -t <session> && tmux new-window ... || tmux new-session ...; tmux new-session -A -d -t <session> -s <view>`", and the `goPtyFleetProjection.ts:227-229` comment quoted above describing `-A` as attach-or-create.
+> **Reason:** `-A` was **removed as a defect**. The chain builder's own comment now reads: "`has-session || new-session -d`, NOT `new-session -A -d`. Under `-A` new-session behaves as attach-session, and `-d` is not attach-session's detach flag (`-D` is) — so on a RE-SEAT, where the view already exists, it ATTACHES and never returns." A coder following the quoted chain reintroduces a hang. The `&&`/`||` form was also replaced, because `A && B || C` runs C when B fails.
+> **Replaced with:** the current three-branch form — no session → `new-session -d -P -F '#{window_id}'`; session but no window → `new-window -d -P -F`; session **and** window → reuse, and the startup command does **not** run again. The reattach property this plan depends on still holds; only the mechanism changed. Note the reuse branch resolves `$wid` by an `awk` name lookup whose own comment concedes it "remains ambiguous across duplicate generations" — a restore pass must carry the window id, not re-derive it from the name.
+
+#### A second trigger, measured 2026-09-14
+
+The same divergence is reachable without any host death, and it is the more common path.
+
+The board was launched over a non-interactive SSH command, so its environment carried no
+`TERM` (see *A Seat's pty Inherits `TERM`*). Every seat's chain therefore created its tmux
+session successfully — `new-session -d` needs no terminfo — and then died on the final
+`exec tmux -u attach`. Result: four live `claude` processes in `lc-reviewer-1`,
+`lc-reviewer-2` and the `lc-review-team` group, and **every** board seat reporting
+`status: "exited"`.
+
+So the board reports a seat dead when its *client* dies, not when its *agent* dies. The Go
+host sets `t.status = "exited"` off the pty lifecycle (`main.go:403`, `:1061`), and for a
+seated terminal that pty **is** the tmux client. Seating guarantees the two diverge, because
+the entire point of tmux is that the session outlives the client.
+
+**And the one component that does ask tmux is scoped away from these rows.**
+`startTmuxReconcilePoll` (`tmuxFleetService.ts:473`) calls `listTmuxPanes()` every 5s, then
+filters:
+
+```js
+.filter(([, e]) => e && e.ideName === TMUX_IDE_NAME)   // 'switchboard-tmux'
+```
+
+and in its rewrite loop passes anything else straight through:
+
+```js
+if (entry.ideName !== TMUX_IDE_NAME) { terminalMap[name] = entry; continue; }
+```
+
+A seated terminal is a **PTY** row — `ptyCreateTerminal` goes through the PTY fleet, and tmux
+appears only as a string inside its startup command. So it lands in that `continue` branch:
+the board asks the tmux server what is alive and then discards the answer for exactly the
+terminals it created.
+
+The poll's own comment says it covers both tmux writers, "adoption (`tmuxOwner: 'adopt'`) and
+any legacy seating rows (`tmuxOwner: 'seat'`)". But the writer that produced `'seat'` rows was
+deleted when seating moved into the Go host (*tmux Belongs in the Go Host*). The poll still
+covers a writer that no longer exists and does not cover the one that replaced it. Nothing
+failed — the coverage stopped pointing at anything, and no gate notices a poll that skips
+every row it is handed.
+
+**Consequence for this plan's scope.** Goal invariant *"no path leaves a seat that is alive in
+tmux invisible to the board"* is not satisfied by restoring after a host death alone. A seat
+whose client never started is invisible to the board while the host is perfectly healthy, and
+the restore pass must key off the tmux session's liveness rather than the pty's.
+
 
 ## Metadata
 

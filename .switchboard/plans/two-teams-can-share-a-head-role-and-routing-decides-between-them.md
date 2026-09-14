@@ -293,6 +293,21 @@ deleting one of the two implementations over guarding both.
 
 ## Outstanding Questions
 
+- **[ANSWERED 2026-09-14 — YES]** Build the ladder at `resolveCodingHeadFromGroups` (`KanbanProvider.ts:5554`). The reframe is confirmed by the operator; `findTeamForHeadRoleInRoots` is dead code and is not the edit site.
 - **[user]** The plan's original root-cause analysis cited `findTeamForHeadRoleInRoots` (TaskViewerProvider.ts:12252) as the dispatch lookup, but that function is dead code (only caller is the orphaned `_selectAutobanTerminal`). The live team-selection site is `resolveCodingHeadFromGroups` (KanbanProvider.ts:5554) returning `leads[0]`. This reframe moves the primary edit site from `teamWiring.ts`/`TaskViewerProvider.ts` to `KanbanProvider.ts` and widens a shared signature. Proceeding on the assumption that the reframe is correct (the ladder must route at the live site or it routes nothing), but the operator should confirm before coding begins.
-- **[user]** Rung 1's signal is corrected from `mission_members` (which holds only plan/feature members, kind `'plan'|'feature'`) to the existing `missions.team` column. Proceeding on the assumption that `missions.team` is the intended "mission names its team" signal (it is already read at dispatch in `command.js:1802`); confirm, or name the alternative carrier.
+- **[ANSWERED 2026-09-14]** Rung 1 reads **per-stream team bindings on `mission_members`**, not
+  `missions.team`. Neither option in the original question was right. The operator's model is that a
+  mission carries many teams across many streams (its "steps"), and different streams may be served by
+  different teams — a lead-headed feature team on one, a bare tier for batch low-complexity work on
+  another. `missions.team` is a single `TEXT` column and cannot express that; the UI specification
+  already promises *"assign one or more teams"*, and the stream map already assumes
+  *"which team takes which stream"*.
+  **New dependency:** `a-mission-carries-many-teams-and-missions-team-cannot-express-it.md` owns the
+  carrier — teams become `mission_members` rows (`member_kind='team'`) with a nullable stream binding.
+  Rung 1 consumes it and must not define its own.
+  **`missions.team` survives as rung 4**, the nominated default, read only when no per-stream binding
+  applies — and every resolution records which source answered, per the repo's fallback rule.
+  **A never-analysed mission is strictly sequential** — members dispatch in order, whatever their
+  kind: feature 1, feature 2, plan 3, feature 4. No grouping by type, no implicit parallelism. The
+  ladder must not fire at all in that case; one implicit stream, one team, today's behaviour exactly.
 - **[user]** When two teams share a head role and both carry `startOnLoad`, Change #6 proposes only the rung-4 nominated default auto-starts. Proceeding on the assumption that single-scope auto-start of one team per head role is the desired policy; confirm, or state the preferred rule (e.g. both start, ladder routes live heads).

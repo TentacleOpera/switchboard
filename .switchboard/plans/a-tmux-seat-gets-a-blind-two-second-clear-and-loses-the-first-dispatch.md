@@ -1,5 +1,12 @@
 # Every Prompt to a Team Seat Is Delivered to the Previous Generation's Agent
 
+> **Superseded: SHIPPED, and being REVERTED with tmux seating. 2026-09-14.**
+> This card is in **Reviewed** (`CODE REVIEWED`) — the work was built and reviewed, so it is live in the product. Retiring it does not mean "skip it"; it means the code it produced comes out when seating is removed. Treat this plan as the **inventory of what to remove**, not as work to skip.
+> **Context:** tmux *seating* (the board wrapping its own seats in `new-session` / `new-window` / `exec tmux -u attach`) is being removed. The tmux *bridge* — dispatching into panes a human created — is unaffected and stays. See `tmux-seating-and-the-tmux-bridge-are-separate-switches` for why those were ever one switch, and `attach-a-seat-from-any-terminal-client-without-tmux` for the replacement.
+> **Decision basis:** persistence was tmux seating's only remaining justification, and Switchboard clears agent context at regular checkpoints — so a preserved session is one the next checkpoint deletes. `re-seat-a-running-terminal-into-tmux` already states this in its own Non-goals: *"Team members are cleared regularly, so this costs nothing that is not already routinely spent."* What survives a crash is the CLI **boot** (8s Claude / 20s Devin readiness ceilings), not the work.
+> **Why this one specifically:** the failure is the seating chain blocking before `select-window`, leaving the seat pointed at a previous generation's window. Without seating there is no chain, no `select-window`, and no window generations — a prompt goes to the seat's own pty.
+
+
 > **CORRECTION 2026-09-10, second rewrite.** This card was twice about delivery *timing* — first
 > `tmuxPromptDelivery`'s blind clear settle (wrong path: the seats are pty seats), then the readiness
 > floor and CR coalescing (wrong: the lead does not clear before a review request). Both were

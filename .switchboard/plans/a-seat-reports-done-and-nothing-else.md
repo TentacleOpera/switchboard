@@ -269,3 +269,46 @@ extension-host `createTerminal` sites first, then land Changes 2–4 unchanged; 
 in the shared fragments and treat the CLI default as a convenience only, which narrows this plan's
 goal. Option (a) is the one that keeps the stated goal; it is new work in the legacy host and was
 not in this plan's scope.
+
+## Implementation Notes — 2026-09-14
+
+Proposed Changes 2–4 are now implemented. The deferral recorded above rested on
+`CLAUDE.md:28` ("the extension still ships and still has to work"). That clause is wrong: the
+release is a **hard cutover** — the extension does not have to keep working — so there was no
+compatibility requirement to protect and the blocker was void. No `env` was added to any
+`vscode.window.createTerminal` site; no new code was written in the legacy host.
+
+Landed:
+
+- `standingOrderFragments.ts:82,86,134,208` — seat-facing fragments now read `run node "<cliPath>"
+  done.`; the `--outcome failed` variant keeps `--outcome`.
+- `teamWiring.ts:298-302` — `TEAM_CODER_QUEUE_DONE_INSTRUCTION` is bare `done`. The `terminals.js`
+  mirror the plan warned about no longer carries the string (only a comment at `:4845`), so there
+  was nothing to move; `stage-marker-commit` is unaffected.
+- `agentPromptBuilder.ts:1215,1282,1284,1310` — all four seat-facing directives are bare `done`.
+- `PlanIngestionEngine.ts:1729,1730,2269` — the three interpolated-seat sites the plan listed as a
+  NIT, moved with the rest so the instruction set does not disagree with itself.
+- `cli.ts:30,1978` — usage strings now read `done [--from <seat>]`.
+- `docs/REMOTE_ACCESS.md:297` — the callback-path doc names bare `done`.
+
+**Untouched, deliberately:** the lead's `POST /kanban/task/complete` instruction
+(`standingOrderFragments.ts:114`, `teamWiring.ts:652`) keeps `from`/`planId`/`workspaceRoot`, and
+the raw-HTTP `/terminals/teams/<id>/queue/done` route (`:89`) still assembles `{"from":"…"}` — both
+explicitly out of scope.
+
+Verification: `bare-completion` 12/12 (two new checks — no seat-facing string names `done --from`
+across the four source files with comments stripped, and the lead's `task/complete` fields are
+still present so a future sweep cannot gut them). `review-team-triage` and
+`member-completion-reminder` green. `completion-asserted-never-inferred`, `queue-pipeline` and
+`stage-marker-commit` each have failures that are **pre-existing** — verified identical on a
+stashed tree; queue-pipeline's is a `<cliPath>` substitution assertion, unrelated. `compile-tests`
+clean, eslint 0 errors.
+
+### Deferred findings — resolution
+
+- CRITICAL `standingOrderFragments.ts:82` — **resolved**, see above.
+- MAJOR `hostSeams.ts:258` (+ `TaskViewerProvider.ts:7407,13130,28940`, `extension.ts:3725`) —
+  **closed as won't-fix.** These seats carry no `SWITCHBOARD_TERMINAL` and now get a loud,
+  recoverable failure naming the variable and `--from`. The hard cutover removes the host.
+- NIT `PlanIngestionEngine.ts:1729` — **resolved**, moved with Changes 2–4.
+- NIT `standingOrderFragments.ts:89` — still open, explicitly out of scope.

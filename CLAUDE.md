@@ -25,16 +25,41 @@ the shape every decision should serve.
 - **Multi-machine means seats, not stores.** A seat's startup command carries an
   `ssh`/`mosh` transport prefix; the pty stays local and the agent process runs
   on the other box.
-- **The VS Code extension (`src/extension.ts`) is the legacy host.** It still
-  ships and still has to work, but it is no longer the thing being designed for.
-  Do not describe this product as a VS Code extension.
+- **The VS Code extension (`src/extension.ts`) is the legacy host, and it is
+  being removed.** The release is a **hard cutover**: the extension ships once,
+  alongside everything else, and there is no version in which the old host and
+  the new one must interoperate. So it does **not** have to keep working across
+  the change, and a feature is never blocked, narrowed, or deferred to preserve
+  extension-host behaviour. Do not write new code in the legacy host to keep it
+  compatible — that is throwaway work protecting a host that is going away. Do
+  not describe this product as a VS Code extension.
+
+  The staged removal is on the board as the feature *"VS Code Becomes a Sidebar,
+  and Stops Being a Second Host"* (Stage 1 — The Panels Leave the Editor;
+  Stage 2 — The Extension Stops Being a Host; Stage 2b — vscodeShim Removal).
+  Check the board for their current column before reasoning about what the
+  extension host still does.
 
 ## Standalone and the extension MUST NOT diverge. NO EXCEPTIONS.
 
-Both composition roots exist, so every feature must land in **both**. If you are planning a feature, the plan names both composition
-roots and its verification covers both. If you are implementing one, the diff
-touches both. "Extension first, standalone later" is not a plan — it is a
-divergence, and no gate catches it.
+**Scope, since the cutover.** This rule governs the code the cutover *keeps* —
+anything shared, and anything the standalone host wires. It is about a change
+landing in one root and silently not the other.
+
+It is **not** a requirement to wire new seams into the legacy host. A seam built
+after the cutover decision lands in **standalone only**; wiring it into
+`extension.ts` is throwaway work in a host that is being removed, and "the
+extension does not have it" is then the intended state, not a divergence. A plan
+for new work names the standalone root and says the extension is out of scope;
+it does not carry a second, doomed implementation to satisfy this heading.
+
+Where both roots *do* still wire the same seam, the rest of this section applies
+in full:
+
+Every such change must land in **both**. If you are planning one, the plan names
+both composition roots and its verification covers both. If you are implementing
+one, the diff touches both. "Extension first, standalone later" is not a plan —
+it is a divergence, and no gate catches it.
 
 **The trap is not verbs.** `bootstrap.ts`'s `default:` arm delegates every
 unmatched verb to the provider, so verb-reachability audits always come back

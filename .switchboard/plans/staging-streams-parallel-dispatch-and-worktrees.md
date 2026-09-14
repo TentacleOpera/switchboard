@@ -57,6 +57,46 @@ This plan historically accumulated multiple distinct concerns across data modeli
 
 *Note: As instructed, this split is recorded here as a recommendation only and is not performed in this plan file.*
 
+### Operator vocabulary, and the editability requirement (2026-09-14)
+
+**Vocabulary.** The operator calls a stream a **step**. This plan calls it a *stream*; the ordered
+structure is the *stream map*. Nothing in the corpus is searchable by the operator's word, which is
+why this design has been re-explained to several agents who each concluded it was unwritten and
+offered to write it again. The mapping, recorded here so the next search lands:
+
+| Operator's word | This plan's word |
+| :--- | :--- |
+| step | **stream** |
+| the steps a mission takes, in order | the **stream map** |
+| step 2 blocks the rest | a **dependency edge**, evaluated at pop time against `completed_at` |
+| step 1 runs two features at once | streams feeding **multiple teams in parallel** |
+| the teams assigned to a step | **per-stream team assignment** |
+| press start | the launch decision surface (which streams, which teams, how many worktrees) |
+
+Related and still open: `one-name-one-vocabulary.md` and
+`settle-on-one-clear-vocabulary-and-sweep-both-audiences.md`.
+
+**Requirement: a mission is BOTH auto-assembled AND user-edited.** Stated by the operator
+2026-09-14. This plan currently supports only the first half — the Analyze pass derives the map
+(*"stages are not stored, but derived at pop time"*) and the user chooses which streams run and which
+team takes each **at launch**. There is no path to *edit the map itself*: to move a member from one
+stream to another, to split or merge streams, to add an ordering edge the analysis did not infer, or
+to override one it did.
+
+`mission-control-panel-ui-specification.md`'s mission detail form covers the adjacent fields —
+**Team** (*"assign one or more teams"*), **Features and plans** (*"add and remove members"*),
+**Max extra worktrees** — but carries no stream-map editor. So membership and team assignment are
+editable and the sequence is not.
+
+The operator's requirement is an editor good enough to be the primary surface, not a fallback for
+when analysis gets it wrong. Derivation is the starting point; the map is the operator's document.
+
+**Schema mismatch this exposes.** `missions.team` is a single `TEXT` column, while the UI
+specification says *"assign one or more teams"* and this plan assumes per-stream assignment. One team
+per mission cannot express either. `mission_members` (`mission_id`, `member_id`, `member_kind`) is the
+natural carrier — `member_kind` is already a discriminator — and both tables are **empty** on the
+reference install, so there is no migration constraint on fixing it.
+
 ### A mission is the staging queue, named — nothing existing changes
 
 The framing that matters: **a mission with one sequential stream is exactly today's staging queue.** Missions generalise the queue rather than replacing it, and no current behaviour is removed.

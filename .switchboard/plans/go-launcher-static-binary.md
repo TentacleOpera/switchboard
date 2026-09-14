@@ -256,6 +256,64 @@ Key risks are turning an unsafe PID into a Stop button, inventing a second works
 
 - Reliable optional tray behavior across supported Linux X11 and Wayland desktop environments, without making tray availability a launcher prerequisite, still needs focused external validation. The user was advised to run web research before enabling the tray adapter.
 - Safe privilege elevation, `apt`/`dpkg` integration, Node ≥ 22 installation sources, and repository/package-signature practices for current Raspberry Pi OS, Debian, and Ubuntu need authoritative external confirmation. The user was advised to run web research before enabling automatic installation.
+
+> **RESEARCHED AND RESOLVED — 2026-09-14.** All four items below are answered. §6 is no longer blocked
+> on research. Sources listed at the end of each item.
+>
+> **1. Privilege elevation → polkit, with a `.rules` file, invoking a fixed executable.**
+> `sudo` is shell-level and wrong for a GUI; polkit is the framework built for graphical apps and
+> D-Bus services needing fine-grained authorisation without a terminal. For new configuration the
+> JavaScript `.rules` form is preferred over legacy `.pkla`. The plan's existing wording — *"invoke a
+> fixed executable with an argument array through the approved Linux elevation mechanism"* — is
+> already the correct shape, and the reason is CVE-2021-4034 (PwnKit): `pkexec` mishandled its
+> calling parameters, so crafted environment variables induced arbitrary code execution. Patched
+> everywhere now, but the lesson stands — **never pass user-controlled argv or environment through the
+> elevation boundary.** Fixed binary, fixed argument array, scrubbed env.
+> Sources: <https://github.blog/security/vulnerability-research/privilege-escalation-polkit-root-on-linux-with-bug/>,
+> <https://kudelskisecurity.com/research/pwnkit-local-privilege-escalation-lpe-in-polkits-pkexec>
+>
+> **2. `apt`/`dpkg` integration → non-interactive env plus an explicit lock timeout.**
+> The invocation is `DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none apt-get -qy
+> -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold
+> -o DPkg::Lock::Timeout=600 install …`. The load-bearing part is **`DPkg::Lock::Timeout`**: it makes
+> apt *wait* for the lock instead of failing. Without it the launcher races `unattended-upgrades` and
+> `apt-daily`, which on a freshly booted Pi is exactly when a first-run installer executes, and which
+> can hold the frontend lock for ten minutes or more. This retires the plan's "package manager lock"
+> edge case as a handled condition rather than an error path.
+> Sources: <https://blog.sinjakli.co.uk/2021/10/25/waiting-for-apt-locks-without-the-hacky-bash-scripts/>,
+> <https://www.cyberciti.biz/faq/explain-debian_frontend-apt-get-variable-for-ubuntu-debian/>
+>
+> **3. Node ≥ 22 source → NOT NodeSource. This one changed under us.**
+> **NodeSource's Debian repository signs with a SHA1 key, and apt's security policy rejects it as of
+> 1 February 2026** — already in force. It is additionally reported broken on arm64 independently of
+> the key. So the `curl … deb.nodesource.com/setup_22.x | sudo -E bash -` line that every Pi tutorial
+> still prints does not work on a current Pi, and must not be shipped.
+> Two viable adapters remain: the **official nodejs.org prebuilt arm64 tarball**, verified against its
+> published `SHA256SUMS`; or **vendoring the runtime in the `.deb`** so no Node install is needed at
+> all. Prefer the second where possible — it is what
+> *A Raspberry Pi Installs Switchboard With `apt`* already does ("no Node install, no compiler, no
+> `npm`"), which is why that plan could ship while this one stayed parked: it sidestepped this
+> question instead of answering it.
+> Sources: <https://github.com/nodesource/distributions/issues/1908>,
+> <https://gist.github.com/stonehippo/f4ef8446226101e8bed3e07a58ea512a>
+>
+> **4. Repository/package signature practice → `signed-by`, never `apt-key`.**
+> `apt-key` is deprecated (Debian Bookworm / Ubuntu 22.04+) and must not be used. Keys go in
+> `/etc/apt/keyrings` (locally added) or `/usr/share/keyrings` (shipped by a package), and are scoped
+> to one repository via `Signed-By:` in a deb822 `.sources` file, or `signed-by=` in a legacy `.list`
+> line. Extension matters: `.asc` ASCII-armored, `.gpg` binary. The signing key itself must be
+> SHA256 or stronger — item 3 is the live demonstration of what a SHA1 key costs.
+> Sources: <https://wiki.debian.org/SecureApt>,
+> <https://manpages.debian.org/testing/apt/apt-secure.8.en.html>
+>
+> **What is STILL blocking §6, and it is not research.** Its second implementation bullet requires a
+> *"signed/versioned release manifest describing official Linux amd64/arm64 artifacts, checksums,
+> minimum host/runtime compatibility, and Debian-family installation methods"*, and specifies that a
+> missing manifest **disables automatic install visibly**. No release artifact has ever been
+> published — there is no `.deb` in `releases/` and nothing for a manifest to describe. So §6 remains
+> inert until the release pipeline produces its first signed artifact, regardless of the four answers
+> above. Build and publish first; then §6 becomes implementable.
+
 - Current Raspberry Pi OS Node package availability may differ by release and architecture and needs authoritative external confirmation. The user was advised to run web research before selecting an automatic Node installation source.
 
 ## Recommendation

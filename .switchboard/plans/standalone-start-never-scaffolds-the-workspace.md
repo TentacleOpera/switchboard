@@ -9,42 +9,39 @@ Make `npx switchboard` self-sufficient for a user who never opens the VS Code ex
 activation, and the Setup panel's "Run Setup" control in the browser actually scaffolds instead of
 silently reporting success.
 
-### Problem analysis (verified against HEAD 58c0030)
+### Problem analysis (re-verified against HEAD ead33f59)
 
-Three independent mechanisms, each sufficient on its own to leave a standalone user with a board that
-renders and an orchestration contract that is entirely absent.
+> **Superseded:** The server-start path scaffolds nothing beyond one `mkdir`. `main()` creates a bare `.switchboard/` for every cwd-targeting subcommand and that is all. It never calls `ControlPlaneMigrationService.bootstrapControlPlaneLayout` or `ensureWorkspaceIdentity`.
+> **Reason:** The start path now does partial scaffolding via a **different mechanism** than `init`. `bootstrap.ts:859-882` calls `seedControlPlaneFromBundle` (seeds control_plane rows in the DB from the bundle) and `projectControlPlane` (projects from DB to filesystem — creates `.agents/`, `.claude/`). `bootstrap.ts:884-899` calls `scaffoldProtocolLayers` (writes/refreshes AGENTS.md/CLAUDE.md managed blocks). `bootstrap.ts:852-857` calls `WorkspaceExcludeService.apply()` (managed gitignore).
+> **Replaced with:** The start path NOW scaffolds `.agents/` and `.claude/` (via projection) and writes/refreshes AGENTS.md/CLAUDE.md managed blocks (via `scaffoldProtocolLayers`). But it still does NOT call `bootstrapControlPlaneLayout` (which creates `.switchboard/plans/`, `.switchboard/inbox/`, `.switchboard/archive/`, `worktrees/`) or `ensureWorkspaceIdentity` (which creates the `workspace_id` config row). It also does NOT create `.agent_version.json`. So a standalone-only install still ends up missing the plans directory the plan watcher needs, the workspace identity, and the version stamp.
 
-**1. The server-start path scaffolds nothing beyond one `mkdir`.**
+Three mechanisms, each sufficient on its own to leave a standalone user with a board that renders and an orchestration contract that is entirely absent:
 
-`main()` creates a bare `.switchboard/` for every cwd-targeting subcommand (`cli.ts:384-389`) and that is
-all. The server-start fall-through begins at `cli.ts:954` and runs straight into `findRunningInstance` →
-`startHeadlessSwitchboard`. It never calls `ControlPlaneMigrationService.bootstrapControlPlaneLayout` —
-the CLI's only caller is the `init` handler at `cli.ts:593` — and never calls `ensureWorkspaceIdentity`
-(also `init`-only, `cli.ts:593-606`). So a fresh directory served by a bare `npx switchboard` ends up with
-`.switchboard/` holding `kanban.db`, `logs/`, and the port/pid files, and nothing else.
+**1. The server-start path scaffolds the protocol layers but NOT the workspace contract (PARTIALLY FIXED).**
 
-Everything `init` produces and start does not (`ControlPlaneMigrationService._bootstrapControlPlaneLayout`,
-`:677` onward):
+The start path at `bootstrap.ts:859-899` now does:
+- `seedControlPlaneFromBundle(bundleDir, db, version)` (:876) — seeds control_plane rows in the DB
+- `projectControlPlane(workspaceRoot, db, version)` (:877) — projects `.agents/` and `.claude/` to the filesystem
+- `scaffoldProtocolLayers(...)` (:899) — writes/refreshes AGENTS.md/CLAUDE.md managed blocks
 
-- `.agents/` — the bundled personas, protocols, rules, scripts, skills and workflows
-- `.switchboard/plans/`, `.switchboard/inbox/`, `.switchboard/archive/` (`:686`)
-- `worktrees/` (`:686`)
-- `AGENTS.md` (`:713`)
-- the `CLAUDE.md` managed block (`:731`) and the `.claude/` skill files (`:743`) — scaffolded as ordinary bundle assets once the mirror generator is deleted, not produced by `generateClaudeMirror`
-- `.switchboard/.agent_version.json` — the stamp that gates every future refresh
-- the `workspace_id` config row (`ensureWorkspaceIdentity`)
+What `init` produces and start still does not (`ControlPlaneMigrationService._bootstrapControlPlaneLayout`):
+
+- `.switchboard/plans/`, `.switchboard/inbox/`, `.switchboard/archive/` — NOT created on the start path
+- `worktrees/` — NOT created on the start path
+- `.switchboard/.agent_version.json` — NOT created on the start path
+- the `workspace_id` config row (`ensureWorkspaceIdentity`) — NOT created on the start path (no `ensureWorkspaceIdentity` call in `bootstrap.ts`)
 
 `.switchboard/plans/` is created lazily, but only by the create-a-plan path
 (`bootstrap.ts:812-813`). A user who never authors a plan through the board never gets the directory the
 plan watcher exists to watch, so "drop a `.md` in the plans folder and it imports itself" — the documented
 way plans reach the board — has no folder to drop into.
 
-**2. The in-browser Setup button cannot scaffold, and says nothing about it.**
+**2. The in-browser Setup button cannot scaffold, and says nothing about it (STILL UNFIXED).**
 
-The Setup panel *is* wired for standalone: `bootstrap.ts:2676-2677` exposes `setupVerb` →
-`SetupPanelProvider.handleServiceVerb`, and `handleServiceVerb` (`SetupPanelProvider.ts:62`) validates the
+The Setup panel *is* wired for standalone: `bootstrap.ts:4934` exposes `setupVerb` →
+`SetupPanelProvider.handleServiceVerb`, and `handleServiceVerb` (`SetupPanelProvider.ts:73`) validates the
 verb and then dispatches into the same `_handleMessage` switch the VS Code webview uses. The `runSetup`
-arm (`SetupPanelProvider.ts:651-652`) does exactly one thing:
+arm (`SetupPanelProvider.ts:673-674`) does exactly one thing:
 
 ```ts
 case 'runSetup':
@@ -52,92 +49,95 @@ case 'runSetup':
 ```
 
 `switchboard.setup` is registered only by the extension's activation. The standalone registry
-(`bootstrap.ts:1104-1215`) registers fifteen commands — `switchboard.refreshUI`,
-`switchboard.triggerAgentFromKanban`, `switchboard.importPlanFromClipboard`, the ticket-push and
-attachment arms, `vscode.open`, `revealInExplorer`, `revealFileInOS` — and `switchboard.setup` is not
-among them. Lookup is registry-first (`hostSeams.ts:327-336`) and falls through to the shim, which warns
+(`bootstrap.ts:1799-1824` onward) registers commands — `switchboard.refreshUI` (:1799),
+`switchboard.triggerAgentFromKanban` (:1824), and others — and `switchboard.setup` is not
+among them. Lookup is registry-first and falls through to the shim, which warns
 once — `command 'switchboard.setup' is not bridged — the calling arm's side effect did not happen`
-(`vscodeShim.ts:394-400`, mirrored at `hostServices.ts:412-421`) — and returns `undefined`. The verb
-resolves successfully. So the single in-app recovery a standalone user would reach for reports nothing
-and does nothing, which is worse than an error.
+— and returns `undefined`. The verb resolves successfully. So the single in-app recovery a standalone
+user would reach for reports nothing and does nothing, which is worse than an error.
 
-**3. There is no upgrade path for protocol content in a standalone-only install.**
+**3. There is no upgrade path for protocol content in a standalone-only install (FIXED).**
 
-`init`'s scaffolding seeds `AGENTS.md` and the `CLAUDE.md` managed block only when the file is absent
-(`ControlPlaneMigrationService.ts:713`, `:731`). The extension does more: on every activation it runs a
-version- and hash-gated refresh that rewrites the managed blocks in place
-(`extension.ts:313-460` → `scaffoldProtocolLayers` at `:4048` → `ensureProtocolFile` at `:3864`). A
-standalone-only install therefore freezes its protocol files at whatever the first `init` wrote. `.agents/`
-content does refresh when the version gate opens (`_copyDirectoryRecursive` with
-`{ overwrite: false, overwriteIfDiffers: true }`), but the managed blocks inside `AGENTS.md` / `CLAUDE.md`
-are absence-gated only — a protocol-block change in a later release never reaches a standalone user.
+> **Superseded:** `init`'s scaffolding seeds `AGENTS.md` and the `CLAUDE.md` managed block only when the file is absent. The extension does more: on every activation it runs a version- and hash-gated refresh. A standalone-only install therefore freezes its protocol files at whatever the first `init` wrote.
+> **Reason:** `scaffoldProtocolLayers` (called on the start path at `bootstrap.ts:899`) does content-based refresh, not just absence-gated seed. At `protocolScaffolder.ts:246`, it compares the existing managed block content to the current `managedInner` and updates if they differ. So a protocol-block change in a later release DOES reach a standalone user on every boot. The 2026-08-24 cut from 14,826 to ~600 chars now reaches standalone users.
+> **Replaced with:** This concern is addressed. `scaffoldProtocolLayers` runs on every start and refreshes the managed blocks by content comparison. No further action needed on this mechanism.
 
-**Confirmed instance, measured 2026-09-05 in the Switchboard repo itself.** This workspace is served by
-a standalone host (`dist/standalone/cli.js tailnet`), and its `CLAUDE.md` managed block has never been
-refreshed since before the 2026-08-23 cut:
+### Approach
 
-```
-CLAUDE.md block   18,407 chars, 174 lines   (markers at :76-250)
-expected           527 chars                 (RESIDENT_PROTOCOL_BODY)
-excess          17,880 chars of stale content
-```
+Add the missing pieces on start, idempotently, with an opt-out. The start path already does projection
+and protocol refresh; add the remaining pieces (plans/inbox/archive dirs, workspace_id,
+.agent_version.json) alongside the existing mechanism. `--no-scaffold` for the "I only want to look at the
+board" case, and print a one-line report of what was created.
 
-`843bae45` cut that block 14,826 → 611 chars in code. The constant is a `bodyOverride`, and
-`buildManagedInner` discards the source entirely when one is supplied (`bodyOverride ?? sourceContent`),
-so the correct emission is 527 characters. This install carries 35× that, re-presented to every agent on
-every turn.
+This is trivial: `mkdir -p` five directories, one call to `ensureWorkspaceIdentity`, one `writeFile` for
+the version stamp. Do not call `bootstrapControlPlaneLayout` — it would re-run the projection the start
+path already does and downgrade the protocol refresh from content-based to absence-gated. Add the missing
+pieces inline.
 
-Two things this instance settles:
+## User Review Required
 
-- **Running the scaffold is not a workaround.** Both writes are gated on `!fs.existsSync`
-  (`ControlPlaneMigrationService.ts:713`, `:731`), so with the file present there is nothing to run. An
-  operator asking "why do I have to keep scaffolding" is describing a fix that cannot work.
-- **`AGENTS.md` is not affected and must not be "fixed".** It is `copyFile`d whole into target
-  workspaces; the constant never applies to it. Its 21,311 bytes are by design, and shrinking it would be
-  a different change with different consequences.
+None.
 
-**Why this is the whole difference between "the board loads" and "Switchboard works."** Nothing errors.
-The board renders, plans import once the folder exists, cards drag. But dispatch hands an agent a
-workspace with no `AGENTS.md`, no `CLAUDE.md` block and no `.agents/` skills — the agent has no
-instructions, and the failure surfaces as an agent that does something unhelpful rather than as a missing
-file.
+## Complexity Audit
 
-### Decision required (a design choice, not a discovered fact)
+### Routine
 
-**Recommendation: scaffold on start, idempotently, with an opt-out.** Run the same three calls `init` runs,
-on the server-start path, before `startHeadlessSwitchboard`.
+- Creating `.switchboard/plans/`, `.switchboard/inbox/`, `.switchboard/archive/`, `worktrees/` directories on the start path — `mkdirSync` with `recursive: true`, idempotent.
+- Calling `ensureWorkspaceIdentity(workspaceRoot)` on the start path — the function exists and is called by `init` at `cli.ts:3892`.
+- Creating `.agent_version.json` on the start path — one `writeFile` of a small JSON object with the version already resolved at `bootstrap.ts:866-872`.
+- `--no-scaffold` in `parseArgs` (`cli.ts:166`) and in `usage()` — one argv check, same pattern as `--no-open`.
+- Registering `switchboard.setup` in the standalone command registry — the pattern already exists 15 times in the same file (`bootstrap.ts:1799-1824`).
 
-Why this is safe rather than presumptuous: `bootstrapControlPlaneLayout` is already non-destructive
-(recursive `mkdir`; the `.agents/` copy is absence-or-differs gated; both managed-block seeds are
-file-absence gated), and it already refuses unsafe roots — `isAllowedSwitchboardLocation`
-(`ControlPlaneMigrationService.ts:681-685`) blocks `$HOME` and the filesystem root, which is exactly the
-"someone ran this in the wrong directory" case.
+### Complex / Risky
 
-The two alternatives are worse. Refusing to boot until `init` has been run adds a mandatory step to every
-first run and buys no safety the location guard doesn't already provide. Prompting on a TTY cannot work
-for `--detach`, which is the headless case this CLI exists for.
+- None. This is directory creation, one function call, one JSON write, one flag, one command registration.
 
-Ship `--no-scaffold` for the "I only want to look at the board" case, and print a one-line report of what
-was created (nothing, when there was nothing to create).
+## Edge-Case & Dependency Audit
+
+**Race Conditions:** No race — scaffolding is idempotent (recursive mkdir, absence-gated or content-gated writes).
+
+**Security:** The start path should check `isAllowedSwitchboardLocation` before creating dirs, same as `bootstrapControlPlaneLayout` does. Blocks `$HOME` and filesystem root.
+
+**Side Effects:** Creating `.switchboard/plans/` on every start means the plan watcher has a folder to watch from the first boot. This is the intended behaviour. `ensureWorkspaceIdentity` writes a `workspace_id` config row — if the DB was created by `createIfMissing` without it, this is the first time it gets one.
+
+**Dependencies & Conflicts:** Do not call `bootstrapControlPlaneLayout` — it would re-run the projection the start path already does and downgrade the protocol refresh from content-based to absence-gated. Add the missing pieces inline.
+
+## Dependencies
+
+- **DB creation parity** — `standalone-start-path-db-creation-parity.md` established `createIfMissing` on the start path. This plan adds the workspace contract pieces around it. No hard ordering — both can ship independently.
+- **npm publishing** — `b4-npx-distribution-publish.md` must ship `.agents/` and `AGENTS.md` in the tarball, or the scaffold copies from `<packageRoot>/.agents` find nothing (`cli.ts:613-624`, `ControlPlaneMigrationService.ts:694`).
+
+## Adversarial Synthesis
+
+Key risk: calling `bootstrapControlPlaneLayout` would re-run the projection the start path already does and downgrade the protocol refresh from content-based to absence-gated. Mitigation: add the missing pieces inline — dirs, `ensureWorkspaceIdentity`, version stamp — and do not call `bootstrapControlPlaneLayout`.
 
 ## Proposed changes
 
-1. **`src/standalone/cli.ts`** — extract the `init` handler's scaffold body (`:588-606`:
-   `bootstrapControlPlaneLayout` → `createIfMissing` → `ensureWorkspaceIdentity` → `flushWorkspaceDb`)
-   into a shared `ensureWorkspaceScaffolded(workspaceRoot, repoRoot)`. `init` keeps its verbose,
-   on-disk-verified report; the start path prints one line and stays silent when nothing was created.
-2. **`src/standalone/cli.ts`** — `--no-scaffold` in `parseArgs` (`:85`) and in `usage()`.
+1. **`src/standalone/bootstrap.ts`** — add the missing scaffold pieces alongside the existing projection.
+   After `projectControlPlane` (:877), create `.switchboard/plans/`, `.switchboard/inbox/`,
+   `.switchboard/archive/`, `worktrees/` via `mkdirSync` (idempotent). Call `ensureWorkspaceIdentity`
+   (imported from `WorkspaceIdentityService`) to write the `workspace_id` config row. Create
+   `.agent_version.json` with the version stamp. Do NOT call `bootstrapControlPlaneLayout` — the
+   projection already handles `.agents/` and `.claude/`, and calling both risks conflict. Print a
+   one-line report of what was created (nothing, when there was nothing to create).
+
+2. **`src/standalone/cli.ts`** — `--no-scaffold` in `parseArgs` (:166) and in `usage()`. When set,
+   skip the scaffold pieces added in step 1 (plans/inbox/archive dirs, workspace_id, version stamp).
+   The projection (`projectControlPlane`) and protocol refresh (`scaffoldProtocolLayers`) still run —
+   they are part of the board's normal operation, not optional scaffolding.
+
 3. **`src/standalone/bootstrap.ts`** — register `switchboard.setup` in the standalone command registry
-   alongside the existing fifteen (`:1111-1215`), delegating to the same shared scaffold so the browser
-   Setup button does what its label says. It must resolve the workspace root the way the neighbouring
-   handlers do rather than closing over the boot-time root, because the board can be scoped to a mapped
-   child workspace.
-4. **Protocol refresh on upgrade** — bring the extension's version/hash-gated managed-block refresh to the
-   standalone start path. This is the one step with real blast radius (it rewrites a file the user may
-   have hand-edited), so it lands separately and behind the same gate the extension uses, never on every
-   boot.
+   alongside the existing commands (:1799-1824), delegating to the same scaffold logic the start path
+   uses so the browser Setup button does what its label says. It must resolve the workspace root the way
+   the neighbouring handlers do rather than closing over the boot-time root, because the board can be
+   scoped to a mapped child workspace.
+
+4. **Protocol refresh on upgrade — SHIPPED.** `scaffoldProtocolLayers` at `bootstrap.ts:899` does
+   content-based refresh on every start. No further action needed.
 
 ## Verification plan
+
+### Automated Tests
 
 1. **Fresh directory.** Temp dir, no git, no `.switchboard/`. Run the built CLI with `--no-open`. Assert on
    disk: `.agents/`, `AGENTS.md`, `CLAUDE.md` carrying the managed markers, `.claude/skills/`,
@@ -147,13 +147,22 @@ was created (nothing, when there was nothing to create).
    managed block appears.
 3. **Refusal.** Run with `--workspace $HOME`. Assert the location guard blocks the scaffold and the result
    is a printed refusal, not a partial tree.
-4. **`--no-scaffold`.** Assert only `.switchboard/` + the DB appear, and that a subsequent bare start
-   scaffolds the rest.
+4. **`--no-scaffold`.** Assert only `.switchboard/` + the DB appear (plus the projection, which is not
+   gated by `--no-scaffold`), and that a subsequent bare start scaffolds the rest.
 5. **Browser Setup verb.** With the server running against an unscaffolded root, POST the `runSetup` setup
    verb; assert the tree appears and the response reports it. Today this returns success having done
    nothing but log `not bridged`.
 6. **Regression.** `npx switchboard init` in a fresh directory still produces its existing report (the
    smoke from the init-scaffolding work).
+
+### Goal Invariants
+
+- `.switchboard/plans/` exists after a bare `npx switchboard` in a fresh directory.
+- `workspace_id` config row exists in the DB after a bare `npx switchboard` in a fresh directory.
+- `switchboard.setup` is registered in the standalone command registry (resolves, does not fall through to the shim).
+- `runSetup` verb via the browser scaffolds the workspace (assert `.switchboard/plans/` appears).
+- `--no-scaffold` prevents `.switchboard/plans/` creation (assert it is absent).
+- `AGENTS.md` managed block is refreshed on boot when the bundled version differs (assert content matches `managedInner` after a boot with a changed bundle).
 
 ## Out of scope
 
@@ -169,4 +178,4 @@ was created (nothing, when there was nothing to create).
 
 ## Metadata
 - **Tags:** cli, devops, infrastructure, reliability
-- **Complexity:** 6
+- **Complexity:** 4

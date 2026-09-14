@@ -116,6 +116,18 @@ It also makes the dock honestly optional: a convenience for wide monitors rather
 
 **Ready is a flag, not a status.** The status set is not-started/in-flight/aborted/completed, so readiness is orthogonal: it marks a mission as eligible for pickup, and **a scheduler or Mission Control must not take an unready mission**. That is the safety property that makes "build missions in advance" usable — a half-assembled mission sitting in the list cannot be grabbed.
 
+> **Added requirement 2026-09-14 — the stream map needs an editor.** The operator's model is that a
+> mission is **both auto-assembled and user-edited**: the Analyze pass proposes the map, and the user
+> then edits it — moving a member between streams, splitting or merging streams, adding an ordering
+> edge the analysis did not infer, overriding one it did. The detail form above covers **Team**,
+> **Features and plans** and **Max extra worktrees**, but nothing edits the *sequence*. The operator
+> asks for this to be a genuinely good surface, not a fallback for when derivation is wrong — the map
+> is the operator's document, and derivation is only its starting point.
+>
+> Note also: the form says *"assign one or more teams"*, but `missions.team` is a single `TEXT`
+> column. The data model owes this panel a plural carrier — see the matching note in
+> `staging-streams-parallel-dispatch-and-worktrees.md`.
+
 **The field counts *extra* worktrees, and the name matters.** "Max parallel worktrees" reads as a total and invites `1` to mean "one tree", which is the mission's starting tree and therefore no isolation at all. **Max extra worktrees** with `0` meaning "stay in the tree the mission started in" is unambiguous, and it makes the default honest: most missions add nothing.
 
 **The cap is a real constraint, not a default.** `mission ≤ 1 extra` keeps unsupervised runs from fanning out into parallel trees with no one watching; an operation may go higher because a supervised run has someone to resolve conflicts. Enforce it where the run starts, not only in the form — a mission whose type is changed after launch must not silently gain parallelism.

@@ -45,8 +45,28 @@ Attach & lifecycle ─────┘
 3. **Entry protocol last.** Hard dependency on both: it invokes B4's published name, and it *detaches* the launched server, which is only acceptable once `switchboard stop` and the pid file exist. Its skill text also references `switchboard stop` directly.
 
 **Prerequisites and guards.**
-- **The naming decision is a human gate on B4** — `@turnzero/switchboard` (recommended) or `switchboard-browser`. Availability was checked 2026-07-22 and must be re-checked at implementation time; two weeks of registry churn already produced one semantically adjacent squat.
-- **Claiming the `@turnzero` npm org** must happen before the first scoped publish. Owning the `turnzero` VS Code publisher id does not reserve it.
+> **Superseded: the naming gate is CLOSED. 2026-09-14.**
+> **Was:** "`@turnzero/switchboard` (recommended) or `switchboard-browser`", plus "Claiming the
+> `@turnzero` npm org must happen before the first scoped publish."
+> **Resolved:** the publish name is **`labcom`**, unscoped, and it is **already owned** — registry
+> lookup 2026-09-14 returns `0.0.1`, created 2026-09-06, maintainer `tentacleopera`, description
+> "Lab Command". No org to claim, no availability to re-check, no squat risk. Both bullets are void.
+>
+> **What B4 still has to change in `package.json`:** `name` is `switchboard` (must become `labcom`);
+> `version` is `1.7.13`, which is ahead of the published `0.0.1` placeholder and needs no bump;
+> and `private: true` was added 2026-09-14 as a deliberate guard against accidental publication
+> while the package is unpublishable — **B4 must remove it** as part of shipping, not incidentally.
+>
+> **Also changed outside this card, 2026-09-14 — read before authoring the allowlist.** `bin` was
+> repointed from `./dist/standalone/cli.js` to a new `./bin/switchboard` POSIX shim, so that an
+> npm-installed board gets `--max-old-space-size` (previously applied only by the Go front
+> controller, which npm never invokes — see *The Heap Ceiling Is Set by the Launcher*). Consequence
+> for this card: **the `files` allowlist must include `bin/`**, or the published `bin` entry points
+> at a file the tarball does not contain. `npm publish` on the full manifest also warns
+> `"bin[switchboard]" script name bin/switchboard was invalid and removed`, which does not reproduce
+> on a minimal package — verify the published manifest keeps the entry rather than trusting the
+> local file.
+
 - **The extension-still-starting bind race is unresolved.** No `.switchboard/` bind lock exists anywhere in `src/`. It is owned by the attach subtask; the entry-protocol subtask must inherit whatever guarantee lands there and must not invent a second mechanism.
 - **PRD contract #2 applies throughout.** The extension ships to ~4,000 installs; the attach subtask refactors its live `_browserTokens` mint/consume pair, so that path must stay behaviour-preserving.
 - **`npm run mirror:check` is a CI gate** on the entry-protocol subtask: `.claude/skills/switchboard/SKILL.md` is generated from `.agents/workflows/switchboard.md`, and editing the generated file fails the build.

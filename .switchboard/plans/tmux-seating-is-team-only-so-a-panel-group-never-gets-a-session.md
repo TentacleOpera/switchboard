@@ -1,5 +1,13 @@
 # tmux Seating Is Team-Only, So a Panel Group Never Gets a Session
 
+> **Superseded: do not build. 2026-09-14.**
+> **Reason (three, any one sufficient):**
+> 1. **Its subject no longer exists.** The plan is written against `createTmuxHeadWithDelegates` in `src/standalone/tmuxTeamSeating.ts`. That seating writer was **deleted** when seating moved into the Go host (*tmux Belongs in the Go Host, Not a Second Fleet in TypeScript*). `tmuxFleetService.ts` now refers to it only as "the now-deleted tmuxTeamSeating seating writer", keeping a `tmuxOwner: 'seat'` discriminator solely so pre-upgrade rows are not clobbered. Every line reference in this plan targets a file that is gone.
+> 2. **It points the wrong way.** This plan extends tmux *seating* to more surfaces. The current direction is *Attach a Seat From Any Terminal Client, Without tmux*, which establishes that tmux was adopted for the **viewing** half and that persistence "came with it, was never the requirement, and is what has gone wrong." Widening seating widens the half that is being removed.
+> 3. **The intent it quotes is satisfied elsewhere.** The operator statement — *"a group is an impromptu collection of terminals you set up in the terminals panel. I don't want tmux limited to teams"* — is a request to reach any seat from any terminal, not a request for more tmux sessions. `switchboard attach <seat>` serves it for **every** seat with no grouping concept at all, and with no session to orphan.
+>
+> **Replaced by:** `attach-a-seat-from-any-terminal-client-without-tmux`. See also `tmux-seating-and-the-tmux-bridge-are-separate-switches`, which makes seating independently disableable without taking pane adoption down with it.
+
 ## Goal
 
 Make tmux seating apply to **any** collection of terminals, not just teams. A group assembled in the

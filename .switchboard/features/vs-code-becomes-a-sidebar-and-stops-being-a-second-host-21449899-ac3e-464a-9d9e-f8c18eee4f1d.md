@@ -18,6 +18,7 @@ Two hosts is the single largest source of defects in this codebase, by its own a
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
+- [ ] [A Read-Only Status Section in the Sidebar: What Is Running, Never What Should Run](../plans/sidebar-read-only-status-section.md) — **PLAN REVIEWED** — ID: 665c24e0-2077-4b4b-a2b9-161b66c001ed
 - [ ] [Stage 1 — The Panels Leave the Editor](../plans/vs-code-becomes-a-sidebar-and-stops-being-a-host.md) — **PLAN REVIEWED** — ID: d9672359-0280-4d4c-80bf-3c72c88284a8
 - [ ] [Stage 2 — The Extension Stops Being a Host](../plans/extension-spawns-or-attaches-to-standalone-host.md) — **PLAN REVIEWED** — ID: 50e67f9d-028b-49f1-88ee-7060b1d34afc
 - [ ] [Stage 2b — vscodeShim Removal](../plans/vscode-shim-removal.md) — **PLAN REVIEWED** — ID: 0c68a9c6-bd0d-48b2-93ea-e57cee79f512

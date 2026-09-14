@@ -1,5 +1,11 @@
 # A Dead Seat's View Follows tmux to a Sibling's Window
 
+> **Superseded: do not build — pending the seating decision. 2026-09-14.**
+> **Context:** tmux *seating* (the board wrapping its own seats in `new-session` / `new-window` / `exec tmux -u attach`) is being removed. The tmux *bridge* — dispatching into panes a human created — is unaffected and stays. See `tmux-seating-and-the-tmux-bridge-are-separate-switches` for why those were ever one switch, and `attach-a-seat-from-any-terminal-client-without-tmux` for the replacement.
+> **Decision basis:** persistence was tmux seating's only remaining justification, and Switchboard clears agent context at regular checkpoints — so a preserved session is one the next checkpoint deletes. `re-seat-a-running-terminal-into-tmux` already states this in its own Non-goals: *"Team members are cleared regularly, so this costs nothing that is not already routinely spent."* What survives a crash is the CLI **boot** (8s Claude / 20s Devin readiness ceilings), not the work.
+> **Why this one specifically:** the mechanism is tmux moving a session to a neighbouring window when its current window dies. Grouped view sessions exist *only* to give each seated team member its own current-window pointer. No seating, no session group, no shared window list, no sibling to follow. The defect cannot occur.
+
+
 ## Goal
 
 When a seat's agent dies, its pane says so. It never renders a sibling, and a prompt addressed to

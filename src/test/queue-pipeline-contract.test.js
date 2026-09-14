@@ -466,8 +466,10 @@ async function run() {
         assert.strictEqual(fleetOrders.filter(o => o.id === 'global-queue-done:global').length, 1);
         assert.strictEqual(fleetOrders[0].scope, 'global');
         const rendered = applyStandingOrders('task', 'Unrelated Planner', fleetOrders, new Set(), []);
-        assert.ok(rendered.includes('done --from "<your terminal name>"'),
+        assert.ok(rendered.includes(' done.'),
             'global completion order must render for every terminal');
+        assert.ok(!/done --from/.test(rendered),
+            'the seat supplies no --from: the CLI resolves it from SWITCHBOARD_TERMINAL');
         // The fragments carry a `<cliPath>` token because they are module
         // constants with byte-identical webview mirrors. renderStandaloneOrdersBlock
         // is the emission seam that resolves it — an unsubstituted token hands the

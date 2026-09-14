@@ -4,15 +4,17 @@
 
 Replace three hardcoded docs URLs with one exported constant pointing at `https://labcom.dev/docs`, and delete the COPY TUTORIAL PROMPT button, whose job is taken over by a resident one-line docs pointer.
 
+> **Shared surface, not extension-only.** `SetupPanelProvider` and `TaskViewerProvider` are imported and wired by **both** composition roots — the extension (`src/extension.ts`) and the standalone host (`src/standalone/bootstrap.ts:110,112,1561,1629`). The standalone host is primary; it serves the same `setup.html` webview through these providers. So this consolidation is shared work that benefits both hosts, not throwaway legacy-host work. The constant must live in a module both providers already import.
+
 ### Problem Analysis
 
-The extension names the docs site in three places, with two different values, none shared:
+The two shared providers name the docs site in three places, with two different values, none shared (line numbers current as of 2026-09-14; they drift, so locate by symbol `docsUrl` / the tutorial prompt string, not by line):
 
 | Site | Value |
 |---|---|
-| `SetupPanelProvider.ts:1470` (`docsUrl`, backs the OPEN DOCS button) | `.../docs/getting-started/installation` |
-| `TaskViewerProvider.ts:14809` (`docsUrl`) | `.../docs/getting-started/installation` |
-| `setup.html:2223` (inside the copied tutorial prompt) | `.../docs/getting-started/` |
+| `SetupPanelProvider.ts:1720` (`docsUrl`, backs the OPEN DOCS button via `_openDocs`) | `.../docs/getting-started/installation` |
+| `TaskViewerProvider.ts:15906` (`docsUrl`, in the `openDocs` message handler) | `.../docs/getting-started/installation` |
+| `setup.html:2386` (inside the copied tutorial prompt string) | `.../docs/getting-started/` |
 
 All three carry `tentacleopera.github.io/switchboard-site`, which `move-the-docs-site-to-switchboard-dev.md` retires.
 
@@ -46,12 +48,12 @@ The tutorial prompt was the only mechanism available for getting docs guidance t
 ### Routine
 
 - One exported constant, three call sites.
-- Deleting the button, its click handler (`setup.html:2222-2237`), and the "Switchboard guide" hint text that describes it.
+- Deleting the button, its click handler (`setup.html:2385-2396`), and the "Switchboard guide" hint text (`setup.html:702`) that describes it. The section (`setup.html:700-707`) holds the two buttons in a flex row; removing one leaves a single flex child to re-lay out.
 
 ### Complex / Risky
 
 - **Do not ship this before the domain is live.** Pointing all three sites at `labcom.dev` while it 404s converts two working buttons into broken ones. The dependency is strict and the change is small enough to look safe out of order.
-- **`setup.html` is a webview**, so the constant cannot be imported directly. Either pass it in with the existing panel state or keep the URL solely on the provider side and have the webview post a message — the pattern `btn-open-docs` already uses (`setup.html:2244` posts `openDocs`, the provider owns the URL). Prefer extending that pattern to inventing a second one.
+- **`setup.html` is a webview**, so the constant cannot be imported directly. Either pass it in with the existing panel state or keep the URL solely on the provider side and have the webview post a message — the pattern `btn-open-docs` already uses (`setup.html:2407` posts `openDocs`, the provider owns the URL at `SetupPanelProvider.ts:678` / `TaskViewerProvider.ts:15905`). Prefer extending that pattern to inventing a second one.
 - **Deleting the button changes a shipped UI affordance.** No state migration is needed, but the "Switchboard guide" section becomes a single button and should be re-laid out rather than left with a stray flex child.
 
 ## Edge-Case & Dependency Audit
@@ -80,7 +82,7 @@ The tutorial prompt was the only mechanism available for getting docs guidance t
 ## Proposed Changes
 
 1. **Export one constant**, e.g. `SWITCHBOARD_DOCS_URL = 'https://labcom.dev/docs'`, in a module both providers already import.
-2. **Point `SetupPanelProvider.ts:1470` and `TaskViewerProvider.ts:14809` at it**, appending the specific page each needs rather than restating the origin.
+2. **Point `SetupPanelProvider.ts:1720` and `TaskViewerProvider.ts:15906` at it**, appending the specific page each needs rather than restating the origin.
 3. **Delete the COPY TUTORIAL PROMPT button**, its handler, and its hint text; keep OPEN DOCS and re-lay out the section for a single button.
 4. **Route OPEN DOCS through the existing `openDocs` message** so the webview never holds the URL.
 5. **Add a grep gate**: no `github.io` literal anywhere in `src/`.

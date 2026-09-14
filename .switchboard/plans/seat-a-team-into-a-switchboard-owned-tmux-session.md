@@ -1,5 +1,12 @@
 # A Team Can Be Seated Into A tmux Session Switchboard Owns
 
+> **Superseded: SHIPPED, and being REVERTED with tmux seating. 2026-09-14.**
+> This card is in **Reviewed** (`CODE REVIEWED`) — the work was built and reviewed, so it is live in the product. Retiring it does not mean "skip it"; it means the code it produced comes out when seating is removed. Treat this plan as the **inventory of what to remove**, not as work to skip.
+> **Context:** tmux *seating* (the board wrapping its own seats in `new-session` / `new-window` / `exec tmux -u attach`) is being removed. The tmux *bridge* — dispatching into panes a human created — is unaffected and stays. See `tmux-seating-and-the-tmux-bridge-are-separate-switches` for why those were ever one switch, and `attach-a-seat-from-any-terminal-client-without-tmux` for the replacement.
+> **Decision basis:** persistence was tmux seating's only remaining justification, and Switchboard clears agent context at regular checkpoints — so a preserved session is one the next checkpoint deletes. `re-seat-a-running-terminal-into-tmux` already states this in its own Non-goals: *"Team members are cleared regularly, so this costs nothing that is not already routinely spent."* What survives a crash is the CLI **boot** (8s Claude / 20s Devin readiness ceilings), not the work.
+> **Why this one specifically:** it *is* the seating feature — "seat a team's members as panes in a tmux session Switchboard creates and owns". Its stated benefit is multi-device reach: "attached from the Mac, the iPad, or a different network". That requirement is real and is served by `switchboard attach <seat>` over the existing `/ws/terminal` socket, with no session to orphan. The remainder of its benefit — "survives the client, the ssh connection and the laptop lid" — is the persistence half ruled out above.
+
+
 ## Goal
 
 Let `startTeamForWorkspace` seat a team's members as panes in a tmux session Switchboard creates and owns, instead of as children of the PTY fleet. One seating path, one team model, one roster — the terminal backend becomes a setting, not a second mode.

@@ -6,21 +6,23 @@
 
 Give the standalone host a first-run flow split at the natural seam: **the database question in the terminal, everything else in the browser.** The location of the database is the precondition for the server, so the terminal asks it; scaffolding, CLIs, roles and teams all have working panel UI already, so the panel asks those. Standalone is increasingly the **first** contact with Switchboard, before the VS Code extension, so first run has to stand on its own; it does not have to do so in a second UI idiom.
 
-### Problem Analysis
+### Problem Analysis (re-verified against HEAD ead33f59)
 
-**The first-boot path creates unconditionally and asks nothing.** `src/standalone/bootstrap.ts:467-478`:
+**The first-boot path creates unconditionally and asks nothing.**
 
-```ts
-const db = KanbanDatabase.forWorkspace(workspaceRoot);
-const dbPath = db.dbPath;
-if (!fs.existsSync(dbDir))  { fs.mkdirSync(dbDir, { recursive: true }); }
-if (!fs.existsSync(dbPath)) { fs.writeFileSync(dbPath, Buffer.alloc(0)); }
-await db.ensureReady();
-```
+> **Superseded:** `src/standalone/bootstrap.ts:467-478` writes a zero-byte `kanban.db` via `writeFileSync(dbPath, Buffer.alloc(0))` then calls `ensureReady()`.
+> **Reason:** The zero-byte pre-touch was dropped. The start path at `bootstrap.ts:838-850` now calls `await db.createIfMissing()` directly. But the core defect is unchanged: `createIfMissing` still fires unconditionally with no probe. The start path still creates a database before asking whether one should exist.
+> **Replaced with:** `bootstrap.ts:838-850` resolves the DB, mkdir's the parent, and calls `await db.createIfMissing()`. The migration chain runs on the empty file `createIfMissing` creates. The wait the user experiences is still spent on an artifact they may be about to delete. The probe-before-create fix is still needed — it gates the `createIfMissing` call, not the old `writeFileSync`.
 
-`forWorkspace` resolves a *configured* location (`customDbPath` → `kanban.dbPath` → mappings / `db-pointer` → `<root>/.switchboard/kanban.db`). It never looks for an **unconfigured existing** database, and nothing defers the build until the location is settled. `ensureReady()` then runs the migration chain — 93 `MIGRATION_V*_SQL` constants reaching V64 — on the empty file it just made. That chain is the wait the user experiences, spent on an artifact they are about to remove.
+`forWorkspace` resolves a *configured* location (`customDbPath` → `kanban.dbPath` → mappings / `db-pointer` → `<root>/.switchboard/kanban.db`). It never looks for an **unconfigured existing** database, and nothing defers the build until the location is settled.
 
-**There is no interactive prompting anywhere in the CLI.** `src/standalone/cli.ts` dispatches `secrets`, `token`, `init`, `scaffold`, `control-plane`, `stop`, `status`, `logs` — all flag-driven. `init` takes `--target agents|claude|both` and nothing else. No `readline`, no prompt library, no TTY handling. The wizard is net-new, not an extension of an existing flow.
+> **Note:** `db-pointer` has been retired by the storage consolidation programme. The resolution chain is now shorter — `customDbPath` → `kanban.dbPath` → `<root>/.switchboard/kanban.db` (or the global store). The `db-pointer` probe tier in the wizard should be kept as one independently removable branch (per the existing risk note) but may already be a no-op.
+
+**There IS interactive prompting in the CLI.**
+
+> **Superseded:** There is no interactive prompting anywhere in the CLI. No `readline`, no prompt library, no TTY handling. The wizard is net-new, not an extension of an existing flow.
+> **Reason:** `openPrompter()` at `cli.ts:875` creates a readline interface and provides an `ask` method. It is used in 10+ places: `cmdSetup` (:2742), the top-level menu (:2827), `cmdSetupHost` (:2359), and more. `cmdSetup` at `:2702` is a full interactive TTY menu (init/scaffold/control-plane/secrets). `process.stdin.isTTY` is checked at :2726.
+> **Replaced with:** The wizard should use the existing `openPrompter()` rather than introducing `node:readline/promises` as net-new. The wizard is an extension of the existing `cmdSetup` interactive flow, not a greenfield prompt. The TTY-detection pattern (`process.stdin.isTTY` check, non-TTY exit with instructions) already exists at `:2726` and should be reused.
 
 **Three of the five questions need data that does not exist in a form the CLI can reach.** This is the real scope of the work, and it is not the prompting:
 
@@ -30,7 +32,7 @@ await db.ensureReady();
 | Where does `.switchboard/` scaffolding live? | `controlPlaneRoot` stores it, but nothing *probes* for it. `detectCandidateParent` answers a different question and returns nothing below two git repos. | Needs an artifact probe (`.switchboard/`, `.agents/`, `.claude/`) at repo root and external root, with "none yet" as a real answer. |
 | Which CLIs do you use? | `CLI_BRAND_ICON_KEYS` in `src/webview/terminals.js` — 19 entries (claude, antigravity, devin, jules, gemini, codex, cursor, copilot, windsurf, qwen, amp, cline, kiro, kilo, trae, opencode, zed…) | It is a **brand-icon map in a webview**, not a registry. The CLI cannot import it. |
 | …and seat roles from them | `config.agents.startupCommands` — live, role-keyed, values are the CLI binary plus flags (`"lead":"claude"`, `"coder":"agy"`, `"analyst":"qwen"`). `agents.visibleAgents` is its visibility twin. | No **seed** table, but the seed is near-identity over the registry keys. Small, not a product decision. |
-| …and the three teams | `SHIPPED_TEAM_TYPES` in `src/webview/kanban.html:4854` — Batch planners / Coding / Review, with head roles and member shapes | Lives in a **self-contained webview**. The CLI cannot import it, and duplicating it guarantees drift. |
+| …and the three teams | `SHIPPED_TEAM_TYPES` in `src/webview/kanban.html:5014` — Batch planners / Coding / Review, with head roles and member shapes | Lives in a **self-contained webview**. The CLI cannot import it, and duplicating it guarantees drift. |
 
 So the last question is blocked on two extractions — and only because a *terminal* consumer cannot import a webview. A browser consumer already can.
 
@@ -74,7 +76,7 @@ None.
 
 ### Routine
 
-- `node:readline/promises` for the single database prompt — built-in, no dependency, and the standalone bundle must stay dependency-light.
+- The existing `openPrompter()` (`cli.ts:875`) for the single database prompt — already used in 10+ places throughout the CLI. No new dependency needed.
 - Reading and writing config keys that already exist (`kanban.dbPath`, `controlPlaneRoot`, `startupCommands`, `visibleAgents`).
 - Adding flag equivalents to `cli.ts`'s existing argv parsing.
 
@@ -83,7 +85,7 @@ None.
 - **Extracting `SHIPPED_TEAM_TYPES` out of `kanban.html`.** It is a self-contained webview by design, and two contract tests (`team-scoped-role-routing.test.js:972`, `standing-orders-marker-contract.test.js:315`) read the constant *out of the HTML source text*. Moving it breaks both unless they are retargeted in the same change. The extraction must leave the webview consuming the shared module rather than keeping a copy — a copy is the drift this plan exists to avoid.
 - **Extracting the CLI list out of `terminals.js`.** Same shape: a webview-local map that the CLI needs. The brand-icon mapping and the launch-command mapping are different concerns and should not be fused into one object just because both are keyed by CLI name.
 - **The `startupCommands` wipe guard.** `GlobalIntegrationConfigService` explicitly refuses an empty or all-blank `startupCommands` write ("WIPE GUARD: never let an empty/all-blank startupCommands or visibleAgents…"). A wizard that writes partial selections must not trip it, and must not be *rescued* by it either — a guard silently discarding the wizard's write looks identical to success.
-- **TTY detection.** `npx switchboard` runs in CI, in containers, and under process managers. Prompting where there is no TTY hangs a start that used to complete. The one prompt must gate on `process.stdin.isTTY` and fall through to `--db`.
+- **TTY detection.** `npx switchboard` runs in CI, in containers, and under process managers. Prompting where there is no TTY hangs a start that used to complete. The one prompt must gate on `process.stdin.isTTY` (the pattern already exists at `cli.ts:2726` in `cmdSetup`) and fall through to `--db`.
 
 ## Edge-Case & Dependency Audit
 
@@ -109,7 +111,7 @@ None.
 
 - **`hand-a-workspace-to-another-machine.md`** — question 1 ("are you migrating?") routes into that bundle's import. Until it exists, question 1 should point at the manual copy steps rather than promise an import that is not built.
 - **`control-plane-scaffold-out-of-the-repo.md` (PLAN REVIEWED)** — sets the recommended answer for question 4.
-- **Collides with `standalone-start-path-db-creation-parity.md`** — both edit `bootstrap.ts:467-478`. That plan makes the standalone-created DB identical to `init`'s; this one decides *whether* to create. Land that first and build the probe in front of its unified creation path, or the two rewrites conflict.
+- **Collides with `standalone-start-path-db-creation-parity.md`** — both edit the first-boot block in `bootstrap.ts` (now at `:838-850`, was `:467-478`). That plan's step 1 (ship `createIfMissing` on the start path) has shipped; this plan's probe builds in front of that `createIfMissing` call. The convergence work (that plan's step 2) should land first so the wizard's probe gates a converged creation path.
 
 ## Adversarial Synthesis
 
@@ -119,7 +121,7 @@ Key risks. (1) Building the wizard while `bootstrap.ts` still creates unconditio
 
 ### 1. Probe before create (independently shippable)
 
-In `bootstrap.ts`, before the `writeFileSync(dbPath, Buffer.alloc(0))`, resolve candidates in the order above. One candidate → adopt and report it. Several → prompt (TTY) or list-and-exit (non-TTY). None → run the wizard (TTY) or exit with instructions (non-TTY). Creation moves *after* the answer.
+In `bootstrap.ts`, before the `await db.createIfMissing()` at `:850`, resolve candidates in the order above. One candidate → adopt and report it. Several → prompt (TTY) or list-and-exit (non-TTY). None → run the wizard (TTY) or exit with instructions (non-TTY). Creation moves *after* the answer.
 
 ### 2. Ask the bootstrap question in the terminal
 
@@ -129,7 +131,7 @@ The database location is the **one** question that must be answered before anyth
 >
 > **Reason:** that was infrastructure invented to avoid a single `readline` prompt. Today the database is built at `bootstrap.ts:467` and the server at `:2910`; making the server boot without a database, serve a restricted route set, and then continue into normal boot without a restart is a substantial new piece — and its entire purpose would be to ask one question that a terminal can ask in three lines. The webview argument is a duplication argument, and it does not apply to a question whose answer is the precondition for the webview existing.
 >
-> **Replaced with:** one terminal prompt, `node:readline/promises`, gated on `process.stdin.isTTY`, with `--db <path>` as the flag equivalent. Once answered, boot proceeds exactly as it does today and the panel serves normally.
+> **Replaced with:** one terminal prompt using the existing `openPrompter()` (`cli.ts:875`), gated on `process.stdin.isTTY` (pattern at `:2726`), with `--db <path>` as the flag equivalent. Once answered, boot proceeds exactly as it does today and the panel serves normally.
 >
 > **Keep the decision separable from the prompt.** The probe and the resolution belong in a function that returns a decision; `readline` is one caller, `--db` a second, and a launcher's first-run screen a third. `switchboard-as-a-local-app-and-a-self-hosted-remote.md` (New, complexity 9) makes "where the board lives" one axis of its mode picker — the same question this prompt asks, generalised to two machines — so a second caller is already foreseeable. Welding the logic into the prompt buys a rewrite later for nothing saved now.
 
@@ -152,6 +154,8 @@ That plan was withdrawn as superseded by the consolidation work, but the argumen
 ```ts
 const backupDir = path.join(this._workspaceRoot, '.switchboard', 'dbbackup');
 ```
+
+> **Line reference updated:** was `KanbanDatabase.ts:7306`, now `:9597` (re-verified against HEAD ead33f59).
 
 So `git clean -xdf` takes the board and every snapshot of it in the same stroke. In this workspace that directory is **29 MB across 4 files** — four whole copies of a 7.3 MB database, sitting inside the repository, protecting nothing against the failure mode most likely to destroy the original.
 
@@ -181,9 +185,9 @@ This is small, independently shippable, and it is the difference between the rec
 
 `src/services/cliRegistry.ts` carries the 19 keys with an optional `startupCommand` defaulting to the key itself. Per-CLI flags are the only hand-authored part and default to none, with the field editable in the panel. Seeding writes through the same `GlobalIntegrationConfigService` path the panel uses — and must clear the wipe guard rather than be silently discarded by it, which looks identical to success.
 
-### 5. `switchboard setup`
+### 5. `switchboard setup` — reconcile with the existing subcommand
 
-A subcommand that reopens the first-run panel on demand, so the flow is reachable after first run without deleting anything. It is the dismissal's escape hatch.
+`switchboard setup` already EXISTS at `cli.ts:3824` → `cmdSetup` (`:2702`), an interactive TTY menu routing to init/scaffold/control-plane/secrets. The wizard's first-run flow should be added as a new option in this existing menu (or as a new `setup firstrun` subcommand), not a replacement. The flow is reachable after first run without deleting anything — it is the dismissal's escape hatch. Do NOT create a second `setup` subcommand.
 
 ## Verification Plan
 
@@ -209,6 +213,17 @@ A subcommand that reopens the first-run panel on demand, so the flow is reachabl
 12. Two candidates present: confirm both are listed and neither is chosen silently.
 13. `npx switchboard` piped (no TTY), no candidate, no `--db`: confirm it exits with instructions and creates nothing. With `--db`, confirm it boots unattended exactly as today.
 14. Single-repo user (the case `detectCandidateParent` returns nothing for): confirm scaffolding is still probed and answered.
+
+### Goal Invariants
+
+- `createIfMissing()` is NOT called when a candidate DB is found and adopted (creation is gated by the probe, not unconditional).
+- `createIfMissing()` is NOT called when no candidate exists and no TTY/`--db` is provided (non-TTY creates nothing).
+- `createIfMissing()` IS called after the user answers the database prompt (creation happens after the answer, not before).
+- `--db <path>` suppresses the prompt and produces the same adoption as answering it.
+- `kanban.html` does NOT define `SHIPPED_TEAM_TYPES` inline after extraction (assert the constant is gone from the HTML source text).
+- `terminals.js` does NOT define `CLI_BRAND_ICON_KEYS` inline after extraction.
+- `backupDir` is derived from `path.dirname(this.dbPath)`, NOT from `this._workspaceRoot` (backups follow the database).
+- `switchboard.setup` is a single subcommand (the existing `cmdSetup` menu, extended — not a duplicate).
 
 ## Recommendation
 

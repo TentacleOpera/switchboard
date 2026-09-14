@@ -69,8 +69,10 @@ async function runTests() {
     // 2. The member completion fragment body exists and routes completions.
     test('the member completion fragment body exists and routes completions', () => {
         const order = buildMemberCompletionFragment({ teamId: 'team-review', headName: 'lead-1' });
-        assert.ok(order.includes('done --from "<your terminal name>"'),
-            'the member completion fragment routes completions through the bundled CLI\'s done command');
+        assert.ok(order.includes('node "<cliPath>" done.'),
+            'the member completion fragment routes completions through the bundled CLI\'s bare done command');
+        assert.ok(!/done --from/.test(order),
+            'the seat supplies no --from: the CLI resolves it from SWITCHBOARD_TERMINAL');
         assert.ok(order.includes('/terminals/teams/team-review/queue/done'),
             'the member completion fragment routes to team queue/done for prompt items');
         // A review team's seats read this same fragment. The board-position clause

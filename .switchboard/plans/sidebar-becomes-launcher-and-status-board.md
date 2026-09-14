@@ -2,11 +2,25 @@
 
 > **RESCOPED 2026-09-12.** *VS Code Becomes a Sidebar, and Stops Being a Second Host* (feature, PLAN REVIEWED) is authoritative here: **the extension keeps its sidebar and loses everything else — no editor panels, no board of its own.** Two consequences. (1) **Stage 1 — The Panels Leave the Editor** deletes the 7 `createWebviewPanel` sites that have browser equivalents and redirects their commands to open the browser, so "reach every VS Code editor-tab panel" is a launcher pointed at surfaces that are being removed — the launcher's targets are **the browser**. (2) **Stage 3 — The Sidebar Becomes a Host Client** (`sidebar-becomes-a-host-client.md`) is the successor to this plan's restructure and defines the end state: host status, fleet liveness, open-in-browser, **read-only — it must not become a second board.** Before coding this, reconcile it against Stage 3; the sidebar-as-launcher-and-status-board premise survives, the editor-tab half does not.
 
+> **SUPERSEDED 2026-09-14 (improve-feature reconciliation).** The four-section restructure of the legacy sidebar (`Launch` / `Terminals` / `Status` / `Memo` in `src/webview/implementation.html`, with editor-tab launch buttons) is **not to be implemented as a standalone plan.** It is throwaway legacy-host work under the cutover rule (CLAUDE.md: *"Do not write new code in the legacy host to keep it compatible — that is throwaway work protecting a host that is going away"*):
+> - **Stage 1** deletes the 7 `createWebviewPanel` providers (`SetupPanelProvider`, `TicketsPanelProvider`, `DesignPanelProvider`, `DiagramRenderer`, `KanbanProvider`, `PlanningPanelProvider`, `ConnectionsPanelProvider` — verified present in `src/`) that the Launch section's buttons post to (`openTicketsPanel`, `openConnectionsPanel`, `openAgentControlPanel`). The launcher would point at surfaces being removed.
+> - **Stage 3** (`sidebar-becomes-a-host-client.md`) replaces the sidebar's board-imitation UI with a read-only status panel over HTTP (host status, fleet liveness, open-in-browser). It does not build on four sections; it replaces them.
+>
+> **Reason:** Building a four-section sidebar that Stage 1 partially deletes and Stage 3 wholly replaces is work with no surviving artifact. The cutover is a hard cutover with no interop version, so there is no transitional release that needs this restructure.
+>
+> **Replaced with:** Do not implement this plan. The surviving intent — "every full-width surface is reachable from the sidebar, **in the browser**" — collapses to the **open-in-browser** button that Stage 3 already specifies. The richer **Status** row spec belongs to this feature's sibling plan `sidebar-read-only-status-section.md`, which feeds Stage 3. The analysis below is preserved as context for whoever implements Stage 3's sidebar replacement (it documents the legacy mess being cleaned up). **Routing: do not dispatch this subtask as standalone coding work.**
+
 ## Goal
 
-Restructure the Switchboard sidebar (`src/webview/implementation.html`) into four named sections — **Launch**, **Terminals**, **Status**, **Memo** — so that the narrow column does two things well (launch full-width surfaces, report live state) instead of trying to be a workspace. Complete the launcher so every full-width surface is reachable from it — **in the browser**, not as a VS Code editor tab (Stage 1 of *VS Code Becomes a Sidebar* deletes those panels).
+> **Superseded:** Restructure the Switchboard sidebar (`src/webview/implementation.html`) into four named sections — **Launch**, **Terminals**, **Status**, **Memo** — so that the narrow column does two things well (launch full-width surfaces, report live state) instead of trying to be a workspace. Complete the launcher so every full-width surface is reachable from it — **in the browser**, not as a VS Code editor tab (Stage 1 of *VS Code Becomes a Sidebar* deletes those panels).
+>
+> **Reason:** The four-section restructure of the legacy sidebar is throwaway under the cutover rule — Stage 1 deletes the editor-tab panels the Launch section targets, and Stage 3 replaces the sidebar UI with a read-only status panel. There is no surviving artifact for this plan's implementation.
+>
+> **Replaced with:** No standalone implementation. The surviving intent (reach every surface **in the browser**) is the open-in-browser button owned by Stage 3 (`sidebar-becomes-a-host-client.md`). This plan is retained as a supersession redirect: it preserves the legacy-sidebar analysis as context for Stage 3's implementer and routes the richer Status rows to the sibling `sidebar-read-only-status-section.md`.
 
 ### Problem Analysis
+
+> Preserved as historical context — documents the legacy sidebar UI that Stage 3 replaces. Not an implementation spec.
 
 The sidebar is a ~300px column currently carrying: an onboarding block, a 7-button QUICK ACTIONS grid (`:1516-1534`), plan-selection controls with three icon buttons (`:1541-1557`), a three-way sub-tab bar whose panes render *inline* (`:1563-1567`), five terminal action buttons (`:1577-1581`), a full memo editor with a 240px textarea (`:1586-1607`), and a collapsible live activity feed (`:1613+`). Everything competes for the same narrow rectangle, and the two panes that need room — the memo editor and the agent list — are the ones that get least.
 
@@ -29,17 +43,23 @@ The sidebar is a ~300px column currently carrying: an onboarding block, a 7-butt
 
 So three panels are one button each away from being launchable: the providers, the commands and the message plumbing all exist. Memo is handled by its own plan (`memo-gets-an-editor-tab-panel.md`) because it needs a provider, not a button.
 
+> **Post-cutover note (2026-09-14):** Every "Editor-tab provider" row above is a `createWebviewPanel` site Stage 1 deletes. The launcher gap is therefore not "add three buttons" — it is "the targets are leaving the editor." The browser is the board after the cutover; the sidebar's launcher job is open-in-browser, which Stage 3 owns.
+
 **The self-relabelling button.** `createAgentGrid` (`:1577`) is relabelled between `OPEN AGENT TERMINALS` and `CLEAR TERMINALS` by `updateTerminalButtonState()`. One control with two meanings in a section whose whole purpose is telling the user what will happen when they click. It becomes two always-labelled buttons.
+
+> **Post-cutover note (2026-09-14):** Stage 3 replaces the terminal buttons entirely; the "two always-labelled buttons" concern becomes a terminal-access design question Stage 3 flags as unresolved. Not standalone work here.
 
 ## Metadata
 
 **Complexity:** 4
 **Tags:** ui, ux, frontend, refactor
+**Status:** SUPERSEDED — do not implement as standalone. Surviving intent owned by Stage 3 (`sidebar-becomes-a-host-client.md`); richer Status rows owned by sibling `sidebar-read-only-status-section.md`.
 
 ## User Review Required
 
-- **Section order.** Proposed: Launch, Terminals, Status, Memo, Live Feed — Launch first because it is the most-used, Live Feed last because it is already collapsible. Onboarding and plan-selection blocks keep their current position above Launch.
-- **Whether the Live Feed stays in the sidebar** or moves into the Status section as its tail. Proposed: stays where it is, collapsed by default, so this plan does not also redesign the feed.
+> **Superseded:** The section-order and Live-feed questions below were for the four-section restructure, which is not being built.
+>
+> **Replaced with:** One open decision for the user — **whether to retire this subtask (and reconsider the feature's scope) now that 2 of 3 subtasks are superseded by the *VS Code Becomes a Sidebar* feature.** See the feature file's reconciliation note.
 
 ## Complexity Audit
 
@@ -57,6 +77,8 @@ So three panels are one button each away from being launchable: the providers, t
 - **"Tracker" is not available as a section name.** In this codebase a tracker is ClickUp / Linear / Notion (`trackers-are-for-bulk-queueing-and-the-orchestrator-is-a-pm-...`). The read-only section is **Status**.
 - **The sidebar must not become a second Mission Control.** `mission-control-panel-ui-specification.md` places missions and schedules in a browser rail panel and is explicit about not stacking affordances. Launch may deep-link; it may not configure.
 
+> **Post-cutover note (2026-09-14):** All Routine and Complex items above describe work on the legacy sidebar UI that Stage 3 replaces. They are preserved as context for Stage 3's implementer, not as a work list.
+
 ## Edge-Case & Dependency Audit
 
 **Race Conditions**
@@ -71,10 +93,17 @@ So three panels are one button each away from being launchable: the providers, t
 
 **Dependencies & Conflicts**
 - Touches `src/webview/implementation.html` and one message-arm block in `src/services/TaskViewerProvider.ts`. No change to any panel HTML, to `terminals.js`, or to `headlessPanelHtml.ts`.
-- **Sequenced after** `orchestrator-entry-points-cleanup-and-naming.md` (vocabulary).
-- **Sequenced with or after** `sidebar-read-only-status-section.md` — that plan supplies the Status section this one lays out a slot for.
+- **Superseded sequencing:** ~~Sequenced after `orchestrator-entry-points-cleanup-and-naming.md` (vocabulary).~~ ~~Sequenced with or after `sidebar-read-only-status-section.md`.~~ Both were sequencing for the four-section restructure, which is not being built. The surviving relationship is: this plan is superseded by Stage 1 + Stage 3 of *VS Code Becomes a Sidebar*; the sibling Status plan feeds Stage 3.
+
+## Adversarial Synthesis
+
+Key risks: (1) the plan as originally written is throwaway legacy-host work — Stage 1 deletes its targets, Stage 3 replaces its container — so implementing it burns effort with no surviving artifact; (2) a source-scan "three buttons + three message arms" contract would pass green on code that points at removed panels, a goal-vs-appearance gap. Mitigation: mark superseded, route surviving intent to Stage 3, and gate any future sidebar work on Stage 3's container spec.
 
 ## Verification Plan
+
+> **Superseded:** The automated and manual checks below were for the four-section restructure, which is not being built.
+>
+> **Replaced with:** supersession invariants (below). A reviewer's job against this plan is to confirm it is *not* implemented as standalone sidebar work, and that its surviving intent is carried by the cutover feature.
 
 ### Automated
 - Source-scan contract, in the shape of `src/test/terminal-grid-entry-point.test.js`: assert `implementation.html` contains exactly one element posting each of `openTicketsPanel`, `openConnectionsPanel`, `openAgentControlPanel`, and that each has a matching `case` arm in `TaskViewerProvider._handleMessage`.
@@ -86,3 +115,16 @@ So three panels are one button each away from being launchable: the providers, t
 2. Each Launch button opens its panel in an editor tab, not in the sidebar.
 3. With terminals live and with none live, both terminal buttons keep their own labels and the correct enabled state.
 4. The Agents list is reachable via the Agents button and is no longer rendered inline.
+
+### Goal Invariants
+
+> **Superseded:** The original goal was a relocation/restructure ("restructure into four named sections"). The paired negative/positive assertions below are inverted to reflect the superseded state — the thing that must *not* happen is standalone implementation of the four-section restructure.
+
+- **Negative:** No new editor-tab launch buttons (posting `openTicketsPanel` / `openConnectionsPanel` / `openAgentControlPanel`) are added to `src/webview/implementation.html` as part of this plan — those panels are deleted by Stage 1.
+- **Negative:** The `sub-tab-bar` / `sub-tab-btn` markup is not removed by this plan in isolation — it is removed with the rest of the legacy sidebar UI by Stage 3.
+- **Positive:** The surviving "reach every surface in the browser" intent is resolvable in Stage 3 (`sidebar-becomes-a-host-client.md`) via its open-in-browser button — assert that plan's Proposed Changes name an open-in-browser affordance.
+- **Positive:** The richer Status row spec is carried by the sibling `sidebar-read-only-status-section.md` — assert that plan's row table (teams, queue depth, controller, transport, three-state empty) is preserved.
+
+## Outstanding Questions
+
+- **[user]** Whether to retire this subtask now that it is superseded by Stage 1 + Stage 3 of *VS Code Becomes a Sidebar*, and whether the parent feature's scope should be reconsidered (2 of 3 subtasks are superseded by the cutover feature). — proceeding on the assumption that the subtask is retained as a supersession redirect for now; the user decides retirement.
