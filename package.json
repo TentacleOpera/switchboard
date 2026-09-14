@@ -1087,6 +1087,7 @@
     "test:contract:coding-head-prompt": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/coding-head-prompt-contract.test.js",
     "test:contract:standing-orders-definitions": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/standing-orders-definitions-contract.test.js",
     "test:contract:standing-orders-additive": "node --require ./src/test/bootstrap/sandboxStateHome.js --require ./src/test/bootstrap/vscodeStub.js src/test/standing-orders-additive-contract.test.js",
+    "test:contract:standing-order-fragment-store": "node --expose-gc --require ./src/test/bootstrap/sandboxStateHome.js src/test/standing-order-fragment-store-contract.test.js",
     "test:contract:minimal-prompt": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/minimal-prompt.test.js",
     "test:contract:claude-protocol-block": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/claude-protocol-block-size-contract.test.js",
     "test:contract:skill-preconditions": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/skill-preconditions-contract.test.js",

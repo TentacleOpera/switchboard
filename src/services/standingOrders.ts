@@ -656,6 +656,16 @@ export function resolveStandingOrderInstruction(o: StandingOrder, ctx: StandingO
         if (composed.unknown.length) {
             console.warn(`[standingOrders] Unknown fragment id(s) on order '${o.id}': ${composed.unknown.join(', ')}`);
         }
+        // Log which source answered for each static fragment — the repo's
+        // fallback rule requires "which store answered" to be answerable after
+        // the fact. A 'compiled-default' source means the store row was absent
+        // or the cache was cold; a 'store' source means the control_plane row
+        // (or its override) was served.
+        const staticSources = Object.entries(composed.sources);
+        if (staticSources.length) {
+            const summary = staticSources.map(([id, src]) => `${id}=${src}`).join(', ');
+            console.log(`[standingOrders] Fragment sources for order '${o.id}': ${summary}`);
+        }
         if (composed.text) { parts.push(composed.text); }
     }
     if (typeof o.instruction === 'string' && o.instruction.length > 0) { parts.push(o.instruction); }
