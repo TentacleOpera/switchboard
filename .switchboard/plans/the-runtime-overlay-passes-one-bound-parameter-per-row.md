@@ -244,3 +244,7 @@ Run `npm run compile-tests` before any `test:contract:*` script.
 
 - **[user]** Whether `''` should clear a string field (e.g. `dispatched_terminal = ''` releasing a stale seat) — proceeding on the assumption that current behaviour is preserved exactly in this change (see User Review Required). The asymmetry is recorded, not resolved.
 - **[user]** Whether the `device_id` index addition (Change 5) should be a separate plan or part of this one — proceeding on the assumption that it is part of this change, since the device-scoped query is the change that makes the index necessary.
+
+## Completion Report
+
+Implemented all five changes in `src/services/KanbanDatabase.ts`: the runtime overlay in `_readRows` now selects `WHERE device_id = ?` (one bound parameter, regardless of read size) instead of `WHERE device_id = ? AND plan_id IN (…)`, removing the 32,766 bound-parameter cliff; the seven field-copy `if`s and the missing-table `catch` arm are byte-identical, so merge semantics and pre-V74 tolerance are preserved. Added `idx_plan_runtime_state_device` to both `SCHEMA_TABLES_SQL` (fresh-DB path) and a new `MIGRATION_V78_SQL` with a matching runner block (upgrade-DB path), keeping the device-scoped query an index seek rather than a full scan. The change lands in shared code, so both composition roots get it once. Compilation and automated tests were skipped per the run directives; the verification steps remain written down in the plan above.

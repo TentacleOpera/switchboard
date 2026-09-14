@@ -726,6 +726,11 @@ export const SCHEMA_INDEX_STATEMENTS: string[] = [
     `CREATE INDEX IF NOT EXISTS idx_coding_rounds_feature ON coding_rounds(feature_id)`,
     `CREATE INDEX IF NOT EXISTS idx_coding_rounds_workspace ON coding_rounds(workspace_id)`,
     `CREATE INDEX IF NOT EXISTS idx_plan_runtime_state_workspace ON plan_runtime_state(workspace_id)`,
+    // device_id-leading index: the runtime overlay in _readRows selects
+    // `WHERE device_id = ?` (one bound parameter, not one per row). The PK
+    // autoindex on (plan_id, device_id) cannot serve a device_id-leading
+    // predicate, so without this index the overlay degrades to a full scan.
+    `CREATE INDEX IF NOT EXISTS idx_plan_runtime_state_device ON plan_runtime_state(device_id)`,
     `CREATE INDEX IF NOT EXISTS idx_plan_tickets_workspace ON plan_tickets(workspace_id)`,
     `CREATE INDEX IF NOT EXISTS idx_plan_tickets_external ON plan_tickets(workspace_id, provider, external_id)`,
     `CREATE INDEX IF NOT EXISTS idx_plan_tickets_plan ON plan_tickets(plan_id)`,
@@ -1197,6 +1202,21 @@ const MIGRATION_V77_SQL = [
     `ALTER TABLE plans ADD COLUMN outcome TEXT DEFAULT ''`,
     `ALTER TABLE plans ADD COLUMN workflow TEXT DEFAULT ''`,
     `ALTER TABLE plans ADD COLUMN released_at TEXT DEFAULT NULL`,
+];
+
+// V78: idx_plan_runtime_state_device — a standalone device_id index on
+// plan_runtime_state. The runtime overlay in _readRows selects
+// `WHERE device_id = ?` (one bound parameter, not one per row, to stay under
+// SQLite's 32,766 bound-parameter ceiling). The PK autoindex on
+// (plan_id, device_id) cannot serve a device_id-leading predicate (SQLite
+// composite indexes require the leading column constrained), so without a
+// standalone device_id index the overlay degrades to a full table scan on
+// every board read. Fresh DBs already get this index from SCHEMA_TABLES_SQL;
+// this migration adds it to upgraded DBs. `CREATE INDEX IF NOT EXISTS` is
+// idempotent — safe on a DB that already has the index (e.g. a fresh DB
+// created post-V78 that ran SCHEMA_TABLES_SQL then re-entered the runner).
+const MIGRATION_V78_SQL = [
+    `CREATE INDEX IF NOT EXISTS idx_plan_runtime_state_device ON plan_runtime_state(device_id)`,
 ];
 
 const MIGRATION_V13_SQL = [
@@ -11231,6 +11251,23 @@ export class KanbanDatabase {
             console.log('[KanbanDatabase] V77 migration completed: outcome + workflow + released_at columns added to plans and backfilled from plan_events');
         }
 
+        // V78: idx_plan_runtime_state_device. The runtime overlay in _readRows
+        // selects `WHERE device_id = ?` (one bound parameter, not one per row, to
+        // stay under SQLite's 32,766 bound-parameter ceiling). The PK autoindex on
+        // (plan_id, device_id) cannot serve a device_id-leading predicate, so
+        // without a standalone device_id index the overlay degrades to a full
+        // table scan on every board read. `CREATE INDEX IF NOT EXISTS` is
+        // idempotent — safe on a DB that already has the index (e.g. a fresh DB
+        // created post-V78 that ran SCHEMA_TABLES_SQL then re-entered the runner).
+        const v78 = await this.getMigrationVersion();
+        if (v78 < 78) {
+            for (const sql of MIGRATION_V78_SQL) {
+                try { this._db.exec(sql); } catch { /* index already exists */ }
+            }
+            await this.setMigrationVersion(78);
+            console.log('[KanbanDatabase] V78 migration completed: device_id index added to plan_runtime_state');
+        }
+
         // Runtime-tier orphan sweep, once per open. Not version-gated: orphans accrue
         // continuously (a plan deleted or archived elsewhere leaves this machine's
         // runtime row behind), so this is maintenance rather than a migration step.
@@ -15103,52 +15140,57 @@ FROM plans
         // Application-level merge: join machine-local runtime state from plan_runtime_state.
         // If the table exists and rows are present, local runtime facts (dispatched_terminal,
         // dispatched_at, last_liveness_at, blocked_at) overlay the row for this device_id.
+        //
+        // Device-scoped, not row-scoped: the query binds exactly one parameter (device_id)
+        // regardless of read size. The previous form — `WHERE device_id = ? AND plan_id IN (…)`
+        // — bound one parameter per row and hit SQLite's 32,766 bound-parameter ceiling on
+        // large reads ("too many SQL variables"). plan_runtime_state is already keyed by
+        // device_id, so selecting every runtime row for this device and letting the
+        // runtimeMap lookup discard rows whose plan isn't in this read yields the same merge.
+        // idx_plan_runtime_state_device (V78) keeps this an index seek, not a full scan —
+        // the PK autoindex on (plan_id, device_id) cannot serve a device_id-leading predicate.
         if (rows.length > 0 && this._db) {
             try {
                 const machineId = getMachineId();
-                const planIds = rows.map(r => r.planId).filter(id => !!id);
-                if (planIds.length > 0) {
-                    const placeholders = planIds.map(() => '?').join(', ');
-                    const rStmt = this._db.prepare(
-                        `SELECT plan_id, dispatched_agent, dispatched_ide, dispatched_terminal, dispatched_team_group, dispatched_at, last_liveness_at, blocked_at ` +
-                        `FROM plan_runtime_state WHERE device_id = ? AND plan_id IN (${placeholders})`,
-                        [machineId, ...planIds]
-                    );
-                    try {
-                        const runtimeMap = new Map<string, any>();
-                        while (rStmt.step()) {
-                            const ro = rStmt.getAsObject();
-                            runtimeMap.set(String(ro.plan_id), ro);
-                        }
-                        for (const row of rows) {
-                            const rt = runtimeMap.get(row.planId);
-                            if (rt) {
-                                if (rt.dispatched_terminal !== undefined && rt.dispatched_terminal !== null && rt.dispatched_terminal !== '') {
-                                    row.dispatchedTerminal = String(rt.dispatched_terminal);
-                                }
-                                if (rt.dispatched_team_group !== undefined && rt.dispatched_team_group !== null && rt.dispatched_team_group !== '') {
-                                    row.dispatchedTeamGroup = String(rt.dispatched_team_group);
-                                }
-                                if (rt.dispatched_agent !== undefined && rt.dispatched_agent !== null && rt.dispatched_agent !== '') {
-                                    row.dispatchedAgent = String(rt.dispatched_agent);
-                                }
-                                if (rt.dispatched_ide !== undefined && rt.dispatched_ide !== null && rt.dispatched_ide !== '') {
-                                    row.dispatchedIde = String(rt.dispatched_ide);
-                                }
-                                if (rt.dispatched_at !== undefined) {
-                                    row.dispatchedAt = rt.dispatched_at !== null ? String(rt.dispatched_at) : null;
-                                }
-                                if (rt.last_liveness_at !== undefined) {
-                                    row.lastLivenessAt = rt.last_liveness_at !== null ? String(rt.last_liveness_at) : null;
-                                }
-                                if (rt.blocked_at !== undefined) {
-                                    row.blockedAt = rt.blocked_at !== null ? String(rt.blocked_at) : null;
-                                }
+                const rStmt = this._db.prepare(
+                    `SELECT plan_id, dispatched_agent, dispatched_ide, dispatched_terminal, dispatched_team_group, dispatched_at, last_liveness_at, blocked_at ` +
+                    `FROM plan_runtime_state WHERE device_id = ?`,
+                    [machineId]
+                );
+                try {
+                    const runtimeMap = new Map<string, any>();
+                    while (rStmt.step()) {
+                        const ro = rStmt.getAsObject();
+                        runtimeMap.set(String(ro.plan_id), ro);
+                    }
+                    for (const row of rows) {
+                        const rt = runtimeMap.get(row.planId);
+                        if (rt) {
+                            if (rt.dispatched_terminal !== undefined && rt.dispatched_terminal !== null && rt.dispatched_terminal !== '') {
+                                row.dispatchedTerminal = String(rt.dispatched_terminal);
+                            }
+                            if (rt.dispatched_team_group !== undefined && rt.dispatched_team_group !== null && rt.dispatched_team_group !== '') {
+                                row.dispatchedTeamGroup = String(rt.dispatched_team_group);
+                            }
+                            if (rt.dispatched_agent !== undefined && rt.dispatched_agent !== null && rt.dispatched_agent !== '') {
+                                row.dispatchedAgent = String(rt.dispatched_agent);
+                            }
+                            if (rt.dispatched_ide !== undefined && rt.dispatched_ide !== null && rt.dispatched_ide !== '') {
+                                row.dispatchedIde = String(rt.dispatched_ide);
+                            }
+                            if (rt.dispatched_at !== undefined) {
+                                row.dispatchedAt = rt.dispatched_at !== null ? String(rt.dispatched_at) : null;
+                            }
+                            if (rt.last_liveness_at !== undefined) {
+                                row.lastLivenessAt = rt.last_liveness_at !== null ? String(rt.last_liveness_at) : null;
+                            }
+                            if (rt.blocked_at !== undefined) {
+                                row.blockedAt = rt.blocked_at !== null ? String(rt.blocked_at) : null;
                             }
                         }
-                    } finally {
-                        rStmt.free();
                     }
+                } finally {
+                    rStmt.free();
                 }
             } catch (runtimeErr) {
                 // If plan_runtime_state table doesn't exist yet (e.g. before V74 migration runs),
