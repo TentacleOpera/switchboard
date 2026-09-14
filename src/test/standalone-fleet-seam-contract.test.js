@@ -348,16 +348,19 @@ function run() {
         // The standalone clear callback must go through the Go host's
         // ptyClearTerminal verb, which now consults clearStrategy and respawns
         // Devin seats. A direct /clear write would bypass the strategy.
-        const clearCb = bootstrapSource.slice(
-            bootstrapSource.indexOf('clearTerminalContext:'),
-            bootstrapSource.indexOf('clearTerminalContext:') + 800,
-        );
+        // 3000, not 800. The 800-char window stopped short of `await
+        // clearPty(handle)` — the assertion below was vacuously red at HEAD and
+        // the whole suite with it. Size the window to the callback, not to a
+        // guess about how many comment lines precede the call.
+        const cbStart0 = bootstrapSource.indexOf('clearTerminalContext:');
+        const clearCb = bootstrapSource.slice(cbStart0, cbStart0 + 3000);
         assert.match(clearCb, /await clearPty\(handle\)/,
             'standalone clearTerminalContext must call clearPty (which routes through ptyClearTerminal)');
-        const clearPtyDef = bootstrapSource.slice(
-            bootstrapSource.indexOf('const clearPty ='),
-            bootstrapSource.indexOf('const clearPty =') + 200,
-        );
+        // One LINE, not 200 chars: the next declaration (`modelPty`) sits inside
+        // a 200-char window and its own type annotation would satisfy or defeat
+        // assertions meant for clearPty.
+        const clearPtyDef = bootstrapSource.slice(bootstrapSource.indexOf('const clearPty ='))
+            .split('\n')[0];
         assert.match(clearPtyDef, /ptyClearTerminal/,
             'clearPty must route through the ptyClearTerminal verb (strategy-aware)');
     });
@@ -366,12 +369,22 @@ function run() {
         // The clear callback must surface a respawn failure as {cleared: false}.
         // The Go host's respawnAndReinject returns {success: false, cleared: false}
         // on a dead child; the standalone wrapper must propagate it, not swallow it.
-        const clearCb = bootstrapSource.slice(
-            bootstrapSource.indexOf('clearTerminalContext:'),
-            bootstrapSource.indexOf('clearTerminalContext:') + 800,
-        );
-        assert.match(clearCb, /cleared: false/,
-            'standalone clearTerminalContext must return {cleared: false} on failure');
+        //
+        // This used to slice 800 chars and match /cleared: false/ — which the
+        // callback's PRE-EXISTING early returns (`terminal.clearBeforePrompt`
+        // off, terminal not found) already satisfied. The gate was green while
+        // `clearPty` returned `Promise<void>` and the verb's failure result was
+        // discarded: the exact divergence the plan names. Assert the two things
+        // that actually carry the failure instead of a substring that any
+        // guard clause supplies.
+        const clearPtyDef = bootstrapSource.slice(bootstrapSource.indexOf('const clearPty ='))
+            .split('\n')[0];
+        assert.ok(!/Promise<void>/.test(clearPtyDef),
+            'clearPty must not be typed Promise<void> — the verb result carries the respawn failure');
+        const cbStart = bootstrapSource.indexOf('clearTerminalContext:');
+        const clearCb = bootstrapSource.slice(cbStart, cbStart + 3000);
+        assert.match(clearCb, /await clearPty\(handle\)[\s\S]{0,400}?(res|result)[\s\S]{0,200}?(success === false|cleared === false)/,
+            'standalone clearTerminalContext must inspect the clearPty result and report success:false / cleared:false as a failed clear');
     });
 
     test('goPtyFleetProjection passes startupCommand in the ptyCreateTerminal payload so respawn can re-inject it', () => {
@@ -381,8 +394,31 @@ function run() {
             projectionSource.indexOf("this.supervisor.request('ptyCreateTerminal'"),
             projectionSource.indexOf("this.supervisor.request('ptyCreateTerminal'") + 600,
         );
-        assert.match(createCall, /startupCommand:\s*effectiveStartupCommand/,
+        // The payload line is `startupCommand: usesTmuxSeating ?
+        // effectiveStartupCommand : composedCli` and the 600-char window never
+        // reached it — so this assertion was red at HEAD, i.e. the gate that was
+        // supposed to prove the respawn field is sent proved nothing and failed
+        // the suite instead. Match the expression that ships, over a window
+        // wide enough to contain it.
+        void createCall;
+        // Delimited by the call's own closing `});`, not by a character count.
+        // Every fixed-width window in this file has gone stale as comments were
+        // added above the fields it was meant to pin — silently, because a
+        // window that falls short reads as "the field is missing".
+        const createCallStart = projectionSource.indexOf("this.supervisor.request('ptyCreateTerminal'");
+        const createCallFull = projectionSource.slice(
+            createCallStart,
+            projectionSource.indexOf('\n        });', createCallStart),
+        );
+        assert.match(createCallFull, /startupCommand:\s*usesTmuxSeating \? effectiveStartupCommand : composedCli/,
             'ptyCreateTerminal payload must include startupCommand for respawn re-injection');
+        // A tmux seat's `startupCommand` is the whole seating chain, which ends
+        // in `exec tmux attach` and is NOT re-runnable as a reset. The composed
+        // cli (transport prefix kept, tmux chain absent) is what the tmux
+        // respawn hands to `tmux respawn-window`, so it has to reach the host
+        // as its own field.
+        assert.match(createCallFull, /startupCommandComposed:\s*composedCli/,
+            'ptyCreateTerminal payload must include startupCommandComposed so a tmux seat can respawn its window command');
     });
 
     console.log(`\nResults: ${passed} passed, ${failed} failed\n`);

@@ -10554,11 +10554,22 @@
 
     async function clearTerminal(name) {
         try {
-            await fetch('/terminals/verb/ptyClearTerminal', {
+            // The verb now consults the per-family clear strategy and RESPAWNS a
+            // respawn-family seat (devin). A respawn can fail — a dead child, no
+            // recorded startup command, a tmux window already gone — and the host
+            // reports that as HTTP 200 with `{ success: false, error }`. Checking
+            // only `res.ok` would paint every one of those as a successful clear,
+            // which is the failure mode this plan exists to remove.
+            const res = await fetch('/terminals/verb/ptyClearTerminal', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name })
             });
+            const body = await res.json().catch(() => null);
+            if (!res.ok || (body && body.success === false)) {
+                showPaneToast(`Clear failed on ${name}: ${(body && body.error) || `HTTP ${res.status}`}`);
+                return;
+            }
             const badgeChanged = terminalBadges.delete(name);
             const gapChanged = terminalReplayGaps.delete(name);
             if (badgeChanged || gapChanged) { renderSidebarList(); renderPaneGrid(); }
@@ -10693,7 +10704,14 @@
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name })
-            }).then(res => { if (!res.ok) { throw new Error(`HTTP ${res.status}`); } })
+            }).then(async res => {
+                if (!res.ok) { throw new Error(`HTTP ${res.status}`); }
+                // A respawn-family clear answers 200 with `{success:false}` when
+                // the respawn failed; treat that as a failed seat, not a cleared
+                // one, so reportFanOutResults counts it.
+                const body = await res.json().catch(() => null);
+                if (body && body.success === false) { throw new Error(body.error || 'clear failed'); }
+            })
         );
         let changed = false;
         for (const r of results) {
@@ -10721,7 +10739,14 @@
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name })
-            }).then(res => { if (!res.ok) { throw new Error(`HTTP ${res.status}`); } })
+            }).then(async res => {
+                if (!res.ok) { throw new Error(`HTTP ${res.status}`); }
+                // A respawn-family clear answers 200 with `{success:false}` when
+                // the respawn failed; treat that as a failed seat, not a cleared
+                // one, so reportFanOutResults counts it.
+                const body = await res.json().catch(() => null);
+                if (body && body.success === false) { throw new Error(body.error || 'clear failed'); }
+            })
         );
         let changed = false;
         for (const r of results) {

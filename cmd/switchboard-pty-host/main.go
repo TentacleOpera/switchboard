@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -50,6 +51,24 @@ type terminal struct {
 	// transport-wrapped string. See the plan
 	// `agents-are-saved-per-machine-and-a-team-picks-one`.
 	startupCommandInner string
+	// startupCommandComposed is the transport-composed CLI (inner + any
+	// `ssh`/`mosh` prefix) WITHOUT the tmux seating chain wrapped around it —
+	// i.e. the exact string the seating chain hands to `tmux new-window`.
+	// It is the only recorded field a tmux respawn can hand back to
+	// `tmux respawn-window`: startupCommand holds the whole chain (which ends
+	// in `exec tmux attach`, so appending an argv suffix to it is a usage
+	// error) and startupCommandInner drops the transport prefix (so an
+	// ssh/mosh seat would respawn the CLI on the WRONG machine). Empty for a
+	// non-tmux seat, where startupCommand already IS the composed command.
+	startupCommandComposed string
+	// generation counts how many times this seat's pty has been replaced by a
+	// clearStrategy "respawn". readOutput captures it at spawn and compares on
+	// EOF: a read error on a PREVIOUS generation's fd is the respawn closing
+	// it, not the seat exiting, and must not run the exit teardown (which
+	// marks the terminal exited, closes every WebSocket client and ends the
+	// session log). Written under f.mu by respawnTerminal BEFORE the old fd is
+	// closed, so the old goroutine can never observe a stale value.
+	generation int
 	// machineId is the machine this seat spawns on (`'local'` default). The
 	// transport prefix lives on the machine definition (TS-side), not here.
 	machineId string
@@ -338,6 +357,11 @@ func (f *fleet) create(payload map[string]any) (map[string]any, error) {
 		machineId:           strField(payload, "machineId"),
 		env:                 env,
 	}
+	// The COMPOSED cli with no tmux chain around it — the string the seating
+	// chain hands to `tmux new-window`, and the only one a tmux respawn can
+	// hand back to `tmux respawn-window`. Assigned outside the literal above so
+	// the literal's gofmt alignment is untouched.
+	t.startupCommandComposed = strField(payload, "startupCommandComposed")
 	if controlMode {
 		t.parseState = &ParseState{}
 	}
@@ -345,7 +369,8 @@ func (f *fleet) create(payload map[string]any) (map[string]any, error) {
 	f.clients[name] = make(map[*wsClient]struct{})
 	f.rings[name] = nil
 	f.nextSeq[name] = 0
-	go f.readOutput(name, file)
+	// Generation 0 — the seat's first pty. A respawn bumps it.
+	go f.readOutput(name, file, t.generation)
 	// Spawn-time routing verification for a seat with NO control stream. A
 	// control-mode seat arms this from onPaneIDLearned; with control mode off
 	// the pane id never arrives, so that hook never fires and nothing checks
@@ -373,7 +398,15 @@ func (f *fleet) create(payload map[string]any) (map[string]any, error) {
 // path is the backstop if it is ever short.
 const tmuxRoutingSettleDelay = 2 * time.Second
 
-func (f *fleet) readOutput(name string, file *os.File) {
+// readOutput pumps one pty fd. `gen` is the seat's respawn generation at the
+// moment this fd was opened: a clearStrategy "respawn" replaces the fd and
+// bumps the generation, so a read error on a SUPERSEDED fd is that respawn
+// closing it, not the seat exiting. Running the exit teardown for it would
+// mark the live terminal `exited`, close and DELETE every WebSocket client
+// (the browser sees `[exited]`), and end the session log — churning exactly
+// the things the respawn design promises survive, and racing the respawn's own
+// `status = "active"`. A stale generation therefore returns silently.
+func (f *fleet) readOutput(name string, file *os.File, gen int) {
 	buf := make([]byte, 4096)
 	for {
 		n, err := file.Read(buf)
@@ -387,6 +420,19 @@ func (f *fleet) readOutput(name string, file *os.File) {
 			f.publish(name, chunk)
 		}
 		if err != nil {
+			// Superseded fd: a respawn closed it. Not an exit — return before
+			// touching any shared state, including the preamble flush, which
+			// would otherwise splice a previous incarnation's held output into
+			// the fresh one.
+			f.mu.Lock()
+			stale := false
+			if t := f.terminals[name]; t != nil && t.generation != gen {
+				stale = true
+			}
+			f.mu.Unlock()
+			if stale {
+				return
+			}
 			// A seat whose tmux never started holds its shell output in the
 			// preamble (suppressed so the seating chain does not render). At EOF
 			// that held text is the ONLY explanation for the dead pane —
@@ -1051,6 +1097,16 @@ func (f *fleet) respawnTerminal(t *terminal) (int, error) {
 	cmd.Dir = t.cwd
 	cmd.Env = t.env
 	applySession(cmd)
+	// Bump the generation BEFORE anything can make the old fd readable-with-
+	// error. The old readOutput goroutine compares the generation it was
+	// spawned with against this value and returns silently when they differ,
+	// so the close below is read as "this fd was superseded" rather than
+	// "the seat exited" — which would otherwise mark the terminal exited,
+	// close every WebSocket client and end the session log.
+	f.mu.Lock()
+	t.generation++
+	gen := t.generation
+	f.mu.Unlock()
 	// Kill the old process tree and close the old master fd BEFORE starting
 	// the new pty pair. killProcessTree waits up to 500ms for SIGTERM then
 	// SIGKILLs, so the old fd is released by the time the new one opens.
@@ -1089,8 +1145,67 @@ func (f *fleet) respawnTerminal(t *terminal) (int, error) {
 	t.pendingBlocks = nil
 	t.sessionTarget = ""
 	t.historyFetched = false
-	go f.readOutput(t.name, file)
+	go f.readOutput(t.name, file, gen)
 	return t.pid, nil
+}
+
+// respawnTmuxWindowLocked is the clearStrategy "respawn" mechanism for a
+// TMUX-SEATED seat, where replacing the pty is the wrong operation entirely.
+//
+// A tmux seat's pty runs a `tmux attach` CLIENT. The agent lives in a tmux
+// WINDOW owned by the tmux server, which is a separate daemon session and not
+// in this pty's process group — killProcessTree kills the client and leaves
+// the agent running (fleet.close() has to issue an explicit `tmux kill-window`
+// for exactly this reason). Re-running t.startupCommand does not help either:
+// for a tmux seat that field holds the whole seating chain, which finds the
+// session AND the window still present, takes its reuse branch (which
+// deliberately does NOT re-run the CLI) and `exec tmux attach`es back to the
+// very session the reset was meant to replace. Nothing is cleared, the
+// declared --model is never re-read, and the argv suffix would land after
+// `exec tmux -u attach`, where tmux reads it as a usage error and the pane
+// dies.
+//
+// `respawn-window -k` is the operation that matches the intent: tmux kills the
+// window's current command and starts a new one IN THE SAME WINDOW, so the
+// window id, the pane, this pty, the session log and every attached client
+// survive while the CLI is genuinely a new process started from the seat's own
+// declared command.
+//
+// Caller MUST hold t.mu.
+func (f *fleet) respawnTmuxWindowLocked(t *terminal, family, prompt string) (int, error) {
+	// The composed CLI is the only honest source here. startupCommand is the
+	// seating chain (see above) and startupCommandInner drops the transport
+	// prefix, so falling back to it on a non-local seat would respawn the CLI
+	// on the wrong machine. Inner is accepted ONLY where it is the same string
+	// by construction (a local seat, whose composition adds no prefix), and the
+	// source is logged either way.
+	cmdStr, source := t.startupCommandComposed, "composed"
+	if cmdStr == "" && (t.machineId == "" || t.machineId == "local") {
+		cmdStr, source = t.startupCommandInner, "inner(local)"
+	}
+	if cmdStr == "" {
+		return 0, fmt.Errorf("respawn requires a recorded CLI command for role %q on machine %q (tmux seat %s:%s); refusing to guess one out of the seating chain",
+			t.role, t.machineId, t.tmuxSession, t.tmuxWindow)
+	}
+	target := "=" + t.tmuxSession + ":" + t.tmuxWindow
+	line := cmdStr + respawnArgvSuffix(family, prompt)
+	log.Printf("[respawn] %s: tmux respawn-window -k -t %s (command source: %s)", t.name, target, source)
+	if out, err := exec.Command("tmux", "respawn-window", "-k", "-t", target, line).CombinedOutput(); err != nil {
+		return 0, fmt.Errorf("tmux respawn-window failed for %s: %v: %s", target, err, strings.TrimSpace(string(out)))
+	}
+	// Read the NEW pane's pid back: this pty's own pid is the attach client's
+	// and does not change, so reporting it would make a respawn look like a
+	// no-op. A failed read-back returns 0, which the caller reports as
+	// `pidSource: "unavailable"` rather than as a plausible-looking pid.
+	out, err := exec.Command("tmux", "list-panes", "-t", target, "-F", "#{pane_pid}").Output()
+	if err != nil {
+		return 0, nil
+	}
+	pid, convErr := strconv.Atoi(strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0]))
+	if convErr != nil {
+		return 0, nil
+	}
+	return pid, nil
 }
 
 // respawnAndReinject is the full clearStrategy "respawn" sequence: replace the
@@ -1107,6 +1222,24 @@ func (f *fleet) respawnTerminal(t *terminal) (int, error) {
 // with the error — unlike the old /clear path, which returned {cleared: true}
 // even on failure.
 func (f *fleet) respawnAndReinject(t *terminal, family, prompt string) map[string]any {
+	// A tmux-seated seat is respawned IN ITS WINDOW, never by replacing this
+	// pty — the pty is only the attach client, and the seating chain is not
+	// re-runnable as a reset. See respawnTmuxWindowLocked.
+	if t.tmuxSession != "" && t.tmuxWindow != "" {
+		pid, err := f.respawnTmuxWindowLocked(t, family, prompt)
+		if err != nil {
+			return map[string]any{"success": false, "cleared": false, "respawned": true, "error": err.Error()}
+		}
+		t.promptCount = 1
+		res := map[string]any{"success": true, "cleared": true, "respawned": true, "tmuxWindow": true}
+		if pid > 0 {
+			res["pid"] = pid
+			res["pidSource"] = "tmux-pane"
+		} else {
+			res["pidSource"] = "unavailable"
+		}
+		return res
+	}
 	pid, err := f.respawnTerminal(t)
 	if err != nil {
 		return map[string]any{"success": false, "cleared": false, "respawned": true, "error": err.Error()}

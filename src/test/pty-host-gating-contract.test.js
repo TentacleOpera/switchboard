@@ -201,6 +201,52 @@ check('Go host respawn requires a startup command and fails loudly without one',
     assert.ok(/env:\s*env,/.test(main), 'terminal create must retain env slice for respawn identity');
 });
 
+check('A tmux-seated respawn replaces the WINDOW command, never re-runs the seating chain', () => {
+    const main = fs.readFileSync(path.join(REPO_ROOT, 'cmd', 'switchboard-pty-host', 'main.go'), 'utf8');
+    // A tmux seat's pty is a `tmux attach` CLIENT; the agent runs in a tmux
+    // window owned by the tmux server, outside this pty's process group. So
+    // killProcessTree + re-typing t.startupCommand does NOT reset it: the chain
+    // finds session AND window present, takes its reuse branch (which does not
+    // re-run the CLI) and re-attaches to the session the reset was meant to
+    // replace — nothing cleared, no --model re-read — while the argv suffix
+    // lands after `exec tmux attach` as a usage error. respawn-window -k is the
+    // operation that matches.
+    assert.ok(/func \(f \*fleet\) respawnTmuxWindowLocked\(/.test(main),
+        'main.go must carry a tmux-window respawn path (respawnTmuxWindowLocked)');
+    assert.ok(/"tmux", "respawn-window", "-k", "-t"/.test(main),
+        'the tmux respawn must use `tmux respawn-window -k`, not a pty replacement');
+    const reinject = main.slice(main.indexOf('func (f *fleet) respawnAndReinject('));
+    const body = reinject.slice(0, reinject.indexOf('\n}\n'));
+    assert.ok(/t\.tmuxSession != "" && t\.tmuxWindow != ""/.test(body),
+        'respawnAndReinject must branch to the tmux-window path for a tmux-seated seat');
+    assert.ok(body.indexOf('respawnTmuxWindowLocked') < body.indexOf('respawnTerminal('),
+        'the tmux branch must be taken BEFORE the pty-replacement path');
+    // The composed cli (no tmux chain, transport prefix intact) is the only
+    // honest source for the window command.
+    assert.ok(/startupCommandComposed/.test(main),
+        'the Go host must record startupCommandComposed for the tmux respawn');
+    assert.ok(/refusing to guess one out of the seating chain/.test(main),
+        'a tmux respawn with no recorded CLI command must fail loudly, not parse the chain');
+});
+
+check('readOutput does not tear the seat down when a respawn replaces its fd', () => {
+    const main = fs.readFileSync(path.join(REPO_ROOT, 'cmd', 'switchboard-pty-host', 'main.go'), 'utf8');
+    // The old goroutine sees EOF the moment the respawn closes the old master
+    // fd. Without a generation guard its exit branch marks the LIVE terminal
+    // exited (racing the respawn's status = "active"), closes and deletes every
+    // WebSocket client, and ends the session log — churning exactly what the
+    // plan promises survives a respawn.
+    assert.ok(/func \(f \*fleet\) readOutput\(name string, file \*os\.File, gen int\)/.test(main),
+        'readOutput must take the respawn generation its fd was opened at');
+    const ro = main.slice(main.indexOf('func (f *fleet) readOutput('));
+    const roBody = ro.slice(0, ro.indexOf('\n}\n'));
+    assert.ok(/t\.generation != gen/.test(roBody),
+        'readOutput must compare the seat generation before running the exit teardown');
+    assert.ok(roBody.indexOf('stale') < roBody.indexOf('delete(f.clients, name)'),
+        'the staleness check must precede the client teardown, not follow it');
+    assert.ok(/t\.generation\+\+/.test(main), 'respawnTerminal must bump the generation before replacing the fd');
+});
+
 check('Node mirror of clearStrategy agrees with the Go host', () => {
     const cliIdentity = fs.readFileSync(path.join(SRC, 'services', 'cliIdentity.ts'), 'utf8');
     assert.ok(/export type ClearStrategy = 'in-process' \| 'respawn'/.test(cliIdentity), 'cliIdentity.ts missing ClearStrategy type');

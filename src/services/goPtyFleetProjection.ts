@@ -537,6 +537,14 @@ export class GoPtyFleetProjection {
             // embeds the composed command in its send-keys).
             startupCommand: usesTmuxSeating ? effectiveStartupCommand : composedCli,
             startupCommandInner: innerCli,
+            // The COMPOSED cli with NO tmux chain around it — the exact string
+            // the seating chain hands to `tmux new-window`. A tmux seat's
+            // respawn hands this back to `tmux respawn-window -k`, because the
+            // pty is only the attach client and `startupCommand` above is the
+            // whole chain (ending in `exec tmux attach`, so an argv suffix on
+            // it is a usage error). Sent unconditionally so the Go host never
+            // has to tell a tmux seat from a non-tmux one to read it.
+            startupCommandComposed: composedCli,
             machineId,
         });
         if (!result || result.success === false) {

@@ -1640,7 +1640,15 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         onDiagnostic: message => log(opts, message),
     });
     taskViewerProvider.setPtyHostSupervisor(ptyHostSupervisor);
-    const clearPty = async (handle: any): Promise<void> => { await ptyHostSupervisor.request('ptyClearTerminal', { name: handle.friendlyName || handle.name }); };
+    // Returns the verb's own result instead of `void`. `ptyClearTerminal` now
+    // consults the per-family clear strategy and RESPAWNS a respawn-family seat
+    // (devin), and a respawn can fail — a dead child, a missing startup command,
+    // a tmux window that is already gone. The verb reports that as a RESOLVED
+    // `{ success: false, cleared: false, error }`, never a rejection, so a
+    // caller that discards the value cannot tell a failed reset from a
+    // successful one. `clearTerminalContext` reads it below; the fire-and-forget
+    // callers (roster reset, clear-all) keep ignoring it.
+    const clearPty = async (handle: any): Promise<any> => await ptyHostSupervisor.request('ptyClearTerminal', { name: handle.friendlyName || handle.name });
     const modelPty = async (handle: any): Promise<void> => { await ptyHostSupervisor.request('ptySendModel', { name: handle.friendlyName || handle.name }); };
     // `slashCommand: true` is the DECLARATION that makes the pty host reset the
     // input line and submit. It used to be inferred there from the leading '/',
@@ -4738,7 +4746,18 @@ Each plan file must include:
                 } catch { /* best effort */ }
             }
             try {
-                await clearPty(handle);
+                // A respawn-family clear (devin) replaces the CLI, and that can
+                // fail without throwing: the verb answers
+                // `{ success: false, cleared: false, error }`. Discarding the
+                // result was the composition-root divergence this plan names —
+                // the standalone returned `{cleared: true}` for a seat whose
+                // reset had not happened, so the caller cleared its seat block,
+                // dropped its work context and dispatched into a dead or
+                // un-reset pane. Report the failure the host actually gave.
+                const res: any = await clearPty(handle);
+                if (res && (res.success === false || res.cleared === false)) {
+                    return { cleared: false, error: res.error || `clear failed for '${terminalName}'` };
+                }
             } catch (err: any) {
                 return { cleared: false, error: err instanceof Error ? err.message : String(err) };
             }
