@@ -177,8 +177,10 @@ async function run() {
     await check('context-aware completion order routes to queue/done without mtime guess', async () => {
         const { buildMemberCompletionFragment } = require(path.join(process.cwd(), 'out', 'services', 'standingOrderFragments.js'));
         const body = buildMemberCompletionFragment({ teamId: 'test-group', headName: 'lead-1' });
-        assert.ok(body.includes('done --from "<your terminal name>"'),
-            'order must instruct coder to signal completion with the bundled CLI\'s done command');
+        assert.ok(body.includes('node "<cliPath>" done.'),
+            'order must instruct coder to signal completion with the bundled CLI\'s bare done command');
+        assert.ok(!/done --from/.test(body),
+            'the seat supplies no --from: the CLI resolves it from SWITCHBOARD_TERMINAL');
         assert.ok(body.includes('/terminals/teams/test-group/queue/done'), 'order must instruct fallback queue/done');
         // Reading `kanbanColumn` to pick an ENDPOINT is routing and is allowed.
         // Reading it to decide that WORK IS FINISHED is the inference this file
@@ -198,8 +200,8 @@ async function run() {
         const { NEW_CODING_HEAD_PROMPT } = require(path.join(process.cwd(), 'out', 'services', 'teamWiring.js'));
         assert.ok(!NEW_CODING_HEAD_PROMPT.includes('mission-control/reports/ naming the feature'),
             'head order must not instruct posting a report file for completion');
-        assert.ok(NEW_CODING_HEAD_PROMPT.includes('task/complete'),
-            'head order must instruct using POST /kanban/task/complete');
+        assert.ok(NEW_CODING_HEAD_PROMPT.includes('accept --plan'),
+            'head order must instruct using the accept --plan CLI verb (which posts to task/complete)');
     });
 
     // ── System completion orders are composed at delivery, not persisted ──
@@ -413,12 +415,15 @@ async function run() {
 
     await check('kanban.html + terminals.js mirrors retired the report-file completion channel', async () => {
         // The webview mirrors of NEW_CODING_HEAD_PROMPT must not instruct
-        // writing a completion report file, and must instruct task/complete.
+        // writing a completion report file, and must instruct accept --plan
+        // (the CLI verb that posts to task/complete — the lead moved off the
+        // hand-assembled POST in plan: the-lead-accepts-a-subtask-and-the-
+        // system-advances).
         for (const [name, src] of [['kanban.html', kanbanHtmlSrc], ['terminals.js', terminalsJsSrc]]) {
             assert.ok(!src.includes('Post a finished report to .switchboard/mission-control/reports/ naming the feature'),
                 `${name} must not instruct posting a completion report file`);
-            assert.ok(src.includes('POST /kanban/task/complete'),
-                `${name} must instruct using POST /kanban/task/complete`);
+            assert.ok(src.includes('accept --plan'),
+                `${name} must instruct using the accept --plan CLI verb`);
         }
     });
 

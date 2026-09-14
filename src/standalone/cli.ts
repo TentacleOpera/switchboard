@@ -27,7 +27,8 @@ function usage(): string {
        npx switchboard plans [column] [--project <name>] [--search <query>] [--limit N] [--offset N] [--json]
        npx switchboard ready [--project <name>] [--json]
        npx switchboard dispatch <planId|prefix> [column] [--project <name>] [--seat <terminal>] [--json]
-       npx switchboard done --from <seat> [--plan <planId>] [--outcome failed] [--json]
+       npx switchboard done [--from <seat>] [--plan <planId>] [--outcome failed] [--json]
+       npx switchboard accept --plan <subtaskPlanId> [--from <lead>] [--json]
        npx switchboard next --from <seat> [--json]
        npx switchboard reports [--kind blocked|finished] [--limit N] [--json]
        npx switchboard clear <terminal|--all> [--json]
@@ -66,6 +67,9 @@ Board commands (drive the board from a terminal):
                         0 dispatched  1 offline  2 nothing ready  3 refused
                         4 auth failed  5 bad input  6 unavailable
   done                Signal task completion for a seat (pops next card if queued).
+  accept              Accept a subtask as a lead (closes the round when the last
+                      subtask in it is accepted; the system dispatches the next
+                      round and completes the feature when the last round closes).
   next                Pull the next card from the queue for a seat.
   reports             List host turn-end reports (blocked/finished) read from
                       plan_events, joined to each card's current kanban column.
@@ -1975,7 +1979,7 @@ async function cmdApi(workspaceRoot: string, argv: string[]): Promise<void> {
 }
 
 /**
- * `switchboard done --from <seat> [--plan <planId>] [--outcome failed] [--json]`
+ * `switchboard done [--from <seat>] [--plan <planId>] [--outcome failed] [--json]`
  *
  * Signal task completion for a seat via POST /kanban/queue/done.
  * The endpoint clears the card's activity light, fires the turn-end notification,
@@ -2077,6 +2081,126 @@ async function cmdDone(workspaceRoot: string, argv: string[]): Promise<void> {
         }
     } else {
         const errMsg = String(data?.error || res.body || 'done failed');
+        console.error(`[switchboard] ${errMsg}`);
+    }
+    exitFlushed(code);
+}
+
+/**
+ * `switchboard accept --plan <subtaskPlanId> [--from <lead>] [--json]`
+ *
+ * A lead accepts a subtask via POST /kanban/task/complete. The lead's one verb
+ * is "this subtask is accepted" — the system closes the round when the last
+ * subtask in it is accepted, dispatches the next round, and completes the
+ * feature when the last round closes (plan: the-lead-accepts-a-subtask-and-
+ * the-system-advances). `round/complete` and `feature/complete` stop being
+ * things a lead is told to post.
+ *
+ * Identity resolution mirrors `cmdDone`: `from` resolves from the host-injected
+ * `SWITCHBOARD_TERMINAL` (set for every seat, leads included), `--from` still
+ * wins for the human-CLI path, and a missing identity fails LOUDLY naming the
+ * variable — a subtask accepted as the wrong lead clears the wrong seat. The
+ * one field the lead supplies is `--plan` (the SUBTASK's planId); missing
+ * `--plan` is a distinct, named error from the identity error so a lead can
+ * tell "you are not in a seat" from "you did not say which subtask."
+ */
+async function cmdAccept(workspaceRoot: string, argv: string[]): Promise<void> {
+    const jsonFlag = argv.includes('--json');
+    if (jsonFlag) { routeLogsToStderr(); }
+
+    let from: string | undefined;
+    let planId: string | undefined;
+
+    for (let i = 0; i < argv.length; i++) {
+        const a = argv[i];
+        if (a === '--json') { continue; }
+        if (a === '--from') { from = argv[++i]; continue; }
+        if (a.startsWith('--from=')) { from = a.slice('--from='.length); continue; }
+        if (a === '--plan') { planId = argv[++i]; continue; }
+        if (a.startsWith('--plan=')) { planId = a.slice('--plan='.length); continue; }
+    }
+
+    // `--plan` is the lead's one field. Check it FIRST and name it distinctly
+    // from the identity error: a lead must be able to tell "you did not say
+    // which subtask" from "you are not in a seat." A missing-plan error that
+    // reads like a missing-identity error sends the lead looking for a seat
+    // variable when the problem is the argument it never typed.
+    if (!planId) {
+        const msg = 'Missing required argument: --plan <subtask planId>. `accept` takes the SUBTASK\'s planId — never the feature\'s.';
+        if (jsonFlag) { emitJson({ success: false, error: msg }); }
+        else { console.error(`[switchboard] ${msg}`); }
+        exitFlushed(5);
+    }
+
+    // Same identity resolution as `cmdDone`. The host injects
+    // SWITCHBOARD_TERMINAL for every seat (leads included), so the lead never
+    // types its own name. `--from` still wins for driving the CLI by hand.
+    let fromSource: 'flag' | 'env' = 'flag';
+    if (!from) {
+        const envSeat = (process.env.SWITCHBOARD_TERMINAL || '').trim();
+        if (envSeat) {
+            from = envSeat;
+            fromSource = 'env';
+        }
+    }
+    if (!from) {
+        // Loud, and it names the variable. NO placeholder, no 'unknown' — a
+        // subtask accepted as the wrong lead clears the wrong seat, and the
+        // error text is the only thing that distinguishes "you are not in a
+        // seat" from "you typed the command wrong".
+        const msg = 'SWITCHBOARD_TERMINAL is not set — `accept` is run from inside a seat, '
+            + 'which is where the host injects it. If you are driving the CLI by hand, pass --from <lead>.';
+        if (jsonFlag) { emitJson({ success: false, error: msg }); }
+        else { console.error(`[switchboard] ${msg}`); }
+        exitFlushed(5);
+    }
+
+    const port = await findRunningInstance(workspaceRoot);
+    if (port === null) {
+        // Carry the resolved identity and the source that answered it even on
+        // the offline path: "which lead did it think I was?" must be answerable
+        // without a board, or a wrong SWITCHBOARD_TERMINAL is invisible until it
+        // clears somebody else's terminal.
+        if (jsonFlag) { emitJson({ success: false, error: 'No running Switchboard instance', from, fromSource }); }
+        else { console.error(`[switchboard] No running Switchboard instance for this workspace (lead '${from}' via ${fromSource === 'env' ? 'SWITCHBOARD_TERMINAL' : '--from'}).`); }
+        exitFlushed(1);
+    }
+
+    const body: Record<string, any> = {
+        workspaceRoot,
+        from,
+        planId,
+    };
+
+    let res;
+    try {
+        res = await apiPost(port, '/kanban/task/complete', workspaceRoot, body, DELIVERY_BLOCKING_TIMEOUT_MS);
+    } catch (err: any) {
+        if (jsonFlag) { emitJson({ success: false, error: `Switchboard did not answer: ${err?.message || err}` }); }
+        else { console.error(`[switchboard] Switchboard did not answer on port ${port}: ${err?.message || err}`); }
+        exitFlushed(1);
+        return;
+    }
+    const code = dispatchExitCode(res.status);
+    const data = res.json();
+    if (jsonFlag) {
+        emitJson({ success: code === 0, status: res.status, exitCode: code, from, fromSource, result: data });
+    } else if (code === 0) {
+        console.log(`[switchboard] Subtask ${planId} accepted by lead '${from}' (${fromSource === 'env' ? 'SWITCHBOARD_TERMINAL' : '--from'}).`);
+        if (data?.roundClosed) {
+            console.log(`  Round ${data.roundClosed} closed.`);
+        }
+        if (data?.roundAlreadyClosed) {
+            console.log(`  Round ${data.roundAlreadyClosed} already closed by a concurrent accept — nothing dispatched.`);
+        }
+        if (data?.nextRound) {
+            console.log(`  Next round ${data.nextRound.ordinal} dispatched (state: ${data.nextRound.state}).`);
+        }
+        if (data?.featureComplete) {
+            console.log('  Feature complete — team released.');
+        }
+    } else {
+        const errMsg = String(data?.error || res.body || 'accept failed');
         console.error(`[switchboard] ${errMsg}`);
     }
     exitFlushed(code);
@@ -3331,7 +3455,7 @@ async function main() {
     const KNOWN_SUBCOMMANDS = new Set([
         'local', 'tailnet', 'stop', 'status', 'logs', 'init', 'scaffold',
         'control-plane', 'secrets', 'token', 'export', 'import',
-        'plans', 'ready', 'dispatch', 'done', 'next', 'reports', 'clear', 'fleet', 'probe', 'verb', 'api',
+        'plans', 'ready', 'dispatch', 'done', 'accept', 'next', 'reports', 'clear', 'fleet', 'probe', 'verb', 'api',
         'help', 'about', 'version', 'setup', 'launcher-state', 'service',
         // Internal routing token — re-spawned by cmdMainMenu's CLI Mode to
         // enable Back without refactoring cmdBoardConsole's exit semantics.
@@ -4330,6 +4454,11 @@ async function main() {
     // ── done ───────────────────────────────────────────────────────
     if (process.argv[2] === 'done') {
         await cmdDone(workspaceRoot, process.argv.slice(3));
+    }
+
+    // ── accept ─────────────────────────────────────────────────────
+    if (process.argv[2] === 'accept') {
+        await cmdAccept(workspaceRoot, process.argv.slice(3));
     }
 
     // ── next ───────────────────────────────────────────────────────

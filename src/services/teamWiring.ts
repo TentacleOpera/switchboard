@@ -295,11 +295,11 @@ export function deriveSharedMemberName(
  * import). `stage-marker-commit-contract.test.js` gates both halves.
  */
 export const TEAM_CODER_QUEUE_DONE_INSTRUCTION =
-    'When you have finished ALL parts of the dispatched plan, run node "<cliPath>" done --from "<your terminal name>" '
-    + '(or switchboard done --from "<your terminal name>"). '
+    'When you have finished ALL parts of the dispatched plan, run node "<cliPath>" done '
+    + '(or switchboard done). '
     + 'This signals completion — the system clears your activity light and notifies your lead. '
     + 'Do NOT report after finishing individual parts — only when ALL work is complete. '
-    + 'If you cannot complete it, run node "<cliPath>" done --from "<your terminal name>" '
+    + 'If you cannot complete it, run node "<cliPath>" done '
     + '--outcome failed with a one-line reason.';
 
 /**
@@ -649,8 +649,7 @@ export const NEW_CODING_HEAD_PROMPT =
     + 'When the work is complete, stage the files you changed by explicit path '
     + '— never `git add -A` or `git add .`. Then create a single commit with a '
     + 'descriptive message. '
-    + 'POST /kanban/task/complete with {"from":"{head}","planId":"<the subtask\'s planId>","workspaceRoot":'
-    + '"<your current working directory>"} '
+    + 'run node "<cliPath>" accept --plan "<the subtask\'s planId>" '
     + 'against the API base named in your SWITCHBOARD STATUS line. '
     + 'The card stays where it is. Completion is asserted, never inferred from board position. '
     + 'run node "<cliPath>" next --from "{head}" (or switchboard next --from "{head}"); '

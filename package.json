@@ -1118,6 +1118,7 @@
     "test:contract:task-complete-instruction": "node src/test/task-complete-instruction-contract.test.js",
     "test:contract:self-completion-clear": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/self-reported-completion-clears-contract.test.js",
     "test:contract:bare-completion": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/bare-completion-contract.test.js",
+    "test:contract:lead-accept": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/lead-accept-advances-contract.test.js",
     "test:contract:team-pane-order": "node src/test/team-pane-order-contract.test.js"
   },
   "devDependencies": {

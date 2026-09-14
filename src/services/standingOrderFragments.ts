@@ -79,11 +79,11 @@ export function buildMemberCompletionFragment(ctx: Pick<StandingOrderComposition
         + '1. If you have a PLAN_ID from your dispatch, call GET /kanban/plan?planId=<your planId>\n'
         + '   against the API base named in your SWITCHBOARD STATUS line.\n'
         + '   - If the response shows kanbanColumn is "LEAD CODED", "CODER CODED", or "INTERN CODED",\n'
-        + '     run node "<cliPath>" done --from "<your terminal name>".\n'
+        + '     run node "<cliPath>" done.\n'
         + '     The system will clear your terminal and dispatch the next staged card.\n'
         + '     Output reporting the queue is empty (or, with --json, {"dispatched":null,"reason":"queue empty"})\n'
         + '     means the run is over — say so and stop.\n'
-        + '     If you cannot complete it, run node "<cliPath>" done --from "<your terminal name>" --outcome failed with a one-line reason.\n'
+        + '     If you cannot complete it, run node "<cliPath>" done --outcome failed with a one-line reason.\n'
         + '   - If the response shows any other column, report to your head (step 3).\n\n'
         + '2. If you do not have a PLAN_ID (ad-hoc prompt, file-based queue item),\n'
         + '   POST /terminals/teams/' + ctx.teamId + '/queue/done with {"from":"<your terminal name>"}.\n'
@@ -100,7 +100,44 @@ export function buildMemberCompletionFragment(ctx: Pick<StandingOrderComposition
         + 'Before reporting, re-read your full orders at .switchboard/teams/' + ctx.teamId + '/member-orders.md';
 }
 
-export function buildHeadCompletionFragment(): string {
+export function buildHeadCompletionFragment(ctx: Pick<StandingOrderCompositionContext, 'hasRegisteredRounds'> = {}): string {
+    // The rounds-registered lead variant: the lead's one verb is "this
+    // subtask is accepted". The system closes the round when the last subtask
+    // in it is accepted, dispatches the next round, and completes the feature
+    // when the last round closes. `round/complete` and `feature/complete` stop
+    // being things a lead is told to post (plan:
+    // the-lead-accepts-a-subtask-and-the-system-advances). The hand-assembled
+    // POST is replaced by a CLI verb — the lead runs `accept --plan` and the
+    // CLI resolves `from` from the host-injected SWITCHBOARD_TERMINAL, the
+    // same identity resolution `done` uses.
+    if (ctx.hasRegisteredRounds) {
+        return 'REGISTER ROUNDS: before any round starts, decide how the feature\'s subtasks group into '
+            + 'ordered rounds and POST /kanban/round/register with {"from":"<your terminal name>",'
+            + '"featureId":"<the FEATURE\'s planId>","rounds":[["<subtask planId>","<subtask planId>"],'
+            + '["<subtask planId>"]]} against the API base named in your SWITCHBOARD STATUS line. Each '
+            + 'entry in `rounds` is ONE round — an array of that round\'s subtask planIds, in dispatch '
+            + 'order. Registering STARTS round 1 — the system dispatches its subtasks to your seats '
+            + 'immediately, and dispatches each later round when the one before it closes. You '
+            + 'do not dispatch subtasks to seats yourself. Re-registering '
+            + 'replaces pending (not-yet-dispatched) rounds and leaves dispatched/closed ones alone.\n\n'
+            + 'CLOSE OUT EVERY SUBTASK. When a seat reports a subtask finished and you are satisfied '
+            + 'with it, run node "<cliPath>" accept --plan "<that SUBTASK\'s planId>" against the API '
+            + 'base named in your SWITCHBOARD STATUS line. Accept per subtask, with that subtask\'s '
+            + 'planId — never the feature\'s. Accepting and rejecting are not two different endings: '
+            + 'you reject by sending a fix round first, then you accept when the subtask is done. '
+            + 'Until you accept, that seat is not cleared and the round does not advance. Your accept '
+            + 'is the only fact that releases a seat.\n\n'
+            + 'The system closes the round when the last subtask in it is accepted, dispatches the '
+            + 'next registered round, and completes the feature when the last round closes. You do '
+            + 'NOT post round/complete or feature/complete — those are the system\'s job, derived '
+            + 'from your accepts. An idle lead is the correct resting state between rounds, not a '
+            + 'failure.';
+    }
+
+    // The stateless variant: a lead whose team registered no rounds keeps the
+    // legacy task/complete + round/complete + feature/complete contract
+    // exactly as before. The `task/complete with {"from"` string is pinned by
+    // bare-completion-contract.test.js and must not change here.
     return 'REGISTER ROUNDS: before any round starts, decide how the feature\'s subtasks group into '
         + 'ordered rounds and POST /kanban/round/register with {"from":"<your terminal name>",'
         + '"featureId":"<the FEATURE\'s planId>","rounds":[["<subtask planId>","<subtask planId>"],'
@@ -131,7 +168,7 @@ export function buildHeadCompletionFragment(): string {
 
 export function buildHeadNextFragment(ctx: Pick<StandingOrderCompositionContext, 'teamId'>): string {
     return 'Then take the next item, routed by where your own work came from:\n'
-        + '- If you hold a card dispatched from the board, run node "<cliPath>" done --from "<your terminal name>". '
+        + '- If you hold a card dispatched from the board, run node "<cliPath>" done. '
         + 'Output reporting the queue is empty means the run is over — say so and stop.\n'
         + '- Otherwise POST /terminals/teams/' + ctx.teamId + '/queue/done with '
         + '{"from":"<your terminal name>"} to take the next queued item. If there are no more '
@@ -205,7 +242,7 @@ const REVIEW_HEAD_WORK =
     + 'to the plans intake folder (.switchboard/plans/intake/) covering deferred items, remaining risks, and intent failures.';
 
 export const GLOBAL_QUEUE_COMPLETION_FRAGMENT_BODY =
-    'When you finish the card you were dispatched, run node "<cliPath>" done --from "<your terminal name>". '
+    'When you finish the card you were dispatched, run node "<cliPath>" done. '
     + 'Do not wait to be asked; there is no head to report to. If you cannot complete it, call the same command with '
     + '--outcome failed and a one-line reason. Do not attempt work above your tier '
     + 'and do not report success you cannot evidence. Output reporting the queue is empty means '

@@ -357,31 +357,29 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
         headPromptMatches.length, 4,
         `Expected exactly 4 shipped headPrompts (Coding, Review, Multi-agent planning, Planning with analyst), found ${headPromptMatches.length}.`
     );
-    // The Coding head prompt is selected by the completion post — the ONE call
-    // that ends its turn. `POST /kanban/task/complete` appears in exactly one
-    // shipped head prompt, so it is the stable selector. It replaced
-    // `/kanban/dispatch` when completion became an asserted event: the head no
-    // longer advances the card to a target column, it asserts the fact and asks
-    // for the next one. See completion-is-asserted-never-inferred.md.
-    const codingHeadPrompt = headPromptMatches.find(hp => hp.includes('/kanban/task/complete'));
+    // The Coding head prompt is selected by the accept verb — the ONE call
+    // that ends its turn. `accept --plan` appears in exactly one shipped head
+    // prompt, so it is the stable selector. It replaced `POST /kanban/task/
+    // complete` when the lead moved to a CLI verb (plan: the-lead-accepts-a-
+    // subtask-and-the-system-advances): the head no longer hand-assembles the
+    // POST, it runs the verb and the CLI resolves `from`. See
+    // completion-is-asserted-never-inferred.md.
+    const codingHeadPrompt = headPromptMatches.find(hp => hp.includes('accept --plan'));
     assert.ok(codingHeadPrompt, 'Coding headPrompt not found among shipped headPrompts');
     const headPrompt = codingHeadPrompt;
-    assert.ok(headPrompt.includes('POST /kanban/task/complete'),
-        'Coding headPrompt must reference POST /kanban/task/complete — the asserted completion signal, the only way the system learns work finished');
+    assert.ok(headPrompt.includes('accept --plan'),
+        'Coding headPrompt must reference the accept --plan CLI verb — the asserted completion signal, the only way the system learns work finished');
     assert.ok(!headPrompt.includes('/kanban/dispatch'),
-        'Coding headPrompt must NOT reference POST /kanban/dispatch — the head does not advance the card or dispatch a reviewer; it posts completion and pops the queue');
+        'Coding headPrompt must NOT reference POST /kanban/dispatch — the head does not advance the card or dispatch a reviewer; it accepts and pops the queue');
     assert.ok(!headPrompt.includes('CODE REVIEWED'),
         'Coding headPrompt must NOT name a target column — the card stays where it is and completion is asserted, never inferred from board position');
-    assert.ok(headPrompt.includes('"from":"{head}"'),
-        'Coding headPrompt must carry "from":"{head}" — the {head} token is substituted by wireSpawnedTeam with the head terminal name');
+    assert.ok(headPrompt.includes('next --from "{head}"'),
+        'Coding headPrompt must carry next --from "{head}" — the {head} token is substituted by wireSpawnedTeam with the head terminal name');
     assert.ok(headPrompt.includes('Never move a card to a new column yourself'),
         'Coding headPrompt must forbid moving the card — a column move releases nothing and completion is asserted, not inferred from position');
     assert.ok(!headPrompt.includes('GET /kanban/feature'),
         'Coding headPrompt must NOT reference GET /kanban/feature — that is a POST create endpoint. '
         + 'Use GET /kanban/plan?planId= to check subtask status.');
-    assert.ok(headPrompt.includes('workspaceRoot'),
-        'Coding headPrompt must include workspaceRoot in the /kanban/task/complete body — '
-        + 'without it, fleet/worktree heads get "Plan not found".');
     assert.ok(!headPrompt.includes('give that coder the next subtask'),
         'Coding headPrompt must NOT say "give that coder the next subtask" — '
         + 'stacking subtasks on the same coder causes context-wall losses.');

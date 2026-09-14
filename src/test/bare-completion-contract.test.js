@@ -178,6 +178,77 @@ check('cmdDone substitutes no placeholder identity', () => {
     }
 });
 
+// ── 6. No seat-facing instruction names --from ───────────────────────────
+//
+// This is the assertion that keeps the field from creeping back one
+// instruction at a time — the way `outcome` survived five corrections and a
+// contract test. Scoped to SEAT-facing strings: the lead's asserted-completion
+// path (POST /kanban/task/complete) legitimately names from/planId/
+// workspaceRoot, because naming which plan is complete is the lead's job.
+
+const SEAT_FACING_SOURCES = [
+    'src/services/standingOrderFragments.ts',
+    'src/services/teamWiring.ts',
+    'src/services/agentPromptBuilder.ts',
+    'src/services/PlanIngestionEngine.ts',
+];
+
+function stripComments(src) {
+    return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+}
+
+check('no seat-facing instruction tells a seat to supply --from to done', () => {
+    for (const rel of SEAT_FACING_SOURCES) {
+        const code = stripComments(fs.readFileSync(path.join(process.cwd(), rel), 'utf8'));
+        const hit = /done\s+--from/.exec(code);
+        assert.ok(!hit,
+            `${rel} still instructs a seat to supply --from to done: ${hit && hit[0]}. `
+            + 'The CLI resolves the seat from SWITCHBOARD_TERMINAL; an instruction that '
+            + 'names the field puts the agent back to assembling the report.');
+    }
+});
+
+check("the lead's completion instruction keeps its fields, scoped per variant", () => {
+    const frag = fs.readFileSync(
+        path.join(process.cwd(), 'src', 'services', 'standingOrderFragments.ts'), 'utf8');
+    // (b) The STATELESS variant (no registered rounds) KEEPS the exact
+    // task/complete string — this plan keeps round/complete + feature/complete
+    // for stateless teams. The assertion stays green regardless of the rounds
+    // variant; it guards nothing about the rounds variant, so (a) is a
+    // separate scoped assertion below.
+    assert.ok(/task\/complete with \{"from"/.test(frag),
+        'the stateless lead names which plan is complete — task/complete keeps from/planId/'
+        + 'workspaceRoot and must not be swept up by the seat-facing rule above');
+    assert.ok(/"planId"/.test(frag), 'task/complete still requires planId');
+});
+
+check("the rounds-registered lead variant names accept --plan and NOT round/complete or feature/complete", () => {
+    // (a) The ROUNDS-REGISTERED variant: the lead's one verb is accept --plan.
+    // No lead-facing string in this variant names round/complete or
+    // feature/complete — the system closes the round and completes the feature
+    // as a consequence of the accepts (plan: the-lead-accepts-a-subtask-and-
+    // the-system-advances). Scoped to the rounds variant: the stateless
+    // variant still names round/complete + feature/complete, and an assertion
+    // carved out so wide it scans the whole file would falsely flag the
+    // stateless path.
+    const { buildHeadCompletionFragment } = require(
+        path.join(process.cwd(), 'out', 'services', 'standingOrderFragments.js'));
+    const roundsFrag = buildHeadCompletionFragment({ hasRegisteredRounds: true });
+    assert.ok(/accept --plan/.test(roundsFrag),
+        'the rounds-registered lead variant must name accept --plan');
+    assert.ok(!/round\/complete/.test(roundsFrag),
+        'the rounds-registered lead variant must NOT name round/complete — the system closes the round');
+    assert.ok(!/feature\/complete/.test(roundsFrag),
+        'the rounds-registered lead variant must NOT name feature/complete — the system completes the feature');
+    // The stateless variant still names both, so the gate protects the
+    // rounds variant specifically.
+    const statelessFrag = buildHeadCompletionFragment({ hasRegisteredRounds: false });
+    assert.ok(/round\/complete/.test(statelessFrag),
+        'the stateless lead variant still names round/complete');
+    assert.ok(/feature\/complete/.test(statelessFrag),
+        'the stateless lead variant still names feature/complete');
+});
+
 if (failures > 0) {
     console.error(`\n${failures} failure(s)`);
     process.exit(1);

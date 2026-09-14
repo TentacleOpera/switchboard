@@ -4706,8 +4706,173 @@ export class LocalApiServer {
                 return;
             }
 
-            // Trigger advance-when-ready hook if team is released
-            if (result.success && this._options.onTeamReleased) {
+            // ── Round advance (plan: the-lead-accepts-a-subtask-and-the-system-
+            //    advances). The lead's one verb is "this subtask is accepted".
+            //    The system closes the round when the last subtask in it is
+            //    accepted, dispatches the next round, and completes the feature
+            //    when the last round closes. `round/complete` and
+            //    `feature/complete` stop being things a lead is told to post.
+            //
+            //    Detection derives round completion from the round's subtask
+            //    CARDS' `completedAt` — NOT from `subtask_seats.delivered`
+            //    (which records dispatch, not acceptance) and NOT by counting
+            //    accepts (a re-accept or manually-completed subtask miscounts).
+            //    The same `completedAt` field `round/complete`'s `outstanding`
+            //    filter uses is the single source of truth.
+            //
+            //    Idempotence: the conditional `closeCodingRoundIfOpen` (state
+            //    IN ('dispatched','partial')) is the guard. The loser of a
+            //    concurrent last-subtask race observes `changes === 0` (already
+            //    closed) and dispatches nothing. The unconditional
+            //    `closeCodingRound` CANNOT serve as this guard — it stamps an
+            //    already-closed row and returns `changes > 0`.
+            //
+            //    Double release: this handler ALREADY fires `onTeamReleased`
+            //    in a fire-and-forget at the bottom of this block on every
+            //    successful completion. When the accept path delegates to
+            //    `_completeFeatureCore` (which releases), that fire-and-forget
+            //    wakes, sees `inFlight === false`, and fires a SECOND time. The
+            //    fire-and-forget is gated on `!roundAdvanced` so the accept
+            //    path's delegation is the sole release on the feature-complete
+            //    branch, and the team is not released while a next round is in
+            //    flight on the round-close branch.
+            let roundAdvanced = false;
+            let roundClosed: number | null = null;
+            let roundAlreadyClosed: number | null = null;
+            let nextRoundInfo: { ordinal: number; roundId: string; state: string; dispatched: boolean; partial?: boolean; error?: string } | null = null;
+            let featureComplete = false;
+
+            try {
+                const teamId = 'team_' + encodeURIComponent(from).replace(/[^a-zA-Z0-9_]/g, '_');
+                let teamRounds: any[] = [];
+                try {
+                    teamRounds = (await db.getCodingRoundsByTeam?.(teamId)) || [];
+                } catch (roundsErr) {
+                    console.warn('[LocalApiServer] task/complete: getCodingRoundsByTeam failed:', roundsErr);
+                    teamRounds = [];
+                }
+
+                if (teamRounds.length > 0) {
+                    // Find the in-flight round that contains THIS subtask. A
+                    // subtask that belongs to no registered round completes and
+                    // stops — the stateless behaviour, exactly as today. There
+                    // is at most one in-flight round per team (round/complete
+                    // enforces it), but the first match is taken defensively.
+                    const currentRound = teamRounds.find(r =>
+                        (r.state === 'dispatched' || r.state === 'partial')
+                        && Object.prototype.hasOwnProperty.call(r.subtaskSeats || {}, planId)
+                    );
+
+                    if (currentRound) {
+                        // Derive round completion from the round's subtask
+                        // CARDS' completedAt — not from subtask_seats.delivered
+                        // (dispatch) and not by counting accepts (re-accept
+                        // miscounts). The just-completed card is already
+                        // stamped by completeCardInternal above.
+                        const wsId = (await db.getWorkspaceId?.()) || (await db.getDominantWorkspaceId?.()) || '';
+                        const board: any[] = (await db.getBoard?.(wsId)) || [];
+                        const completedByPlanId = new Set<string>();
+                        for (const p of board) {
+                            if (p && p.completedAt && p.planId) {
+                                completedByPlanId.add(String(p.planId));
+                            }
+                        }
+                        const roundSubtaskPlanIds = Object.keys(currentRound.subtaskSeats || {});
+                        const allComplete = roundSubtaskPlanIds.every(pid => completedByPlanId.has(pid));
+
+                        if (allComplete) {
+                            // Last accept in the round. Close it conditionally —
+                            // the compare-and-swap is the idempotence guard.
+                            const now = new Date().toISOString();
+                            const closed = await db.closeCodingRoundIfOpen?.(currentRound.roundId, now);
+                            if (!closed) {
+                                // Lost the race: a concurrent accept already
+                                // closed this round. Dispatch nothing. The
+                                // winner's delegation is the sole release, so
+                                // suppress our own fire-and-forget too.
+                                roundAdvanced = true;
+                                roundAlreadyClosed = currentRound.ordinal;
+                            } else {
+                                // We won the close. Dispatch the next registered
+                                // round, or — when the closed round was the last —
+                                // delegate to the existing feature-complete core
+                                // (the same core POST /kanban/feature/complete
+                                // uses). Do NOT fork a second release path.
+                                roundAdvanced = true;
+                                roundClosed = currentRound.ordinal;
+
+                                const nextRound = teamRounds
+                                    .filter(r => r.state === 'registered' && r.ordinal > currentRound.ordinal)
+                                    .sort((a, b) => a.ordinal - b.ordinal)[0];
+                                const isLast = !nextRound;
+
+                                // Resolve the roster for dispatch/feature-core.
+                                // The accept path does not clear coder seats
+                                // itself (the round's cards were completed
+                                // individually by the accepts); the
+                                // feature-complete core clears every roster
+                                // seat including the lead.
+                                let roster: string[] | null = null;
+                                if (this._options.resolveTeamMembers) {
+                                    roster = await this._options.resolveTeamMembers(workspaceRoot, from);
+                                }
+                                if (!roster || roster.length === 0) {
+                                    roster = [from];
+                                }
+
+                                if (isLast) {
+                                    const featureResult = await this._completeFeatureCore({
+                                        db,
+                                        workspaceRoot,
+                                        from,
+                                        featureId: currentRound.featureId,
+                                        roster,
+                                        clearLead: true,
+                                    });
+                                    featureComplete = featureResult.success;
+                                    if (!featureResult.success) {
+                                        console.warn(`[LocalApiServer] task/complete: feature-complete delegation failed for feature '${currentRound.featureId}': ${featureResult.error}`);
+                                    }
+                                } else {
+                                    const nextDispatch = await this._dispatchRoundCore({
+                                        db,
+                                        workspaceRoot,
+                                        from,
+                                        round: nextRound,
+                                        roster,
+                                    });
+                                    nextRoundInfo = {
+                                        ordinal: nextRound.ordinal,
+                                        roundId: nextRound.roundId,
+                                        state: nextDispatch.state,
+                                        dispatched: nextDispatch.success,
+                                        ...(nextDispatch.success ? {} : { partial: true, error: nextDispatch.error }),
+                                    };
+                                }
+                            }
+                        }
+                        // else: not the last accept in the round. roundAdvanced
+                        // stays false; the existing fire-and-forget runs as
+                        // today. Nothing is closed or dispatched.
+                    }
+                    // else: this subtask belongs to no registered (in-flight)
+                    // round. roundAdvanced stays false — stateless behaviour,
+                    // exactly as today.
+                }
+            } catch (advanceErr) {
+                // The round-advance path must never break the accept itself.
+                // The card is already completed; a failure to advance is
+                // logged, not surfaced as a failed accept.
+                console.warn('[LocalApiServer] task/complete: round-advance error:', advanceErr);
+            }
+
+            // Trigger advance-when-ready hook if team is released. Gated on
+            // `!roundAdvanced`: when the accept path took over release (the
+            // feature-complete delegation) or is holding the team for the next
+            // round (the round-close dispatch), the fire-and-forget is
+            // suppressed — two release paths is how onTeamReleased gets
+            // double-fired.
+            if (result.success && !roundAdvanced && this._options.onTeamReleased) {
                 const terminal = result.dispatchedTerminal || from;
                 void (async () => {
                     try {
@@ -4727,7 +4892,13 @@ export class LocalApiServer {
             }
 
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify(result));
+            res.end(JSON.stringify({
+                ...result,
+                ...(roundClosed !== null ? { roundClosed } : {}),
+                ...(roundAlreadyClosed !== null ? { roundAlreadyClosed } : {}),
+                ...(nextRoundInfo !== null ? { nextRound: nextRoundInfo } : {}),
+                ...(featureComplete ? { featureComplete } : {}),
+            }));
         } catch (err) {
             console.error('[LocalApiServer] kanbanTaskComplete error:', err);
             res.writeHead(500, { 'Content-Type': 'application/json' });

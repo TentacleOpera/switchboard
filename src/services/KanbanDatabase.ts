@@ -4678,12 +4678,59 @@ export class KanbanDatabase {
      * the same semantics the pre-V74 `dispatched_at IS NOT NULL` had when
      * plans carried one device's row.
      *
-     * All column refs are qualified with `plans.` because the subquery
+     * All column refs are qualified with an explicit alias because the subquery
      * introduces `plan_runtime_state prs`, and an unqualified `plan_id`
-     * would be ambiguous.
+     * would be ambiguous. The alias is a parameter so the same predicate can be
+     * applied to the outer row (`plans`) and to a feature-unit sibling (`sib`)
+     * in the cohesion guard below.
      */
-    private static readonly IN_FLIGHT_SQL =
-        `(plans.worktree_status = 'active' OR EXISTS (SELECT 1 FROM plan_runtime_state prs WHERE prs.plan_id = plans.plan_id AND prs.dispatched_at IS NOT NULL) OR (plans.worktree_id IS NOT NULL AND plans.worktree_id IN (SELECT id FROM worktrees WHERE status = 'active')))`;
+    private static _inFlightSql(alias: string): string {
+        return `(${alias}.worktree_status = 'active' OR EXISTS (SELECT 1 FROM plan_runtime_state prs WHERE prs.plan_id = ${alias}.plan_id AND prs.dispatched_at IS NOT NULL) OR (${alias}.worktree_id IS NOT NULL AND ${alias}.worktree_id IN (SELECT id FROM worktrees WHERE status = 'active')))`;
+    }
+
+    /**
+     * "This row is dormant-eligible": parked in a dormant column, aged out of
+     * the hot window, and not in-flight. Placeholders are positional — the
+     * caller must push `[...DORMANT_KANBAN_COLUMNS, cutoffIso]` in textual
+     * order for every occurrence.
+     */
+    private static _dormantEligibleSql(alias: string): string {
+        const dormant = KanbanDatabase.DORMANT_KANBAN_COLUMNS.map(() => '?').join(', ');
+        return `(${alias}.kanban_column IN (${dormant}) AND ${alias}.updated_at < ? AND NOT (${KanbanDatabase._inFlightSql(alias)}))`;
+    }
+
+    /**
+     * Feature-unit cohesion guard. A feature and its subtasks move in or out of
+     * the working set as ONE unit, mirroring the unit semantics
+     * `selectColdEligiblePlanIds` applies to the cold sweep.
+     *
+     * Without this, a dormant feature row can be windowed out while its live
+     * subtasks are not — and the board renders NEITHER, because the webview
+     * rolls subtasks up under their feature and filters every card carrying a
+     * `featureId` out of the column view (`src/webview/kanban.html`: the
+     * `!card.featureId` clauses). The whole unit silently disappears while work
+     * is still in flight on it. The inverse (a windowed-out subtask under a
+     * visible feature) desyncs the feature's expansion from its
+     * `subtaskCount`, which comes from a separate unwindowed sweep.
+     *
+     * So: exclude a unit member only when every other member of its unit is
+     * ALSO dormant-eligible. Standalone cards (no feature, no featureId) have
+     * no unit and are unaffected.
+     */
+    private static _unitCohesionSql(alias: string): string {
+        return `NOT EXISTS (
+                    SELECT 1 FROM plans sib
+                    WHERE sib.workspace_id = ${alias}.workspace_id
+                      AND sib.status = 'active'
+                      AND sib.plan_id <> ${alias}.plan_id
+                      AND (
+                          (${alias}.is_feature = 1 AND sib.feature_id = ${alias}.plan_id)
+                          OR (COALESCE(${alias}.feature_id, '') <> ''
+                              AND (sib.plan_id = ${alias}.feature_id OR sib.feature_id = ${alias}.feature_id))
+                      )
+                      AND NOT ${KanbanDatabase._dormantEligibleSql('sib')}
+                )`;
+    }
 
     /**
      * Working-set board read: every `status='active'` row EXCEPT dormant cards
@@ -4691,7 +4738,11 @@ export class KanbanDatabase {
      * the hot window AND that are not in-flight. The card stays active and on
      * the board; the collection read simply does not materialise it. A touched
      * card (any write bumping `updated_at`) re-enters, and in-flight cards are
-     * never excluded.
+     * never excluded. Feature units move as one: a member is excluded only when
+     * every other member of its unit is also dormant-eligible (see
+     * {@link _unitCohesionSql}) — otherwise a dormant feature row is windowed
+     * out from under its live subtasks and the webview's subtask roll-up hides
+     * the whole unit.
      *
      * This is the read-side filter the 1 GB Pi plan names: 317 cards in
      * PLAN REVIEWED + 91 in CODE REVIEWED were materialised on every
@@ -4707,17 +4758,21 @@ export class KanbanDatabase {
         const cutoff = new Date();
         cutoff.setDate(cutoff.getDate() - days);
         const cutoffIso = cutoff.toISOString();
-        const dormant = KanbanDatabase.DORMANT_KANBAN_COLUMNS.map(() => '?').join(', ');
         const stmt = this._db.prepare(
             `SELECT ${PLAN_COLUMNS} FROM plans
              WHERE workspace_id = ? AND status = 'active'
                AND NOT (
-                   kanban_column IN (${dormant})
-                   AND updated_at < ?
-                   AND NOT (${KanbanDatabase.IN_FLIGHT_SQL})
+                   ${KanbanDatabase._dormantEligibleSql('plans')}
+                   AND ${KanbanDatabase._unitCohesionSql('plans')}
                )
              ORDER BY updated_at DESC`,
-            [workspaceId, ...KanbanDatabase.DORMANT_KANBAN_COLUMNS, cutoffIso]
+            [
+                workspaceId,
+                // _dormantEligibleSql('plans')
+                ...KanbanDatabase.DORMANT_KANBAN_COLUMNS, cutoffIso,
+                // _unitCohesionSql('plans') → _dormantEligibleSql('sib')
+                ...KanbanDatabase.DORMANT_KANBAN_COLUMNS, cutoffIso,
+            ]
         );
         return this._readRows(stmt);
     }
@@ -4748,7 +4803,6 @@ export class KanbanDatabase {
             ? 'plans LEFT JOIN projects pr ON plans.project_id = pr.id'
             : 'plans';
 
-        const dormant = KanbanDatabase.DORMANT_KANBAN_COLUMNS.map(() => '?').join(', ');
         let query = `SELECT ${selectColumns} FROM ${fromClause} WHERE plans.workspace_id = ? AND plans.status = 'active'`;
         const params: unknown[] = [workspaceId];
 
@@ -4770,7 +4824,8 @@ export class KanbanDatabase {
         const cutoff = new Date();
         cutoff.setDate(cutoff.getDate() - days);
         const cutoffIso = cutoff.toISOString();
-        query += ` AND NOT (plans.kanban_column IN (${dormant}) AND plans.updated_at < ? AND NOT (${KanbanDatabase.IN_FLIGHT_SQL}))`;
+        query += ` AND NOT (${KanbanDatabase._dormantEligibleSql('plans')} AND ${KanbanDatabase._unitCohesionSql('plans')})`;
+        params.push(...KanbanDatabase.DORMANT_KANBAN_COLUMNS, cutoffIso);
         params.push(...KanbanDatabase.DORMANT_KANBAN_COLUMNS, cutoffIso);
 
         query += ` ORDER BY plans.updated_at DESC`;
@@ -8434,6 +8489,39 @@ export class KanbanDatabase {
             return Number(result?.changes ?? 0) > 0;
         } catch (e) {
             console.warn(`[KanbanDatabase] closeCodingRound failed for round ${roundId}:`, e);
+            return false;
+        }
+    }
+
+    /**
+     * Conditionally close a coding_rounds row: set state='closed' and stamp
+     * closed_at ONLY when the row is still in flight (state='dispatched' or
+     * 'partial'). Returns `changes > 0` ONLY when THIS caller was the one that
+     * closed it — a concurrent caller that lost the race observes
+     * `changes === 0` (already closed) and stops.
+     *
+     * This is the idempotence guard for the accept path (plan:
+     * the-lead-accepts-a-subtask-and-the-system-advances). The existing
+     * {@link closeCodingRound} is UNCONDITIONAL — it stamps `closed_at` on an
+     * already-closed row and returns `changes > 0`, so it CANNOT serve as the
+     * guard: two concurrent last-subtask accepts would both see "I closed it"
+     * and both dispatch the next round. The conditional `WHERE state IN
+     * ('dispatched','partial')` clause makes the close a compare-and-swap — the
+     * database is the single arbiter of which accept won.
+     *
+     * `coding_rounds` is unreleased (clean break), so this method is additive —
+     * no migration, no column.
+     */
+    public async closeCodingRoundIfOpen(roundId: string, closedAt: string): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        try {
+            const result = this._db.run(
+                `UPDATE coding_rounds SET state = 'closed', closed_at = ? WHERE round_id = ? AND state IN ('dispatched','partial')`,
+                [closedAt, roundId]
+            );
+            return Number(result?.changes ?? 0) > 0;
+        } catch (e) {
+            console.warn(`[KanbanDatabase] closeCodingRoundIfOpen failed for round ${roundId}:`, e);
             return false;
         }
     }

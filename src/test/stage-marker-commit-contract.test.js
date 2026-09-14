@@ -384,7 +384,7 @@ test('the shipped Coding reviewer is reports-to-head, and no shipped member is a
 });
 
 test('NEW_CODING_HEAD_PROMPT keeps every load-bearing literal', () => {
-    for (const lit of ['"from":"{head}"',
+    for (const lit of ['accept --plan',
         'intern → coder → lead', 'seat fails review on the same subtask twice',
         'stop and report to the human instead of dispatching again', 'PLAN FILES ARE THE SOURCE OF TRUTH',
         'Never move a card backwards', 'Never move a card to a new column yourself',
