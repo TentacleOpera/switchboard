@@ -344,3 +344,9 @@ needed.
 ---
 
 **Recommendation:** Complexity 6 → Send to Coder.
+
+---
+
+## Implementation Summary
+
+Implemented all five proposed changes. Five static fragment bodies (`gitSafety`, `reviewHead`, `headCommit`, `orchestratorReport`, `globalCompletion`) now live in the `control_plane` store as `kind: 'standing-order-fragment'` rows, seeded at startup alongside protocols. An in-memory cache (module-level `Map` in `standingOrderFragments.ts`) is warmed after `seedControlPlaneFromBundle` in `bootstrap.ts` and invalidated+reloaded on every fragment-kind `override_body`/`upsert` write in `KanbanDatabase.ts`, so an operator's override reaches the next delivered prompt with no rebuild and no restart. The sync composition path reads the cache via `resolveStaticFragmentBody` closures — no async in the delivery path. `composeStandingOrderFragments` returns a `sources` map (`'store'` vs `'compiled-default'`) per static fragment, logged by `resolveStandingOrderInstruction` to satisfy the repo's fallback rule. `projectControlPlane` skips the new kind to prevent junk `.agents/` files. A new contract test (`standing-order-fragment-store-contract.test.js`) covers the census gate, store-backed delivery through `renderStandaloneOrdersBlock`, compiled-default fallback, override-survives-reseed, and projection skip. The additive-contract test's invariant 2 comment was reconciled to reflect that the live source for a moved static fragment is the store, not src.

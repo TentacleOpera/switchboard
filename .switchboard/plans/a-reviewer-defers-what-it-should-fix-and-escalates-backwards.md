@@ -109,6 +109,29 @@ new column. Nothing here needs a decision the operator has not already given.
 - **`kind: 'reviewed'`, `dragDropMode: 'cli'`, `source: 'built-in'`.** `kind` is almost entirely
   presentational — the only behavioural read in the tree is `project.js:2464` — so `'reviewed'`
   groups it correctly without side effects.
+- **`ESCALATED` appears whenever `CODE REVIEWED` appears, and this is structural, not a
+  convention.** Column visibility is resolved in `_filterDynamicColumns`
+  (`KanbanProvider.ts:4631-4637`), and it keys off `role`:
+  ```ts
+  if (col.featureOnly) return occupiedColumns.has(col.id);
+  if (!col.role) return true;                      // role-less: always visible
+  if (visibleAgents[col.role] !== false) return true;
+  return occupiedColumns.has(col.id);              // never hide a column holding cards
+  ```
+  `ESCALATED` carries no role, so it falls into the second line and **cannot be hidden by any
+  existing mechanism** — there is no `visibleAgents` entry to switch off. The requirement is
+  therefore satisfied by construction rather than by a rule someone must remember, and Invariant 7
+  pins it so a future edit cannot quietly give the column a role and make it hideable.
+- **The converse needs building: `ESCALATED` must NOT appear when `CODE REVIEWED` is hidden.**
+  Role-less means *always* visible, which on a board that runs no reviewer leaves a permanently
+  empty column. `CODE REVIEWED` carries `role: 'reviewer'` and disappears when that agent is
+  hidden, so the two currently decouple in the one direction that produces clutter rather than
+  data loss. This is the only genuinely new visibility concept in the plan — see Change D.
+- **A paired column that holds cards is never hidden.** The existing filter's last line already
+  encodes this for role-carrying columns (`return occupiedColumns.has(col.id)`), and the pairing
+  must inherit it verbatim. Hiding a column that holds escalated cards would destroy the exact
+  visibility this plan exists to create — an escalation into an invisible column is strictly worse
+  than the backwards move it replaces.
 - **Exit from `ESCALATED` is a human move, and is not automated.** The operator decides: accept the
   deviation (forward to `ACCEPTANCE TESTED`), or reject it (back to a coding column). Automating
   this would re-create the defect one stage later.
@@ -187,7 +210,14 @@ state nobody can see is a worse failure than the backwards move it replaces.
   { id: 'ESCALATED', label: 'Escalated', order: 320, kind: 'reviewed', source: 'built-in', dragDropMode: 'cli' },
   ```
 - **Edge case:** No `role` key — deliberate, and worth a comment saying so, because every
-  neighbouring entry has one and a future editor will read its absence as an oversight.
+  neighbouring entry has one and a future editor will read its absence as an oversight. The
+  comment must state both consequences: it keeps the column out of dispatch, and it makes the
+  column structurally unhideable (`_filterDynamicColumns:4633`).
+- **Already correct, do not "fix" it:** `getNextColumn`'s skip rule
+  (`KanbanProvider.ts:7827`, `if (!col.role && col.kind !== 'completed') return true`) means the
+  **Advance** button steps from `CODE REVIEWED` straight to `ACCEPTANCE TESTED`, skipping
+  `ESCALATED`. That is wanted — escalation is a deliberate act by a reviewer or a human, never
+  where a card lands by advancing. Do not add an `ESCALATED` carve-out to that function.
 
 #### `src/services/KanbanProvider.ts`
 - `:9724-9726` — add `'ESCALATED'` to the explicit column-order array, after `'CODE REVIEWED'`.
@@ -267,6 +297,59 @@ state nobody can see is a worse failure than the backwards move it replaces.
   A plan with no record and a plan with nothing deferred must not look alike, which is the same
   distinction `DEFERRED_FINDINGS_SECTION_INSTRUCTION` already draws for the section itself.
 
+### Change D — pair `ESCALATED`'s visibility to `CODE REVIEWED`
+
+The requirement is one-directional and already met (`ESCALATED` cannot be hidden). This change adds
+only the converse, so the column does not appear on boards that run no reviewer.
+
+#### `src/services/agentConfig.ts`
+- **Logic:** add an optional field to `KanbanColumnDefinition` (`:153-165`):
+  ```ts
+  /** This column is shown only when the named column is shown, and hidden with it —
+   *  unless it holds cards. Visibility is otherwise driven by `role`, which a paired
+   *  column deliberately lacks. */
+  visibilityPairedWith?: string;
+  ```
+- Set `visibilityPairedWith: 'CODE REVIEWED'` on the `ESCALATED` entry.
+
+#### `src/services/KanbanProvider.ts` — `_filterDynamicColumns` (`:4631`)
+- **Logic:** before the `if (!col.role) return true` line, resolve the pairing:
+  ```ts
+  if (col.visibilityPairedWith) {
+      if (occupiedColumns.has(col.id)) return true;   // never hide held cards
+      const partner = columns.find(c => c.id === col.visibilityPairedWith);
+      if (!partner) return true;                      // unresolvable pair fails VISIBLE
+      if (!partner.role) return true;
+      return visibleAgents[partner.role] !== false || occupiedColumns.has(partner.id);
+  }
+  ```
+- **Edge case — the fail direction is mandatory.** An unresolvable or missing partner must resolve
+  to **visible**. A pairing bug that hides a column silently loses work; one that shows an extra
+  column is cosmetic and self-announcing. This is the same visible-failure choice already made at
+  `LocalApiServer.ts:11785` for the `'unknown'` case, in the same words: *"an extra column is
+  recoverable; a silently missing stage is not."*
+- **Edge case:** the partner's own `occupiedColumns` check must be included, or `ESCALATED` would
+  vanish in the case where the reviewer is hidden but `CODE REVIEWED` is still on screen holding
+  cards — which is exactly the pairing the operator asked for, in the situation that most needs it.
+
+#### `src/services/PlanningPanelProvider.ts` (`:7964`)
+- The same filter exists here with the same shape. Both must change together or the two panels
+  disagree about which columns exist. Extract the predicate to one shared helper rather than
+  editing two copies — a divergence here is invisible until a user compares panels.
+
+#### `src/services/LocalApiServer.ts` — `_handleGetColumns` (`:11780-11792`)
+- **Context:** the endpoint currently tags every role-less column
+  `{ enabled: true, enabledSource: 'structural' }` (`:11781`).
+- **Logic:** a paired column's `enabled` is computed from its partner, so reporting `'structural'`
+  would state a derived value as an inherent one. Add a fifth tag, `'paired'`, and report the
+  partner-derived `enabled` alongside it.
+- **Edge case — a known gate breaks here, deliberately.**
+  `src/test/board-read-endpoints-contract.test.js:571-576` filters out `'structural'` and then
+  asserts every remaining tag is one of four known values. A fifth tag fails that assertion. Update
+  the test's known set to include `'paired'`; do **not** widen the assertion to accept arbitrary
+  strings — the closed set is the point of the check.
+
+
 ## Verification Plan
 
 ### Automated Tests
@@ -285,6 +368,15 @@ state nobody can see is a worse failure than the backwards move it replaces.
 5. **Prompt gates updated, not loosened.** The existing reviewer-prompt regression expectations are
    updated to the new strings. The test must still pin exact text; a diff that replaces an equality
    assertion with a substring or regex match fails this plan's intent.
+6. **Visibility pairing, both directions and the override.** Drive `_filterDynamicColumns` with
+   three fixtures: (a) reviewer visible → both `CODE REVIEWED` and `ESCALATED` present; (b) reviewer
+   hidden, no escalated cards → neither present; (c) reviewer hidden, one card sitting in
+   `ESCALATED` → `ESCALATED` present. Case (c) is the one that matters: it asserts held work is
+   never hidden.
+7. **Unresolvable pair fails visible.** Point `visibilityPairedWith` at a column id that does not
+   exist and assert the column still renders. A pairing bug must never be able to hide a column.
+8. **Panel agreement.** `KanbanProvider` and `PlanningPanelProvider` return the same column set for
+   the same inputs — the regression test for the two-copies-of-one-filter hazard.
 
 ### Goal Invariants
 1. `DEFAULT_KANBAN_COLUMNS` contains an entry with id `ESCALATED`, `order` strictly between the
@@ -300,3 +392,12 @@ state nobody can see is a worse failure than the backwards move it replaces.
 5. `KanbanDatabase.DORMANT_KANBAN_COLUMNS` does not contain `ESCALATED`.
 6. A card moved to `ESCALATED` has a `last_action` that is not the action it carried before the
    move.
+7. The `ESCALATED` entry in `DEFAULT_KANBAN_COLUMNS` has no `role` property, and
+   `_filterDynamicColumns` contains no `ESCALATED`-specific branch — its always-visible behaviour
+   comes from the general role-less rule, not a special case.
+8. `ESCALATED` declares `visibilityPairedWith: 'CODE REVIEWED'`, and no board state exists in which
+   `CODE REVIEWED` renders and `ESCALATED` does not. *(Paired positive: a fixture in which the
+   reviewer is hidden and `ESCALATED` holds a card still renders `ESCALATED` — the rule hides an
+   empty paired column, never one holding work.)*
+9. `GET /kanban/columns` reports `ESCALATED` with `enabledSource: 'paired'` and an `enabled` value
+   that tracks `CODE REVIEWED`, never a hardcoded `true`.
