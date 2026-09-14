@@ -726,10 +726,13 @@ export const SCHEMA_INDEX_STATEMENTS: string[] = [
     `CREATE INDEX IF NOT EXISTS idx_coding_rounds_feature ON coding_rounds(feature_id)`,
     `CREATE INDEX IF NOT EXISTS idx_coding_rounds_workspace ON coding_rounds(workspace_id)`,
     `CREATE INDEX IF NOT EXISTS idx_plan_runtime_state_workspace ON plan_runtime_state(workspace_id)`,
-    // device_id-leading index: the runtime overlay in _readRows selects
-    // `WHERE device_id = ?` (one bound parameter, not one per row). The PK
-    // autoindex on (plan_id, device_id) cannot serve a device_id-leading
-    // predicate, so without this index the overlay degrades to a full scan.
+    // device_id-leading index. The PK autoindex on (plan_id, device_id) cannot
+    // serve a device_id-leading predicate (SQLite composite indexes require the
+    // leading column constrained), so any `WHERE device_id = ?` query is a full
+    // scan without this. NOTE: the _readRows runtime overlay does NOT use it —
+    // that overlay is row-scoped and chunked (see RUNTIME_OVERLAY_CHUNK), and the
+    // device-scoped form was measured no faster with this index than without it.
+    // Kept for device-scoped maintenance queries.
     `CREATE INDEX IF NOT EXISTS idx_plan_runtime_state_device ON plan_runtime_state(device_id)`,
     `CREATE INDEX IF NOT EXISTS idx_plan_tickets_workspace ON plan_tickets(workspace_id)`,
     `CREATE INDEX IF NOT EXISTS idx_plan_tickets_external ON plan_tickets(workspace_id, provider, external_id)`,
@@ -1205,19 +1208,28 @@ const MIGRATION_V77_SQL = [
 ];
 
 // V78: idx_plan_runtime_state_device — a standalone device_id index on
-// plan_runtime_state. The runtime overlay in _readRows selects
-// `WHERE device_id = ?` (one bound parameter, not one per row, to stay under
-// SQLite's 32,766 bound-parameter ceiling). The PK autoindex on
-// (plan_id, device_id) cannot serve a device_id-leading predicate (SQLite
-// composite indexes require the leading column constrained), so without a
-// standalone device_id index the overlay degrades to a full table scan on
-// every board read. Fresh DBs already get this index from SCHEMA_TABLES_SQL;
-// this migration adds it to upgraded DBs. `CREATE INDEX IF NOT EXISTS` is
-// idempotent — safe on a DB that already has the index (e.g. a fresh DB
-// created post-V78 that ran SCHEMA_TABLES_SQL then re-entered the runner).
+// plan_runtime_state. The PK autoindex on (plan_id, device_id) cannot serve a
+// device_id-leading predicate (SQLite composite indexes require the leading
+// column constrained), so a `WHERE device_id = ?` query is a full table scan
+// without it. Fresh DBs get the index from SCHEMA_INDEX_STATEMENTS; this
+// migration adds it to upgraded DBs. `CREATE INDEX IF NOT EXISTS` is idempotent
+// — safe on a DB that already has the index (e.g. a fresh DB created post-V78
+// that ran SCHEMA_INDEX_STATEMENTS then re-entered the runner).
 const MIGRATION_V78_SQL = [
     `CREATE INDEX IF NOT EXISTS idx_plan_runtime_state_device ON plan_runtime_state(device_id)`,
 ];
+
+/**
+ * Bound-parameter cap for the runtime overlay's `plan_id IN (…)` list in
+ * `_readRows`. SQLite's ceiling is 32,766 bound parameters (probed against this
+ * build, 2026-09-14); past it a read fails with "too many SQL variables". The
+ * overlay chunks its plan-id list at this size, so the parameter count per query
+ * is capped and never grows with the read — a board read of any size succeeds.
+ *
+ * 500 is well under the ceiling and well above any ordinary board read, so the
+ * common case is still a single query.
+ */
+const RUNTIME_OVERLAY_CHUNK = 500;
 
 const MIGRATION_V13_SQL = [
     `ALTER TABLE plans ADD COLUMN repo_scope TEXT DEFAULT ''`,
@@ -11251,14 +11263,12 @@ export class KanbanDatabase {
             console.log('[KanbanDatabase] V77 migration completed: outcome + workflow + released_at columns added to plans and backfilled from plan_events');
         }
 
-        // V78: idx_plan_runtime_state_device. The runtime overlay in _readRows
-        // selects `WHERE device_id = ?` (one bound parameter, not one per row, to
-        // stay under SQLite's 32,766 bound-parameter ceiling). The PK autoindex on
-        // (plan_id, device_id) cannot serve a device_id-leading predicate, so
-        // without a standalone device_id index the overlay degrades to a full
-        // table scan on every board read. `CREATE INDEX IF NOT EXISTS` is
-        // idempotent — safe on a DB that already has the index (e.g. a fresh DB
-        // created post-V78 that ran SCHEMA_TABLES_SQL then re-entered the runner).
+        // V78: idx_plan_runtime_state_device. The PK autoindex on
+        // (plan_id, device_id) cannot serve a device_id-leading predicate, so a
+        // `WHERE device_id = ?` query is a full table scan without a standalone
+        // device_id index. `CREATE INDEX IF NOT EXISTS` is idempotent — safe on a
+        // DB that already has the index (e.g. a fresh DB created post-V78 that ran
+        // SCHEMA_INDEX_STATEMENTS then re-entered the runner).
         const v78 = await this.getMigrationVersion();
         if (v78 < 78) {
             for (const sql of MIGRATION_V78_SQL) {
@@ -15141,28 +15151,47 @@ FROM plans
         // If the table exists and rows are present, local runtime facts (dispatched_terminal,
         // dispatched_at, last_liveness_at, blocked_at) overlay the row for this device_id.
         //
-        // Device-scoped, not row-scoped: the query binds exactly one parameter (device_id)
-        // regardless of read size. The previous form — `WHERE device_id = ? AND plan_id IN (…)`
-        // — bound one parameter per row and hit SQLite's 32,766 bound-parameter ceiling on
-        // large reads ("too many SQL variables"). plan_runtime_state is already keyed by
-        // device_id, so selecting every runtime row for this device and letting the
-        // runtimeMap lookup discard rows whose plan isn't in this read yields the same merge.
-        // idx_plan_runtime_state_device (V78) keeps this an index seek, not a full scan —
-        // the PK autoindex on (plan_id, device_id) cannot serve a device_id-leading predicate.
+        // Row-scoped and CHUNKED. The parameter count is capped at
+        // RUNTIME_OVERLAY_CHUNK + 1 per query and never grows with the read, so
+        // SQLite's 32,766 bound-parameter ceiling ("too many SQL variables") is
+        // unreachable at any read size — that is the cliff this guards.
+        //
+        // A device-scoped `WHERE device_id = ?` (one parameter, no plan_id list) was
+        // tried and reverted: it makes every _readRows call materialise every runtime
+        // row this device owns, whatever the read size. Measured on the reference board
+        // (1,402 runtime rows for this device, 2026-09-14): a single-plan lookup went
+        // from 23 us to 5,111 us, and idx_plan_runtime_state_device did NOT mitigate it
+        // (5,268 us WITH the index) because the cost is row materialisation, not the
+        // scan. With ~61 loop-adjacent single-plan read sites (getPlanByPlanId and
+        // friends), that is seconds of added latency per board sweep, and it scales with
+        // the device's TOTAL runtime rows — which grow with total plans, not active ones,
+        // since the orphan sweep only removes rows whose plan is gone.
+        //
+        // Chunking keeps the PK autoindex seek (plan_id is the leading column), keeps the
+        // cost proportional to the read, and still removes the ceiling.
         if (rows.length > 0 && this._db) {
             try {
                 const machineId = getMachineId();
-                const rStmt = this._db.prepare(
-                    `SELECT plan_id, dispatched_agent, dispatched_ide, dispatched_terminal, dispatched_team_group, dispatched_at, last_liveness_at, blocked_at ` +
-                    `FROM plan_runtime_state WHERE device_id = ?`,
-                    [machineId]
-                );
-                try {
-                    const runtimeMap = new Map<string, any>();
-                    while (rStmt.step()) {
-                        const ro = rStmt.getAsObject();
-                        runtimeMap.set(String(ro.plan_id), ro);
+                const planIds = Array.from(new Set(rows.map(r => r.planId).filter(id => !!id)));
+                const runtimeMap = new Map<string, any>();
+                for (let off = 0; off < planIds.length; off += RUNTIME_OVERLAY_CHUNK) {
+                    const chunk = planIds.slice(off, off + RUNTIME_OVERLAY_CHUNK);
+                    const placeholders = chunk.map(() => '?').join(', ');
+                    const rStmt = this._db.prepare(
+                        `SELECT plan_id, dispatched_agent, dispatched_ide, dispatched_terminal, dispatched_team_group, dispatched_at, last_liveness_at, blocked_at ` +
+                        `FROM plan_runtime_state WHERE device_id = ? AND plan_id IN (${placeholders})`,
+                        [machineId, ...chunk]
+                    );
+                    try {
+                        while (rStmt.step()) {
+                            const ro = rStmt.getAsObject();
+                            runtimeMap.set(String(ro.plan_id), ro);
+                        }
+                    } finally {
+                        rStmt.free();
                     }
+                }
+                if (runtimeMap.size > 0) {
                     for (const row of rows) {
                         const rt = runtimeMap.get(row.planId);
                         if (rt) {
@@ -15189,8 +15218,6 @@ FROM plans
                             }
                         }
                     }
-                } finally {
-                    rStmt.free();
                 }
             } catch (runtimeErr) {
                 // If plan_runtime_state table doesn't exist yet (e.g. before V74 migration runs),

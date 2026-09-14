@@ -1014,6 +1014,13 @@ jobs:
       - name: DB backup hygiene contract (manifest, retention, failed sets)
         run: npm run test:contract:db-backup-hygiene
 
+      # Runtime overlay: _readRows merges plan_runtime_state onto every plan row.
+      # Pins the bound-parameter cap (a 40k-plan read must not hit SQLite's 32,766
+      # variable ceiling), the merge semantics including the empty-string
+      # asymmetry, device isolation, pre-V74 tolerance and the V78 device index.
+      - name: Runtime overlay parameter-ceiling contract
+        run: npm run test:contract:runtime-overlay-ceiling
+
       # Every test:contract:db-* script in package.json must have a matching
       # step in this workflow file. A script not wired into CI is a silent gap.
       - name: Storage scripts parity contract (package.json vs workflow)
