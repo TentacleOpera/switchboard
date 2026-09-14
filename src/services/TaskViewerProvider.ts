@@ -5095,7 +5095,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             integrationsConfigured: await computeIntegrationsConfigured()
                         };
                         const result = sharedGetPanelHtmlById(id, repoRoot, currentWsRoot(), caps, getTheme());
-                        if (result && (id === 'terminals' || id === 'dock') && this._terminalSessionToken) {
+                        if (result && (id === 'terminals' || id === 'dock' || id === 'command') && this._terminalSessionToken) {
                             // Carried as a body data-attribute, NOT an inline <script>.
                             // The terminals panel serves `script-src 'nonce-<n>' 'self'`
                             // (headlessPanelHtml.getTerminalsHtml + the CSP meta tag in

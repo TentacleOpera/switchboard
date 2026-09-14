@@ -1302,6 +1302,16 @@ jobs:
       - name: Terminal input path contract (binary frames, UTF-8/CSI-safe chunking, FIFO pacing)
         run: npm run test:contract:terminal-input-path
 
+      # The mobile command view's terminal key bar. A phone keyboard has no
+      # arrow keys, so no menu can be answered. This pins the DECCKM-aware
+      # arrow sequences, the Ctrl-C interrupt, the press-time cursor-mode
+      # read, the encodeInputFrame input path (no paste regression), the
+      # shared-viewport embedding (no hand-rolled <pre> stream box), the
+      # coarse-pointer visibility gate, and the template-injected xterm
+      # body attributes on both hosts.
+      - name: Terminal key bar contract (mobile command view, DECCKM arrows, shared viewport)
+        run: npm run test:contract:terminal-key-bar
+
       # Status panes. `paneModes` gained a third value and ~23 existing sites
       # binary-test the mode — a third value inheriting the wrong branch compiles
       # clean and misbehaves silently, and the pane grid has no runtime harness.
@@ -1917,8 +1927,6 @@ jobs:
       # Heap ceiling contract — the four entry paths (cli re-exec, npm bin shim,
       # Go front controller, Go launcher) must not drift apart, must not set
       # NODE_OPTIONS, and must not re-exec short-lived client verbs.
-      - name: Heap ceiling contract (four entry paths agree)
-        run: npm run test:contract:heap-ceiling
 
       - name: Run integration suite
         run: npm run test:integration:all

@@ -282,3 +282,7 @@ routine; the load-bearing work is the `SwitchboardTerminalViewport` embedder-mod
 (step 1), which touches the shared terminal module the panel also depends on — a coder can
 land it, but the refactor should be reviewed against the panel's existing call sites to
 confirm no panel dep became optional-and-broken in the split.
+
+## Completion Summary
+
+Replaced the read-only `<pre>` terminal stream with the shared `SwitchboardTerminalViewport` (xterm + WebSocket + replay + resize + answerback suppression) so the mobile command view is a real interactive terminal. Added `terminalKeyBar.js` — a coarse-pointer-only key bar synthesizing DECCKM-aware arrows (ESC [ X / ESC O X), Esc, Tab, Enter, and Ctrl-C/-D/-Z through `encodeInputFrame` (never paste), with sticky Ctrl and press-time cursor-mode reads. The seat switcher now builds from the full `ptyListTerminals` fleet grouped by team via `resolveTeamSeats`, with an Ungrouped section for unassigned seats. Both hosts inject `data-terminal-token` for the command panel; `getCommandHtml` injects xterm CSS + addon body data-attributes. Contract test `terminal-key-bar-contract.test.js` pins all structural properties.

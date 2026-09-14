@@ -115,8 +115,14 @@
     let selectedMissionId = null;
     let teamRoster = [];
     let liveFleet = [];
-    let activeTerminalWs = null;
-    let terminalOutputDecoder = typeof TextDecoder !== 'undefined' ? new TextDecoder('utf-8') : null;
+    // The interactive terminal viewer state. The viewport controller
+    // (window.SwitchboardTerminalViewport) owns the xterm instance and its
+    // WebSocket; command.js holds only the controller and the per-seat
+    // terminalsMap it shares with it. The key bar controller synthesizes
+    // control keys the phone keyboard cannot type.
+    let terminalViewport = null;
+    let terminalKeyBar = null;
+    let terminalTerminalsMap = null;
     // The live seats for the team currently open in the viewer, so the seat
     // switcher can re-open the viewer for a different seat without re-resolving.
     let viewerLiveSeats = [];
@@ -247,7 +253,11 @@
     const btnCloseTerminal = document.getElementById('btn-close-terminal');
     const terminalViewerTitle = document.getElementById('terminal-viewer-title');
     const terminalWsStatus = document.getElementById('terminal-ws-status');
-    const terminalStreamOutput = document.getElementById('terminal-stream-output');
+    // The interactive terminal viewer uses the shared xterm viewport
+    // (terminalViewport.js), not the hand-rolled <pre> stream box. The
+    // viewport module appends its own container inside the host element.
+    const terminalXtermHost = document.getElementById('terminal-xterm-host');
+    const terminalKeyBarEl = document.getElementById('terminal-key-bar');
     const terminalSeatSwitcher = document.getElementById('terminal-seat-switcher');
 
     // Preview Overlay Elements
@@ -2067,137 +2077,408 @@
         missionStatusChip.classList.remove('hidden');
     }
 
-    // ── 6. Read-Only Terminal Viewer ───────────────────────────────────
+    // ── 6. Interactive Terminal Viewer ─────────────────────────────────
 
     /**
-     * Open the read-only terminal viewer for a specific seat. Takes a seat
-     * name (not a team + head pair), titles the pane, fetches scrollback, and
-     * opens a solo WebSocket. The optional `seatList` populates the seat
-     * switcher in the viewer header so the operator can switch to any live
-     * seat of the same team — each switch routes back through this function,
-     * which calls closeActiveWs immediately before opening the new socket, so
-     * the previous one is closed first and there is never a window with two
-     * simultaneous sockets. Nothing between re-entry and that call opens a
-     * socket (the scrollback fetch is plain HTTP), so one switch is one socket.
+     * Resolve the PTY host origin for the terminal WebSocket. Mirrors
+     * terminals.js: the body data-attribute (injected by the host) wins,
+     * then the legacy global, then the page's own origin. The standalone
+     * host injects NO data-pty-host-origin (loopback would break remote
+     * viewers); the extension host injects ws://127.0.0.1:<port>. Both
+     * paths are covered by this fallback chain.
+     */
+    function resolvePtyHostOrigin() {
+        return (document.body && document.body.dataset && document.body.dataset.ptyHostOrigin)
+            || window.__SB_PTY_HOST_ORIGIN__
+            || `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}`;
+    }
+
+    let terminalFitLadderGen = null;
+    let terminalWorkingSilenceShown = null;
+
+    /**
+     * Build the deps bag for the shared terminal viewport. The viewport
+     * module (terminalViewport.js) is embedder-independent: every
+     * dependency is a constructor argument. The command view provides a
+     * minimal bag — the panel-only callbacks (caret ring, pane assignments,
+     * fit ladder, startup curtain) are no-ops, because the command view
+     * renders ONE terminal, not a grid. The load-bearing deps (terminalsMap,
+     * ptyHostOrigin, fitLadderGen, getFleetList, workingSilenceShown) are
+     * real so the viewport's resize/replay/answerback machinery fires.
+     */
+    function buildTerminalViewportDeps() {
+        // One entry at a time, but the viewport module shares a single
+        // terminalsMap across every view it owns, so the map persists across
+        // seat switches and the destroy/create cycle cleans up properly.
+        if (!terminalTerminalsMap) { terminalTerminalsMap = new Map(); }
+        if (!terminalFitLadderGen) { terminalFitLadderGen = new Map(); }
+        if (!terminalWorkingSilenceShown) { terminalWorkingSilenceShown = new Set(); }
+        return {
+            terminalsMap: terminalTerminalsMap,
+            fitLadderGen: terminalFitLadderGen,
+            workingSilenceShown: terminalWorkingSilenceShown,
+            ptyHostOrigin: resolvePtyHostOrigin(),
+            isDockFrame: false,
+            // Fleet list — the viewport uses it for paste attribution role
+            // lookup. The command view's liveFleet is the same source.
+            getFleetList: () => liveFleet,
+            // Pane-assignment surface. The command view has no pane grid, so
+            // these return the single-seat shape: one slot, the open seat,
+            // slot 0 focused. The viewport uses these only for caret-ring
+            // focus management, which is a no-op here.
+            getPaneAssignments: () => viewerLiveSeats.length
+                ? [viewerLiveSeats[0].friendlyName]
+                : [],
+            getFocusedPaneIndex: () => 0,
+            focusPaneTerminal: () => {},
+            clearCaretRing: () => {},
+            // Input state. The command view has no per-pane input chip; the
+            // status chip in the viewer header is driven by the WebSocket
+            // handlers below.
+            refreshInputState: () => {},
+            notifyInputDropped: () => {},
+            showPaneToast: (msg) => { console.warn('[Command] terminal toast:', msg); },
+            // Startup curtain / working silence — no-ops; the command view
+            // has no startup curtain element.
+            bumpStartupCurtain: () => {},
+            dismissStartupCurtain: () => {},
+            showTerminalErrorToast: (name, msg) => {
+                terminalWsStatus.textContent = 'Error';
+                terminalWsStatus.className = 'status-chip error';
+            },
+            markReplayGap: () => {},
+            clearWorkingSilence: () => {},
+            // Fit ladder — the viewport drives xterm fit through this. The
+            // command view has no multi-pane coordination, so a no-op gen
+            // bump is sufficient: the per-entry ResizeObserver runs its own
+            // fit ladder.
+            startFitLadder: () => {},
+            cancelDetachTimer: () => {},
+            // Renderer resync — the command view has no pane grid reflow, so
+            // a no-op is correct: the viewport's own ResizeObserver handles
+            // renderer swaps for the single pane.
+            resyncPaneRenderer: () => {},
+            // Seating — the command view's single terminal is always
+            // "seated" (it is the only thing on the pane), so the suspend
+            // path's transient-0x0 guard arms the renderer-release timer
+            // rather than releasing immediately. This matches the desktop
+            // panel's behaviour for a pane that stays assigned.
+            isTerminalSeated: () => true,
+        };
+    }
+
+    /**
+     * Deliver a synthesized keystroke through the active terminal's
+     * WebSocket. Routes through the viewport's encodeInputFrame (the same
+     * framing the desktop terminals panel uses), NEVER term.paste — a paste
+     * would land as bracketed-paste text, not a keystroke, and a TUI reading
+     * a single arrow would see the whole bracketed block.
+     */
+    function sendTerminalInput(bytes) {
+        if (!terminalViewport || !terminalTerminalsMap) { return; }
+        // The open seat is the first (and only) entry in the map. The
+        // viewport keys entries by name; the seat switcher destroys the
+        // prior view before creating the new one, so the map holds exactly
+        // one entry at a time.
+        for (const entry of terminalTerminalsMap.values()) {
+            if (entry && entry.ws && entry.ws.readyState === WebSocket.OPEN) {
+                try {
+                    entry.ws.send(terminalViewport.encodeInputFrame(bytes));
+                } catch { /* disposed mid-send */ }
+            }
+            break;
+        }
+    }
+
+    /**
+     * Read the xterm DECCKM (application cursor) mode at press time. The
+     * mode flips during a session (vim, less, fzf), so a value captured at
+     * attach goes stale; the key bar reads it on every press. Returns
+     * 'application' or 'normal'.
+     *
+     * xterm does not expose DECCKM through its public options API. The
+     * state lives on the internal CoreService's decPrivateModes map
+     * (`term._core.coreService.decPrivateModes.applicationCursorKeys`).
+     * This is a private API, but the vendored xterm bundle is pinned, so
+     * the path is stable for this codebase. The fallback chain guards
+     * against a disposed term or a moved private field.
+     */
+    function getCursorMode() {
+        if (!terminalTerminalsMap) { return 'normal'; }
+        for (const entry of terminalTerminalsMap.values()) {
+            if (entry && entry.term) {
+                try {
+                    const core = entry.term._core;
+                    if (core && core.coreService && core.coreService.decPrivateModes
+                        && typeof core.coreService.decPrivateModes.applicationCursorKeys === 'boolean') {
+                        return core.coreService.decPrivateModes.applicationCursorKeys
+                            ? 'application' : 'normal';
+                    }
+                } catch { /* disposed or private API moved */ }
+            }
+            break;
+        }
+        return 'normal';
+    }
+
+    /**
+     * Group the live fleet by team, with ungrouped seats in their own
+     * section. The seat switcher uses this so the operator can reach ANY
+     * live seat — including seats not assigned to a team. The grouping
+     * uses the same `resolveTeamSeats` authority as the roster cards, so
+     * the switcher and the roster cannot disagree about which seat
+     * belongs to which team. Seats not claimed by any team fall into an
+     * "Ungrouped" section.
+     */
+    function buildFleetRoster() {
+        const live = liveFleet.filter(t => t && t.status !== 'exited' && t.friendlyName);
+        // Claim order matches renderTeamsView: non-seeds ahead of seeds,
+        // stable within each group. resolveTeamSeats claims in the order it
+        // is handed, so the sort determines who wins a headRole.
+        const claimOrder = teamRoster
+            .map((team, i) => ({ team, i, seed: SEED_TEAM_IDS.has(team.id) ? 1 : 0 }))
+            .sort((a, b) => (a.seed - b.seed) || (a.i - b.i))
+            .map(entry => entry.team);
+        const resolved = resolveTeamSeats(claimOrder, liveFleet);
+        const byTeam = new Map();
+        const claimed = new Set();
+        for (const team of claimOrder) {
+            const entry = resolved.get(team.id);
+            if (!entry) { continue; }
+            const seats = [];
+            if (entry.head && entry.head.friendlyName) {
+                seats.push(entry.head);
+                claimed.add(entry.head.friendlyName);
+            }
+            for (const m of entry.members) {
+                if (m && m.friendlyName) {
+                    seats.push(m);
+                    claimed.add(m.friendlyName);
+                }
+            }
+            if (seats.length > 0) { byTeam.set(team.name, seats); }
+        }
+        const ungrouped = live.filter(t => t.friendlyName && !claimed.has(t.friendlyName));
+        return { byTeam, ungrouped };
+    }
+
+    /**
+     * Open the interactive terminal viewer for a specific seat. Takes a
+     * seat name (not a team + head pair), titles the pane, and opens the
+     * shared xterm viewport. The seat switcher is built from the COMPLETE
+     * live fleet (ptyListTerminals), grouped by team with ungrouped seats
+     * in their own section — so the operator can reach any live seat,
+     * including seats not assigned to a team. Each switch routes back
+     * through this function, which destroys the prior viewport before
+     * creating the new one, so the previous socket is closed first and
+     * there is never a window with two simultaneous sockets.
      */
     function openTerminalViewer(team, seatName, seatList) {
-        const name = seatName || team.name;
-        // Store the live seats for the switcher (head + members).
+        const name = seatName || (team && team.name);
+        // Store the live seats for the switcher (head + members). Retained
+        // for backwards compatibility with the original call sites; the
+        // switcher itself is now built from the full fleet roster.
         viewerLiveSeats = Array.isArray(seatList) ? seatList : [];
 
         terminalViewerTitle.textContent = `Terminal: ${name}`;
-        terminalStreamOutput.textContent = 'Connecting to terminal stream...\n';
+        terminalWsStatus.textContent = 'Connecting';
+        terminalWsStatus.className = 'status-chip';
 
-        // Build the seat switcher — one button per live seat, highlighting the
-        // one currently open. Hidden when there is only one seat (or none).
-        if (terminalSeatSwitcher) {
-            terminalSeatSwitcher.innerHTML = '';
-            if (viewerLiveSeats.length > 1) {
-                terminalSeatSwitcher.style.display = 'flex';
-                for (const seat of viewerLiveSeats) {
-                    const btn = document.createElement('button');
-                    const isActive = seat.friendlyName === name;
-                    btn.textContent = seat.friendlyName;
-                    btn.style.cssText = 'font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;'
-                        + 'border:1px solid var(--border-color);background:'
-                        + (isActive ? 'var(--accent-primary, #4a9eff)' : 'var(--panel-bg)')
-                        + ';color:' + (isActive ? '#fff' : 'var(--text-primary)');
-                    btn.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        // Route through this same function — it closes the
-                        // previous socket immediately before opening the new
-                        // one. No separate socket-opening path.
-                        openTerminalViewer(team, seat.friendlyName, viewerLiveSeats);
-                    });
-                    terminalSeatSwitcher.appendChild(btn);
-                }
-            } else {
-                terminalSeatSwitcher.style.display = 'none';
-            }
-        }
+        // Build the seat switcher from the COMPLETE live fleet, grouped by
+        // team. Ungrouped seats get their own section so the operator can
+        // reach any live seat, not just the team that opened the viewer.
+        buildSeatSwitcher(name);
 
         // Hide other panes, show viewer
         Object.values(viewPanes).forEach(p => p.classList.remove('active'));
         paneTerminalViewer.classList.add('active');
 
-        // Fetch initial scrollback log
-        fetch(`/terminals/${encodeURIComponent(name)}/log`)
-            .then(res => res.text())
-            .then(logText => {
-                if (logText) {
-                    terminalStreamOutput.textContent = logText + '\n--- Live Stream ---\n';
-                    terminalStreamOutput.scrollTop = terminalStreamOutput.scrollHeight;
-                }
-            })
-            .catch(() => {});
+        // Destroy the prior viewport before creating the new one. The
+        // viewport's destroyTerminalView closes the WebSocket and disposes
+        // the xterm instance, so there is never a window with two
+        // simultaneous sockets. This mirrors the original closeActiveWs
+        // behaviour but through the shared viewport's lifecycle.
+        destroyTerminalViewer();
 
-        // Connect WebSocket — closeActiveWs runs FIRST so no socket leak.
-        closeActiveWs();
-        const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${wsProtocol}//${location.host}/ws/terminal?name=${encodeURIComponent(name)}&solo=1`;
-
-        try {
-            const ws = new WebSocket(wsUrl);
-            ws.binaryType = 'arraybuffer';
-            activeTerminalWs = ws;
-
-            ws.onopen = () => {
-                terminalWsStatus.textContent = 'Live';
-                terminalWsStatus.className = 'status-chip success';
-            };
-
-            ws.onmessage = (event) => {
-                let text = '';
-                if (typeof event.data !== 'string' && event.data instanceof ArrayBuffer) {
-                    const view = new DataView(event.data);
-                    if (view.byteLength >= 4) {
-                        text = terminalOutputDecoder ? terminalOutputDecoder.decode(new Uint8Array(event.data, 4)) : '';
-                    }
-                } else if (typeof event.data === 'string') {
-                    try {
-                        const frame = JSON.parse(event.data);
-                        if (frame.t === 'out' && typeof frame.data === 'string') {
-                            text = atob(frame.data);
-                        }
-                    } catch {
-                        text = event.data;
-                    }
-                }
-
-                if (text) {
-                    // Strip common ANSI escape codes for cleaner mobile pre render
-                    const clean = text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
-                    terminalStreamOutput.textContent += clean;
-                    terminalStreamOutput.scrollTop = terminalStreamOutput.scrollHeight;
-                }
-            };
-
-            ws.onclose = () => {
-                terminalWsStatus.textContent = 'Closed';
-                terminalWsStatus.className = 'status-chip';
-            };
-
-            ws.onerror = () => {
-                terminalWsStatus.textContent = 'Error';
-                terminalWsStatus.className = 'status-chip error';
-            };
-        } catch (err) {
+        // Lazily create the viewport controller. It is safe to create once
+        // and reuse across seat switches — the controller is stateless
+        // aside from the terminalsMap it shares.
+        if (!terminalViewport && window.SwitchboardTerminalViewport) {
+            terminalViewport = window.SwitchboardTerminalViewport.create(buildTerminalViewportDeps());
+        }
+        if (!terminalViewport) {
             terminalWsStatus.textContent = 'Offline';
             terminalWsStatus.className = 'status-chip unknown';
+            console.error('[Command] SwitchboardTerminalViewport not loaded — cannot open terminal viewer');
+            return;
+        }
+
+        // Create the xterm view for this seat. The viewport module handles
+        // xterm construction, renderer attach, WebSocket connect, replay,
+        // and resize voting. The container (terminalXtermHost) is the box
+        // the ResizeObserver measures.
+        if (terminalXtermHost) {
+            terminalViewport.createTerminalView(name, terminalXtermHost);
+        }
+
+        // Create the mobile key bar. The bar synthesizes control keys the
+        // phone keyboard cannot type (arrows, Esc, Tab, Ctrl-C) and
+        // delivers them through sendTerminalInput, which routes through
+        // the viewport's encodeInputFrame — the same framing the desktop
+        // terminals panel uses.
+        if (!terminalKeyBar && window.SwitchboardTerminalKeyBar && terminalKeyBarEl) {
+            terminalKeyBar = window.SwitchboardTerminalKeyBar.create({
+                container: terminalKeyBarEl,
+                send: sendTerminalInput,
+                getCursorMode: getCursorMode,
+                isCoarsePointer: () => !!(typeof window !== 'undefined'
+                    && window.matchMedia
+                    && window.matchMedia('(pointer: coarse)').matches),
+            });
+        }
+        if (terminalKeyBar) { terminalKeyBar.refresh(); }
+
+        // The viewport's WebSocket handlers drive the status chip. The
+        // viewport does not call refreshInputState for the command view
+        // (it is a no-op in the deps bag), so we poll the entry's ws
+        // readyState. This is cheaper than a per-frame callback and the
+        // chip is presentation-only.
+        pollTerminalWsStatus(name);
+    }
+
+    /**
+     * Build the seat switcher from the complete live fleet, grouped by
+     * team. Ungrouped seats get their own section. Each button re-opens
+     * the viewer for that seat, which destroys the prior viewport before
+     * creating the new one.
+     */
+    function buildSeatSwitcher(activeName) {
+        if (!terminalSeatSwitcher) { return; }
+        terminalSeatSwitcher.innerHTML = '';
+        const { byTeam, ungrouped } = buildFleetRoster();
+        const totalSeats = Array.from(byTeam.values()).reduce((n, s) => n + s.length, 0) + ungrouped.length;
+        if (totalSeats <= 1) {
+            terminalSeatSwitcher.style.display = 'none';
+            return;
+        }
+        terminalSeatSwitcher.style.display = 'flex';
+
+        const makeSeatBtn = (seat) => {
+            const btn = document.createElement('button');
+            const isActive = seat.friendlyName === activeName;
+            btn.textContent = seat.friendlyName;
+            btn.style.cssText = 'font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;'
+                + 'border:1px solid var(--border-color);background:'
+                + (isActive ? 'var(--accent-primary, #4a9eff)' : 'var(--panel-bg)')
+                + ';color:' + (isActive ? '#fff' : 'var(--text-primary)');
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                // Route through openTerminalViewer — it destroys the prior
+                // viewport before creating the new one. No separate
+                // socket-opening path.
+                openTerminalViewer(null, seat.friendlyName, viewerLiveSeats);
+            });
+            return btn;
+        };
+
+        // Team sections first, in declared order.
+        for (const team of teamRoster) {
+            const seats = byTeam.get(team.name);
+            if (!seats || seats.length === 0) { continue; }
+            const label = document.createElement('span');
+            label.style.cssText = 'font-size:9px;font-weight:600;color:var(--text-secondary);'
+                + 'padding:2px 6px;align-self:center;';
+            label.textContent = team.name || team.headRole || 'team';
+            terminalSeatSwitcher.appendChild(label);
+            for (const seat of seats) {
+                terminalSeatSwitcher.appendChild(makeSeatBtn(seat));
+            }
+        }
+        // Ungrouped section last.
+        if (ungrouped.length > 0) {
+            const label = document.createElement('span');
+            label.style.cssText = 'font-size:9px;font-weight:600;color:var(--text-secondary);'
+                + 'padding:2px 6px;align-self:center;';
+            label.textContent = 'Ungrouped';
+            terminalSeatSwitcher.appendChild(label);
+            for (const seat of ungrouped) {
+                terminalSeatSwitcher.appendChild(makeSeatBtn(seat));
+            }
         }
     }
 
-    function closeActiveWs() {
-        if (activeTerminalWs) {
-            try {
-                activeTerminalWs.close();
-            } catch {}
-            activeTerminalWs = null;
+    /**
+     * Poll the active terminal's WebSocket readyState and update the
+     * status chip. The viewport module does not expose a per-frame status
+     * callback (its refreshInputState is a no-op in the command view), so
+     * a short poll is the cheapest presentation-only bridge. Stops when
+     * the viewer closes.
+     */
+    let statusPollTimer = null;
+    function pollTerminalWsStatus(name) {
+        if (statusPollTimer) { clearInterval(statusPollTimer); statusPollTimer = null; }
+        statusPollTimer = setInterval(() => {
+            if (!paneTerminalViewer.classList.contains('active')) {
+                clearInterval(statusPollTimer);
+                statusPollTimer = null;
+                return;
+            }
+            if (!terminalTerminalsMap) { return; }
+            const entry = terminalTerminalsMap.get(name);
+            if (!entry) {
+                terminalWsStatus.textContent = 'Closed';
+                terminalWsStatus.className = 'status-chip';
+                return;
+            }
+            if (entry.exited) {
+                terminalWsStatus.textContent = 'Exited';
+                terminalWsStatus.className = 'status-chip';
+                return;
+            }
+            if (!entry.ws) {
+                terminalWsStatus.textContent = 'Connecting';
+                terminalWsStatus.className = 'status-chip';
+                return;
+            }
+            switch (entry.ws.readyState) {
+                case WebSocket.OPEN:
+                    terminalWsStatus.textContent = 'Live';
+                    terminalWsStatus.className = 'status-chip success';
+                    break;
+                case WebSocket.CONNECTING:
+                    terminalWsStatus.textContent = 'Connecting';
+                    terminalWsStatus.className = 'status-chip';
+                    break;
+                case WebSocket.CLOSING:
+                case WebSocket.CLOSED:
+                    terminalWsStatus.textContent = 'Reconnecting';
+                    terminalWsStatus.className = 'status-chip';
+                    break;
+            }
+        }, 500);
+    }
+
+    /**
+     * Destroy the active terminal viewer's xterm view and close its
+     * WebSocket. The viewport module's destroyTerminalView closes the
+     * socket, disposes the xterm instance, releases the renderer, and
+     * removes the entry from the terminalsMap. Safe to call when no view
+     * is open (no-op).
+     */
+    function destroyTerminalViewer() {
+        if (terminalViewport && terminalTerminalsMap) {
+            // Destroy every entry — there should be exactly one, but a
+            // failed switch could leave a stale entry. destroyTerminalView
+            // is idempotent (no-op if the name is absent).
+            for (const name of Array.from(terminalTerminalsMap.keys())) {
+                try { terminalViewport.destroyTerminalView(name); } catch { /* ignore */ }
+            }
         }
+        if (statusPollTimer) { clearInterval(statusPollTimer); statusPollTimer = null; }
     }
 
     function closeTerminalViewer() {
-        closeActiveWs();
+        destroyTerminalViewer();
         viewerLiveSeats = [];
         if (terminalSeatSwitcher) {
             terminalSeatSwitcher.innerHTML = '';

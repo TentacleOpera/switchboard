@@ -603,12 +603,23 @@ export function getCommandHtml(repoRoot: string, workspaceRoot: string, capabili
     const csp = `default-src 'none'; script-src 'nonce-${nonce}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws: wss:; frame-src 'self'; manifest-src 'self';`;
     content = content.replace(/\{\{NONCE\}\}/g, nonce);
     content = content.replace(/\{\{COMMAND_JS_URI\}\}/g, '/static/webview/command.js');
+    // xterm CSS — the terminal viewport module (terminalViewport.js) lazy-loads
+    // the xterm JS bundle from body data-attributes, but the CSS is a 5 KB
+    // stylesheet that stays a template substitution (same pattern as
+    // getTerminalsHtml). The command view's interactive terminal viewer
+    // (replacing the read-only <pre> stream box) needs the same xterm stack.
+    content = content.replace(/\{\{XTERM_CSS_URI\}\}/g, '/static/webview/vendor/xterm/xterm.css');
     content = content.replace(/<script>/g, `<script nonce="${nonce}">`);
     content = injectTransportShim(content, nonce, '<!-- SHARED_DEFAULTS_SCRIPT -->', `<script nonce="${nonce}" src="/static/webview/command.js"></script>`, false);
     content = content.replace(/\{\{HANKEN_FONT_URI\}\}/g, '/static/designs/HankenGrotesk-Variable.woff2');
     content = content.replace(/\{\{GEIST_PIXEL_FONT_URI\}\}/g, '/static/designs/GeistPixel-Square.woff2');
     const caps = { ...DEFAULT_HOST_CAPABILITIES, ...capabilities };
-    const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="command" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}"`;
+    // The terminal viewport module reads xterm/addon URIs off <body data-…>
+    // (same pattern as getTerminalsHtml). The command view's interactive
+    // terminal viewer lazy-loads xterm.js, addon-fit, addon-webgl, and
+    // addon-canvas from these attributes, so the viewport module can inject
+    // them without parser-blocking <script> tags.
+    const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="command" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}" data-xterm-uri="/static/webview/vendor/xterm/xterm.js" data-xterm-fit-uri="/static/webview/vendor/xterm/addon-fit.js" data-xterm-webgl-uri="/static/webview/vendor/xterm/addon-webgl.js" data-canvas-addon-uri="/static/webview/vendor/xterm/addon-canvas.js"`;
     content = injectBodyAttributes(content, bodyAttr);
     content = applyThemeClass(content, themeClass);
     return { html: content, csp };

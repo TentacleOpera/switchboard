@@ -1431,7 +1431,7 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
     const getPanelHtml = async (id: string): Promise<{ html: string; csp?: string } | null> => {
         const result = sharedGetPanelHtmlById(id, repoRoot, workspaceRoot, await getStandaloneCaps(), getTheme());
         if (!result) { return null; }
-        if ((id === 'terminals' || id === 'dock') && terminalSessionToken) {
+        if ((id === 'terminals' || id === 'dock' || id === 'command') && terminalSessionToken) {
             // The terminal WS channel is RCE-grade and keeps its own credential,
             // independent of the HTTP auth token (see the terminalSessionToken
             // comment above). Carried as a body data-attribute — NOT an inline

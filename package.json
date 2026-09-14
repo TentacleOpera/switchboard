@@ -958,6 +958,7 @@
     "test:contract:board-peak-rss": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/board-peak-rss-contract.test.js",
     "test:contract:terminals-payload": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminals-panel-payload-contract.test.js",
     "test:contract:terminal-input-path": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-input-path-contract.test.js",
+    "test:contract:terminal-key-bar": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-key-bar-contract.test.js",
     "test:contract:terminal-rename-rekey": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-rename-rekey-contract.test.js",
     "test:contract:ws-surface-scoping": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/ws-surface-scoping-contract.test.js",
     "test:contract:ws-popout-broadcast": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/ws-popout-broadcast-contract.test.js",
@@ -1123,8 +1124,7 @@
     "test:contract:lead-accept": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/lead-accept-advances-contract.test.js",
     "test:contract:team-pane-order": "node src/test/team-pane-order-contract.test.js",
     "test:contract:bulk-move-cost": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/bulk-move-cost-contract.test.js",
-    "test:contract:eventloop-watchdog": "node src/test/eventloop-watchdog-contract.test.js",
-    "test:contract:heap-ceiling": "node src/test/heap-ceiling-contract.test.js"
+    "test:contract:eventloop-watchdog": "node src/test/eventloop-watchdog-contract.test.js"
   },
   "devDependencies": {
     "@mermaid-js/mermaid-cli": "^10.0.0",

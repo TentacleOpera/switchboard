@@ -9,6 +9,7 @@
     <link rel="manifest" href="/manifest.json">
     <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/icon-180.png">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{NONCE}}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws: wss:; frame-src 'self'; manifest-src 'self';">
+    <link rel="stylesheet" href="{{XTERM_CSS_URI}}">
     <title>Switchboard Command</title>
     <style>
         @font-face {
@@ -690,7 +691,7 @@
             border: 1px solid var(--accent-amber);
         }
 
-        /* Read-Only Terminal Viewer */
+        /* Terminal Viewer (interactive — xterm + mobile key bar) */
         .terminal-viewer-pane {
             display: none;
             flex-direction: column;
@@ -718,18 +719,62 @@
             min-height: 44px;
         }
 
-        .terminal-stream-box {
+        /* xterm host container. The viewport module appends its own .xterm
+         * element inside this; the container only provides the box the
+         * ResizeObserver measures. flex:1 + min-height:0 lets it fill the
+         * space between the header and the key bar without overflowing. */
+        .terminal-xterm-host {
             flex: 1;
+            min-height: 0;
             background: #050505;
-            color: #d4d4d4;
+            position: relative;
+            overflow: hidden;
+        }
+        .terminal-xterm-host .terminal-view-host {
+            position: absolute;
+            inset: 0;
+        }
+
+        /* Mobile key bar. Hidden on fine-pointer (desktop) viewports; the key
+         * bar module toggles .sb-keybar-hidden / .sb-keybar-visible based on
+         * the (pointer: coarse) media query. The bar is fixed at the bottom
+         * of the viewer pane so it never scrolls out of reach. */
+        .sb-keybar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            padding: 6px 8px;
+            background: var(--panel-bg2);
+            border-top: 1px solid var(--border-color);
+            flex-shrink: 0;
+            justify-content: center;
+        }
+        .sb-keybar.sb-keybar-hidden {
+            display: none;
+        }
+        .sb-keybar-btn {
             font-family: var(--font-code);
-            font-size: 11px;
-            line-height: 1.4;
-            padding: 10px;
-            margin: 0;
-            overflow-y: auto;
-            white-space: pre-wrap;
-            word-break: break-all;
+            font-size: 13px;
+            line-height: 1;
+            padding: 10px 12px;
+            min-width: 40px;
+            min-height: 40px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--panel-bg);
+            color: var(--text-primary);
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+            user-select: none;
+        }
+        .sb-keybar-btn-wide {
+            min-width: 64px;
+        }
+        .sb-keybar-btn.sb-keybar-armed {
+            background: var(--accent-primary, #4a9eff);
+            color: #fff;
+            border-color: var(--accent-primary, #4a9eff);
         }
 
         /* VIEW Overlay */
@@ -906,7 +951,7 @@
         }
     </style>
 </head>
-<body>
+<body class="is-solo">
     <div id="app-root">
         <!-- Top Header -->
         <header class="cmd-header">
@@ -1075,7 +1120,7 @@
                     </div>
                 </section>
 
-                <!-- Read-Only Terminal Viewer Pane -->
+                <!-- Interactive Terminal Viewer Pane (xterm + mobile key bar) -->
                 <section class="terminal-viewer-pane" id="pane-terminal-viewer">
                     <div class="terminal-viewer-header">
                         <button class="secondary-action-btn" id="btn-close-terminal">&larr; Back to Teams</button>
@@ -1083,7 +1128,11 @@
                         <span class="status-chip" id="terminal-ws-status">Live</span>
                     </div>
                     <div id="terminal-seat-switcher" style="display:none;flex-wrap:wrap;gap:4px;padding:4px 8px;background:var(--panel-bg2);border-bottom:1px solid var(--border-color);"></div>
-                    <pre class="terminal-stream-box" id="terminal-stream-output"></pre>
+                    <!-- xterm host. The viewport module appends its own container here. -->
+                    <div class="terminal-xterm-host" id="terminal-xterm-host"></div>
+                    <!-- Mobile key bar. Hidden on fine-pointer viewports; the key bar
+                         module toggles visibility based on (pointer: coarse). -->
+                    <div id="terminal-key-bar"></div>
                 </section>
 
                 <!-- VIEW Document Preview Overlay -->
@@ -1153,7 +1202,14 @@
     </div>
 
     <!-- SHARED_DEFAULTS_SCRIPT -->
-    <script src="/static/webview/sharedUtils.js" nonce="{{NONCE}}"></script>
-    <script src="/static/webview/command.js" nonce="{{NONCE}}"></script>
+    <!-- `defer` on the terminal stack: terminalViewport.js and terminalKeyBar.js
+         are not parser-blocking dependencies of command.js, but command.js
+         reads window.SwitchboardTerminalViewport / window.SwitchboardTerminalKeyBar
+         at viewer-open time, so they must be loaded before any viewer opens.
+         defer keeps the download parallel and execution in document order. -->
+    <script defer nonce="{{NONCE}}" src="/static/webview/sharedUtils.js"></script>
+    <script defer nonce="{{NONCE}}" src="/static/webview/terminalViewport.js"></script>
+    <script defer nonce="{{NONCE}}" src="/static/webview/terminalKeyBar.js"></script>
+    <script defer nonce="{{NONCE}}" src="/static/webview/command.js"></script>
 </body>
 </html>
