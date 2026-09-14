@@ -417,27 +417,27 @@ Required items remain operator decisions, not research questions.
 
 ## Outstanding Questions
 
-- **[user]** How is a team bound to a stream, given streams are derived and have no stable id?
-  Proceeding on the assumption that the team binds to the dependency-edge partition key the Analyze
-  pass produces (extended to emit and persist it — see Clarification under User Review Required and
-  Dependencies). A stream that no longer exists drops its binding rather than silently reassigning
-  it. If the operator would rather streams became first-class stored rows, that contradicts the
-  sibling plan's central premise and should be settled there.
-- **[user]** Does `missions.team` survive as the nominated default? Proceeding on the assumption
-  that **yes**, it is retained and read as rung 4 of the routing ladder — the fallback when no
-  per-stream binding applies. The alternative is retiring it outright and requiring an explicit
-  binding for every stream.
-- **[user]** Is a team a member of one mission at a time, or many? Proceeding on the assumption
-  that a team may appear in multiple missions (the operator's model has a "feature team" that
-  serves multiple missions over time), which requires widening the `UNIQUE(member_id)` index on
-  `mission_members` (V65) to `UNIQUE(mission_id, member_id)` or dropping it in favour of the PK.
-  If the operator intends one-mission-at-a-time, the current index is correct and no change is
-  needed. This is a schema decision the operator should confirm before coding begins.
+- **[RESOLVED 2026-09-14 — from the operator's stated model, not asked again.]** These three were
+  written by an agent while drafting this plan from the operator's answers, then put back to the
+  operator as new questions. That is a loop. All three follow from what was already stated on
+  2026-09-14 and are settled here.
 
----
+  **1. Binding to a stream → the dependency-edge partition key.** Streams are derived at pop time and
+  are not stored; the sibling plan (`staging-streams-parallel-dispatch-and-worktrees.md`) is explicit
+  that *"stages are not stored, but derived at pop time"*. A dependent plan does not get to contradict
+  its parent's central premise. So the team binds to the partition key the Analyze pass produces, and
+  a stream that disappears on re-analysis **drops** its binding rather than silently reassigning the
+  team. Making streams first-class stored rows remains possible, but it is a change to the sibling
+  plan and must be argued there.
 
-**Recommendation:** Complexity is 7 — Send to Lead Coder. The schema change is small, but the
-read-path coercion fix, the `UNIQUE(member_id)` decision, the partition-key dependency on the sibling
-plan, and the containment-predicate exclusion are each a place where a silent failure hides behind a
-green test. A lead coder can sequence the dependency on the sibling plan's partition-key emission
-and verify the read-path discriminator before the contract suite is trusted.
+  **2. `missions.team` survives as the nominated default.** Already decided, in
+  `two-teams-can-share-a-head-role-and-routing-decides-between-them.md`: it is read as **rung 4** of
+  the routing ladder, the fallback when no per-stream binding applies, and every resolution records
+  which source answered. Keeping the two plans consistent is not a new decision.
+
+  **3. A team may belong to many missions.** The operator's model states it directly — a feature team
+  and a batch tier serving work across missions over time, with mission assignment being a per-run
+  parameter rather than a standing property. One-mission-at-a-time would contradict that.
+  **Schema consequence:** `mission_members`'s `UNIQUE(member_id)` index (V65) must widen to
+  `UNIQUE(mission_id, member_id)`, or be dropped in favour of the primary key. Both tables are empty,
+  so there is no migration cost.
