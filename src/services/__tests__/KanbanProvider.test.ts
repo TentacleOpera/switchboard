@@ -813,10 +813,10 @@ Manual verification steps:
         const wireMove = (cards: KanbanCard[]) => {
             (provider as any)._lastCards = cards;
             (provider as any)._currentWorkspaceRoot = workspaceRoot;
-            sandbox.stub(provider as any, '_resolveWorkspaceRoot').callsFake((r?: string) => r || workspaceRoot);
+            sandbox.stub(provider as any, '_resolveWorkspaceRoot').callsFake((r?: any) => r || workspaceRoot);
             sandbox.stub(provider as any, 'moveCardToColumnWithReason').resolves({ ok: true, detail: '' });
             sandbox.stub(provider as any, 'moveCardToColumn').resolves(true);
-            sandbox.stub(provider as any, '_collectAllMovedSessionIds').callsFake((_r: string, sid: string) => Promise.resolve([sid]));
+            sandbox.stub(provider as any, '_collectAllMovedSessionIds').callsFake((_r: any, sid: any) => Promise.resolve([sid]));
             const postMessage = sandbox.stub(provider as any, 'postMessage');
             const recordRunSheet = sandbox.stub().resolves();
             (provider as any)._taskViewerProvider = { recordRunSheetForColumnMove: recordRunSheet };
@@ -908,7 +908,7 @@ Manual verification steps:
             (provider as any)._cliTriggersEnabled = false;
             (provider as any).moveCardToColumnWithReason.restore?.();
             sandbox.stub(provider as any, 'moveCardToColumnWithReason')
-                .callsFake((_r: string, sid: string) => Promise.resolve(
+                .callsFake((_r: any, sid: any) => Promise.resolve(
                     sid === 'p2' ? { ok: false, reason: 'error', detail: 'db write failed' } : { ok: true, detail: '' }
                 ));
 
@@ -970,7 +970,7 @@ Manual verification steps:
         test('moveSelected arm (PLAN REVIEWED): routes through _advanceCards CODED_AUTO', async () => {
             wireMove([card('p1', 'PLAN REVIEWED'), card('p2', 'PLAN REVIEWED')]);
             (provider as any)._cliTriggersEnabled = true;
-            sandbox.stub(provider as any, '_filterUnknownComplexitySessions').callsFake((ids: string[]) => ({ filtered: ids, skippedCount: 0 }));
+            sandbox.stub(provider as any, '_filterUnknownComplexitySessions').callsFake((ids: any) => ({ filtered: ids, skippedCount: 0 }));
             const advanceSpy = sandbox.spy(provider as any, '_advanceCards');
             sandbox.stub(provider as any, '_partitionByComplexityRoute').resolves(
                 new Map([['lead', []], ['coder', ['p1', 'p2']], ['intern', []]])
