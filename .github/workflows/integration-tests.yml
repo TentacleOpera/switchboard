@@ -79,6 +79,15 @@ jobs:
       - name: Push-routing ratchet (Gap A)
         run: npm run push-routing:check
 
+      # The apiOriginated caller-surface flag was deleted from the dispatch path;
+      # its failure mode was a silent positive — drop it at any hop and dispatch
+      # still resolves a terminal, delivers, and returns true, so nothing else can
+      # see it come back. This ratchet pins per-file occurrence counts, the
+      # load-bearing allowPtyFleet pool-resolver sites (a floor, not a target),
+      # and the untyped dead-slot arity that protects bypassTriggerGate.
+      - name: Dispatch-surface ratchet (apiOriginated must not grow back)
+        run: npm run dispatch-surface:check
+
       - name: Standalone push-parity ratchet
         run: npm run standalone-parity:check
 

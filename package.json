@@ -1002,6 +1002,7 @@
     "parity:check": "node scripts/check-protocol-parity.js",
     "icons:parity": "node scripts/check-icon-parity.js",
     "push-routing:check": "node scripts/check-push-routing.js",
+    "dispatch-surface:check": "node scripts/check-dispatch-surface.js",
     "standalone-parity:check": "node scripts/check-standalone-push-parity.js",
     "standalone-fork:check": "node src/test/standalone-kanban-fork-detector.test.js",
     "host-seam-parity:check": "node scripts/check-host-seam-parity.js",
