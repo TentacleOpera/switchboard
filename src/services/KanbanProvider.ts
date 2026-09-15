@@ -11515,7 +11515,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     return { success: result.success, role: undefined, targetColumn, moved: result.moved, failures: result.failures, skippedUnknownComplexity: result.skippedUnknownComplexity, dispatched: result.dispatched, error: result.error };
                 }
 
-                if (!this._cliTriggersEnabled) {
+                // bypassTriggerGate is the explicit-command escape hatch — the same
+                // read triggerAction performs. Without it an explicit
+                // POST /kanban/dispatch of several cards was refused while the
+                // same call for one card succeeded: identical defect to the one
+                // _advanceCards:9725 documents for the CODED_AUTO path, still
+                // live here on the non-CODED_AUTO batch path until this fix.
+                if (!this._cliTriggersEnabled && !msg?.bypassTriggerGate) {
                     return { success: false, error: 'CLI triggers are disabled' };
                 }
                 const dispatchSpec = workspaceRoot
