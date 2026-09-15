@@ -208,45 +208,46 @@ check('no seat-facing instruction tells a seat to supply --from to done', () => 
     }
 });
 
-check("the lead's completion instruction keeps its fields, scoped per variant", () => {
+check("the lead's completion instruction names the subtask it is accepting", () => {
     const frag = fs.readFileSync(
         path.join(process.cwd(), 'src', 'services', 'standingOrderFragments.ts'), 'utf8');
-    // (b) The STATELESS variant (no registered rounds) KEEPS the exact
-    // task/complete string — this plan keeps round/complete + feature/complete
-    // for stateless teams. The assertion stays green regardless of the rounds
-    // variant; it guards nothing about the rounds variant, so (a) is a
-    // separate scoped assertion below.
-    assert.ok(/task\/complete with \{"from"/.test(frag),
-        'the stateless lead names which plan is complete — task/complete keeps from/planId/'
-        + 'workspaceRoot and must not be swept up by the seat-facing rule above');
-    assert.ok(/"planId"/.test(frag), 'task/complete still requires planId');
+    // There is no longer a stateless variant to scope this to. The lead's
+    // completion verb is `accept --plan <subtask planId>`; the hand-assembled
+    // task/complete POST it replaced is gone, along with the
+    // `hasRegisteredRounds` branch that kept it alive for every team that had
+    // not yet registered rounds — which was every team, always.
+    assert.ok(/accept --plan/.test(frag),
+        'the lead accepts by CLI verb — accept --plan is the completion instruction');
+    assert.ok(/<that SUBTASK\\'s planId>/.test(frag),
+        'the lead names WHICH subtask it is accepting — never the feature');
+    assert.ok(!/task\/complete with \{"from"/.test(frag),
+        'the lead is no longer told to hand-assemble a task/complete POST');
 });
 
-check("the rounds-registered lead variant names accept --plan and NOT round/complete or feature/complete", () => {
-    // (a) The ROUNDS-REGISTERED variant: the lead's one verb is accept --plan.
-    // No lead-facing string in this variant names round/complete or
-    // feature/complete — the system closes the round and completes the feature
-    // as a consequence of the accepts (plan: the-lead-accepts-a-subtask-and-
-    // the-system-advances). Scoped to the rounds variant: the stateless
-    // variant still names round/complete + feature/complete, and an assertion
-    // carved out so wide it scans the whole file would falsely flag the
-    // stateless path.
+check("the lead's completion fragment names accept --plan and NOT round/complete or feature/complete", () => {
+    // The lead's one verb is accept --plan. No lead-facing string names
+    // round/complete or feature/complete — the system closes the round and
+    // completes the feature as a consequence of the accepts (plan:
+    // the-lead-accepts-a-subtask-and-the-system-advances).
+    //
+    // This used to be scoped to a `hasRegisteredRounds: true` variant, with a
+    // companion assertion pinning that the `false` variant still named
+    // round/complete and feature/complete. That companion assertion pinned the
+    // bug: "no registered rounds" is the state every feature starts in, so the
+    // stateless branch was the only branch any lead ever saw and no lead was
+    // ever told to register a round. Both the branch and its assertion are
+    // gone — there is one contract.
     const { buildHeadCompletionFragment } = require(
         path.join(process.cwd(), 'out', 'services', 'standingOrderFragments.js'));
-    const roundsFrag = buildHeadCompletionFragment({ hasRegisteredRounds: true });
-    assert.ok(/accept --plan/.test(roundsFrag),
-        'the rounds-registered lead variant must name accept --plan');
-    assert.ok(!/round\/complete/.test(roundsFrag),
-        'the rounds-registered lead variant must NOT name round/complete — the system closes the round');
-    assert.ok(!/feature\/complete/.test(roundsFrag),
-        'the rounds-registered lead variant must NOT name feature/complete — the system completes the feature');
-    // The stateless variant still names both, so the gate protects the
-    // rounds variant specifically.
-    const statelessFrag = buildHeadCompletionFragment({ hasRegisteredRounds: false });
-    assert.ok(/round\/complete/.test(statelessFrag),
-        'the stateless lead variant still names round/complete');
-    assert.ok(/feature\/complete/.test(statelessFrag),
-        'the stateless lead variant still names feature/complete');
+    const frag = buildHeadCompletionFragment();
+    assert.ok(/accept --plan/.test(frag),
+        'the lead completion fragment must name accept --plan');
+    assert.ok(/round\/register/.test(frag),
+        'the lead is told to register its rounds — unconditionally, not only once it already has some');
+    assert.ok(!/round\/complete/.test(frag),
+        'the lead must NOT name round/complete — the system closes the round');
+    assert.ok(!/feature\/complete/.test(frag),
+        'the lead must NOT name feature/complete — the system completes the feature');
 });
 
 if (failures > 0) {

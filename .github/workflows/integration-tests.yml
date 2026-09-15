@@ -1444,6 +1444,14 @@ jobs:
       - name: Shell agent dock contract (dock placement, width floor, relay guard)
         run: npm run test:contract:shell-agent-dock
 
+      # Agent Control configures itself: POST /agent/control/config writes the
+      # key to the secrets store, GET never echoes it, the dedicated endpoint/
+      # model keys replace the startupCommands overload (migrated once), and
+      # both composition roots wire store/delete on the seam — the trap that
+      # left the surface able to read a key it could not set.
+      - name: Agent-control config contract (key write-only, one-time migration, seam parity)
+        run: npm run test:contract:agent-control-config
+
       # The Terminal Grid button must open the SYSTEM browser. Simple Browser is
       # a webview wrapping a cross-origin iframe: navigator.clipboard throws and
       # Electron eats Cmd/Ctrl+C before it reaches the frame (vscode#182642,

@@ -1046,6 +1046,7 @@
     "test:contract:shell-modal-panel": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/shell-modal-panel-contract.test.js",
     "test:contract:standalone-pwa-install": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/standalone-pwa-install-contract.test.js",
     "test:contract:shell-agent-dock": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/shell-agent-dock.test.js",
+    "test:contract:agent-control-config": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/agent-control-config-contract.test.js",
     "test:contract:terminal-grid-entry-point": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-grid-entry-point.test.js",
     "test:contract:terminal-pane-pinning": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-pane-pinning-contract.test.js",
     "test:contract:terminal-sidebar-groupings": "node --require ./src/test/bootstrap/sandboxStateHome.js src/test/terminal-sidebar-groupings-contract.test.js",

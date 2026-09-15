@@ -24,7 +24,6 @@ import { readScheduleState } from './scheduleState';
 import { normalizeLogSlice } from './terminalLogUtils';
 import { attributePlansToTerminals } from './terminalPlanAttribution';
 import {
-    STANDING_ORDERS_CONFIG_KEY,
     STANDING_ORDER_DEFINITIONS_CONFIG_KEY,
     StandingOrder,
     StandingOrderDefinition,
@@ -36,7 +35,7 @@ import {
     makeStandingOrder,
     makeStandingOrderDefinition,
 } from './standingOrders';
-import { plausibleOriginTerminal, TERMINALS_GROUPS_KEY, mutateTerminalGroups, teamHeadName, installGlobalQueueDoneOrder } from './teamWiring';
+import { plausibleOriginTerminal, TERMINALS_GROUPS_KEY, mutateTerminalGroups, teamHeadName, installGlobalQueueDoneOrder, inspectStandingOrders } from './teamWiring';
 import { computeRosterClearTargets } from './workContextResolver';
 import { instantiateExternalHeadedTeam, resolveExternalTeamTemplate } from './agentGroupInstantiation';
 import { parseComplexityScore, getFallbackRole } from './complexityScale';
@@ -407,7 +406,7 @@ interface LocalApiServerOptions {
      * extracted verb returns `{ success, ... }`). Optional — absent in
      * headless/test harnesses (returns 503).
      */
-    kanbanVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
+    kanbanVerb?: (verb: string, payload: any, workspaceRoot?: string, source?: 'agent-control') => Promise<any>;
     /**
      * PTY terminal verb handler — dispatches terminal verbs (ptyCreate,
      * ptySendPrompt, etc.) to the pty host. Returns the service method's
@@ -680,12 +679,20 @@ interface LocalApiServerOptions {
     allowSecretWritesOverHttp?: boolean;
     taskViewerVerb?: (verb: string, payload: any, workspaceRoot?: string) => Promise<any>;
     /**
-     * Encrypted secrets store — used by the agent control surface to read
-     * the model API key (`switchboard.agentControl.apiKey`). Optional —
-     * absent in test harnesses; the controller then falls back to the
-     * `SWITCHBOARD_AGENT_API_KEY` env var.
+     * Encrypted secrets store — the agent control surface reads AND writes the
+     * model API key (`switchboard.agentControl.apiKey`) through this seam:
+     * `POST /agent/control/config` is the surface-side setter, so a root that
+     * wires only `get` leaves the surface able to read a key it cannot set
+     * ("never wired" and "working" become the same value). Optional — absent
+     * in test harnesses; the controller then falls back to the
+     * `SWITCHBOARD_AGENT_API_KEY` env var, and the write endpoint reports the
+     * unwired seam instead of pretending the key was stored.
      */
-    encryptedSecretsStore?: { get(key: string): Promise<string | undefined> } | null;
+    encryptedSecretsStore?: {
+        get(key: string): Promise<string | undefined>;
+        store(key: string, value: string): Promise<void>;
+        delete(key: string): Promise<void>;
+    } | null;
     cleanupWorktree?: (
         workspaceRoot: string,
         worktreeId: string | number
@@ -8663,7 +8670,7 @@ export class LocalApiServer {
         }
     }
 
-    private async _handleKanbanVerb(verb: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    private async _handleKanbanVerb(verb: string, req: http.IncomingMessage, res: http.ServerResponse, source?: 'agent-control'): Promise<void> {
         if (!await this._checkAuth(req, true)) {
             this._sendUnauthorized(res);
             return;
@@ -8691,7 +8698,7 @@ export class LocalApiServer {
             delete body.type;
             delete body.bypassTriggerGate;
             const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim() || undefined;
-            const result = await kanbanVerb(verb, body, workspaceRoot);
+            const result = await kanbanVerb(verb, body, workspaceRoot, source);
             const ok = !result || result.success !== false;
             res.writeHead(ok ? 200 : 502, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify(result ?? { success: true }));
@@ -9165,11 +9172,14 @@ export class LocalApiServer {
      * workspace. Returns `{ success: true, available, orders }`; `available` is false
      * when no kanban DB is reachable so the webview can gate the UI honestly.
      *
-     * Returns rows raw and identity-stable (preserving on-disk UUIDs for
-     * delete-by-id). System orders are composed at delivery and never persisted,
-     * so the persisted store holds only what a human authored — there is no
-     * staleness to surface. The endpoint returns the rows as-is, with `scope`
-     * defaulted to `pair` for shipped-state rows that predate the field.
+     * Returns persisted rows raw and identity-stable (preserving on-disk UUIDs
+     * for delete-by-id), annotated by `inspectStandingOrders` with the
+     * delivery-time metadata the Orders tab renders: `scope` defaulted to
+     * `pair` for shipped-state rows, `dropped` for rows the read-time
+     * transforms exclude from delivery, `stale` for dangling definition links,
+     * and `effectiveInstruction` for rows whose delivered text differs from
+     * the stored `instruction`. `coreOrders` carries the system-composed
+     * orders (never persisted) so the tab shows both populations.
      */
     private async _handleStandingOrdersList(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
@@ -9191,24 +9201,29 @@ export class LocalApiServer {
         }
 
         try {
-            const raw = await db.getConfigJson(STANDING_ORDERS_CONFIG_KEY, []) as StandingOrder[];
-            const rawArray = Array.isArray(raw) ? raw : [];
+            // Terminal-name → role map for the composed-fragment resolution —
+            // best-effort: the inspection answers without it (role-dependent
+            // fragments render their no-role variant).
+            let roleMap: Map<string, string> | undefined;
+            try {
+                if (this._options.terminalVerb) {
+                    const listed = await this._options.terminalVerb('ptyListTerminals', {}, this._options.workspaceRoot);
+                    roleMap = new Map<string, string>();
+                    for (const t of (listed?.terminals || [])) {
+                        if (t?.friendlyName && t?.role) { roleMap.set(t.friendlyName, String(t.role)); }
+                    }
+                }
+            } catch { roleMap = undefined; }
 
-            const orders = rawArray.map(o => ({
-                ...o,
-                // Default absent `scope` to `pair` on read so the client always
-                // sees an explicit scope field, even for shipped-state rows.
-                scope: (o.scope || 'pair') as StandingOrderScope,
-            }));
-
-            // Definitions library — returned alongside orders so the webview
-            // can render the library UI and show which assignments link to
-            // which definitions in a single GET.
-            const rawDefs = await db.getConfigJson(STANDING_ORDER_DEFINITIONS_CONFIG_KEY, []) as StandingOrderDefinition[];
-            const definitions = Array.isArray(rawDefs) ? rawDefs : [];
+            const inspection = await inspectStandingOrders(db, roleMap);
 
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: true, available: true, orders, definitions }));
+            res.end(JSON.stringify({
+                success: true, available: true,
+                orders: inspection.orders,
+                definitions: inspection.definitions,
+                coreOrders: inspection.coreOrders,
+            }));
         } catch (err) {
             // NOT `orders: []` on its own — that would be "no standing orders are
             // configured", a different and load-bearing answer. `available: false`
@@ -11195,114 +11210,156 @@ export class LocalApiServer {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    //  Agent Control Surface — the dock's Agent tab is an API-backed controller,
-    //  not a pty seat. POST /agent/control resolves phrases to plan ids, fires
-    //  mechanical actions directly, and optionally calls a configured model
-    //  endpoint for fuzzy resolution. GET /agent/control/config reports whether
-    //  a model is configured and which quick actions are available.
-    //  See plan: the-dock-agent-tab-is-a-control-surface-not-a-terminal.
+    //  Agent Control Surface — the dock's Agent tab (and the mobile command
+    //  surface's agent pane) is an API-backed controller driven by action
+    //  buttons, not a pty seat and not a text box. The quick actions fire their
+    //  mechanical endpoints directly (/kanban/advance, /kanban/move,
+    //  /kanban/plans/priority, the board/column reads); POST /agent/control is
+    //  the one model-backed action ("Resolve"), which takes a card chosen from
+    //  a dropdown — no free text anywhere. GET /agent/control/config reports
+    //  the endpoint/model/key state; POST /agent/control/config is the
+    //  surface-side setter for it.
+    //  See plan: the-dock-agent-tab-is-a-control-surface-not-a-terminal and
+    //  the-agent-control-surface-cannot-be-configured-and-is-driven-by-typing.
     // ═══════════════════════════════════════════════════════════════════════
 
     /**
-     * Resolve the model endpoint configured for the controller role. The
-     * `project_manager` startup command, when it starts with `http://` or
-     * `https://`, is treated as an HTTP model endpoint rather than a CLI
-     * command. Returns `{ url, apiKey }` or `null` when no model is configured.
-     * The API key is read from the `switchboard.agentControl.apiKey` secret
-     * (stored via the encrypted secrets store) or the
-     * `SWITCHBOARD_AGENT_API_KEY` env var as a fallback.
+     * The surface's configured model endpoint. Reads the surface's OWN key
+     * (`agents.agentControlEndpoint`, written by POST /agent/control/config)
+     * and nothing else — the unreleased `agents.startupCommands` URL overload
+     * took a clean break: a URL typed into the startup-command field is a CLI
+     * command, never an endpoint.
+     *
+     * Returns `{ url }`, `null` when unconfigured, or `{ error }` when the
+     * config is unreadable or holds a non-URL value — three outcomes, never
+     * collapsed (a corrupt file is not an unconfigured one).
      */
-    private async _resolveAgentControlModel(): Promise<{
-        url: string; apiKey: string; keySource: 'secrets-store' | 'env';
-    } | { error: string } | null> {
-        // Tagged, not silently defaulted. This is a CONFIGURATION read, and
-        // CLAUDE.md's rule applies in full: a default that behaves like a
-        // configured value turns a loud failure into a quiet wrong answer.
-        // Three distinct outcomes, never collapsed into one:
-        //   null            — no model endpoint configured (the ordinary case)
-        //   { error }       — configured but unusable; the tab SAYS SO
-        //   { url, apiKey } — usable, with the store that answered recorded
-        let commands: Record<string, string> | undefined;
+    private async _resolveAgentControlEndpoint(): Promise<{ url: string } | { error: string } | null> {
+        let endpoint = '';
         try {
-            commands = await GlobalIntegrationConfigService.getAgentStartupCommands();
+            endpoint = String(await GlobalIntegrationConfigService.getAgentConfig<string>('agentControlEndpoint') || '').trim();
         } catch (err) {
-            // A corrupt integration-config.json is NOT an unconfigured one.
-            // Returning null here would report "no model configured" for a file
-            // that is merely unreadable — the exact conflation CLAUDE.md names
-            // (`catch { return {} }` reading a corrupt file as unconfigured),
-            // and integration-config.json has a documented corruption history.
-            console.error('[LocalApiServer] agent-control: startup commands unreadable:', err);
-            return { error: 'Agent startup commands could not be read (config may be corrupt). Fix the config; the model is not being treated as unconfigured.' };
+            console.error('[LocalApiServer] agent-control: endpoint config unreadable:', err);
+            return { error: 'Agent-control config could not be read (config may be corrupt). Fix the config; the model is not being treated as unconfigured.' };
         }
-        // Which store answered is recorded, so "why is it using that URL?" is
-        // answerable after the fact rather than guessed from two candidates.
-        const fromPm = String(commands?.['project_manager'] || '').trim();
-        const fromMc = String(commands?.['mission-control'] || '').trim();
-        const trimmed = fromPm || fromMc;
-        if (!trimmed || !/^https?:\/\//i.test(trimmed)) { return null; }
+        if (!endpoint) { return null; }
+        if (!/^https?:\/\//i.test(endpoint)) {
+            return { error: `Configured agent-control endpoint "${endpoint}" is not an http(s) URL.` };
+        }
+        return { url: endpoint };
+    }
 
-        let apiKey = '';
-        let keySource: 'secrets-store' | 'env' = 'env';
+    /**
+     * The model API key, tagged with the store that answered. The secrets
+     * store wins over `SWITCHBOARD_AGENT_API_KEY` (the headless-install
+     * override). An unreadable store is `{ error }`, never silently "unset" —
+     * that conflation made a locked keychain look like a missing credential.
+     */
+    private async _resolveAgentControlApiKey(): Promise<{ apiKey: string; keySource: 'secrets-store' | 'env' } | { error: string }> {
         const secretsStore = this._options.encryptedSecretsStore;
         if (secretsStore && typeof secretsStore.get === 'function') {
             try {
-                apiKey = String(await secretsStore.get('switchboard.agentControl.apiKey') || '');
-                if (apiKey) { keySource = 'secrets-store'; }
+                const stored = String(await secretsStore.get('switchboard.agentControl.apiKey') || '');
+                if (stored) { return { apiKey: stored, keySource: 'secrets-store' }; }
             } catch (err) {
-                // Swallowing this made a locked/!unlocked keychain look identical
-                // to an unset key, and the caller then reported the model as
-                // configured with an empty credential.
                 console.error('[LocalApiServer] agent-control: secrets store read failed:', err);
                 return { error: 'The stored API key could not be read (secrets store unavailable).' };
             }
         }
-        if (!apiKey) {
-            apiKey = String(process.env.SWITCHBOARD_AGENT_API_KEY || '');
-            keySource = 'env';
+        return { apiKey: String(process.env.SWITCHBOARD_AGENT_API_KEY || ''), keySource: 'env' };
+    }
+
+    /**
+     * Resolve the model the agent-control surface should call. Returns
+     * `{ url, model, apiKey, keySource }`, or `null` when no endpoint is
+     * configured. Configured-but-unusable states are `{ error }`, and they are
+     * kept distinct: endpoint-without-model and endpoint-without-key are each
+     * reported, never collapsed into "unconfigured" or silently defaulted.
+     */
+    private async _resolveAgentControlModel(): Promise<{
+        url: string; model: string; apiKey: string; keySource: 'secrets-store' | 'env';
+    } | { error: string } | null> {
+        const endpoint = await this._resolveAgentControlEndpoint();
+        if (endpoint === null) { return null; }
+        if ('error' in endpoint) { return endpoint; }
+
+        let modelName = '';
+        try {
+            modelName = String(await GlobalIntegrationConfigService.getAgentConfig<string>('agentControlModel') || '').trim();
+        } catch (err) {
+            console.error('[LocalApiServer] agent-control: model config unreadable:', err);
+            return { error: 'Agent-control config could not be read (config may be corrupt). Fix the config; the model is not being treated as unconfigured.' };
         }
-        if (!apiKey) {
-            // Previously returned `{ url, apiKey: '' }` — a truthy object, so
-            // `modelConfigured: !!model` reported TRUE with no credential and
-            // every model call 401'd behind a UI claiming it was configured.
-            // An endpoint with no key is a misconfiguration, and it says so.
-            return { error: `Model endpoint ${trimmed} is configured but no API key is set (switchboard.agentControl.apiKey or SWITCHBOARD_AGENT_API_KEY).` };
+        // Unset means unset: a wrong model that answers is worse than none, so
+        // endpoint-without-model is an error the surface reports beside the
+        // model field — not a guess at a default.
+        if (!modelName) {
+            return { error: `Model endpoint ${endpoint.url} is configured but no model is set (agents.agentControlModel).` };
         }
-        return { url: trimmed, apiKey, keySource };
+
+        const key = await this._resolveAgentControlApiKey();
+        if ('error' in key) { return key; }
+        if (!key.apiKey) {
+            // A truthy { url } with an empty credential reported TRUE for
+            // `modelConfigured` once, and every call 401'd behind a UI claiming
+            // it was configured. An endpoint with no key is a misconfiguration,
+            // and it says so.
+            return { error: `Model endpoint ${endpoint.url} is configured but no API key is set (switchboard.agentControl.apiKey or SWITCHBOARD_AGENT_API_KEY).` };
+        }
+        return { url: endpoint.url, model: modelName, apiKey: key.apiKey, keySource: key.keySource };
     }
 
     /** Narrow the tagged result to a usable model, or null. */
     private static _usableAgentModel(
-        m: { url: string; apiKey: string; keySource: string } | { error: string } | null
-    ): { url: string; apiKey: string; keySource: string } | null {
+        m: { url: string; model: string; apiKey: string; keySource: string } | { error: string } | null
+    ): { url: string; model: string; apiKey: string; keySource: string } | null {
         return m && !('error' in m) ? m : null;
     }
 
     /**
      * GET /agent/control/config — report whether the model endpoint is
-     * configured and available, plus the list of quick (mechanical) actions
-     * the controller can fire without a model call.
+     * configured and available, the configured endpoint/model values (so the
+     * config row can render current state), whether a key is set (never the
+     * key itself), plus the list of quick (mechanical) actions the controller
+     * can fire without a model call.
      */
     private async _handleAgentControlConfig(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         await this._handleReadEndpoint(req, res, async () => {
+            // The resolver runs FIRST so endpoint/model/key reads below see
+            // exactly what the model path would use.
             const model = await this._resolveAgentControlModel();
             const usable = LocalApiServer._usableAgentModel(model);
+            const endpoint = await GlobalIntegrationConfigService.getAgentConfig<string>('agentControlEndpoint');
+            const modelName = await GlobalIntegrationConfigService.getAgentConfig<string>('agentControlModel');
+            const key = await this._resolveAgentControlApiKey();
             // The mechanical actions below need no model, and stay available
             // when it is broken — plan edge case 1: "a control surface that
-            // goes blank is worse than a terminal".
+            // goes blank is worse than a terminal". The by-id actions take
+            // their target from the card picker dropdown on the surface, and
+            // `resolve-card` is the one model-backed action (needsModel: true).
             const quickActions = [
                 { id: 'dispatch-starred', label: 'Dispatch starred cards', needsModel: false },
                 { id: 'refresh-board', label: 'Refresh board state', needsModel: false },
                 { id: 'list-columns', label: 'List columns', needsModel: false },
-                { id: 'advance-plan', label: 'Advance a plan (by id)', needsModel: false },
-                { id: 'move-plan', label: 'Move a plan (by id + column)', needsModel: false },
-                { id: 'star-plan', label: 'Star a plan (by id)', needsModel: false },
+                { id: 'advance-plan', label: 'Advance selected card', needsModel: false },
+                { id: 'move-plan', label: 'Move selected card', needsModel: false },
+                { id: 'star-plan', label: 'Star selected card', needsModel: false },
+                { id: 'resolve-card', label: 'Resolve selected card', needsModel: true },
             ];
             return {
                 // TRUE only for a model that can actually be called. A
                 // configured-but-keyless endpoint reports false WITH a reason,
                 // so the tab says what is wrong instead of claiming health.
                 modelConfigured: !!usable,
+                // The configured values as stored — the config row renders them
+                // verbatim (including a value the resolver would reject, so the
+                // operator can see and fix it). The API key is NEVER returned —
+                // `keySet` is all the surface is allowed to know.
+                endpoint: endpoint ? String(endpoint) : null,
+                model: modelName ? String(modelName) : null,
+                keySet: !('error' in key) && !!key.apiKey,
                 modelUrl: usable ? usable.url : null,
+                modelName: usable ? usable.model : null,
                 modelKeySource: usable ? usable.keySource : null,
                 modelError: model && 'error' in model ? model.error : null,
                 quickActions,
@@ -11311,140 +11368,83 @@ export class LocalApiServer {
     }
 
     /**
-     * Resolve a free-text phrase to a set of plan ids using the current board
-     * state. This is the "resolution" half of the controller — the part that
-     * can be wrong, so it is reported back to the operator before/within the
-     * action reply. When a model is configured, the phrase is sent to the
-     * model for fuzzy matching against the board's plan topics; when no model
-     * is available, a keyword-based fallback resolves common patterns
-     * ("starred", "my cards", column names, plan ids, topic substrings).
+     * POST /agent/control/config — the surface-side setter for the model
+     * endpoint, model name and API key. Auth-gated like the sibling routes.
+     *
+     * Write order is KEY-FIRST, endpoint/model-second: a resolver that runs
+     * between the two writes then sees "key set, old endpoint" — harmless —
+     * rather than "new endpoint, no key", which is the configured-but-keyless
+     * state the resolver already flags as an error.
+     *
+     * Body: { endpoint?: string, model?: string, apiKey?: string }
+     *   apiKey absent → stored key unchanged
+     *   apiKey ''     → stored key deleted (explicit clear)
+     *   apiKey <v>    → written to the encrypted secrets store
+     *
+     * Response: { success, keySet, endpoint, model } — the key VALUE is never
+     * present in any response field.
      */
-    private async _resolveAgentPhrase(
-        phrase: string,
-        board: any[],
-        history: Array<{ role: string; content: string }>
-    ): Promise<{ resolved: any[]; reply: string; usedModel: boolean }> {
-        const text = String(phrase || '').trim().toLowerCase();
-        if (!text) { return { resolved: [], reply: 'Empty command.', usedModel: false }; }
-
-        // ── Mechanical / keyword resolution (no model needed) ──────────────
-        // "starred" / "my starred cards" → all starred plans
-        if (/\bstarred\b|\bstar\b/.test(text) && !/\bunstar\b/.test(text)) {
-            const starred = board.filter(p => p.starred === 1 || p.starred === true || p.priority === 1 || p.priority === true);
-            return {
-                resolved: starred,
-                reply: starred.length
-                    ? `Resolved ${starred.length} starred card(s): ${starred.map(p => p.topic || p.planId).join(', ')}`
-                    : 'No starred cards on the board.',
-                usedModel: false,
-            };
+    private async _handleAgentControlConfigWrite(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+        if (!await this._checkAuth(req, true)) {
+            this._sendUnauthorized(res);
+            return;
         }
-
-        // "my cards" / "all cards" / "board" → entire board
-        if (/\bmy cards\b|\ball cards\b|\bboard\b|\beverything\b/.test(text)) {
-            return {
-                resolved: board,
-                reply: board.length
-                    ? `Resolved all ${board.length} card(s) on the board.`
-                    : 'Board is empty.',
-                usedModel: false,
-            };
-        }
-
-        // Column name match: "dispatch the created plans" / "show coded" etc.
-        for (const col of DEFAULT_KANBAN_COLUMNS) {
-            const label = String(col.label || col.id || '').toLowerCase();
-            const id = String(col.id || '').toLowerCase();
-            if (label && (text.includes(label) || text.includes(id))) {
-                const inCol = board.filter(p => String(p.kanbanColumn || '').toLowerCase() === id);
-                return {
-                    resolved: inCol,
-                    reply: inCol.length
-                        ? `Resolved ${inCol.length} card(s) in ${col.label}: ${inCol.map(p => p.topic || p.planId).join(', ')}`
-                        : `No cards in ${col.label}.`,
-                    usedModel: false,
-                };
-            }
-        }
-
-        // Plan ID match (UUID or session id substring)
-        const idMatch = board.filter(p => {
-            const pid = String(p.planId || '').toLowerCase();
-            const sid = String(p.sessionId || '').toLowerCase();
-            return (pid && text.includes(pid)) || (sid && text.includes(sid));
-        });
-        if (idMatch.length) {
-            return {
-                resolved: idMatch,
-                reply: `Resolved ${idMatch.length} card(s) by id: ${idMatch.map(p => p.topic || p.planId).join(', ')}`,
-                usedModel: false,
-            };
-        }
-
-        // Topic substring match (case-insensitive) — match if any word
-        // from the phrase (4+ chars) appears in a plan's topic
-        const phraseWords = text.split(/\s+/).filter(w => w.length >= 4);
-        const topicMatch = phraseWords.length > 0
-            ? board.filter(p => {
-                const topic = String(p.topic || '').toLowerCase();
-                if (!topic) { return false; }
-                return phraseWords.some(w => topic.includes(w));
-            })
-            : [];
-        if (topicMatch.length) {
-            return {
-                resolved: topicMatch,
-                reply: `Resolved ${topicMatch.length} card(s) by topic: ${topicMatch.map(p => p.topic || p.planId).join(', ')}`,
-                usedModel: false,
-            };
-        }
-
-        // ── Model-based fuzzy resolution (if configured) ───────────────────
-        // Narrowed: the resolver now returns a tagged union, and a
-        // configured-but-unusable model ({ error }) must NOT be called — it
-        // carries no url or apiKey. Keyword resolution below still runs, which
-        // is the point of keeping mechanical actions off the model path.
-        const model = LocalApiServer._usableAgentModel(await this._resolveAgentControlModel());
-        if (model) {
-            try {
-                const modelReply = await this._callModelForResolution(model, text, board, history);
-                if (modelReply && Array.isArray(modelReply.planIds)) {
-                    const resolved = board.filter(p => modelReply.planIds.includes(p.planId) || modelReply.planIds.includes(p.sessionId));
-                    return {
-                        resolved,
-                        reply: modelReply.reply || `Model resolved ${resolved.length} card(s).`,
-                        usedModel: true,
-                    };
+        try {
+            const body = await this._parseJsonBody(req);
+            if (typeof body?.apiKey === 'string') {
+                const secretsStore = this._options.encryptedSecretsStore;
+                if (!secretsStore || typeof secretsStore.store !== 'function' || typeof secretsStore.delete !== 'function') {
+                    // Report the unwired seam — never pretend the key was stored.
+                    res.writeHead(503, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify({
+                        success: false,
+                        error: 'Cannot store the API key: this host\'s encryptedSecretsStore seam is not wired for writing.',
+                        seam: 'encryptedSecretsStore',
+                    }));
+                    return;
                 }
-            } catch (err) {
-                // Model call failed — fall through to "no resolution" with the error
-                return {
-                    resolved: [],
-                    reply: `Model resolution failed: ${err instanceof Error ? err.message : 'unknown error'}. Try a plan id or column name.`,
-                    usedModel: true,
-                };
+                const trimmed = body.apiKey.trim();
+                if (trimmed) { await secretsStore.store('switchboard.agentControl.apiKey', trimmed); }
+                else { await secretsStore.delete('switchboard.agentControl.apiKey'); }
             }
+            if (typeof body?.endpoint === 'string') {
+                await GlobalIntegrationConfigService.setAgentConfig('agentControlEndpoint', body.endpoint.trim());
+            }
+            if (typeof body?.model === 'string') {
+                await GlobalIntegrationConfigService.setAgentConfig('agentControlModel', body.model.trim());
+            }
+            const key = await this._resolveAgentControlApiKey();
+            const endpoint = await GlobalIntegrationConfigService.getAgentConfig<string>('agentControlEndpoint');
+            const modelName = await GlobalIntegrationConfigService.getAgentConfig<string>('agentControlModel');
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: true,
+                keySet: !('error' in key) && !!key.apiKey,
+                endpoint: endpoint ? String(endpoint) : '',
+                model: modelName ? String(modelName) : '',
+            }));
+        } catch (err) {
+            console.error('[LocalApiServer] agentControlConfig write error:', err);
+            res.writeHead(500, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'config write failed' }));
         }
-
-        return {
-            resolved: [],
-            reply: `Could not resolve "${phrase}" to any card. Try a plan id, column name, "starred", or "my cards".`,
-            usedModel: false,
-        };
     }
 
     /**
-     * Call the configured HTTP model endpoint for fuzzy phrase resolution.
-     * Sends the board's plan summaries (id + topic + column) and the phrase,
-     * asks the model to return matching plan ids. Uses a minimal
+     * Call the configured HTTP model endpoint to choose the action for a card
+     * the operator picked from the surface's dropdown. This is the model's
+     * only job on the surface: fuzzy ACTION resolution for a card whose next
+     * step the operator does not want to name. The card itself is chosen
+     * mechanically (a dropdown read of the board), so the model can never
+     * invent the target. Sends the configured model NAME in the request body —
+     * an endpoint serving several models is the ordinary case. Uses a minimal
      * OpenAI-compatible chat completions request format.
      */
-    private async _callModelForResolution(
-        model: { url: string; apiKey: string },
-        phrase: string,
-        board: any[],
-        history: Array<{ role: string; content: string }>
-    ): Promise<{ planIds: string[]; reply: string } | null> {
+    private async _callModelForAction(
+        model: { url: string; model: string; apiKey: string },
+        card: any,
+        board: any[]
+    ): Promise<{ action: string; column?: string; reply: string } | null> {
         const planSummaries = board.map(p => ({
             planId: p.planId,
             sessionId: p.sessionId,
@@ -11452,18 +11452,24 @@ export class LocalApiServer {
             column: p.kanbanColumn,
             starred: !!(p.starred === 1 || p.starred === true || p.priority === 1 || p.priority === true),
         }));
-        const systemPrompt = `You are a board controller. Given a user phrase and the current board state, resolve the phrase to a list of planIds. Reply with JSON: {"planIds": ["uuid1", ...], "reply": "one-line summary of what you resolved"}. Only include planIds that exist on the board. If no cards match, return empty planIds and explain in reply.`;
-        const userContent = `Board state:\n${JSON.stringify(planSummaries, null, 2)}\n\nUser phrase: "${phrase}"`;
+        const columnIds = DEFAULT_KANBAN_COLUMNS.map(c => String(c.id));
+        const systemPrompt = `You are a board controller. The operator selected one card and asks you to choose the action that card should take. Reply with JSON only: {"action": "advance"|"move"|"star"|"unstar"|"none", "column": "<target column id, required only for move>", "reply": "one-line explanation"}. Valid column ids: ${columnIds.join(', ')}. "advance" sends the card to its next stage; "move" sends it to a named column; "star"/"unstar" toggles its priority star; "none" when no action applies.`;
+        const userContent = `Selected card:\n${JSON.stringify({
+            planId: card.planId,
+            sessionId: card.sessionId,
+            topic: card.topic,
+            column: card.kanbanColumn,
+            starred: !!(card.starred === 1 || card.starred === true || card.priority === 1 || card.priority === true),
+        }, null, 2)}\n\nBoard state:\n${JSON.stringify(planSummaries, null, 2)}`;
         const messages = [
             { role: 'system', content: systemPrompt },
-            ...(history || []).slice(-6).map(h => ({ role: h.role || 'user', content: h.content })),
             { role: 'user', content: userContent },
         ];
         const body = JSON.stringify({
-            model: 'gpt-4o-mini',
+            model: model.model,
             messages,
             temperature: 0,
-            max_tokens: 500,
+            max_tokens: 300,
         });
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         if (model.apiKey) { headers['Authorization'] = `Bearer ${model.apiKey}`; }
@@ -11474,7 +11480,11 @@ export class LocalApiServer {
         const content = data?.choices?.[0]?.message?.content || data?.content || '';
         try {
             const parsed = JSON.parse(content);
-            return { planIds: Array.isArray(parsed.planIds) ? parsed.planIds : [], reply: String(parsed.reply || '') };
+            return {
+                action: String(parsed.action || 'none'),
+                column: parsed.column ? String(parsed.column) : undefined,
+                reply: String(parsed.reply || ''),
+            };
         } catch {
             return null;
         }
@@ -11506,12 +11516,17 @@ export class LocalApiServer {
     }
 
     /**
-     * POST /agent/control — the controller brain. Takes the operator's text
-     * + conversation history, resolves phrases to plan ids, and either fires
-     * a mechanical action directly or asks the model for fuzzy resolution.
+     * POST /agent/control — the one model-backed action on the surface:
+     * "Resolve". There is NO free-text arm — the surface is driven by action
+     * buttons, and the only input this endpoint accepts is a `cardId` chosen
+     * from the board's own dropdown. The model is asked which action that card
+     * should take; the chosen action fires through the same mechanical seams
+     * the quick-action buttons use (`kanbanVerb`, `moveCard`,
+     * `_setPlanPriority`), and what it resolved/did is reported back.
      *
-     * Body: { text: string, history?: Array<{role, content}>, workspaceRoot?: string }
-     * Response: { success, reply, resolved: Array<{planId, topic, kanbanColumn}>, actions: Array<{type, result, error?}>, usedModel: boolean, history: Array<...> }
+     * Body: { cardId: string, workspaceRoot?: string }
+     * Response: { success, reply, resolved: [{planId, sessionId, topic, kanbanColumn, starred}],
+     *           actions: [{type, result, error?}], usedModel: true }
      */
     private async _handleAgentControl(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
         if (!await this._checkAuth(req, true)) {
@@ -11520,16 +11535,14 @@ export class LocalApiServer {
         }
         try {
             const body = await this._parseJsonBody(req);
-            const text = String(body?.text || '').trim();
-            const history = Array.isArray(body?.history) ? body.history : [];
+            const cardId = String(body?.cardId || '').trim();
             const workspaceRoot = String(body?.workspaceRoot || this._options.workspaceRoot || '').trim();
-            if (!text) {
+            if (!cardId) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ success: false, error: 'Missing required field: text' }));
+                res.end(JSON.stringify({ success: false, error: 'Missing required field: cardId' }));
                 return;
             }
 
-            // Fetch the board for resolution
             const db = await this._options.getKanbanDatabase?.(workspaceRoot || this._options.workspaceRoot || '');
             if (!db) {
                 res.writeHead(503, { 'Content-Type': 'application/json' });
@@ -11538,117 +11551,91 @@ export class LocalApiServer {
             }
             await db.ensureReady?.();
             const board = await this._resolveBoard(db);
-
-            // Resolve the phrase to plan ids
-            const { resolved, reply, usedModel } = await this._resolveAgentPhrase(text, board, history);
-
-            // Determine and execute the action
-            const actions: Array<{ type: string; result: any; error?: string }> = [];
-            const lowerText = text.toLowerCase();
-
-            if (resolved.length > 0) {
-                // "dispatch" → advance the resolved cards
-                if (/\bdispatch\b|\badvance\b|\bsend\b/.test(lowerText)) {
-                    const planIds = resolved.map(p => p.planId || p.sessionId).filter(Boolean);
-                    const kanbanVerb = this._options.kanbanVerb;
-                    if (kanbanVerb) {
-                        try {
-                            // Group by source column and advance each group
-                            const byColumn = new Map<string, string[]>();
-                            for (const r of resolved) {
-                                const col = String(r.kanbanColumn || '');
-                                const key = col || '';
-                                (byColumn.get(key) ?? byColumn.set(key, []).get(key)!).push(r.sessionId || r.planId);
-                            }
-                            const moved: any[] = [];
-                            for (const [column, sessionIds] of byColumn) {
-                                if (!column) { moved.push({ from: '(no column)', count: 0, error: 'No column to advance from' }); continue; }
-                                const result = await kanbanVerb('promptSelected', { column, sessionIds, workspaceRoot }, workspaceRoot);
-                                moved.push({ from: column, count: sessionIds.length, ...(result?.success ? {} : { error: result?.error }) });
-                            }
-                            actions.push({ type: 'advance', result: { moved, count: planIds.length } });
-                        } catch (err) {
-                            actions.push({ type: 'advance', result: null, error: err instanceof Error ? err.message : 'advance failed' });
-                        }
-                    } else {
-                        actions.push({ type: 'advance', result: null, error: 'Advance not available: kanbanVerb seam not wired' });
-                    }
-                }
-                // "move to <column>" → move the resolved cards
-                else if (/\bmove\b/.test(lowerText)) {
-                    const moveCard = this._options.moveCard;
-                    if (moveCard) {
-                        // Try to extract target column from the phrase
-                        let targetColumn = '';
-                        for (const col of DEFAULT_KANBAN_COLUMNS) {
-                            const label = String(col.label || '').toLowerCase();
-                            const id = String(col.id || '').toLowerCase();
-                            if (label && lowerText.includes(label)) { targetColumn = col.id; break; }
-                            if (id && lowerText.includes(id)) { targetColumn = col.id; break; }
-                        }
-                        if (targetColumn) {
-                            try {
-                                const ids = resolved.map(p => p.planId || p.sessionId).filter(Boolean);
-                                let movedCount = 0;
-                                const errors: string[] = [];
-                                for (const id of ids) {
-                                    try {
-                                        const result = await moveCard(workspaceRoot, id, targetColumn);
-                                        if (result?.success) { movedCount++; }
-                                        else { errors.push(result?.error || 'move failed'); }
-                                    } catch (err) {
-                                        errors.push(err instanceof Error ? err.message : 'move failed');
-                                    }
-                                }
-                                actions.push({ type: 'move', result: { targetColumn, count: movedCount, ...(errors.length ? { errors } : {}) } });
-                            } catch (err) {
-                                actions.push({ type: 'move', result: null, error: err instanceof Error ? err.message : 'move failed' });
-                            }
-                        } else {
-                            actions.push({ type: 'move', result: null, error: 'No target column found in phrase. Try "move to <column>".' });
-                        }
-                    } else {
-                        actions.push({ type: 'move', result: null, error: 'Move not available: moveCard seam not wired' });
-                    }
-                }
-                // "star" → star the resolved cards
-                else if (/\bstar\b|\bprioriti[sz]e\b/.test(lowerText) && !/\bunstar\b/.test(lowerText)) {
-                    const planIds = resolved.map(p => p.planId).filter(Boolean);
-                    let starred = 0;
-                    const errors: string[] = [];
-                    for (const pid of planIds) {
-                        try {
-                            await this._setPlanPriority(pid, true, workspaceRoot);
-                            starred++;
-                        } catch (err) {
-                            errors.push(String(err instanceof Error ? err.message : err));
-                        }
-                    }
-                    actions.push({ type: 'star', result: { starred, errors } });
-                }
+            const card = (board || []).find((p: any) => String(p.planId || '') === cardId || String(p.sessionId || '') === cardId);
+            if (!card) {
+                res.writeHead(404, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: `Card not found on the board: ${cardId}` }));
+                return;
             }
 
-            // Build the updated history (append this turn)
-            const updatedHistory = [
-                ...history,
-                { role: 'user', content: text },
-                { role: 'assistant', content: reply },
-            ].slice(-20); // keep last 20 turns
+            const resolvedModel = await this._resolveAgentControlModel();
+            const model = LocalApiServer._usableAgentModel(resolvedModel);
+            if (!model) {
+                // Unconfigured or half-configured — say which, in terms the
+                // config row beside the Resolve button can act on.
+                const reason = resolvedModel && 'error' in resolvedModel
+                    ? resolvedModel.error
+                    : 'No model configured — set the endpoint, model and API key in the config row.';
+                res.writeHead(503, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: reason }));
+                return;
+            }
+
+            const decision = await this._callModelForAction(model, card, board);
+            if (!decision) {
+                res.writeHead(502, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ success: false, error: 'Model returned no usable decision.' }));
+                return;
+            }
+
+            const actions: Array<{ type: string; result: any; error?: string }> = [];
+            const act = String(decision.action || 'none').trim().toLowerCase();
+            const targetId = String(card.planId || card.sessionId || '');
+            if (act === 'advance') {
+                const kanbanVerb = this._options.kanbanVerb;
+                const column = String(card.kanbanColumn || '');
+                if (!kanbanVerb) {
+                    actions.push({ type: 'advance', result: null, error: 'Advance not available: kanbanVerb seam not wired' });
+                } else if (!column) {
+                    actions.push({ type: 'advance', result: null, error: 'Card has no recorded column to advance from' });
+                } else {
+                    try {
+                        const result = await kanbanVerb('promptSelected', { column, sessionIds: [card.sessionId || card.planId], workspaceRoot }, workspaceRoot);
+                        actions.push({ type: 'advance', result, ...(result?.success ? {} : { error: result?.error }) });
+                    } catch (err) {
+                        actions.push({ type: 'advance', result: null, error: err instanceof Error ? err.message : 'advance failed' });
+                    }
+                }
+            } else if (act === 'move') {
+                const moveCard = this._options.moveCard;
+                const targetColumn = String(decision.column || '').trim();
+                if (!moveCard) {
+                    actions.push({ type: 'move', result: null, error: 'Move not available: moveCard seam not wired' });
+                } else if (!targetColumn) {
+                    actions.push({ type: 'move', result: null, error: 'Model chose "move" without a target column' });
+                } else {
+                    try {
+                        const result = await moveCard(workspaceRoot, targetId, targetColumn);
+                        actions.push({ type: 'move', result, ...(result?.success ? {} : { error: result?.error }) });
+                    } catch (err) {
+                        actions.push({ type: 'move', result: null, error: err instanceof Error ? err.message : 'move failed' });
+                    }
+                }
+            } else if (act === 'star' || act === 'unstar') {
+                try {
+                    const ok = await this._setPlanPriority(targetId, act === 'star', workspaceRoot);
+                    actions.push({ type: act, result: { starred: act === 'star', ok } });
+                } catch (err) {
+                    actions.push({ type: act, result: null, error: err instanceof Error ? err.message : 'star failed' });
+                }
+            } else {
+                // 'none' or anything the model invented — report, never guess.
+                actions.push({ type: act || 'none', result: { note: 'No action taken' } });
+            }
 
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
                 success: true,
-                reply,
-                resolved: resolved.map(p => ({
-                    planId: p.planId,
-                    sessionId: p.sessionId,
-                    topic: p.topic,
-                    kanbanColumn: p.kanbanColumn,
-                    starred: !!(p.starred === 1 || p.starred === true || p.priority === 1 || p.priority === true),
-                })),
+                reply: decision.reply || `Model chose "${act}" for ${card.topic || cardId}.`,
+                resolved: [{
+                    planId: card.planId,
+                    sessionId: card.sessionId,
+                    topic: card.topic,
+                    kanbanColumn: card.kanbanColumn,
+                    starred: !!(card.starred === 1 || card.starred === true || card.priority === 1 || card.priority === true),
+                }],
                 actions,
-                usedModel,
-                history: updatedHistory,
+                usedModel: true,
             }));
         } catch (err) {
             console.error('[LocalApiServer] agentControl error:', err);
@@ -13859,6 +13846,8 @@ export class LocalApiServer {
                 await this._handleAgentControl(req, res);
             } else if (pathname === '/agent/control/config' && req.method === 'GET') {
                 await this._handleAgentControlConfig(req, res);
+            } else if (pathname === '/agent/control/config' && req.method === 'POST') {
+                await this._handleAgentControlConfigWrite(req, res);
             } else if (pathname === '/kanban/advance' && req.method === 'POST') {
                 await this._handleKanbanAdvance(req, res);
             } else if (pathname === '/teams/create-external' && req.method === 'POST') {
@@ -13951,6 +13940,16 @@ export class LocalApiServer {
                 // between them owned by neither.
                 const verb = decodeURIComponent(pathname.slice('/mission-control/verb/'.length));
                 await this._handleKanbanVerb(verb, req, res);
+            } else if (pathname.startsWith('/agent-control/verb/') && req.method === 'POST') {
+                // Agent Control is its own panel (agent-control.html) but its verbs are
+                // KANBAN verbs (getCustomAgents, getAgentGroups, getStandingOrders,
+                // saveMachine, ...). transport.js derives the route from
+                // `data-panel="agent-control"`, so the panel posts to
+                // /agent-control/verb/*. Without this arm every Agent Control verb 404s —
+                // the panel renders and no control responds. Same shape as the
+                // mission-control arm above.
+                const verb = decodeURIComponent(pathname.slice('/agent-control/verb/'.length));
+                await this._handleKanbanVerb(verb, req, res, 'agent-control');
             } else if (pathname.startsWith('/planning/verb/') && req.method === 'POST') {
                 const verb = decodeURIComponent(pathname.slice('/planning/verb/'.length));
                 await this._handlePlanningVerb(verb, req, res);

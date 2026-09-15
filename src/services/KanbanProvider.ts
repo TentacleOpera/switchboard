@@ -39,8 +39,9 @@ import { SURFACES } from './wsHub';
 import { reviveWithRetention, injectInitialWebviewState } from '../utils/reviveWithRetention';
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore, deriveComplexityFromContent, resolveRoleWithDegradation } from './complexityScale';
 import { sanitizeTags, parsePlanMetadata } from './planMetadataUtils';
-import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, DEFAULT_TEAM_DEFINITIONS, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor, readTeamPacing, readTeamPairProgramming, resolveTeamDefinitionForHeadTerminal, type TeamPairProgrammingIntensity, mutateTerminalGroups, resolveTeamMembersForHead, resolveTeamById } from './teamWiring';
-import { mutateStandingOrders, mutateStandingOrderDefinitions, makeStandingOrder, makeStandingOrderDefinition, syncDefinitionToAssignments, validateInstruction, STANDING_ORDERS_CONFIG_KEY, STANDING_ORDER_DEFINITIONS_CONFIG_KEY, type StandingOrder, type StandingOrderDefinition, type StandingOrderScope } from './standingOrders';
+import { migrateAgentGroups, importDelegatesIntoTeams, SEEDED_AGENT_GROUP, DEFAULT_TEAM_DEFINITIONS, startTeamById, saveTerminalGroupsGuarded, TERMINALS_GROUPS_KEY, type TerminalGroupsSettingsAccessor, readTeamPacing, readTeamPairProgramming, resolveTeamDefinitionForHeadTerminal, type TeamPairProgrammingIntensity, mutateTerminalGroups, resolveTeamMembersForHead, resolveTeamById, inspectStandingOrders } from './teamWiring';
+import { mutateStandingOrders, mutateStandingOrderDefinitions, makeStandingOrder, makeStandingOrderDefinition, syncDefinitionToAssignments, validateInstruction, type StandingOrder, type StandingOrderDefinition, type StandingOrderScope } from './standingOrders';
+import { readBuildConfig, setBuildTarget, recordBuildResult, resolveBuildResult, lastResultPerTarget, probeBuildTargets, isBuildTargetId, type BuildResult } from './buildTarget';
 import { KanbanService, type KanbanServiceContext } from './kanbanService';
 import { KANBAN_VERBS } from '../generated/verbAllowlist';
 import { createVscodeHostSeams, type HostSeams } from './hostSeams';
@@ -271,11 +272,12 @@ export class KanbanProvider implements vscode.Disposable {
     private _panel?: vscode.WebviewPanel;
     /**
      * Secondary editor panel rendering the Agent Control view of the same Kanban
-     * backend (loads kanban.html with `data-view="agent-control"`). One provider,
-     * one hub, one message handler — this panel shares the primary's push path via
-     * the secondary-delivery block in `postMessage()`. It owns NO readiness flag,
-     * NO pending queue, and NO dedup cache: those singletons belong to the primary
-     * board panel and must not be driven by this panel's lifecycle.
+     * backend (loads agent-control.html + agent-control.js — a standalone panel, not
+     * a `data-view` projection of kanban.html). One provider, one hub, one message
+     * handler — this panel shares the primary's push path via the secondary-delivery
+     * block in `postMessage()`. It owns NO readiness flag, NO pending queue, and NO
+     * dedup cache: those singletons belong to the primary board panel and must not be
+     * driven by this panel's lifecycle.
      */
     private _agentControlPanel?: vscode.WebviewPanel;
     private _pendingTab?: string;
@@ -2009,9 +2011,9 @@ export class KanbanProvider implements vscode.Disposable {
 
     /**
      * Open or reveal the Agent Control panel — a second top-level editor WebviewPanel
-     * served by the same provider/hub/handler as the board. It loads the same
-     * `kanban.html` with `data-view="agent-control"` injected onto `<body>` so the
-     * frontend renders the Agents/Teams/Prompts tabs instead of the board.
+     * served by the same provider/hub/handler as the board. It loads
+     * `agent-control.html` (its own file, not kanban.html with a `data-view` marker),
+     * which renders the Agents/Teams/Prompts/Standing Orders tabs instead of the board.
      *
      * Deliberately stripped vs `open()`: it does NOT reset `_webviewReady` or
      * `_pendingWebviewMessages` (those belong to the primary panel's cold-start
@@ -6127,9 +6129,10 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             '',
             'Standing orders: callback contract is installed on all workers — they report to you on completion. Do not re-register.',
             '',
-            'STAGING (one call per subtask):',
-            `node "<cliPath>" verb ptySendPrompt '{"name":"<seat>","data":"Implement the plan at <path> (relative to your repo root). This subtask only.","clearBeforePrompt":false,"origin":"${originVal}","dispatch":{"planId":"<id>","role":"coder"}}'`,
-            'origin is your own seat name — it keeps the team-wide context reset from clearing you.',
+            'REGISTER YOUR ROUNDS (one call, before any work starts):',
+            `node "<cliPath>" api POST /kanban/round/register '{"from":"${originVal}","featureId":"<the FEATURE's planId>","rounds":[["<subtask planId>","<subtask planId>"],["<subtask planId>"]]}'`,
+            'Each entry in `rounds` is ONE round — an array of that round\'s subtask planIds, in dispatch order. Subtasks inside a round run in parallel; rounds run in sequence. Registering STARTS round 1: the system dispatches its subtasks to your seats immediately, and dispatches each later round when the one before it closes.',
+            'You do NOT dispatch subtasks to seats. There is no per-subtask staging call — registering the rounds IS the dispatch. Re-registering replaces pending (not-yet-dispatched) rounds and leaves dispatched or closed ones alone.',
             '',
             'MESSAGE (fix rounds, questions, verdicts — anything that is not a new subtask):',
             `node "<cliPath>" verb ptySendPrompt '{"name":"<seat>","data":"<your message>","clearBeforePrompt":false,"origin":"${originVal}"}'`,
@@ -6138,24 +6141,24 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             '',
             'REVIEW: On callback, review git diff — not the coder\'s self-report. Coder self-report does not clear context; resend fixes to the same terminal (context preserved). After two failures on the same subtask, follow the recovery ladder in your standing orders (clear and retry, lateral hand-off, vertical escalation, lead self-fix, stop) — do not escalate vertically without trying the cheaper rungs first.',
             '',
-            `CLOSE OUT EVERY SUBTASK — ALWAYS, no judgement call. When you are finished with a subtask, commit, then POST /kanban/task/complete with {"from":"${originVal}","planId":"<that SUBTASK's planId>","workspaceRoot":"<your cwd>"} against the API base named in your SWITCHBOARD STATUS line. Accepting and rejecting are not two different endings: you reject by sending a fix round FIRST, then you post when the subtask is done. Post per subtask, with that subtask's planId — never the feature's. Nothing downstream happens until you post: the coder is not cleared and you cannot be handed the next subtask.`,
+            `ACCEPT EVERY SUBTASK — ALWAYS, no judgement call. When a seat reports a subtask finished and you are satisfied with it, commit, then run node "<cliPath>" accept --plan "<that SUBTASK's planId>". Accepting and rejecting are not two different endings: you reject by sending a fix round FIRST, then you accept when the subtask is done. Accept per subtask, with that subtask's planId — never the feature's. Nothing downstream happens until you accept: the coder is not cleared and the round does not advance. The system closes the round when its last subtask is accepted, dispatches the next round, and completes the feature when the last round closes — you post nothing for either.`,
             '',
-            'FEATURE WATCH: Armed by the system. You will be nudged if you go idle with subtasks you have not posted completion for. No action needed — do not wait for it, do not poll for it.',
+            'FEATURE WATCH: Armed by the system. You will be nudged if you go idle with subtasks you have not accepted. No action needed — do not wait for it, do not poll for it.',
             '',
             featureFileLine,
             '',
             'RULES:',
-            '- Do NOT rewrite or edit plan files, and do NOT open individual subtask plans — the FEATURE FILE is what you dispatch and review from. The plan is the source of truth for the coder that receives it; never modify its content.',
+            '- Do NOT rewrite or edit plan files, and do NOT open individual subtask plans — the FEATURE FILE is what you build your rounds from and review against. The plan is the source of truth for the coder that receives it; never modify its content.',
             '- Do NOT query kanban.db directly. The plan IDs are in the FEATURE FILE\'s Subtasks section; use the API for anything else.',
-            '- Do NOT verify work before dispatching. The kanban column is the system\'s record, not a coder\'s claim.',
+            '- Do NOT verify work before registering your rounds. The kanban column is the system\'s record, not a coder\'s claim.',
             '- Clear a terminal when at rest (completion received AND next work goes elsewhere), or when following rung 1 of the recovery ladder (clear and re-dispatch the same subtask with named defects). The ladder is in your standing orders.',
-            '- The host auto-clears the full team roster once when a new feature run starts, and clears the accepted coder when you POST /kanban/task/complete. Coder self-report does not clear context — do not manually clear between subtasks or fixes. Manual ptyClearTerminal is for the stand-down case, or for rung 1 of the recovery ladder (clear a twice-failed seat and re-dispatch with named defects) — not for routine between-subtask clearing.',
-            '- You do NOT move cards. A card enters a column when it reaches this team and stays there while the team works it. Column position records nothing about your progress — your completion posts do.',
-            '- clearBeforePrompt stays false on every dispatch — the host issues no clear at dispatch time. The caller\'s contract is unchanged.',
-            '- Every new feature run gets a fresh team context. Context is preserved across coder reports, review, fixes, and handoffs until your completion post clears the coder.',
+            '- The host auto-clears the full team roster once when a new feature run starts, and clears the accepted coder when you accept its subtask. Coder self-report does not clear context — do not manually clear between subtasks or fixes. Manual ptyClearTerminal is for the stand-down case, or for rung 1 of the recovery ladder (clear a twice-failed seat and ask the system to re-dispatch with named defects) — not for routine between-subtask clearing.',
+            '- You do NOT move cards. A card enters a column when it reaches this team and stays there while the team works it. Column position records nothing about your progress — your accepts do.',
+            '- clearBeforePrompt stays false on every MESSAGE you send. Subtask dispatch is the system\'s, not yours, and it owns its own clear policy — you never set clearBeforePrompt for a subtask because you never send one.',
+            '- Every new feature run gets a fresh team context. Context is preserved across coder reports, review, fixes, and handoffs until your accept clears the coder.',
             '- When a seat reports, its context is preserved for review. If standing the terminal down without new work, ptyClearTerminal it.',
-            '- One subtask per terminal at a time. Use a second terminal for concurrency.',
-            '- COMPLETION WAKE: The system delivers a coder\'s completion into this terminal. Do not sleep, poll, or run a timer to wait for it — end your turn after dispatching and the next completion starts a new one.',
+            '- One subtask per terminal at a time — the system enforces it when it dispatches a round. Concurrency is how you group subtasks into a round, not something you arrange by hand.',
+            '- COMPLETION WAKE: The system delivers a coder\'s completion into this terminal. Do not sleep, poll, or run a timer to wait for it — end your turn after registering your rounds, and the next completion starts a new one. An idle lead between rounds is the correct resting state, not a failure.',
             '- Every finding cites a plan clause. Quote the section or line the diff violates. A defect you cannot cite is a question report, not a dispatch.',
             '- Name the defect, never the mechanism. State what is wrong and which plan clause it breaks; do not tell the coder how to fix it. Where the plan itself names a mechanism, quote the plan verbatim.',
             '- Never issue a git verb (commit, push, branch, merge) to a team seat. The head commits the team\'s work; coders never commit.',
@@ -6546,7 +6549,7 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             // This branch returns early, before the built-in feature-directive block
             // below — so custom agents must have their own opt-in prepend here or
             // they'd never receive the directive regardless of the toggle.
-            // Phone-a-Friend — the custom-agent fallback addon list (kanban.html
+            // Phone-a-Friend — the custom-agent fallback addon list (agent-control.js
             // renderRoleAddons) exposes this checkbox for custom coding agents, but the
             // custom branch returns before the built-in coder/lead/intern wiring below.
             // Append the directive here (Option A port, same as generateUnifiedPrompt's
@@ -6778,6 +6781,20 @@ If the user asks a question in a comment, post it as a comment on the issue. The
             const reviewCommits = await this._resolveCodedCommitsForPlans(plans, workspaceRoot);
             if (reviewCommits.length > 0) {
                 resolvedOptions.reviewCommits = reviewCommits;
+                // BUILD RESULTS — the result for EACH commit under review, read from
+                // the per-workspace build config. Keyed by sha so the reviewer reads
+                // the verdict for the commit it holds, never "the last build". A
+                // commit with no recorded result is rendered as "not built yet" by
+                // the builder; absent config means absent, never a placeholder.
+                try {
+                    const buildDb = this._getKanbanDb(workspaceRoot);
+                    if (buildDb && await buildDb.ensureReady()) {
+                        const buildCfg = await readBuildConfig(buildDb);
+                        resolvedOptions.buildResults = reviewCommits
+                            .map(sha => buildCfg.results[sha])
+                            .filter((r): r is BuildResult => !!r);
+                    }
+                } catch { /* a missing build result must not break the dispatch */ }
             }
         } else if (role === 'tester') {
             // Completion testing takes the PLAN'S `## Goal` as its primary intent
@@ -10152,7 +10169,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
         return { targetColumn, reason };
     }
 
-    public async handleServiceVerb(verb: string, payload: any): Promise<any> {
+    public async handleServiceVerb(verb: string, payload: any, source?: 'agent-control'): Promise<any> {
         if (!this._kanbanService) {
             this._initKanbanService();
         }
@@ -10183,7 +10200,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
         // editor webview clicks call _handleMessage directly. Arms that would focus
         // an editor panel use it to degrade to a WS push instead — an HTTP caller has
         // no editor panel to look at. Set after the spread so a payload key can't spoof it.
-        return this._handleMessage({ ...(payload ?? {}), type: verb, __viaHttp: true });
+        return this._handleMessage({ ...(payload ?? {}), type: verb, __viaHttp: true }, source);
     }
 
 
@@ -13948,6 +13965,103 @@ ${FOCUS_DIRECTIVE}`;
                 this.postMessage({ type: 'startupCommandsForMachine', machineId, commands });
                 return { success: true, machineId, commands };
             }
+            case 'getBuildTarget': {
+                // Where a build runs (plan: surface-a-build-target-in-agent-control).
+                // The choice is per-workspace, stored in the kanban.db config table
+                // so BOTH hosts read the same value. Availability is probed HERE —
+                // at the point of choice — never inferred at dispatch, and never
+                // silently swapped for `this box`.
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) { return { success: false, error: 'No workspace root resolved' }; }
+                const db = this._getKanbanDb(workspaceRoot);
+                if (!db || !(await db.ensureReady())) { return { success: false, error: 'Kanban DB unavailable' }; }
+                const cfg = await readBuildConfig(db);
+                const sshHost = (await db.getConfigJson<string>('build.sshHost', '')) || '';
+                const actionsRepo = (await db.getConfigJson<string>('build.actionsRepo', '')) || '';
+                const actionsConfigured = (await db.getConfigJson<boolean>('build.actionsConfigured', false)) === true;
+                const availability = probeBuildTargets({ sshHost, actionsRepo, actionsConfigured });
+                const lastResults = lastResultPerTarget(cfg);
+                const config = { sshHost, actionsRepo, actionsConfigured };
+                // `target` is undefined when the row's target was present but
+                // unrecognised — `unrecognizedTarget` carries that raw value so the
+                // panel reports it instead of showing `this-box` as if chosen.
+                this.postMessage({ type: 'buildTarget', target: cfg.target, unrecognizedTarget: cfg.unrecognizedTarget, availability, lastResults, config });
+                return { success: true, target: cfg.target, unrecognizedTarget: cfg.unrecognizedTarget, availability, lastResults, config };
+            }
+            case 'saveBuildTarget': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) { return { success: false, error: 'No workspace root resolved' }; }
+                if (!isBuildTargetId(msg.target)) { return { success: false, error: `Invalid build target: ${String(msg.target)}` }; }
+                const db = this._getKanbanDb(workspaceRoot);
+                if (!db || !(await db.ensureReady())) { return { success: false, error: 'Kanban DB unavailable' }; }
+                const saved = await setBuildTarget(db, msg.target);
+                // Push the FULL state, not just the echo: the panel must clear any
+                // stale `unrecognizedTarget` and re-probe availability for the newly
+                // selected target (a bare `buildTargetSaved` left both stale).
+                const sshHost = (await db.getConfigJson<string>('build.sshHost', '')) || '';
+                const actionsRepo = (await db.getConfigJson<string>('build.actionsRepo', '')) || '';
+                const actionsConfigured = (await db.getConfigJson<boolean>('build.actionsConfigured', false)) === true;
+                const availability = probeBuildTargets({ sshHost, actionsRepo, actionsConfigured });
+                this.postMessage({ type: 'buildTarget', target: saved.target, unrecognizedTarget: saved.unrecognizedTarget, availability, lastResults: lastResultPerTarget(saved), config: { sshHost, actionsRepo, actionsConfigured } });
+                return { success: true, target: msg.target };
+            }
+            case 'saveBuildTargetConfig': {
+                // Per-target connection config the availability probe reads. NOT
+                // credentials — Actions credentials live in SecretStorage; the
+                // `actionsConfigured` flag records that they are set, so the probe
+                // can report honestly without the secret crossing this path.
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) { return { success: false, error: 'No workspace root resolved' }; }
+                const db = this._getKanbanDb(workspaceRoot);
+                if (!db || !(await db.ensureReady())) { return { success: false, error: 'Kanban DB unavailable' }; }
+                if (typeof msg.sshHost === 'string') { await db.setConfigJson('build.sshHost', msg.sshHost.trim()); }
+                if (typeof msg.actionsRepo === 'string') { await db.setConfigJson('build.actionsRepo', msg.actionsRepo.trim()); }
+                if (typeof msg.actionsConfigured === 'boolean') { await db.setConfigJson('build.actionsConfigured', msg.actionsConfigured); }
+                const cfg = await readBuildConfig(db);
+                const availability = probeBuildTargets({
+                    sshHost: (await db.getConfigJson<string>('build.sshHost', '')) || '',
+                    actionsRepo: (await db.getConfigJson<string>('build.actionsRepo', '')) || '',
+                    actionsConfigured: (await db.getConfigJson<boolean>('build.actionsConfigured', false)) === true,
+                });
+                this.postMessage({ type: 'buildTarget', target: cfg.target, unrecognizedTarget: cfg.unrecognizedTarget, availability, lastResults: lastResultPerTarget(cfg) });
+                return { success: true, availability };
+            }
+            case 'recordBuildResult': {
+                // A build result recorded against its commit SHA. The AGENT runs the
+                // build (guided by the seat.build-target standing order) and records
+                // the outcome here; the reviewer path reads it back by SHA/planId.
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) { return { success: false, error: 'No workspace root resolved' }; }
+                const commitSha = typeof msg.commitSha === 'string' ? msg.commitSha.trim() : '';
+                if (!commitSha) { return { success: false, error: 'commitSha is required' }; }
+                if (!isBuildTargetId(msg.target)) { return { success: false, error: `Invalid build target: ${String(msg.target)}` }; }
+                const db = this._getKanbanDb(workspaceRoot);
+                if (!db || !(await db.ensureReady())) { return { success: false, error: 'Kanban DB unavailable' }; }
+                const result: BuildResult = {
+                    commitSha,
+                    planId: typeof msg.planId === 'string' && msg.planId ? msg.planId : undefined,
+                    target: msg.target,
+                    success: msg.success === true,
+                    durationMs: typeof msg.durationMs === 'number' && isFinite(msg.durationMs) ? msg.durationMs : 0,
+                    summary: typeof msg.summary === 'string' && msg.summary ? msg.summary : undefined,
+                    at: new Date().toISOString(),
+                };
+                await recordBuildResult(db, result);
+                this.postMessage({ type: 'buildResultRecorded', result });
+                return { success: true, result };
+            }
+            case 'getBuildResult': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) { return { success: false, error: 'No workspace root resolved' }; }
+                const db = this._getKanbanDb(workspaceRoot);
+                if (!db || !(await db.ensureReady())) { return { success: false, error: 'Kanban DB unavailable' }; }
+                const cfg = await readBuildConfig(db);
+                const result = resolveBuildResult(cfg, {
+                    commitSha: typeof msg.commitSha === 'string' ? msg.commitSha : undefined,
+                    planId: typeof msg.planId === 'string' ? msg.planId : undefined,
+                });
+                return { success: true, result };
+            }
             case 'getMachines': {
                 const machines = await GlobalIntegrationConfigService.getMachines();
                 this.postMessage({ type: 'machinesList', machines });
@@ -14610,22 +14724,32 @@ ${FOCUS_DIRECTIVE}`;
                 }
                 try {
                     const db = this._getKanbanDb(workspaceRoot);
-                    const raw = await db.getConfigJson<StandingOrder[]>(STANDING_ORDERS_CONFIG_KEY, []) as StandingOrder[];
-                    const rawArray = Array.isArray(raw) ? raw : [];
-                    // System orders are composed at delivery and never persisted,
-                    // so the persisted store holds only what a human authored —
-                    // no staleness to surface. Rows are returned as-is, with
-                    // `scope` defaulted to `pair` for shipped-state rows.
-                    const orders = rawArray.map(o => ({
-                        ...o,
-                        // Default absent `scope` to `pair` on read so the client
-                        // always sees an explicit scope field.
-                        scope: (o.scope || 'pair') as StandingOrderScope,
-                    }));
-                    const rawDefinitions = await db.getConfigJson<StandingOrderDefinition[]>(STANDING_ORDER_DEFINITIONS_CONFIG_KEY, []) as StandingOrderDefinition[];
-                    const definitions = Array.isArray(rawDefinitions) ? rawDefinitions : [];
-                    this.postMessage({ type: 'standingOrders', available: true, orders, definitions });
-                    return { success: true, available: true, orders, definitions, type: 'standingOrdersResult' };
+                    // Terminal-name → role map for the composed-fragment
+                    // resolution — best-effort via the fleet list (empty when
+                    // the pty host is unreachable); the inspection answers
+                    // without it.
+                    let roleMap: Map<string, string> | undefined;
+                    try {
+                        const fleet = this._taskViewerProvider ? await this._taskViewerProvider.listFleetTerminals() : [];
+                        if (fleet.length) {
+                            roleMap = new Map<string, string>();
+                            for (const t of fleet) {
+                                if (t?.friendlyName && t?.role) { roleMap.set(t.friendlyName, t.role); }
+                            }
+                        }
+                    } catch { roleMap = undefined; }
+
+                    // inspectStandingOrders annotates each persisted row with
+                    // the delivery-time metadata the tab renders (`dropped`,
+                    // `stale`, `effectiveInstruction`) and composes the
+                    // never-persisted `coreOrders` — the tab must show both
+                    // populations, not just the add-on half.
+                    const inspection = await inspectStandingOrders(db, roleMap);
+                    const orders = inspection.orders;
+                    const definitions = inspection.definitions;
+                    const coreOrders = inspection.coreOrders;
+                    this.postMessage({ type: 'standingOrders', available: true, orders, definitions, coreOrders });
+                    return { success: true, available: true, orders, definitions, coreOrders, type: 'standingOrdersResult' };
                 } catch (e: any) {
                     const reason = 'Standing-orders store read failed: ' + (e?.message || 'Failed to read standing orders');
                     this.postMessage({ type: 'standingOrders', available: false, orders: [], definitions: [], reason });
@@ -15619,10 +15743,16 @@ ${FOCUS_DIRECTIVE}`;
 
 
     private async _getHtml(webview: vscode.Webview, viewMarker?: 'agent-control'): Promise<string> {
+        // Agent Control is a real standalone panel (agent-control.html +
+        // agent-control.js) — it no longer loads kanban.html with a data-view
+        // projection. Branch on the view marker so the extension host resolves the
+        // same file the headless host serves (headlessPanelHtml.getAgentControlHtml).
+        const isAgentControl = viewMarker === 'agent-control';
+        const htmlFile = isAgentControl ? 'agent-control.html' : 'kanban.html';
         const paths = [
-            vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'kanban.html'),
-            vscode.Uri.joinPath(this._extensionUri, 'webview', 'kanban.html'),
-            vscode.Uri.joinPath(this._extensionUri, 'src', 'webview', 'kanban.html')
+            vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', htmlFile),
+            vscode.Uri.joinPath(this._extensionUri, 'webview', htmlFile),
+            vscode.Uri.joinPath(this._extensionUri, 'src', 'webview', htmlFile)
         ];
 
         let htmlUri: vscode.Uri | undefined;
@@ -15636,8 +15766,8 @@ ${FOCUS_DIRECTIVE}`;
 
         if (!htmlUri) {
             return `<html><body style="padding:20px;font-family:sans-serif;background:#0a0e13;color:#c9d1d9;">
-                <h3>⚠️ Kanban HTML not found</h3>
-                <p>Could not locate kanban.html in any expected location.</p>
+                <h3>⚠️ ${isAgentControl ? 'Agent Control' : 'Kanban'} HTML not found</h3>
+                <p>Could not locate ${htmlFile} in any expected location.</p>
             </body></html>`;
         }
 
@@ -15648,26 +15778,30 @@ ${FOCUS_DIRECTIVE}`;
         const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}' ${webview.cspSource}; style-src 'unsafe-inline' ${webview.cspSource}; img-src ${webview.cspSource} data:; font-src ${webview.cspSource}; connect-src 'none';">`;
         content = content.replace('<head>', `<head>\n    ${csp}`);
         content = content.replace(/<script>/g, `<script nonce="${nonce}">`);
+        // agent-control.html tags its companion scripts with a {{NONCE}} placeholder
+        // rather than a bare `<script>` — nonce them here too.
+        content = content.replace(/\{\{NONCE\}\}/g, nonce);
 
         // Inject shared defaults
         const sharedDefaultsUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'sharedDefaults.js')).toString();
         content = content.replace('<!-- SHARED_DEFAULTS_SCRIPT -->', `<script src="${sharedDefaultsUri}" nonce="${nonce}"></script>`);
 
-        // Inject initial workspace root as a data attribute on <body>, and — for the
-        // Agent Control view — the `data-view="agent-control"` marker the frontend
-        // switches on to render the Agents/Teams/Prompts tabs instead of the board.
-        // Both attributes ride the same `<body` replacement so a bare `<body` is never
-        // left in the document for a later replace to miss (a second `replace('<body')`
-        // would no longer match once the first has expanded the tag).
+        // Agent Control: swap the template's `/static/webview/*.js` script sources
+        // for webview URIs, and add the shared-utils companion (escapeHtml/escapeAttr).
+        if (isAgentControl) {
+            const sharedUtilsUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'sharedUtils.js')).toString();
+            const agentControlJsUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'agent-control.js')).toString();
+            content = content.replace('/static/webview/sharedUtils.js', sharedUtilsUri);
+            content = content.replace('/static/webview/agent-control.js', agentControlJsUri);
+        }
+
+        // Inject initial workspace root as a data attribute on <body>.
         const workspaceRoot = this._resolveWorkspaceRoot();
-        const viewAttr = viewMarker === 'agent-control' ? ' data-view="agent-control"' : '';
         if (workspaceRoot) {
             content = content.replace(
                 '<body',
-                `<body data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}"${viewAttr}`
+                `<body data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}"`
             );
-        } else if (viewAttr) {
-            content = content.replace('<body', `<body${viewAttr}`);
         }
 
         // Inject icon URIs for column button area

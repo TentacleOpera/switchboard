@@ -98,6 +98,7 @@ import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExtern
 // matching import in TaskViewerProvider.ts. `loadEffectiveStandingOrders` is the
 // only server-side reader of `terminals.standingOrders` in either host.
 import { wireSpawnedTeam, loadEffectiveStandingOrders, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, resolveLiveGroupHeads, type TerminalGroupsSettingsAccessor } from '../services/teamWiring';
+import { readBuildRenderOptions } from '../services/buildTarget';
 import { setStandingOrdersApplier } from '../services/standingOrdersDelivery';
 import { ORIENTATION_PREAMBLE, waitForSeatQuiescence } from '../services/startupOrientation';
 import { resolveWorkContext, resolveTeamGroupForTerminal, computeRosterClearTargets } from '../services/workContextResolver';
@@ -673,10 +674,22 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                         subagentPolicy: seatOpts?.subagentPolicy,
                         customSubagentName: seatOpts?.customSubagentName,
                         hasRegisteredRounds: await resolveHasRegisteredRoundsForSeat(db, handle.friendlyName, effectiveOrders, groups || []).catch(() => false),
+                        // No `.catch(() => ({}))` here: swallowing a failed build-config
+                        // read would deliver no `seat.build-target` fragment, which is
+                        // indistinguishable from "the operator never chose a target" —
+                        // the exact AGENTS.md fallback shape. Let a read failure reach
+                        // the catch below, which LOGS it (matching the extension twin at
+                        // TaskViewerProvider, which has no catch and warns on failure).
+                        ...(await readBuildRenderOptions(db)),
                     }, { terminalName: handle.friendlyName });
                     soBlockAdded = out !== beforeSO;
                 }
-            } catch { /* a degraded prompt beats a lost dispatch */ }
+            } catch (err) {
+                // Logged, not swallowed: a silent catch here would make "the
+                // standing-orders append failed" and "it produced no block" the same
+                // observable. Matches the extension twin's console.warn.
+                console.warn('[bootstrap] Standing-orders / seat-block append failed:', err);
+            }
         }
         // See the extension host's twin: a carrier line with no block below it is
         // noise. Returns BEFORE the dispatch-identity parse so a skipped relay
@@ -2010,12 +2023,21 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
         }
     };
 
-    const kanbanVerb = async (verb: string, payload: any, workspaceRootArg?: string): Promise<any> => {
+    const kanbanVerb = async (verb: string, payload: any, workspaceRootArg?: string, source?: 'agent-control'): Promise<any> => {
         const root = workspaceRootArg || workspaceRoot;
         try {
             switch (verb) {
                 case 'ready':
                 case 'refresh':
+                    // Agent Control shares the Kanban verb rail but must NOT drive the
+                    // board's cold start: its `ready` arm (KanbanProvider._handleMessage,
+                    // source === 'agent-control') deliberately skips pushFullState's
+                    // file→DB scan, which is the exact cost this panel was extracted to
+                    // avoid. Delegate so the AC arm is reached instead of pushing the
+                    // whole board at a panel that renders none of it.
+                    if (source === 'agent-control') {
+                        return await kanbanProvider.handleServiceVerb(verb, { ...(payload ?? {}), workspaceRoot: root }, source);
+                    }
                     await pushFullState();
                     return { success: true };
 
@@ -2243,7 +2265,7 @@ Read the current content above. Deepen the problem analysis, verify every file p
                             initiatorProject: kanbanProvider.getProjectFilter(),
                             ...payload,
                             workspaceRoot: root,
-                        });
+                        }, source);
                         // Read-only classification is prefix-based rather than a named
                         // set. Verified against all 152 KANBAN_VERBS: 25 match and every
                         // one is a genuine read or a client-side notification, so there is
@@ -5329,7 +5351,11 @@ Each plan file must include:
         // wired" and "working" are the same value because the read is optional
         // and falls through to an env var. Wired here and in
         // TaskViewerProvider so both hosts read the same store.
-        encryptedSecretsStore: { get: (key: string) => secrets.get(key) },
+        encryptedSecretsStore: {
+            get: (key: string) => secrets.get(key),
+            store: (key: string, value: string) => secrets.store(key, value),
+            delete: (key: string) => secrets.delete(key),
+        },
         // The board proxies /ws/terminal to the Go PTY host so terminals share the
         // board's origin — and therefore its tailnet listener. Resolved per call,
         // not captured: the child restarts on its own and takes a new port with it.

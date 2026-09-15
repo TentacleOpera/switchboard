@@ -39,7 +39,10 @@ const path = require('path');
 const assert = require('assert');
 
 const REPO_ROOT = path.resolve(__dirname, '../..');
-const kanbanHtml = fs.readFileSync(path.join(REPO_ROOT, 'src/webview/kanban.html'), 'utf8');
+// The Agents/Teams tabs left kanban.html for the Agent Control panel — the team
+// form markup is in agent-control.html, the tab functions in agent-control.js.
+const agentControlSrc = fs.readFileSync(path.join(REPO_ROOT, 'src/webview/agent-control.html'), 'utf8')
+    + '\n' + fs.readFileSync(path.join(REPO_ROOT, 'src/webview/agent-control.js'), 'utf8');
 const taskViewerTs = fs.readFileSync(path.join(REPO_ROOT, 'src/services/TaskViewerProvider.ts'), 'utf8');
 const agentGroupInstantiationTs = fs.readFileSync(path.join(REPO_ROOT, 'src/services/agentGroupInstantiation.ts'), 'utf8');
 const ptyFleetServiceTs = fs.readFileSync(path.join(REPO_ROOT, 'src/standalone/ptyFleetService.ts'), 'utf8');
@@ -132,7 +135,7 @@ test('jules is in BUILT_IN_AGENT_LABELS but not in ROLE_KEYS', () => {
 });
 
 test('teamsTabRoleOptions filters the label list by ROLE_KEYS', () => {
-    const body = functionBody(kanbanHtml, 'function teamsTabRoleOptions(');
+    const body = functionBody(agentControlSrc, 'function teamsTabRoleOptions(');
     assert.ok(
         /new Set\(ROLE_KEYS\)/.test(body),
         'teamsTabRoleOptions must derive its built-in roster from ROLE_KEYS'
@@ -153,7 +156,7 @@ test('the head-role select carries no static options to drift from the roster', 
     // The markup is an empty <select>; teamsTabRoleOptions is the single writer.
     // A re-added static <option> would survive as a stale duplicate on first paint.
     assert.ok(
-        /<select id="agent-groups-head-role" class="modal-input"><\/select>/.test(kanbanHtml),
+        /<select id="agent-groups-head-role" class="modal-input"><\/select>/.test(agentControlSrc),
         'the head-role select must stay empty in markup — JS owns the roster'
     );
 });
@@ -161,7 +164,7 @@ test('the head-role select carries no static options to drift from the roster', 
 console.log('\n--- Explicit assignment, and no silent roster rewrites ---');
 
 test('custom agent roles are offered as team roles', () => {
-    const body = functionBody(kanbanHtml, 'function teamsTabRoleOptions(');
+    const body = functionBody(agentControlSrc, 'function teamsTabRoleOptions(');
     assert.ok(
         /optgroup/.test(body) && /Custom Agents/.test(body),
         'teamsTabRoleOptions must offer registered custom agents — the TEAMS tab is the sanctioned assignment path'
@@ -169,7 +172,7 @@ test('custom agent roles are offered as team roles', () => {
 });
 
 test('an unknown stored role is preserved as its own option', () => {
-    const body = functionBody(kanbanHtml, 'function teamsTabRoleOptions(');
+    const body = functionBody(agentControlSrc, 'function teamsTabRoleOptions(');
     assert.ok(
         /if\s*\(!known\.has\(want\)\)/.test(body),
         'a stored role missing from the roster must be re-injected, or SAVE silently rewrites the team'
@@ -177,7 +180,7 @@ test('an unknown stored role is preserved as its own option', () => {
 });
 
 test('member rows are read by data-field, not by element index', () => {
-    const body = functionBody(kanbanHtml, 'function teamsTabSaveAgentGroup(');
+    const body = functionBody(agentControlSrc, 'function teamsTabSaveAgentGroup(');
     assert.ok(
         /\[data-field="role"\]/.test(body) && /\[data-field="count"\]/.test(body)
             && /\[data-field="scope"\]/.test(body) && /\[data-field="relationship"\]/.test(body),

@@ -99,6 +99,7 @@ check('terminals.js subscribes only to xterm events the VENDORED public Terminal
 // transport.js, which reaches the host over fetch() and a WebSocket.
 const BROWSER_PANELS = {
     board: 'kanban.html',
+    'agent-control': 'agent-control.html',
     project: 'project.html',
     memo: 'memo.html',
     tickets: 'tickets.html',

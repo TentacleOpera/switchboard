@@ -5,8 +5,12 @@ import {
     makeFragmentStandingOrder,
     makeStandingOrderDefinition,
     reSyncAssignmentsToDefinitions,
+    materializeStandingOrderForInspection,
+    listCoreStandingOrders,
     StandingOrder,
     StandingOrderDefinition,
+    StandingOrderScope,
+    TerminalGroup,
     STANDING_ORDERS_CONFIG_KEY,
     STANDING_ORDER_DEFINITIONS_CONFIG_KEY,
 } from './standingOrders';
@@ -615,7 +619,8 @@ export const TEAM_HEAD_COMMIT_INSTRUCTION = ` ${TEAM_HEAD_COMMIT_FRAGMENT_BODY}`
  *  - "advance" language removed entirely to prevent misinterpretation, and
  *    card movement is never described as the lead's role.
  *
- * Byte-identical to the shipped `headPrompt` in `kanban.html`'s Coding entry.
+ * Byte-identical to the shipped `headPrompt` in `agent-control.js`'s Coding entry
+ * (SHIPPED_TEAM_TYPES — the gallery moved there with the tabs).
  * The client mirror (`NEW_CODING_HEAD_PROMPT_CLIENT`) was retired when system
  * protocol composition moved to delivery-time fragment composition.
  */
@@ -2147,6 +2152,143 @@ export async function loadEffectiveStandingOrders(db: any): Promise<StandingOrde
     }
 
     return effective;
+}
+
+/** A persisted standing-order row annotated for the inspection surface. */
+export interface InspectedStandingOrder extends StandingOrder {
+    scope: StandingOrderScope;
+    /**
+     * The delivery-time read transforms ({@link dropSystemAuthoredRows},
+     * {@link migrateTeamPairOrders}) remove this row from what agents receive,
+     * but the row still sits in the store — it is shown, labeled, because
+     * "on disk but never delivered" is exactly the stale-order failure the
+     * surface exists to make visible.
+     */
+    dropped?: boolean;
+    /**
+     * The row's `definitionId` names a definition that no longer exists — its
+     * `instruction` copy is still delivered but no longer tracks the library
+     * entry (reSync finds no match and leaves it as-is).
+     */
+    stale?: boolean;
+    /**
+     * What is actually delivered when it differs from the on-disk
+     * `instruction`: the resynced definition text, or the composed fragment
+     * text for a fragment-bearing row (a fragments-only row has no persisted
+     * `instruction` at all, so without this it would render blank).
+     */
+    effectiveInstruction?: string;
+}
+
+export interface StandingOrdersInspection {
+    orders: InspectedStandingOrder[];
+    definitions: StandingOrderDefinition[];
+    coreOrders: Array<StandingOrder & { core: true }>;
+}
+
+/**
+ * The ONE inspection read of the standing-orders store — shared by the
+ * `getStandingOrders` verb (KanbanProvider, both hosts) and
+ * `GET /terminals/standing-orders` (LocalApiServer) so the panel and the HTTP
+ * surface cannot drift on what an order "is".
+ *
+ * Returns three things:
+ *  - `orders`: every persisted row, annotated — `scope` defaulted to `pair`
+ *    for shipped-state rows, `dropped`/`stale`/`effectiveInstruction` marking
+ *    what the delivery path would do with the row (the transforms are
+ *    read-time only, so a dropped row is still on disk and still listed).
+ *  - `definitions`: the definitions library, verbatim.
+ *  - `coreOrders`: the system-composed orders ({@link listCoreStandingOrders})
+ *    — the population that governs agents without existing as rows. The tab
+ *    must show both populations as such: a core order with no marking invites
+ *    the edit-and-replace the additive contract forbids.
+ *
+ * `roleMap` (terminal name → role) is optional and only affects how the
+ * composed text resolves role-dependent fragments; absent → the fragments that
+ * consult it render their no-role variant.
+ */
+export async function inspectStandingOrders(
+    db: any,
+    roleMap?: Map<string, string>
+): Promise<StandingOrdersInspection> {
+    const raw = await db.getConfigJson(STANDING_ORDERS_CONFIG_KEY, []) as StandingOrder[];
+    const rawArray = Array.isArray(raw) ? raw : [];
+    const rawDefs = await db.getConfigJson(STANDING_ORDER_DEFINITIONS_CONFIG_KEY, []) as StandingOrderDefinition[];
+    const definitions = Array.isArray(rawDefs) ? rawDefs : [];
+    const definitionIds = new Set(definitions.map(d => d && d.id).filter(Boolean));
+
+    // Groups: scoped key plus the legacy bare 'terminals.groups' merge every
+    // reader performs — a team registered under the bare key only still gets
+    // its core orders listed.
+    let groups: TerminalGroup[] = [];
+    try {
+        const scoped = await db.getConfigJson(TERMINALS_GROUPS_KEY, []) as any[];
+        groups = Array.isArray(scoped) ? [...scoped] : [];
+        const bare = await db.getConfigJson('terminals.groups', []) as any[];
+        if (Array.isArray(bare)) {
+            const seen = new Set(groups.map(g => g && g.id).filter(Boolean));
+            for (const g of bare) {
+                if (g && typeof g.id === 'string' && !seen.has(g.id)) {
+                    groups.push(g);
+                    seen.add(g.id);
+                }
+            }
+        }
+    } catch (err) {
+        // Logged, not silent: a failed groups read renders the same empty
+        // coreOrders as "no teams exist", and the difference must be
+        // recoverable after the fact.
+        console.warn('[teamWiring] standing-orders inspection: groups read failed:', err);
+    }
+
+    // The pure half of loadEffectiveStandingOrders' transform chain, applied
+    // for ANNOTATION rather than delivery. migrateToDefinitions is skipped —
+    // it writes, and its only observable effect here (a stamped definitionId)
+    // does not change what the row delivers.
+    const kept = migrateTeamPairOrders(dropSystemAuthoredRows(rawArray));
+    const keptSet = new Set(kept);
+    const resynced = reSyncAssignmentsToDefinitions(definitions, kept);
+
+    const orders: InspectedStandingOrder[] = rawArray.map(o => {
+        const base: InspectedStandingOrder = {
+            ...o,
+            scope: (o.scope || 'pair') as StandingOrderScope,
+        };
+        if (!keptSet.has(o)) {
+            base.dropped = true;
+            return base;
+        }
+        const idx = kept.indexOf(o);
+        const effective = (idx >= 0 ? resynced[idx] : o) || o;
+        if (effective.instruction !== o.instruction) {
+            base.effectiveInstruction = effective.instruction;
+        }
+        if (o.definitionId && !definitionIds.has(o.definitionId)) {
+            base.stale = true;
+        }
+        // Fragment-bearing rows deliver composed fragment text (plus any
+        // instruction body) — surface it, or a fragments-only row renders as
+        // an empty instruction.
+        if (Array.isArray(effective.fragments) && effective.fragments.length > 0) {
+            try {
+                const materialized = materializeStandingOrderForInspection(effective, groups, roleMap);
+                if (typeof materialized.instruction === 'string'
+                    && materialized.instruction !== effective.instruction) {
+                    base.effectiveInstruction = materialized.instruction;
+                }
+            } catch { /* inspection degrades to the stored text */ }
+        }
+        return base;
+    });
+
+    let coreOrders: Array<StandingOrder & { core: true }> = [];
+    try {
+        coreOrders = await listCoreStandingOrders(groups, roleMap, db);
+    } catch (err) {
+        console.warn('[teamWiring] core standing-order inspection failed:', err);
+    }
+
+    return { orders, definitions, coreOrders };
 }
 
 /**

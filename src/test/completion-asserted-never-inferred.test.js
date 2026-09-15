@@ -235,19 +235,26 @@ async function run() {
     // one post only a lead can make. `completed_at` is the single fact that
     // releases a team; an order on the head that omits it releases nothing.
 
-    await check('the head completion fragment tells the LEAD to post task/complete and not to prompt itself', async () => {
+    await check('the head completion fragment tells the LEAD to accept the subtask and not to prompt itself', async () => {
         const { buildHeadCompletionFragment, buildMemberCompletionFragment } = require(path.join(process.cwd(), 'out', 'services', 'standingOrderFragments.js'));
         const head = buildHeadCompletionFragment();
         const member = buildMemberCompletionFragment({ teamId: 'test-group', headName: 'lead-1' });
         assert.notStrictEqual(head, member, 'the head must not be handed the member body');
-        assert.ok(head.includes('POST /kanban/task/complete'),
-            'the lead\'s own order must name POST /kanban/task/complete');
+        // The lead's completion verb is `accept --plan`, not a hand-assembled
+        // task/complete POST. The system derives round close and feature
+        // complete from the accepts.
+        assert.ok(head.includes('accept --plan'),
+            'the lead\'s own order must name the accept verb');
         assert.ok(head.includes('"from":"<your terminal name>"'),
-            'the post must be addressed FROM the lead — first person, not a description of what somebody else does');
+            'the register call must be addressed FROM the lead — first person, not a description of what somebody else does');
         assert.ok(!head.includes('ptySendPrompt'),
             'the head has nobody to relay to — a self-prompt fallback must not survive in the head body');
-        assert.ok(head.includes('/terminals/teams/test-group/queue/done'),
-            'the head still advances the team queue, so queue/done must survive with the groupId baked in');
+        // queue/done is NOT in this fragment any more. A lead advances by
+        // accepting — the system dispatches the next round — so the
+        // `done --from` pop was gated out for lead heads entirely (it raced
+        // the round advance). Reviewer heads still get it, from headNext.
+        assert.ok(!head.includes('queue/done'),
+            'a lead does not pop a queue: accepting advances the round, and both live at once is the race this gate exists to prevent');
         assert.ok(!head.includes('kanban/dispatch') && !head.includes('CODE REVIEWED'),
             'the head body must not infer completion from board position either');
     });
@@ -267,6 +274,8 @@ async function run() {
     const planEngineSrc = readSrc('src/services/PlanIngestionEngine.ts');
     const kanbanDbSrc = readSrc('src/services/KanbanDatabase.ts');
     const kanbanHtmlSrc = readSrc('src/webview/kanban.html');
+    // The shipped Coding headPrompt moved to agent-control.js with the Teams tab.
+    const agentControlJsSrc = readSrc('src/webview/agent-control.js');
     const terminalsJsSrc = readSrc('src/webview/terminals.js');
 
     await check('member completion fragment body exists in standingOrderFragments', async () => {
@@ -413,25 +422,26 @@ async function run() {
         }
     });
 
-    await check('kanban.html + terminals.js mirrors retired the report-file completion channel', async () => {
+    await check('agent-control.js + terminals.js mirrors retired the report-file completion channel', async () => {
         // The webview mirrors of NEW_CODING_HEAD_PROMPT must not instruct
         // writing a completion report file, and must instruct accept --plan
         // (the CLI verb that posts to task/complete — the lead moved off the
         // hand-assembled POST in plan: the-lead-accepts-a-subtask-and-the-
         // system-advances).
-        for (const [name, src] of [['kanban.html', kanbanHtmlSrc], ['terminals.js', terminalsJsSrc]]) {
+        for (const [name, src] of [['agent-control.js', agentControlJsSrc], ['terminals.js', terminalsJsSrc]]) {
             assert.ok(!src.includes('Post a finished report to .switchboard/mission-control/reports/ naming the feature'),
                 `${name} must not instruct posting a completion report file`);
         }
-        // Only kanban.html still CARRIES the Coding headPrompt. The terminals.js
-        // client mirror (NEW_CODING_HEAD_PROMPT_CLIENT) was retired when system
-        // protocol composition moved to delivery-time fragment composition —
+        // Only agent-control.js still CARRIES the Coding headPrompt (it moved
+        // out of kanban.html with the Teams tab). The terminals.js client mirror
+        // (NEW_CODING_HEAD_PROMPT_CLIENT) was retired when system protocol
+        // composition moved to delivery-time fragment composition —
         // `coding-head-prompt-contract.test.js` pins its absence. Demanding the
         // completion verb from a file that carries no prompt at all is a gate
         // that can only ever be red, so assert what is actually true of each:
-        // kanban.html names the verb, terminals.js declares no mirror.
-        assert.ok(kanbanHtmlSrc.includes('accept --plan'),
-            'kanban.html must instruct using the accept --plan CLI verb');
+        // agent-control.js names the verb, terminals.js declares no mirror.
+        assert.ok(agentControlJsSrc.includes('accept --plan'),
+            'agent-control.js must instruct using the accept --plan CLI verb');
         assert.ok(!terminalsJsSrc.includes('NEW_CODING_HEAD_PROMPT_CLIENT'),
             'terminals.js must declare NO Coding headPrompt mirror — the client mirror is retired, '
             + 'and a reinstated one would drift from teamWiring.ts the moment the verb changes');

@@ -45,7 +45,9 @@ const kanbanProviderTs = fs.readFileSync(path.join(REPO_ROOT, 'src/services/Kanb
 const localApiServerTs = fs.readFileSync(path.join(REPO_ROOT, 'src/services/LocalApiServer.ts'), 'utf8');
 const agentGroupInstantiationTs = fs.readFileSync(path.join(REPO_ROOT, 'src/services/agentGroupInstantiation.ts'), 'utf8');
 const agentPromptBuilderTs = fs.readFileSync(path.join(REPO_ROOT, 'src/services/agentPromptBuilder.ts'), 'utf8');
-const kanbanHtml = fs.readFileSync(path.join(REPO_ROOT, 'src/webview/kanban.html'), 'utf8');
+// SHIPPED_TEAM_TYPES (the team gallery presets) moved to agent-control.js when
+// the tabs left kanban.html.
+const agentControlJs = fs.readFileSync(path.join(REPO_ROOT, 'src/webview/agent-control.js'), 'utf8');
 
 let passed = 0;
 let failed = 0;
@@ -988,9 +990,9 @@ async function item9() {
         // incomplete" hole this gate exists to close.
         assert.ok(NEW_REVIEW_TEAM_HEAD_PROMPT.includes('"seatBlock":false'),
             'NEW_REVIEW_TEAM_HEAD_PROMPT must include seatBlock:false in its ptySendPrompt payload');
-        const reviewPresetStart = kanbanHtml.indexOf("name: 'Review'");
-        assert.ok(reviewPresetStart > 0, "Review preset not found in kanban.html");
-        const reviewPreset = kanbanHtml.slice(reviewPresetStart, kanbanHtml.indexOf("name: 'Multi-agent planning'", reviewPresetStart));
+        const reviewPresetStart = agentControlJs.indexOf("name: 'Review'");
+        assert.ok(reviewPresetStart > 0, "Review preset not found in agent-control.js");
+        const reviewPreset = agentControlJs.slice(reviewPresetStart, agentControlJs.indexOf("name: 'Multi-agent planning'", reviewPresetStart));
         assert.ok(reviewPreset.includes('"seatBlock":false'),
             'Review team preset headPrompt must include seatBlock:false in its ptySendPrompt payload');
         // The Review preset has reviewer seats and NO coder seat, so
@@ -1028,10 +1030,10 @@ async function item9() {
             'the pre-triage review-prompt snapshot must stay deleted');
     });
 
-    await test('kanban.html: Review team preset exists in SHIPPED_TEAM_TYPES with reviewer headRole and reviewer members', () => {
-        assert.ok(kanbanHtml.includes("name: 'Review'"));
-        assert.ok(kanbanHtml.includes("headRole: 'reviewer'"));
-        assert.ok(kanbanHtml.includes("{ role: 'reviewer', count: 3, scope: 'per-team', relationship: 'reports-to-head' }"));
+    await test('agent-control.js: Review team preset exists in SHIPPED_TEAM_TYPES with reviewer headRole and reviewer members', () => {
+        assert.ok(agentControlJs.includes("name: 'Review'"));
+        assert.ok(agentControlJs.includes("headRole: 'reviewer'"));
+        assert.ok(agentControlJs.includes("{ role: 'reviewer', count: 3, scope: 'per-team', relationship: 'reports-to-head' }"));
     });
 }
 

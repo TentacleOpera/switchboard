@@ -20,8 +20,9 @@
  *    A role can hold a commit radio, a default, a resolved strategy and a stage
  *    mapping and still emit no policy at all — three green layers, dead control.
  *  - The Coding-team migration is exact-value matched. One drifted byte between
- *    `kanban.html`, `teamWiring.ts` and the `terminals.js` mirror and it silently
- *    never fires, leaving every existing install on the bypass permanently.
+ *    `agent-control.js`, `teamWiring.ts` and the `terminals.js` mirror and it
+ *    silently never fires, leaving every existing install on the bypass
+ *    permanently.
  *
  * Run with:
  *   node --require ./src/test/bootstrap/sandboxStateHome.js src/test/stage-marker-commit-contract.test.js
@@ -57,7 +58,9 @@ const AGENT_PROMPT_BUILDER_SRC = SRC('services', 'agentPromptBuilder.ts');
 const KANBAN_PROVIDER_SRC = SRC('services', 'KanbanProvider.ts');
 const SHARED_DEFAULTS_SRC = SRC('webview', 'sharedDefaults.js');
 const TERMINALS_JS_SRC = SRC('webview', 'terminals.js');
-const KANBAN_HTML_SRC = SRC('webview', 'kanban.html');
+// The shipped team gallery (SHIPPED_TEAM_TYPES) lives in agent-control.js since
+// the tabs left kanban.html — see extract-agent-control-into-its-own-panel-file.md.
+const AGENT_CONTROL_JS_SRC = SRC('webview', 'agent-control.js');
 
 let passed = 0;
 let failed = 0;
@@ -352,19 +355,19 @@ function readConcat(src, decl) {
 test('NEW_CODING_HEAD_PROMPT_CLIENT is retired from terminals.js — system protocol is composed at delivery', () => {
     // The client mirror was retired when system protocol composition moved to
     // delivery-time fragment composition. The host constant NEW_CODING_HEAD_PROMPT
-    // remains as the canonical parity reference for kanban.html's Coding headPrompt.
+    // remains as the canonical parity reference for agent-control.js's Coding headPrompt.
     assert.ok(
         !/NEW_CODING_HEAD_PROMPT_CLIENT/.test(TERMINALS_JS_SRC),
         'terminals.js must NOT declare NEW_CODING_HEAD_PROMPT_CLIENT — the client mirror is retired'
     );
 });
 
-test('the shipped kanban.html headPrompt is byte-identical to NEW_CODING_HEAD_PROMPT', () => {
-    // kanban.html's copy lives inside an object literal, so it ends at the
+test('the shipped agent-control.js headPrompt is byte-identical to NEW_CODING_HEAD_PROMPT', () => {
+    // agent-control.js's copy lives inside an object literal, so it ends at the
     // first line that is not a `+ '…'` continuation, not at a `;`.
-    const lines = KANBAN_HTML_SRC.split('\n');
+    const lines = AGENT_CONTROL_JS_SRC.split('\n');
     const start = lines.findIndex(l => l.includes("headPrompt: 'You lead this team."));
-    assert.ok(start >= 0, 'Coding team headPrompt not found in kanban.html');
+    assert.ok(start >= 0, 'Coding team headPrompt not found in agent-control.js');
     const chain = [lines[start].replace(/^\s*headPrompt:\s*/, '')];
     for (let i = start + 1; i < lines.length && /^\s*\+\s*'/.test(lines[i]); i++) {
         chain.push(lines[i].trim());
@@ -372,14 +375,14 @@ test('the shipped kanban.html headPrompt is byte-identical to NEW_CODING_HEAD_PR
     // eslint-disable-next-line no-eval
     const shipped = eval('(' + chain.join('\n') + ')');
     assert.strictEqual(shipped, NEW_CODING_HEAD_PROMPT,
-        'the migration writes NEW_CODING_HEAD_PROMPT while the gallery forks kanban.html\'s copy — '
+        'the migration writes NEW_CODING_HEAD_PROMPT while the gallery forks agent-control.js\'s copy — '
         + 'a drift means migrated and freshly-adopted teams carry different text');
 });
 
 test('the shipped Coding reviewer is reports-to-head, and no shipped member is a `reviewer` pair', () => {
-    assert.ok(/role: 'reviewer',[^}]*relationship: 'reports-to-head'/.test(KANBAN_HTML_SRC),
+    assert.ok(/role: 'reviewer',[^}]*relationship: 'reports-to-head'/.test(AGENT_CONTROL_JS_SRC),
         'the Coding reviewer must be reports-to-head — `reviewer` reinstates the board bypass');
-    assert.ok(!/relationship: 'reviewer'/.test(KANBAN_HTML_SRC),
+    assert.ok(!/relationship: 'reviewer'/.test(AGENT_CONTROL_JS_SRC),
         'a shipped member declaring relationship: \'reviewer\' installs the hand-to-reviewer order on the lead');
 });
 

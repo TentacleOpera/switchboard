@@ -146,6 +146,7 @@
         tickets: ['tickets', 'common'],
         connections: ['connections', 'common'],
         'mission-control': ['common'],
+        'agent-control': ['kanban', 'common'],
         linear: ['common'],
         database: ['common'],
     };

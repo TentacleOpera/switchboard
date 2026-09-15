@@ -159,3 +159,9 @@ None.
 - **[user]** Agent Control only, or should the board keep an Orders view too? Default assumption is Agent Control only — the board is being narrowed to the board, not widened.
 - Does any order body today contain anything that should not be displayed? The credential-injection design says no, but the tab makes bodies visible for the first time, so it is worth one pass over the installed set before shipping rather than after.
 - Is there a server-side "which orders reach terminal X" resolve worth exposing, so the tab can answer that without mirroring the resolver? `resolveTeamStanding` (`standingOrders.ts:101`) suggests the logic is already factored for it.
+
+---
+
+## Completion Summary (2026-09-15)
+
+The Orders surface already existed in `agent-control` as the extracted STANDING ORDERS tab; the gap this plan uniquely required — distinguishing core (system-composed, never persisted) orders from persisted add-ons — is now implemented. A shared `inspectStandingOrders` read in `teamWiring.ts` annotates persisted rows (`dropped`, `stale`, `effectiveInstruction`) and composes `coreOrders` via `listCoreStandingOrders` (which shares `syntheticTeamOrder` with `selectOrders`, so delivery and inspection cannot drift); both read surfaces — the `getStandingOrders` kanban verb (serves both hosts) and `GET /terminals/standing-orders` — return it. The tab gained a read-only "Core Orders" section (no edit/delete, labeled "composed at delivery"), a "SYSTEM-INSTALLED" badge for installer-minted deterministic ids, and per-row deterministic id display; persisted-row CRUD was left intact since the operator's read-only answer scoped this plan's additions, not the pre-existing add-on manager. Verified by transpile-smoke: core orders materialize with real fragment text, `applyStandingOrders` delivery is unchanged, and dropped/stale/effectiveInstruction annotate correctly. Per run directives, project compilation and automated tests were not executed.

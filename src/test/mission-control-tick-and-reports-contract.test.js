@@ -670,8 +670,9 @@ async function run() {
         // see the note on NEW_CODING_HEAD_PROMPT in teamWiring.ts. terminals.js no
         // longer builds a head prompt at all, so asserting the line there pinned a
         // copy that is gone by design, not a prompt that lost a line. The two files
-        // that DO still carry a head prompt are still pinned.
-        for (const file of ['src/services/teamWiring.ts', 'src/webview/kanban.html']) {
+        // that DO still carry a head prompt are still pinned — the shipped gallery
+        // copy lives in agent-control.js since the tabs left kanban.html.
+        for (const file of ['src/services/teamWiring.ts', 'src/webview/agent-control.js']) {
             assert.ok(
                 read(file).includes('a recommendedRole; dispatch it to a seat of that role'),
                 `${file}'s head prompt lost the seat-routing line`

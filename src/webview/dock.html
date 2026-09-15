@@ -250,38 +250,72 @@
             cursor: pointer;
         }
         .agent-control-quickbtn:hover { color: var(--text-primary); border-color: var(--accent-dim); }
-        .agent-control-input-row {
+        .agent-control-picker-row {
             display: flex;
+            flex-wrap: wrap;
             gap: 6px;
-            padding: 8px 10px;
+            padding: 6px 10px;
             border-top: 1px solid var(--border-color);
             background: var(--panel-bg);
+            align-items: center;
         }
-        .agent-control-input {
+        .agent-control-picker-row select {
             flex: 1 1 auto;
+            min-width: 120px;
             background: var(--bg-color);
             border: 1px solid var(--border-color);
             border-radius: 4px;
             color: var(--text-primary);
             font-family: var(--font-code);
-            font-size: 12px;
-            padding: 6px 10px;
+            font-size: 11px;
+            padding: 4px 6px;
             outline: none;
             box-sizing: border-box;
         }
-        .agent-control-input:focus { border-color: var(--accent-primary); }
-        .agent-control-send {
+        .agent-control-config {
+            padding: 8px 10px;
+            border-top: 1px solid var(--border-color);
+            background: var(--panel-bg);
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        .agent-control-config label {
+            font-size: 10px;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .agent-control-config input {
+            background: var(--bg-color);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            color: var(--text-primary);
+            font-family: var(--font-code);
+            font-size: 11px;
+            padding: 4px 8px;
+            outline: none;
+            box-sizing: border-box;
+            width: 100%;
+        }
+        .agent-control-config input:focus { border-color: var(--accent-primary); }
+        .agent-control-config-save {
+            align-self: flex-end;
             background: var(--accent-dim);
             border: 1px solid var(--accent-dim);
             border-radius: 4px;
             color: var(--text-primary);
             font-family: var(--font-family);
-            font-size: 12px;
-            padding: 6px 14px;
+            font-size: 11px;
+            padding: 4px 14px;
             cursor: pointer;
         }
-        .agent-control-send:hover { background: var(--accent-primary); color: var(--bg-color); }
-        .agent-control-send[disabled] { opacity: 0.5; cursor: not-allowed; }
+        .agent-control-config-save:hover { background: var(--accent-primary); color: var(--bg-color); }
+        .agent-control-config-status {
+            font-size: 10px;
+            color: var(--text-dim);
+        }
+        .agent-control-config-status.is-error { color: #f85149; }
         .agent-control-status {
             padding: 4px 10px;
             font-size: 10px;
@@ -435,10 +469,25 @@
     <div id="dock-agent-pane">
         <div class="agent-control-log" id="agent-control-log"></div>
         <div class="agent-control-quickactions" id="agent-control-quickactions"></div>
-        <div class="agent-control-input-row">
-            <input type="text" class="agent-control-input" id="agent-control-input"
-                   placeholder="Type an intent (e.g. 'dispatch my starred cards')" />
-            <button type="button" class="agent-control-send" id="agent-control-send">Send</button>
+        <!-- Card + column pickers: the by-id actions (advance/move/star) and the
+             model-backed Resolve act on the selected card. No free-text input —
+             every action on this surface is a button or a dropdown. -->
+        <div class="agent-control-picker-row">
+            <select id="agent-control-card-select" aria-label="Card"></select>
+            <select id="agent-control-column-select" aria-label="Target column"></select>
+        </div>
+        <!-- The surface's own config: endpoint, model and key are set HERE,
+             not via a repurposed startup command or an env var. The key field
+             is write-only — it renders set/unset and never echoes the value. -->
+        <div class="agent-control-config">
+            <label for="agent-control-endpoint">Model endpoint</label>
+            <input type="text" id="agent-control-endpoint" placeholder="https://… (unset)" />
+            <label for="agent-control-model">Model</label>
+            <input type="text" id="agent-control-model" placeholder="model name (unset)" />
+            <label for="agent-control-key">API key</label>
+            <input type="password" id="agent-control-key" placeholder="(unset)" autocomplete="off" />
+            <button type="button" class="agent-control-config-save" id="agent-control-config-save">Save config</button>
+            <div class="agent-control-config-status" id="agent-control-config-status"></div>
         </div>
         <div class="agent-control-status" id="agent-control-status">Control surface ready.</div>
     </div>

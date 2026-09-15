@@ -53,6 +53,7 @@ import { instantiateAgentGroupCore, instantiateExternalHeadedTeam, resolveExtern
 // them and persists the result. Importing them back would re-open the
 // four-site-convention hole the loader closed.
 import { wireSpawnedTeam, findTeamForHeadRoleInRoots, startTeamById, loadEffectiveStandingOrders, resolveTeamScopedRoleTerminal, resolveTeamMembersForHead, resolveTeamPacingForHead, resolveDefinitionForGroup, plausibleOriginTerminal, terminalsShareTeam, resolveHeadForTerminal, resolveLiveGroupHeads, listTeamsInRoots, resolveTeamByIdInRoots, TERMINALS_GROUPS_KEY, rewriteTeamGroupHeadForRename, teamHeadName, type TerminalGroupsSettingsAccessor } from './teamWiring';
+import { readBuildRenderOptions } from './buildTarget';
 import { isTmuxAvailable, listTmuxSessions, buildTmuxGrid, validateTmuxSessionName, killTmuxSession, killTmuxSessionGroup } from '../standalone/tmuxBackend';
 import { installReviewerCallbackOrder, removeReviewerCallbackOrder } from './standingOrders';
 import { resolveWorkContext, resolveTeamGroupForTerminal, computeRosterClearTargets } from './workContextResolver';
@@ -1358,6 +1359,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                 subagentPolicy: seatOpts?.subagentPolicy,
                                 customSubagentName: seatOpts?.customSubagentName,
                                 hasRegisteredRounds,
+                                ...(db ? await readBuildRenderOptions(db) : {}),
                             }, { terminalName: payload.name });
                             soBlockAdded = data !== beforeSO;
                         }
@@ -4688,7 +4690,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             // option is declared and read but was wired by NEITHER root, so the
             // key silently fell through to SWITCHBOARD_AGENT_API_KEY on both
             // hosts. vscode.SecretStorage is the extension-side store.
-            encryptedSecretsStore: { get: async (key: string) => await this._context.secrets.get(key) },
+            // Read AND write — POST /agent/control/config is the surface-side
+            // setter for the model API key, so a get-only seam would leave the
+            // extension host able to read a key it cannot set.
+            encryptedSecretsStore: {
+                get: async (key: string) => await this._context.secrets.get(key),
+                store: async (key: string, value: string) => await this._context.secrets.store(key, value),
+                delete: async (key: string) => await this._context.secrets.delete(key),
+            },
             // The roster-clear busy predicate's window. Read from the same
             // setting the other three readers honour — without this wiring the
             // option is a dead seam and changing the setting changes nothing
@@ -4954,14 +4963,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     return { success: false, error: err instanceof Error ? err.message : String(err) };
                 }
             },
-            kanbanVerb: async (verb, payload, wsRoot) => {
+            kanbanVerb: async (verb, payload, wsRoot, source) => {
                 if (!this._kanbanProvider) {
                     return { success: false, error: 'Kanban provider not available' };
                 }
                 const p = (wsRoot && payload && payload.workspaceRoot == null)
                     ? { ...payload, workspaceRoot: wsRoot }
                     : payload;
-                return await this._kanbanProvider.handleServiceVerb(verb, p);
+                return await this._kanbanProvider.handleServiceVerb(verb, p, source);
             },
             planningVerb: async (verb, payload, wsRoot) => {
                 if (!this._planningPanelProvider) {

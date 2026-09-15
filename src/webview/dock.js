@@ -89,12 +89,12 @@
     let fleetPollTimer = null;
 
     // ── Agent control surface state ──────────────────────────────────────
-    // The controller holds its own conversation history between turns (an
-    // API seat has no terminal to carry it). Sent with each request so the
-    // model has context. Capped at 20 turns by the server.
-    let agentHistory = [];
+    // No conversation history and no free-text input — the surface is driven
+    // by action buttons and dropdowns; the only model call is the explicit
+    // Resolve action on a selected card.
     let agentModelConfigured = false;
     let agentSending = false;
+    let agentBoardCache = [];
 
     // ── Viewport deps bag (CLI tab only) ─────────────────────────────────
     // The Agent tab is a control surface (no terminal); only the CLI tab
@@ -138,10 +138,15 @@
 
     // ── Agent control surface element refs ───────────────────────────────
     const agentLogEl = document.getElementById('agent-control-log');
-    const agentInputEl = document.getElementById('agent-control-input');
-    const agentSendBtn = document.getElementById('agent-control-send');
     const agentStatusEl = document.getElementById('agent-control-status');
     const agentQuickActionsEl = document.getElementById('agent-control-quickactions');
+    const agentCardSelectEl = document.getElementById('agent-control-card-select');
+    const agentColumnSelectEl = document.getElementById('agent-control-column-select');
+    const agentEndpointEl = document.getElementById('agent-control-endpoint');
+    const agentModelEl = document.getElementById('agent-control-model');
+    const agentKeyEl = document.getElementById('agent-control-key');
+    const agentConfigSaveBtn = document.getElementById('agent-control-config-save');
+    const agentConfigStatusEl = document.getElementById('agent-control-config-status');
 
     // ── Tab switching ────────────────────────────────────────────────────
     function setDockActiveTab(tab) {
@@ -221,10 +226,11 @@
     }
 
     // ── Agent control surface ────────────────────────────────────────────
-    // The Agent tab is an API-backed control surface, not a pty seat. It
-    // shows the pane, loads the model config + quick actions, and listens
-    // for input. No terminal emulator is mounted. See plan:
-    // the-dock-agent-tab-is-a-control-surface-not-a-terminal.
+    // The Agent tab is an API-backed control surface, not a pty seat and not
+    // a text box — every action is a button or a dropdown, and endpoint/model/
+    // key are configured in the pane itself. No terminal emulator is mounted.
+    // See plans: the-dock-agent-tab-is-a-control-surface-not-a-terminal and
+    // the-agent-control-surface-cannot-be-configured-and-is-driven-by-typing.
 
     /** Show the agent control surface and load its config. */
     async function syncAgentControl() {
@@ -235,7 +241,13 @@
         if (dockRestartBtn) { dockRestartBtn.style.display = 'none'; }
         updateDockTitle();
         await loadAgentControlConfig();
-        if (agentInputEl) { agentInputEl.focus(); }
+    }
+
+    /** Render the modelError beside the config fields that fix it. */
+    function setAgentConfigStatus(text, isError) {
+        if (!agentConfigStatusEl) { return; }
+        agentConfigStatusEl.textContent = text || '';
+        agentConfigStatusEl.classList.toggle('is-error', isError === true);
     }
 
     /** Load model availability + quick actions from GET /agent/control/config. */
@@ -249,12 +261,31 @@
             const data = await res.json();
             const cfg = data.data || data;
             agentModelConfigured = !!cfg.modelConfigured;
-            if (agentModelConfigured) {
-                setAgentStatus('Model configured. Mechanical actions always available.', 'model');
-            } else {
-                setAgentStatus('No model configured. Mechanical actions available; fuzzy resolution disabled.', '');
+            // The config row renders the stored values verbatim — including a
+            // value the resolver rejects — so the operator sees and fixes it.
+            // The key field is write-only: it renders set/unset, never the value.
+            if (agentEndpointEl && document.activeElement !== agentEndpointEl) {
+                agentEndpointEl.value = cfg.endpoint || '';
             }
-            // Render quick action buttons
+            if (agentModelEl && document.activeElement !== agentModelEl) {
+                agentModelEl.value = cfg.model || '';
+            }
+            if (agentKeyEl) {
+                agentKeyEl.value = '';
+                agentKeyEl.placeholder = cfg.keySet ? 'API key is set (write-only — type to replace)' : 'API key (unset)';
+            }
+            if (cfg.modelError) {
+                setAgentConfigStatus(cfg.modelError, true);
+            } else {
+                setAgentConfigStatus('', false);
+            }
+            if (agentModelConfigured) {
+                setAgentStatus('Model configured (' + (cfg.modelName || '') + '). Mechanical actions always available.', 'model');
+            } else {
+                setAgentStatus('No usable model. Mechanical actions available; Resolve is disabled.', '');
+            }
+            // Render quick action buttons — each fires its mechanical endpoint
+            // DIRECTLY. Nothing is stuffed into a text box; there isn't one.
             if (agentQuickActionsEl) {
                 agentQuickActionsEl.innerHTML = '';
                 const actions = Array.isArray(cfg.quickActions) ? cfg.quickActions : [];
@@ -263,17 +294,189 @@
                     btn.type = 'button';
                     btn.className = 'agent-control-quickbtn';
                     btn.textContent = action.label;
-                    btn.addEventListener('click', () => {
-                        if (agentInputEl) {
-                            agentInputEl.value = action.label;
-                            void sendAgentControl();
-                        }
-                    });
+                    btn.disabled = action.needsModel === true && !agentModelConfigured;
+                    btn.addEventListener('click', () => void runAgentAction(action.id));
                     agentQuickActionsEl.appendChild(btn);
                 }
             }
+            // Populate the card + column pickers the by-id actions act on.
+            await refreshAgentPickers();
         } catch (err) {
             setAgentStatus('Failed to load control config: ' + (err?.message || err), 'error');
+        }
+    }
+
+    /** Fetch the board and fill the card picker; fetch columns for the move picker. */
+    async function refreshAgentPickers() {
+        try {
+            const res = await fetch('/kanban/board', { credentials: 'same-origin' });
+            const data = res.ok ? await res.json() : null;
+            agentBoardCache = data ? (data.data || data || []) : [];
+            if (!Array.isArray(agentBoardCache)) { agentBoardCache = []; }
+        } catch {
+            agentBoardCache = [];
+        }
+        if (agentCardSelectEl) {
+            const prev = agentCardSelectEl.value;
+            agentCardSelectEl.innerHTML = '';
+            for (const card of agentBoardCache) {
+                const id = String(card.planId || card.sessionId || '');
+                if (!id) { continue; }
+                const opt = document.createElement('option');
+                opt.value = id;
+                opt.textContent = (card.topic || id) + (card.kanbanColumn ? ' [' + card.kanbanColumn + ']' : '');
+                agentCardSelectEl.appendChild(opt);
+            }
+            if (prev && agentBoardCache.some(c => String(c.planId || c.sessionId) === prev)) {
+                agentCardSelectEl.value = prev;
+            }
+        }
+        try {
+            const res = await fetch('/kanban/columns', { credentials: 'same-origin' });
+            const data = res.ok ? await res.json() : null;
+            const cols = data ? (data.data || data) : null;
+            if (agentColumnSelectEl && cols) {
+                const enabled = [...(cols.builtIn || []), ...(cols.custom || [])]
+                    .filter(c => c && c.id && c.enabled !== false);
+                const prev = agentColumnSelectEl.value;
+                agentColumnSelectEl.innerHTML = '';
+                for (const col of enabled) {
+                    const opt = document.createElement('option');
+                    opt.value = String(col.id);
+                    opt.textContent = String(col.label || col.id);
+                    agentColumnSelectEl.appendChild(opt);
+                }
+                if (prev && enabled.some(c => String(c.id) === prev)) {
+                    agentColumnSelectEl.value = prev;
+                }
+            }
+        } catch { /* column picker stays empty; move reports the missing target */ }
+    }
+
+    /** The selected card's id, or null with a status line saying why not. */
+    function selectedCardId() {
+        const id = agentCardSelectEl ? String(agentCardSelectEl.value || '') : '';
+        if (!id) {
+            setAgentStatus('Pick a card from the dropdown first.', 'error');
+            return null;
+        }
+        return id;
+    }
+
+    /**
+     * Fire one surface action at its mechanical endpoint. The quick-action
+     * buttons call here directly — the old path (stuff the label into a text
+     * input, POST it to /agent/control for keyword parsing) is gone.
+     */
+    async function runAgentAction(id) {
+        if (agentSending) { return; }
+        agentSending = true;
+        try {
+            if (id === 'dispatch-starred') {
+                const starred = agentBoardCache.filter(c => c.starred === 1 || c.starred === true || c.priority === 1 || c.priority === true);
+                if (!starred.length) {
+                    renderControlEntry('assistant', 'No starred cards on the board.', null, null);
+                    return;
+                }
+                const r = await agentFetch('/kanban/advance', { planIds: starred.map(c => c.planId || c.sessionId) });
+                renderControlEntry('assistant', r.ok
+                    ? 'Advanced ' + starred.length + ' starred card(s).'
+                    : 'Advance failed: ' + r.error, null, [{ type: 'advance', result: r.body }]);
+            } else if (id === 'refresh-board') {
+                await refreshAgentPickers();
+                renderControlEntry('assistant', 'Board refreshed — ' + agentBoardCache.length + ' card(s).', null, null);
+            } else if (id === 'list-columns') {
+                const res = await fetch('/kanban/columns', { credentials: 'same-origin' });
+                const data = res.ok ? await res.json() : null;
+                const cols = data ? (data.data || data) : null;
+                const names = cols ? [...(cols.builtIn || []), ...(cols.custom || [])].map(c => c.label || c.id) : [];
+                renderControlEntry('assistant', names.length ? 'Columns: ' + names.join(', ') : 'No columns reported.', null, null);
+            } else if (id === 'advance-plan') {
+                const cardId = selectedCardId();
+                if (!cardId) { return; }
+                const r = await agentFetch('/kanban/advance', { planIds: [cardId] });
+                renderControlEntry('assistant', r.ok ? 'Advanced ' + cardId + '.' : 'Advance failed: ' + r.error, null, [{ type: 'advance', result: r.body, ...(r.ok ? {} : { error: r.error }) }]);
+            } else if (id === 'move-plan') {
+                const cardId = selectedCardId();
+                if (!cardId) { return; }
+                const targetColumn = agentColumnSelectEl ? String(agentColumnSelectEl.value || '') : '';
+                if (!targetColumn) {
+                    setAgentStatus('Pick a target column from the dropdown first.', 'error');
+                    return;
+                }
+                const r = await agentFetch('/kanban/move', { planId: cardId, targetColumn });
+                renderControlEntry('assistant', r.ok ? 'Moved ' + cardId + ' to ' + targetColumn + '.' : 'Move failed: ' + r.error, null, [{ type: 'move', result: r.body, ...(r.ok ? {} : { error: r.error }) }]);
+            } else if (id === 'star-plan') {
+                const cardId = selectedCardId();
+                if (!cardId) { return; }
+                const r = await agentFetch('/kanban/plans/priority', { planId: cardId, starred: true }, 'PUT');
+                renderControlEntry('assistant', r.ok ? 'Starred ' + cardId + '.' : 'Star failed: ' + r.error, null, [{ type: 'star', result: r.body, ...(r.ok ? {} : { error: r.error }) }]);
+            } else if (id === 'resolve-card') {
+                const cardId = selectedCardId();
+                if (!cardId) { return; }
+                renderControlEntry('user', 'Resolve ' + cardId, null, null);
+                const res = await fetch('/agent/control', {
+                    method: 'POST', credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ cardId }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || data.success === false) {
+                    renderControlEntry('assistant', 'Resolve failed: ' + (data.error || res.status), null, null);
+                    setAgentStatus('Resolve failed: ' + (data.error || res.status), 'error');
+                } else {
+                    renderControlEntry('assistant', data.reply || '(no reply)',
+                        Array.isArray(data.resolved) ? data.resolved : null,
+                        Array.isArray(data.actions) ? data.actions : null);
+                    setAgentStatus('Resolved via model.', 'model');
+                }
+            }
+        } catch (err) {
+            setAgentStatus('Action failed: ' + (err?.message || err), 'error');
+        } finally {
+            agentSending = false;
+        }
+    }
+
+    /** POST/PUT helper for the mechanical endpoints; normalises the reply. */
+    async function agentFetch(url, body, method) {
+        try {
+            const res = await fetch(url, {
+                method: method || 'POST', credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body || {}),
+            });
+            const data = await res.json().catch(() => ({}));
+            return { ok: res.ok && data.success !== false, status: res.status, body: data, error: data.error || (res.ok ? '' : 'HTTP ' + res.status) };
+        } catch (err) {
+            return { ok: false, status: 0, body: null, error: err?.message || String(err) };
+        }
+    }
+
+    /** Save the endpoint/model/key the surface's config row holds. */
+    async function saveAgentControlConfig() {
+        const payload = {};
+        if (agentEndpointEl) { payload.endpoint = agentEndpointEl.value.trim(); }
+        if (agentModelEl) { payload.model = agentModelEl.value.trim(); }
+        // The key field is write-only: an empty field means "leave the stored
+        // key unchanged", so it is only sent when the operator typed one.
+        if (agentKeyEl && agentKeyEl.value.trim()) { payload.apiKey = agentKeyEl.value.trim(); }
+        try {
+            const res = await fetch('/agent/control/config', {
+                method: 'POST', credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.success === false) {
+                setAgentConfigStatus('Save failed: ' + (data.error || res.status), true);
+                return;
+            }
+            if (agentKeyEl) { agentKeyEl.value = ''; }
+            setAgentConfigStatus('Saved.', false);
+            await loadAgentControlConfig();
+        } catch (err) {
+            setAgentConfigStatus('Save failed: ' + (err?.message || err), true);
         }
     }
 
@@ -284,53 +487,6 @@
         agentStatusEl.className = 'agent-control-status';
         if (cls === 'error') { agentStatusEl.classList.add('is-error'); }
         else if (cls === 'model') { agentStatusEl.classList.add('is-model'); }
-    }
-
-    /** Send the current input to POST /agent/control and render the reply. */
-    async function sendAgentControl() {
-        if (agentSending) { return; }
-        const text = agentInputEl ? agentInputEl.value.trim() : '';
-        if (!text) { return; }
-        agentSending = true;
-        if (agentSendBtn) { agentSendBtn.disabled = true; }
-        agentInputEl.value = '';
-        // Render the user's input immediately
-        renderControlEntry('user', text, null, null);
-        try {
-            const res = await fetch('/agent/control', {
-                method: 'POST', credentials: 'same-origin',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text, history: agentHistory }),
-            });
-            if (!res.ok) {
-                const errBody = await res.json().catch(() => ({}));
-                renderControlEntry('assistant', 'Error: ' + (errBody.error || res.status), null, null);
-                setAgentStatus('Request failed: ' + (errBody.error || res.status), 'error');
-                return;
-            }
-            const data = await res.json();
-            const reply = data.reply || '(no reply)';
-            const resolved = Array.isArray(data.resolved) ? data.resolved : [];
-            const actions = Array.isArray(data.actions) ? data.actions : [];
-            renderControlEntry('assistant', reply, resolved, actions);
-            // Update history (the server returns the full updated history)
-            if (Array.isArray(data.history)) { agentHistory = data.history; }
-            // Update status
-            if (data.usedModel) {
-                setAgentStatus('Resolved via model. ' + resolved.length + ' card(s) matched.', 'model');
-            } else if (resolved.length > 0) {
-                setAgentStatus('Resolved ' + resolved.length + ' card(s) via keyword match.', '');
-            } else {
-                setAgentStatus('No cards resolved. Try a plan id, column name, or "starred".', '');
-            }
-        } catch (err) {
-            renderControlEntry('assistant', 'Network error: ' + (err?.message || err), null, null);
-            setAgentStatus('Network error: ' + (err?.message || err), 'error');
-        } finally {
-            agentSending = false;
-            if (agentSendBtn) { agentSendBtn.disabled = false; }
-            if (agentInputEl) { agentInputEl.focus(); }
-        }
     }
 
     /** Render a control surface log entry (user or assistant turn). */
@@ -741,17 +897,11 @@
         });
     }
 
-    // Agent control surface input + send.
-    if (agentSendBtn) {
-        agentSendBtn.addEventListener('click', () => void sendAgentControl());
-    }
-    if (agentInputEl) {
-        agentInputEl.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                void sendAgentControl();
-            }
-        });
+    // Agent control surface — the config row's save button. Every other action
+    // is wired at render time inside loadAgentControlConfig (quick actions) or
+    // handled by the pickers + runAgentAction.
+    if (agentConfigSaveBtn) {
+        agentConfigSaveBtn.addEventListener('click', () => void saveAgentControlConfig());
     }
 
     if (dockHopPlanCb) { dockHopPlanCb.addEventListener('change', () => toggleHopCheckbox('plan', dockHopPlanCb.checked)); }

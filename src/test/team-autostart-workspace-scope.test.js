@@ -37,7 +37,8 @@ const { instantiateAgentGroupCore } = require('../../out/services/agentGroupInst
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const taskViewerTs = fs.readFileSync(path.join(REPO_ROOT, 'src/services/TaskViewerProvider.ts'), 'utf8');
 const bootstrapTs = fs.readFileSync(path.join(REPO_ROOT, 'src/standalone/bootstrap.ts'), 'utf8');
-const kanbanHtml = fs.readFileSync(path.join(REPO_ROOT, 'src/webview/kanban.html'), 'utf8');
+// The Teams tab functions live in agent-control.js since the tabs left kanban.html.
+const agentControlJs = fs.readFileSync(path.join(REPO_ROOT, 'src/webview/agent-control.js'), 'utf8');
 const extensionTs = fs.readFileSync(path.join(REPO_ROOT, 'src/extension.ts'), 'utf8');
 
 let passed = 0;
@@ -402,11 +403,11 @@ const LEAD_TEAM = { id: 'feature-implementation', name: 'Lead team', headRole: '
     // 23. Field-carry guard: teamsTabSaveAgentGroup must still carry
     //     startWorktree (load-bearing for manual starts) but must NOT carry
     //     startOnLoad (retired).
-    await test("kanban.html teamsTabSaveAgentGroup carries startWorktree but NOT startOnLoad", async () => {
-        const saveIdx = kanbanHtml.indexOf('function teamsTabSaveAgentGroup');
+    await test("agent-control.js teamsTabSaveAgentGroup carries startWorktree but NOT startOnLoad", async () => {
+        const saveIdx = agentControlJs.indexOf('function teamsTabSaveAgentGroup');
         assert.ok(saveIdx > 0, 'teamsTabSaveAgentGroup not found');
-        const nextFnIdx = kanbanHtml.indexOf('\n        function ', saveIdx + 10);
-        const save = kanbanHtml.slice(saveIdx, nextFnIdx > saveIdx ? nextFnIdx : saveIdx + 6000);
+        const nextFnIdx = agentControlJs.indexOf('\n        function ', saveIdx + 10);
+        const save = agentControlJs.slice(saveIdx, nextFnIdx > saveIdx ? nextFnIdx : saveIdx + 6000);
         assert.ok(/prevGroup\?\.startWorktree/.test(save),
             'teamsTabSaveAgentGroup must carry startWorktree from prevGroup');
         assert.ok(!/prevGroup\?\.startOnLoad/.test(save),

@@ -3,7 +3,8 @@
 /**
  * Contract: Team member seats resolve their CLI from the team's machine.
  *
- * Source-level assertions against kanban.html, per the plan
+ * Source-level assertions against agent-control.html + agent-control.js (the
+ * Teams tab's home since it left kanban.html), per the plan
  * `agents-are-saved-per-machine-and-a-team-picks-one`:
  *  1. The member row builder creates an input with class `member-label` and
  *     does NOT create a `member-cmd` input (per-member startupCommand retired).
@@ -25,8 +26,10 @@ const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
 
-const KANBAN_HTML = path.join(__dirname, '..', '..', 'src', 'webview', 'kanban.html');
-const source = fs.readFileSync(KANBAN_HTML, 'utf8');
+const WEBVIEW = path.join(__dirname, '..', '..', 'src', 'webview');
+// The tab's markup lives in agent-control.html, its functions in agent-control.js.
+const source = fs.readFileSync(path.join(WEBVIEW, 'agent-control.html'), 'utf8')
+    + '\n' + fs.readFileSync(path.join(WEBVIEW, 'agent-control.js'), 'utf8');
 
 let failures = 0;
 function check(name, fn) {

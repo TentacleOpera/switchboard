@@ -43,6 +43,15 @@ export interface GlobalConfig {
         machineStartupCommands?: Record<string, Record<string, string>>;
         visibleAgents?: Record<string, boolean>;
         customAgents?: any[];
+        /**
+         * The agent-control surface's model endpoint + model name. These are
+         * the surface's OWN keys — they replaced the overload that read the
+         * model URL out of `startupCommands['project_manager']`. Written by
+         * `POST /agent/control/config`; the API key never lives here (it is in
+         * the encrypted secrets store under `switchboard.agentControl.apiKey`).
+         */
+        agentControlEndpoint?: string;
+        agentControlModel?: string;
     };
 }
 
@@ -74,7 +83,8 @@ export const LOCAL_AGENT_MACHINE: AgentMachine = {
 };
 
 /** Agent-config keys that are stored machine-globally (cross-workspace, cross-IDE). */
-export type AgentGlobalKey = 'startupCommands' | 'visibleAgents' | 'customAgents';
+export type AgentGlobalKey = 'startupCommands' | 'visibleAgents' | 'customAgents'
+    | 'agentControlEndpoint' | 'agentControlModel';
 
 /**
  * A single scheduled job. `source` picks the prompt preset; `target` picks the

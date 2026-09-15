@@ -240,8 +240,30 @@ export function getBoardHtml(repoRoot: string, workspaceRoot: string, capabiliti
 }
 
 export function getAgentControlHtml(repoRoot: string, workspaceRoot: string, capabilities?: HostCapabilities, themeClass?: string): PanelHtmlResult {
-    const result = getBoardHtml(repoRoot, workspaceRoot, capabilities, themeClass);
-    return { ...result, html: injectBodyAttributes(result.html, 'data-view="agent-control"') };
+    const candidates = [
+        path.join(repoRoot, 'dist', 'webview', 'agent-control.html'),
+        path.join(repoRoot, 'src', 'webview', 'agent-control.html'),
+    ];
+    const htmlPath = findFile(candidates);
+    if (!htmlPath) {
+        return { html: '<html><body>Agent Control panel HTML not found.</body></html>', csp: '' };
+    }
+    let content = fs.readFileSync(htmlPath, 'utf8');
+    const nonce = makeNonce();
+    const csp = `default-src 'self'; script-src 'nonce-${nonce}' 'self'; style-src 'unsafe-inline' 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws: wss:; frame-src 'self';`;
+    content = content.replace(/\{\{NONCE\}\}/g, nonce);
+    content = content.replace(/\{\{HANKEN_FONT_URI\}\}/g, '/static/designs/HankenGrotesk-Variable.woff2');
+    content = content.replace(/\{\{GEIST_PIXEL_FONT_URI\}\}/g, '/static/designs/GeistPixel-Square.woff2');
+    // agent-control.html carries the marker — the shim injects sharedDefaults,
+    // clipboardFallback and transport there. sharedUtils.js (escapeHtml/escapeAttr)
+    // and agent-control.js load from the template's own <script> tags.
+    const firstScript = `<script nonce="${nonce}" src="/static/webview/agent-control.js"></script>`;
+    content = injectTransportShim(content, nonce, '<!-- SHARED_DEFAULTS_SCRIPT -->', firstScript, true);
+    const caps = { ...DEFAULT_HOST_CAPABILITIES, ...capabilities };
+    const bodyAttr = `data-initial-workspace-root="${encodeURIComponent(workspaceRoot)}" data-panel="agent-control" data-host-capabilities="${htmlEscapeJson(JSON.stringify(caps))}"`;
+    content = injectBodyAttributes(content, bodyAttr);
+    content = applyThemeClass(content, themeClass);
+    return { html: content, csp };
 }
 
 export function getMissionControlHtml(repoRoot: string, workspaceRoot: string, capabilities?: HostCapabilities, themeClass?: string): PanelHtmlResult {

@@ -5,6 +5,14 @@ const fs = require('fs');
 const path = require('path');
 
 const kanbanSource = fs.readFileSync(path.join(process.cwd(), 'src', 'webview', 'kanban.html'), 'utf8');
+// The Agents/Teams/Prompts/Standing Orders tabs moved out of kanban.html into the
+// Agent Control panel (agent-control.html + agent-control.js — see
+// .switchboard/plans/extract-agent-control-into-its-own-panel-file.md). Tab-related
+// assertions read the union of the board and the Agent Control panel; a pattern is
+// "present" if either file carries it and "removed" only if neither does.
+const agentControlSource = fs.readFileSync(path.join(process.cwd(), 'src', 'webview', 'agent-control.html'), 'utf8')
+    + '\n' + fs.readFileSync(path.join(process.cwd(), 'src', 'webview', 'agent-control.js'), 'utf8');
+const tabSource = kanbanSource + '\n' + agentControlSource;
 const taskViewerSource = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'TaskViewerProvider.ts'), 'utf8');
 const setupPanelSource = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'SetupPanelProvider.ts'), 'utf8');
 const kanbanProviderSource = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'KanbanProvider.ts'), 'utf8');
@@ -23,12 +31,12 @@ function run() {
     // Test 1: HTML Structure Verification
     console.log('Test 1: HTML Structure Verification');
     expectRegex(
-        kanbanSource,
+        tabSource,
         /<div\s+id="prompts-tab-content"\s+class="shared-tab-content">/,
         'Expected prompts-tab-content div to exist with correct class'
     );
     expectRegex(
-        kanbanSource,
+        tabSource,
         /<button[^>]*data-tab="prompts"[^>]*>PROMPTS<\/button>/,
         'Expected Prompts tab button with data-tab="prompts" attribute'
     );
@@ -58,7 +66,7 @@ function run() {
 
     promptsTabElements.forEach(elementId => {
         expectRegex(
-            kanbanSource,
+            tabSource,
             new RegExp(`id="${elementId}"`),
             `Expected element with id="${elementId}" to exist`
         );
@@ -89,7 +97,7 @@ function run() {
 
     removedElements.forEach(elementId => {
         expectNoRegex(
-            kanbanSource,
+            tabSource,
             new RegExp(`id="${elementId}"`),
             `Expected old/removed element id="${elementId}" to NOT exist`
         );
@@ -102,61 +110,61 @@ function run() {
     
     // Verify prompts tab functions exist
     expectRegex(
-        kanbanSource,
+        tabSource,
         /function\s+handleRoleChange\s*\(/,
         'Expected handleRoleChange function to exist'
     );
     expectRegex(
-        kanbanSource,
+        tabSource,
         /function\s+saveRoleConfig\s*\(/,
         'Expected saveRoleConfig function to exist'
     );
     expectRegex(
-        kanbanSource,
+        tabSource,
         /function\s+renderRoleAddons\s*\(/,
         'Expected renderRoleAddons function to exist'
     );
     expectRegex(
-        kanbanSource,
+        tabSource,
         /function\s+refreshPreview\s*\(/,
         'Expected refreshPreview function to exist'
     );
     expectRegex(
-        kanbanSource,
+        tabSource,
         /function\s+initPromptsTabListeners\s*\(/,
         'Expected initPromptsTabListeners function to exist'
     );
 
     // Verify old function names NO LONGER EXIST
     expectNoRegex(
-        kanbanSource,
+        tabSource,
         /function\s+agentsTabSaveCurrentRoleDraft\s*\(/,
         'Expected old agentsTabSaveCurrentRoleDraft function to NOT exist'
     );
     expectNoRegex(
-        kanbanSource,
+        tabSource,
         /function\s+agentsTabLoadRoleIntoForm\s*\(/,
         'Expected old agentsTabLoadRoleIntoForm function to NOT exist'
     );
     expectNoRegex(
-        kanbanSource,
+        tabSource,
         /function\s+agentsTabUpdateSummary\s*\(/,
         'Expected old agentsTabUpdateSummary function to NOT exist'
     );
     expectNoRegex(
-        kanbanSource,
+        tabSource,
         /function\s+agentsTabLoadPreview\s*\(/,
         'Expected old agentsTabLoadPreview function to NOT exist'
     );
     expectNoRegex(
-        kanbanSource,
+        tabSource,
         /function\s+agentsTabRenderRoleTabs\s*\(/,
         'Expected old agentsTabRenderRoleTabs function to NOT exist'
     );
 
     // Verify the broken promptsTabCollectConfig has been removed
     expectNoRegex(
-        kanbanSource,
+        tabSource,
         /function\s+promptsTabCollectConfig\s*\(/,
         'Expected broken promptsTabCollectConfig function to NOT exist (referenced non-existent element IDs)'
     );
@@ -167,34 +175,34 @@ function run() {
     console.log('Test 3: CSS Class Verification');
     
     expectRegex(
-        kanbanSource,
+        tabSource,
         /\.prompts-role-tab\s*\{/,
         'Expected .prompts-role-tab class to exist'
     );
     expectRegex(
-        kanbanSource,
+        tabSource,
         /\.prompts-role-tab\.active\s*\{/,
         'Expected .prompts-role-tab.active class to exist'
     );
     expectRegex(
-        kanbanSource,
+        tabSource,
         /\.prompts-role-tab\.has-override/,
         'Expected .prompts-role-tab.has-override class to exist'
     );
 
     // Verify old classes NO LONGER EXIST
     expectNoRegex(
-        kanbanSource,
+        tabSource,
         /\.agents-prompt-role-tab\s*\{/,
         'Expected old .agents-prompt-role-tab class to NOT exist'
     );
     expectNoRegex(
-        kanbanSource,
+        tabSource,
         /\.agents-prompt-role-tab\.active\s*\{/,
         'Expected old .agents-prompt-role-tab.active class to NOT exist'
     );
     expectNoRegex(
-        kanbanSource,
+        tabSource,
         /\.agents-prompt-role-tab\.has-override\s*\{/,
         'Expected old .agents-prompt-role-tab.has-override class to NOT exist'
     );
@@ -266,19 +274,19 @@ function run() {
     
     // Verify prompts tab button exists with correct data-tab attribute
     expectRegex(
-        kanbanSource,
+        tabSource,
         /data-tab="prompts"/,
         'Expected prompts tab button to have data-tab attribute'
     );
     
     // Verify other tabs still exist in correct order
     expectRegex(
-        kanbanSource,
+        tabSource,
         /data-tab="kanban"/,
         'Expected kanban tab to still exist'
     );
     expectRegex(
-        kanbanSource,
+        tabSource,
         /data-tab="agents"/,
         'Expected agents tab to still exist'
     );
@@ -286,19 +294,19 @@ function run() {
     // (mission-control.html) — see mission-control-panel-ui-specification.md.
     // Assert it is gone from the board, not that it remains.
     expectNoRegex(
-        kanbanSource,
+        tabSource,
         /data-tab="automation"/,
         'Expected automation tab to be removed from the board (moved to Mission Control panel)'
     );
     expectRegex(
-        kanbanSource,
+        tabSource,
         /data-tab="setup"/,
         'Expected setup tab to still exist'
     );
 
     // Verify position of WORKTREES and SETUP tabs (AUTOMATION is gone)
     expectRegex(
-        kanbanSource,
+        tabSource,
         /data-tab="worktrees"[\s\S]*?data-tab="setup"/,
         'Expected WORKTREES tab to be positioned before SETUP'
     );
@@ -310,24 +318,24 @@ function run() {
     
     // Verify "Agent Visibility & CLI Commands" section still exists in agents tab
     expectRegex(
-        kanbanSource,
+        tabSource,
         /agents-tab-content/,
         'Expected agents-tab-content to still exist'
     );
     expectRegex(
-        kanbanSource,
+        tabSource,
         /Agent Visibility/,
         'Expected "Agent Visibility" section to still exist in agents tab'
     );
     expectRegex(
-        kanbanSource,
+        tabSource,
         /CLI Commands/,
         'Expected "CLI Commands" section to still exist in agents tab'
     );
 
     // Verify Jules auto-sync checkbox still exists in agents tab
     expectRegex(
-        kanbanSource,
+        tabSource,
         /jules-auto-sync/,
         'Expected jules-auto-sync checkbox to still exist in agents tab'
     );
@@ -366,12 +374,12 @@ function run() {
 
     // Verify save functionality exists (saveRoleConfig uses postKanbanMessage)
     expectRegex(
-        kanbanSource,
+        tabSource,
         /saveRoleConfig/,
         'Expected saveRoleConfig function to exist for saving role config'
     );
     expectRegex(
-        kanbanSource,
+        tabSource,
         /postKanbanMessage/,
         'Expected postKanbanMessage to be used for saving config'
     );
@@ -383,79 +391,79 @@ function run() {
     
     // Verify .subsection-header uses var(--accent-teal) color
     expectRegex(
-        kanbanSource,
+        tabSource,
         /\.subsection-header\s*\{[^}]*color:\s*var\(--accent-teal\)/,
         'Expected .subsection-header to use var(--accent-teal) color'
     );
 
     // Verify no dep-tree-header, dep-tree-title, dep-tree-actions CSS classes remain
     expectNoRegex(
-        kanbanSource,
+        tabSource,
         /\.dep-tree-header\s*\{/,
         'Expected .dep-tree-header CSS to be removed'
     );
     expectNoRegex(
-        kanbanSource,
+        tabSource,
         /\.dep-tree-title\s*\{/,
         'Expected .dep-tree-title CSS to be removed'
     );
     expectNoRegex(
-        kanbanSource,
+        tabSource,
         /\.dep-tree-actions\s*\{/,
         'Expected .dep-tree-actions CSS to be removed'
     );
     expectNoRegex(
-        kanbanSource,
+        tabSource,
         /\.setup-section-title\s*\{/,
         'Expected .setup-section-title CSS to be removed'
     );
     expectNoRegex(
-        kanbanSource,
+        tabSource,
         /\.prompts-tab\s+h2\s*\{/,
         'Expected .prompts-tab h2 CSS to be removed'
     );
     expectNoRegex(
-        kanbanSource,
+        tabSource,
         /\.config-section\s+h3\s*\{/,
         'Expected .config-section h3 CSS to be removed'
     );
 
     // Verify .subsection-actions CSS exists
     expectRegex(
-        kanbanSource,
+        tabSource,
         /\.subsection-actions\s*\{/,
         'Expected .subsection-actions CSS to exist'
     );
 
     // Verify no "AGENT CONFIGURATION" top-level heading in agents tab
     expectNoRegex(
-        kanbanSource,
+        tabSource,
         /AGENT CONFIGURATION/,
         'Expected "AGENT CONFIGURATION" heading to be removed from agents tab'
     );
 
     // Verify no "Prompt Configuration" h2 in prompts tab
     expectNoRegex(
-        kanbanSource,
+        tabSource,
         /<h2[^>]*>Prompt Configuration<\/h2>/,
         'Expected <h2>Prompt Configuration</h2> to be removed from prompts tab'
     );
 
     // Verify subsection headers exist in remaining tabs
     expectRegex(
-        kanbanSource,
+        tabSource,
         /<div class="subsection-header"><span>User Acceptance Testing<\/span><\/div>/,
         'Expected "User Acceptance Testing" subsection header in UAT tab'
     );
     expectRegex(
-        kanbanSource,
+        tabSource,
         /<div class="subsection-header"><span>Routing Configuration<\/span><\/div>/,
         'Expected "Routing Configuration" subsection header in Setup tab'
     );
 
     // Verify action buttons are in .subsection-actions rows
     expectRegex(
-        kanbanSource,
+        tabSource,
         /<div class="subsection-actions">[\s\S]*?btn-refresh-uat/,
         'Expected UAT tab refresh button in .subsection-actions row'
     );

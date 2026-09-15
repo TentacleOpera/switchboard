@@ -824,7 +824,7 @@ suite('agentPromptBuilder', () => {
             const global = fs.readFileSync(path.join(root, 'src', 'services', 'GlobalIntegrationConfigService.ts'), 'utf8');
             assert.ok(/tester:\s*false/.test(global), 'GlobalIntegrationConfigService must default tester to false');
 
-            const html = fs.readFileSync(path.join(root, 'src', 'webview', 'kanban.html'), 'utf8');
+            const html = fs.readFileSync(path.join(root, 'src', 'webview', 'agent-control.html'), 'utf8');
             const optionalIdx = html.indexOf('<!-- OPTIONAL -->');
             const testerRowIdx = html.indexOf('data-role="tester"');
             assert.ok(optionalIdx > 0 && testerRowIdx > optionalIdx,
@@ -840,7 +840,7 @@ suite('agentPromptBuilder', () => {
             const fs = require('fs');
             const path = require('path');
             const html = fs.readFileSync(
-                path.resolve(__dirname, '..', '..', '..', 'src', 'webview', 'kanban.html'), 'utf8');
+                path.resolve(__dirname, '..', '..', '..', 'src', 'webview', 'agent-control.js'), 'utf8');
             const start = html.indexOf('const SHIPPED_TEAM_TYPES');
             const templates = html.slice(start, html.indexOf('\n        ];', start));
             assert.ok(start > 0 && templates.length > 0, 'SHIPPED_TEAM_TYPES must exist');

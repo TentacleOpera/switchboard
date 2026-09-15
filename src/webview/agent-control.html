@@ -1,0 +1,3685 @@
+<!-- Switchboard Agent Control — extracted from kanban.html (extract-agent-control-into-its-own-panel-file.md).
+     Carries the Agents, Teams, Prompts and Standing Orders tabs as a first-class panel. -->
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Switchboard Agent Control</title>
+    <style>
+        @font-face {
+            font-family: 'Hanken Grotesk';
+            src: url('{{HANKEN_FONT_URI}}') format('woff2');
+            font-weight: 100 900;
+            font-display: swap;
+        }
+        @font-face {
+            font-family: 'GeistPixel';
+            src: url('{{GEIST_PIXEL_FONT_URI}}') format('woff2');
+            font-weight: normal;
+            font-style: normal;
+            font-display: swap;
+        }
+        .sb-icon {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            vertical-align: -0.125em;
+            background-color: currentColor;
+            flex-shrink: 0;
+            mask-repeat: no-repeat;
+            mask-position: center;
+            mask-size: contain;
+        }
+        .sb-icon-sm { width: 10px; height: 10px; }
+        .sb-icon-xs { width: 6px; height: 6px; }
+        .sb-icon-dot { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tZG90LnN2ZyAtLT4KPCEtLSBmaWxsIGlzIGlnbm9yZWQgdW5kZXIgQ1NTIG1hc2s7IGZpbGw9IiM0NWUwZTYiIGlzIGZyb3plbiBmb3IgcGFyaXR5IGNoZWNrIC0tPgo8c3ZnIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgdmlld0JveD0iMCAwIDE2IDE2IiB3aWR0aD0iMTYiIGhlaWdodD0iMTYiPgogIDxjaXJjbGUgY3g9IjgiIGN5PSI4IiByPSI1IiBmaWxsPSIjNDVlMGU2Ii8+Cjwvc3ZnPgo='); }
+        .sb-icon-drag-handle { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tZHJhZy1oYW5kbGUuc3ZnIC0tPgo8IS0tIGZpbGwgaXMgaWdub3JlZCB1bmRlciBDU1MgbWFzazsgZmlsbD0iIzQ1ZTBlNiIgaXMgZnJvemVuIGZvciBwYXJpdHkgY2hlY2sgLS0+CjxzdmcgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB2aWV3Qm94PSIwIDAgMTYgMTYiIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+CiAgPHBhdGggZmlsbD0iIzQ1ZTBlNiIgZmlsbC1ydWxlPSJldmVub2RkIiBkPSJNNiAzYTEuNSAxLjUgMCAxIDEtMyAwIDEuNSAxLjUgMCAwIDEgMyAwem03IDBhMS41IDEuNSAwIDEgMS0zIDAgMS41IDEuNSAwIDAgMSAzIDB6TTYgOGExLjUgMS41IDAgMSAxLTMgMCAxLjUgMS41IDAgMCAxIDMgMHptNyAwYTEuNSAxLjUgMCAxIDEtMyAwIDEuNSAxLjUgMCAwIDEgMyAwem0tNyA1YTEuNSAxLjUgMCAxIDEtMyAwIDEuNSAxLjUgMCAwIDEgMyAwem03IDBhMS41IDEuNSAwIDEgMS0zIDAgMS41IDEuNSAwIDAgMSAzIDB6Ii8+Cjwvc3ZnPgo='); }
+        .sb-icon-bolt { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tYm9sdC5zdmcgLS0+CjwhLS0gZmlsbCBpcyBpZ25vcmVkIHVuZGVyIENTUyBtYXNrOyBmaWxsPSIjNDVlMGU2IiBpcyBmcm96ZW4gZm9yIHBhcml0eSBjaGVjayAtLT4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiIgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2Ij4KICA8cGF0aCBmaWxsPSIjNDVlMGU2IiBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik05LjUgMEwyIDloNXY3bDcuNS05SDlWMHoiLz4KPC9zdmc+Cg=='); }
+        .sb-icon-tree-elbow { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tdHJlZS1lbGJvdy5zdmcgLS0+CjwhLS0gZmlsbCBpcyBpZ25vcmVkIHVuZGVyIENTUyBtYXNrOyBmaWxsPSIjNDVlMGU2IiBpcyBmcm96ZW4gZm9yIHBhcml0eSBjaGVjayAtLT4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiIgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2Ij4KICA8cGF0aCBmaWxsPSIjNDVlMGU2IiBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik0zIDB2MTBoMTB2MkgxVjBoMnoiLz4KPC9zdmc+Cg=='); }
+        .sb-icon-chevron-right { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tY2hldnJvbi1yaWdodC5zdmcgLS0+CjwhLS0gZmlsbCBpcyBpZ25vcmVkIHVuZGVyIENTUyBtYXNrOyBmaWxsPSIjNDVlMGU2IiBpcyBmcm96ZW4gZm9yIHBhcml0eSBjaGVjayAtLT4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiIgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2Ij4KICA8cGF0aCBmaWxsPSIjNDVlMGU2IiBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik02LjIyIDMuMjJhLjc1Ljc1IDAgMCAxIDEuMDYgMGw0LjI1IDQuMjVhLjc1Ljc1IDAgMCAxIDAgMS4wNmwtNC4yNSA0LjI1YS43NS43NSAwIDAgMS0xLjA2LTEuMDZMOS45NCA4IDYuMjIgNC4yOGEuNzUuNzUgMCAwIDEgMC0xLjA2eiIvPgo8L3N2Zz4K'); }
+        .sb-icon-branch { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tYnJhbmNoLnN2ZyAtLT4KPCEtLSBmaWxsIGlzIGlnbm9yZWQgdW5kZXIgQ1NTIG1hc2s7IGZpbGw9IiM0NWUwZTYiIGlzIGZyb3plbiBmb3IgcGFyaXR5IGNoZWNrIC0tPgo8c3ZnIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgdmlld0JveD0iMCAwIDE2IDE2IiB3aWR0aD0iMTYiIGhlaWdodD0iMTYiPgogIDxwYXRoIGZpbGw9IiM0NWUwZTYiIGZpbGwtcnVsZT0iZXZlbm9kZCIgZD0iTTExLjc1IDIuNWExLjc1IDEuNzUgMCAxIDAtMS41IDIuNjA3djEuODkzYS43NS43NSAwIDAgMS0uNzUuNzVoLTNhMS43NSAxLjc1IDAgMCAwLTEuNzUgMS43NXYxLjg5M2ExLjc1IDEuNzUgMCAxIDAgMS41IDBWOS41YS4yNS4yNSAwIDAgMSAuMjUtLjI1aDNhMi4yNSAyLjI1IDAgMCAwIDIuMjUtMi4yNVY1LjEwN2ExLjc1IDEuNzUgMCAwIDAgMC0yLjYwN3pNNC4yNSAxMS43NWEuMjUuMjUgMCAxIDEgMCAuNS4yNS4yNSAwIDAgMSAwLS41em03LjUtOC41YS4yNS4yNSAwIDEgMSAwIC41LjI1LjI1IDAgMCAxIDAtLjV6Ii8+Cjwvc3ZnPgo='); }
+        .sb-icon-close { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tY2xvc2Uuc3ZnIC0tPgo8IS0tIGZpbGwgaXMgaWdub3JlZCB1bmRlciBDU1MgbWFzazsgZmlsbD0iIzQ1ZTBlNiIgaXMgZnJvemVuIGZvciBwYXJpdHkgY2hlY2sgLS0+CjxzdmcgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB2aWV3Qm94PSIwIDAgMTYgMTYiIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+CiAgPHBhdGggZmlsbD0iIzQ1ZTBlNiIgZmlsbC1ydWxlPSJldmVub2RkIiBkPSJNMy43MiAzLjcyYS43NS43NSAwIDAgMSAxLjA2IDBMOCA2Ljk0bDMuMjItMy4yMmEuNzUuNzUgMCAxIDEgMS4wNiAxLjA2TDkuMDYgOGwzLjIyIDMuMjJhLjc1Ljc1IDAgMSAxLTEuMDYgMS4wNkw4IDkuMDZsLTMuMjIgMy4yMmEuNzUuNzUgMCAwIDEtMS4wNi0xLjA2TDYuOTQgOCAzLjcyIDQuNzhhLjc1Ljc1IDAgMCAxIDAtMS4wNnoiLz4KPC9zdmc+Cg=='); }
+        .sb-icon-arrow-child { mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tYXJyb3ctY2hpbGQuc3ZnIC0tPgo8IS0tIGZpbGwgaXMgaWdub3JlZCB1bmRlciBDU1MgbWFzazsgZmlsbD0iIzQ1ZTBlNiIgaXMgZnJvemVuIGZvciBwYXJpdHkgY2hlY2sgLS0+CjxzdmcgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB2aWV3Qm94PSIwIDAgMTYgMTYiIHdpZHRoPSIxNiIgaGVpZ2h0PSIxNiI+CiAgPHBhdGggZmlsbD0iIzQ1ZTBlNiIgZmlsbC1ydWxlPSJldmVub2RkIiBkPSJNMyAydjZoNy4xN2wtMi41OC0yLjU4YS43NS43NSAwIDAgMSAxLjA2LTEuMDZsMy44NiAzLjg2YS43NS43NSAwIDAgMSAwIDEuMDZsLTMuODYgMy44NmEuNzUuNzUgMCAxIDEtMS4wNi0xLjA2TDEwLjE3IDkuNUgxLjVhLjc1Ljc1IDAgMCAxLS43NS0uNzVWMmEuNzUuNzUgMCAwIDEgMS41IDB6Ii8+Cjwvc3ZnPgo='); }
+        :root {
+            --bg-color: #1a1a1a;
+            --panel-bg: #000000;
+            --panel-bg2: #0a0a0a;
+            --border-color: #333333;
+            --border-bright: #555555;
+            --text-primary: #e0e0e0;
+            --text-secondary: #8C8C8C;
+
+            --accent-primary: #00e5ff;
+            --accent-teal: var(--accent-primary);
+            --accent-teal-dim: color-mix(in srgb, var(--accent-teal) 40%, transparent);
+            --glow-teal: 0 0 10px color-mix(in srgb, var(--accent-teal) 50%, transparent);
+            --accent-red: #da3633;
+            --accent-orange: #d29922;
+            --font-family: 'Hanken Grotesk', Menlo, Consolas, sans-serif;
+            --font-code:   Menlo, Consolas, monospace;
+        }
+        body.theme-claudify {
+            --accent-primary: #D97757;
+            --accent-teal: #D97757;
+            --accent-teal-dim: color-mix(in srgb, #D97757 40%, transparent);
+            --accent-teal-bright: #E2A188;
+            --feature-accent: #D4A017;   /* gold: replaces base purple #7c3aed for feature/epic cards (Claudify only) */
+            --glow-teal: none;           /* kill all variable-routed neon glow */
+            --text-secondary: #8C8C8C;
+            --border-color: #333333;
+            --border-bright: #555555;
+        }
+
+        /* Claudify: remove neon glow from base (non-cyber) interactive states */
+        body.theme-claudify .btn-batch:hover,
+        body.theme-claudify .kanban-card.selected,
+        body.theme-claudify .kanban-mode-dropdown.is-off:focus,
+        body.theme-claudify .kanban-structure-item.drag-over,
+        body.theme-claudify .modal-textarea:focus,
+        body.theme-claudify .plan-node.blocking,
+        body.theme-claudify .routing-map-active-dot,
+        body.theme-claudify .toggle-switch input:checked + .toggle-slider::before,
+        body.theme-claudify .worktree-primary-btn:focus { box-shadow: none; }
+
+        /* Claudify: recolor hardcoded teal (#00ad9f) that no variable controls */
+        body.theme-claudify .worktree-primary-btn { background: color-mix(in srgb, #D97757 12%, transparent); }
+        body.theme-claudify .worktree-primary-btn:hover:not(:disabled) { background: color-mix(in srgb, #D97757 25%, transparent); }
+
+        /* ── Create Worktree strip-icon: merge mode (worktree already exists for context) ── */
+        /* Afterburner (default theme): yellow */
+        #btn-create-worktree.merge-mode {
+            background: rgba(255, 204, 0, 0.15);
+            border-color: #ffcc00;
+        }
+        #btn-create-worktree.merge-mode:hover:not(:disabled) {
+            background: rgba(255, 204, 0, 0.25);
+        }
+        /* Optional: tint the icon */
+        #btn-create-worktree.merge-mode img {
+            filter: sepia(1) saturate(5) hue-rotate(5deg);
+        }
+
+        /* Claudify theme: Claude-orange tint (matches existing .worktree-primary-btn claudify override) */
+        body.theme-claudify #btn-create-worktree.merge-mode {
+            background: color-mix(in srgb, #D97757 18%, transparent);
+            border-color: color-mix(in srgb, #D97757 50%, transparent);
+        }
+        body.theme-claudify #btn-create-worktree.merge-mode:hover:not(:disabled) {
+            background: color-mix(in srgb, #D97757 30%, transparent);
+        }
+        body.theme-claudify #btn-create-worktree.merge-mode img {
+            filter: brightness(0) invert(35%) sepia(1) saturate(3) hue-rotate(340deg);
+        }
+
+        /* Claudify: avoid afterburner's glowing coloured icons. The teal-tinted PNGs are knocked
+           to black (brightness(0)) then inverted to a flat neutral GREY at rest and on hover.
+           Terracotta appears ONLY during the click flash (.flash is added for 0.3s by flashIconBtn
+           on every button click) — the single accent moment, no resting glow. */
+        body.theme-claudify .strip-icon-btn img,
+        body.theme-claudify .kanban-sub-bar .strip-icon-btn img,
+        body.theme-claudify .controls-strip .strip-icon-btn img,
+        body.theme-claudify .column-icon-btn img,
+        body.theme-claudify .column-header-btn img,
+        body.theme-claudify .mode-toggle img,
+        body.theme-claudify .complexity-routing-btn img,
+        body.theme-claudify .btn-add-plan img {
+            filter: brightness(0) invert(55%);   /* ~#8c8c8c flat grey */
+        }
+        body.theme-claudify .strip-icon-btn.is-active img,
+        body.theme-claudify .kanban-sub-bar .strip-icon-btn.is-active img,
+        body.theme-claudify .column-icon-btn:hover img,
+        body.theme-claudify .column-header-btn:hover img,
+        body.theme-claudify .mode-toggle:hover img,
+        body.theme-claudify .complexity-routing-btn:hover img,
+        body.theme-claudify .btn-add-plan:hover img {
+            filter: brightness(0) invert(72%);   /* brighter grey on hover / active toggle */
+        }
+        /* The ONLY terracotta: the 0.3s click flash. */
+        body.theme-claudify .strip-icon-btn.flash img,
+        body.theme-claudify .kanban-sub-bar .strip-icon-btn.flash img,
+        body.theme-claudify .controls-strip .strip-icon-btn.flash img,
+        body.theme-claudify .column-icon-btn.flash img,
+        body.theme-claudify .column-header-btn.flash img,
+        body.theme-claudify .mode-toggle.flash img,
+        body.theme-claudify .complexity-routing-btn.flash img,
+        body.theme-claudify .btn-add-plan.flash img {
+            filter: brightness(0) saturate(100%) invert(54%) sepia(48%) saturate(560%) hue-rotate(330deg) brightness(108%) contrast(87%);
+        }
+        /* Off states stay greyed-out (no teal to recolor) */
+        body.theme-claudify .strip-icon-btn.is-off img,
+        body.theme-claudify .kanban-sub-bar .strip-icon-btn.is-off img,
+        body.theme-claudify .complexity-routing-btn.is-off img {
+            filter: grayscale(1) brightness(0.7);
+        }
+
+        /* ── Colour kanban icons opt-in (switchboard.theme.colourKanbanIcons) ──
+           When enabled, override Claudify's grey-at-rest knockout so icons show in
+           terracotta at rest and on hover. Placed AFTER the grey rules (77-95); the
+           extra .kanban-icons-colour class gives equal-or-higher specificity so
+           these win. */
+
+        /* Claudify: terracotta at rest + hover, matching its accent. */
+        body.theme-claudify.kanban-icons-colour .strip-icon-btn img,
+        body.theme-claudify.kanban-icons-colour .kanban-sub-bar .strip-icon-btn img,
+        body.theme-claudify.kanban-icons-colour .controls-strip .strip-icon-btn img,
+        body.theme-claudify.kanban-icons-colour .column-icon-btn img,
+        body.theme-claudify.kanban-icons-colour .column-header-btn img,
+        body.theme-claudify.kanban-icons-colour .mode-toggle img,
+        body.theme-claudify.kanban-icons-colour .complexity-routing-btn img,
+        body.theme-claudify.kanban-icons-colour .btn-add-plan img {
+            /* same terracotta recolour used by the Claudify .flash rule (kanban.html:105) */
+            filter: brightness(0) saturate(100%) invert(54%) sepia(48%) saturate(560%) hue-rotate(330deg) brightness(108%) contrast(87%);
+        }
+        body.theme-claudify.kanban-icons-colour .strip-icon-btn:hover img,
+        body.theme-claudify.kanban-icons-colour .kanban-sub-bar .strip-icon-btn:hover img,
+        body.theme-claudify.kanban-icons-colour .strip-icon-btn.is-active img,
+        body.theme-claudify.kanban-icons-colour .kanban-sub-bar .strip-icon-btn.is-active img,
+        body.theme-claudify.kanban-icons-colour .column-icon-btn:hover img,
+        body.theme-claudify.kanban-icons-colour .column-header-btn:hover img,
+        body.theme-claudify.kanban-icons-colour .mode-toggle:hover img,
+        body.theme-claudify.kanban-icons-colour .complexity-routing-btn:hover img,
+        body.theme-claudify.kanban-icons-colour .btn-add-plan:hover img {
+            /* slightly brighter terracotta on hover/active */
+            filter: brightness(0) saturate(100%) invert(54%) sepia(48%) saturate(700%) hue-rotate(330deg) brightness(120%) contrast(87%);
+        }
+
+        /* Preserve the disabled (.is-off) greyed-out treatment when colour mode is ON —
+           at rest AND on hover. The colour resting/hover rules above would otherwise
+           override the theme .is-off rule (119-123) by specificity/source order, making
+           disabled icons appear coloured. These selectors tie the colour hover rule's
+           specificity and win by later source order — so disabled icons stay grey even
+           while hovered. */
+        body.theme-claudify.kanban-icons-colour .strip-icon-btn.is-off img,
+        body.theme-claudify.kanban-icons-colour .kanban-sub-bar .strip-icon-btn.is-off img,
+        body.theme-claudify.kanban-icons-colour .complexity-routing-btn.is-off img {
+            filter: grayscale(1) brightness(0.7);
+        }
+
+        /* Claudify: kanban cards = an exact copy of implementation.html's .secondary-btn
+           (the COMPLETE/COPY/CREATE buttons): solid --panel-bg2 fill, --border-color border,
+           --text-secondary text. NO terracotta — the accent is not in these buttons.
+           Keep the green 'completed' bar. */
+        body.theme-claudify .kanban-card {
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg2) 100%) !important;
+            border: 1px solid var(--border-color) !important;
+            color: var(--text-secondary) !important;
+            box-shadow: none !important;
+        }
+        body.theme-claudify .kanban-card.completed {
+            border-left: 3px solid var(--vscode-testing-iconPassed, #73c991) !important;
+        }
+        body.theme-claudify .kanban-card:hover {
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 9%, var(--panel-bg2)) 0%, var(--panel-bg2) 100%) !important;
+            border-color: var(--border-bright) !important;
+            color: var(--text-primary) !important;
+            box-shadow: none !important;
+        }
+        /* Feature cards: restore the gold identity that the !important .kanban-card rules above
+           otherwise flatten (mirrors the green .completed bar). Declared after :hover so the
+           gold survives hover. Selection still wins for non-feature cards; feature cards have their
+           own .feature-card.selected override below that keeps the gold border. */
+        body.theme-claudify .kanban-card.feature-card,
+        body.theme-claudify .kanban-card.feature-card:hover {
+            border-left: 4px solid var(--feature-accent) !important;
+            background: linear-gradient(180deg, color-mix(in srgb, var(--feature-accent) 12%, var(--panel-bg2)) 0%, var(--panel-bg2) 100%) !important;
+        }
+        /* Selected: clear terracotta highlight so the selection is obvious (keep green completed bar). */
+        body.theme-claudify .kanban-card.selected {
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg2) 100%) !important;
+            border-color: var(--accent-primary) !important;
+            color: var(--text-primary) !important;
+            box-shadow: inset 0 0 0 1px var(--accent-primary) !important;
+        }
+        /* Selected feature cards in Claudify: gold border instead of terracotta */
+        body.theme-claudify .kanban-card.feature-card.selected {
+            border-color: var(--feature-accent) !important;
+            box-shadow: inset 0 0 0 1px var(--feature-accent) !important;
+        }
+        /* Claudify: feature subtask label in gold to match the recolored feature accent
+           (base rule at .feature-subtask-label stays purple for Afterburner). */
+        body.theme-claudify .feature-subtask-label {
+            color: var(--feature-accent);
+        }
+        /* Card titles hardcode harsh white (.card-topic) or inherit the muted subtitle colour.
+           Give them a mid-tone — brighter than the subtitle (--text-secondary), softer than
+           the harsh cream (--text-primary). */
+        body.theme-claudify .card-topic,
+        body.theme-claudify .plan-title {
+            color: color-mix(in srgb, var(--text-primary) 60%, var(--text-secondary)) !important;
+        }
+
+        body.theme-claudify .column-name { color: #8a8a8a; }
+        /* No warm text — card buttons and agent names fall back to the neutral greys
+           (--text-secondary resting, --text-primary on hover) from the base rules. */
+        /* Grey the remaining terracotta chrome: column count badges + the is-teal strip
+           buttons (ASSIGN/FEATURE). Neutral at rest, no glow. */
+        body.theme-claudify .column-count {
+            color: #8c8c8c;
+            background: color-mix(in srgb, #8c8c8c 12%, transparent);
+            border-color: color-mix(in srgb, #8c8c8c 28%, transparent);
+            box-shadow: none;
+        }
+        body.theme-claudify .strip-btn.is-teal {
+            color: #b8b8b8;
+            border-color: var(--border-color);
+            background: color-mix(in srgb, #ffffff 4%, transparent);
+        }
+        body.theme-claudify .strip-btn.is-teal:hover:not(:disabled) {
+            background: color-mix(in srgb, #ffffff 8%, transparent);
+            border-color: var(--border-bright);
+            color: #e0e0e0;
+        }
+        /* The "+" create-plan / create-project buttons: grey at rest & hover, terracotta only on
+           the click flash (matches the icon buttons). */
+        body.theme-claudify .btn-add-plan {
+            background: color-mix(in srgb, #ffffff 4%, transparent);
+            border-color: var(--border-color);
+            color: #b8b8b8;
+        }
+        body.theme-claudify .btn-add-plan:hover:not(:disabled) {
+            background: color-mix(in srgb, #ffffff 8%, transparent);
+            border-color: var(--border-bright);
+            color: #e0e0e0;
+        }
+        body.theme-claudify #btn-add-plan { color: #b8b8b8; }
+        body.theme-claudify #btn-add-plan:hover {
+            color: #e0e0e0;
+            background: color-mix(in srgb, #ffffff 6%, transparent);
+        }
+        body.theme-claudify .btn-add-plan.flash,
+        body.theme-claudify #btn-add-plan.flash {
+            background: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+            border-color: var(--accent-primary);
+            color: var(--accent-primary);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: var(--font-family);
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            background: var(--bg-color);
+            color: var(--text-primary);
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .kanban-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 12px 20px;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--panel-bg);
+        }
+
+        .kanban-title {
+            flex: 1;
+            min-width: 0;
+            font-size: 11px;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            color: var(--accent-teal);
+            text-shadow: var(--glow-teal);
+        }
+
+        .header-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .workspace-project-select {
+            background: #0a0a0a;
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-size: 10px;
+            letter-spacing: 0.5px;
+            padding: 2px 8px;
+            min-width: 280px;
+            min-height: 24px;
+        }
+
+        .workspace-project-select:focus {
+            outline: none;
+            border-color: var(--accent-teal-dim);
+        }
+
+
+
+        .workspace-filter-badge {
+            font-size: 9px;
+            letter-spacing: 0.6px;
+            color: var(--accent-teal);
+            border: 1px solid color-mix(in srgb, var(--accent-teal) 35%, transparent);
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            padding: 3px 6px;
+            border-radius: 2px;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+
+        .controls-strip {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 16px;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--panel-bg2);
+        }
+
+        .kanban-sub-bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 4px 16px;
+            background: var(--panel-bg);
+            border-bottom: 1px solid var(--border-color);
+            min-height: 28px;
+            box-sizing: border-box;
+        }
+        .kanban-sub-bar .strip-icon-btn {
+            padding: 2px;
+            height: 20px;
+            width: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: 1px solid transparent;
+            cursor: pointer;
+            border-radius: 2px;
+            flex-shrink: 0;
+        }
+        .kanban-sub-bar .strip-icon-btn img {
+            width: 14px;
+            height: 14px;
+        }
+        .kanban-sub-bar .strip-icon-btn:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+        }
+        .kanban-sub-bar .strip-icon-btn.is-active {
+            background: transparent;
+            box-shadow: none;
+        }
+        .kanban-sub-bar .strip-icon-btn.is-active:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            box-shadow: var(--glow-teal);
+        }
+        .kanban-sub-bar .strip-icon-btn.is-active img {
+            filter: brightness(1.2);
+        }
+        .kanban-sub-bar .strip-icon-btn.is-off {
+            opacity: 0.5;
+        }
+        .kanban-sub-bar .strip-icon-btn.is-off img {
+            filter: grayscale(0.5) brightness(0.7);
+        }
+        .kanban-sub-bar .strip-icon-btn.is-paused {
+            border-color: transparent;
+            background: color-mix(in srgb, var(--accent-orange) 10%, transparent);
+        }
+        .kanban-sub-bar .strip-icon-btn.is-paused svg {
+            color: var(--accent-orange);
+        }
+        .sub-bar-status {
+            font-size: 11px;
+            font-weight: 500;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            color: var(--accent-teal);
+        }
+        #status-message.sub-bar-status {
+            min-width: 0;
+            overflow: hidden;
+        }
+        #status-message.sub-bar-status.flashing {
+            animation: statusFlash 3s ease-in-out forwards;
+        }
+
+        .settings-strip {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 6px 16px;
+            border-bottom: 1px solid var(--border-color);
+            background: color-mix(in srgb, var(--panel-bg2) 85%, transparent);
+            flex-wrap: wrap;
+        }
+
+        .cli-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 10px;
+            letter-spacing: 0.6px;
+            color: var(--accent-teal);
+            user-select: none;
+            cursor: pointer;
+            text-transform: uppercase;
+        }
+
+        .cli-toggle input[type="checkbox"] {
+            width: 12px;
+            height: 12px;
+            accent-color: var(--accent-teal);
+            cursor: pointer;
+        }
+
+        .cli-toggle.is-off .toggle-label {
+            color: var(--accent-orange);
+        }
+
+        .strip-btn {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-size: 10px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            padding: 4px 10px;
+            cursor: pointer;
+            border-radius: 2px;
+            transition: all 0.15s;
+        }
+        
+        .controls-strip .strip-btn {
+            height: 24px;
+            display: inline-flex;
+            align-items: center;
+        }
+
+        .strip-btn:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+            border-color: var(--accent-teal-dim);
+            color: var(--accent-teal);
+        }
+
+        .cyber-theme-enabled .strip-btn:hover:not(:disabled) {
+            box-shadow: var(--glow-teal);
+        }
+
+        .strip-btn.is-active {
+            color: var(--accent-teal);
+            border-color: var(--accent-teal-dim);
+            box-shadow: var(--glow-teal);
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+
+        .strip-btn.is-teal {
+            color: var(--accent-teal);
+            border-color: var(--accent-teal-dim);
+            background: color-mix(in srgb, var(--accent-teal) 6%, transparent);
+        }
+
+        .strip-btn.is-teal:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--accent-teal) 14%, transparent);
+            box-shadow: var(--glow-teal);
+        }
+
+        .strip-btn:disabled,
+        .strip-btn.is-teal:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .btn-add-plan {
+            background: color-mix(in srgb, var(--accent-teal) 15%, transparent);
+            border: 1px solid color-mix(in srgb, var(--accent-teal) 30%, transparent);
+            color: var(--accent-teal);
+            font-size: 14px;
+            font-weight: bold;
+            width: 18px;
+            height: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            border-radius: 2px;
+            transition: all 0.15s;
+            flex-shrink: 0;
+        }
+
+        .btn-add-plan:hover {
+            background: var(--accent-teal);
+            color: var(--panel-bg);
+        }
+
+        .btn-add-plan img {
+            filter: sepia(1) saturate(3) hue-rotate(140deg) brightness(0.9);
+            transition: filter 0.15s;
+        }
+
+        .btn-add-plan:hover img {
+            filter: sepia(1) saturate(3) hue-rotate(140deg) brightness(1.2);
+        }
+
+        .controls-strip .btn-add-plan {
+            width: 24px;
+            height: 24px;
+            font-size: 16px;
+        }
+
+        .strip-icon-btn {
+            width: 28px;
+            height: 28px;
+            padding: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid transparent;
+            background: var(--panel-bg2);
+            border-radius: 2px;
+            cursor: pointer;
+            transition: all 0.15s;
+            flex-shrink: 0;
+        }
+
+        .strip-icon-btn:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+            border-color: transparent;
+            box-shadow: var(--glow-teal);
+        }
+
+        .strip-icon-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .controls-strip .strip-icon-btn {
+            width: 24px;
+            height: 24px;
+            padding: 0;
+            border: 1px solid transparent;
+            background: var(--panel-bg2);
+            border-radius: 3px;
+        }
+        .controls-strip .strip-icon-btn img {
+            width: 22px;
+            height: 22px;
+        }
+        .controls-strip .kanban-mode-dropdown {
+            min-height: 24px;
+            padding: 2px 6px;
+        }
+
+        .strip-icon-btn img {
+            width: 18px;
+            height: 18px;
+            object-fit: contain;
+            pointer-events: none;
+        }
+
+        .strip-icon-btn.is-active {
+            border-color: transparent;
+            background: transparent;
+            box-shadow: none;
+            opacity: 1;
+        }
+        .strip-icon-btn.is-active:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            box-shadow: var(--glow-teal);
+        }
+
+        .strip-icon-btn.is-active img {
+            filter: brightness(1.2);
+        }
+
+        /* Highlight ONLY the Remote Control & Automation buttons when active.
+           Scoped by ID so the generic .strip-icon-btn.is-active rule above
+           (shared by CLI Triggers, Feature Ultracode/Goal, Collapse Coders, etc.)
+           is NOT affected. No img filter — the border + background tint carry
+           the cue, and an ID-scoped filter would clobber the Claudify colour
+           icon opt-in rules. Mix with --panel-bg2 (not transparent) so the
+           tint is opaque and clearly visible against the dark background. */
+        #btn-remote-control.is-active {
+            border-color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 30%, var(--panel-bg2));
+            box-shadow: var(--glow-teal);
+        }
+        #btn-remote-control.is-active:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--accent-teal) 40%, var(--panel-bg2));
+            box-shadow: var(--glow-teal);
+        }
+
+        .strip-icon-btn.is-off {
+            border-color: transparent;
+            opacity: 0.5;
+        }
+
+        .strip-icon-btn.is-off img {
+            filter: grayscale(0.5) brightness(0.7);
+        }
+
+        .backlog-toggle-btn {
+            background: color-mix(in srgb, var(--panel-bg2) 80%, transparent);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-size: 9px;
+            letter-spacing: 0.5px;
+            padding: 2px 6px;
+            cursor: pointer;
+            border-radius: 3px;
+            transition: all 0.15s;
+            text-transform: uppercase;
+            line-height: 1;
+        }
+        .backlog-toggle-btn:hover {
+            border-color: var(--accent-teal-dim);
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            color: var(--accent-teal);
+        }
+        .backlog-toggle-btn.is-active {
+            color: var(--accent-orange);
+            border-color: color-mix(in srgb, var(--accent-orange) 45%, transparent);
+            background: color-mix(in srgb, var(--accent-orange) 10%, transparent);
+        }
+
+        .btn-batch {
+            background: color-mix(in srgb, var(--accent-teal) 12%, transparent);
+            border: 1px solid color-mix(in srgb, var(--accent-teal) 28%, transparent);
+            color: var(--accent-teal);
+            font-size: 9px;
+            font-weight: bold;
+            letter-spacing: 0.6px;
+            line-height: 1;
+            min-height: 18px;
+            padding: 3px 6px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            border-radius: 2px;
+            transition: all 0.15s;
+        }
+
+        .btn-batch:hover {
+            background: var(--accent-teal);
+            color: var(--panel-bg);
+            box-shadow: 0 0 12px color-mix(in srgb, var(--accent-teal) 60%, transparent);
+        }
+
+        .kanban-board {
+            display: flex;
+            gap: 12px;
+            padding: 16px;
+            padding-top: 12px;
+            flex: 1;
+            min-height: 0;
+            overflow-x: auto;
+        }
+
+        .kanban-column {
+            flex: 1;
+            min-width: 220px;
+            max-width: 320px;
+            display: flex;
+            flex-direction: column;
+            background: var(--panel-bg);
+            border: 1px solid var(--vscode-contrastBorder, var(--border-color));
+            border-radius: 4px;
+            /* overflow: visible allows tooltips to escape the column without clipping */
+            overflow: visible;
+            position: relative;
+            transition: z-index 0s;
+        }
+
+        .kanban-column:hover {
+            /* Elevate hovered column to ensure tooltips appear above neighboring columns */
+            z-index: 100;
+        }
+
+        .column-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--panel-bg2);
+            min-height: 52px;
+            /* Add radii here since parent no longer clips overflow */
+            border-top-left-radius: 4px;
+            border-top-right-radius: 4px;
+            z-index: 20;
+        }
+
+        .column-name {
+            font-size: 10px;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+        }
+
+        .column-agent {
+            font-size: 9px;
+            color: var(--text-secondary);
+            margin-top: 2px;
+            text-transform: uppercase;
+            opacity: 0.8;
+            letter-spacing: 0.5px;
+            height: 13px;
+        }
+
+        .column-agent .column-agent-link {
+            color: inherit;
+            text-decoration: none;
+            cursor: pointer;
+        }
+        .column-agent .column-agent-link:hover {
+            text-decoration: underline;
+            opacity: 1;
+        }
+
+        .column-subline-spacer {
+            height: 13px;
+            margin-top: 2px;
+        }
+
+        .column-count {
+            font-family: var(--font-code);
+            font-size: 10px;
+            color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 15%, transparent);
+            border: 1px solid color-mix(in srgb, var(--accent-teal) 30%, transparent);
+            padding: 1px 6px;
+            border-radius: 8px;
+            min-width: 20px;
+            text-align: center;
+            box-shadow: var(--glow-teal);
+        }
+
+        /* "Load more" control appended to a capped column. Pages the rest of the
+           column into the DOM on demand without re-rendering the board. */
+        .column-load-more {
+            display: block;
+            width: 100%;
+            margin-top: 6px;
+            padding: 6px 8px;
+            background: transparent;
+            border: 1px dashed var(--border-color);
+            border-radius: 3px;
+            color: var(--vscode-descriptionForeground, var(--text-secondary));
+            font-size: 11px;
+            font-family: var(--font-family, var(--font, system-ui, sans-serif));
+            cursor: pointer;
+            text-align: center;
+        }
+        .column-load-more:hover {
+            border-color: var(--accent-teal);
+            color: var(--accent-teal);
+        }
+
+        .column-select {
+            background: #0a0a0a;
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-size: 9px;
+            padding: 2px 4px;
+            outline: none;
+            margin-right: 8px;
+            margin-left: auto;
+        }
+
+        .column-select:hover,
+        .column-select:focus {
+            border-color: var(--border-bright);
+            outline: none;
+        }
+
+        /* Remote (§10) config styles moved to project.html with the Remote tab. */
+
+        .column-button-area {
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            gap: 4px;
+            padding: 6px 12px;
+            background: color-mix(in srgb, var(--panel-bg2) 60%, var(--panel-bg));
+            border-bottom: 1px solid var(--border-color);
+            z-index: 10;
+        }
+
+        .column-icon-btn {
+            background: color-mix(in srgb, var(--panel-bg2) 80%, transparent);
+            border: 1px solid transparent;
+            color: var(--accent-teal);
+            cursor: pointer;
+            padding: 4px;
+            border-radius: 3px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s;
+        }
+
+        .column-icon-btn.is-disabled,
+        .column-icon-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+
+        .column-icon-btn img {
+            width: 22px;
+            height: 22px;
+            filter: brightness(1);
+            transition: all 0.15s;
+        }
+
+        .column-icon-btn:hover {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+
+        .column-icon-btn:hover img {
+            filter: brightness(1.2);
+        }
+
+        .column-icon-btn-labeled {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 6px;
+        }
+
+        .column-icon-btn-labeled .cap-label {
+            font-size: 9px;
+            font-weight: 600;
+            color: var(--vscode-editorWarning-foreground, #cca700);
+            white-space: nowrap;
+        }
+
+        .column-header-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            border: 1px solid transparent;
+            border-radius: 3px;
+            background: transparent;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .column-header-btn:focus {
+            outline: none;
+        }
+        .column-header-btn:hover {
+            border-color: transparent;
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+        .column-header-btn img {
+            width: 20px;
+            height: 20px;
+            filter: brightness(0.9);
+            transition: all 0.15s;
+            pointer-events: none;
+        }
+        .column-header-btn:hover img {
+            filter: brightness(1.2);
+        }
+
+        #btn-add-plan {
+            color: var(--accent-teal);
+            font-size: 18px;
+            font-weight: bold;
+        }
+
+
+
+        .column-body {
+            flex: 1;
+            padding: 8px;
+            overflow-y: auto;
+            overflow-x: hidden;
+            min-height: 120px;
+            transition: background 0.15s;
+            /* Ensure body is below header/button area for tooltip stacking */
+            z-index: 1;
+        }
+
+        .column-body.drag-over {
+            background: color-mix(in srgb, var(--accent-teal) 6%, transparent);
+            outline: 1px dashed var(--accent-teal-dim);
+            outline-offset: -4px;
+        }
+
+        .kanban-card {
+            /* Black/grey card body shared across both themes (D1) — no resting teal tint or edge.
+               Afterburner still lights up on hover/select via the rules below. */
+            background: linear-gradient(180deg, color-mix(in srgb, #ffffff 5%, var(--panel-bg2)) 0%, var(--panel-bg) 100%);
+            border: 1px solid var(--vscode-contrastBorder, var(--border-color));
+            border-radius: 3px;
+            padding: 10px 12px;
+            margin-bottom: 8px;
+            cursor: grab;
+            transition: all 0.15s;
+            position: relative;
+            width: 100%;
+        }
+
+        .kanban-card:active {
+            cursor: grabbing;
+        }
+
+        .kanban-card:hover {
+            border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
+            /* Replace black shadow with a glowing teal bloom */
+            box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
+            /* Elevate hovered card so its tooltip is above other cards */
+            z-index: 50;
+        }
+
+        .kanban-card.dragging {
+            opacity: 0.4;
+            border-color: var(--accent-teal-dim);
+        }
+
+        .kanban-card.completed {
+            opacity: 0.7;
+            border-left: 3px solid var(--vscode-testing-iconPassed, #73c991);
+        }
+        .kanban-card.completed:hover {
+            opacity: 0.85;
+        }
+        .card-done-badge {
+            font-size: 10px;
+            color: var(--vscode-testing-iconPassed, #73c991);
+            padding: 2px 6px;
+            border: 1px solid var(--vscode-testing-iconPassed, #73c991);
+            border-radius: 3px;
+            white-space: nowrap;
+        }
+        .feature-card {
+            border-left: 4px solid #7c3aed;
+            background: rgba(124, 58, 237, 0.06);
+        }
+        .feature-subtask-label {
+            color: #7c3aed;
+            font-weight: 700;
+        }
+        /* Coding Rounds (subtask 05): round indicator on feature cards. Reads
+         * directly from coding_rounds (never inferred from card counts). A
+         * 'partial' round (some subtask seats undelivered) is amber so it is
+         * visibly distinct from a healthy 'dispatched' round. */
+        .round-indicator {
+            color: var(--vscode-textLink-foreground, #3794ff);
+            font-weight: 600;
+        }
+        .round-indicator.partial {
+            color: #d29922;
+        }
+
+        /* During drag, prevent child elements from interfering with drop targets */
+        .column-body.drag-over .kanban-card,
+        .column-body.drag-over .empty-state {
+            pointer-events: none;
+        }
+
+        .card-topic {
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .card-meta {
+            font-size: 9px;
+            color: #8a8a8a;
+            letter-spacing: 0.5px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .complexity-indicator {
+            font-weight: 600;
+            letter-spacing: 0.3px;
+        }
+        /* Complexity is a fixed severity scale — must be identical in every theme, so use
+           literals (not theme vars, which shift the scale when a theme overrides the accent). */
+        .complexity-indicator.very-high { color: #ff00ff; }
+        .complexity-indicator.high { color: #da3633; }
+        .complexity-indicator.medium { color: #d29922; }
+        .complexity-indicator.low { color: #98c379; }
+        .complexity-indicator.very-low { color: #00e5ff; }
+        .complexity-indicator.unknown { color: #7f848e; }
+
+        /* Agent activity-light highlight ring — lit while a card is dispatched to an agent.
+           Static, non-animated 2px border ring, theme-colored. Negative inset lets it sit
+           outside the border. No animation by design (a pulse read as too busy). */
+        .kanban-card.is-working::after {
+            content: "";
+            position: absolute;
+            inset: -2px;
+            border-radius: 5px;
+            pointer-events: none;
+            z-index: 1;
+            /* Default fallback — only reachable if a future third theme clears both
+               cyber-theme-enabled and theme-claudify. Defensive only. */
+            box-shadow: 0 0 0 2px #e0a800;
+        }
+
+        /* Afterburner theme: cyan highlight */
+        body.cyber-theme-enabled .kanban-card.is-working::after {
+            box-shadow: 0 0 0 2px #00e5ff;
+        }
+
+        /* Claudify theme: orange highlight */
+        body.theme-claudify .kanban-card.is-working::after {
+            box-shadow: 0 0 0 2px #D97757;
+        }
+
+        /* One-shot feedback when a card's operation completes (status light goes out
+           or card enters the COMPLETED column). Distinct from the static green
+           .completed bar — this is a brief highlight that fades. */
+        @keyframes card-op-completed-flash {
+            0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--vscode-testing-iconPassed, #73c991) 60%, transparent); }
+            30%  { box-shadow: 0 0 0 3px color-mix(in srgb, var(--vscode-testing-iconPassed, #73c991) 45%, transparent); }
+            100% { box-shadow: 0 0 0 0 transparent; }
+        }
+        .kanban-card.card-op-completed {
+            animation: card-op-completed-flash 1.4s ease-out forwards;
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .kanban-card.card-op-completed { animation: none; }
+            .teams-flow-node { opacity: 1; animation: none; }
+            .teams-flow-edge { stroke-dashoffset: 0; animation: none; }
+            .teams-flow-pulse { animation: none; opacity: 0.5; }
+        }
+
+        .card-actions {
+            display: flex;
+            gap: 6px;
+            margin-top: 8px;
+        }
+
+        .card-btn {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-size: 9px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            padding: 2px 6px;
+            cursor: pointer;
+            border-radius: 2px;
+            transition: all 0.15s;
+            min-height: 22px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .card-btn:hover {
+            background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
+            border-color: var(--border-bright);
+            color: var(--text-primary);
+        }
+
+        .card-btn.complete:hover {
+            border-color: var(--accent-teal-dim);
+            color: var(--accent-teal);
+        }
+
+        .card-btn.recover:hover {
+            border-color: var(--vscode-testing-iconPassed, #73c991);
+            color: var(--vscode-testing-iconPassed, #73c991);
+        }
+
+
+        .card-btn.icon-btn {
+            padding: 4px;
+            width: 22px;
+            height: 22px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* V63: priority star toggle */
+        .card-btn.star-btn {
+            padding: 2px;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+        }
+        .card-btn.star-btn.starred {
+            color: var(--vscode-editorWarning-foreground, #cca700);
+        }
+        .card-btn.star-btn:hover {
+            color: var(--vscode-editorWarning-foreground, #cca700);
+        }
+
+        /* V67: card priority badge and popover */
+        .card-btn.priority-btn {
+            padding: 2px;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+            cursor: pointer;
+        }
+        .card-btn.priority-btn:hover {
+            opacity: 0.85;
+        }
+        .priority-picker-popover {
+            background: var(--vscode-dropdown-background, #252526);
+            color: var(--vscode-dropdown-foreground, #cccccc);
+            border: 1px solid var(--vscode-dropdown-border, #3c3c3c);
+            border-radius: 4px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+            padding: 4px;
+            font-size: 11px;
+            min-width: 110px;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .priority-opt, .priority-opt-clear {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 8px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        .priority-opt:hover, .priority-opt-clear:hover {
+            background: var(--vscode-list-hoverBackground, #2a2d2e);
+        }
+        .priority-opt.active, .priority-opt-clear.active {
+            background: var(--vscode-list-activeSelectionBackground, #094771);
+            color: #ffffff;
+        }
+        .priority-opt .pdot, .priority-opt-clear .pdot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        /* Card Copy Button Success Animation */
+        @keyframes copyFlash {
+            0% { background-color: var(--vscode-testing-iconPassed, #73c991); color: #ffffff; }
+            70% { background-color: var(--vscode-testing-iconPassed, #73c991); color: #ffffff; }
+            100% { background-color: transparent; color: var(--text-secondary); }
+        }
+        .card-btn.copy.copied {
+            animation: copyFlash 1.5s ease-out forwards;
+        }
+
+        /* Card Copy Button — dispatch failed, prompt ready */
+        @keyframes promptReadyGlow {
+            0%, 100% { box-shadow: 0 0 4px 1px rgba(255, 165, 0, 0.6); border-color: rgba(255, 165, 0, 0.8); }
+            50% { box-shadow: 0 0 8px 2px rgba(255, 165, 0, 0.9); border-color: rgba(255, 165, 0, 1); }
+        }
+        .card-btn.copy.prompt-ready {
+            animation: promptReadyGlow 2s ease-in-out infinite;
+            border: 1px solid rgba(255, 165, 0, 0.8);
+        }
+
+        /* Column Icon Button Flash (was missing — flashIconBtn() was a no-op) */
+        @keyframes iconFlash {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.2); opacity: 0.7; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .flash {
+            animation: iconFlash 0.3s ease-out forwards;
+        }
+
+        /* Column Highlight Animation for Advance Operations */
+        @keyframes columnHighlight {
+            0% { background: color-mix(in srgb, var(--accent-teal) 20%, transparent); }
+            50% { background: color-mix(in srgb, var(--accent-teal) 30%, transparent); }
+            100% { background: transparent; }
+        }
+        .column-body.highlight {
+            animation: columnHighlight 0.8s ease-out forwards;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 20px 10px;
+            font-size: 10px;
+            color: var(--text-secondary);
+            letter-spacing: 0.5px;
+        }
+
+        /* Scrollbar styling */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--vscode-scrollbarSlider-background, var(--border-bright));
+            border-radius: 3px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--vscode-scrollbarSlider-hoverBackground, var(--text-secondary));
+        }
+
+        /* Card Drop Animation */
+        @keyframes dropPulse {
+            0% { transform: scale(1.05); box-shadow: 0 4px 20px var(--accent-teal); }
+            100% { transform: scale(1); box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent); }
+        }
+        .card-dropped {
+            animation: dropPulse 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+        }
+
+        /* Card Complete / Delete Animation */
+        @keyframes cardComplete {
+            0% { transform: scale(1); opacity: 1; }
+            40% { transform: scale(1.05); opacity: 0.9; }
+            100% { transform: scale(0.8) translateX(40px); opacity: 0; padding-top: 0; padding-bottom: 0; margin: 0; height: 0; border-width: 0; }
+        }
+        .card-completing {
+            animation: cardComplete 0.4s ease-out forwards;
+            pointer-events: none;
+            overflow: hidden;
+        }
+
+        /* Autoban Read-Only Status Bar */
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Shared Subsection Styles */
+        .subsection-header {
+          display:flex; align-items:center; gap:8px;
+           font-size:10px; font-weight:600;
+          color:var(--accent-teal); text-transform:uppercase;
+          letter-spacing:1px; margin-bottom:8px;
+        }
+        .db-subsection { border-top:1px solid var(--border-color); padding:10px 0; }
+        .subsection-actions { display:flex; gap:10px; margin-bottom:8px; }
+        .startup-row { display:flex; align-items:center; gap:6px; margin-bottom:6px; font-size:11px; }
+        .startup-row input[type="text"] {
+          background:#0a0a0a; color:var(--text-primary);
+          border:1px solid var(--border-color); border-radius:3px;
+          padding:3px 6px; font-size:10px; font-family:var(--font-code);
+        }
+        .prompts-role-tab {
+           font-size:10px; padding:3px 8px;
+          border:1px solid var(--border-color); border-radius:3px;
+          background:transparent; color:var(--text-secondary); cursor:pointer; transition:all 0.15s;
+        }
+        .prompts-role-tab.active {
+          border-color:var(--accent-teal-dim); color:var(--accent-teal);
+          background:color-mix(in srgb,var(--accent-teal) 8%,transparent);
+        }
+        .prompts-role-tab.has-override::after {
+          content: '';
+          display: inline-block;
+          width: 6px;
+          height: 6px;
+          margin-left: 4px;
+          background-color: var(--accent-teal);
+          mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tZG90LnN2ZyAtLT4KPCEtLSBmaWxsIGlzIGlnbm9yZWQgdW5kZXIgQ1NTIG1hc2s7IGZpbGw9IiM0NWUwZTYiIGlzIGZyb3plbiBmb3IgcGFyaXR5IGNoZWNrIC0tPgo8c3ZnIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgdmlld0JveD0iMCAwIDE2IDE2IiB3aWR0aD0iMTYiIGhlaWdodD0iMTYiPgogIDxjaXJjbGUgY3g9IjgiIGN5PSI4IiByPSI1IiBmaWxsPSIjNDVlMGU2Ii8+Cjwvc3ZnPgo=');
+          mask-size: contain;
+          mask-repeat: no-repeat;
+        }
+
+        /* Custom Agents List Styles */
+        .agents-tab-custom-agent-item {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 8px 10px;
+          border: 1px solid var(--border-color);
+          background: var(--panel-bg2);
+          border-radius: 4px;
+          font-size: 11px;
+        }
+
+        .agents-tab-custom-agent-item-name {
+          flex: 1;
+          color: var(--text-primary);
+        }
+
+        .agents-tab-custom-agent-item-command {
+          flex: 1;
+          font-family: var(--font-code);
+          color: var(--text-secondary);
+          font-size: 10px;
+        }
+
+        .agents-tab-custom-agent-item-actions {
+          display: flex;
+          gap: 4px;
+        }
+
+        .agents-tab-custom-agent-item-btn {
+          background: transparent;
+          border: 1px solid var(--border-color);
+          color: var(--text-secondary);
+          font-size: 9px;
+          padding: 2px 6px;
+          cursor: pointer;
+          border-radius: 2px;
+        }
+
+        .agents-tab-custom-agent-item-btn:hover {
+          background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+          border-color: var(--accent-teal-dim);
+          color: var(--accent-teal);
+        }
+
+        .agents-tab-custom-agent-item-btn.delete:hover {
+          border-color: var(--accent-red);
+          color: var(--accent-red);
+        }
+
+        .agents-tab-custom-agent-badge {
+          font-size: 9px;
+          padding: 2px 6px;
+          border-radius: 10px;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          font-weight: 600;
+          display: inline-flex;
+          align-items: center;
+          margin-left: 6px;
+        }
+
+        .agents-tab-custom-agent-badge.standalone {
+          background: color-mix(in srgb, var(--accent-teal) 15%, transparent);
+          color: var(--accent-teal);
+          border: 1px solid color-mix(in srgb, var(--accent-teal) 30%, transparent);
+        }
+
+        .agents-tab-custom-agent-badge.team-assigned {
+          background: color-mix(in srgb, var(--accent-blue, #3b82f6) 15%, transparent);
+          color: var(--accent-blue, #60a5fa);
+          border: 1px solid color-mix(in srgb, var(--accent-blue, #3b82f6) 30%, transparent);
+        }
+
+        /* Unrecognised-CLI indicator. Switchboard's readiness timing is keyed on
+           the CLI family parsed from a startup command; a command it cannot
+           identify (a wrapper like `npx devin`, an alias, a path) falls back to
+           the most patient profile. Without this an operator discovers the
+           misclassification through a prompt that never submits. Neutral amber,
+           not an error: the fallback is safe, just slower. */
+        .agents-tab-unknown-cli {
+          font-size: 9px;
+          padding: 1px 5px;
+          border-radius: 10px;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          font-weight: 600;
+          white-space: nowrap;
+          flex-shrink: 0;
+          background: color-mix(in srgb, var(--accent-amber, #d59a2a) 15%, transparent);
+          color: var(--accent-amber, #d59a2a);
+          border: 1px solid color-mix(in srgb, var(--accent-amber, #d59a2a) 30%, transparent);
+        }
+
+        /* ── TEAMS tab — card row, flow diagram, portraits ─────────────── */
+        /* Three-card row: each card is a clickable tile carrying a portrait,
+           name, purpose and roster strip. The whole card is the click target. */
+        .teams-card-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .teams-card {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            padding: 10px;
+            border: 1px solid var(--border-color);
+            background: var(--panel-bg2);
+            border-radius: 4px;
+            cursor: pointer;
+            transition: border-color 0.15s, background 0.15s;
+            min-width: 140px;
+            flex: 1 1 140px;
+        }
+        .teams-card:hover {
+            border-color: var(--accent-teal-dim);
+            background: color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg2));
+        }
+        .teams-card.is-picked {
+            border-color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 8%, var(--panel-bg2));
+        }
+        .teams-card-portrait {
+            flex-shrink: 0;
+            color: var(--accent);
+        }
+        /* Pixel-art <img> treatment — one class, defined per webview document
+           (separate documents share no sheet). Integer display sizes plus
+           `pixelated` keep raster art hard-edged; without this a 32x32 PNG
+           scaled to 28px shimmers. Applied to art <img> elements by the
+           icon-picker / surface-render code; harmless on elements that do
+           not use it. */
+        .pixel-art {
+            image-rendering: pixelated;
+            -ms-interpolation-mode: nearest-neighbor;
+        }
+        .teams-card-name {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        .teams-card-purpose {
+            font-size: 10px;
+            color: var(--text-secondary);
+            line-height: 1.3;
+        }
+        .teams-card-roster {
+            font-size: 9px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            margin-top: 2px;
+        }
+        .teams-card-note {
+            font-size: 9px;
+            color: var(--text-secondary);
+            margin-top: 2px;
+        }
+        .teams-card-autostart {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            margin-top: 4px;
+            font-size: 9px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+        .teams-card-autostart-label {
+            cursor: pointer;
+        }
+        .teams-card-autostart-wt {
+            flex: 1 1 80px;
+            min-width: 60px;
+            font-size: 9px;
+            text-transform: none;
+            letter-spacing: normal;
+            padding: 2px 4px;
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            background: var(--panel-bg);
+            color: var(--text-primary);
+        }
+        .teams-build-link {
+            display: inline-block;
+            margin-top: 8px;
+            font-size: 11px;
+            color: var(--accent-teal);
+            cursor: pointer;
+            text-decoration: none;
+        }
+        .teams-build-link:hover { text-decoration: underline; }
+
+        /* Flow diagram panel — sits below the card row. */
+        #teams-flow-panel {
+            margin-top: 10px;
+            min-height: 0;
+        }
+        #teams-flow-panel:empty { display: none; }
+        .teams-flow-svg {
+            width: 100%;
+            overflow-x: auto;
+        }
+        .teams-flow-node {
+            color: var(--accent);
+            opacity: 0;
+            animation: teams-flow-node-in 0.3s ease-out forwards;
+        }
+        @keyframes teams-flow-node-in {
+            to { opacity: 1; }
+        }
+        .teams-flow-edge {
+            stroke-dasharray: 200;
+            stroke-dashoffset: 200;
+            animation: teams-flow-edge-draw 0.22s ease-out forwards;
+        }
+        @keyframes teams-flow-edge-draw {
+            to { stroke-dashoffset: 0; }
+        }
+        .teams-flow-pulse {
+            animation: teams-flow-pulse 2.5s ease-in-out infinite;
+        }
+        @keyframes teams-flow-pulse {
+            0%, 100% { opacity: 0.3; }
+            50% { opacity: 0.8; }
+        }
+        .teams-flow-action {
+            margin-top: 8px;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .teams-flow-error {
+            font-size: 11px;
+            color: var(--accent-red);
+        }
+        .teams-flow-hint {
+            font-size: 10px;
+            color: var(--text-secondary);
+        }
+
+        /* Secondary button — ported from implementation.html so .secondary-btn
+           references in this file (EXPORT AS SKILL, Validate, CANCEL) are styled
+           instead of falling back to the user-agent default. Uses the same CSS
+           variables already declared in :root / body.theme-claudify above. */
+        .secondary-btn {
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            padding: 8px;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1.2px;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: none;
+            border-radius: 2px;
+        }
+
+        .secondary-btn:hover {
+            background: color-mix(in srgb, var(--border-bright) 10%, transparent);
+            border-color: var(--border-bright);
+            color: var(--text-primary);
+        }
+
+        .secondary-btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+            color: var(--vscode-disabledForeground, var(--text-secondary));
+            border-color: var(--border-color);
+            box-shadow: none;
+        }
+
+        .secondary-btn.dispatching {
+            opacity: 0.7;
+            cursor: wait;
+        }
+
+        .hidden { display: none !important; }
+
+        /* Inline Custom Agent Form */
+        .agents-tab-inline-form {
+          border: 1px solid var(--border-bright);
+          border-radius: 4px;
+          padding: 12px;
+          margin-bottom: 8px;
+          background: var(--panel-bg2);
+        }
+        .agents-tab-inline-form-title {
+          font-size: 12px;
+          font-weight: 600;
+          color: var(--text-primary);
+          margin-bottom: 10px;
+          padding-bottom: 6px;
+          border-bottom: 1px solid var(--border-color);
+        }
+        .agents-tab-inline-form .modal-input,
+        .agents-tab-inline-form .modal-textarea {
+          margin-bottom: 8px;
+        }
+        .agents-tab-inline-form .modal-label {
+          margin-bottom: 3px;
+        }
+
+        .agent-description {
+          font-size: 10px;
+          color: var(--text-secondary);
+          margin-left: 22px;
+          margin-bottom: 8px;
+          opacity: 0.85;
+          line-height: 1.3;
+        }
+        #agents-tab-content .startup-row {
+          margin-bottom: 2px !important; /* Clarification: Scoped explicitly to prevent regressions */
+        }
+
+        .agents-group-label {
+          font-size: 10px;
+          letter-spacing: 1px;
+          text-transform: uppercase;
+          color: var(--text-secondary);
+          margin: 12px 0 4px;
+        }
+        /* Drag-Drop Mode Toggle Styles */
+        .mode-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            border: 1px solid transparent;
+            border-radius: 3px;
+            background: transparent;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .mode-toggle:focus {
+            outline: none;
+        }
+
+        .mode-toggle:hover {
+            border-color: transparent;
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+
+        .mode-toggle img {
+            width: 20px;
+            height: 20px;
+            filter: brightness(0.9);
+            transition: all 0.15s;
+            pointer-events: none;
+        }
+
+        .mode-toggle:hover img {
+            filter: brightness(1.2);
+        }
+
+        /* Complexity Routing Button Styles */
+        .complexity-routing-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            border: 1px solid transparent;
+            border-radius: 3px;
+            background: transparent;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .complexity-routing-btn:focus {
+            outline: none;
+        }
+
+        .complexity-routing-btn:hover {
+            border-color: transparent;
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            box-shadow: var(--glow-teal);
+        }
+
+        .complexity-routing-btn.is-active {
+            border-color: transparent;
+            background: transparent;
+            box-shadow: none;
+            opacity: 1;
+        }
+        .complexity-routing-btn.is-active:hover {
+            background: color-mix(in srgb, var(--accent-teal) 15%, transparent);
+            box-shadow: var(--glow-teal);
+        }
+        .complexity-routing-btn.is-off {
+            opacity: 0.5;
+        }
+        .complexity-routing-btn.is-off img {
+            filter: grayscale(0.5) brightness(0.7);
+        }
+
+        .complexity-routing-btn img {
+            width: 20px;
+            height: 20px;
+            filter: brightness(0.9);
+            transition: all 0.15s;
+            pointer-events: none;
+        }
+
+        .complexity-routing-btn:hover img {
+            filter: brightness(1.2);
+        }
+
+        /* Worktree tab primary button */
+        .worktree-primary-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 8px 14px;
+            border: 1px solid var(--accent-teal, #00ad9f);
+            border-radius: 4px;
+            background: rgba(0, 173, 159, 0.12);
+            color: var(--text-primary, #e8e8e8);
+            font-size: 14px;
+            font-weight: 600;
+            line-height: 1.3;
+            cursor: pointer;
+            transition: all 0.15s;
+            width: 100%;
+        }
+        .worktree-primary-btn:focus {
+            outline: none;
+            box-shadow: 0 0 0 2px rgba(0, 173, 159, 0.3);
+        }
+        .worktree-primary-btn:hover:not(:disabled) {
+            background: rgba(0, 173, 159, 0.25);
+            border-color: var(--accent-teal, #00ad9f);
+        }
+        .worktree-primary-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+        .worktree-primary-btn.danger {
+            border-color: var(--accent-red, #e55);
+            background: rgba(229, 85, 85, 0.12);
+            color: var(--accent-red, #e55);
+        }
+        .worktree-primary-btn.danger:hover:not(:disabled) {
+            background: rgba(229, 85, 85, 0.25);
+        }
+
+        /* Selected card highlight */
+        .kanban-card.selected {
+            border-color: var(--accent-teal);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 35%, transparent),
+                        inset 0 0 4px color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+
+        /* Selected feature cards: purple border instead of theme accent */
+        .kanban-card.feature-card.selected {
+            border-color: #7c3aed;
+            box-shadow: 0 0 8px color-mix(in srgb, #7c3aed 35%, transparent),
+                        inset 0 0 4px color-mix(in srgb, #7c3aed 10%, transparent);
+        }
+
+        /* Recover buttons in Completed column */
+        .recover-selected-btn,
+        .recover-all-btn {
+            font-size: 9px;
+            letter-spacing: 0.5px;
+            color: var(--text-secondary, #888888);
+            padding: 3px 8px !important;
+        }
+        .recover-selected-btn:hover,
+        .recover-all-btn:hover {
+            color: var(--accent-teal);
+        }
+
+
+
+        /* ===== ULTRACODE blast — Afterburner only, fired on toggle-on. Deliberately obnoxious. ===== */
+        #ultracode-blast {
+            position: fixed;
+            inset: 0;
+            z-index: 99999;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+            overflow: hidden;
+            background: radial-gradient(circle at center,
+                color-mix(in srgb, var(--accent-teal) 22%, transparent) 0%,
+                transparent 60%);
+            animation: ucFlash 1.7s ease-out forwards;
+        }
+        #ultracode-blast .uc-word {
+            font-family: 'Impact', 'Arial Black', system-ui, sans-serif;
+            font-weight: 900;
+            font-size: clamp(48px, 15vw, 240px);
+            letter-spacing: 0.06em;
+            color: #eafffd;
+            text-transform: uppercase;
+            white-space: nowrap;
+            transform-origin: center;
+            animation: ucSlam 1.7s cubic-bezier(0.18, 1.5, 0.3, 1) forwards,
+                       ucGlitch 0.11s steps(2) infinite;
+        }
+        @keyframes ucFlash {
+            0%   { opacity: 0; }
+            8%   { opacity: 1; }
+            70%  { opacity: 1; }
+            100% { opacity: 0; }
+        }
+        @keyframes ucSlam {
+            0%       { transform: scale(0.2) rotate(-6deg); filter: blur(8px); }
+            14%      { transform: scale(1.18) rotate(1deg); filter: blur(0); }
+            24%      { transform: scale(0.98) rotate(0deg); }
+            32%      { transform: scale(1.04); }
+            40%, 72% { transform: scale(1); }
+            100%     { transform: scale(1.6); opacity: 0; }
+        }
+        @keyframes ucGlitch {
+            0%   { text-shadow: -3px 0 #ff00d4, 3px 0 var(--accent-teal), 0 0 18px var(--accent-teal), 0 0 50px #7c3aed; }
+            100% { text-shadow:  3px 0 #ff00d4, -3px 0 var(--accent-teal), 0 0 28px var(--accent-teal), 0 0 70px #7c3aed; }
+        }
+
+        /* Modal overlay */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+        }
+        .modal-overlay.hidden {
+            display: none;
+        }
+        .modal-content {
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            width: 480px;
+            max-width: 90vw;
+            box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+        }
+        .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px 12px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .modal-title {
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--accent-primary);
+            margin: 0;
+        }
+        .modal-close-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 20px;
+            cursor: pointer;
+            padding: 0;
+            width: 28px;
+            height: 28px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            line-height: 1;
+        }
+        .modal-close-btn:hover {
+            color: var(--text-primary);
+        }
+        .modal-body {
+            padding: 16px 20px;
+        }
+        .modal-body label {
+            display: block;
+            color: var(--text-secondary);
+            font-size: 12px;
+            margin-bottom: 8px;
+        }
+        .modal-plan-count {
+            color: var(--text-primary);
+            font-size: 13px;
+            margin-bottom: 12px;
+        }
+        .modal-plan-list {
+            list-style: none;
+            padding: 0;
+            margin: 0 0 12px 0;
+            max-height: 120px;
+            overflow-y: auto;
+        }
+        .modal-plan-list li {
+            font-size: 12px;
+            color: var(--text-primary);
+            padding: 4px 8px;
+            border-left: 2px solid var(--accent-red);
+            margin-bottom: 4px;
+            background: color-mix(in srgb, var(--accent-red) 5%, transparent);
+            border-radius: 0 3px 3px 0;
+        }
+        .modal-textarea {
+            width: 100%;
+            background: var(--bg-color);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            color: var(--text-primary);
+            font-family: var(--font-family);
+            font-size: 13px;
+            padding: 10px;
+            resize: vertical;
+            min-height: 100px;
+        }
+        .modal-textarea:focus {
+            outline: none;
+            border-color: var(--accent-teal);
+            box-shadow: 0 0 4px var(--accent-teal-dim);
+        }
+        .modal-textarea::placeholder {
+            color: var(--text-secondary);
+        }
+        .modal-footer {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            padding: 12px 20px 16px;
+            border-top: 1px solid var(--border-color);
+        }
+        .modal-btn {
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-size: 13px;
+            cursor: pointer;
+            border: 1px solid transparent;
+            font-family: var(--font-family);
+            transition: all 0.15s;
+        }
+        .modal-btn-primary {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            border: 1px solid color-mix(in srgb, var(--accent-teal) 30%, transparent);
+            color: color-mix(in srgb, var(--accent-teal) 80%, var(--text-secondary));
+            font-size: 11px;
+            letter-spacing: 1px;
+            padding: 8px 12px;
+            border-radius: 2px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            flex: 1;
+        }
+        .modal-btn-primary:hover {
+            background: color-mix(in srgb, var(--accent-teal) 15%, transparent);
+            color: var(--accent-teal);
+            border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
+        }
+
+        /* Custom Agent Modal Styles */
+        .modal-card {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-bright);
+            box-shadow: 0 24px 48px rgba(0, 0, 0, 0.45);
+            width: min(100%, 640px);
+            max-height: calc(100vh - 40px);
+            overflow-y: auto;
+            padding: 16px;
+        }
+
+        .modal-label {
+            display: block;
+            margin-bottom: 4px;
+            color: var(--text-secondary);
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 11px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            user-select: none;
+            margin-bottom: 4px;
+        }
+        .checkbox-label:hover {
+            color: var(--text-primary);
+        }
+
+        .modal-input,
+        .modal-textarea {
+            width: 100%;
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 8px 10px;
+            font-size: 11px;
+            margin-bottom: 10px;
+        }
+
+        .modal-input:hover,
+        .modal-input:focus,
+        .modal-textarea:hover,
+        .modal-textarea:focus {
+            border-color: var(--border-bright);
+            outline: none;
+        }
+
+        .modal-textarea {
+            min-height: 120px;
+            resize: vertical;
+        }
+
+        /* Flex utility classes */
+        .flex {
+            display: flex;
+        }
+
+        .gap-2 {
+            gap: 8px;
+        }
+
+        /* Modal secondary button */
+        .modal-btn-secondary {
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-size: 10px;
+            letter-spacing: 1px;
+            padding: 8px 12px;
+            border-radius: 2px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            flex: 1;
+        }
+
+        .modal-btn-secondary:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--border-bright) 10%, transparent);
+            border-color: var(--border-bright);
+            color: var(--text-primary);
+        }
+
+        /* CSS Toggle Switch */
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 32px;
+            height: 16px;
+            flex-shrink: 0;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            inset: 0;
+            background: var(--border-color);
+            border-radius: 16px;
+            transition: background 0.2s;
+        }
+
+        .toggle-slider::before {
+            content: '';
+            position: absolute;
+            height: 12px;
+            width: 12px;
+            left: 2px;
+            bottom: 2px;
+            background: var(--text-secondary);
+            border-radius: 50%;
+            transition: all 0.2s;
+        }
+
+        .toggle-switch input:checked + .toggle-slider {
+            background: color-mix(in srgb, var(--accent-teal) 50%, transparent);
+        }
+
+        .toggle-switch input:checked + .toggle-slider::before {
+            transform: translateX(16px);
+            background: var(--accent-teal);
+            box-shadow: 0 0 4px var(--accent-teal);
+        }
+
+
+
+        /* CLI toggle inline label */
+        .cli-toggle-inline {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 9px;
+            letter-spacing: 0.6px;
+            color: var(--accent-teal);
+            text-transform: uppercase;
+            user-select: none;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .cli-toggle-inline.is-off {
+            color: var(--accent-orange);
+        }
+
+        /* Kanban mode dropdown */
+        .kanban-mode-dropdown {
+            font-size: 9px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            background: var(--panel-bg);
+            color: var(--accent-teal);
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            padding: 3px 6px;
+            cursor: pointer;
+            outline: none;
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+        .kanban-mode-dropdown:hover,
+        .kanban-mode-dropdown:focus {
+            border-color: var(--accent-teal-dim);
+            box-shadow: var(--glow-teal);
+        }
+        .kanban-mode-dropdown.is-off {
+            color: var(--text-secondary);
+            border-color: color-mix(in srgb, var(--text-secondary) 45%, transparent);
+        }
+        .kanban-mode-dropdown.is-off:hover,
+        .kanban-mode-dropdown.is-off:focus {
+            border-color: var(--text-secondary);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--text-secondary) 30%, transparent);
+        }
+        .kanban-mode-dropdown option {
+            background: var(--bg-color);
+            color: var(--text-primary);
+        }
+
+        /* Routing map modal styles */
+        .routing-map-content {
+            width: 900px;
+            max-width: 95vw;
+        }
+
+        .routing-map-columns {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            padding: 20px;
+            min-height: 400px;
+        }
+
+        .routing-column {
+            background: var(--vscode-panel-background, #1e1e1e);
+            border: 1px solid var(--vscode-panel-border, #444);
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .routing-column-header {
+            padding: 12px;
+            border-bottom: 1px solid var(--vscode-panel-border, #444);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .role-badge {
+            font-weight: 600;
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+        }
+
+        .role-badge.lead { background: #ff6b6b; color: white; }
+        .role-badge.coder { background: #4ecdc4; color: white; }
+        .role-badge.intern { background: #45b7d1; color: white; }
+
+        .routing-drop-zone {
+            flex: 1;
+            padding: 12px;
+            min-height: 300px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .routing-drop-zone.drag-over {
+            background: var(--vscode-list-dropBackground, rgba(255,255,255,0.05));
+            border: 2px dashed var(--vscode-focusBorder, #007fd4);
+            border-radius: 6px;
+        }
+
+        .complexity-card {
+            background: var(--vscode-button-background, #0e639c);
+            color: var(--vscode-button-foreground, #fff);
+            padding: 12px 16px;
+            border-radius: 6px;
+            cursor: grab;
+            text-align: center;
+            font-weight: 600;
+            font-size: 14px;
+            transition: transform 0.15s, box-shadow 0.15s;
+            user-select: none;
+            border: none;
+        }
+
+        .complexity-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+
+        .complexity-card.dragging {
+            opacity: 0.4;
+            cursor: grabbing;
+        }
+
+        .complexity-card.complexity-high { background: #c0392b; }
+        .complexity-card.complexity-medium { background: #16a085; }
+        .complexity-card.complexity-low { background: #2980b9; }
+
+        .routing-map-active-dot {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            background: var(--accent-teal);
+            border-radius: 50%;
+            margin-left: 4px;
+            box-shadow: 0 0 4px var(--accent-teal);
+        }
+
+        /* Body-level tooltip overlay */
+        #tooltip-overlay {
+            position: fixed;
+            z-index: 9999;
+            pointer-events: none;
+            background: var(--bg-tertiary, #1a1a2e);
+            color: var(--text-primary, #e0e0e0);
+            font-size: 10px;
+            padding: 3px 8px;
+            border-radius: 3px;
+            white-space: pre-line;
+            text-align: left;
+            max-width: 320px;
+            border: 1px solid var(--border-color, #2a2a4a);
+            opacity: 0;
+            visibility: hidden;
+            transition: none;
+        }
+        #tooltip-overlay.visible {
+            opacity: 1;
+            visibility: visible;
+            animation: tooltipFadeIn 0.1s ease-out forwards;
+        }
+
+        @keyframes tooltipFadeIn {
+            to { opacity: 1; }
+        }
+
+        /* Kanban Structure Styles */
+        .kanban-structure-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .kanban-structure-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            border: 1px solid var(--border-color);
+            background: var(--panel-bg2);
+            border-radius: 4px;
+        }
+
+        .kanban-structure-item.is-fixed {
+            opacity: 0.8;
+        }
+
+        .kanban-structure-item.drag-over {
+            border-color: var(--accent-teal);
+            box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-teal) 40%, transparent);
+        }
+
+        .kanban-structure-handle,
+        .kanban-structure-lock {
+            width: 18px;
+            flex-shrink: 0;
+            font-size: 12px;
+            text-align: center;
+            color: var(--text-secondary);
+        }
+
+        .kanban-structure-item-label {
+            flex: 1;
+            min-width: 0;
+            font-size: 11px;
+            color: var(--text-primary);
+        }
+
+        .kanban-structure-item-kind {
+            flex-shrink: 0;
+            font-size: 9px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+        }
+
+        /* Setup Tab Styles - matching setup.html */
+        #setup-tab-content {
+            overflow-y: auto;
+            background: var(--bg-color);
+        }
+
+        .setup-section {
+            border: 1px solid var(--border-color);
+            background: var(--panel-bg);
+            margin-bottom: 12px;
+        }
+
+        .setup-field {
+            padding: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .flex {
+            display: flex;
+        }
+
+        .flex.gap-2 {
+            gap: 8px;
+        }
+
+        .w-full {
+            width: 100%;
+        }
+
+        .hint-text {
+            font-size: 10px;
+            color: var(--text-secondary);
+            margin-top: 10px;
+            letter-spacing: 0.5px;
+        }
+
+
+        /* UAT Styles */
+        #uat-tab-content {
+            overflow: hidden;
+        }
+
+        .uat-plan-section {
+            margin-bottom: 16px;
+        }
+
+        .uat-plan-title {
+            font-size: 11px;
+            color: var(--accent-teal);
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+            padding-bottom: 4px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .uat-step {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            padding: 4px 0;
+            font-size: 12px;
+        }
+
+        .uat-step input[type="checkbox"] {
+            accent-color: var(--accent-teal);
+            margin-top: 2px;
+            cursor: pointer;
+        }
+
+        .uat-step.checked .uat-step-text {
+            text-decoration: line-through;
+            color: var(--text-secondary);
+        }
+
+        .uat-step-text {
+            color: var(--text-primary);
+        }
+
+        .uat-no-steps {
+            font-size: 10px;
+            color: var(--text-secondary);
+            font-style: italic;
+            padding: 4px 0;
+        }
+
+        .dep-tree-container {
+            flex: 1;
+            overflow: auto;
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 20px;
+            position: relative;
+        }
+
+        .dep-tree {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .plan-node {
+            display: flex;
+            flex-direction: column;
+            padding: 10px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background: var(--panel-bg2);
+            min-width: 200px;
+            max-width: 400px;
+            cursor: pointer;
+            transition: transform 0.2s, border-color 0.2s;
+        }
+
+        .plan-node:hover {
+            border-color: var(--accent-teal);
+            transform: translateY(-2px);
+        }
+
+        .plan-node.created {
+            border-left: 4px solid var(--accent-orange);
+        }
+
+        .plan-node.planned {
+            border-left: 4px solid #2ea043; /* Green */
+        }
+
+        .plan-node.blocking {
+            border: 1px solid var(--accent-red);
+            box-shadow: 0 0 5px rgba(218, 54, 51, 0.3);
+        }
+
+        .plan-id {
+            font-family: var(--font-code);
+            font-size: 10px;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+        }
+
+        .plan-title {
+            font-size: 13px;
+            font-weight: 500;
+            margin-bottom: 6px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .plan-status-tag {
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 2px 6px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            width: fit-content;
+        }
+
+        .dep-connector {
+            margin-left: 30px;
+            padding-left: 20px;
+            border-left: 1px solid var(--border-bright);
+            position: relative;
+            margin-bottom: 10px;
+        }
+
+        .dep-connector::before {
+            content: '';
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            position: absolute;
+            left: 0;
+            top: 0;
+            background-color: var(--border-bright);
+            mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tdHJlZS1lbGJvdy5zdmcgLS0+CjwhLS0gZmlsbCBpcyBpZ25vcmVkIHVuZGVyIENTUyBtYXNrOyBmaWxsPSIjNDVlMGU2IiBpcyBmcm96ZW4gZm9yIHBhcml0eSBjaGVjayAtLT4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiIgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2Ij4KICA8cGF0aCBmaWxsPSIjNDVlMGU2IiBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik0zIDB2MTBoMTB2MkgxVjBoMnoiLz4KPC9zdmc+Cg==');
+            mask-size: contain;
+            mask-repeat: no-repeat;
+        }
+
+        .dep-link {
+            cursor: pointer;
+            text-decoration: underline;
+            text-decoration-style: dotted;
+            transition: color 0.15s, text-decoration-style 0.15s;
+        }
+
+        .dep-link:hover {
+            text-decoration-style: solid;
+            color: var(--text-primary) !important;
+        }
+
+        .dep-legend {
+            display: flex;
+            gap: 15px;
+            margin-top: 20px;
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .legend-box {
+            width: 12px;
+            height: 12px;
+            border-radius: 2px;
+        }
+
+        .legend-box.created { background: var(--accent-orange); }
+        .legend-box.planned { background: #2ea043; }
+        .legend-box.blocking { border: 1px solid var(--accent-red); background: rgba(218, 54, 51, 0.2); }
+
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-secondary);
+            font-style: italic;
+        }
+
+        /* Role-based Prompts Tab UI */
+        .prompts-tab {
+            padding: 20px;
+            overflow-y: auto;
+            height: 100%;
+        }
+
+        .role-selector-section {
+            margin-bottom: 24px;
+            padding: 12px;
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            border-radius: 8px;
+            border: 1px solid var(--accent-teal-dim);
+        }
+
+        .role-selector-section label {
+            font-weight: 600;
+            font-size: 13px;
+            margin-right: 8px;
+            color: var(--text-primary);
+        }
+
+        .role-selector-section select {
+            padding: 6px 12px;
+            border: 1px solid var(--accent-teal);
+            border-radius: 4px;
+            font-size: 13px;
+            min-width: 200px;
+            background: var(--panel-bg2, #0a0a0a);
+            color: var(--text-primary);
+        }
+
+        .role-selector-section select:focus {
+            outline: none;
+            border-color: var(--accent-teal);
+            box-shadow: 0 0 0 1px var(--accent-teal-dim);
+        }
+
+        .role-config {
+            margin-bottom: 24px;
+        }
+
+        .config-section {
+            margin-bottom: 16px;
+            padding: 16px;
+            background: #0a0a0a;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+
+        .section-desc {
+            margin: 0 0 12px 0;
+            font-size: 12px;
+            color: var(--text-secondary);
+            line-height: 1.4;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .input-group label {
+            font-weight: 600;
+            font-size: 12px;
+            align-self: center;
+            white-space: nowrap;
+            color: var(--text-primary);
+        }
+
+        .input-group input[type="text"] {
+            flex: 1;
+            padding: 6px 8px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            font-size: 13px;
+            background: #111;
+            color: var(--text-primary);
+        }
+
+        .example-paths {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .example-paths strong {
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        .example-paths code {
+            display: block;
+            background: #1a1a1a;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: var(--font-code);
+            margin-top: 4px;
+            color: var(--accent-teal);
+        }
+
+
+        .checkbox-group {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 8px;
+        }
+
+        .radio-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        .radio-option {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            font-size: 13px;
+            color: var(--text-primary);
+        }
+
+        .radio-option input[type="radio"] {
+            cursor: pointer;
+            accent-color: var(--accent-teal);
+        }
+
+        .checkbox-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            cursor: pointer;
+            padding: 8px;
+            background: #0d0d0d;
+            border-radius: 4px;
+            border: 1px solid var(--border-color);
+        }
+
+        .checkbox-item:hover {
+            background: #1a1a1a;
+        }
+
+        .checkbox-item input[type="checkbox"] {
+            margin: 0;
+        }
+
+        .addon-radio-group {
+            margin-bottom: 8px;
+            padding: 4px 0;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .addon-radio-group .checkbox-item {
+            padding-left: 4px;
+        }
+
+        .tooltip {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-left: auto;
+        }
+
+        .addon-subsection-accordion {
+            border: 1px solid var(--border-color, #333);
+            border-radius: 6px;
+            margin: 8px 0;
+            background: var(--panel-bg2, transparent);
+        }
+        .addon-subsection-accordion > summary.addon-subsection-header {
+            cursor: pointer;
+            padding: 8px 12px;
+            font-weight: 600;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            list-style: none;
+            user-select: none;
+        }
+        .addon-subsection-accordion > summary.addon-subsection-header::-webkit-details-marker { display: none; }
+        .addon-subsection-accordion > summary.addon-subsection-header::before {
+            content: '';
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            margin-right: 8px;
+            vertical-align: -0.125em;
+            background-color: currentColor;
+            mask-image: url('data:image/svg+xml;base64,PCEtLSBzb3VyY2U6IGljb25zL2ljb24tY2hldnJvbi1yaWdodC5zdmcgLS0+CjwhLS0gZmlsbCBpcyBpZ25vcmVkIHVuZGVyIENTUyBtYXNrOyBmaWxsPSIjNDVlMGU2IiBpcyBmcm96ZW4gZm9yIHBhcml0eSBjaGVjayAtLT4KPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxNiAxNiIgd2lkdGg9IjE2IiBoZWlnaHQ9IjE2Ij4KICA8cGF0aCBmaWxsPSIjNDVlMGU2IiBmaWxsLXJ1bGU9ImV2ZW5vZGQiIGQ9Ik02LjIyIDMuMjJhLjc1Ljc1IDAgMCAxIDEuMDYgMGw0LjI1IDQuMjVhLjc1Ljc1IDAgMCAxIDAgMS4wNmwtNC4yNSA0LjI1YS43NS43NSAwIDAgMS0xLjA2LTEuMDZMOS45NCA4IDYuMjIgNC4yOGEuNzUuNzUgMCAwIDEgMC0xLjA2eiIvPgo8L3N2Zz4K');
+            mask-size: contain;
+            mask-repeat: no-repeat;
+            transition: transform 0.15s ease;
+        }
+        .addon-subsection-accordion[open] > summary.addon-subsection-header::before { transform: rotate(90deg); }
+        .addon-subsection-body { padding: 8px 12px 12px; }
+        .addon-option-desc {
+            display: block;
+            font-size: 11px;
+            color: var(--text-secondary, #888);
+            margin: 2px 0 6px 22px;
+            line-height: 1.4;
+        }
+        .addon-option-label {
+            font-weight: 500;
+        }
+
+        #promptPreview {
+            width: 100%;
+            min-height: 200px;
+            padding: 8px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            font-family: var(--font-code);
+            font-size: 12px;
+            background: #0d0d0d;
+            color: var(--text-primary);
+            resize: vertical;
+        }
+
+        /* CSS for worktrees tab */
+        .btn-secondary {
+            background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
+            border: 1px solid color-mix(in srgb, var(--text-secondary) 30%, transparent);
+            color: var(--text-secondary);
+            font-size: 11px;
+            letter-spacing: 1px;
+            padding: 8px 12px;
+            border-radius: 2px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .btn-secondary:hover {
+            background: color-mix(in srgb, var(--text-secondary) 20%, transparent);
+            color: var(--text-primary);
+        }
+        .btn-danger {
+            background: color-mix(in srgb, var(--accent-red) 10%, transparent);
+            border: 1px solid color-mix(in srgb, var(--accent-red) 30%, transparent);
+            color: var(--accent-red);
+            font-size: 11px;
+            letter-spacing: 1px;
+            padding: 8px 12px;
+            border-radius: 2px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .btn-danger:hover {
+            background: color-mix(in srgb, var(--accent-red) 20%, transparent);
+            color: var(--text-primary);
+            border-color: var(--accent-red);
+        }
+
+        /* Add flash animation — 3 seconds total: 0.3s fade-in, ~2.4s hold, 0.3s fade-out */
+        @keyframes statusFlash {
+            0% { opacity: 0; }
+            10% { opacity: 1; }
+            90% { opacity: 1; }
+            100% { opacity: 0; }
+        }
+
+    </style>
+    <style>
+.shared-tab-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 16px 0;
+  background: var(--panel-bg);
+  border-bottom: 1px solid var(--border-color);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.shared-tab-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  color: var(--text-secondary);
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 8px 16px;
+  cursor: pointer;
+  border-radius: 3px 3px 0 0;
+  transition: all 0.08s;
+  position: relative;
+  top: 1px;
+}
+.shared-tab-btn:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent-teal) 5%, transparent);
+}
+.shared-tab-btn.active {
+  color: var(--accent-teal);
+  background: var(--panel-bg2);
+  border-color: var(--border-color);
+  border-bottom-color: var(--panel-bg2);
+}
+.shared-tab-content {
+  display: none;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+}
+.shared-tab-content.active {
+  display: flex;
+  overflow-y: auto;
+}
+.cyber-theme-enabled .shared-tab-btn.active {
+  box-shadow: 0 -2px 8px color-mix(in srgb, var(--accent-teal) 30%, transparent);
+}
+.cyber-theme-enabled .shared-tab-bar {
+  background: var(--panel-bg);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+/* Claudify: neutral-grey tab nav (active tab keeps the terracotta accent). kanban.html has its
+   own inline copy of these tab styles, so the override must live here too. */
+body.theme-claudify .shared-tab-btn:not(.active) { color: #8a8a8a; }
+/* Active tab = invisible rectangle: fill + bottom border match the bar so only the
+   terracotta text reads (D14). */
+body.theme-claudify .shared-tab-btn.active {
+  background: var(--panel-bg);
+  border-color: transparent;
+  border-bottom-color: transparent;
+/* Mission card styling in STAGING column */
+.kanban-card.mission-card {
+    border-left: 3px solid var(--vscode-focusBorder, #4d9375);
+    background: var(--vscode-editorWidget-background, rgba(255,255,255,.04));
+    cursor: grab;
+}
+.kanban-card.mission-card .mission-badge {
+    font-size: 9px;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: rgba(255,255,255,.1);
+    color: var(--text-secondary);
+    text-transform: uppercase;
+}
+
+body.theme-claudify .shared-tab-btn:hover:not(.active) {
+  color: #c8c8c8;
+  background: color-mix(in srgb, #ffffff 5%, transparent);
+}
+    </style>
+</head>
+
+<body class="cyber-theme-enabled">
+    <!-- SHARED_DEFAULTS_SCRIPT -->
+    <div class="shared-tab-bar">
+        <button class="shared-tab-btn active" data-tab="agents">AGENTS</button>
+        <button class="shared-tab-btn" data-tab="teams">TEAMS</button>
+        <button class="shared-tab-btn" data-tab="prompts">PROMPTS</button>
+        <button class="shared-tab-btn" data-tab="standing-orders">STANDING ORDERS</button>
+    </div>
+
+    <div id="status-message" style="display:none;"></div>
+    <div id="tooltip-overlay"></div>
+    <div id="agents-tab-content" class="shared-tab-content">
+      <div style="padding:12px; overflow-y:auto; height:100%;">
+
+        <!-- Build Target — where a build runs (plan: surface-a-build-target-in-agent-control).
+             The choice is per-workspace and delivered to the agent as the
+             seat.build-target standing order; the reviewer is told the result for
+             its own commit. Availability is probed at render — an unusable target
+             is shown as unavailable, never silently swapped for `this box`. -->
+        <div class="db-subsection">
+          <div class="subsection-header"><span>Build Target</span></div>
+          <div style="font-size:10px; color:var(--text-secondary); line-height:1.4; margin:4px 0 8px;">
+            Where builds run. The agent is told this via the <code style="font-size:10px;">seat.build-target</code> standing order, and a reviewer is given the build result for the commit it holds.
+          </div>
+          <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+            <label for="build-target-select" style="font-size:11px; font-weight:600; min-width:60px;">Target</label>
+            <select id="build-target-select" style="flex:0 1 auto; min-width:200px;">
+              <option value="this-box">this box</option>
+              <option value="ssh">desktop over SSH</option>
+              <option value="github-actions">GitHub Actions</option>
+            </select>
+            <span id="build-target-status" style="font-size:10px; color:var(--text-secondary);"></span>
+          </div>
+          <div id="build-target-durations" style="font-size:10px; color:var(--text-secondary); line-height:1.6; margin-top:8px;"></div>
+          <!-- Per-target connection config. Shown contextually for the selected
+               remote target so the availability probe has something to check. NOT
+               credentials — Actions credentials live in SecretStorage; the checkbox
+               records that they are set. -->
+          <div id="build-target-config-ssh" style="display:none; margin-top:8px;">
+            <label class="modal-label" for="build-target-ssh-host">SSH host (user@host)</label>
+            <input id="build-target-ssh-host" class="modal-input" type="text" placeholder="e.g. user@desktop.local">
+          </div>
+          <div id="build-target-config-actions" style="display:none; margin-top:8px;">
+            <label class="modal-label" for="build-target-actions-repo">GitHub repository (owner/repo)</label>
+            <input id="build-target-actions-repo" class="modal-input" type="text" placeholder="e.g. acme/widgets">
+            <label class="cli-toggle-inline" style="margin-top:6px; display:flex; align-items:center; gap:6px;">
+              <input type="checkbox" id="build-target-actions-configured" style="width:auto; margin:0;">
+              <span style="font-size:10px;">GitHub Actions credentials are configured (in SecretStorage)</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Agent Visibility & CLI Commands -->
+        <div class="db-subsection">
+          <div class="subsection-header"><span>Agent Visibility &amp; CLI Commands</span></div>
+          <div style="font-size:10px; color:var(--text-secondary); line-height:1.4; margin:4px 0 8px;">
+            Set pre-consent flags or pre-populate trusted directories for your CLIs to prevent unseen blocking prompts at spawn. See <code style="font-size:10px;">docs/AGENT_CLI_CONSENT_FLAGS.md</code> in this repository.
+          </div>
+
+          <!-- Machine selector (plan: agents-are-saved-per-machine-and-a-team-picks-one).
+               Agents are saved PER MACHINE. A team picks one machine. The machine
+               carries its own ssh/mosh prefix, applied to every agent in that set. -->
+          <div id="agents-tab-machine-bar" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:4px 0 10px; padding:6px 8px; border:1px solid var(--border); border-radius:4px; background:var(--panel-bg2);">
+            <label style="font-size:11px; font-weight:600; min-width:60px;">Machine</label>
+            <select id="agents-tab-machine-select" style="flex:0 1 auto; min-width:140px;"></select>
+            <span id="agents-tab-machine-transport" style="font-size:10px; color:var(--text-secondary);"></span>
+            <div style="flex:1;"></div>
+            <button id="agents-tab-btn-add-machine" class="strip-btn" style="font-size:10px;">ADD MACHINE</button>
+            <button id="agents-tab-btn-edit-machine" class="strip-btn" style="font-size:10px;">EDIT</button>
+            <button id="agents-tab-btn-delete-machine" class="strip-btn" style="font-size:10px; color:var(--accent-red);">DELETE</button>
+            <button id="agents-tab-btn-probe-machine" class="strip-btn" style="font-size:10px;">PROBE</button>
+            <span id="agents-tab-machine-probe-status" style="font-size:10px; min-width:40px;"></span>
+          </div>
+          <div id="agents-tab-machine-form" class="agents-tab-inline-form" style="display:none;">
+            <div class="agents-tab-inline-form-title" id="agents-tab-machine-form-title">New Machine</div>
+            <label class="modal-label" for="agents-tab-machine-name">Name</label>
+            <input id="agents-tab-machine-name" class="modal-input" type="text" placeholder="e.g. Pi Cluster">
+            <label class="modal-label" for="agents-tab-machine-id">ID (unique, no spaces)</label>
+            <input id="agents-tab-machine-id" class="modal-input" type="text" placeholder="e.g. pi-cluster">
+            <label class="modal-label" for="agents-tab-machine-transport-select">Transport</label>
+            <select id="agents-tab-machine-transport-select" class="modal-input">
+              <option value="local">local</option>
+              <option value="ssh">ssh</option>
+              <option value="mosh">mosh</option>
+            </select>
+            <label class="modal-label" for="agents-tab-machine-prefix">Transport prefix</label>
+            <input id="agents-tab-machine-prefix" class="modal-input" type="text" placeholder="e.g. user@host (for ssh/mosh); empty for local">
+            <div id="agents-tab-machine-error" style="min-height:16px; color: var(--accent-red); font-size: 11px; margin-top: 6px;"></div>
+            <div style="display:flex; gap:8px; margin-top:8px;">
+              <button id="agents-tab-btn-save-machine" class="modal-btn-primary">SAVE MACHINE</button>
+              <button id="agents-tab-btn-cancel-machine" class="modal-btn-secondary">CANCEL</button>
+            </div>
+          </div>
+
+          <!-- CORE -->
+          <div class="agents-group-label" style="margin-top:4px;">Core</div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="planner" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Planner</label><input type="text" data-role="planner" id="agents-tab-cmd-planner" placeholder="e.g. agy --approval-mode auto_edit" style="flex:1;"></div>
+          <div class="agent-description">Writes detailed step-by-step implementation plans and creates work checklists. Increase the number of terminals to spread multiple plans among different planners for faster processing of plan batches.</div>
+          <div class="startup-row planner-pool-row" style="padding-left:24px;">
+            <label style="min-width:70px;">Terminals</label>
+            <select id="agents-tab-planner-terminal-count" data-role="planner" style="flex:0 0 auto;">
+              <option value="1" selected>1</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+            </select>
+            <label class="cli-toggle-inline" style="margin-left:12px;" title="When advancing all, send at most one plan per available planner terminal (oldest plans first). Reducing the count does not close existing terminals — close them manually.">
+              <input type="checkbox" id="agents-tab-planner-limit-dispatch" data-role="planner" style="width:auto;margin:0;">
+              Limit dispatches to number of available terminals
+            </label>
+          </div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="lead" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Lead Coder</label><input type="text" data-role="lead" id="agents-tab-cmd-lead" placeholder="e.g. agy" style="flex:1;"></div>
+          <div class="agent-description">Implements high-complexity files, complex refactors, and core architecture changes.</div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="coder" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Coder</label><input type="text" data-role="coder" id="agents-tab-cmd-coder" placeholder="e.g. agy --approval-mode auto_edit" style="flex:1;"></div>
+          <div class="agent-description">Implements low-complexity boilerplate, routine functions, and minor enhancements.</div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="intern" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Intern</label><input type="text" data-role="intern" id="agents-tab-cmd-intern" placeholder="e.g. agy" style="flex:1;"></div>
+          <div class="agent-description">Executes simple, repetitive code edits and heavily guided tasks at lowest cost.</div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="reviewer" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Reviewer</label><input type="text" data-role="reviewer" id="agents-tab-cmd-reviewer" placeholder="e.g. agy --approval-mode auto_edit" style="flex:1;"></div>
+          <div class="agent-description">Evaluates completed implementations against plans, checking for regressions and scope creep.</div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="analyst" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Analyst</label><input type="text" data-role="analyst" id="agents-tab-cmd-analyst" placeholder="e.g. qwen" style="flex:1;"></div>
+          <div class="agent-description">Researches general-purpose technical queries and outlines plan dependencies.</div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="project_manager" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Project Manager</label><input type="text" data-role="project_manager" id="agents-tab-cmd-project-manager" placeholder="e.g. claude" style="flex:1;"></div>
+          <div class="agent-description">Host-agnostic management console — drives the board over the LocalApiServer HTTP API. Activate via the Manage button in the Implementation panel.</div>
+
+          <!-- OPTIONAL -->
+          <div class="agents-group-label">Optional</div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="tester" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Acceptance Tester</label><input type="text" data-role="tester" id="agents-tab-cmd-tester" placeholder="e.g. agy" style="flex:1;"></div>
+          <div class="agent-description">Judges finished changes against acceptance criteria (deferred risks resolved and intent satisfied) and writes follow-up plans. Optional by decision — enabling it is what gives the pipeline a Completion Tested stage.</div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="ticket_updater" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Ticket Updater</label><input type="text" data-role="ticket_updater" id="agents-tab-cmd-ticket-updater" placeholder="e.g. agy" style="flex:1;"></div>
+          <div class="agent-description">Synchronizes plan state and comments back to connected project management systems (e.g. ClickUp/Linear).</div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="researcher" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Researcher</label><input type="text" data-role="researcher" id="agents-tab-cmd-researcher" placeholder="e.g. claude" style="flex:1;"></div>
+          <div class="agent-description">Researches general topics and saves results as documents to local docs storage (.switchboard/docs/).</div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="jules" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Jules</label><span style="flex:1;font-size:10px;color:var(--text-secondary);">Cloud coder visibility only</span></div>
+          <div class="agent-description">Offloads tasks to Google Jules cloud-coding service for quota-free background execution.</div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="claude_artifacts" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Claude Artifacts</label><input type="text" data-role="claude_artifacts" id="agents-tab-cmd-claude-artifacts" placeholder="e.g. claude" style="flex:1;"></div>
+          <div class="agent-description">Terminal-only helper to download and upload claude.ai document artifacts.</div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="phone_a_friend" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Phone-a-Friend</label><input type="text" data-role="phone_a_friend" id="agents-tab-cmd-phone-a-friend" placeholder="e.g. agy --model flash" style="flex:1;"></div>
+          <div class="agent-description">Automatic second-pass coder — receives a dispatch when a coder finishes a plan batch (requires the Phone-a-Friend addon enabled on the coding role).</div>
+          <label class="startup-row" style="display:flex;align-items:center;gap:8px;margin-top:6px;">
+            <input id="agents-tab-jules-auto-sync" type="checkbox" style="width:auto;margin:0;">
+            <span>Auto-sync repo before sending to Jules</span>
+          </label>
+
+          <!-- Seat-clear session-restart toll. Lives HERE, beside the always-visible
+               role command fields, not inside the Custom Agents inline form: that form
+               is hidden by agentsTabHideInlineForm() after any save, cancel or delete,
+               so a note placed in it disappears for the rest of the session — and the
+               reader who needs it is usually configuring a ROLE, not a custom agent.
+               Static copy only: no runtime detection, no banner, no notification. See
+               devin-clear-reauth-toll-visibility.md. -->
+          <p style="font-size:10px; color:var(--text-secondary); margin-top:10px; line-height:1.4;">
+            Clearing a seat restarts that seat's CLI session. A restarted session re-initialises its MCP servers, so any OAuth-backed MCP server prompts for authorisation again. This is expected and recurs on each work-context switch — it is not a broken token. To stop the prompts, remove the OAuth-backed servers you do not need from your agent's own MCP config.
+          </p>
+
+
+        </div>
+
+        <!-- Custom Agents -->
+        <div class="db-subsection">
+          <div class="subsection-header"><span>Custom Agents</span></div>
+          <div id="agents-tab-custom-agent-list" style="display:flex; flex-direction:column; gap:6px;"></div>
+          <div id="agents-tab-custom-agent-delete-error" style="min-height:0px; color: var(--accent-red); font-size: 11px; margin-top: 4px;"></div>
+          <div id="agents-tab-custom-agent-form" class="agents-tab-inline-form">
+            <div class="agents-tab-inline-form-title" id="agents-tab-inline-form-title">New Custom Agent</div>
+            <label class="modal-label" for="agents-tab-custom-agent-name">Agent name</label>
+            <input id="agents-tab-custom-agent-name" class="modal-input" type="text" placeholder="e.g. Refactor Specialist">
+            <label class="modal-label" for="agents-tab-custom-agent-command">Startup command</label>
+            <input id="agents-tab-custom-agent-command" class="modal-input" type="text" placeholder="e.g. devin --model claude-opus-4.6">
+            <p style="font-size:10px; color:var(--text-secondary); margin-top:4px; line-height:1.4;">
+              Flags here are re-applied on every clear. The model is a flag, not a separate setting — declare it in the command (e.g. <code>devin --model claude-opus-4.6</code>).
+            </p>
+
+            <p style="font-size:10px; color:var(--text-secondary); margin-top:8px; line-height:1.4;">
+              Custom agents are standalone definitions available across workspaces. To assemble agents into teams with delegates, use the <strong>TEAMS</strong> tab. Configure prompt add-ons and instructions in the <strong>PROMPTS</strong> tab.
+            </p>
+            <div id="agents-tab-custom-agent-error" style="min-height:16px; color: var(--accent-red); font-size: 11px; margin-top: 6px;"></div>
+            <div class="flex gap-2" style="margin-top: 10px;">
+              <button id="agents-tab-btn-save-custom-agent" class="modal-btn-primary">SAVE AGENT</button>
+              <button id="agents-tab-btn-cancel-custom-agent" class="modal-btn-secondary">CANCEL</button>
+            </div>
+          </div>
+          <button id="agents-tab-btn-add-custom-agent" class="strip-btn" style="width:100%; margin-top:8px;">ADD CUSTOM AGENT</button>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Teams Tab Content -->
+    <div id="teams-tab-content" class="shared-tab-content">
+      <!-- SVG defs: portrait symbol + glow filter. Emitted once, referenced
+           via <use> by every card and flow node. Single flat interceptor silhouette
+           from agent-fleet-air-combat-detailed.svg#afc-jet. -->
+      <svg width="0" height="0" style="position:absolute;" aria-hidden="true">
+        <defs>
+          <filter id="portrait-glow" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="1.5" result="blur"/>
+            <feMerge>
+              <feMergeNode in="blur"/>
+              <feMergeNode in="SourceGraphic"/>
+            </feMerge>
+          </filter>
+          <!-- Agent: radar interceptor silhouette (Source: agent-fleet-air-combat-detailed.svg#afc-jet) -->
+          <symbol id="portrait-agent" viewBox="-32 -28 64 64" shape-rendering="crispEdges">
+            <g fill="currentColor">
+              <rect x="-4" y="-16" width="8" height="8"/>
+              <rect x="-8" y="-8" width="16" height="4"/>
+              <rect x="-12" y="-8" width="4" height="4"/>
+              <rect x="8" y="-8" width="4" height="4"/>
+              <rect x="-8" y="-4" width="16" height="4"/>
+              <rect x="-16" y="-4" width="4" height="4"/>
+              <rect x="12" y="-4" width="4" height="4"/>
+              <rect x="-8" y="0" width="16" height="4"/>
+              <rect x="-20" y="0" width="4" height="4"/>
+              <rect x="16" y="0" width="4" height="4"/>
+              <rect x="-12" y="4" width="24" height="4"/>
+              <rect x="-24" y="4" width="4" height="4"/>
+              <rect x="20" y="4" width="4" height="4"/>
+              <rect x="-12" y="8" width="24" height="4"/>
+              <rect x="-28" y="8" width="4" height="4"/>
+              <rect x="24" y="8" width="4" height="4"/>
+              <rect x="-16" y="12" width="32" height="4"/>
+              <rect x="-24" y="12" width="4" height="4"/>
+              <rect x="20" y="12" width="4" height="4"/>
+              <rect x="-12" y="16" width="24" height="4"/>
+              <rect x="-16" y="16" width="4" height="4"/>
+              <rect x="12" y="16" width="4" height="4"/>
+              <rect x="-20" y="16" width="4" height="4"/>
+              <rect x="16" y="16" width="4" height="4"/>
+              <rect x="-8" y="20" width="16" height="4"/>
+              <rect x="-12" y="20" width="4" height="4"/>
+              <rect x="8" y="20" width="4" height="4"/>
+              <rect x="-16" y="20" width="4" height="4"/>
+              <rect x="12" y="20" width="4" height="4"/>
+            </g>
+          </symbol>
+        </defs>
+      </svg>
+      <div style="padding:12px; overflow-y:auto; height:100%;">
+
+        <!-- Team Types Gallery -->
+        <div class="db-subsection" id="teams-gallery-subsection">
+          <div class="subsection-header"><span>Teams</span></div>
+          <div style="font-size:11px; color:var(--text-secondary); margin-bottom:8px;">
+            Pick a team to see it drawn, then start it. A team also starts automatically when its head role starts —
+            the button here is for starting it on its own.
+          </div>
+          <div id="teams-gallery" class="teams-card-row"></div>
+          <a class="teams-build-link" id="teams-build-link">+ Build your own</a>
+          <div id="teams-flow-panel"></div>
+        </div>
+
+        <!-- Your Teams -->
+        <div class="db-subsection" id="agent-groups-subsection">
+          <div class="subsection-header"><span>Your Teams</span></div>
+          <div style="font-size:11px; color:var(--text-secondary); margin-bottom:8px;">
+            Adopted teams and their definitions. Edit one to adjust members, roles, or prompts;
+            delete one to remove it. Starting the head role spawns the team wired.
+          </div>
+          <div id="agent-groups-list" style="display:flex; flex-direction:column; gap:6px;"></div>
+          <div id="agent-groups-error" style="min-height:0px; color: var(--accent-red); font-size: 11px; margin-top: 4px;"></div>
+          <div id="agent-groups-inline-form" class="agents-tab-inline-form hidden">
+            <div class="agents-tab-inline-form-title" id="agent-groups-form-title">New Team</div>
+            <label class="modal-label" for="agent-groups-name">Team name</label>
+            <input id="agent-groups-name" class="modal-input" type="text" placeholder="e.g. Feature Implementation">
+            <label class="modal-label" for="agent-groups-head-role">Head role</label>
+            <select id="agent-groups-head-role" class="modal-input"></select>
+            <!-- Machine selector (plan: agents-are-saved-per-machine-and-a-team-picks-one).
+                 A team picks ONE machine — head and every delegate spawn on it. The
+                 machine carries its own ssh/mosh prefix, applied to every agent. -->
+            <label class="modal-label" for="agent-groups-machine" style="margin-top:10px;">Machine</label>
+            <select id="agent-groups-machine" class="modal-input"></select>
+            <div style="font-size:10px; color:var(--text-secondary); margin-top:2px;">
+              The head and every member spawn on this machine. Per-member startup commands are retired — each role resolves from the machine's command map.
+            </div>
+            <div style="display:flex; align-items:center; gap:6px; margin-top:10px;">
+              <input type="checkbox" id="agent-groups-worktree-mode" style="margin:0; cursor:pointer;">
+              <label for="agent-groups-worktree-mode" style="font-size:11px; cursor:pointer; margin:0;">Spawn in own worktree</label>
+            </div>
+            <!-- §Pair-programming team scope: pair programming is a property of a
+                 team, on by default. The planner splits each plan by difficulty, so
+                 the lead takes what needs judgement and the coder takes the rest. -->
+            <label class="modal-label" for="agent-groups-pair-programming" style="margin-top:10px;">Pair programming</label>
+            <select id="agent-groups-pair-programming" class="modal-input" data-tooltip="The planner splits each plan by difficulty — the lead takes what needs judgement, the coder takes the rest. Off only when the team has no cheaper seat or you want the lead to do everything.">
+              <option value="on">On (default — lead + coder split)</option>
+              <option value="aggressive">Aggressive (coder takes more independently)</option>
+              <option value="off">Off (lead does everything)</option>
+            </select>
+            <div style="font-size:11px; font-weight:600; margin-top:10px; margin-bottom:4px;">Team icon</div>
+            <div id="agent-groups-icon-picker" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+              <button id="agent-groups-icon-preview" type="button" class="strip-btn" style="padding:4px; width:40px; height:40px; display:flex; align-items:center; justify-content:center;" title="Choose icon"></button>
+              <span id="agent-groups-icon-label" style="font-size:11px; color:var(--text-secondary);">Role portrait (default)</span>
+              <button id="agent-groups-icon-reset" type="button" class="strip-btn" style="font-size:10px; padding:2px 8px;" title="Reset to role portrait">RESET</button>
+            </div>
+            <input type="hidden" id="agent-groups-icon-value">
+            <div id="agent-groups-icon-grid" class="agents-tab-inline-form" style="display:none; position:relative; margin-top:6px; padding:8px; max-height:240px; overflow-y:auto; border:1px solid var(--border); border-radius:4px; background:var(--panel-bg2);">
+              <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px; flex-wrap:wrap;">
+                <span style="font-size:10px; font-weight:600;">Pick an icon</span>
+                <label class="strip-btn" style="font-size:10px; padding:2px 8px; cursor:pointer;">
+                  CUSTOM…
+                  <input id="agent-groups-icon-file" type="file" accept="image/png,image/svg+xml,image/webp" style="display:none;">
+                </label>
+                <button id="agent-groups-icon-grid-close" type="button" class="strip-btn" style="font-size:10px; padding:2px 8px; margin-left:auto;">CLOSE</button>
+              </div>
+              <div id="agent-groups-icon-grid-items" style="display:grid; grid-template-columns:repeat(auto-fill, minmax(36px, 1fr)); gap:4px;"></div>
+              <div id="agent-groups-icon-error" style="min-height:0; color:var(--accent-red); font-size:10px; margin-top:4px;"></div>
+            </div>
+            <div style="font-size:11px; font-weight:600; margin-top:10px; margin-bottom:4px;">Members</div>
+            <div style="font-size:10px;color:var(--text-secondary);">Each member resolves its startup command from the selected machine's command map (Agents tab).</div>
+            <div id="agent-groups-members" style="display:flex; flex-direction:column; gap:4px;"></div>
+            <button id="agent-groups-add-member" class="strip-btn" style="width:100%; margin-top:6px;">ADD MEMBER</button>
+            <div style="font-size:11px; color:var(--text-secondary); margin-top:8px;">
+              Every member reports to the head. Closing the head closes its own members; shared members stay.
+            </div>
+            <label class="modal-label" for="agent-groups-prompt" style="margin-top:10px;">Team prompt</label>
+            <textarea id="agent-groups-prompt" class="modal-input" rows="4" placeholder="System prompt delivered to every member on every message. Leave blank for the default (report-back route + git safety). Use {child} for the head terminal name." style="font-family:var(--font-mono, monospace); font-size:11px; resize:vertical; white-space:pre-wrap;"></textarea>
+            <label class="modal-label" for="agent-groups-head-prompt" style="margin-top:10px;">Head prompt (delivered to the team's head only)</label>
+            <textarea id="agent-groups-head-prompt" class="modal-input" rows="4" placeholder="Standing order delivered to the head terminal on every message. Use {head} for the head terminal name. Leave blank for teams whose head needs no special instruction." style="font-family:var(--font-mono, monospace); font-size:11px; resize:vertical; white-space:pre-wrap;"></textarea>
+            <div class="flex gap-2" style="margin-top: 10px;">
+              <button id="agent-groups-btn-save" class="modal-btn-primary">SAVE TEAM</button>
+              <button id="agent-groups-btn-cancel" class="modal-btn-secondary">CANCEL</button>
+            </div>
+          </div>
+          <button id="agent-groups-btn-add" class="strip-btn" style="width:100%; margin-top:8px;">ADD TEAM</button>
+        </div>
+
+        <!-- Phone a friend -->
+        <div class="db-subsection" id="delegation-subsection">
+          <div class="subsection-header"><span>Phone a friend</span></div>
+          <div style="font-size:11px; color:var(--text-secondary); margin-bottom:8px;">
+            Enable Phone-a-Friend per role — a second-pass coder notified when a batch finishes. Advanced per-terminal overrides below. Saved to role config.
+          </div>
+          <div class="startup-row" style="gap:8px; margin-bottom:8px;">
+            <label style="min-width:70px;">Role</label>
+            <select id="delegation-role-select" style="flex:1;"></select>
+          </div>
+          <div id="delegation-panels" style="display:flex; flex-direction:column; gap:8px;"></div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Prompts Tab Content -->
+    <div id="prompts-tab-content" class="shared-tab-content">
+      <div class="prompts-tab">
+
+        <!-- Role Selector -->
+        <div class="db-subsection">
+          <div class="subsection-header"><span>Role Selector</span></div>
+          <div class="role-selector-section" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+          <label for="roleSelect">Role:</label>
+          <select id="roleSelect" style="flex: 1; min-width: 150px;">
+            <option value="planner" selected>Planner</option>
+            <option value="lead">Lead Coder</option>
+            <option value="coder">Coder</option>
+            <option value="intern">Intern</option>
+            <option value="reviewer">Reviewer</option>
+            <option value="tester">Acceptance Tester</option>
+            <option value="analyst">Analyst</option>
+            <option value="researcher">Researcher</option>
+            <option value="ticket_updater">Ticket Updater</option>
+            <option value="jules">Jules</option>
+            <optgroup id="customAgentsGroup" label="Custom Agents"></optgroup>
+          </select>
+          <button id="prompts-tab-btn-export-skill" class="secondary-btn" style="height:26px; line-height:24px; padding:0 12px; margin:0;">EXPORT AS SKILL</button>
+          </div>
+          <div id="roleDescription" class="agent-description" style="margin-top: 8px; margin-left: 0;"></div>
+        </div>
+
+        <!-- Planner-specific configuration -->
+        <div id="plannerConfig" class="role-config">
+          <div class="db-subsection">
+            <div class="subsection-header"><span>Workflow File (single plan)</span></div>
+            <div class="config-section workflow-section">
+              <p class="section-desc">The workflow file defines the planning methodology.</p>
+              
+              <div class="input-group">
+                <label class="checkbox-item" title="Enable workflow file for planner">
+                  <input type="checkbox" id="plannerWorkflowEnabled" checked>
+                  <span>Enable Workflow File</span>
+                </label>
+              </div>
+              <div id="plannerWorkflowFilePathGroup">
+                <div class="input-group">
+                  <label for="workflowFilePath">Workflow File Path:</label>
+                  <input type="text" id="workflowFilePath" value=".agents/protocols/improve-plan/SKILL.md" />
+                  <button id="validateWorkflowPath" class="secondary-btn">Validate</button>
+                </div>
+                <div id="prompts-tab-workflow-path-status" style="font-size:11px; margin-top:4px;"></div>
+                
+                <div class="example-paths">
+                  <strong>Example paths:</strong>
+                  <code>.agents/protocols/improve-plan/SKILL.md</code> (Switchboard Native)
+                  <code>.claude/get-shit-done/agents/gsd-planner.md</code> (GSD)
+                  <code>.claude/superpowers/skills/writing-plans.md</code> (Superpowers)
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <div class="db-subsection">
+            <div class="subsection-header"><span>Add-ons</span></div>
+            <div class="config-section addons-section">
+              <p class="section-desc">Planner-specific Mission Control features.</p>
+              
+              <div class="checkbox-group">
+                <label class="checkbox-item" title="Include batch execution rules and focus directive">
+                  <input type="checkbox" id="plannerAddonSwitchboardSafeguards">
+                  <span>Switchboard Safeguards</span>
+                  <span class="tooltip">Include batch execution rules and focus directive</span>
+                </label>
+                
+
+                
+
+                <label class="checkbox-item" title="Include project constitution as context for planning">
+                  <input type="checkbox" id="plannerAddonConstitution">
+                  <span>Project Constitution Reference</span>
+                  <span class="tooltip">Include project constitution as context</span>
+                </label>
+                <label class="checkbox-item" title="Append project PRD as context for planning">
+                  <input type="checkbox" id="plannerAddonDesignSystemDoc">
+                  <span>Project PRD Reference</span>
+                  <span class="tooltip">Include project PRD as context for planning</span>
+                </label>
+
+                <!-- §Pair-programming team scope: the Aggressive Pair Programming
+                     checkbox is RETIRED. Pair programming is now a property of a
+                     team (off|on|aggressive) set on the team card; the board-wide
+                     non-team path keeps the #pairProgrammingModeSelect dropdown.
+                     The legacy roleConfig_planner.addons.aggressivePairProgramming
+                     key is preserved on read (KanbanProvider._getPromptsConfig) so
+                     existing installs keep their non-team behaviour. -->
+
+                <label class="checkbox-item" title="Permit worktrees & commits; block destructive undo (reset/checkout/clean) and unclean deletions">
+                  <input type="checkbox" id="plannerAddonGitProhibition">
+                  <span>Git Safety Guardrail</span>
+                  <span class="tooltip">Permit worktrees & commits; block destructive undo (reset/checkout/clean) and unclean deletions</span>
+                </label>
+
+                <label class="checkbox-item" title="Instruct agent to ignore previous checkpoint summaries from prior sessions">
+                  <input type="checkbox" id="plannerAddonClearAntigravityContext">
+                  <span>Clear Antigravity Context</span>
+                  <span class="tooltip">Instruct agent to ignore previous checkpoint summaries from prior sessions</span>
+                </label>
+
+                <label class="checkbox-item" title="Compress responses to reduce output tokens">
+                  <input type="checkbox" id="plannerAddonCavemanOutput">
+                  <span>Caveman Output</span>
+                  <span class="tooltip">Compress responses to reduce output tokens</span>
+                </label>
+
+                <label class="checkbox-item" title="Skip project compilation step in generated prompts">
+                  <input type="checkbox" id="plannerAddonSkipCompilation">
+                  <span>Do not recompile the project</span>
+                  <span class="tooltip">Skip compilation step to save tokens</span>
+                </label>
+
+                 <label class="checkbox-item" title="Skip automated test execution in generated prompts">
+                  <input type="checkbox" id="plannerAddonSkipTests">
+                  <span>Do not run automated tests</span>
+                  <span class="tooltip">Skip automated test execution to save tokens</span>
+                </label>
+
+                <label class="checkbox-item" title="Instruct the planner to emit a research prompt for anything it is not 100% sure about">
+                  <input type="checkbox" id="plannerAddonAdviseResearch">
+                  <span>Advise Research If Unsure</span>
+                  <span class="tooltip">Planner outputs a research prompt (for Google AI Studio / Claude / your research agent) covering its uncertain assumptions</span>
+                </label>
+
+                <details class="addon-subsection-accordion">
+                  <summary class="addon-subsection-header">Features</summary>
+                  <div class="addon-subsection-body" style="display:flex;flex-direction:column;gap:8px;padding:8px 12px;">
+                    <div class="addon-subsection-caption" style="opacity:0.75;font-size:11px;">These add-ons only take effect when the dispatched card is a feature (has subtasks). They are ignored for single-plan dispatch.</div>
+                    <label class="checkbox-item" title="When dispatched against a feature, backfill missing ## Goal, ## How the Subtasks Achieve This, and ## Dependencies & sequencing sections in the feature file">
+                      <input type="checkbox" id="plannerAddonWriteFeatureDescriptionIfEmpty">
+                      <span>Write Feature Description If Empty</span>
+                      <span class="tooltip">When dispatched against a feature, backfill missing ## Goal, ## How the Subtasks Achieve This, and ## Dependencies & sequencing sections in the feature file</span>
+                    </label>
+
+                    <!-- Feature Workflow File -->
+                    <div class="addon-file-group" style="margin-top: 8px; border-top: 1px solid var(--vscode-panel-border, #eee); padding-top: 8px;">
+                      <div class="input-group">
+                        <label class="checkbox-item" title="Enable workflow file for planner when targeting a feature">
+                          <input type="checkbox" id="plannerFeatureWorkflowEnabled">
+                          <span>Enable Feature Workflow File</span>
+                        </label>
+                      </div>
+                      <div id="plannerFeatureWorkflowFilePathGroup" style="display:none; margin-top: 4px;">
+                        <div class="input-group" style="display:flex; gap:6px; align-items:center;">
+                          <label for="plannerFeatureWorkflowFilePath" style="font-size:11px;">Path:</label>
+                          <input type="text" id="plannerFeatureWorkflowFilePath" value=".agents/protocols/improve-feature/SKILL.md" style="flex:1; padding:2px 6px; border-radius:4px; border:1px solid var(--vscode-input-border, #ccc); background:var(--vscode-input-background, #fff); color:var(--vscode-input-foreground, #000); font-size:11px;" />
+                          <button id="validateFeatureWorkflowPath" class="secondary-btn" style="padding:2px 6px; font-size:11px;">Validate</button>
+                        </div>
+                        <div id="prompts-tab-feature-workflow-path-status" style="font-size:10px; margin-top:4px; color: var(--vscode-descriptionForeground);"></div>
+                        <div class="example-paths" style="font-size:10px; opacity:0.8; margin-top:4px;">
+                          <strong>Default:</strong> <code>.agents/protocols/improve-feature/SKILL.md</code>
+                        </div>
+                      </div>
+                    </div>
+
+                    <!-- Feature Subagent Policy -->
+                    <div style="margin-top: 8px; border-top: 1px solid var(--vscode-panel-border, #eee); padding-top: 8px; display:flex; flex-direction:column; gap:4px;">
+                      <span style="font-weight:600; font-size:11px;">Feature Subagent Policy</span>
+                      <label class="checkbox-item" title="Let the execution platform decide subagent behavior for features">
+                        <input type="radio" name="plannerFeatureSubagentPolicy" value="default" checked>
+                        <span>Not Specified</span>
+                      </label>
+                      <label class="checkbox-item" title="Explicitly instruct the agent not to spawn or invoke any subagents for features">
+                        <input type="radio" name="plannerFeatureSubagentPolicy" value="noSubagents">
+                        <span>No Subagents</span>
+                      </label>
+                      <label class="checkbox-item" title="Instruct the agent to use parallel subagents when handling features">
+                        <input type="radio" name="plannerFeatureSubagentPolicy" value="useSubagents">
+                        <span>Yes (Use Subagents)</span>
+                      </label>
+                      <label class="checkbox-item" title="Instruct the agent to use a specific custom subagent for features" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                        <input type="radio" name="plannerFeatureSubagentPolicy" value="customSubagent">
+                        <span>Custom Subagent</span>
+                        <input id="plannerFeatureCustomSubagentName" type="text" placeholder="Custom subagent name..." style="margin-left:8px;padding:2px 6px;border-radius:4px;border:1px solid var(--vscode-input-border, #ccc);background:var(--vscode-input-background, #fff);color:var(--vscode-input-foreground, #000);display:none;font-size:11px;width:150px;">
+                      </label>
+                    </div>
+                  </div>
+                </details>
+
+                <details class="addon-subsection-accordion">
+                  <summary class="addon-subsection-header">Subagent Policy</summary>
+                  <div class="addon-subsection-body" style="display:flex;flex-direction:column;gap:8px;padding:8px 12px;">
+                    <label class="checkbox-item" title="Let the execution platform decide subagent behavior">
+                      <input type="radio" name="plannerSubagentPolicy" value="default" checked>
+                      <span>Not Specified</span>
+                    </label>
+                    <label class="checkbox-item" title="Explicitly instruct the agent not to spawn or invoke any subagents">
+                      <input type="radio" name="plannerSubagentPolicy" value="noSubagents">
+                      <span>No Subagents</span>
+                    </label>
+                    <label class="checkbox-item" title="Instruct the agent to use parallel subagents when handling multiple plans">
+                      <input type="radio" name="plannerSubagentPolicy" value="useSubagents">
+                      <span>Yes (Use Subagents)</span>
+                    </label>
+                    <label class="checkbox-item" title="Instruct the agent to use a specific custom subagent" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                      <input type="radio" name="plannerSubagentPolicy" value="customSubagent">
+                      <span>Custom Subagent</span>
+                      <input id="plannerAddonCustomSubagentName" type="text" placeholder="Custom subagent name..." style="margin-left:8px;padding:2px 6px;border-radius:4px;border:1px solid var(--vscode-input-border, #ccc);background:var(--vscode-input-background, #fff);color:var(--vscode-input-foreground, #000);display:none;font-size:11px;width:150px;">
+                    </label>
+                  </div>
+                </details>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Research Complexity Section (researcher only) -->
+        <div id="researchComplexityConfig" class="role-config" style="display: none;">
+          <div class="db-subsection">
+            <div class="subsection-header"><span>Research Complexity</span></div>
+            <div class="config-section">
+              <p class="section-desc">Select the depth of research for the generated prompt.</p>
+              
+              <div class="radio-group">
+                <label class="radio-option">
+                  <input type="radio" name="researchComplexity" value="quick">
+                  <span>Quick (5-10 sources)</span>
+                </label>
+                <label class="radio-option">
+                  <input type="radio" name="researchComplexity" value="standard">
+                  <span>Standard (15-30 sources)</span>
+                </label>
+                <label class="radio-option">
+                  <input type="radio" name="researchComplexity" value="deep" checked>
+                  <span>Deep (50-100+ sources)</span>
+                </label>
+                <label class="radio-option">
+                  <input type="radio" name="researchComplexity" value="academic">
+                  <span>Academic (100-200+ sources)</span>
+                </label>
+              </div>
+
+              <!-- Save to local docs toggle (researcher only) -->
+              <div id="saveToLocalDocsRow" class="checkbox-group" style="margin-top: 16px; display: none;">
+                <label class="checkbox-item" title="Save research results to .switchboard/docs/ for later viewing">
+                  <input type="checkbox" id="saveToLocalDocs">
+                  <span>Save Results to Local Docs</span>
+                  <span class="tooltip">Instructs the agent to save research results to .switchboard/docs/ using write_to_file</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Non-planner roles: Prompt customization -->
+        <div id="promptCustomization" class="role-config" style="display: none;">
+          <div class="db-subsection">
+            <div class="subsection-header"><span>Add-ons</span></div>
+            <div class="config-section addons-section">
+              <p class="section-desc" id="roleAddonsDesc">Role-specific Mission Control features.</p>
+              
+              <div id="roleAddonsGroup" class="checkbox-group">
+                <!-- Role-specific add-ons injected here via JavaScript -->
+              </div>
+            </div>
+          </div>
+        </div>
+        
+
+        <!-- Preview section (shown for all roles) -->
+        <div class="db-subsection">
+          <div class="subsection-header">
+            <span>Edit Prompt Template</span>
+            <span id="previewPlanIndicator" style="margin-left: 8px; font-size: 10px; font-weight: normal; text-transform: none; letter-spacing: 0;"></span>
+          </div>
+          <div class="config-section preview-section">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+              <span class="section-desc" style="margin:0;">Final composed prompt sent to the agent (editable):</span>
+              
+            </div>
+            <textarea id="promptPreview"></textarea>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Standing Orders Tab Content (Agent Control view only; hidden on the board
+         by the CSS allow-list + the default .shared-tab-content inactive rule). -->
+    <div id="standing-orders-tab-content" class="shared-tab-content">
+      <div class="prompts-tab" style="max-width: 900px; margin: 0 auto;">
+
+        <!-- Effect note — one line, matching the team cockpit editor's pattern. -->
+        <div class="db-subsection">
+          <div class="section-desc" style="margin:0 0 8px 0;">
+            Changes apply to future prompts only. Running agents do not re-read them.
+          </div>
+        </div>
+
+        <div class="db-subsection">
+          <div class="subsection-header" style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+            <span>Library</span>
+            <button id="standing-orders-def-add-btn" class="action-btn" style="height:26px; line-height:24px; padding:0 12px; margin:0;">+ NEW ENTRY</button>
+          </div>
+          <div class="section-desc" style="margin:0 0 10px 0;">Reusable instructions. Editing one updates every order that follows it.</div>
+          <div id="standing-orders-def-add-form" style="display:none; border:1px solid var(--panel-border, #444); padding:10px; margin-bottom:12px; border-radius:4px;">
+            <label class="modal-label" for="standing-orders-def-add-name">Name <span style="font-weight:normal; color:var(--text-secondary, #999);">(optional)</span></label>
+            <input id="standing-orders-def-add-name" class="modal-input" type="text" placeholder="Short label">
+            <label class="modal-label" for="standing-orders-def-add-instruction">Instruction</label>
+            <textarea id="standing-orders-def-add-instruction" class="modal-textarea" rows="3" placeholder="Reusable instruction..."></textarea>
+            <div id="standing-orders-def-add-error" style="min-height:16px; color: var(--accent-red); font-size: 11px; margin-top: 4px;"></div>
+            <div class="flex gap-2" style="margin-top: 8px;">
+              <button id="standing-orders-def-add-submit" class="action-btn">SAVE</button>
+              <button id="standing-orders-def-add-cancel" class="secondary-btn">CANCEL</button>
+            </div>
+          </div>
+          <div id="standing-orders-def-list"></div>
+          <div id="standing-orders-def-empty" style="display:none; color: var(--text-secondary, #999); font-size: 12px; padding: 12px 0;">No library entries yet.</div>
+        </div>
+
+        <!-- Core orders — system-composed at delivery from the live team
+             roster, never persisted. Read-only: there is no stored row to
+             edit or delete. This is the population the persisted list below
+             cannot show — the two sections together are the full set of
+             orders governing agents. -->
+        <div class="db-subsection">
+          <div class="subsection-header"><span>Core Orders</span></div>
+          <div class="section-desc" style="margin:0 0 10px 0;">Composed at delivery from the live team roster — never stored, not editable.</div>
+          <div id="standing-orders-core-list"></div>
+          <div id="standing-orders-core-empty" style="display:none; color: var(--text-secondary, #999); font-size: 12px; padding: 12px 0;">No core orders in this scope — no live spawned teams.</div>
+        </div>
+
+        <!-- Scope filter + Add button -->
+        <div class="db-subsection">
+          <div class="subsection-header"><span>Add-on Orders</span></div>
+          <div class="section-desc" style="margin:0 0 10px 0;">Persisted rows — human-authored, or installed by the host and labeled as such.</div>
+          <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
+            <label for="standing-orders-scope-filter">Scope:</label>
+            <select id="standing-orders-scope-filter" style="flex:1; min-width:160px; max-width:240px;">
+              <option value="all" selected>All</option>
+              <option value="global">Global</option>
+              <option value="role">Role</option>
+              <option value="team">Team</option>
+              <option value="team-head">Team-Head</option>
+              <option value="pair">Pair</option>
+            </select>
+            <button id="standing-orders-add-btn" class="action-btn" style="height:26px; line-height:24px; padding:0 12px; margin:0;">+ ADD ORDER</button>
+          </div>
+
+          <!-- Availability gate (shown ONLY when the host has answered `available:false`).
+               `available` starts null ("not answered yet") and the red line is suppressed
+               until a response actually refuses — see standingOrdersTabRender. The text
+               is set dynamically from `reason` so "no workspace root" and "the DB read
+               threw" are not conflated into one misleading sentence. -->
+          <div id="standing-orders-unavailable" style="display:none; color: var(--accent-red); font-size: 12px; margin-bottom: 8px;">
+            Standing orders require a Kanban database. Open Setup to configure one.
+          </div>
+
+          <!-- Quiet loading state: shown while `available` is still null (no response
+               yet). Replaces the old behaviour of painting the red line before any
+               answer could arrive. -->
+          <div id="standing-orders-loading" style="display:none; color: var(--text-secondary, #999); font-size: 12px; margin-bottom: 8px;">Loading standing orders…</div>
+
+          <!-- Inline add form (toggled by the Add button) -->
+          <div id="standing-orders-add-form" style="display:none; border:1px solid var(--panel-border, #444); padding:10px; margin-bottom:12px; border-radius:4px;">
+            <div id="standing-orders-add-scope-note" style="font-size:11px; color: var(--text-secondary, #999); margin-bottom:6px;"></div>
+            <div id="standing-orders-add-role-row" style="display:none; margin-bottom:6px;">
+              <label class="modal-label" for="standing-orders-add-role">Role</label>
+              <select id="standing-orders-add-role" class="modal-input"></select>
+            </div>
+            <div id="standing-orders-add-team-row" style="display:none; margin-bottom:6px;">
+              <label class="modal-label" for="standing-orders-add-team">Team</label>
+              <select id="standing-orders-add-team" class="modal-input"></select>
+            </div>
+            <div id="standing-orders-add-def-row" style="display:none; margin-bottom:6px;">
+              <label class="modal-label" for="standing-orders-add-def">From library</label>
+              <select id="standing-orders-add-def" class="modal-input"></select>
+            </div>
+            <label class="modal-label" for="standing-orders-add-instruction">Instruction</label>
+            <textarea id="standing-orders-add-instruction" class="modal-textarea" rows="3" placeholder="The instruction appended to every matching prompt..."></textarea>
+            <div id="standing-orders-add-error" style="min-height:16px; color: var(--accent-red); font-size: 11px; margin-top: 4px;"></div>
+            <div class="flex gap-2" style="margin-top: 8px;">
+              <button id="standing-orders-add-submit" class="action-btn">SAVE</button>
+              <button id="standing-orders-add-cancel" class="secondary-btn">CANCEL</button>
+            </div>
+          </div>
+
+          <!-- Order list -->
+          <div id="standing-orders-list"></div>
+          <div id="standing-orders-empty" style="display:none; color: var(--text-secondary, #999); font-size: 12px; padding: 12px 0;">No standing orders in this scope.</div>
+        </div>
+      </div>
+    </div>
+    <script nonce="{{NONCE}}" src="/static/webview/sharedUtils.js"></script>
+    <script nonce="{{NONCE}}" src="/static/webview/agent-control.js"></script>
+</body>
+
+</html>

@@ -122,3 +122,9 @@ None.
 
 - **[user]** What resets the week — any defect, or only one in the three tabs?
 - Does anything outside `kanban.html` and `KanbanProvider.ts` reference the three pane ids? A test or a deep link would need updating, and it is cheaper to know before the deletion.
+
+---
+
+## Completion Summary
+
+The extraction subtask had already removed the Agents/Teams/Prompts/Standing Orders markup and script from `kanban.html`; this pass finished the retirement. Deleted the dead tab-scoped CSS tail from `kanban.html` (agents/prompts/teams/standing-orders rules, including `#agents-tab-content .startup-row`) and removed the `AGENT_CONTROL_VIEW` scaffolding constant from `agent-control.js`, unwrapping its guards — the pending-role and settingResult semantics are unchanged since the constant was always `true`. Retargeted the contract tests that still read moved symbols (`SHIPPED_TEAM_TYPES`, `MEMBER_RELATIONSHIP_PRESETS`, `teamsTab*`, shipped headPrompts) out of `kanban.html` to `agent-control.html`/`agent-control.js`, and added `agent-control` to the `BROWSER_PANELS` inventory. `viewMarker` stays in `_getHtml` — it now selects `agent-control.html` vs `kanban.html`, which is required by `openAgentControl`; no `data-view="agent-control"` remains in `src/`. Also fixed a pre-existing unclosed `body.theme-claudify .shared-tab-btn.active` rule that was swallowing the `.mission-card` styles, and refreshed two stale comments in `teamWiring.ts`/`KanbanProvider.ts` that pointed at `kanban.html` for moved content. Compilation and automated tests were skipped per operator directive.

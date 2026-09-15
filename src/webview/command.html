@@ -1113,9 +1113,27 @@
                         <div id="agent-status-chip" class="status-chip hidden"></div>
                         <div id="agent-control-log" style="flex:1 1 auto; overflow-y:auto; padding:8px; font-family:var(--font-code); font-size:11px; line-height:1.5; color:var(--text-primary); background:var(--panel-bg); border:1px solid var(--border-color); border-radius:4px;"></div>
                         <div id="agent-quick-actions" style="display:flex; flex-wrap:wrap; gap:4px;"></div>
-                        <div style="display:flex; gap:6px;">
-                            <input type="text" id="agent-control-input" placeholder="Type an intent..." style="flex:1 1 auto; background:var(--panel-bg); border:1px solid var(--border-color); border-radius:4px; color:var(--text-primary); font-family:var(--font-code); font-size:12px; padding:8px 10px; outline:none;" />
-                            <button class="primary-action-btn" id="btn-agent-send" style="padding:8px 16px;">Send</button>
+                        <!-- Card + column pickers: the by-id actions and the
+                             model-backed Resolve act on the selected card.
+                             No free-text input — this surface is phone-first;
+                             everything is a tap or a dropdown. -->
+                        <div style="display:flex; flex-direction:column; gap:6px;">
+                            <select id="agent-control-card-select" style="background:var(--panel-bg); border:1px solid var(--border-color); border-radius:4px; color:var(--text-primary); font-family:var(--font-code); font-size:11px; padding:6px 8px; outline:none;"></select>
+                            <select id="agent-control-column-select" style="background:var(--panel-bg); border:1px solid var(--border-color); border-radius:4px; color:var(--text-primary); font-family:var(--font-code); font-size:11px; padding:6px 8px; outline:none;"></select>
+                        </div>
+                        <!-- The surface's own config: endpoint, model and key
+                             set HERE — the phone is the surface this feature is
+                             meant to reach, so it cannot depend on a CLI or an
+                             env var. The key field is write-only. -->
+                        <div style="display:flex; flex-direction:column; gap:5px; padding:6px; background:var(--panel-bg); border:1px solid var(--border-color); border-radius:4px;">
+                            <label for="agent-control-endpoint" style="font-size:10px; color:var(--text-dim); text-transform:uppercase;">Model endpoint</label>
+                            <input type="text" id="agent-control-endpoint" placeholder="https://… (unset)" style="background:var(--panel-bg2); border:1px solid var(--border-color); border-radius:4px; color:var(--text-primary); font-family:var(--font-code); font-size:11px; padding:6px 8px; outline:none;" />
+                            <label for="agent-control-model" style="font-size:10px; color:var(--text-dim); text-transform:uppercase;">Model</label>
+                            <input type="text" id="agent-control-model" placeholder="model name (unset)" style="background:var(--panel-bg2); border:1px solid var(--border-color); border-radius:4px; color:var(--text-primary); font-family:var(--font-code); font-size:11px; padding:6px 8px; outline:none;" />
+                            <label for="agent-control-key" style="font-size:10px; color:var(--text-dim); text-transform:uppercase;">API key</label>
+                            <input type="password" id="agent-control-key" placeholder="(unset)" autocomplete="off" style="background:var(--panel-bg2); border:1px solid var(--border-color); border-radius:4px; color:var(--text-primary); font-family:var(--font-code); font-size:11px; padding:6px 8px; outline:none;" />
+                            <button class="secondary-action-btn" id="btn-agent-config-save" style="align-self:flex-end; padding:6px 14px;">Save config</button>
+                            <div id="agent-control-config-status" style="font-size:10px; color:var(--text-dim);"></div>
                         </div>
                     </div>
                 </section>

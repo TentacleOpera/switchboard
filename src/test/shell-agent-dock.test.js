@@ -293,14 +293,39 @@ test('dock.html contains empty state, CLI input, start/restart, fleet table', ()
 test('dock.html has three panes: agent (control surface), cli, fleet (not iframes)', () => {
     assert.ok(dockHtml.includes('id="dock-agent-pane"'), '#dock-agent-pane must exist in dock.html');
     assert.ok(dockHtml.includes('id="dock-cli-pane"'), '#dock-cli-pane must exist in dock.html');
-    // The Agent tab is a control surface — it has a log, input, send button,
-    // quick actions and a status line, NOT a terminal emulator.
+    // The Agent tab is a control surface driven by ACTION BUTTONS — a log,
+    // quick actions, card/column pickers and a status line, NOT a terminal
+    // emulator and NOT a free-text intent box. The input + Send button were
+    // the defect the-agent-control-surface-cannot-be-configured removed: the
+    // six quick actions were the text input (their labels were stuffed into
+    // it and keyword-parsed server-side).
     assert.ok(dockHtml.includes('id="agent-control-log"'), '#agent-control-log must exist in dock.html');
-    assert.ok(dockHtml.includes('id="agent-control-input"'), '#agent-control-input must exist in dock.html');
-    assert.ok(dockHtml.includes('id="agent-control-send"'), '#agent-control-send must exist in dock.html');
+    assert.ok(!dockHtml.includes('id="agent-control-input"'), '#agent-control-input must NOT exist in dock.html — the intent text box is retired');
+    assert.ok(!dockHtml.includes('id="agent-control-send"'), '#agent-control-send must NOT exist in dock.html — no Send button without a text box');
+    // The by-id actions and the model-backed Resolve take a dropdown
+    // selection; the surface's own config row sets endpoint/model/key.
+    assert.ok(dockHtml.includes('id="agent-control-card-select"'), '#agent-control-card-select must exist — the card picker');
+    assert.ok(dockHtml.includes('id="agent-control-column-select"'), '#agent-control-column-select must exist — the move target picker');
+    assert.ok(dockHtml.includes('id="agent-control-endpoint"'), '#agent-control-endpoint must exist — the surface sets its own endpoint');
+    assert.ok(dockHtml.includes('id="agent-control-model"'), '#agent-control-model must exist — the model is named');
+    assert.ok(dockHtml.includes('id="agent-control-key"'), '#agent-control-key must exist — write-only API key field');
     // The dock document does NOT host iframes for terminals — the CLI tab
     // uses the viewport module directly, and the Agent tab has no terminal.
     assert.ok(!dockHtml.includes('<iframe'), 'dock.html must not contain any iframes');
+});
+
+test('the mobile command surface has no free-text intent input either', () => {
+    // command.html renders its own copy of the agent pane and is the surface
+    // the feature is meant to reach on a phone — the action-buttons-only rule
+    // applies to BOTH panes, or the mobile Goal invariant is violated.
+    const commandHtml = fs.readFileSync(path.join(__dirname, '../webview/command.html'), 'utf8');
+    const commandJs = fs.readFileSync(path.join(__dirname, '../webview/command.js'), 'utf8');
+    assert.ok(!commandHtml.includes('id="agent-control-input"'), '#agent-control-input must NOT exist in command.html');
+    assert.ok(!commandHtml.includes('id="btn-agent-send"'), '#btn-agent-send must NOT exist in command.html');
+    assert.ok(commandHtml.includes('id="agent-control-card-select"'), 'command.html must have the card picker');
+    assert.ok(commandHtml.includes('id="agent-control-endpoint"'), 'command.html must have the endpoint config field');
+    assert.ok(!/function\s+sendAgentControlMobile/.test(commandJs), 'sendAgentControlMobile must be absent from command.js');
+    assert.ok(/function\s+runAgentActionMobile/.test(commandJs), 'command.js must have runAgentActionMobile — actions fire mechanical endpoints');
 });
 
 test('dock.html loads terminalViewport.js and dock.js, NOT terminals.js', () => {
@@ -364,11 +389,28 @@ test('dock.js owns the tab strip switching logic', () => {
         'dock.js must declare DOCK_TABS with agent, cli, fleet');
 });
 
-test('dock.js Agent tab is a control surface with syncAgentControl and sendAgentControl', () => {
+test('dock.js Agent tab is a control surface — actions fire endpoints, never a text box', () => {
     assert.ok(/function\s+syncAgentControl/.test(dockJs), 'dock.js must have syncAgentControl — the Agent tab loads its config on activation');
-    assert.ok(/function\s+sendAgentControl/.test(dockJs), 'dock.js must have sendAgentControl — the Agent tab sends intents to /agent/control');
-    assert.ok(dockJs.includes('/agent/control'),
-        'dock.js must call /agent/control — the Agent tab is an API-backed control surface');
+    // The text-parsing path is gone: no sendAgentControl, and the quick
+    // actions call their mechanical endpoints directly rather than stuffing a
+    // label into an input and POSTing it to /agent/control for the keyword
+    // parser. (The one remaining /agent/control POST is the model-backed
+    // Resolve action, which takes a dropdown-selected cardId — not text.)
+    assert.ok(!/function\s+sendAgentControl\b/.test(dockJs), 'sendAgentControl must be absent from dock.js — the intent box is retired');
+    assert.ok(/function\s+runAgentAction\b/.test(dockJs), 'dock.js must have runAgentAction — quick actions fire mechanical endpoints');
+    const actionsFn = block(dockJs, 'async function runAgentAction', '/** POST/PUT helper');
+    assert.ok(actionsFn.includes("'/kanban/advance'"), 'dispatch-starred/advance must POST /kanban/advance (the promptSelected path)');
+    assert.ok(actionsFn.includes("'/kanban/move'"), 'move-plan must POST /kanban/move (the moveCard seam)');
+    assert.ok(actionsFn.includes("'/kanban/plans/priority'"), 'star-plan must PUT /kanban/plans/priority (the _setPlanPriority path)');
+    assert.ok(actionsFn.includes("'/kanban/board'") || dockJs.includes("'/kanban/board'"),
+        'refresh-board must GET /kanban/board');
+    assert.ok(actionsFn.includes("'/kanban/columns'") || dockJs.includes("'/kanban/columns'"),
+        'list-columns must GET /kanban/columns');
+    assert.ok(!actionsFn.includes('text:'), 'runAgentAction must never send a free-text field');
+    // The surface writes its own config — endpoint/model/key in the pane.
+    assert.ok(/function\s+saveAgentControlConfig\b/.test(dockJs), 'dock.js must have saveAgentControlConfig');
+    assert.ok(/fetch\('\/agent\/control\/config',\s*\{\s*method:\s*'POST'/.test(dockJs.replace(/\s+/g, ' ')) || dockJs.includes("'/agent/control/config'"),
+        'dock.js must POST /agent/control/config to save the endpoint/model/key');
 });
 
 test('dock.js does NOT have startDockTerminal or syncDockSeat (Agent tab is not a terminal)', () => {

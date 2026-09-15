@@ -35,8 +35,11 @@ const TERMINALS_JS_SRC = fs.readFileSync(
 const AGENT_DIRECTIVES_SRC = fs.readFileSync(
     path.join(__dirname, '..', 'services', 'agentDirectives.ts'), 'utf8'
 );
-const KANBAN_HTML_SRC = fs.readFileSync(
-    path.join(__dirname, '..', 'webview', 'kanban.html'), 'utf8'
+// SHIPPED_TEAM_TYPES and MEMBER_RELATIONSHIP_PRESETS moved to agent-control.js
+// when the Agents/Teams/Prompts/Standing Orders tabs left kanban.html — see
+// .switchboard/plans/extract-agent-control-into-its-own-panel-file.md.
+const AGENT_CONTROL_JS_SRC = fs.readFileSync(
+    path.join(__dirname, '..', 'webview', 'agent-control.js'), 'utf8'
 );
 const TEAM_WIRING_SRC = fs.readFileSync(
     path.join(__dirname, '..', 'services', 'teamWiring.ts'), 'utf8'
@@ -282,9 +285,9 @@ test('GIT_SAFETY_DIRECTIVE in agentPromptBuilder.ts is byte-identical to GIT_SAF
     );
 });
 
-test('kanban.html shipped team prompts carry byte-identical safety + callback text', () => {
+test('agent-control.js shipped team prompts carry byte-identical safety + callback text', () => {
     // The THIRD and FOURTH copies of this prose. The test above pins
-    // terminals.js to agentPromptBuilder.ts; kanban.html's SHIPPED_TEAM_TYPES
+    // terminals.js to agentPromptBuilder.ts; agent-control.js's SHIPPED_TEAM_TYPES
     // hand-copies BOTH the git-safety directive and the callback instruction
     // into each shipped team's `prompt`, and nothing pinned them. Those
     // prompts are what an operator actually adopts when they click USE, so a
@@ -308,11 +311,11 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
     const callback = readQuotedChain(LINK_PRESETS_SRC, cbAnchor.index + cbAnchor[0].length);
     assert.ok(callback, 'could not read reports-to-head template as a quoted chain');
 
-    const start = KANBAN_HTML_SRC.indexOf('const SHIPPED_TEAM_TYPES');
-    assert.ok(start >= 0, 'SHIPPED_TEAM_TYPES not found in kanban.html');
-    const end = KANBAN_HTML_SRC.indexOf('const MEMBER_RELATIONSHIP_PRESETS', start);
+    const start = AGENT_CONTROL_JS_SRC.indexOf('const SHIPPED_TEAM_TYPES');
+    assert.ok(start >= 0, 'SHIPPED_TEAM_TYPES not found in agent-control.js');
+    const end = AGENT_CONTROL_JS_SRC.indexOf('const MEMBER_RELATIONSHIP_PRESETS', start);
     assert.ok(end > start, 'could not bound the SHIPPED_TEAM_TYPES array');
-    const block = KANBAN_HTML_SRC.slice(start, end);
+    const block = AGENT_CONTROL_JS_SRC.slice(start, end);
 
     const prompts = [];
     const re = /prompt:\s*/g;
@@ -334,14 +337,14 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
             p.startsWith(callback),
             'A shipped team prompt does not open with the reports-to-head callback text verbatim.\n' +
             `linkPresets.ts: "${callback}"\n` +
-            `kanban.html:   "${p.slice(0, callback.length)}"\n` +
+            `agent-control.js:   "${p.slice(0, callback.length)}"\n` +
             'Without it, a team member is never told how to report back to its head.'
         );
         assert.ok(
             p.endsWith(gitSafety),
             'A shipped team prompt does not end with GIT_SAFETY_DIRECTIVE verbatim.\n' +
             `agentDirectives.ts: "${gitSafety}"\n` +
-            `kanban.html:           "${p.slice(-gitSafety.length)}"\n` +
+            `agent-control.js:           "${p.slice(-gitSafety.length)}"\n` +
             'This is the only guardrail a team coder gets — a drift here is invisible without this test.'
         );
     }
@@ -418,7 +421,7 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
     assert.ok(tsReviewHeadPrompt, 'could not read NEW_REVIEW_TEAM_HEAD_PROMPT as a quoted chain');
     assert.strictEqual(
         reviewHeadPrompt, tsReviewHeadPrompt,
-        'Review headPrompt drift detected between kanban.html and teamWiring.ts.'
+        'Review headPrompt drift detected between agent-control.js and teamWiring.ts.'
     );
     assert.ok(reviewHeadPrompt.includes('assign its subtask plans to your reviewer seats in batches of up to two'), 'Review headPrompt must assign in batches of up to two');
     assert.ok(reviewHeadPrompt.includes('four categories'), 'Review headPrompt must describe the four-category triage');
@@ -430,7 +433,7 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
     // The Coding headPrompt must tell the lead to pull the next card via
     // POST /kanban/queue/next after the reviewer passes, and the sentence
     // must be byte-identical between teamWiring.ts (NEW_CODING_HEAD_PROMPT,
-    // the host source of truth) and kanban.html's shipped headPrompt. The
+    // the host source of truth) and agent-control.js's shipped headPrompt. The
     // rewriter at teamWiring.ts:1239-1241 rewrites stale team-head rows by
     // indexOf match, so the two literals MUST move together — a drift here
     // ships a lead that never asks for the next card (the whole point of
@@ -441,9 +444,9 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
     assert.ok(tsHeadPrompt, 'could not read NEW_CODING_HEAD_PROMPT as a quoted chain');
     assert.strictEqual(
         headPrompt, tsHeadPrompt,
-        'Coding headPrompt drift detected between kanban.html and teamWiring.ts.\n'
+        'Coding headPrompt drift detected between agent-control.js and teamWiring.ts.\n'
         + `teamWiring.ts: "${tsHeadPrompt}"\n`
-        + `kanban.html:   "${headPrompt}"\n`
+        + `agent-control.js:   "${headPrompt}"\n`
         + 'The two literals must be byte-identical — the teamWiring.ts rewriter '
         + 'matches stale rows by indexOf, so a drift ships a lead carrying stale text.'
     );
@@ -463,7 +466,7 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
     );
     assert.ok(
         headPrompt.includes(queueNextSentence),
-        'kanban.html Coding headPrompt must carry the next standing order '
+        'agent-control.js Coding headPrompt must carry the next standing order '
         + 'byte-identically to teamWiring.ts — a gallery-adopted team must pace its own pipeline.'
     );
 
@@ -489,7 +492,7 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
     );
     assert.ok(
         headPrompt.includes(unattendedEscalationSentence),
-        'kanban.html Coding headPrompt must carry the unattended escalation clause byte-identically '
+        'agent-control.js Coding headPrompt must carry the unattended escalation clause byte-identically '
         + 'to teamWiring.ts — a gallery-adopted team must not stall overnight.'
     );
 

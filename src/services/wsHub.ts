@@ -93,6 +93,7 @@ export const PANEL_SURFACES: Record<string, string[]> = {
     tickets: [SURFACES.tickets, SURFACES.common],
     connections: [SURFACES.connections, SURFACES.common],
     'mission-control': [SURFACES.common],
+    'agent-control': [SURFACES.kanban, SURFACES.common],
     linear: [SURFACES.common],
     database: [SURFACES.common],
 };

@@ -9,9 +9,11 @@
  *  3. Card movement is stated as unconditional, with no named exception.
  *  4. The completion post uses the subtask's planId, not the FEATURE planId.
  *  5. The prompt states POST /kanban/queue/next as the "ask for the next card" call.
- *  6. teamWiring.ts and kanban.html copies are byte-identical. The terminals.js
+ *  6. teamWiring.ts and agent-control.js copies are byte-identical. The terminals.js
  *     client mirror (NEW_CODING_HEAD_PROMPT_CLIENT) was retired when system
- *     protocol composition moved to delivery-time fragment composition.
+ *     protocol composition moved to delivery-time fragment composition. The
+ *     shipped gallery copy lives in agent-control.js's SHIPPED_TEAM_TYPES since
+ *     the tabs left kanban.html.
  *
  * Run with:
  *   node --require ./src/test/bootstrap/sandboxStateHome.js src/test/coding-head-prompt-contract.test.js
@@ -24,7 +26,7 @@ const assert = require('assert');
 const ROOT = path.join(__dirname, '..', '..');
 const TEAM_WIRING_SRC = fs.readFileSync(path.join(ROOT, 'src', 'services', 'teamWiring.ts'), 'utf8');
 const TERMINALS_JS_SRC = fs.readFileSync(path.join(ROOT, 'src', 'webview', 'terminals.js'), 'utf8');
-const KANBAN_HTML_SRC = fs.readFileSync(path.join(ROOT, 'src', 'webview', 'kanban.html'), 'utf8');
+const AGENT_CONTROL_JS_SRC = fs.readFileSync(path.join(ROOT, 'src', 'webview', 'agent-control.js'), 'utf8');
 
 function readQuotedChain(src, i) {
     if (src[i] !== "'") { return null; }
@@ -73,18 +75,18 @@ function run() {
         'terminals.js must NOT declare NEW_CODING_HEAD_PROMPT_CLIENT — the client mirror is retired'
     );
 
-    // Extract Coding headPrompt from kanban.html
-    const khStart = KANBAN_HTML_SRC.indexOf("name: 'Coding'");
-    assert.ok(khStart >= 0, 'Coding team not found in kanban.html');
-    const khHpAnchor = /headPrompt:\s*/.exec(KANBAN_HTML_SRC.slice(khStart));
-    assert.ok(khHpAnchor, 'Coding headPrompt not found in kanban.html');
-    const khPrompt = readQuotedChain(KANBAN_HTML_SRC, khStart + khHpAnchor.index + khHpAnchor[0].length);
-    assert.ok(khPrompt, 'could not extract Coding headPrompt from kanban.html');
+    // Extract Coding headPrompt from agent-control.js (SHIPPED_TEAM_TYPES)
+    const khStart = AGENT_CONTROL_JS_SRC.indexOf("name: 'Coding'");
+    assert.ok(khStart >= 0, 'Coding team not found in agent-control.js');
+    const khHpAnchor = /headPrompt:\s*/.exec(AGENT_CONTROL_JS_SRC.slice(khStart));
+    assert.ok(khHpAnchor, 'Coding headPrompt not found in agent-control.js');
+    const khPrompt = readQuotedChain(AGENT_CONTROL_JS_SRC, khStart + khHpAnchor.index + khHpAnchor[0].length);
+    assert.ok(khPrompt, 'could not extract Coding headPrompt from agent-control.js');
 
     // ── 1. Byte-identity across the 2 surviving source files ──────────
 
-    check('NEW_CODING_HEAD_PROMPT in teamWiring.ts and Coding headPrompt in kanban.html are byte-identical', () => {
-        assert.strictEqual(twPrompt, khPrompt, 'teamWiring.ts and kanban.html must be byte-identical');
+    check('NEW_CODING_HEAD_PROMPT in teamWiring.ts and Coding headPrompt in agent-control.js are byte-identical', () => {
+        assert.strictEqual(twPrompt, khPrompt, 'teamWiring.ts and agent-control.js must be byte-identical');
     });
 
     check('NEW_CODING_HEAD_PROMPT_CLIENT is absent from terminals.js (client mirror retired)', () => {

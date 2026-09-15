@@ -97,6 +97,20 @@ export interface BatchPromptPlan {
 }
 
 /**
+ * A build result as the reviewer prompt renders it. Mirrors the persisted
+ * `BuildResult` (src/services/buildTarget.ts) but is declared here so the prompt
+ * builder stays a leaf with no import on the build-config module.
+ */
+export interface ReviewBuildResult {
+    commitSha: string;
+    target: string;
+    success: boolean;
+    durationMs: number;
+    summary?: string;
+    at?: string;
+}
+
+/**
  * How many loose plans one team head is handed by a single batch move.
  *
  * Load-bearing twice over, and both failures are silent. It bounds the conflict
@@ -339,6 +353,15 @@ export interface PromptBuilderOptions {
      * (`-n 1`) and deduplicated are the caller's contract, not the builder's.
      */
     reviewCommits?: string[];
+
+    /**
+     * Build results for the commits under review, resolved by the CALLER
+     * (KanbanProvider reviewer branch) from the per-workspace build config. Each
+     * entry is keyed by commit SHA; the builder reports the result for EACH
+     * `reviewCommits` sha — or an explicit "not built yet" — so a reviewer never
+     * reads "the last build" for a different commit. Empty/absent → emit nothing.
+     */
+    buildResults?: ReviewBuildResult[];
 
     /**
      * Pre-resolved protocol content for the nine protocol-carrying directives.
@@ -1838,6 +1861,38 @@ function buildReviewUnitBlock(reviewCommits: string[] | undefined): string {
 }
 
 /**
+ * Report the build result for EACH commit under review — keyed by sha, never
+ * "the last build". A commit with no recorded result is reported as "not built
+ * yet" so the reviewer neither assumes it builds nor reads another commit's
+ * result. Absent `reviewCommits` → '' (the prompt is byte-identical to today).
+ */
+function buildBuildResultBlock(reviewCommits: string[] | undefined, results: ReviewBuildResult[] | undefined): string {
+    if (!Array.isArray(reviewCommits)) { return ''; }
+    const bySha = new Map<string, ReviewBuildResult>();
+    for (const r of results || []) {
+        if (r && typeof r.commitSha === 'string') { bySha.set(r.commitSha.trim(), r); }
+    }
+    const lines: string[] = [];
+    const seen = new Set<string>();
+    for (const raw of reviewCommits) {
+        if (typeof raw !== 'string') { continue; }
+        const sha = raw.trim();
+        if (!sha || seen.has(sha)) { continue; }
+        seen.add(sha);
+        const r = bySha.get(sha);
+        if (!r) {
+            lines.push(`${sha}: not built yet — do not assume this commit builds. Run the build for it (target: see BUILD TARGET) before judging, or note the gap explicitly.`);
+            continue;
+        }
+        const seconds = Math.round((Number(r.durationMs) || 0) / 100) / 10;
+        const verdict = r.success ? 'build PASSED' : 'build FAILED';
+        lines.push(`${sha}: ${verdict} on ${r.target} (${seconds}s)${r.summary ? ' — ' + r.summary : ''}${r.at ? ' [' + r.at + ']' : ''}`);
+    }
+    if (lines.length === 0) { return ''; }
+    return 'BUILD RESULTS (for the commit(s) under review, keyed by sha — not "the last build"):\n' + lines.join('\n');
+}
+
+/**
  * Canonical prompt builder.  Every UI surface that produces a prompt for an
  * agent role MUST call this function so that "Copy Prompt", "Advance",
  * autoban, and ticket-view dispatch all emit identical text.
@@ -2236,6 +2291,10 @@ UNATTENDED IMPROVER CONTRACT:
         // ABOVE PLANS TO PROCESS: so the plan list reads as context for the diff, not as
         // the review target.
         const reviewUnitBlock = buildReviewUnitBlock(options?.reviewCommits);
+        // BUILD RESULTS — for the commit(s) under review, keyed by sha. Sits
+        // directly under the review unit so the reviewer reads the build verdict
+        // for the SAME commit the diff is for, or an explicit "not built yet".
+        const buildResultBlock = buildBuildResultBlock(options?.reviewCommits, options?.buildResults);
 
         const promptParts = [
             reviewerExecutionBlock,
@@ -2245,6 +2304,7 @@ UNATTENDED IMPROVER CONTRACT:
             suffixBlock,
             featureDirectiveBlock,
             reviewUnitBlock,
+            buildResultBlock,
             `PLANS TO PROCESS:\n${planList}`,
             noSeparateReviewArtifactsBlock,
             reviewerRisksToMemoBlock

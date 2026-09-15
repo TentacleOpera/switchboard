@@ -5,6 +5,7 @@ import * as crypto from 'crypto';
 // closed the cycle builder → protocolDirectives → KanbanDatabase → here → builder,
 // and the hash then ran on an undefined body. Keep this import on the leaf.
 import { GIT_SAFETY_DIRECTIVE, NO_SUBAGENTS_DIRECTIVE, CUSTOM_SUBAGENT_DIRECTIVE_TEMPLATE } from './agentDirectives';
+import { buildTargetDirective } from './buildTarget';
 import type { KanbanDatabase } from './KanbanDatabase';
 
 export type StandingOrderWorkKind = 'feature' | 'plan';
@@ -35,6 +36,16 @@ export interface StandingOrderCompositionContext {
      */
     subagentPolicy?: 'noSubagents' | 'useSubagents' | 'customSubagent' | 'default';
     customSubagentName?: string;
+    /**
+     * The operator's chosen build target (Agent Control → Build). `undefined`
+     * emits nothing (the status quo needs no instruction). Carried as the RAW
+     * persisted string — including a value that is present but unrecognised — so
+     * the `seat.build-target` fragment surfaces a corrupt target instead of
+     * substituting one. Threaded from `StandingOrderRenderOptions.buildTarget`.
+     */
+    buildTarget?: string;
+    /** Host / repo shown alongside the build-target directive (SSH host, Actions repo). */
+    buildTargetDetail?: string;
     /**
      * True when this head's team has at least one row in the `coding_rounds`
      * table (Coding Rounds feature). Resolved live at the composition-root
@@ -72,6 +83,7 @@ export const STANDING_ORDER_FRAGMENT_IDS = {
     orchestratorReport: 'team.head.orchestrator-report',
     globalCompletion: 'global.queue.completion',
     subagentPolicy: 'seat.subagent-policy',
+    buildTarget: 'seat.build-target',
 } as const;
 
 export const TEAM_HEAD_COMMIT_FRAGMENT_BODY =
@@ -113,70 +125,53 @@ export function buildMemberCompletionFragment(ctx: Pick<StandingOrderComposition
         + 'Before reporting, re-read your full orders at .switchboard/teams/' + ctx.teamId + '/member-orders.md';
 }
 
-export function buildHeadCompletionFragment(ctx: Pick<StandingOrderCompositionContext, 'hasRegisteredRounds'> = {}): string {
-    // The rounds-registered lead variant: the lead's one verb is "this
-    // subtask is accepted". The system closes the round when the last subtask
-    // in it is accepted, dispatches the next round, and completes the feature
-    // when the last round closes. `round/complete` and `feature/complete` stop
-    // being things a lead is told to post (plan:
-    // the-lead-accepts-a-subtask-and-the-system-advances). The hand-assembled
-    // POST is replaced by a CLI verb — the lead runs `accept --plan` and the
-    // CLI resolves `from` from the host-injected SWITCHBOARD_TERMINAL, the
-    // same identity resolution `done` uses.
-    if (ctx.hasRegisteredRounds) {
-        return 'REGISTER ROUNDS: before any round starts, decide how the feature\'s subtasks group into '
-            + 'ordered rounds and POST /kanban/round/register with {"from":"<your terminal name>",'
-            + '"featureId":"<the FEATURE\'s planId>","rounds":[["<subtask planId>","<subtask planId>"],'
-            + '["<subtask planId>"]]} against the API base named in your SWITCHBOARD STATUS line. Each '
-            + 'entry in `rounds` is ONE round — an array of that round\'s subtask planIds, in dispatch '
-            + 'order. Registering STARTS round 1 — the system dispatches its subtasks to your seats '
-            + 'immediately, and dispatches each later round when the one before it closes. You '
-            + 'do not dispatch subtasks to seats yourself. Re-registering '
-            + 'replaces pending (not-yet-dispatched) rounds and leaves dispatched/closed ones alone.\n\n'
-            + 'CLOSE OUT EVERY SUBTASK. When a seat reports a subtask finished and you are satisfied '
-            + 'with it, run node "<cliPath>" accept --plan "<that SUBTASK\'s planId>" against the API '
-            + 'base named in your SWITCHBOARD STATUS line. Accept per subtask, with that subtask\'s '
-            + 'planId — never the feature\'s. Accepting and rejecting are not two different endings: '
-            + 'you reject by sending a fix round first, then you accept when the subtask is done. '
-            + 'Until you accept, that seat is not cleared and the round does not advance. Your accept '
-            + 'is the only fact that releases a seat.\n\n'
-            + 'The system closes the round when the last subtask in it is accepted, dispatches the '
-            + 'next registered round, and completes the feature when the last round closes. Closing '
-            + 'a round and completing the feature are the system\'s job, derived from your accepts — '
-            + 'you post nothing for either, and there is no round-boundary or feature-end call for '
-            + 'you to make. An idle lead is the correct resting state between rounds, not a failure.';
-    }
+/**
+ * The lead head's completion fragment body. Static — the lead's contract does
+ * not vary by team, so the text is store-eligible and carries a compiled
+ * default (see STATIC_FRAGMENT_BODIES).
+ */
+// The lead's one verb is "this subtask is accepted". The system closes the
+// round when the last subtask in it is accepted, dispatches the next round,
+// and completes the feature when the last round closes. `round/complete`
+// and `feature/complete` are not things a lead is told to post (plan:
+// the-lead-accepts-a-subtask-and-the-system-advances). The hand-assembled
+// POST is replaced by a CLI verb — the lead runs `accept --plan` and the
+// CLI resolves `from` from the host-injected SWITCHBOARD_TERMINAL, the
+// same identity resolution `done` uses.
+//
+// There is NO stateless variant. This fragment used to branch on
+// `hasRegisteredRounds` and hand a lead with no rounds the legacy
+// hand-dispatch contract. That read "no rounds yet" — the state EVERY
+// feature starts in — as "this team uses the old flow", so the compat
+// branch was the only branch any lead ever saw and `coding_rounds` stayed
+// empty for the life of the feature. Coding Rounds was unreleased dev work
+// with no install base to protect, so the branch is deleted rather than
+// bootstrapped: a lead is told to register rounds, full stop.
+const HEAD_COMPLETION_FRAGMENT_BODY =
+    'REGISTER ROUNDS: before any round starts, decide how the feature\'s subtasks group into '
+    + 'ordered rounds and POST /kanban/round/register with {"from":"<your terminal name>",'
+    + '"featureId":"<the FEATURE\'s planId>","rounds":[["<subtask planId>","<subtask planId>"],'
+    + '["<subtask planId>"]]} against the API base named in your SWITCHBOARD STATUS line. Each '
+    + 'entry in `rounds` is ONE round — an array of that round\'s subtask planIds, in dispatch '
+    + 'order. Registering STARTS round 1 — the system dispatches its subtasks to your seats '
+    + 'immediately, and dispatches each later round when the one before it closes. You '
+    + 'do not dispatch subtasks to seats yourself. Re-registering '
+    + 'replaces pending (not-yet-dispatched) rounds and leaves dispatched/closed ones alone.\n\n'
+    + 'CLOSE OUT EVERY SUBTASK. When a seat reports a subtask finished and you are satisfied '
+    + 'with it, run node "<cliPath>" accept --plan "<that SUBTASK\'s planId>" against the API '
+    + 'base named in your SWITCHBOARD STATUS line. Accept per subtask, with that subtask\'s '
+    + 'planId — never the feature\'s. Accepting and rejecting are not two different endings: '
+    + 'you reject by sending a fix round first, then you accept when the subtask is done. '
+    + 'Until you accept, that seat is not cleared and the round does not advance. Your accept '
+    + 'is the only fact that releases a seat.\n\n'
+    + 'The system closes the round when the last subtask in it is accepted, dispatches the '
+    + 'next registered round, and completes the feature when the last round closes. Closing '
+    + 'a round and completing the feature are the system\'s job, derived from your accepts — '
+    + 'you post nothing for either, and there is no round-boundary or feature-end call for '
+    + 'you to make. An idle lead is the correct resting state between rounds, not a failure.';
 
-    // The stateless variant: a lead whose team registered no rounds keeps the
-    // legacy task/complete + round/complete + feature/complete contract
-    // exactly as before. The `task/complete with {"from"` string is pinned by
-    // bare-completion-contract.test.js and must not change here.
-    return 'REGISTER ROUNDS: before any round starts, decide how the feature\'s subtasks group into '
-        + 'ordered rounds and POST /kanban/round/register with {"from":"<your terminal name>",'
-        + '"featureId":"<the FEATURE\'s planId>","rounds":[["<subtask planId>","<subtask planId>"],'
-        + '["<subtask planId>"]]} against the API base named in your SWITCHBOARD STATUS line. Each '
-        + 'entry in `rounds` is ONE round — an array of that round\'s subtask planIds, in dispatch '
-        + 'order. Registering STARTS round 1 — the system dispatches its subtasks to your seats '
-        + 'immediately, and dispatches each later round when you mark the one before it complete. You '
-        + 'do not dispatch subtasks to seats yourself. Re-registering '
-        + 'replaces pending (not-yet-dispatched) rounds and leaves dispatched/closed ones alone.\n\n'
-        + 'CLOSE OUT EVERY SUBTASK. When a seat reports a subtask finished and you are satisfied '
-        + 'with it, POST /kanban/task/complete with {"from":"<your terminal name>","planId":'
-        + '"<that SUBTASK\'s planId>","workspaceRoot":"<your cwd>"} against the API base named in your '
-        + 'SWITCHBOARD STATUS line. Post per subtask, with that subtask\'s planId — never '
-        + 'the feature\'s. Accepting and rejecting are not two different endings: you reject by '
-        + 'sending a fix round first, then you post when the subtask is done. Until you post, that '
-        + 'seat is not cleared and you cannot be handed the next subtask. Your POST is the only fact '
-        + 'that releases a seat.\n\n'
-        + 'ROUND BOUNDARY: when every subtask in a round is finished, POST /kanban/round/complete '
-        + 'with {"from":"<your terminal name>","workspaceRoot":"<your cwd>"} to complete all '
-        + 'outstanding cards and clear every coder seat in one call. You are NOT cleared — you '
-        + 'orchestrate the next round.\n\n'
-        + 'FEATURE COMPLETE: when the entire feature is finished, POST /kanban/feature/complete '
-        + 'with {"from":"<your terminal name>","planId":"<the FEATURE\'s planId>","workspaceRoot":'
-        + '"<your cwd>"} to complete all outstanding subtasks, clear every roster seat including '
-        + 'yourself, and release the team. A feature planId posted to /kanban/task/complete is '
-        + 'rejected — use the feature endpoint.';
+export function buildHeadCompletionFragment(): string {
+    return HEAD_COMPLETION_FRAGMENT_BODY;
 }
 
 export function buildHeadNextFragment(ctx: Pick<StandingOrderCompositionContext, 'teamId'>): string {
@@ -189,33 +184,15 @@ export function buildHeadNextFragment(ctx: Pick<StandingOrderCompositionContext,
         + 'a column advances when work STARTS, not when it finishes.';
 }
 
-const CODING_HEAD_WORK =
-    'You lead this team. Your coders work the subtasks of one feature. '
-    + 'PLAN FILES ARE THE SOURCE OF TRUTH. Do not rewrite, edit, restructure, or replace plan content. '
-    + 'Read the plan, dispatch based on it, review against it — never modify its content. '
-    + 'Each subtask carries a recommendedRole; dispatch it to a seat of that role on your team. If your team has '
-    + 'no such seat, dispatch to a coder and say why in your status report. Your team\'s seats are the '
-    + 'ptyListTerminals rows whose parentInstanceId matches your SWITCHBOARD_AGENT_INSTANCE_ID — role alone '
-    + 'is not a membership test, and a standalone seat of the same role is not yours to drive. Take the '
-    + 'subtask\'s recommendedRole as the routing decision; do not invent complexity tiers. Before sending any '
-    + 'seat a revert or stand-down, confirm with git diff that the state you are undoing exists. When a seat fails '
-    + 'review on the same subtask twice, do not send that subtask to it a third time — escalate '
-    + 'one rung along intern → coder → lead, name the specific defects in the dispatch, and say '
-    + 'in your status report which seat you moved it to and why; if the seat that failed twice is '
-    + 'a lead, or your team has no seat above it, stop and report to the human instead of dispatching again. '
-    + 'When a coder reports a subtask finished, note it and dispatch the next subtask to an idle seat that has not '
-    + 'already worked on it — do not stack subtasks on the same coder, or it will hit its context limit mid-task. '
-    + 'One subtask per cleared seat before rotation. Do not send anything to the reviewer, and do not write review '
-    + 'instructions — that is not your job. Never move a card backwards to an earlier pipeline stage — only Mission '
-    + 'Control may do that. Never move a card to a new column yourself — that is not your role.';
-
 /**
- * The rounds-owned variant of {@link CODING_HEAD_WORK}, composed for a lead
- * head whose team has registered rounds (`hasRegisteredRounds === true`). The
- * hand-dispatch instructions ("dispatch based on it", "dispatch the next
- * subtask to an idle seat") are removed — the system dispatches each round
- * (subtask 03), so leaving them live would race the system path and seat the
- * same work twice. The lead's loop becomes: read the feature, decide the
+ * The lead head's work fragment. The hand-dispatch instructions ("dispatch
+ * based on it", "dispatch the next subtask to an idle seat") are absent —
+ * the system dispatches each round (subtask 03), so leaving them live would
+ * race the system path and seat the same work twice. This was once the
+ * `hasRegisteredRounds === true` variant of a `CODING_HEAD_WORK` constant
+ * that carried those instructions for teams with no rounds; that constant is
+ * deleted, because "no rounds yet" is the state every feature starts in and
+ * a lead reading it never registered any. The lead's loop becomes: read the feature, decide the
  * rounds, register them, and mark each round done as its seats report in. The
  * non-dispatch guidance (plan-file source of truth, revert confirmation,
  * double-fail escalation, reviewer/card-movement rules) is preserved — those
@@ -318,7 +295,14 @@ export const STANDING_ORDER_FRAGMENTS: ReadonlyArray<StandingOrderFragment> = [
     // seat-scoped directive block (`buildSeatDirectiveBlock`) emits, so the two
     // delivery channels cannot drift apart — one string, two channels.
     { id: STANDING_ORDER_FRAGMENT_IDS.subagentPolicy, name: 'Seat subagent policy', order: 31, obligation: 'safety', applies: ctx => ctx.subagentPolicy === 'noSubagents' || (ctx.subagentPolicy === 'customSubagent' && !!ctx.customSubagentName), body: ctx => ctx.subagentPolicy === 'noSubagents' ? NO_SUBAGENTS_DIRECTIVE : (ctx.subagentPolicy === 'customSubagent' && ctx.customSubagentName ? CUSTOM_SUBAGENT_DIRECTIVE_TEMPLATE(ctx.customSubagentName) : '') },
-    { id: STANDING_ORDER_FRAGMENT_IDS.codingHead, name: 'Coding head work', order: 10, obligation: 'work', applies: ctx => ctx.inTeam && ctx.isHead && ctx.headRole === 'lead', body: ctx => ctx.hasRegisteredRounds ? CODING_HEAD_WORK_WITH_ROUNDS : CODING_HEAD_WORK },
+    // Build target — config carries the operator's choice (Agent Control → Build),
+    // this fragment does the telling. Gated on a RESOLVED value: a workspace whose
+    // target was never chosen delivers no order (the status quo). Once chosen —
+    // including an explicit `this box` — the agent is told where to build and to
+    // record the result the reviewer reads. The body branches on the target, so
+    // this is a DYNAMIC fragment and stays in source.
+    { id: STANDING_ORDER_FRAGMENT_IDS.buildTarget, name: 'Seat build target', order: 32, obligation: 'safety', applies: ctx => !!ctx.buildTarget, body: ctx => buildTargetDirective(ctx.buildTarget as string, ctx.buildTargetDetail) },
+    { id: STANDING_ORDER_FRAGMENT_IDS.codingHead, name: 'Coding head work', order: 10, obligation: 'work', applies: ctx => ctx.inTeam && ctx.isHead && ctx.headRole === 'lead', body: () => CODING_HEAD_WORK_WITH_ROUNDS },
     { id: STANDING_ORDER_FRAGMENT_IDS.reviewHead, name: 'Review head work', order: 10, obligation: 'work', applies: ctx => ctx.inTeam && ctx.isHead && ctx.headRole === 'reviewer', body: () => resolveStaticFragmentBody(STANDING_ORDER_FRAGMENT_IDS.reviewHead).body },
     { id: STANDING_ORDER_FRAGMENT_IDS.headCommit, name: 'Team head commit', order: 30, obligation: 'commit', applies: ctx => ctx.inTeam && ctx.isHead && (ctx.headRole === 'lead' || ctx.headRole === 'reviewer'), body: () => resolveStaticFragmentBody(STANDING_ORDER_FRAGMENT_IDS.headCommit).body },
     { id: STANDING_ORDER_FRAGMENT_IDS.headCompletion, name: 'Close out subtasks', order: 40, obligation: 'completion', applies: ctx => ctx.inTeam && ctx.isHead && ctx.headRole === 'lead', body: buildHeadCompletionFragment },
@@ -328,7 +312,7 @@ export const STANDING_ORDER_FRAGMENTS: ReadonlyArray<StandingOrderFragment> = [
     // `done --from` pop races it and must be suppressed. A lead head WITHOUT
     // rounds (the stateless path) and every REVIEWER head keep the pop —
     // rounds are a coding-team construct and the gate is unchanged for them.
-    { id: STANDING_ORDER_FRAGMENT_IDS.headNext, name: 'Request next work', order: 50, obligation: 'queue', applies: ctx => ctx.inTeam && ctx.isHead && (ctx.headRole === 'lead' || ctx.headRole === 'reviewer') && !(ctx.headRole === 'lead' && ctx.hasRegisteredRounds), body: buildHeadNextFragment },
+    { id: STANDING_ORDER_FRAGMENT_IDS.headNext, name: 'Request next work', order: 50, obligation: 'queue', applies: ctx => ctx.inTeam && ctx.isHead && ctx.headRole === 'reviewer', body: buildHeadNextFragment },
     // orchestratorReport is retained as a recognized fragment ID so any
     // persisted standing-order row that references it resolves cleanly
     // (composeStandingOrderFragments would otherwise emit "[Unknown
@@ -356,13 +340,21 @@ export const STANDING_ORDER_FRAGMENTS: ReadonlyArray<StandingOrderFragment> = [
  * future fragment authored as `() => someConst` is automatically store-eligible
  * and a fragment that starts reading `ctx` is automatically removed.
  *
- * Five of the twelve fragments are static: `gitSafety`, `reviewHead`,
- * `headCommit`, `orchestratorReport`, `globalCompletion`. The other seven read
- * `ctx` (team id, head name, head role, subagent policy, registered-rounds
- * flag, etc.) and stay in source.
+ * Static today: `gitSafety`, `codingHead`, `headCompletion`, `reviewHead`,
+ * `headCommit`, `orchestratorReport`, `globalCompletion`. The rest read `ctx`
+ * (team id, head name, head role, subagent policy, etc.) and stay in source.
+ *
+ * `codingHead` and `headCompletion` became static when the Coding Rounds
+ * compat branch was deleted: both used to switch on `ctx.hasRegisteredRounds`
+ * and now return one contract. That is the census working as designed — a
+ * fragment that stops reading `ctx` becomes store-eligible — so they are
+ * declared here rather than kept artificially dynamic. Do NOT reintroduce a
+ * `ctx` read to keep this list short; declare the id instead.
  */
 export const STATIC_STANDING_ORDER_FRAGMENT_IDS: ReadonlySet<string> = new Set([
     STANDING_ORDER_FRAGMENT_IDS.gitSafety,
+    STANDING_ORDER_FRAGMENT_IDS.codingHead,
+    STANDING_ORDER_FRAGMENT_IDS.headCompletion,
     STANDING_ORDER_FRAGMENT_IDS.reviewHead,
     STANDING_ORDER_FRAGMENT_IDS.headCommit,
     STANDING_ORDER_FRAGMENT_IDS.orchestratorReport,
@@ -384,8 +376,10 @@ export function isStaticFragment(id: string): boolean {
  */
 export const STATIC_FRAGMENT_BODIES: Readonly<Record<string, string>> = {
     [STANDING_ORDER_FRAGMENT_IDS.gitSafety]: GIT_SAFETY_DIRECTIVE,
-    [STANDING_ORDER_FRAGMENT_IDS.reviewHead]: REVIEW_HEAD_WORK,
+    [STANDING_ORDER_FRAGMENT_IDS.codingHead]: CODING_HEAD_WORK_WITH_ROUNDS,
     [STANDING_ORDER_FRAGMENT_IDS.headCommit]: TEAM_HEAD_COMMIT_FRAGMENT_BODY,
+    [STANDING_ORDER_FRAGMENT_IDS.headCompletion]: HEAD_COMPLETION_FRAGMENT_BODY,
+    [STANDING_ORDER_FRAGMENT_IDS.reviewHead]: REVIEW_HEAD_WORK,
     [STANDING_ORDER_FRAGMENT_IDS.orchestratorReport]: ORCHESTRATOR_REPORT_FRAGMENT_BODY,
     [STANDING_ORDER_FRAGMENT_IDS.globalCompletion]: GLOBAL_QUEUE_COMPLETION_FRAGMENT_BODY,
 };
