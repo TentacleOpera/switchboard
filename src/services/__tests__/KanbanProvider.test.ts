@@ -788,5 +788,250 @@ Manual verification steps:
             assert.strictEqual(execStub.callCount, 0, 'no dispatch command should fire for a backward move');
         });
     });
+
+    suite('_advanceCards specific-target + move-only arms (plan: finish-advance-cards-extraction)', () => {
+        // Characterisation for the extraction: pin landing column, dispatch-or-
+        // not, and delta order for every affordance BEFORE it is rerouted
+        // through _advanceCards. The dispatch-or-not assertions are the ones
+        // that catch the moveCardForward trap (a naive conversion starts
+        // dispatching where HEAD does not).
+        const card = (id: string, column: string, complexity = '5'): KanbanCard => ({
+            planId: id,
+            sessionId: `session-${id}`,
+            topic: `Plan ${id}`,
+            planFile: `plan_${id}.md`,
+            column,
+            lastActivity: new Date().toISOString(),
+            createdAt: new Date().toISOString(),
+            complexity,
+            workspaceRoot
+        });
+
+        // Minimum surface the specific-target branch (and the move-only arms
+        // that delegate to it) touches. Returns spies for dispatch, run-sheet,
+        // and the posted deltas.
+        const wireMove = (cards: KanbanCard[]) => {
+            (provider as any)._lastCards = cards;
+            (provider as any)._currentWorkspaceRoot = workspaceRoot;
+            sandbox.stub(provider as any, '_resolveWorkspaceRoot').callsFake((r?: string) => r || workspaceRoot);
+            sandbox.stub(provider as any, 'moveCardToColumnWithReason').resolves({ ok: true, detail: '' });
+            sandbox.stub(provider as any, 'moveCardToColumn').resolves(true);
+            sandbox.stub(provider as any, '_collectAllMovedSessionIds').callsFake((_r: string, sid: string) => Promise.resolve([sid]));
+            const postMessage = sandbox.stub(provider as any, 'postMessage');
+            const recordRunSheet = sandbox.stub().resolves();
+            (provider as any)._taskViewerProvider = { recordRunSheetForColumnMove: recordRunSheet };
+            const execStub = sandbox.stub().resolves(true);
+            sandbox.stub(provider as any, '_seams').returns({
+                commands: { executeCommand: execStub },
+                ui: { showErrorMessage: sandbox.stub(), showWarningMessage: sandbox.stub(), showInformationMessage: sandbox.stub() }
+            });
+            return { execStub, recordRunSheet, postMessage };
+        };
+
+        const dispatchedWithTrigger = (execStub: sinon.SinonStub) =>
+            execStub.getCalls().some(c => /trigger(Batch)?AgentFromKanban/.test(String(c.args[0])));
+
+        test('specific target: forward move dispatches with triggers on', async () => {
+            const { execStub } = wireMove([card('p1', 'CREATED')]);
+            (provider as any)._cliTriggersEnabled = true;
+
+            const result = await (provider as any)._advanceCards(workspaceRoot, ['p1'], { target: 'CODER CODED' });
+
+            assert.strictEqual(result.success, true);
+            assert.deepStrictEqual(result.moved, [{ id: 'p1', targetColumn: 'CODER CODED' }]);
+            assert.strictEqual(result.dispatched, true);
+            assert.ok(execStub.calledWith('switchboard.triggerAgentFromKanban', 'coder', 'p1'));
+        });
+
+        test('dispatch:false moves the card and NEVER dispatches (the moveCardForward trap)', async () => {
+            const { execStub } = wireMove([card('p1', 'CREATED')]);
+            (provider as any)._cliTriggersEnabled = true;
+
+            const result = await (provider as any)._advanceCards(workspaceRoot, ['p1'], { target: 'CODER CODED', dispatch: false });
+
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(result.moved.length, 1);
+            assert.strictEqual(result.dispatched, false);
+            assert.ok(!dispatchedWithTrigger(execStub), 'dispatch:false must not fire a trigger command even with triggers on');
+        });
+
+        test('specific target: backward move records backward and does not dispatch', async () => {
+            const { execStub, recordRunSheet } = wireMove([card('p1', 'CODE REVIEWED')]);
+            (provider as any)._cliTriggersEnabled = true;
+
+            const result = await (provider as any)._advanceCards(workspaceRoot, ['p1'], { target: 'CODER CODED' });
+
+            assert.strictEqual(result.moved.length, 1, 'backward card still moves');
+            assert.strictEqual(result.dispatched, false, 'backward card must not dispatch');
+            assert.ok(!dispatchedWithTrigger(execStub));
+            assert.ok(recordRunSheet.calledWith('p1', 'CODER CODED', 'backward', workspaceRoot),
+                'run sheet must record direction: backward');
+        });
+
+        test('target undefined resolves the next pipeline stage from sourceColumn', async () => {
+            const { execStub } = wireMove([card('p1', 'CREATED')]);
+            (provider as any)._cliTriggersEnabled = true;
+            sandbox.stub(provider as any, '_getNextColumnId').resolves('PLAN REVIEWED');
+
+            const result = await (provider as any)._advanceCards(workspaceRoot, ['p1'], { sourceColumn: 'CREATED' });
+
+            assert.strictEqual(result.success, true);
+            assert.deepStrictEqual(result.moved, [{ id: 'p1', targetColumn: 'PLAN REVIEWED' }]);
+            // PLAN REVIEWED maps to the planner role — dispatch uses it.
+            assert.ok(execStub.calledWith('switchboard.triggerAgentFromKanban', 'planner', 'p1'));
+        });
+
+        test('target undefined with no next stage fails honestly', async () => {
+            wireMove([card('p1', 'COMPLETED')]);
+            sandbox.stub(provider as any, '_getNextColumnId').resolves(null);
+
+            const result = await (provider as any)._advanceCards(workspaceRoot, ['p1'], { sourceColumn: 'COMPLETED' });
+
+            assert.strictEqual(result.success, false);
+            assert.match(result.error, /No next column after 'COMPLETED'/);
+        });
+
+        test('dispatchRole option is honoured over _columnToRole (custom column)', async () => {
+            const { execStub } = wireMove([card('p1', 'CREATED')]);
+            (provider as any)._cliTriggersEnabled = true;
+
+            // 'QA LANE' has no _columnToRole mapping; the caller-resolved
+            // spec.role must reach the trigger call.
+            const result = await (provider as any)._advanceCards(workspaceRoot, ['p1'], { target: 'QA LANE', dispatchRole: 'reviewer' });
+
+            assert.strictEqual(result.dispatched, true);
+            assert.ok(execStub.calledWith('switchboard.triggerAgentFromKanban', 'reviewer', 'p1'));
+        });
+
+        test('specific target: partial failure moves the rest and reports only the failed card', async () => {
+            const { postMessage } = wireMove([card('p1', 'CREATED'), card('p2', 'CREATED')]);
+            (provider as any)._cliTriggersEnabled = false;
+            (provider as any).moveCardToColumnWithReason.restore?.();
+            sandbox.stub(provider as any, 'moveCardToColumnWithReason')
+                .callsFake((_r: string, sid: string) => Promise.resolve(
+                    sid === 'p2' ? { ok: false, reason: 'error', detail: 'db write failed' } : { ok: true, detail: '' }
+                ));
+
+            const result = await (provider as any)._advanceCards(workspaceRoot, ['p1', 'p2'], { target: 'CODER CODED', dispatch: false });
+
+            assert.deepStrictEqual(result.moved, [{ id: 'p1', targetColumn: 'CODER CODED' }]);
+            assert.deepStrictEqual(result.failures, [{ id: 'p2', sourceColumn: 'CREATED', reason: 'db write failed' }]);
+            const failedPost = postMessage.getCalls().find(c => c.args[0]?.type === 'moveCardsFailed');
+            assert.ok(failedPost, 'moveCardsFailed must be posted');
+            assert.deepStrictEqual(failedPost.args[0].failures, [{ id: 'p2', sourceColumn: 'CREATED', reason: 'db write failed' }]);
+        });
+
+        test('moveCardForward arm: moves and does NOT dispatch even with triggers on', async () => {
+            const { execStub, postMessage } = wireMove([card('p1', 'CREATED')]);
+            (provider as any)._cliTriggersEnabled = true;
+
+            const result = await (provider as any)._handleMessage({
+                type: 'moveCardForward', sessionIds: ['p1'], targetColumn: 'CODER CODED', workspaceRoot
+            });
+
+            assert.strictEqual(result.success, true);
+            assert.ok(!dispatchedWithTrigger(execStub), 'moveCardForward is move-only — it must never fire a trigger command');
+            assert.ok(postMessage.getCalls().some(c => c.args[0]?.type === 'moveCards'), 'moveCards delta expected');
+        });
+
+        test('moveCardBackwards arm: moves and does NOT dispatch', async () => {
+            const { execStub } = wireMove([card('p1', 'CODE REVIEWED')]);
+            (provider as any)._cliTriggersEnabled = true;
+
+            const result = await (provider as any)._handleMessage({
+                type: 'moveCardBackwards', sessionIds: ['p1'], targetColumn: 'CODER CODED', workspaceRoot
+            });
+
+            assert.strictEqual(result.success, true);
+            assert.ok(!dispatchedWithTrigger(execStub));
+        });
+
+        test('triggerBatchAction arm: bypassTriggerGate dispatches with triggers off', async () => {
+            const { execStub } = wireMove([card('p1', 'PLAN REVIEWED'), card('p2', 'PLAN REVIEWED')]);
+            (provider as any)._cliTriggersEnabled = false;
+            // Feature-refusal pre-scan reads the db; give it an empty one.
+            sandbox.stub(provider as any, '_getKanbanDb').returns({
+                ensureReady: sandbox.stub().resolves(true),
+                getPlanByPlanId: sandbox.stub().resolves(undefined),
+                getPlanBySessionId: sandbox.stub().resolves(undefined)
+            });
+            sandbox.stub(provider as any, '_resolveKanbanDispatchSpec').resolves(null);
+            sandbox.stub(provider as any, '_scheduleBoardRefresh');
+
+            const result = await (provider as any)._handleMessage({
+                type: 'triggerBatchAction', sessionIds: ['p1', 'p2'], targetColumn: 'CODER CODED',
+                workspaceRoot, bypassTriggerGate: true
+            });
+
+            assert.strictEqual(result.success, true);
+            assert.ok(dispatchedWithTrigger(execStub), 'explicit bypass must dispatch even with triggers off');
+        });
+
+        test('moveSelected arm (PLAN REVIEWED): routes through _advanceCards CODED_AUTO', async () => {
+            wireMove([card('p1', 'PLAN REVIEWED'), card('p2', 'PLAN REVIEWED')]);
+            (provider as any)._cliTriggersEnabled = true;
+            sandbox.stub(provider as any, '_filterUnknownComplexitySessions').callsFake((ids: string[]) => ({ filtered: ids, skippedCount: 0 }));
+            const advanceSpy = sandbox.spy(provider as any, '_advanceCards');
+            sandbox.stub(provider as any, '_partitionByComplexityRoute').resolves(
+                new Map([['lead', []], ['coder', ['p1', 'p2']], ['intern', []]])
+            );
+            sandbox.stub(provider as any, '_getVisibleAgents').resolves({ lead: true, coder: true, intern: true });
+
+            const result = await (provider as any)._handleMessage({
+                type: 'moveSelected', sessionIds: ['p1', 'p2'], column: 'PLAN REVIEWED', workspaceRoot
+            });
+
+            assert.strictEqual(result.success, true);
+            assert.ok(advanceSpy.called, 'moveSelected complexity-route branch must delegate to _advanceCards');
+            const callArgs = advanceSpy.firstCall.args[2] as any;
+            assert.strictEqual(callArgs.target, 'CODED_AUTO');
+        });
+
+        test('moveAll arm (general column): routes through _advanceCards and dispatches with triggers on', async () => {
+            const { execStub } = wireMove([card('p1', 'CREATED'), card('p2', 'CREATED')]);
+            (provider as any)._cliTriggersEnabled = true;
+            const advanceSpy = sandbox.spy(provider as any, '_advanceCards');
+            // LEAD CODED keeps this out of the planner-distribution path, which
+            // owns its own fan-out and is allowlisted separately.
+            sandbox.stub(provider as any, '_getNextColumnId').resolves('LEAD CODED');
+            sandbox.stub(provider as any, '_resolveKanbanDispatchSpec').resolves(null);
+
+            const result = await (provider as any)._handleMessage({
+                type: 'moveAll', column: 'CREATED', workspaceRoot
+            });
+
+            assert.strictEqual(result.success, true);
+            assert.ok(advanceSpy.called, 'moveAll general branch must delegate to _advanceCards');
+            assert.ok(dispatchedWithTrigger(execStub), 'advance-all onto a coded column dispatches with triggers on');
+        });
+
+        test('CLI triggers off: every move affordance moves without dispatching', async () => {
+            const { execStub, postMessage } = wireMove([card('p1', 'CREATED'), card('p2', 'CREATED')]);
+            (provider as any)._cliTriggersEnabled = false;
+            sandbox.stub(provider as any, '_getNextColumnId').resolves('LEAD CODED');
+            sandbox.stub(provider as any, '_resolveKanbanDispatchSpec').resolves(null);
+            sandbox.stub(provider as any, '_getKanbanDb').returns({
+                ensureReady: sandbox.stub().resolves(true),
+                getPlanByPlanId: sandbox.stub().resolves(undefined),
+                getPlanBySessionId: sandbox.stub().resolves(undefined)
+            });
+            sandbox.stub(provider as any, '_scheduleBoardRefresh');
+
+            const fwd = await (provider as any)._handleMessage({
+                type: 'moveCardForward', sessionIds: ['p1'], targetColumn: 'CODER CODED', workspaceRoot
+            });
+            const batch = await (provider as any)._handleMessage({
+                type: 'triggerBatchAction', sessionIds: ['p1', 'p2'], targetColumn: 'CODER CODED', workspaceRoot
+            });
+
+            assert.ok(!dispatchedWithTrigger(execStub), 'no affordance may dispatch with triggers off');
+            assert.strictEqual(fwd.success, true);
+            // Reconciled gate: the batch arm moves the cards rather than
+            // refusing the drop outright.
+            assert.strictEqual(batch.success, true);
+            assert.ok(postMessage.getCalls().some(c => c.args[0]?.type === 'moveCards'),
+                'cards must still move with triggers off');
+        });
+    });
 });
 
