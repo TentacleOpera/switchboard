@@ -3276,16 +3276,6 @@ Read the current content above. Deepen the problem analysis, verify every file p
                         return result;
                     }
 
-                    // CLI-triggers gate — mirrors KanbanProvider.ts:8153. An
-                    // API-originated dispatch (POST /kanban/dispatch) passes
-                    // bypassTriggerGate: true; a board drag-drop respects the
-                    // setting. Without this gate the standalone host dispatches
-                    // regardless of the toggle while the board UI reports it off.
-                    const cliTriggersEnabled = kanbanProvider._getScopedSetting<boolean>('kanban.cliTriggersEnabled', true);
-                    if (!cliTriggersEnabled && !payload?.bypassTriggerGate) {
-                        return { success: false, error: 'CLI triggers are disabled' };
-                    }
-
                     const sourceColumn: string | undefined = payload.column;
                     const explicitTarget: string | undefined = payload.targetColumn;
                     const planFile: string | undefined = payload.planFile;
@@ -3325,6 +3315,29 @@ Read the current content above. Deepen the problem analysis, verify every file p
                     const targetRole = payload.role || (targetColumn
                         ? (DEFAULT_KANBAN_COLUMNS.find(c => c.id === targetColumn)?.role || columnToPromptRole(targetColumn) || 'lead')
                         : 'coder');
+
+                    // CLI-triggers gate — reconciled to the provider's rule (one
+                    // gate for every advance affordance): the card still moves,
+                    // the setting suppresses only the dispatch. An API-originated
+                    // dispatch (POST /kanban/dispatch) passes bypassTriggerGate.
+                    // Deferred to here because the move needs the resolved
+                    // records and targetColumn; before the reconciliation this
+                    // gate ran before record resolution and refused outright.
+                    const cliTriggersEnabled = kanbanProvider._getScopedSetting<boolean>('kanban.cliTriggersEnabled', true);
+                    if (!cliTriggersEnabled && !payload?.bypassTriggerGate) {
+                        const gateMovedIds = records.map((r: any) => r.sessionId || r.planId).filter(Boolean);
+                        if (targetColumn && gateMovedIds.length > 0) {
+                            const moveFrom = sourceColumn || records[0]?.kanbanColumn;
+                            if (moveFrom && moveFrom !== targetColumn) {
+                                await moveSessionsToColumn(gateMovedIds, targetColumn);
+                                server.broadcastWs('moveCards', { sessionIds: gateMovedIds, targetColumn }, SURFACES.kanban);
+                            }
+                            schedulePushFullState();
+                            return { success: true, targetColumn, dispatched: false };
+                        }
+                        return { success: false, error: 'CLI triggers are disabled' };
+                    }
+
                     // getWorktrees() takes no arguments — it already filters status='active'
                     // in SQL and is scoped to this workspace's db.
                     const activeWorktrees = await db.getWorktrees();
