@@ -24,7 +24,26 @@ those below were re-checked on 2026-09-15 unless marked otherwise.
 
 ## User Review Required
 
-**Yes — an either/or the author must pick:** clear every row stamped to the seat, or stop stamping N rows in the first place. Both are defensible and they lead to different implementations.
+**Decided 2026-09-15 by the operator: clear every row stamped to the seat.**
+
+The shipped standing order is one POST per *turn* — *"Do NOT post after finishing individual
+parts"* — so the stamped set **is** the turn, and clearing all of it on the turn boundary is
+consistent with the directive the seat was given. "Stop stamping N rows" is the better data model
+but it is a refactor of the fan-out, not a fix for the stuck lights.
+
+## Settled Design
+
+- **Clear every row stamped to that seat** when the completion POST arrives.
+- **Do NOT gate on `remaining === 0`.** The comment at `LocalApiServer.ts:7143-7152` already rules
+  this out with reasons, and they still hold: the sibling rows have no second POST (mtime completion
+  is retired and the ingestion clear seam is dormant), so a batch would never announce at all; and
+  the same callback carries the board refresh in both hosts, so a row would go clean in the DB while
+  its card stayed lit — the exact stuck light this work exists to remove.
+- **`remaining` stays display-only.** It renders as `"<title> +N more"` in the completion toast and
+  must not become a gate.
+- **The one risk to guard:** a seat legitimately holding two unrelated dispatches would have both
+  cleared. Scope the clear to the rows belonging to the completing dispatch if that is
+  distinguishable; if it is not, record that limitation rather than leaving it implicit.
 
 ## Proposed Changes
 

@@ -24,7 +24,21 @@ those below were re-checked on 2026-09-15 unless marked otherwise.
 
 ## User Review Required
 
-**Yes — one decision:** register a group row for head-only teams, or resolve the queue by head name. The first changes what a team *is*; the second changes only the lookup.
+**Decided 2026-09-15 by the operator: resolve the queue by head name.**
+
+The smaller change, and it leaves the data model alone. Registering `terminals.groups` rows for
+member-less teams would make a group row stop meaning "this team has members", and anything else
+reading it as proof of membership would quietly change behaviour.
+
+## Settled Design
+
+- **Resolve the queue by head name** when no live group row exists, rather than registering a row
+  for head-only teams.
+- **`wireSpawnedTeam` keeps returning `{ ok: true }` on empty `children`** (`teamWiring.ts:1382`) —
+  that is not the defect and is not changed.
+- **Absent must stay distinguishable from empty.** The defect is `buildTeamsForShell`
+  (`terminals.js:1927-1934`) emitting `false` / `null` / `0` when `liveGroup` is missing, which reads
+  as real state. After the fix an unresolvable team renders as unknown, never as idle.
 
 ## Proposed Changes
 

@@ -22,7 +22,21 @@ those below were re-checked on 2026-09-15 unless marked otherwise.
 
 ## User Review Required
 
-**Yes, lightly — a disclosure decision more than a bug fix.** Whether the product should *prevent* the switch or merely disclose it is the author's call; this plan assumes disclose.
+**Decided 2026-09-15 by the operator: disclose.**
+
+Each panel reads the effective provider and states when the other is disabled. Preventing the switch
+was rejected — it would have the product decide which of the user's integrations matters.
+
+## Settled Design
+
+- **Disclose, do not prevent.** The switch stays available; what changes is that its consequence is
+  stated where the user can see it.
+- **Both panels disclose**, not just the one being changed — `connections.js` and `linear.js` each
+  read the effective provider.
+- **Not a confirm gate.** Per CLAUDE.md this is a plain statement in the panel: no dialog, no
+  two-click pattern, no "are you sure".
+- **Silent when there is nothing to disclose.** With one provider configured, no message appears —
+  a notice that is always present is one nobody reads.
 
 ## Proposed Changes
 

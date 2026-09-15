@@ -22,7 +22,19 @@ those below were re-checked on 2026-09-15 unless marked otherwise.
 
 ## User Review Required
 
-**Yes — a lifecycle decision:** reuse an existing team worktree, or create per start and remove on stop. Both are coherent; they imply different cleanup semantics.
+**Decided 2026-09-15 by the operator: reuse.**
+
+Look up an existing `tier='team'` worktree before provisioning. Removal-on-stop was rejected because
+"stop" is not reliably observed — a crash, a closed laptop or a killed host leaks exactly what is
+leaking today, so a cleanup path that depends on a graceful stop does not close the hole.
+
+## Settled Design
+
+- **Reuse:** `provisionTeamWorktree` looks up an existing `tier='team'` row for the team and returns
+  it instead of provisioning a second.
+- **No removal on stop.** Deliberate — see the decision above. A stale worktree persisting across
+  restarts is the accepted cost, and is bounded at one per team rather than one per start.
+- **A worktree with uncommitted work is never removed silently**, in any path this plan touches.
 
 ## Proposed Changes
 

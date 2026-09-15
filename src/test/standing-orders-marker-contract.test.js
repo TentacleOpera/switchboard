@@ -27,8 +27,13 @@ const STANDING_ORDERS_SRC = fs.readFileSync(
 const TERMINALS_JS_SRC = fs.readFileSync(
     path.join(__dirname, '..', 'webview', 'terminals.js'), 'utf8'
 );
-const AGENT_PROMPT_BUILDER_SRC = fs.readFileSync(
-    path.join(__dirname, '..', 'services', 'agentPromptBuilder.ts'), 'utf8'
+// The directive constants moved to agentDirectives.ts — a leaf module with no
+// imports — to break the require cycle that left GIT_SAFETY_DIRECTIVE undefined
+// when agentPromptBuilder was the entry point. agentPromptBuilder still
+// re-exports them, so every importer is unchanged; the SOURCE-TEXT assertions
+// below have to read the file that now declares them.
+const AGENT_DIRECTIVES_SRC = fs.readFileSync(
+    path.join(__dirname, '..', 'services', 'agentDirectives.ts'), 'utf8'
 );
 const KANBAN_HTML_SRC = fs.readFileSync(
     path.join(__dirname, '..', 'webview', 'kanban.html'), 'utf8'
@@ -249,14 +254,14 @@ test('GIT_SAFETY_DIRECTIVE in agentPromptBuilder.ts is byte-identical to GIT_SAF
     // tests above, and the same shape link-presets-mirror-contract.test.js
     // uses for the callback constant.
 
-    // Extract from agentPromptBuilder.ts: `export const GIT_SAFETY_DIRECTIVE = `...`;`
+    // Extract from agentDirectives.ts: `export const GIT_SAFETY_DIRECTIVE = `...`;`
     // The host constant is a backtick template literal with escaped backticks
     // inside (\`<path>\`). Greedy-match from the opening backtick to the
     // closing `` `; ``, then unescape \` to `.
-    const hostMatch = AGENT_PROMPT_BUILDER_SRC.match(
+    const hostMatch = AGENT_DIRECTIVES_SRC.match(
         /export\s+const\s+GIT_SAFETY_DIRECTIVE\s*=\s*`(.*)`;/
     );
-    assert.ok(hostMatch, 'GIT_SAFETY_DIRECTIVE not found in agentPromptBuilder.ts');
+    assert.ok(hostMatch, 'GIT_SAFETY_DIRECTIVE not found in agentDirectives.ts');
     const hostValue = hostMatch[1].replace(/\\`/g, '`');
 
     // Extract from terminals.js: `var GIT_SAFETY_DIRECTIVE_CLIENT = '...';`
@@ -271,7 +276,7 @@ test('GIT_SAFETY_DIRECTIVE in agentPromptBuilder.ts is byte-identical to GIT_SAF
     assert.strictEqual(
         hostValue, clientValue,
         `GIT_SAFETY_DIRECTIVE drift detected.\n` +
-        `agentPromptBuilder.ts: "${hostValue}"\n` +
+        `agentDirectives.ts: "${hostValue}"\n` +
         `terminals.js:         "${clientValue}"\n` +
         `This is the one guardrail team coders get — a drift here is invisible without this test.`
     );
@@ -286,10 +291,10 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
     // drift here silently ships a team whose coders carry stale or absent
     // safety text — the exact failure the owning plan names under "Safeguard
     // text must have one source of truth" (verification step 10).
-    const hostMatch = AGENT_PROMPT_BUILDER_SRC.match(
+    const hostMatch = AGENT_DIRECTIVES_SRC.match(
         /export\s+const\s+GIT_SAFETY_DIRECTIVE\s*=\s*`(.*)`;/
     );
-    assert.ok(hostMatch, 'GIT_SAFETY_DIRECTIVE not found in agentPromptBuilder.ts');
+    assert.ok(hostMatch, 'GIT_SAFETY_DIRECTIVE not found in agentDirectives.ts');
     const gitSafety = hostMatch[1].replace(/\\`/g, '`');
 
     // The callback text now lives in the `reports-to-head` preset template in
@@ -335,7 +340,7 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
         assert.ok(
             p.endsWith(gitSafety),
             'A shipped team prompt does not end with GIT_SAFETY_DIRECTIVE verbatim.\n' +
-            `agentPromptBuilder.ts: "${gitSafety}"\n` +
+            `agentDirectives.ts: "${gitSafety}"\n` +
             `kanban.html:           "${p.slice(-gitSafety.length)}"\n` +
             'This is the only guardrail a team coder gets — a drift here is invisible without this test.'
         );
@@ -519,10 +524,10 @@ test('kanban.html shipped team prompts carry byte-identical safety + callback te
 });
 
 test('GIT_SAFETY_DIRECTIVE_WORKTREE_MODE excludes the staging-scope clause (isolated trees need no path-staging rule)', () => {
-    const hostMatch = AGENT_PROMPT_BUILDER_SRC.match(
+    const hostMatch = AGENT_DIRECTIVES_SRC.match(
         /export\s+const\s+GIT_SAFETY_DIRECTIVE_WORKTREE_MODE\s*=\s*`(.*)`;/
     );
-    assert.ok(hostMatch, 'GIT_SAFETY_DIRECTIVE_WORKTREE_MODE not found in agentPromptBuilder.ts');
+    assert.ok(hostMatch, 'GIT_SAFETY_DIRECTIVE_WORKTREE_MODE not found in agentDirectives.ts');
     const worktreeDirective = hostMatch[1];
     assert.ok(
         !worktreeDirective.includes('git add -A'),
