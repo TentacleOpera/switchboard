@@ -101,6 +101,7 @@ The board reached over the tailnet is trusted, correctly addressed, and protecte
 - [ ] [The tailnet URL is chosen for reachability, never for origin trust, so the board lands on an insecure context that cannot install to a Home Screen](../plans/the-tailnet-url-never-offers-a-secure-origin.md) — **CODE REVIEWED** — ID: be0cf7de-bd11-4ee3-b999-5da0dde9e105
 - [ ] [`switchboard tailnet` prints the credential-free tailnet URL and then opens the credentialed loopback one, which arrives already spent](../plans/tailnet-mode-opens-the-loopback-board-and-spends-its-token.md) — **CODE REVIEWED** — ID: eddb76a9-bc8e-4de5-b51d-b13a8c0bac4d
 - [ ] [The Tailnet LocalAPI Probe Omits the Host Header, So MagicDNS Names Are Never Discovered and the Remote Board 403s](../plans/tailnet-localapi-probe-omits-the-host-header-so-magicdns-names-are-never-discovered.md) — **CODE REVIEWED** — ID: b7dc9141-d45c-41b3-af50-2cef25502f89
+- [ ] [Nothing Checks or Surfaces Tailscale ACL Posture](../plans/nothing-checks-or-surfaces-tailscale-acl-posture.md) — **CREATED** — ID: 19589962-3ea1-492e-857d-39a9a0a6d130
 <!-- END SUBTASKS -->
 
 ## Completion Summary

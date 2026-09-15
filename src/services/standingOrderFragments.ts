@@ -1,5 +1,10 @@
 import * as crypto from 'crypto';
-import { GIT_SAFETY_DIRECTIVE, NO_SUBAGENTS_DIRECTIVE, CUSTOM_SUBAGENT_DIRECTIVE_TEMPLATE } from './agentPromptBuilder';
+// Leaf module, deliberately NOT './agentPromptBuilder'. This file builds
+// BUNDLED_STANDING_ORDER_FRAGMENTS (and hashes each body) at module scope, so it
+// needs these strings fully initialised at import time. Reaching into the builder
+// closed the cycle builder → protocolDirectives → KanbanDatabase → here → builder,
+// and the hash then ran on an undefined body. Keep this import on the leaf.
+import { GIT_SAFETY_DIRECTIVE, NO_SUBAGENTS_DIRECTIVE, CUSTOM_SUBAGENT_DIRECTIVE_TEMPLATE } from './agentDirectives';
 import type { KanbanDatabase } from './KanbanDatabase';
 
 export type StandingOrderWorkKind = 'feature' | 'plan';
