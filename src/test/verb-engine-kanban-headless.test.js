@@ -341,6 +341,139 @@ async function main() {
         assert.deepStrictEqual(result, { success: true });
     });
 
+    // ── Project verbs: the 2026-09-15 dropdown outage ─────────────────────
+    // Three separate defects landed the operator with an empty project dropdown
+    // and a board filtered to a project they never chose:
+    //   1. the standalone host wrote the `projects` row through its own `db`
+    //      handle, so the provider's memoised `allWorkspaceProjects` — what the
+    //      dropdown is built from — kept the pre-create list until restart;
+    //   2. `addProject` switched the active filter unconditionally, so an agent
+    //      creating eight projects in a loop moved the operator's board eight times;
+    //   3. a root that could not be read was memoised as `[]`, making "unreadable"
+    //      indistinguishable from "no projects".
+    // A fake DB is injected so these assert on the ARM's behaviour, not on sqlite.
+    function withFakeProjectDb(tmp) {
+        const built = buildHeadlessProvider(tmp);
+        const state = { projects: [], config: {}, ready: true, workspaceId: 'ws-1' };
+        const fakeDb = {
+            ensureReady: async () => state.ready,
+            getWorkspaceId: async () => (state.ready ? state.workspaceId : null),
+            getDominantWorkspaceId: async () => null,
+            getProjects: async () => {
+                if (!state.ready) { throw new Error('db unavailable'); }
+                return [...state.projects];
+            },
+            addProject: async (_wsId, name) => {
+                if (state.projects.includes(name)) { return false; }
+                state.projects.push(name);
+                return true;
+            },
+            deleteProject: async (_wsId, name) => {
+                state.projects = state.projects.filter(p => p !== name);
+            },
+            setConfig: async (key, value) => { state.config[key] = value; },
+        };
+        built.provider._getKanbanDb = () => fakeDb;
+        built.provider._kanbanDbs = new Map();
+        built.provider._projectFilter = 'Existing Project';
+        built.provider._projectOverrideEnabled = false;
+        built.provider._allWorkspaceProjectsCache = null;
+        built.provider._allWorkspaceProjectsCacheExpiry = 0;
+        return { ...built, state, fakeDb };
+    }
+
+    await test('addProject does NOT move the active project filter by default (verb rail)', async () => {
+        const { provider } = withFakeProjectDb(tmpRoot);
+        const before = provider.getProjectFilter();
+        for (const name of ['P1', 'P2', 'P3']) {
+            const result = await provider.handleServiceVerb('addProject', { workspaceRoot: tmpRoot, projectName: name });
+            assert.strictEqual(result.success, true, `addProject ${name} must succeed`);
+        }
+        assert.strictEqual(provider.getProjectFilter(), before,
+            'an agent creating projects over the rail must not move the operator\'s board');
+    });
+
+    await test('addProject honours makeActive:true (the board button keeps its switch)', async () => {
+        const { provider, state } = withFakeProjectDb(tmpRoot);
+        const result = await provider.handleServiceVerb('addProject', {
+            workspaceRoot: tmpRoot, projectName: 'Button Project', makeActive: true,
+        });
+        assert.strictEqual(result.success, true);
+        assert.strictEqual(provider.getProjectFilter(), 'Button Project');
+        assert.strictEqual(state.config['kanban.activeProjectFilter'], 'Button Project',
+            'setProjectFilter must persist the active project to DB config');
+    });
+
+    await test('addProject schema rejects a non-boolean makeActive', () => {
+        assert.strictEqual(validateVerbPayload('kanban', 'addProject', { projectName: 'x', makeActive: true }).ok, true);
+        assert.strictEqual(validateVerbPayload('kanban', 'addProject', { projectName: 'x', makeActive: 'true' }).ok, false);
+        assert.strictEqual(validateVerbPayload('kanban', 'addProject', {}).ok, false);
+    });
+
+    await test('addProject/deleteProject drop the memoised project list (the stale dropdown)', async () => {
+        const { provider, state } = withFakeProjectDb(tmpRoot);
+        state.projects = ['Existing Project'];
+
+        const first = await provider._getAllWorkspaceProjects();
+        assert.deepStrictEqual(first[path.resolve(tmpRoot)], ['Existing Project']);
+        assert.ok(provider._allWorkspaceProjectsCache, 'a clean read must memoise');
+
+        await provider.handleServiceVerb('addProject', { workspaceRoot: tmpRoot, projectName: 'Fresh' });
+        assert.strictEqual(provider._allWorkspaceProjectsCache, null,
+            'addProject must drop the memo or the dropdown ships the pre-create list');
+        const afterAdd = await provider._getAllWorkspaceProjects();
+        assert.ok(afterAdd[path.resolve(tmpRoot)].includes('Fresh'),
+            'the next push must carry the project that was just created');
+
+        await provider.handleServiceVerb('deleteProject', { workspaceRoot: tmpRoot, projectName: 'Fresh' });
+        assert.strictEqual(provider._allWorkspaceProjectsCache, null, 'deleteProject must drop the memo too');
+        const afterDelete = await provider._getAllWorkspaceProjects();
+        assert.ok(!afterDelete[path.resolve(tmpRoot)].includes('Fresh'));
+    });
+
+    await test('an unreadable root is OMITTED, never memoised as an empty project list', async () => {
+        const { provider, state } = withFakeProjectDb(tmpRoot);
+        state.projects = ['Existing Project'];
+        state.ready = false;
+
+        const degraded = await provider._getAllWorkspaceProjects();
+        assert.ok(!(path.resolve(tmpRoot) in degraded),
+            'a root that could not be read must be ABSENT, not [] — "unreadable" is not "no projects"');
+        assert.notStrictEqual(provider._allWorkspaceProjectsCacheExpiry, 0,
+            'a degraded memo must carry an expiry so the failed root is retried');
+
+        // ...and the expiry is what stops every push re-initialising a dead database.
+        provider._allWorkspaceProjectsCacheExpiry = Date.now() - 1;
+        state.ready = true;
+        const healed = await provider._getAllWorkspaceProjects();
+        assert.deepStrictEqual(healed[path.resolve(tmpRoot)], ['Existing Project'],
+            'the degraded memo must expire so the root heals without a restart');
+        assert.strictEqual(provider._allWorkspaceProjectsCacheExpiry, 0,
+            'a clean re-read must clear the expiry');
+    });
+
+    // ── Standalone composition root: the project verbs are wired THERE ─────
+    // The delivery defect was a composition-root divergence, not a missing verb:
+    // bootstrap.ts answered addProject/deleteProject from its own `db` handle and
+    // never reached the provider arm that drops the memo. Source-level, because the
+    // seam is a call site in a host this suite does not boot.
+    await test('standalone bootstrap delegates the project verbs to the provider and pushes', async () => {
+        const bootstrapSrc = await fs.promises.readFile(
+            path.join(process.cwd(), 'src', 'standalone', 'bootstrap.ts'), 'utf8');
+        const arm = bootstrapSrc.match(/case 'addProject':\s*\n\s*case 'deleteProject': \{([\s\S]*?)\n {16}\}/);
+        assert.ok(arm, "bootstrap.ts must answer 'addProject'/'deleteProject' in one delegating arm");
+        assert.match(arm[1], /kanbanProvider\.handleServiceVerb\(verb,/,
+            'the project verbs must reach the provider arm — a direct db write leaves the memo stale');
+        assert.match(arm[1], /schedulePushFullState\(\)/,
+            'project mutations must push through the 40 ms coalescer, not a bare pushFullState');
+        assert.ok(!/await db\.addProject\(/.test(bootstrapSrc),
+            'bootstrap must not write the projects table behind the provider again');
+        assert.ok(!/await db\.deleteProject\(/.test(bootstrapSrc),
+            'bootstrap must not delete from the projects table behind the provider again');
+        assert.match(bootstrapSrc, /case 'getProjects': \{/,
+            "standalone must answer 'getProjects' so an agent can read back what it wrote");
+    });
+
     // ── Schema registry sanity ────────────────────────────────────────────
     await test('kanban schema registry validates strictly for moves, passes schemaless verbs', () => {
         assert.strictEqual(validateVerbPayload('kanban', 'moveSelected', { sessionIds: ['a'], column: 'CREATED' }).ok, true);

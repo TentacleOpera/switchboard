@@ -353,6 +353,17 @@ export class KanbanProvider implements vscode.Disposable {
     private _projectFilter: string | null = KanbanDatabase.UNASSIGNED_PROJECT_FILTER;
     private _projectFilterNeedsValidation: boolean = false;
     private _allWorkspaceProjectsCache: Record<string, string[]> | null = null;
+    /**
+     * Epoch ms after which a DEGRADED project memo must be re-read; 0 means the memo is
+     * clean and never expires on its own (only `invalidateProjectCache` drops it).
+     * A degraded read omits the failed root rather than memoising `[]` for it, but it
+     * must still be memoised briefly: `ensureReady()` returns false for a root with no
+     * board DB (a scoped-mapping parent folder, a root whose DB has not been created
+     * yet), and it re-runs the full `_initialize()` every call. Without this window,
+     * every full-state push re-initialises that database — a per-mutation cost on the
+     * exact path this memo exists to keep cheap.
+     */
+    private _allWorkspaceProjectsCacheExpiry: number = 0;
     // Global Override flags (plan 02). Live ONLY in the kanban.db config table
     // (workspace tier) — never scope-resolved, never in globalState.
     private _workspaceOverrideEnabled: boolean = false;
@@ -610,7 +621,7 @@ export class KanbanProvider implements vscode.Disposable {
         if (this._context?.subscriptions) {
             this._context.subscriptions.push(
                 vscode.workspace.onDidChangeWorkspaceFolders(() => {
-                    this._allWorkspaceProjectsCache = null;
+                    this.invalidateProjectCache();
                 }),
                 vscode.workspace.onDidChangeConfiguration(e => {
                     if (e.affectsConfiguration('switchboard.theme.name')) {
@@ -1216,10 +1227,16 @@ export class KanbanProvider implements vscode.Disposable {
      */
     public invalidateProjectCache(): void {
         this._allWorkspaceProjectsCache = null;
+        this._allWorkspaceProjectsCacheExpiry = 0;
     }
 
+    /** How long a degraded project memo is trusted before the failed roots are retried. */
+    private static readonly DEGRADED_PROJECT_MEMO_MS = 5000;
+
     private async _getAllWorkspaceProjects(): Promise<Record<string, string[]>> {
-        if (this._allWorkspaceProjectsCache) {
+        if (this._allWorkspaceProjectsCache
+            && (this._allWorkspaceProjectsCacheExpiry === 0
+                || Date.now() < this._allWorkspaceProjectsCacheExpiry)) {
             return this._allWorkspaceProjectsCache;
         }
         const result: Record<string, string[]> = {};
@@ -1253,9 +1270,14 @@ export class KanbanProvider implements vscode.Disposable {
                 console.warn(`[KanbanProvider] _getAllWorkspaceProjects: read failed for ${root} — project list omitted, not cached:`, e);
             }
         }
-        if (!degraded) {
-            this._allWorkspaceProjectsCache = result;
-        }
+        // Memoised either way — but a degraded map expires, so the failed root is
+        // retried instead of being frozen out for the life of the host process. The
+        // failed root stays ABSENT from the map (never `[]`), so "could not read" and
+        // "has no projects" remain distinguishable; only the retry cadence is bounded.
+        this._allWorkspaceProjectsCache = result;
+        this._allWorkspaceProjectsCacheExpiry = degraded
+            ? Date.now() + KanbanProvider.DEGRADED_PROJECT_MEMO_MS
+            : 0;
         return result;
     }
 
@@ -10510,7 +10532,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 }
 
                 // Invalidate project cache — reassignment may change project assignments
-                this._allWorkspaceProjectsCache = null;
+                this.invalidateProjectCache();
 
                 await this._refreshBoard(sourceWorkspaceRoot);
 
@@ -10624,7 +10646,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
                 const db = this._getKanbanDb(workspaceRoot);
                 const created = await db.addProject(workspaceId, projectName);
-                this._allWorkspaceProjectsCache = null; // Invalidate cache
+                this.invalidateProjectCache();
 
                 // Creating a project no longer MEANS switching to it. The switch is an
                 // opt-in the caller asks for: the board's create-project button passes
@@ -10704,7 +10726,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     if (workspaceId) {
                         const db = this._getKanbanDb(workspaceRoot);
                         await db.deleteProject(workspaceId, msg.projectName);
-                        this._allWorkspaceProjectsCache = null; // Invalidate cache
+                        this.invalidateProjectCache();
                         await this._refreshBoard(workspaceRoot);
                         if (this._planningPanelProvider) {
                             this._planningPanelProvider.postMessageToProjectWebview({
