@@ -5,15 +5,26 @@
  * Kanban Dispatch Callers Guard.
  *
  * Ensures the webview's CODED_AUTO drop path sends `targetColumn: 'CODED_AUTO'`
- * as intent (not a pre-resolved column), and that the server's KanbanProvider
- * delegates CODED_AUTO to `_advanceCards` for per-card complexity routing.
+ * as intent (not a pre-resolved column), that the server's KanbanProvider
+ * delegates CODED_AUTO to `_advanceCards` for per-card complexity routing, and
+ * — the ratchet — that no NEW arm open-codes a direct
+ * `executeCommand('switchboard.trigger*AgentFromKanban', …)` call instead of
+ * routing through `_advanceCards`.
  *
- * Three assertions:
+ * Assertions:
  *  1. resolveCodedAutoTarget is absent from kanban.html (deleted).
  *  2. The CODED_AUTO drop block sends targetColumn: 'CODED_AUTO' (not a
  *     pre-resolved target).
  *  3. KanbanProvider's triggerBatchAction and triggerAction arms delegate
  *     CODED_AUTO to _advanceCards.
+ *  4. _advanceCards exists.
+ *  5. Occurrence ratchet: every direct trigger-call site in KanbanProvider.ts
+ *     is attributed to its owning member (a `private …name(` method or a
+ *     `case 'name':` arm). Sites inside `_advanceCards` are the operation
+ *     itself; a named allowlist covers call sites whose dispatch shape the
+ *     operation does not model. The total outside both must stay at or below
+ *     DIRECT_TRIGGER_CEILING — a number that only ever ratchets DOWN, one step
+ *     per arm converted.
  */
 
 const fs = require('fs');
@@ -89,6 +100,91 @@ test('_advanceCards method exists on KanbanProvider', () => {
     assert.ok(
         /private\s+async\s+_advanceCards\s*\(/.test(kanbanProviderCode),
         '_advanceCards method must exist on KanbanProvider — the unified advance operation'
+    );
+});
+
+// 5. Occurrence ratchet over direct trigger-call sites.
+//
+// Owner attribution: a site belongs to the nearest preceding member boundary —
+// either a class method declaration at 4-space indent (`method:<name>`) or a
+// `case '<verb>':` label (`case:<verb>`). A site that lands outside every
+// boundary attributes to `unknown` and counts against the ceiling, so a call
+// hidden in an unrecognised construct still fails rather than passing.
+test('direct trigger*AgentFromKanban calls are confined to _advanceCards + the named allowlist', () => {
+    const TRIGGER_CALL_RE = /executeCommand(?:<[^>]*>)?\(\s*'switchboard\.trigger(?:Batch)?AgentFromKanban'/g;
+
+    // Named exemptions — each entry is a site whose dispatch shape the advance
+    // operation deliberately does NOT model. The expected count is exact: a
+    // site added OR removed inside an allowlisted owner fails, so the list
+    // cannot quietly rot.
+    const ALLOWED_SITES = new Map([
+        // The operation itself: the four calls every other affordance delegates to.
+        ['method:_advanceCards', 4],
+        // Private helper with no browser surface — comment/integration-driven
+        // re-dispatch of a card already in a role column; there is no move half
+        // to delegate.
+        ['method:_remoteDispatchColumnAgent', 1],
+        // Planner fan-out: owns the per-terminal bucket partition, the
+        // persistent rotation cursor, and the 'improve-plan' instruction.
+        // Shares _advanceCards' move half (dispatch:false); keeps its own
+        // dispatch shape.
+        ['method:_distributePlannerDispatch', 2],
+        // Fixed 'jules' role dispatch — no column move.
+        ['case:julesLowComplexity', 1],
+        ['case:julesSelected', 1],
+        // Dispatches the column as-is for dispatch-analysis — no move.
+        ['case:dispatchAnalyze', 1],
+    ]);
+
+    // Only ever ratchets DOWN — lower it in the same commit that removes the
+    // sites. History: 9 at extraction start (triggerAction 1, triggerBatchAction
+    // 1, moveSelected 4, moveAll 3; the sendDispatch* arms were already deleted).
+    const DIRECT_TRIGGER_CEILING = 9;
+
+    const boundaries = [];
+    for (const m of kanbanProviderCode.matchAll(
+        /^    (?:private|public|protected)\s+(?:static\s+)?(?:async\s+)?(?:get\s+|set\s+)?(\w+)\s*\(/gm
+    )) {
+        boundaries.push({ index: m.index, owner: `method:${m[1]}` });
+    }
+    for (const m of kanbanProviderCode.matchAll(/case '([A-Za-z0-9_]+)':/g)) {
+        boundaries.push({ index: m.index, owner: `case:${m[1]}` });
+    }
+    boundaries.sort((a, b) => a.index - b.index);
+
+    const byOwner = new Map();
+    for (const m of kanbanProviderCode.matchAll(TRIGGER_CALL_RE)) {
+        let owner = 'unknown';
+        for (const b of boundaries) {
+            if (b.index < m.index) { owner = b.owner; } else { break; }
+        }
+        byOwner.set(owner, (byOwner.get(owner) || 0) + 1);
+    }
+
+    const listing = [...byOwner.entries()].map(([o, n]) => `${o}×${n}`).join(', ');
+
+    // Allowlisted owners must match their declared count exactly.
+    for (const [owner, expected] of ALLOWED_SITES) {
+        const actual = byOwner.get(owner) || 0;
+        assert.strictEqual(actual, expected,
+            `allowlisted owner ${owner} must hold exactly ${expected} direct trigger call(s), found ${actual} (all sites: ${listing})`);
+    }
+
+    // Everything else is the ratchet: direct calls outside the operation and
+    // the allowlist must be ≤ the ceiling. A new arm that open-codes a
+    // trigger call instead of routing through _advanceCards trips this.
+    let unlisted = 0;
+    const unlistedOwners = [];
+    for (const [owner, count] of byOwner) {
+        if (!ALLOWED_SITES.has(owner)) {
+            unlisted += count;
+            unlistedOwners.push(`${owner}×${count}`);
+        }
+    }
+    assert.ok(
+        unlisted <= DIRECT_TRIGGER_CEILING,
+        `${unlisted} direct trigger call(s) outside _advanceCards + allowlist (ceiling ${DIRECT_TRIGGER_CEILING}): ${unlistedOwners.join(', ')}. ` +
+        `Route the arm through _advanceCards, or lower the ceiling as sites are converted.`
     );
 });
 
