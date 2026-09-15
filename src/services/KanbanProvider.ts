@@ -9636,7 +9636,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
      * only), visible-agent resolution, target-column resolution + degradation,
      * per-card forward/backward classification, per-card moveCardToColumn,
      * run-sheet recording, cascade-id collection, moveCards/moveCardsFailed
-     * pushes, the _cliTriggersEnabled gate, and the dispatch call.
+     * pushes, the _cliTriggersEnabled gate, and the dispatch call (suppressed
+     * entirely when `options.dispatch === false` — the move-only mode).
      *
      * Returns `moved[]` with a resolved `targetColumn` per card — the payload
      * that lets the webview arm its optimistic guard without re-implementing
@@ -9650,6 +9651,17 @@ This step is what moves the plan forward in the Switchboard pipeline.
             target?: string;
             initiatorProject?: string | null;
             bypassTriggerGate?: boolean;
+            // false = move half only (moveCardForward/moveCardBackwards,
+            // promptOnDrop, and arms whose dispatch shape the operation does
+            // not model). A wrong default here silently dispatches where HEAD
+            // did not — the option exists because dispatch is opt-OUT, not
+            // opt-in, and the safe failure is a card that moved without firing.
+            dispatch?: boolean;
+            // Caller-resolved dispatch role for the specific-target branch.
+            // _columnToRole returns null for custom kanban columns, so a caller
+            // that resolved the role through _resolveKanbanDispatchSpec hands it
+            // in explicitly rather than letting the operation re-derive null.
+            dispatchRole?: string;
         }
     ): Promise<{
         success: boolean;
@@ -9659,8 +9671,24 @@ This step is what moves the plan forward in the Switchboard pipeline.
         dispatched: boolean;
         error?: string;
     }> {
-        const target = options.target;
         const sourceColumn = options.sourceColumn;
+        const mayDispatch = options.dispatch !== false;
+
+        // `undefined` target = "advance to the next pipeline stage", resolved
+        // from the source column through the same _getNextColumnId the arms
+        // use (visibility-aware: hidden roles, disabled lanes, featureOnly
+        // skips). Real callers: moveSelected/moveAll's general branch.
+        let target = options.target;
+        if (target === undefined) {
+            if (!sourceColumn) {
+                return { success: false, moved: [], failures: [], skippedUnknownComplexity: 0, dispatched: false, error: 'sourceColumn is required when no target column is given' };
+            }
+            const next = await this._getNextColumnId(sourceColumn, workspaceRoot);
+            if (!next) {
+                return { success: false, moved: [], failures: [], skippedUnknownComplexity: 0, dispatched: false, error: `No next column after '${sourceColumn}'` };
+            }
+            target = next;
+        }
 
         if (target === 'CODED_AUTO') {
             // Complexity-route per card, classifying direction (forward/backward)
@@ -9726,7 +9754,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 // POST /kanban/dispatch). It was threaded into this operation but never
                 // read, so an explicit API dispatch onto CODED_AUTO moved the cards and
                 // then silently declined to dispatch whenever the toggle was off.
-                if (this._cliTriggersEnabled || options.bypassTriggerGate) {
+                if (mayDispatch && (this._cliTriggersEnabled || options.bypassTriggerGate)) {
                     if (forwardSids.length === 1) {
                         await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', dispatchRole, forwardSids[0], undefined, workspaceRoot, undefined);
                         dispatched = true;
@@ -9744,7 +9772,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
             return { success: true, moved, failures, skippedUnknownComplexity: skippedCount, dispatched };
         }
 
-        // Specific target column — move all cards there, no routing.
+        // Specific target column — move all cards there, no routing. Direction
+        // is classified per card from the card's CURRENT column (read before
+        // the move mutates nothing in _lastCards — moveCardToColumn leaves it
+        // stale until the next refresh, which is what makes the classification
+        // trustworthy). Backward cards move and record 'backward' in the run
+        // sheet but never dispatch — same rule the CODED_AUTO branch applies.
         const moved: Array<{ id: string; targetColumn: string }> = [];
         const failures: Array<{ id: string; sourceColumn: string; reason: string }> = [];
         const movedIds: string[] = [];
@@ -9752,13 +9785,16 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
         for (const sid of sessionIds) {
             const card = this._lastCards.find(c => (c.planId || c.sessionId) === sid && c.workspaceRoot === workspaceRoot);
-            const outcome = await this.moveCardToColumnWithReason(workspaceRoot, sid, target!);
+            const outcome = await this.moveCardToColumnWithReason(workspaceRoot, sid, target);
             if (outcome.ok) {
-                await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, target!, 'forward', workspaceRoot);
+                const direction = this._isColumnBefore(target, card?.column ?? sourceColumn ?? '') ? 'backward' : 'forward';
+                await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, target, direction, workspaceRoot);
                 const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
                 movedIds.push(...cascadeIds);
-                dispatchIds.push(sid);
-                moved.push({ id: sid, targetColumn: target! });
+                if (direction === 'forward') {
+                    dispatchIds.push(sid);
+                }
+                moved.push({ id: sid, targetColumn: target });
             } else {
                 failures.push({ id: sid, sourceColumn: card?.column ?? sourceColumn ?? '', reason: outcome.detail });
             }
@@ -9772,8 +9808,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
         }
 
         let dispatched = false;
-        if ((this._cliTriggersEnabled || options.bypassTriggerGate) && dispatchIds.length > 0) {
-            const role = this._columnToRole(target!);
+        if (mayDispatch && (this._cliTriggersEnabled || options.bypassTriggerGate) && dispatchIds.length > 0) {
+            const role = options.dispatchRole ?? this._columnToRole(target);
             if (role) {
                 if (dispatchIds.length === 1) {
                     await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', role, dispatchIds[0], undefined, workspaceRoot, undefined);
