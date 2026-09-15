@@ -7710,26 +7710,18 @@ This step is what moves the plan forward in the Switchboard pipeline.
             // No live planner terminals — fall back to single trigger via default resolution
             // V63: filter in-flight cards (same guard as the multi-terminal path).
             const dispatchable = sourceCards.filter(c => !c.working);
-            const movedIds: string[] = [];
-            const dispatchIds: string[] = [];
-            const failures: { id: string; sourceColumn: string; reason: string }[] = this._inFlightSkipFailures(sourceCards);
-            for (const card of dispatchable) {
-                const sid = this._cardId(card);
-                const outcome = await this.moveCardToColumnWithReason(workspaceRoot, sid, nextCol);
-                if (outcome.ok) {
-                    await tvp.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
-                    const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
-                    movedIds.push(...cascadeIds);
-                    dispatchIds.push(sid);
-                } else {
-                    failures.push({ id: sid, sourceColumn: card.column, reason: outcome.detail });
-                }
-            }
-            if (movedIds.length > 0) {
-                this.postMessage({ type: 'moveCards', sessionIds: movedIds, targetColumn: nextCol });
-            }
-            if (failures.length > 0) {
-                this.postMessage({ type: 'moveCardsFailed', failures });
+            // Move half is the shared operation (dispatch: false — the
+            // 'improve-plan' batch trigger below owns dispatch). In-flight
+            // skips are reported through the same moveCardsFailed channel
+            // the operation uses for write failures.
+            const moveResult = await this._advanceCards(workspaceRoot, dispatchable.map(c => this._cardId(c)), {
+                target: nextCol,
+                dispatch: false
+            });
+            const dispatchIds = moveResult.moved.map(m => m.id);
+            const skipFailures = this._inFlightSkipFailures(sourceCards);
+            if (skipFailures.length > 0) {
+                this.postMessage({ type: 'moveCardsFailed', failures: skipFailures });
             }
             await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', 'planner', dispatchIds, 'improve-plan', workspaceRoot, undefined);
             return;
@@ -7771,26 +7763,16 @@ This step is what moves the plan forward in the Switchboard pipeline.
         // Pre-move only dispatched cards (optimistic UI). Persist BEFORE the slow /clear+send
         // chain so the move sticks immediately. Capture failed writes so the UI reverts them
         // with a reason instead of silently (the trailing full refresh that used to do this is
-        // gone).
+        // gone). The move itself is the shared operation (dispatch: false — the
+        // per-terminal bucket fan-out below owns dispatch); in-flight skips go
+        // through the same moveCardsFailed channel its write failures use.
         const dispatchedIds = plans.map(c => this._cardId(c));
-        const movedIds: string[] = [];
-        const failures: { id: string; sourceColumn: string; reason: string }[] = [...skipFailures];
-        for (const card of plans) {
-            const sid = this._cardId(card);
-            const outcome = await this.moveCardToColumnWithReason(workspaceRoot, sid, nextCol);
-            if (outcome.ok) {
-                await tvp.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
-                const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
-                movedIds.push(...cascadeIds);
-            } else {
-                failures.push({ id: sid, sourceColumn: card.column, reason: outcome.detail });
-            }
-        }
-        if (movedIds.length > 0) {
-            this.postMessage({ type: 'moveCards', sessionIds: movedIds, targetColumn: nextCol });
-        }
-        if (failures.length > 0) {
-            this.postMessage({ type: 'moveCardsFailed', failures });
+        await this._advanceCards(workspaceRoot, dispatchedIds, {
+            target: nextCol,
+            dispatch: false
+        });
+        if (skipFailures.length > 0) {
+            this.postMessage({ type: 'moveCardsFailed', failures: skipFailures });
         }
 
         // Round-robin partition into per-terminal buckets, starting from the
@@ -11202,15 +11184,6 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     return { success: result.success, role: undefined, targetColumn, moved: result.moved, failures: result.failures, skippedUnknownComplexity: result.skippedUnknownComplexity, dispatched: result.dispatched, error: result.error };
                 }
 
-                // The CLI-triggers setting exists to stop webview DRAG-DROP from
-                // auto-dispatching. An API-originated dispatch (POST /kanban/dispatch)
-                // is an explicit manager command, not an accidental drag — it passes
-                // bypassTriggerGate: true. Reading bypassTriggerGate here keeps the
-                // setting bound to accidental drag-drops across all surfaces.
-                if (!this._cliTriggersEnabled && !msg?.bypassTriggerGate) {
-                    return { success: false, error: 'CLI triggers are disabled' };
-                }
-
                 const dispatchSpec = workspaceRoot
                     ? await this._resolveKanbanDispatchSpec(workspaceRoot, targetColumn, msg.initiatorProject)
                     : null;
@@ -11219,7 +11192,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     return { success: false, error: `No dispatch role for column '${targetColumn}'` };
                 }
                 const canDispatch = workspaceRoot ? await this._canAssignRole(workspaceRoot, role) : false;
-                // Capture the source column BEFORE moveCardToColumn mutates the DB.
+                // Capture the source column BEFORE the move mutates the DB.
                 // A concurrent board refresh (scheduled by _handleTriggerAgentActionInternal
                 // during the dispatch await) can update _lastCards with the new column,
                 // making card.column stale by the time the prompt-fallback fires.
@@ -11227,23 +11200,41 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     ? this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot)
                     : undefined;
                 const sourceColumnForPrompt = sourceCard?.column;
-                // Persist the column move FIRST — decouples the card position from
-                // dispatch success. The card stays where the user dropped it regardless
-                // of whether the agent dispatch succeeds. If dispatch fails, the
-                // prompt-fallback below copies the prompt and glows the copy-prompt button.
+                // Persist the column move FIRST, through the shared operation —
+                // decouples the card position from dispatch success. The card
+                // stays where the user dropped it regardless of whether the
+                // agent dispatch succeeds. If dispatch fails, the
+                // prompt-fallback below copies the prompt and glows the
+                // copy-prompt button. dispatch:false because this arm's
+                // dispatch carries terminal-override, planner-rotation,
+                // pair-programming and prompt-fallback semantics the operation
+                // does not model — it shares the move half only.
                 if (workspaceRoot) {
-                    const ok = await this.moveCardToColumn(workspaceRoot, sessionId, targetColumn);
-                    if (ok) {
-                        const movedIds = await this._collectAllMovedSessionIds(workspaceRoot, sessionId);
-                        this.postMessage({ type: 'moveCards', sessionIds: movedIds, targetColumn });
-                    } else {
-                        this.postMessage({
-                            type: 'moveCardsFailed',
-                            failures: [{ id: sessionId, sourceColumn: sourceColumnForPrompt ?? '', reason: "couldn't save — board may be out of sync" }]
-                        });
+                    const moveResult = await this._advanceCards(workspaceRoot, [sessionId], {
+                        target: targetColumn,
+                        sourceColumn: msg.sourceColumn ?? sourceColumnForPrompt,
+                        initiatorProject: msg.initiatorProject,
+                        dispatch: false
+                    });
+                    if (moveResult.moved.length === 0) {
                         this._scheduleBoardRefresh(workspaceRoot);
-                        return { success: false, error: "Failed to persist card move" };
+                        return { success: false, error: 'Failed to persist card move', failures: moveResult.failures };
                     }
+                }
+                // The CLI-triggers setting exists to stop webview DRAG-DROP from
+                // auto-dispatching. An API-originated dispatch (POST /kanban/dispatch)
+                // is an explicit manager command, not an accidental drag — it passes
+                // bypassTriggerGate: true. Reconciled rule (one gate for every
+                // advance affordance): the card has already moved; the setting now
+                // suppresses only the dispatch. Previously this arm refused the
+                // whole drop — the move included — when the toggle was off.
+                const dispatchAllowed = this._cliTriggersEnabled || !!msg?.bypassTriggerGate;
+                if (!dispatchAllowed) {
+                    // With no root nothing moved and nothing can dispatch —
+                    // refuse honestly rather than report a hollow success.
+                    if (!workspaceRoot) { return { success: false, error: 'CLI triggers are disabled' }; }
+                    this._scheduleBoardRefresh(workspaceRoot);
+                    return { success: true, role, targetColumn, dispatchable: canDispatch, dispatched: false };
                 }
                 if (dispatchSpec?.source === 'custom-user' && workspaceRoot && this._taskViewerProvider) {
                     // NON-TEAM-ONLY: the board enum's cli-ide/ide-ide values select
@@ -11515,88 +11506,79 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     return { success: result.success, role: undefined, targetColumn, moved: result.moved, failures: result.failures, skippedUnknownComplexity: result.skippedUnknownComplexity, dispatched: result.dispatched, error: result.error };
                 }
 
-                // bypassTriggerGate is the explicit-command escape hatch — the same
-                // read triggerAction performs. Without it an explicit
-                // POST /kanban/dispatch of several cards was refused while the
-                // same call for one card succeeded: identical defect to the one
-                // _advanceCards:9725 documents for the CODED_AUTO path, still
-                // live here on the non-CODED_AUTO batch path until this fix.
-                if (!this._cliTriggersEnabled && !msg?.bypassTriggerGate) {
-                    return { success: false, error: 'CLI triggers are disabled' };
-                }
                 const dispatchSpec = workspaceRoot
                     ? await this._resolveKanbanDispatchSpec(workspaceRoot, targetColumn, msg.initiatorProject)
                     : null;
                 const role = dispatchSpec?.role || this._columnToRole(targetColumn);
+                // Reconciled gate — one rule for every advance affordance: cards
+                // always move; a CLI dispatch requires the toggle OR an explicit
+                // bypassTriggerGate (POST /kanban/dispatch). This arm previously
+                // refused the whole drop when the toggle was off, and ignored
+                // bypassTriggerGate entirely — the same defect _advanceCards's
+                // CODED_AUTO branch documents, still live here until now.
+                const dispatchAllowed = this._cliTriggersEnabled || !!msg?.bypassTriggerGate;
 
-                // Persist + confirm BEFORE dispatch (mirrors moveSelected's general branch):
-                // the card is authoritative a DB write after the drop, not a dispatch later.
-                // Without a resolved workspaceRoot there is nothing to persist against, so
-                // dispatch the raw ids and let the dispatch layer resolve the root itself —
-                // that is the pre-conversion behaviour and must not become a silent no-op.
-                let dispatchIds: string[] = Array.isArray(sessionIds) ? [...sessionIds] : [];
-                if (dispatchIds.length > 0 && workspaceRoot) {
-                    const movedIds: string[] = [];
-                    const failures: Array<{ id: string; sourceColumn: string; reason: string }> = [];
-                    dispatchIds = [];
-
-                    for (const sid of sessionIds) {
-                        const card = this._lastCards.find(c => (c.planId || c.sessionId) === sid && c.workspaceRoot === workspaceRoot);
-                        const ok = await this.moveCardToColumn(workspaceRoot, sid, targetColumn);
-                        if (ok) {
-                            await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetColumn, 'forward', workspaceRoot);
-                            const ids = await this._collectAllMovedSessionIds(workspaceRoot, sid);
-                            movedIds.push(...ids);
-                            dispatchIds.push(sid);
-                        } else {
-                            failures.push({
-                                id: sid,
-                                sourceColumn: card?.column ?? '',
-                                reason: "couldn't save — board may be out of sync"
-                            });
-                        }
+                if (!workspaceRoot) {
+                    // Nothing to persist against — dispatch the raw ids and let
+                    // the dispatch layer resolve the root itself. Pre-conversion
+                    // behaviour, kept verbatim; a closed gate still refuses here
+                    // because nothing was moved and nothing else would happen.
+                    if (!dispatchAllowed) {
+                        return { success: false, error: 'CLI triggers are disabled' };
                     }
-
-                    if (movedIds.length > 0) {
-                        this.postMessage({ type: 'moveCards', sessionIds: movedIds, targetColumn });
+                    const rawIds: string[] = Array.isArray(sessionIds) ? [...sessionIds] : [];
+                    if (rawIds.length > 0 && role) {
+                        await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, rawIds, undefined, workspaceRoot, undefined);
                     }
-                    if (failures.length > 0) {
-                        this.postMessage({ type: 'moveCardsFailed', failures });
-                    }
+                    return { success: true, role, targetColumn };
                 }
 
-                if (dispatchIds.length > 0) {
-                    if (dispatchSpec?.source === 'custom-user' && role && this._taskViewerProvider) {
-                        const instruction = role === 'planner' ? 'improve-plan' : undefined;
-                        await this._taskViewerProvider.dispatchConfiguredKanbanColumnAction(role, dispatchIds, {
-                            targetColumn,
-                            dragDropMode: dispatchSpec.dragDropMode,
-                            additionalInstructions: dispatchSpec.triggerPrompt,
-                            instruction,
-                            workspaceRoot: workspaceRoot || undefined
-                        });
-                    } else if (role) {
-                        await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, dispatchIds, undefined, workspaceRoot, undefined);
-                    }
+                // Persist + confirm BEFORE dispatch (mirrors moveSelected's
+                // general branch): the card is authoritative a DB write after
+                // the drop, not a dispatch later. Built-in columns dispatch
+                // INSIDE the operation; custom-user columns keep their
+                // configured dispatch below (dragDropMode, triggerPrompt).
+                const result = await this._advanceCards(workspaceRoot, Array.isArray(sessionIds) ? sessionIds : [], {
+                    target: targetColumn,
+                    sourceColumn: msg.sourceColumn,
+                    initiatorProject: msg.initiatorProject,
+                    bypassTriggerGate: msg?.bypassTriggerGate,
+                    dispatch: dispatchSpec?.source !== 'custom-user',
+                    dispatchRole: role ?? undefined
+                });
+                const dispatchIds = result.moved.map(m => m.id);
+
+                if (dispatchSpec?.source === 'custom-user' && role && this._taskViewerProvider
+                    && dispatchIds.length > 0 && dispatchAllowed) {
+                    const instruction = role === 'planner' ? 'improve-plan' : undefined;
+                    await this._taskViewerProvider.dispatchConfiguredKanbanColumnAction(role, dispatchIds, {
+                        targetColumn,
+                        dragDropMode: dispatchSpec.dragDropMode,
+                        additionalInstructions: dispatchSpec.triggerPrompt,
+                        instruction,
+                        workspaceRoot: workspaceRoot || undefined
+                    });
                 }
                 this._scheduleBoardRefresh(workspaceRoot ?? undefined);
-                return { success: true, role, targetColumn };
+                return { success: result.success, role, targetColumn, moved: result.moved, failures: result.failures, dispatched: result.dispatched };
             }
             case 'moveCardBackwards': {
                 const { sessionIds, targetColumn } = msg;
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (Array.isArray(sessionIds) && sessionIds.length > 0 && workspaceRoot) {
-                    const allMovedIds: string[] = [];
-                    for (const sid of sessionIds) {
-                        await this.moveCardToColumn(workspaceRoot, sid, targetColumn);
-                        await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetColumn, 'backward', workspaceRoot);
-                        const movedIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
-                        allMovedIds.push(...movedIds);
-                    }
-                    // Targeted delta, not a full-board redraw — the move is already persisted
-                    // and the target column is known. Keeps drag-advance snappy.
-                    this.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn });
-                    return { success: true, movedSessionIds: allMovedIds, targetColumn };
+                    // Move-only through the shared operation (dispatch:false —
+                    // this arm must never fire an agent). Two deliberate
+                    // changes vs the open-coded version: a failed write now
+                    // posts moveCardsFailed instead of being echoed as moved,
+                    // and the run-sheet direction is classified per card
+                    // rather than trusting the arm name.
+                    const result = await this._advanceCards(workspaceRoot, sessionIds, {
+                        target: targetColumn,
+                        sourceColumn: msg.sourceColumn,
+                        initiatorProject: msg.initiatorProject,
+                        dispatch: false
+                    });
+                    return { success: result.success, movedSessionIds: result.moved.map(m => m.id), targetColumn, failures: result.failures, error: result.error };
                 }
                 return { success: false, error: 'sessionIds and workspaceRoot are required' };
             }
@@ -11604,17 +11586,17 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const { sessionIds, targetColumn } = msg;
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (Array.isArray(sessionIds) && sessionIds.length > 0 && workspaceRoot) {
-                    const allMovedIds: string[] = [];
-                    for (const sid of sessionIds) {
-                        await this.moveCardToColumn(workspaceRoot, sid, targetColumn);
-                        await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetColumn, 'forward', workspaceRoot);
-                        const movedIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
-                        allMovedIds.push(...movedIds);
-                    }
-                    // Targeted delta, not a full-board redraw — the move is already persisted
-                    // and the target column is known. Keeps drag-advance snappy.
-                    this.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn });
-                    return { success: true, movedSessionIds: allMovedIds, targetColumn };
+                    // dispatch:false — this arm is what the webview sends when
+                    // CLI triggers are OFF; dispatching here would fire an
+                    // agent on every triggers-off drag (the trap this
+                    // extraction exists to close).
+                    const result = await this._advanceCards(workspaceRoot, sessionIds, {
+                        target: targetColumn,
+                        sourceColumn: msg.sourceColumn,
+                        initiatorProject: msg.initiatorProject,
+                        dispatch: false
+                    });
+                    return { success: result.success, movedSessionIds: result.moved.map(m => m.id), targetColumn, failures: result.failures, error: result.error };
                 }
                 return { success: false, error: 'sessionIds and workspaceRoot are required' };
             }
@@ -12035,33 +12017,18 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, targetColumn, msg.initiatorProject);
                 const isPromptModeBuiltIn = dispatchSpec?.source === 'built-in' && dispatchSpec?.dragDropMode === 'prompt';
                 if ((dispatchSpec?.source === 'custom-user' || isPromptModeBuiltIn) && this._taskViewerProvider && dispatchSpec?.role) {
-                    const allMovedIds: string[] = [];
-                    const dispatchIds: string[] = [];
-                    const failures: Array<{ id: string; sourceColumn: string; reason: string }> = [];
-
-                    for (const sid of sessionIds) {
-                        const card = this._lastCards.find(c => (c.planId || c.sessionId) === sid && c.workspaceRoot === workspaceRoot);
-                        const ok = await this.moveCardToColumn(workspaceRoot, sid, targetColumn);
-                        if (ok) {
-                            await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetColumn, 'forward', workspaceRoot);
-                            const ids = await this._collectAllMovedSessionIds(workspaceRoot, sid);
-                            allMovedIds.push(...ids);
-                            dispatchIds.push(sid);
-                        } else {
-                            failures.push({
-                                id: sid,
-                                sourceColumn: card?.column ?? sourceColumn ?? '',
-                                reason: "couldn't save — board may be out of sync"
-                            });
-                        }
-                    }
-
-                    if (allMovedIds.length > 0) {
-                        this.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn });
-                    }
-                    if (failures.length > 0) {
-                        this.postMessage({ type: 'moveCardsFailed', failures });
-                    }
+                    // Move half is the shared operation (dispatch: false — the
+                    // configured prompt-mode dispatch below owns dispatch).
+                    // Deliberate deltas vs the open-coded copy: per-card
+                    // direction classification and real failure reasons
+                    // (outcome.detail) instead of the flat "couldn't save".
+                    const moveResult = await this._advanceCards(workspaceRoot, sessionIds, {
+                        target: targetColumn,
+                        sourceColumn,
+                        initiatorProject: msg.initiatorProject,
+                        dispatch: false
+                    });
+                    const dispatchIds = moveResult.moved.map(m => m.id);
 
                     if (dispatchIds.length === 0) {
                         this.postMessage({ type: 'promptOnDropResult', sessionIds, success: false });
@@ -12089,69 +12056,37 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     return { success: dispatched, sessionIds, targetColumn };
                 }
 
-                // Advance cards visually — PLAN REVIEWED uses complexity routing
-                // Direct moveCardToColumn + per-group moveCards delta instead of routing through
-                // kanbanForwardMove (whose trailing refreshUI redrew the whole board). The run-sheet
-                // workflow-event write is preserved via recordRunSheetForColumnMove.
+                // Advance cards visually — PLAN REVIEWED uses complexity routing.
+                // Both halves are the shared operation in move-only mode; the
+                // arm keeps only its prompt-specific extras (dispatch identity,
+                // clipboard prompt, pair programming). Deliberate deltas vs the
+                // open-coded copies: PLAN REVIEWED now skips unknown-complexity
+                // cards like every other advance affordance (the old copy
+                // routed them through _resolveComplexityRoutedRole, defaulting
+                // Unknown to lead), direction is classified per card, and
+                // failures carry outcome.detail.
                 if (sourceColumn === 'PLAN REVIEWED') {
-                    const groups = await this._partitionByComplexityRoute(workspaceRoot, sessionIds);
-                    const visibleAgents = await this._getVisibleAgents(workspaceRoot);
-                    if (['lead', 'coder', 'intern'].every(r => visibleAgents[r] === false)) {
-                        void this._seams().ui.showErrorMessage('No coding agent is currently enabled. Enable a coding agent in Setup or move manually.');
-                        return { success: false, error: 'No coding agent is currently enabled.' };
+                    const result = await this._advanceCards(workspaceRoot, sessionIds, {
+                        target: 'CODED_AUTO',
+                        sourceColumn,
+                        initiatorProject: msg.initiatorProject,
+                        dispatch: false
+                    });
+                    if (!result.success) {
+                        return { success: false, error: result.error };
                     }
-                    for (const [role, sids] of groups) {
-                        if (sids.length === 0) { continue; }
-                        const targetCol = this._targetColumnForDispatchRole(role, visibleAgents);
-                        const allMovedSids: string[] = [];
-                        const failures: Array<{ id: string; sourceColumn: string; reason: string }> = [];
-                        for (const sid of sids) {
-                            const card = this._lastCards.find(c => (c.planId || c.sessionId) === sid && c.workspaceRoot === workspaceRoot);
-                            const ok = await this.moveCardToColumn(workspaceRoot, sid, targetCol);
-                            if (ok) {
-                                await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
-                                await this._recordDispatchIdentity(workspaceRoot, sid, targetCol, undefined, true);
-                                const movedIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
-                                allMovedSids.push(...movedIds);
-                            } else {
-                                failures.push({
-                                    id: sid,
-                                    sourceColumn: card?.column ?? sourceColumn ?? '',
-                                    reason: "couldn't save — board may be out of sync"
-                                });
-                            }
-                        }
-                        if (allMovedSids.length > 0) {
-                            this.postMessage({ type: 'moveCards', sessionIds: allMovedSids, targetColumn: targetCol });
-                        }
-                        if (failures.length > 0) {
-                            this.postMessage({ type: 'moveCardsFailed', failures });
-                        }
+                    for (const m of result.moved) {
+                        await this._recordDispatchIdentity(workspaceRoot, m.id, m.targetColumn, undefined, true);
                     }
                 } else {
-                    const allMovedIds2: string[] = [];
-                    const failures: Array<{ id: string; sourceColumn: string; reason: string }> = [];
-                    for (const sid of sessionIds) {
-                        const card = this._lastCards.find(c => (c.planId || c.sessionId) === sid && c.workspaceRoot === workspaceRoot);
-                        const ok = await this.moveCardToColumn(workspaceRoot, sid, targetColumn);
-                        if (ok) {
-                            await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetColumn, 'forward', workspaceRoot);
-                            await this._recordDispatchIdentity(workspaceRoot, sid, targetColumn, undefined, true);
-                            const movedIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
-                            allMovedIds2.push(...movedIds);
-                        } else {
-                            failures.push({
-                                id: sid,
-                                sourceColumn: card?.column ?? sourceColumn ?? '',
-                                reason: "couldn't save — board may be out of sync"
-                            });
-                        }
-                    }
-                    if (allMovedIds2.length > 0) {
-                        this.postMessage({ type: 'moveCards', sessionIds: allMovedIds2, targetColumn });
-                    }
-                    if (failures.length > 0) {
-                        this.postMessage({ type: 'moveCardsFailed', failures });
+                    const result = await this._advanceCards(workspaceRoot, sessionIds, {
+                        target: targetColumn,
+                        sourceColumn,
+                        initiatorProject: msg.initiatorProject,
+                        dispatch: false
+                    });
+                    for (const m of result.moved) {
+                        await this._recordDispatchIdentity(workspaceRoot, m.id, m.targetColumn, undefined, true);
                     }
                 }
 
@@ -12272,47 +12207,28 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             this._notifySkippedUnknownComplexity(skippedCount, 0);
                             return { success: false, error: 'All selected plans have unknown complexity' };
                         }
-                        const groups = await this._partitionByComplexityRoute(workspaceRoot, knownIds);
-                        const visibleAgents = await this._getVisibleAgents(workspaceRoot);
-                        if (['lead', 'coder', 'intern'].every(r => visibleAgents[r] === false)) {
-                            void this._seams().ui.showErrorMessage('No coding agent is currently enabled. Enable a coding agent in Setup or move manually.');
-                            return { success: false, error: 'No coding agent is currently enabled.' };
+                        // The whole complexity-route half is the shared
+                        // operation — same partition/degrade/move/delta/dispatch
+                        // the CODED_AUTO drop path runs. Deliberate deltas vs
+                        // the open-coded copy: direction is classified per card
+                        // (a straggler from a later column no longer records
+                        // 'forward' nor dispatches), and bypassTriggerGate is
+                        // honoured (one gate rule for every advance affordance).
+                        const result = await this._advanceCards(workspaceRoot, knownIds, {
+                            target: 'CODED_AUTO',
+                            sourceColumn: column,
+                            initiatorProject: msg.initiatorProject,
+                            bypassTriggerGate: msg?.bypassTriggerGate
+                        });
+                        if (!result.success) {
+                            return { success: false, error: result.error };
                         }
-                        const movedParts: string[] = [];
-                        for (const [role, sids] of groups) {
-                            if (sids.length === 0) { continue; }
-                            const targetCol = this._targetColumnForDispatchRole(role, visibleAgents);
-                            const dispatchRole = this._columnToRole(targetCol) || role;
-                            const movedSids: string[] = [];
-                            const dispatchSids: string[] = [];
-                            const failures: { id: string; sourceColumn: string; reason: string }[] = [];
-                            for (const sid of sids) {
-                                const outcome = await this.moveCardToColumnWithReason(workspaceRoot, sid, targetCol);
-                                if (outcome.ok) {
-                                    await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
-                                    const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
-                                    movedSids.push(...cascadeIds);
-                                    dispatchSids.push(sid);
-                                } else {
-                                    failures.push({ id: sid, sourceColumn: column, reason: outcome.detail });
-                                }
+                        if (result.moved.length > 0) {
+                            const perColumn = new Map<string, number>();
+                            for (const m of result.moved) {
+                                perColumn.set(m.targetColumn, (perColumn.get(m.targetColumn) || 0) + 1);
                             }
-                            if (movedSids.length > 0) {
-                                this.postMessage({ type: 'moveCards', sessionIds: movedSids, targetColumn: targetCol });
-                            }
-                            if (failures.length > 0) {
-                                this.postMessage({ type: 'moveCardsFailed', failures });
-                            }
-                            if (this._cliTriggersEnabled) {
-                                if (dispatchSids.length === 1) {
-                                    await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', dispatchRole, dispatchSids[0], undefined, workspaceRoot, undefined);
-                                } else {
-                                    await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', dispatchRole, dispatchSids, undefined, workspaceRoot, undefined);
-                                }
-                            }
-                            movedParts.push(`${sids.length} → ${targetCol}`);
-                        }
-                        if (movedParts.length > 0) {
+                            const movedParts = [...perColumn.entries()].map(([col, n]) => `${n} → ${col}`);
                             const skippedSuffix = skippedCount > 0 ? ` (${skippedCount} skipped — unknown complexity)` : '';
                             this.postMessage({ type: 'showStatusMessage', message: `Moved ${knownIds.length} plans from ${column}: ${movedParts.join(', ')}.${skippedSuffix}`, isError: false });
                         }
@@ -12355,34 +12271,23 @@ This step is what moves the plan forward in the Switchboard pipeline.
                                 );
                                 await this._distributePlannerDispatch(workspaceRoot, selectedCards, nextCol, { skipLimit: true });
                             } else {
-                                const movedIds: string[] = [];
-                                const dispatchIds: string[] = [];
-                                const failures: { id: string; sourceColumn: string; reason: string }[] = [];
-                                for (const sid of msg.sessionIds) {
-                                    const outcome = await this.moveCardToColumnWithReason(workspaceRoot, sid, nextCol);
-                                    if (outcome.ok) {
-                                        await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
-                                        const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
-                                        movedIds.push(...cascadeIds);
-                                        dispatchIds.push(sid);
-                                    } else {
-                                        failures.push({ id: sid, sourceColumn: column, reason: outcome.detail });
-                                    }
+                                // 'Advance to next stage': the operation re-derives
+                                // the target from sourceColumn through the same
+                                // _getNextColumnId that produced nextCol here — the
+                                // undefined-target contract exercised by a real
+                                // caller. Deliberate deltas vs the open-coded copy:
+                                // direction is classified per card (backward
+                                // stragglers no longer dispatch) and
+                                // bypassTriggerGate is honoured.
+                                const advResult = await this._advanceCards(workspaceRoot, msg.sessionIds, {
+                                    sourceColumn: column,
+                                    initiatorProject: msg.initiatorProject,
+                                    bypassTriggerGate: msg?.bypassTriggerGate
+                                });
+                                if (!advResult.success) {
+                                    return { success: false, error: advResult.error };
                                 }
-                                if (movedIds.length > 0) {
-                                    this.postMessage({ type: 'moveCards', sessionIds: movedIds, targetColumn: nextCol });
-                                }
-                                if (failures.length > 0) {
-                                    this.postMessage({ type: 'moveCardsFailed', failures });
-                                }
-                                if (this._cliTriggersEnabled && role) {
-                                    const instruction = role === 'planner' ? 'improve-plan' : undefined;
-                                    if (dispatchIds.length === 1) {
-                                        await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', role, dispatchIds[0], instruction, workspaceRoot, undefined);
-                                    } else {
-                                        await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, dispatchIds, instruction, workspaceRoot, undefined);
-                                    }
-                                } else if (!role) {
+                                if (!role) {
                                     console.log(`[Kanban] Column '${nextCol}' has no role mapping, using visual move only`);
                                 }
                             }
@@ -12434,48 +12339,27 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             this._notifySkippedUnknownComplexity(skippedCount, 0);
                             return { success: false, error: 'All plans have unknown complexity' };
                         }
-                        const groups = await this._partitionByComplexityRoute(workspaceRoot, knownIds);
-                        const visibleAgents = await this._getVisibleAgents(workspaceRoot);
-                        if (['lead', 'coder', 'intern'].every(r => visibleAgents[r] === false)) {
-                            void this._seams().ui.showErrorMessage('No coding agent is currently enabled. Enable a coding agent in Setup or move manually.');
-                            return { success: false, error: 'No coding agent is currently enabled.' };
-                        }
-                        const movedParts: string[] = [];
-                        for (const [role, sids] of groups) {
-                            if (sids.length === 0) { continue; }
-                            const targetCol = this._targetColumnForDispatchRole(role, visibleAgents);
-                            const dispatchRole = this._columnToRole(targetCol) || role;
-                            const movedSids: string[] = [];
-                            const dispatchSids: string[] = [];
-                            const failures: { id: string; sourceColumn: string; reason: string }[] = [];
-                            for (const sid of sids) {
-                                const outcome = await this.moveCardToColumnWithReason(workspaceRoot, sid, targetCol);
-                                if (outcome.ok) {
-                                    await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
-                                    const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
-                                    movedSids.push(...cascadeIds);
-                                    dispatchSids.push(sid);
-                                } else {
-                                    failures.push({ id: sid, sourceColumn: column, reason: outcome.detail });
-                                }
-                            }
-                            if (movedSids.length > 0) {
-                                this.postMessage({ type: 'moveCards', sessionIds: movedSids, targetColumn: targetCol });
-                            }
-                            if (failures.length > 0) {
-                                this.postMessage({ type: 'moveCardsFailed', failures });
-                            }
-                            if (this._cliTriggersEnabled) {
-                                if (dispatchSids.length === 1) {
-                                    await this._seams().commands.executeCommand('switchboard.triggerAgentFromKanban', dispatchRole, dispatchSids[0], undefined, workspaceRoot, undefined);
-                                } else {
-                                    await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', dispatchRole, dispatchSids, undefined, workspaceRoot, undefined);
-                                }
-                            }
-                            movedParts.push(`${sids.length} → ${targetCol}`);
+                        // Shared complexity-route operation — same shape as
+                        // moveSelected's PLAN REVIEWED branch above. Deliberate
+                        // deltas vs the open-coded copy: per-card direction
+                        // classification (backward stragglers no longer dispatch)
+                        // and bypassTriggerGate honoured.
+                        const result = await this._advanceCards(workspaceRoot, knownIds, {
+                            target: 'CODED_AUTO',
+                            sourceColumn: column,
+                            initiatorProject: msg.initiatorProject,
+                            bypassTriggerGate: msg?.bypassTriggerGate
+                        });
+                        if (!result.success) {
+                            return { success: false, error: result.error };
                         }
                         // No full refresh — each complexity group already posted its own targeted
-                        // moveCards delta above (one per target column). N small deltas, not a redraw.
+                        // moveCards delta inside the operation (one per target column). N small deltas, not a redraw.
+                        const perColumn = new Map<string, number>();
+                        for (const m of result.moved) {
+                            perColumn.set(m.targetColumn, (perColumn.get(m.targetColumn) || 0) + 1);
+                        }
+                        const movedParts = [...perColumn.entries()].map(([col, n]) => `${n} → ${col}`);
                         const skippedSuffix = skippedCount > 0 ? ` (${skippedCount} skipped — unknown complexity)` : '';
                         this.postMessage({ type: 'showStatusMessage', message: `Moved ${knownIds.length} plans from ${column}: ${movedParts.join(', ')}.${skippedSuffix}`, isError: false });
                     } else {
@@ -12519,29 +12403,21 @@ This step is what moves the plan forward in the Switchboard pipeline.
                                 // that is what reverted the move to NEW until dispatch finished.
                                 return { success: true, column, targetColumn: nextCol };
                             } else {
-                                const movedIds: string[] = [];
-                                const dispatchIds: string[] = [];
-                                const failures: { id: string; sourceColumn: string; reason: string }[] = [];
-                                for (const sid of sessionIds) {
-                                    const outcome = await this.moveCardToColumnWithReason(workspaceRoot, sid, nextCol);
-                                    if (outcome.ok) {
-                                        await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
-                                        const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
-                                        movedIds.push(...cascadeIds);
-                                        dispatchIds.push(sid);
-                                    } else {
-                                        failures.push({ id: sid, sourceColumn: column, reason: outcome.detail });
-                                    }
+                                // 'Advance all to next stage': the operation
+                                // re-derives the target from sourceColumn (same
+                                // _getNextColumnId that produced nextCol above).
+                                // Deliberate deltas vs the open-coded copy:
+                                // per-card direction classification and
+                                // bypassTriggerGate honoured.
+                                const advResult = await this._advanceCards(workspaceRoot, sessionIds, {
+                                    sourceColumn: column,
+                                    initiatorProject: msg.initiatorProject,
+                                    bypassTriggerGate: msg?.bypassTriggerGate
+                                });
+                                if (!advResult.success) {
+                                    return { success: false, error: advResult.error };
                                 }
-                                if (movedIds.length > 0) {
-                                    this.postMessage({ type: 'moveCards', sessionIds: movedIds, targetColumn: nextCol });
-                                }
-                                if (failures.length > 0) {
-                                    this.postMessage({ type: 'moveCardsFailed', failures });
-                                }
-                                if (this._cliTriggersEnabled && role) {
-                                    await this._seams().commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, dispatchIds, undefined, workspaceRoot, undefined);
-                                } else if (!role) {
+                                if (!role) {
                                     console.log(`[Kanban] Column '${nextCol}' has no role mapping, using visual move only`);
                                 }
                             }
@@ -12681,23 +12557,19 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 if ((column === 'PLAN REVIEWED' || column === 'STAGING') && (!dispatchSpec || dispatchSpec.source === 'built-in')) {
                     const { filtered: knownIds, skippedCount } = this._filterUnknownComplexitySessions(msg.sessionIds);
                     if (knownIds.length > 0) {
-                        const groups = await this._partitionByComplexityRoute(workspaceRoot, knownIds);
-                        const visibleAgents = await this._getVisibleAgents(workspaceRoot);
-                        if (['lead', 'coder', 'intern'].every(r => visibleAgents[r] === false)) {
-                            void this._seams().ui.showErrorMessage('No coding agent is currently enabled. Enable a coding agent in Setup or move manually.');
-                            return { success: false, error: 'No coding agent is currently enabled.' };
-                        }
-                        for (const [role, sids] of groups) {
-                            if (sids.length === 0) { continue; }
-                            const targetCol = this._targetColumnForDispatchRole(role, visibleAgents);
-                            const movedSids: string[] = [];
-                            for (const sid of sids) {
-                                await this.moveCardToColumn(workspaceRoot, sid, targetCol);
-                                await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
-                                const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
-                                movedSids.push(...cascadeIds);
-                            }
-                            this.postMessage({ type: 'moveCards', sessionIds: movedSids, targetColumn: targetCol });
+                        // Shared operation, move-only — promptSelected's dispatch
+                        // is the clipboard, never a CLI trigger. Deliberate deltas
+                        // vs the open-coded copy: per-card direction
+                        // classification and moveCardsFailed on write failure
+                        // (the old copy ignored moveCardToColumn's result).
+                        const result = await this._advanceCards(workspaceRoot, knownIds, {
+                            target: 'CODED_AUTO',
+                            sourceColumn: column,
+                            initiatorProject: msg.initiatorProject,
+                            dispatch: false
+                        });
+                        if (!result.success) {
+                            return { success: false, error: result.error };
                         }
                         for (const card of sourceCards) {
                             const sid = this._cardId(card);
@@ -12713,14 +12585,15 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         this.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans. No plans advanced (${skippedCount} skipped — unknown complexity).`, isError: false });
                     }
                 } else {
-                    const allMovedIds: string[] = [];
-                    for (const sid of msg.sessionIds) {
-                        await this.moveCardToColumn(workspaceRoot, sid, nextCol);
-                        await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
-                        const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
-                        allMovedIds.push(...cascadeIds);
-                    }
-                    this.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn: nextCol });
+                    // Move-only through the shared operation — same deltas:
+                    // per-card direction classification, moveCardsFailed on
+                    // write failure (previously ignored).
+                    await this._advanceCards(workspaceRoot, msg.sessionIds, {
+                        target: nextCol,
+                        sourceColumn: column,
+                        initiatorProject: msg.initiatorProject,
+                        dispatch: false
+                    });
                     for (const card of sourceCards) {
                         const sid = this._cardId(card);
                         this.postMessage({ type: 'copyPlanLinkResult', planId: sid, sessionId: sid, success: true });
@@ -12787,57 +12660,42 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 if ((column === 'PLAN REVIEWED' || column === 'STAGING') && (!dispatchSpec || dispatchSpec.source === 'built-in')) {
                     const { filtered: knownIds, skippedCount } = this._filterUnknownComplexitySessions(sessionIds);
                     if (knownIds.length > 0) {
-                        const groups = await this._partitionByComplexityRoute(workspaceRoot, knownIds);
-                        const visibleAgents = await this._getVisibleAgents(workspaceRoot);
-                        if (['lead', 'coder', 'intern'].every(r => visibleAgents[r] === false)) {
-                            void this._seams().ui.showErrorMessage('No coding agent is currently enabled. Enable a coding agent in Setup or move manually.');
-                            return { success: false, error: 'No coding agent is currently enabled.' };
+                        // Shared operation, move-only — promptAll's dispatch is
+                        // the clipboard. The operation's moveCardToColumnWithReason
+                        // stays DB-first and feature-cascade aware; the old copy's
+                        // warning about bypassing the cascade is what the shared
+                        // operation already guarantees. Deliberate deltas:
+                        // per-card direction classification, moveCardsFailed on
+                        // write failure (previously ignored).
+                        const result = await this._advanceCards(workspaceRoot, knownIds, {
+                            target: 'CODED_AUTO',
+                            sourceColumn: column,
+                            initiatorProject: msg.initiatorProject,
+                            dispatch: false
+                        });
+                        if (!result.success) {
+                            return { success: false, error: result.error };
                         }
-                        const movedParts: string[] = [];
-                        for (const [role, sids] of groups) {
-                            if (sids.length === 0) { continue; }
-                            const targetCol = this._targetColumnForDispatchRole(role, visibleAgents);
-                            // Persist via moveCardToColumn (DB-first, feature-cascade aware) — matches the
-                            // pre-conversion kanbanForwardMove path which routed through moveCardToColumn.
-                            // A direct db.updateColumn would skip the feature subtask cascade and orphan
-                            // subtasks in the source column when a feature parent is advanced.
-                            const movedSids: string[] = [];
-                            for (const sid of sids) {
-                                await this.moveCardToColumn(workspaceRoot, sid, targetCol);
-                                const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
-                                movedSids.push(...cascadeIds);
-                            }
-                            this.postMessage({ type: 'moveCards', sessionIds: movedSids, targetColumn: targetCol });
-                            // Column already persisted above. Preserve only the run-sheet workflow-event
-                            // write that kanbanForwardMove (via _applyManualKanbanColumnChange) performed —
-                            // drop its trailing full refreshUI that defeated this delta.
-                            for (const sid of sids) {
-                                await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, targetCol, 'forward', workspaceRoot);
-                            }
-                            movedParts.push(`${sids.length} → ${targetCol}`);
+                        const perColumn = new Map<string, number>();
+                        for (const m of result.moved) {
+                            perColumn.set(m.targetColumn, (perColumn.get(m.targetColumn) || 0) + 1);
                         }
+                        const movedParts = [...perColumn.entries()].map(([col, n]) => `${n} → ${col}`);
                         this.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans. Advanced ${knownIds.length}: ${movedParts.join(', ')}.`, isError: false });
                     } else {
                         this.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans. No plans advanced.`, isError: false });
                     }
                     this._notifySkippedUnknownComplexity(skippedCount, knownIds.length);
                 } else {
-                    // Persist via moveCardToColumn (DB-first, feature-cascade aware) — matches the
-                    // pre-conversion kanbanForwardMove path. A direct db.updateColumn would skip the
-                    // feature subtask cascade and orphan subtasks when a feature parent is advanced.
-                    const allMovedIds: string[] = [];
-                    for (const sid of sessionIds) {
-                        await this.moveCardToColumn(workspaceRoot, sid, nextCol);
-                        const cascadeIds = await this._collectAllMovedSessionIds(workspaceRoot, sid);
-                        allMovedIds.push(...cascadeIds);
-                    }
-                    this.postMessage({ type: 'moveCards', sessionIds: allMovedIds, targetColumn: nextCol });
-                    // Column already persisted above. Preserve only the run-sheet workflow-event
-                    // write that kanbanForwardMove (via _applyManualKanbanColumnChange) performed —
-                    // drop its trailing full refreshUI that defeated this delta.
-                    for (const sid of sessionIds) {
-                        await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
-                    }
+                    // Move-only through the shared operation — moveCardToColumnWithReason
+                    // keeps the feature-cascade semantics the old comment demanded,
+                    // and write failures now surface via moveCardsFailed.
+                    await this._advanceCards(workspaceRoot, sessionIds, {
+                        target: nextCol,
+                        sourceColumn: column,
+                        initiatorProject: msg.initiatorProject,
+                        dispatch: false
+                    });
                     this.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`, isError: false });
                 }
                 return { success: true, prompt, targetColumn: nextCol };

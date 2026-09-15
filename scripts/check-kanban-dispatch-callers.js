@@ -134,12 +134,25 @@ test('direct trigger*AgentFromKanban calls are confined to _advanceCards + the n
         ['case:julesSelected', 1],
         // Dispatches the column as-is for dispatch-analysis — no move.
         ['case:dispatchAnalyze', 1],
+        // Single-card dispatch carries terminal-override, unattended,
+        // origin-terminal and clear/skip-clear args plus planner-rotation,
+        // pair-programming, drive-mode-watch and prompt-fallback follow-ups the
+        // operation does not model. The arm delegates its MOVE half to
+        // _advanceCards(dispatch:false); the dispatch call itself stays.
+        ['case:triggerAction', 1],
+        // The no-workspaceRoot fallback dispatches raw ids when there is
+        // nothing to persist against — a degenerate path the operation cannot
+        // own (it needs a root for the db). The rooted path delegates fully.
+        ['case:triggerBatchAction', 1],
     ]);
 
     // Only ever ratchets DOWN — lower it in the same commit that removes the
     // sites. History: 9 at extraction start (triggerAction 1, triggerBatchAction
-    // 1, moveSelected 4, moveAll 3; the sendDispatch* arms were already deleted).
-    const DIRECT_TRIGGER_CEILING = 9;
+    // 1, moveSelected 4, moveAll 3; the sendDispatch* arms were already deleted);
+    // triggerAction + triggerBatchAction moved to the named allowlist above
+    // when their move halves converted; moveSelected and moveAll then delegated
+    // both branches, leaving zero unlisted direct calls.
+    const DIRECT_TRIGGER_CEILING = 0;
 
     const boundaries = [];
     for (const m of kanbanProviderCode.matchAll(
