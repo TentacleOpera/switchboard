@@ -181,3 +181,54 @@ The shipped change satisfied the plan's second Goal Invariant (`vscodeShim.ts` n
 - MAJOR — `_syncConfiguredPlanFolder` arms `fs.watch(configuredPlanFolder, { recursive: true })` plus a `**/*.md` FileSystemWatcher over the configured plan folder, the same unbounded double-watch shape that was just removed from the brain path. `src/services/TaskViewerProvider.ts:16637`
 - NIT — the depth-1 branch in `vscodeShim.createFileSystemWatcher` remains unreachable (no production glob has a `/` without `**`); it is retained because the plan's Goal Invariant names it, but it is untested code. `src/standalone/vscodeShim.ts:365`
 - NIT — `_brainWatchers` is now always empty; the field and its three dispose loops are kept so the disposal call sites do not need touching. `src/services/TaskViewerProvider.ts:1635`
+
+## Post-Fix Measurement (2026-09-15)
+
+Resolves the deferred MAJOR "the post-fix descriptor count has not been re-measured". Measured
+against the live board host (pid 3873, `switchboard tailnet`, 2h58m uptime) by reading
+`/proc/<pid>/fdinfo` and mapping every watched inode back to a path:
+
+```
+inotify watches held: 1,766   (ceiling 30,517 — 6% of budget, was 55%)
+```
+
+**The depth-bounded fix landed and worked** — down from the 17,218 this card measured, ~9.7x.
+
+**But the remaining watches are not what this card's rule produces.** All but three are in the
+brain tree (the three are the repo root, `.switchboard/plans`, `.switchboard/features`), and
+their depth below `~/.gemini/antigravity-cli/brain` is:
+
+| depth | count | what |
+| :--- | ---: | :--- |
+| 0 | 1 | `brain/` |
+| 1 | 55 | session directories — matches `brain direct subdirs: 55` |
+| 2 | 154 | |
+| 3 | 52 | `<session>/.system_generated/steps` |
+| 4 | 1,501 | `steps/<step>` — one watch per agent step |
+
+Depth 0-1 is exactly this card's rule (root + one per session, 56 watches). Everything at depth
+2-4 can only come from a *recursive* walker, and the only one left in the codebase is
+`attachDirectoryWatcher`, which honours `EXCLUDED_DIR_NAMES`. The exact call site arming the brain
+tree through it was not pinned — the deferred MAJOR about `RelativePattern(folder,
+'.switchboard/plans/**/*.md')` becoming a recursive watch of a whole root is the nearest suspect
+and is still open.
+
+**Follow-on fix applied:** `.system_generated` added to `EXCLUDED_DIR_NAMES`
+(`src/services/directoryWatcher.ts`). Projected from the live watch set:
+
+```
+watched under .system_generated (removed): 1,597
+watched elsewhere (kept):                    166
+projected after restart:                     169   (from 1,766 — a further 10.4x)
+```
+
+Safe because the brain tree holds 1,489 `.txt`, 658 `.jsonl`, 57 `.json`, 43 `.log` and **zero**
+`.md` — nothing the plan scanner ingests lives under `.system_generated` — and ingestion does not
+depend on watches: `_collectAntigravityPlanCandidates` walks the full tree on every Plan Scanner
+sweep, so a `plan.md` appearing there would still import, on the sweep rather than instantly.
+That is the same trade the first deferred MAJOR on this card already accepted.
+
+Not verified on the running host: it serves an older `dist` build, and rebuilding/restarting it
+would destroy the board the session was dispatched from — the same constraint the original
+measurement recorded. The projection is arithmetic over the live watch set, not an observation of
+the new build.

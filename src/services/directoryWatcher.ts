@@ -42,6 +42,18 @@ import { getInotifyWatchCount, getInotifyCeiling } from './inotifyWatchCount';
  */
 export const EXCLUDED_DIR_NAMES = new Set([
     '.git', 'node_modules', 'dist', 'out', 'build', '.next', '.cache', 'logs', 'dbbackup', 'mission-control',
+    // Antigravity agent step output (~/.gemini/antigravity-*/brain/<session>/.system_generated/**).
+    // Measured on the Pi board 2026-09-15: of 1,766 inotify watches held by the host,
+    // 1,763 were in the brain tree and 1,553 of those sat at depth 3-4 under
+    // .system_generated/steps — one watch per agent step, growing for the life of the
+    // install. The tree holds .txt/.jsonl/.json/.log and not one .md, so nothing the
+    // plan scanner ingests lives under here. Only the intended two levels remain: the
+    // brain root and its 55 session directories.
+    // Ingestion is unaffected — _collectAntigravityPlanCandidates walks the full tree
+    // on every Plan Scanner sweep (TaskViewerProvider.ts:17104), so a plan.md appearing
+    // under this directory would still be imported, just on the sweep rather than
+    // instantly.
+    '.system_generated',
 ]);
 
 export interface DirectoryWatcherHandle {
