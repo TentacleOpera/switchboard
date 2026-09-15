@@ -14,11 +14,11 @@ Move Agent Control out of kanban.html into a panel file of its own, give it an O
 
 <!-- BEGIN SUBTASKS (auto-generated, do not edit) -->
 ## Subtasks
-- [ ] [Add an Orders tab to Agent Control](../plans/add-an-orders-tab-to-agent-control.md) — **LEAD CODED** — ID: 6b9d97ce-60da-43d2-b1ab-6e574f27e1b7
-- [ ] [Extract Agent Control into its own panel file](../plans/extract-agent-control-into-its-own-panel-file.md) — **LEAD CODED** — ID: 1e9a9b79-abd5-46ef-9b78-31beb778cd77
-- [ ] [Retire the agent tabs from kanban.html](../plans/retire-the-agent-tabs-from-kanban-html.md) — **LEAD CODED** — ID: 02aa2bd1-26cc-492f-b3b4-7d826eede6f6
-- [ ] [Surface a Build Target in Agent Control](../plans/surface-a-build-target-in-agent-control.md) — **LEAD CODED** — ID: c4475ad5-4222-4ccd-b009-7ce44ee60e0e
-- [ ] [The Agent Control Surface Cannot Be Configured, and Is Driven by Typing](../plans/the-agent-control-surface-cannot-be-configured-and-is-driven-by-typing.md) — **LEAD CODED** — ID: 00e0d1f0-6e70-4d9f-843c-d8433daa6e6f
+- [ ] [Add an Orders tab to Agent Control](../plans/add-an-orders-tab-to-agent-control.md) — **CODE REVIEWED** — ID: 6b9d97ce-60da-43d2-b1ab-6e574f27e1b7
+- [ ] [Extract Agent Control into its own panel file](../plans/extract-agent-control-into-its-own-panel-file.md) — **CODE REVIEWED** — ID: 1e9a9b79-abd5-46ef-9b78-31beb778cd77
+- [ ] [Retire the agent tabs from kanban.html](../plans/retire-the-agent-tabs-from-kanban-html.md) — **CODE REVIEWED** — ID: 02aa2bd1-26cc-492f-b3b4-7d826eede6f6
+- [ ] [Surface a Build Target in Agent Control](../plans/surface-a-build-target-in-agent-control.md) — **CODE REVIEWED** — ID: c4475ad5-4222-4ccd-b009-7ce44ee60e0e
+- [ ] [The Agent Control Surface Cannot Be Configured, and Is Driven by Typing](../plans/the-agent-control-surface-cannot-be-configured-and-is-driven-by-typing.md) — **CODE REVIEWED** — ID: 00e0d1f0-6e70-4d9f-843c-d8433daa6e6f
 <!-- END SUBTASKS -->
 
 ## Scope note (operator, 2026-09-15)
@@ -35,3 +35,16 @@ Strictly ordered: **extract → add the Orders tab → retire the old tabs**. Al
 
 **Cross-feature note.** The in-flight standing-orders work has a *Standing Orders Tab in the Agent Control Panel* subtask that depends on the extraction here landing first — it has nowhere to live until Agent Control is its own panel.
 
+
+## Review Findings
+
+Reviewed commit `a9497bd6`; the feature goal is achieved — `getAgentControlHtml` now serves `src/webview/agent-control.html` (161 KB, four tabs, `data-panel="agent-control"`, no `data-view`) instead of the 796 KB board, `KanbanProvider._getHtml` branches on `viewMarker`, and `src/` contains no `data-view="agent-control"` or `AGENT_CONTROL_VIEW`. Three fixes applied: `KanbanProvider.saveBuildTargetConfig` now pushes `config` on the `buildTarget` message (it blanked the SSH host / Actions repo / credentials checkbox on the round-trip that saved them), `buildTargetDirective` now tells the agent to send `planId` (the only writer of `BuildConfig.planIndex`, previously dead), and `protocol-catalog.json` was regenerated so the CI `catalog:check` gate is green (it was red on the commit's own new endpoint). Validation: `tsc -p tsconfig.test.json` clean, `catalog:check` OK, `eslint` 0 errors, `test:contract:agent-control-config` 11/11, both standing-order fragment suites green, and every retargeted suite at or better than its `a9497bd6^` baseline (measured in a `git archive` copy of the parent — `completion-asserted-never-inferred` improved 2→1, `panel-runtime-surface` 2→1, the rest unchanged). Remaining risk is coverage, not correctness: three of the five subtasks have no automated check that discriminates on their core mechanism.
+
+## Deferred Findings
+
+- MAJOR — commit `a9497bd6` sweeps in the Coding Rounds contract rewrite (deletion of `CODING_HEAD_WORK`, the `hasRegisteredRounds` compat branch, and the `headNext` lead arm) which belongs to `coding-rounds-05-the-lead-is-told-its-new-contract.md`, not to any plan in this feature — `src/services/standingOrderFragments.ts:125`
+- MAJOR — commit `a9497bd6` also carries an unrelated feature-file edit for the Liveness feature — `.switchboard/features/liveness-stall-watching-and-what-arms-them-8033c64d-49e3-497b-9ef5-c1b386dec20b.md:14`
+- MAJOR — `src/test/prompts-tab-move-regression.test.js` was retargeted at `agent-control.html` by this commit but has no `package.json` script and no CI invocation; it also fails (pre-existing, same assertion at baseline) — `src/test/prompts-tab-move-regression.test.js:1`
+- NIT — `agent-control.html` carries dead `#setup-tab-content` / `#uat-tab-content` CSS inherited from the board — `src/webview/agent-control.html:2373`
+- NIT — `inspectStandingOrders` does `kept.indexOf(o)` inside a `map` over every persisted row (O(n²)) — `src/services/teamWiring.ts:2246`
+- NIT — `listCoreStandingOrders` still resolves `hasRegisteredRounds` per team, which no surviving fragment reads — `src/services/standingOrders.ts:495`

@@ -14018,13 +14018,20 @@ ${FOCUS_DIRECTIVE}`;
                 if (typeof msg.actionsRepo === 'string') { await db.setConfigJson('build.actionsRepo', msg.actionsRepo.trim()); }
                 if (typeof msg.actionsConfigured === 'boolean') { await db.setConfigJson('build.actionsConfigured', msg.actionsConfigured); }
                 const cfg = await readBuildConfig(db);
-                const availability = probeBuildTargets({
+                // `config` RIDES THE PUSH. The panel renders its three connection
+                // inputs from `msg.config` and treats an absent one as `{}` — so a
+                // push without it blanked the SSH host / Actions repo / credentials
+                // checkbox the operator had just saved, on the very round-trip that
+                // saved them. Read back what was written rather than echoing `msg`,
+                // so the inputs show the stored (trimmed) values.
+                const savedConfig = {
                     sshHost: (await db.getConfigJson<string>('build.sshHost', '')) || '',
                     actionsRepo: (await db.getConfigJson<string>('build.actionsRepo', '')) || '',
                     actionsConfigured: (await db.getConfigJson<boolean>('build.actionsConfigured', false)) === true,
-                });
-                this.postMessage({ type: 'buildTarget', target: cfg.target, unrecognizedTarget: cfg.unrecognizedTarget, availability, lastResults: lastResultPerTarget(cfg) });
-                return { success: true, availability };
+                };
+                const availability = probeBuildTargets(savedConfig);
+                this.postMessage({ type: 'buildTarget', target: cfg.target, unrecognizedTarget: cfg.unrecognizedTarget, availability, lastResults: lastResultPerTarget(cfg), config: savedConfig });
+                return { success: true, availability, config: savedConfig };
             }
             case 'recordBuildResult': {
                 // A build result recorded against its commit SHA. The AGENT runs the

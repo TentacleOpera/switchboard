@@ -128,9 +128,15 @@ export function normalizeBuildConfig(raw: unknown): BuildConfig {
  * the standing-orders block (same convention as the completion directive).
  */
 export function buildTargetDirective(target: string, detail?: string): string {
+    // `planId` is part of the payload, not optional decoration: it is the ONLY
+    // writer of BuildConfig.planIndex, and without it `resolveBuildResult`'s
+    // plan → commit bridge (and the getBuildResult verb's planId arm) can never
+    // resolve — a stored index with no writer, which is the failure this repo
+    // keeps re-reporting. `commitSha` still keys the result; planId only indexes it.
     const record = ' When the build finishes, record its outcome against the commit you built so the '
         + 'reviewer receives the result for THAT commit: run `node "<cliPath>" verb recordBuildResult '
-        + '\'{"commitSha":"<sha>","target":"' + target + '","success":<true|false>,"durationMs":<ms>}\'`. '
+        + '\'{"commitSha":"<sha>","planId":"<the planId you were dispatched>","target":"' + target
+        + '","success":<true|false>,"durationMs":<ms>}\'`. '
         + 'A result keyed by the wrong sha, or not recorded at all, tells the reviewer "not built yet".';
     switch (target) {
         case 'this-box':
