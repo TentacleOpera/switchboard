@@ -50,9 +50,21 @@ happens to say so".
   POLICY: You are strictly forbidden from spawning or invoking any subagents. Handle all tasks
   yourself."* Note `'default'` and `'useSubagents'` emit **nothing** (`agentPromptBuilder.ts:1483`),
   so today the absence of the directive is the current behaviour.
-- **One policy, one place.** Once the add-on exists, a per-role `subagentPolicy` override and a team
-  add-on can disagree. Precedence must be stated and recorded in the delivered prompt's source, or
-  this becomes another "which store answered" question.
+- **Precedence is settled: a team standing order always wins.** Decided by the operator 2026-09-15 —
+  *"standing orders for teams always override conflicts in the prompt builder."* Where a team
+  standing order and a prompt-builder-derived policy disagree, the standing order is the delivered
+  value and the builder's is discarded.
+- **The rule is general, not a subagent carve-out.** The prompt builder derives **29** policies from
+  the `addons` layer — `driveMode`, `gitProhibitionEnabled`, `pairProgrammingEnabled`,
+  `accurateCodingEnabled`, `workflowFilePath` and the rest, alongside `subagentPolicy`. Every one of
+  them can be contradicted by a team standing order, so the precedence belongs in the composition
+  code **once**, as a stated rule, not re-implemented per policy. Implementing it only for
+  `subagentPolicy` leaves 28 policies with undefined behaviour on conflict, which is the state this
+  plan is trying to leave.
+- **The delivered value records which layer produced it.** This is the CLAUDE.md tagged-source rule
+  applied to prompt composition: a policy arriving from two layers with no attribution is how the
+  four-level startup-command lookup became unanswerable after the fact. Knowing a standing order won
+  is worth as much as the win itself.
 
 ## Proposed Changes
 
@@ -78,13 +90,20 @@ happens to say so".
 - **Edge case:** the toggle must be discoverable in the orders surface. An add-on that is on by
   default and hidden is the buried default this plan exists to remove, relocated.
 
-### C — precedence, stated once
+### C — precedence, stated once, for every policy
 
-- **Logic:** a per-role `subagentPolicy` and the team add-on can disagree. Decide and document which
-  wins, and record the source alongside the value so "which layer answered" is answerable after the
-  fact.
-- **Edge case:** this is the CLAUDE.md tagged-source rule applied to prompt composition — a policy
-  arriving from two places with no attribution is how the startup-command bug happened.
+- **Logic:** implement "a team standing order overrides the prompt builder on conflict" as a single
+  rule in the composition path, covering all 29 `addons` policies — not a branch inside the
+  subagent handling.
+- **Logic:** record the winning layer alongside the delivered value, so "which layer answered" is
+  answerable after the fact.
+- **Edge case:** *conflict* needs a definition. A standing order that says nothing about a policy is
+  not a conflict and must not blank the builder's value — only an order that actually speaks to it
+  overrides. Getting this wrong turns every standing order into a wipe of every unrelated policy.
+- **Edge case:** the default-ON no-subagents add-on from Change B is itself a team standing order,
+  so under this rule it overrides a per-role `useSubagents`. That is the intended reading, and it
+  means the per-role toggle stops being sufficient to opt out — the team-level toggle is the opt-out.
+  Confirm that is wanted before shipping both changes together.
 
 ## Verification Plan
 
@@ -98,4 +117,8 @@ happens to say so".
 3. The add-on's body is `NO_SUBAGENTS_DIRECTIVE` itself — no second copy of the text exists.
 4. A default-on add-on is composed at delivery and never persisted as an operator-authored row
    *(paired positive: turning it off survives the next compose)*.
-5. Where a role policy and the team add-on disagree, the delivered prompt's source is recorded.
+5. Where a team standing order and a prompt-builder policy disagree, the standing order's value is
+   delivered, and the winning layer is recorded alongside it.
+6. That precedence is implemented once in the composition path and applies to every `addons` policy,
+   not only `subagentPolicy` — greppable as a single rule, not a per-policy branch.
+7. A standing order that does not mention a policy leaves the builder's value intact.
