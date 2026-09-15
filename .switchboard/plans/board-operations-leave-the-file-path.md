@@ -76,9 +76,15 @@ focus makes the cloud-agent premise moot.
   that already do. The error names the board and how to reach it; it does not offer a workaround.
 - **The `manage-features` skill loses its Create-by-file section.** Documentation that teaches the
   unguarded path is as load-bearing as the code that implements it.
-- **`**Feature:**` and `**Project:**` become arrival metadata only** — applied on INSERT, not on
-  update of a row that already exists. This keeps a plan able to declare its feature as it arrives,
-  and closes the bulk-reassign hole without touching ingestion.
+- **`**Feature:**` becomes arrival metadata only** — applied on INSERT, not on update of a row that
+  already exists. This keeps a plan able to declare its feature as it arrives, and closes the
+  bulk-reassign hole without touching ingestion.
+- **`**Project:**` is NOT touched by this plan.** `replace-agent-project-pinning-with-a-sticky-ui-setting.md`
+  (`03ed0e7a`, PLAN REVIEWED) removes agent-authored project pinning outright, replacing it with a
+  board-level sticky-project setting the importer consults. That is a superset of making the pin
+  arrival-only, and it owns `_resolveProjectForInsert`. Two plans editing that precedence in
+  different directions is how a resolver ends up with both mechanisms half-applied — so the project
+  half stays there, and this plan handles `**Feature:**` alone.
 - **No replacement fallback is added.** If the board is unreachable, that is the answer: start it.
   The failure must be loud and actionable, never a second path that quietly does less.
 - **Not in scope: the board-instruction-file design.** `cloud-agent-fills-and-pushes-board-instructions`
@@ -121,6 +127,12 @@ focus makes the cloud-agent premise moot.
     mechanism. Flagged above as out of scope.
   - `f78bb9e6` *The Feature File Is a Faithful Projection of the Database* — reinforced by this
     plan: once the file is never a write path, "projection" is unambiguous.
+  - `03ed0e7a` *Replace agent-authored project pinning with a sticky-project UI setting* — owns the
+    `**Project:**` half outright. Must not be implemented in parallel with a project change here;
+    there is none, by design.
+  - `f72f21ea` *The manage-features Skill Stops Teaching the File Path* — this plan's documentation
+    half, in feature `497b83ac`. Either order works; landing only one leaves either a live fallback
+    nobody is told about, or instructions for a path that now fails.
   - `aef9bed6` *Scaffolding Installs a CLI Dependency It Never Checks* — adjacent. Both narrow the
     ways an agent can proceed without a reachable board.
 
@@ -154,11 +166,12 @@ deliverable, not decoration.
   file-based membership (`**Feature:**` in the metadata block). Same treatment — these are the same
   path under another heading.
 
-### Change C — membership metadata becomes arrival-only
+### Change C — feature membership metadata becomes arrival-only
 
 #### `src/services/PlanIngestionEngine.ts` (`:3137`) and the sibling carrier in `KanbanProvider.ts` (`:16554`, `:16613`)
-- **Logic:** apply `**Feature:**` / `**Project:**` on INSERT only. On a row that already exists,
-  ignore both — the verb rail owns membership from that point on.
+- **Logic:** apply `**Feature:**` on INSERT only. On a row that already exists, ignore it — the verb
+  rail owns membership from that point on. **Do not change `**Project:**` here** — see Settled
+  Design; `03ed0e7a` owns that resolver.
 - **Edge case:** a plan file deleted and re-added is an INSERT again, so it re-declares. Acceptable,
   and worth a comment so it is not read as a leak.
 - **Edge case:** confirm the feature-creation verb path does not itself rely on the update-time
@@ -192,6 +205,7 @@ deliverable, not decoration.
    failure naming the board; none writes a file instead.
 3. The `manage-features` skill contains no instruction to create or link a feature by writing a
    file.
-4. `**Feature:**` and `**Project:**` are applied only when the plan row is being inserted.
+4. `**Feature:**` is applied only when the plan row is being inserted. `_resolveProjectForInsert`
+   is unmodified by this plan.
 5. `create-feature-skill-documents-the-frontmatter-carrier.md` is no longer in a dispatchable
    column, or no longer instructs agents to use the frontmatter carrier for membership.
