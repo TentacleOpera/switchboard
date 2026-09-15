@@ -2026,22 +2026,44 @@ export async function startHeadlessSwitchboard(opts: HeadlessSwitchboardOptions)
                     }
                     return { success: true };
 
-                case 'addProject': {
-                    const workspaceId = await getWorkspaceId();
-                    if (workspaceId && payload.projectName) {
-                        await db.addProject(workspaceId, payload.projectName);
-                        await pushFullState();
-                    }
-                    return { success: true };
+                // Project mutations DELEGATE to the provider's arms rather than
+                // writing through `db` here, and push through the 40 ms coalescer.
+                //
+                // Why delegate: the provider owns `_allWorkspaceProjectsCache`
+                // (KanbanProvider.ts:1209), which `getFullStateMessages` reads to build
+                // `allWorkspaceProjects` — and `allWorkspaceProjects[workspaceRoot]` is
+                // what the board's project dropdown is built from (kanban.html:7994),
+                // NOT the sibling `projects` field. Writing the row through `db` here
+                // left that cache holding the pre-create list, so every push after a
+                // create re-delivered a dropdown without the new project — including the
+                // push a browser reload asks for, because the cache lives in the host
+                // process, not the page. That is the 2026-09-15 outage: eight projects
+                // written correctly, the push firing correctly, and the list stale until
+                // the host restarted. The provider's arms null that cache on every
+                // project write; a hand-written arm here cannot, and nothing would catch
+                // it again.
+                //
+                // Why `schedulePushFullState()` and not `await pushFullState()`: a batch
+                // of agent-created projects is exactly the burst the coalescer exists for
+                // — eight creates become one rebuild over ~2,700 cards, not eight.
+                case 'addProject':
+                case 'deleteProject': {
+                    const result = await kanbanProvider.handleServiceVerb(verb, { ...payload, workspaceRoot: root });
+                    schedulePushFullState();
+                    return result;
                 }
 
-                case 'deleteProject': {
+                // Read-back for the verb rail: an agent that can create a project on this
+                // host can now confirm what it wrote. Read-only — no push. Answered here
+                // rather than through the provider because `getProjects` is not in
+                // KANBAN_VERBS (the catalog has no provider arm for it), so
+                // handleServiceVerb rejects it as an unknown verb.
+                case 'getProjects': {
                     const workspaceId = await getWorkspaceId();
-                    if (workspaceId && payload.projectName) {
-                        await db.deleteProject(workspaceId, payload.projectName);
-                        await pushFullState();
+                    if (!workspaceId) {
+                        return { success: false, error: 'No workspace ID resolved for this board' };
                     }
-                    return { success: true };
+                    return { success: true, projects: await db.getProjects(workspaceId) };
                 }
 
                 // moveSelected/moveAll, promptSelected/promptAll, chatCopyPrompt,

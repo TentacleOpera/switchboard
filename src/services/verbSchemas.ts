@@ -529,10 +529,37 @@ const KANBAN_VERB_SCHEMAS: Record<string, VerbSchema> = {
             workspaceRoot: { type: 'string' },
         },
     },
-};
-
-export const PLANNING_VERB_SCHEMAS: Record<string, VerbSchema> = {
-    // Features
+    // Projects. These two lived in PLANNING_VERB_SCHEMAS, where they validated
+    // nothing: `addProject`/`deleteProject` are KANBAN verbs, dispatched through
+    // KanbanProvider.handleServiceVerb, which validates under provider 'kanban'. A
+    // schema filed under the wrong provider is not a weaker check, it is no check —
+    // and it reads in review exactly like a check that runs.
+    addProject: {
+        fields: {
+            projectName: { type: 'string', required: true },
+            workspaceRoot: { type: 'string' },
+            // Opt-in: make the new project the active filter. Only the board's
+            // create-project button passes it; an agent creating projects over the verb
+            // rail must not move the operator's board. Typed so a rail caller passing a
+            // string is rejected rather than being silently truthy.
+            makeActive: { type: 'boolean' },
+        },
+    },
+    deleteProject: {
+        fields: {
+            projectName: { type: 'string', required: true },
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    // ── Relocated from PLANNING_VERB_SCHEMAS ──────────────────────────────────
+    // These are KANBAN verbs: they are gated by KANBAN_VERBS and validated by
+    // KanbanProvider.handleServiceVerb under provider 'kanban'. Filed under
+    // 'planning' they matched nothing — validateVerbPayload looked them up in the
+    // planning map, PlanningPanelProvider never dispatches them, and every payload
+    // reached the arm unchecked. A schema under the wrong provider is not a weaker
+    // check, it is no check, and it reads in review exactly like one that runs.
+    // (`promoteToFeature` was also filed there; the kanban entry below it already
+    // existed and is identical, so the dead copy was deleted rather than moved.)
     sendToNew: {
         fields: {
             planId: { type: 'string' },
@@ -565,19 +592,6 @@ export const PLANNING_VERB_SCHEMAS: Record<string, VerbSchema> = {
             workspaceRoot: { type: 'string' },
         },
     },
-    // Projects
-    addProject: {
-        fields: {
-            projectName: { type: 'string', required: true },
-            workspaceRoot: { type: 'string' },
-        },
-    },
-    deleteProject: {
-        fields: {
-            projectName: { type: 'string', required: true },
-            workspaceRoot: { type: 'string' },
-        },
-    },
     assignSelectedToProject: {
         fields: {
             projectName: { type: 'string', required: true },
@@ -591,7 +605,6 @@ export const PLANNING_VERB_SCHEMAS: Record<string, VerbSchema> = {
             workspaceRoot: { type: 'string' },
         },
     },
-    // Settings
     saveSetting: {
         fields: {
             key: { type: 'string', required: true },
@@ -614,7 +627,6 @@ export const PLANNING_VERB_SCHEMAS: Record<string, VerbSchema> = {
             terminalName: { type: 'string', required: true },
         },
     },
-    // Worktrees
     createWorktree: {
         fields: {
             workspaceRoot: { type: 'string' },
@@ -665,6 +677,9 @@ export const PLANNING_VERB_SCHEMAS: Record<string, VerbSchema> = {
             workspaceRoot: { type: 'string' },
         },
     },
+};
+
+export const PLANNING_VERB_SCHEMAS: Record<string, VerbSchema> = {
     // Features
     addSubtaskToFeature: {
         fields: {
@@ -676,13 +691,6 @@ export const PLANNING_VERB_SCHEMAS: Record<string, VerbSchema> = {
     removeSubtaskFromFeature: {
         fields: {
             subtaskSessionId: { type: 'string', required: true },
-            workspaceRoot: { type: 'string' },
-        },
-    },
-    promoteToFeature: {
-        fields: {
-            planId: { type: 'string', required: true },
-            name: { type: 'string' },
             workspaceRoot: { type: 'string' },
         },
     },
@@ -1433,6 +1441,45 @@ export const SETUP_VERB_SCHEMAS: Record<string, VerbSchema> = {
             notionConfig: { type: 'object' },
         },
     },
+    // ── Relocated from TASK_VIEWER_VERB_SCHEMAS ──────────────────────────────
+    // Backup / project-transfer verbs are SETUP verbs: gated by SETUP_VERBS and
+    // validated by SetupPanelProvider under provider 'setup'. Filed under
+    // 'taskViewer' they validated nothing — `restoreBackup`, `exportProject` and
+    // `importProject` each hand a caller-supplied path or id straight to the
+    // filesystem / DB arm, so the boundary check has to exist where the caller
+    // actually arrives.
+    listBackups: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+        },
+    },
+    createBackup: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            reason: { type: 'string' },
+            type: { type: 'string' },
+        },
+    },
+    restoreBackup: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            backupId: { type: 'string', required: true },
+        },
+    },
+    exportProject: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            workspaceId: { type: 'string', required: true },
+            destPath: { type: 'string', required: true },
+        },
+    },
+    importProject: {
+        fields: {
+            workspaceRoot: { type: 'string' },
+            srcPath: { type: 'string', required: true },
+            targetWorkspaceId: { type: 'string' },
+        },
+    },
 };
 
 export const TASK_VIEWER_VERB_SCHEMAS: Record<string, VerbSchema> = {
@@ -1850,38 +1897,6 @@ export const TASK_VIEWER_VERB_SCHEMAS: Record<string, VerbSchema> = {
         },
     },
     resetDatabase: {},
-    listBackups: {
-        fields: {
-            workspaceRoot: { type: 'string' },
-        },
-    },
-    createBackup: {
-        fields: {
-            workspaceRoot: { type: 'string' },
-            reason: { type: 'string' },
-            type: { type: 'string' },
-        },
-    },
-    restoreBackup: {
-        fields: {
-            workspaceRoot: { type: 'string' },
-            backupId: { type: 'string', required: true },
-        },
-    },
-    exportProject: {
-        fields: {
-            workspaceRoot: { type: 'string' },
-            workspaceId: { type: 'string', required: true },
-            destPath: { type: 'string', required: true },
-        },
-    },
-    importProject: {
-        fields: {
-            workspaceRoot: { type: 'string' },
-            srcPath: { type: 'string', required: true },
-            targetWorkspaceId: { type: 'string' },
-        },
-    },
     jobsList: {
         fields: {
             workspaceRoot: { type: 'string' },

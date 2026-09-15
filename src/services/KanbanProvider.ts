@@ -1206,6 +1206,18 @@ export class KanbanProvider implements vscode.Disposable {
         return allowedRoots;
     }
 
+    /**
+     * Drop the memoised project list. Every path that writes the `projects` table must
+     * call this, from either host — `allWorkspaceProjects` is what the board's project
+     * dropdown is built from (kanban.html), and a write that leaves the memo in place
+     * ships a correct row with a stale dropdown until the host restarts. The provider's
+     * own project arms do it inline; callers OUTSIDE this class (TaskViewerProvider's
+     * triage-pipeline setup writes `projects` directly) need this entry point.
+     */
+    public invalidateProjectCache(): void {
+        this._allWorkspaceProjectsCache = null;
+    }
+
     private async _getAllWorkspaceProjects(): Promise<Record<string, string[]>> {
         if (this._allWorkspaceProjectsCache) {
             return this._allWorkspaceProjectsCache;
@@ -1215,6 +1227,12 @@ export class KanbanProvider implements vscode.Disposable {
         const allowedRoots = this._getAllowedRoots();
         const allRoots = [...new Set([...roots, ...allowedRoots])];
 
+        // A root that could not be read is NOT recorded as "has no projects". An empty
+        // array there is indistinguishable from a real empty workspace: the dropdown
+        // renders the same either way, and memoising it makes a transient DB failure
+        // permanent for the life of the host process. Record the failure, leave the
+        // root out of the map, and skip the memo so the next push retries.
+        let degraded = false;
         for (const root of allRoots) {
             try {
                 const db = this._getKanbanDb(root);
@@ -1222,14 +1240,22 @@ export class KanbanProvider implements vscode.Disposable {
                     const workspaceId = await db.getWorkspaceId();
                     if (workspaceId) {
                         result[path.resolve(root)] = await db.getProjects(workspaceId);
+                    } else {
+                        degraded = true;
+                        console.warn(`[KanbanProvider] _getAllWorkspaceProjects: no workspace id for ${root} — project list omitted, not cached`);
                     }
+                } else {
+                    degraded = true;
+                    console.warn(`[KanbanProvider] _getAllWorkspaceProjects: database not ready for ${root} — project list omitted, not cached`);
                 }
-            } catch {
-                // Skip unavailable workspaces
-                result[path.resolve(root)] = [];
+            } catch (e) {
+                degraded = true;
+                console.warn(`[KanbanProvider] _getAllWorkspaceProjects: read failed for ${root} — project list omitted, not cached:`, e);
             }
         }
-        this._allWorkspaceProjectsCache = result;
+        if (!degraded) {
+            this._allWorkspaceProjectsCache = result;
+        }
         return result;
     }
 
@@ -4033,7 +4059,13 @@ If the user asks a question in a comment, post it as a comment on the issue. The
 
     private async _refreshBoard(_workspaceRoot?: string) {
         if (!this._panel) {
-            console.log('[KanbanProvider] _refreshBoard skipped: no panel');
+            // Expected, and not a fault, on the standalone host: it never creates a
+            // webview panel and never will — it pushes full state over the WS hub
+            // instead (bootstrap.ts `pushFullState`). Printed once per mutating verb,
+            // the bare "skipped" line read like the cause of the 2026-09-15 dropdown
+            // outage (17 of them during it) when the actual defect was a stale project
+            // cache. Say which host this is and where its refresh went.
+            console.log('[KanbanProvider] _refreshBoard skipped: no panel (host has no webview; state is pushed over the WS hub instead)');
             return;
         }
         console.log(`[KanbanProvider] _refreshBoard start: workspaceRoot=${_workspaceRoot || 'undefined'}`);
@@ -10594,13 +10626,23 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const created = await db.addProject(workspaceId, projectName);
                 this._allWorkspaceProjectsCache = null; // Invalidate cache
 
-                // Make the just-created project the active filter. This is the create-project
-                // button path (no dropdown switch), so without this the active project would
-                // stay on the previous value and plans created right after would land in the
-                // wrong project. setProjectFilter writes the kanban.activeProjectFilter config
-                // key the watcher reads. The project now exists (newly created, or already
-                // existed on a duplicate), so making it active is correct either way.
-                await this.setProjectFilter(projectName);
+                // Creating a project no longer MEANS switching to it. The switch is an
+                // opt-in the caller asks for: the board's create-project button passes
+                // `makeActive: true` (kanban.html), because that is the gesture where the
+                // operator is standing in front of the project they just made and the
+                // plans they create next belong in it.
+                //
+                // It is not the default, because this arm is also the verb rail: an agent
+                // creating eight projects in a loop moved the operator's board filter
+                // eight times and left it parked on the last one — a blank board. A side
+                // effect that is right for one caller and wrong for every other does not
+                // belong in the shared path. setProjectFilter writes the
+                // kanban.activeProjectFilter config key the watcher reads. The project
+                // exists either way here (newly created, or already existing on a
+                // duplicate), so honouring the flag is correct in both cases.
+                if (msg.makeActive === true) {
+                    await this.setProjectFilter(projectName);
+                }
 
                 await this._refreshBoard(workspaceRoot);
 

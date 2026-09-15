@@ -13351,7 +13351,12 @@ body.theme-claudify .shared-tab-btn:hover:not(.active) {
                     type: 'addProject',
                     workspaceRoot,
                     projectName,
-                    description
+                    description,
+                    // The button, and only the button, asks for the new project to become
+                    // the active filter. The backend arm no longer does it implicitly —
+                    // an agent creating projects over the verb rail must not move the
+                    // operator's board.
+                    makeActive: true
                 });
 
                 closeModal();

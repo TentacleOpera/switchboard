@@ -10528,6 +10528,12 @@ Each plan file must include:
 
             // Create the project board and assign already-imported cards to it.
             await db.addProject(workspaceId, projectName);
+            // The board's project dropdown is built from KanbanProvider's memoised
+            // `allWorkspaceProjects`, not from this write. Without this the triage
+            // project exists, cards land in it, and the operator cannot select it until
+            // the host restarts — the same stale-memo fault the standalone addProject
+            // arm had. Every writer of the `projects` table invalidates.
+            this._kanbanProvider?.invalidateProjectCache();
             const allPlans = await db.getAllPlans(workspaceId);
             const importedIds = allPlans
                 .filter((p) => p.sourceType === importSourceType)
