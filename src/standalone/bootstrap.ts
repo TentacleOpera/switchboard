@@ -12,7 +12,6 @@ import { RetentionService } from '../services/RetentionService';
 import { HostCapabilityService, sampleProcessRss } from '../services/hostCapability';
 import { CpuAttributionService } from '../services/cpuAttribution';
 import { startEventLoopWatchdog } from '../services/eventLoopWatchdog';
-import { ProbeSamplingService } from '../services/ProbeSamplingService';
 import { DEFAULT_KANBAN_COLUMNS } from '../services/agentConfig';
 import { KanbanDatabase } from '../services/KanbanDatabase';
 import {
@@ -5554,13 +5553,6 @@ Each plan file must include:
         log(opts, `Scheduled backup config read failed: ${e}`);
     }
 
-    const probeSampler = ProbeSamplingService.getInstance({
-        getActiveTerminalCount: () => ptyFleetService?.listActive()?.length ?? 0,
-        log: (m) => log(opts, m),
-        warn: (m) => log(opts, m),
-    });
-    probeSampler.start();
-
     // Write the discovery port file for external skills/scripts
     const portFile = path.join(switchboardDir, 'api-server-port.txt');
     fs.writeFileSync(portFile, String(port), 'utf8');
@@ -5667,7 +5659,6 @@ Each plan file must include:
             try { (planningProvider as any).dispose?.(); } catch { /* ignore */ }
             try { await backupService.shutdown(); } catch { /* ignore */ }
             try { retentionService.stopScheduledRotation(); } catch { /* ignore */ }
-            try { probeSampler.stop(); } catch { /* ignore */ }
             try { cpuAttribution.stop(); } catch { /* ignore */ }
             try { eventLoopWatchdog.stop(); } catch { /* ignore */ }
             try { await server.stop(); } catch { /* ignore */ }

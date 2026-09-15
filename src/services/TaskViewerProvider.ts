@@ -59,7 +59,6 @@ import { resolveWorkContext, resolveTeamGroupForTerminal, computeRosterClearTarg
 import { ORIENTATION_PREAMBLE, waitForSeatQuiescence } from './startupOrientation';
 import { detectSyncFolder } from './cloudSyncMigration';
 import { attachDirectoryWatcher, type DirectoryWatcherHandle } from './directoryWatcher';
-import { ProbeSamplingService } from './ProbeSamplingService';
 
 import * as cp from 'child_process';
 import { promisify } from 'util';
@@ -5342,11 +5341,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 }
             }
             this._apiServerDiagnosticsChannel.appendLine(`[TaskViewerProvider] Local API server started on port ${port}.`);
-            ProbeSamplingService.getInstance({
-                getActiveTerminalCount: () => this._ptyTerminalNames?.length ?? 0,
-                log: (m) => this._apiServerDiagnosticsChannel.appendLine(`[ProbeSamplingService] ${m}`),
-                warn: (m) => this._apiServerDiagnosticsChannel.appendLine(`[ProbeSamplingService] [WARN] ${m}`),
-            }).start();
             // Per-process CPU attribution + event-loop watchdog (plan:
             // attribute-switchboards-cpu-before-optimising-it). Composition-root
             // parity with standalone bootstrap: the extension host runs its own
@@ -5444,7 +5438,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             this._apiServerWatchdogTimer = undefined;
         }
         try {
-            ProbeSamplingService.getInstance().stop();
             try { this._cpuAttributionService?.stop(); } catch { /* ignore */ }
             try { this._eventLoopWatchdog?.stop(); } catch { /* ignore */ }
         } catch { /* ignore */ }

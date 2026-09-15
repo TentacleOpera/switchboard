@@ -794,13 +794,35 @@ export class PlanIngestionEngine {
     }
 
     private async _scanForNewFiles(workspaceRoot: string): Promise<void> {
-        // The scanner watches the intake folder only — plans/intake/ — so its
-        // cost is proportional to arrivals, not to archive size. Existing plans
-        // in plans/ are never re-scanned; the board reads them on demand via
-        // record.planFile. See the-plan-watcher-is-a-setting-when-the-board-does-not-own-the-tree.md.
-        const intakeDir = path.join(workspaceRoot, '.switchboard', 'plans', 'intake');
+        // Swept: plans/ (top level, NOT recursive), plans/intake/, features/.
+        //
+        // plans/ is back in the sweep. It was removed on the theory that the sweep
+        // stat'd every archived file — measured at 80ms for 2,381 plans — and that
+        // the cost grew with the archive forever. It does not: `_scanSeenPaths`
+        // (added seven weeks EARLIER) returns below the moment no new path appears,
+        // before any stat and before the DB read, and a file that already has a row
+        // is skipped by set lookup before its stat. The real steady-state cost of
+        // including plans/ is one readdir — measured 9.4ms for 2,381 entries on a
+        // Pi 400, ~0.09% of a core at the 10s tick, scaling ~4ms per 1,000 files.
+        //
+        // What excluding it cost was reliability, on the two paths the live fs
+        // watcher cannot cover, because both happen when no watcher is listening:
+        //   1. A plan written to plans/ while the board was down. The startup scan
+        //      exists precisely to import "files created before this session" and
+        //      could not see them.
+        //   2. A populated plans/ against an empty database — a fresh clone, a
+        //      rebuilt board — which never back-filled and stayed empty forever.
+        // Both were reported as deferred findings on
+        // the-plan-watcher-is-a-setting-when-the-board-does-not-own-the-tree.md.
+        //
+        // NOT recursive at the top level: the archive is flat, and recursing would
+        // re-walk intake/ (swept separately) and any folder a user parks there.
+        // intake/ stays swept so the writers still pointing at it keep working; it
+        // is a door this engine reads, not one anything is required to use.
+        const plansDir = path.join(workspaceRoot, '.switchboard', 'plans');
+        const intakeDir = path.join(plansDir, 'intake');
         const featuresDir = path.join(workspaceRoot, '.switchboard', 'features');
-        if (!fs.existsSync(intakeDir) && !fs.existsSync(featuresDir)) { return; }
+        if (!fs.existsSync(plansDir) && !fs.existsSync(featuresDir)) { return; }
 
         try {
             const currentPaths = new Set<string>();
@@ -817,6 +839,19 @@ export class PlanIngestionEngine {
                 }
             };
 
+            /** Top level only — files in `dir`, no descent. */
+            const collectTopLevel = async (dir: string): Promise<void> => {
+                const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+                for (const entry of entries) {
+                    if (entry.isFile() && entry.name.endsWith('.md')) {
+                        currentPaths.add(path.join(dir, entry.name).replace(/\\/g, '/'));
+                    }
+                }
+            };
+
+            if (fs.existsSync(plansDir)) {
+                await collectTopLevel(plansDir);
+            }
             if (fs.existsSync(intakeDir)) {
                 await collectPaths(intakeDir);
             }
