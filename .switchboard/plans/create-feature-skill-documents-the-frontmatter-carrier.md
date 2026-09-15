@@ -1,147 +1,182 @@
-# The create-feature Skill Documents the Link Mechanism That Works Without the Extension
+# The manage-features Skill Stops Teaching the File Path
 
 <!-- board-collapse-02 -->
-> **RESCOPED 2026-09-04 (Board Collapse 02).** Delete the proposed `mirror:generate` npm script and `scripts/generate-claude-mirror.js`. The generator is being removed, not given a second entry point — see *Delete the Claude mirror generator*. Edit `.agents/skills/create-feature/SKILL.md` and its `.claude/` counterpart directly, in the same commit. **The rest of this plan stands and is still wanted**: the two stale sections telling remote agents how to link subtasks via `**Feature:**` frontmatter, and flipping "never commit the feature file" to "commit it in remote sessions".
+> **RESCOPED 2026-09-04 (Board Collapse 02).** The `mirror:generate` npm script and
+> `scripts/generate-claude-mirror.js` were deleted from this plan — the generator was being removed,
+> not given a second entry point. That half is void and is not restated below.
 
+> **REWRITTEN 2026-09-15.** This plan's central change — make the `**Feature:**` frontmatter
+> carrier the *primary documented* way to link subtasks — is **reversed**. See the superseded
+> callout under Defect A. What remains is the commit guidance, two invariants, and removing the
+> instructions that send an agent down the file path.
 
 ## Goal
 
-Fix two stale sections in the `create-feature` skill that make an agent produce a feature with no subtasks attached, and that tell it not to commit the file it just wrote. Both were caught by an agent following the skill in a real remote session.
+Bring the feature skill in line with the system as it now is: the board is the only way to change
+board state, and the file path is being removed. Delete the sections that tell an agent to link
+subtasks by writing frontmatter, fix the stale "do not commit" instruction, and state the two
+invariants an agent gets wrong.
 
 ### Problem analysis
 
-`create-feature` is the skill for creating a feature when the VS Code extension is **not** running. Two of its sections describe a world that no longer exists.
+**The skill this plan was written against no longer exists.** It targeted
+`.agents/skills/create-feature/SKILL.md`. That skill has been consolidated into
+`manage-features`, which now carries Create, Create from Plans, Group and Rearrange in one file.
+Every path below is re-pointed. `scripts/generate-claude-mirror.js` does not exist (correctly — the
+2026-09-04 rescope removed it); `scripts/check-claude-mirror.js` remains as the drift guard.
 
-**Defect A — the skill does not document the link mechanism that works.** Its "Linking Existing Plans as Subtasks" section offers exactly one method, `assign-to-feature.js`, and then says:
+**Defect A — reversed.**
 
-> This also routes through the extension; in a remote session it will fail and the agent should note that subtask linking will need to be done when VS Code is next opened, OR the user can drag-and-drop in the kanban UI.
+> **Superseded:** *"Rewrite 'Linking Existing Plans as Subtasks' so the frontmatter carrier is the
+> primary method, since it is the one that works in the situation this skill exists for."*
+> **Reason:** the situation that justified it is gone. The carrier was the answer to "a cloud agent
+> cannot reach the board", and `switchboard tailnet` now serves the board on loopback **and** the
+> machine's Tailscale address, so any agent on the tailnet reaches the verb rail directly. The
+> operator settled this on 2026-09-15: the file-write operations are being removed
+> (`board-operations-leave-the-file-path.md`), because the file path enforces none of the invariants
+> the verb path does — `setProjectForPlansInvariant` rejects a direct subtask project change and
+> cascades feature→subtasks; a hand-written line does neither — and because a feature file's body is
+> not re-read after import, so editing one is a silent no-op that still reports a successful write.
+> Promoting the carrier to the primary documented method would teach the exact path being deleted.
+> **Replaced with:** the skill documents **one** way to link subtasks — through the board — and says
+> plainly that an unreachable board is an error to fix, not a case to work around. The sentence that
+> produced the empty feature still goes; it is replaced by "start the board", not by frontmatter.
 
-So the skill whose entire purpose is "the extension is unreachable" tells the agent that linking is impossible without the extension. An agent following it literally writes a feature file, links nothing, and hands the user an empty feature plus an apology.
+**Defect A′ — what is actually wrong with the skill today.** Three passages still send an agent to
+the file path, all in `.agents/skills/manage-features/SKILL.md`:
 
-Linking works fine without the extension. `**Feature:** <feature-uuid>` written into each plan's `.md` **is** the carrier — `src/services/PlanIngestionEngine.ts:999` logs *"Linked subtask … to feature … via `**Feature:**` frontmatter"*. It is apply-if-empty (`:993-994` returns early when `featureId` is already set) and it defers with retries when the feature row has not been imported yet (`:978-988`), so plan and feature files can land in either order.
+- `:113-114` — *"note that subtask linking will need to be done when VS Code is next opened, OR the
+  user can drag-and-drop in the kanban UI."* This is the original defect and is still there: the
+  section whose premise is "the board is unreachable" tells the agent linking is impossible. It is
+  wrong for a new reason now — the board is reachable; start it.
+- `:469-470` — the Rearrange primitives table's remote column instructs writing `**Feature:**` and
+  `**Project:**` into the metadata block, and removing the `**Feature:**` line to detach.
+- `:480` — *"remote: file + `**Feature:**` line → move to PLAN REVIEWED"*.
 
-> **Superseded:** The project's own CLAUDE.md documents this as the *only* mechanism: *"Feature relationships are carried by `**Feature:** <feature-plan-id>` … No manifest file or batch payload is used."*
-> **Reason:** The quoted text is not in CLAUDE.md. It appears in `.agents/workflows/switchboard-cloud.md` (line 39) and its mirror `.claude/skills/switchboard-cloud/SKILL.md` (line 39). The `improve-plan` SKILL.md itself (line 149) also documents this mechanism. CLAUDE.md contains the Switchboard protocol (workflow registry, skill table, plan-authoring rules) but does not include the "No manifest file or batch payload is used" sentence. The misattribution does not change the argument — the mechanism IS documented in the project — but the citation must point to the correct file so a verifier can check it.
-> **Replaced with:** The project documents this as the *only* mechanism in `.agents/workflows/switchboard-cloud.md:39` (and its mirror): *"Feature relationships are carried by `**Feature:** <feature-plan-id>` … No manifest file or batch payload is used."* The `improve-plan` SKILL.md (line 149) states the same. The skill and the project instructions disagree, and the skill is the one an agent reads while doing the task.
+**Defect B — unchanged and still valid.** `:130-132` still says:
 
-**This is on every remote grouping path.** `create-feature-from-plans` is the extension-running skill, and it correctly hands off when the extension is down — *"fall back to the `create-feature` skill"* (`.agents/skills/create-feature-from-plans/SKILL.md:19`, `:26`, `:71`). The `switchboard-cloud` workflow says the same. So all of them terminate in the broken section.
+> Do NOT commit or push — creating a feature is a planning action. Leave the new
+> file in the working tree for the user. (The features folder will be tracked once
+> `expose-features-folder-in-gitignore.md` is deployed.)
 
-**Defect B — the "don't commit" instruction is stale.** "After Writing" says:
+That plan deployed and is gone. `.gitignore:63` carries the explicit `!.switchboard/features/`
+negation and feature files are tracked today. The parenthetical describes a pre-deployment state,
+and the instruction it justifies leaves a remote agent's work uncommitted in an ephemeral container.
 
-> Do NOT commit or push — creating a feature is a planning action. Leave the new file in the working tree for the user. (The features folder will be tracked once `expose-features-folder-in-gitignore.md` is deployed.)
+**Where the fix goes.** `.agents/` is the source of truth; `.claude/skills/` is generated.
+`scripts/check-claude-mirror.js` regenerates from `.agents/` and fails CI on drift — its header names
+the reason: *"the exact failure mode behind the 'skill fixes don't stick' bug this guard
+backstops."* Hand-editing the `.claude` copy turns `mirror:check` red, and it is the likely wrong
+move because it is the copy an agent reads.
 
-That plan has deployed and is gone from `.switchboard/plans/`. `.gitignore:55` carries an explicit `!.switchboard/features/` negation, and 261 feature files are tracked today. The parenthetical describes a pre-deployment state, and the instruction it justifies leaves a remote agent's work uncommitted in an ephemeral container.
+### Root cause
 
-**Where the fix goes.** `.agents/` is the source of truth; `.claude/skills/` is **generated**. `scripts/check-claude-mirror.js` regenerates the mirror from `.agents/` with the same `generateClaudeMirror` the extension uses and fails CI on drift, and its header names the reason: *"the exact failure mode behind the 'skill fixes don't stick' bug this guard backstops."* The two copies differ only in that the `.claude` one carries YAML frontmatter, which the generator adds. Editing `.claude/skills/create-feature/SKILL.md` is the wrong move and turns `mirror:check` red — and it is the likely wrong move, because that is the copy an agent reads.
-
-**A contributing gap:** there is a `mirror:check` script but no regenerate script. An agent that correctly edits `.agents/` has no documented way to refresh the mirror, so it either leaves CI red or hand-edits `.claude/` and defeats the guard. `generateClaudeMirror(rootDir, extensionVersion)` is exported at `src/services/ClaudeCodeMirrorService.ts:446`.
+The skill was written when an unreachable board was a normal condition, so it documented a way to
+work around one. The board became reachable from anywhere on the tailnet and the workaround was
+never retired — it hardened into the documented method, and this plan was about to promote it
+further.
 
 ## Metadata
 
+**Feature:** 497b83ac-da27-4cc9-b862-dbe37ed3718b
 **Complexity:** 2
 **Tags:** docs, bugfix
 
 ## User Review Required
 
-Yes — the rewrite of the "After Writing" section changes the commit guidance from "never commit" to "commit in remote sessions." This is a behavioral policy change for agents following the skill. The user should confirm that remote agents committing feature files (and the plans they group) is the desired behavior, since it changes what a remote session leaves behind in the git tree.
+No. Both open questions are settled. The commit-policy question is answered by `.gitignore:63` —
+feature files are tracked, so "leave it uncommitted" loses a remote session's work. The linking
+question is settled by `board-operations-leave-the-file-path.md`.
 
 ## Complexity Audit
 
 ### Routine
-- Editing markdown content in a single skill file (`.agents/skills/create-feature/SKILL.md`).
-- ~~Adding one npm script entry to `package.json` (`mirror:generate`).~~ **REMOVED 2026-09-04 (Board Collapse audit): the mirror generator is being deleted, not given a second entry point.** Every `mirror:generate` step, risk note and verification line below is void with it — including the ordering note about `npm run compile-tests`. Edit `.agents/skills/create-feature/SKILL.md` and its `.claude/` counterpart **directly, in the same commit**. The rest of this plan stands: the two stale sections on linking subtasks via `**Feature:**` frontmatter, and flipping "never commit the feature file" to "commit it in remote sessions".
-- Regenerating the mirror by running the new script — mechanical, idempotent.
-- Grep-based verification that stale claims are gone.
+- Editing markdown in one skill file and regenerating its mirror.
+- Grep-based verification that the stale claims are gone.
 
 ### Complex / Risky
-- The "After Writing" guidance change is a policy shift (not just a factual correction) — a remote agent will now commit feature files instead of leaving them in the working tree. If the user disagrees with this policy, the fix introduces an unwanted behavior. This is flagged in User Review Required.
+- **Three separate passages teach the file path**, in two different sections (Create, Rearrange).
+  Fixing the famous one at `:113` and leaving the Rearrange table at `:469` leaves the path fully
+  documented under another heading.
+- **Sequencing with `board-operations-leave-the-file-path.md`.** That plan removes
+  `create-feature.js`'s `viaDirectFile` fallback; this one removes the documentation pointing at it.
+  Either order works, but landing only this one leaves a working fallback nobody is told about, and
+  landing only that one leaves instructions for a path that now fails.
 
 ## Edge-Case & Dependency Audit
 
-**Race Conditions:** None. The skill is documentation; it does not execute code. The `mirror:generate` script calls `generateClaudeMirror`, which is synchronous and idempotent (documented in its JSDoc at `ClaudeCodeMirrorService.ts:443`).
-
-**Security:** No security implications. No secrets, credentials, or auth surfaces touched.
-
-**Side Effects:**
-- Running `mirror:generate` overwrites all of `.claude/skills/` from `.agents/`. If any hand-edited drift exists in other skill files (it should not, since `mirror:check` guards this), the regeneration would overwrite it. This is the intended behavior — the guard exists to prevent exactly this drift.
-- The `mirror:generate` script must be run after `npm run compile-tests` because it requires `out/services/ClaudeCodeMirrorService.js` (same as `mirror:check`, per `check-claude-mirror.js:13-14,64-66`). The plan should document this prerequisite.
-
-**Dependencies & Conflicts:**
-- `mirror:check` (package.json:914) remains unchanged. The new `mirror:generate` script is additive.
-- The `create-feature-from-plans` skill's three fallback references (`:19`, `:26`, `:71`) point to the `create-feature` skill. After the fix, they land on a section that can complete the job. No edit expected there, but the verification plan asserts it.
-- The `switchboard-cloud` workflow (`.agents/workflows/switchboard-cloud.md:39`) already documents the frontmatter carrier. The fix brings the `create-feature` skill into alignment with it — no conflict.
-
-## Dependencies
-
-None — this plan is self-contained. No other plan needs to complete first.
+- **Race conditions / security.** None; documentation.
+- **Side effects.** An agent that currently produces a feature with the board down will start
+  failing. That is intended and must be a clear error, not a silent empty feature.
+- **Dependencies & conflicts.**
+  - `board-operations-leave-the-file-path.md` — removes the code path this plan stops documenting.
+    This plan is that plan's Change B, kept here because this card already exists and is scoped to
+    this skill.
+  - `cloud-agent-fills-and-pushes-board-instructions.md` (BACKLOG) — same premise, different
+    mechanism; out of scope for both.
+  - `check-claude-mirror.js` — the drift guard. Unchanged; the mirror must be regenerated, not
+    hand-edited.
 
 ## Adversarial Synthesis
 
-Key risks: (1) the commit-policy change in "After Writing" is a behavioral shift, not just a factual fix — if the user expects remote agents to never commit, the fix introduces an unwanted side effect; (2) a plan without a `## Metadata` block would need one created to carry `**Feature:**`, and the skill must say so explicitly; (3) the `mirror:generate` script shares `mirror:check`'s compiled-output prerequisite, which must be documented or an agent will hit a confusing "module not found" error. Mitigations: the policy change is flagged in User Review Required; the Metadata-block edge case is addressed in the Proposed Changes; the compile prerequisite is noted in the script documentation.
+Small and low-risk, with two traps. The first is partial removal: three passages teach the file path
+and only one is famous, so a fix that reads well against the reported symptom can leave the
+mechanism fully documented in the Rearrange table. The second is replacing the deleted sentence with
+nothing — an agent that hits an unreachable board needs to be told to start it, or it will invent a
+workaround, which is how the original section came to exist.
 
 ## Proposed Changes
 
-### `.agents/skills/create-feature/SKILL.md`
+### `.agents/skills/manage-features/SKILL.md`
 
-**Context:** This is the source-of-truth skill file. The `.claude/skills/` mirror is generated from it and must never be hand-edited.
+**Context:** source-of-truth skill. The `.claude/skills/manage-features/` mirror is generated.
 
-**Logic:** Two sections have stale content that causes agent failure in remote sessions. The "Linking Existing Plans as Subtasks" section offers only `assign-to-feature.js` (which requires the extension) and says linking is impossible without it. The "After Writing" section says "do NOT commit" based on a gitignore state that no longer exists. Both need rewriting to match the current system.
+1. **`:113-114` — delete the "linking must wait for VS Code" sentence.** Replace with: linking
+   requires a running board; if `switchboard api GET /health` does not answer, start it
+   (`switchboard local` or `switchboard tailnet`) and retry. Do not offer a file-based alternative.
+2. **`:469-470`, `:480` — remove the remote/file column from the Rearrange primitives.** Membership
+   is changed through the board only. Keep the local commands; drop the `**Feature:**`-by-file
+   instructions and the "remove the line to detach" row.
+3. **`:130-132` — fix "After Writing".** Drop the stale gitignore parenthetical and the blanket
+   "do NOT commit". `.switchboard/features/` is tracked; a remote container is ephemeral, so
+   uncommitted work is lost work. A local session may leave the file for review; a remote session
+   commits it with the plans it groups.
+4. **State the two invariants** where linking is described, not only under Filename Convention:
+   - A feature's UUID lives **only** in its filename. A body-line UUID that disagrees links nothing.
+   - Never write a `**Plan ID:**` line into a plan body — it is never parsed; the importer keys
+     identity by file path.
+5. **Note that `.agents/` is source of truth** and `.claude/skills/` is generated, so the next agent
+   asked to fix a skill edits the right file. Prefer a shared skill-authoring home if one exists —
+   it applies to every skill, not this one.
 
-**Implementation:**
+### `.claude/skills/manage-features/SKILL.md`
 
-1. **Rewrite "Linking Existing Plans as Subtasks" so the frontmatter carrier is the primary method**, since it is the one that works in the situation this skill exists for:
-   - Write `**Feature:** <feature-uuid>` into each plan's `## Metadata` block. The UUID is the one in the feature's filename.
-   - State that it is apply-if-empty — it will not steal a plan already attached to another feature.
-   - State that order does not matter: an unresolved reference defers and retries (up to 5 retries, `PlanIngestionEngine.MAX_FEATURE_LINK_RETRIES = 5` at `:184`).
-   - Keep `assign-to-feature.js` documented, correctly labelled as the path for when the extension **is** running.
-   - Delete the claim that linking must wait for VS Code. It is the sentence that produces the empty feature.
-
-2. **Fix "After Writing":** drop the stale gitignore parenthetical, and drop the blanket "do NOT commit". `.switchboard/features/` is tracked, and a remote session's container is ephemeral, so uncommitted work is lost work. Say that a local session may leave the file for the user to review, and a remote session should commit it with the plans it groups.
-
-3. **Add the two invariants an agent gets wrong**, both already true and neither currently stated in the linking section:
-   - The feature's UUID lives **only** in its filename. The skill says this under "Filename Convention" but not where linking is described, which is where it matters — a body-line UUID that disagrees with the filename links nothing.
-   - Never write a `**Plan ID:**` line into a plan body. It is never parsed; the importer keys identity by file path.
-
-4. **Add a note that `.agents/` is the source of truth** and `.claude/skills/` is generated, so the next agent asked to fix a skill edits the right file. Consider placing this in the skill-authoring guidance rather than in `create-feature` itself if a better home exists — it applies to every skill, not this one.
-
-**Edge Cases:**
-- **Plan without a `## Metadata` block:** If a plan file does not have a `## Metadata` section, the agent must create one before writing `**Feature:** <uuid>` into it. The skill should state this explicitly — an agent that tries to write the frontmatter line into a non-existent section will either place it in the wrong location or skip it.
-- **Feature UUID mismatch:** If the UUID written into `**Feature:**` does not match the UUID in the feature's filename, the defer mechanism will exhaust retries (5) and drop the link silently (`:983-986`). The invariant in step 3 guards this, but the skill should state the consequence — not just the rule.
-
-### `package.json`
-
-**Context:** The `mirror:check` script (line 914) guards against `.claude/skills/` drift but there is no matching `mirror:generate` script to fix drift when it occurs.
-
-**Logic:** Add a `mirror:generate` npm script wrapping `generateClaudeMirror`, so "edit `.agents/`, run `npm run mirror:generate`, commit both" is a stated two-step rather than folklore.
-
-**Implementation:**
-- Add `"mirror:generate": "node scripts/generate-claude-mirror.js"` alongside the existing `mirror:check` entry.
-- Create `scripts/generate-claude-mirror.js` as a thin wrapper that calls `generateClaudeMirror(REPO_ROOT, packageVersion)` and writes to the committed `.claude/skills/` directory (unlike `mirror:check`, which writes to a temp dir for diffing).
-- The script must require `out/services/ClaudeCodeMirrorService.js` (same compiled-output prerequisite as `mirror:check`). Document this in the script header: "Run after `npm run compile-tests`."
-- Keep `mirror:check` exactly as it is — it is the guard, and this only gives it a matching fix command.
-
-### `.claude/skills/create-feature/SKILL.md`
-
-**Context:** This is the generated mirror. It must NOT be hand-edited.
-
-**Logic:** Regenerate by running `npm run mirror:generate` after the `.agents/` edit. The only difference from the `.agents/` version should be the leading YAML frontmatter block that the generator adds.
-
-**Implementation:**
-- Run `npm run mirror:generate` (after `npm run compile-tests`).
-- Verify with `diff` that the only delta is the frontmatter block.
-- Commit both the `.agents/` edit and the regenerated `.claude/` file in the same commit. A commit containing one without the other is the drift the guard exists to catch.
+Regenerate from `.agents/`; do not hand-edit. Commit both in the same commit — one without the other
+is the drift `check-claude-mirror.js` exists to catch.
 
 ## Verification Plan
 
 ### Automated Tests
 
-1. **`npm run mirror:check` is green** after the edit and regeneration — the gate that fails if `.claude/` was hand-edited or left stale.
-2. **The two copies differ only by frontmatter.** `diff` them and assert the only delta is the leading YAML block, as it is today.
-3. **`npm run mirror:generate` is idempotent** — running it twice produces no diff.
-4. **Read-through as the target reader.** Follow the revised skill end to end in a session with no extension, on two throwaway plans, and assert the result is a feature file plus two plans each carrying `**Feature:** <uuid>` matching the filename UUID. The current skill fails this test, which is what makes it the acceptance criterion.
-5. **Grep for the deleted claim.** Assert no copy of any skill still says subtask linking requires VS Code or must wait for the extension.
-6. **Grep for the stale gitignore claim**, in `create-feature` and anywhere else it was copied.
-7. **Confirm `.switchboard/features/` is still tracked** (`git check-ignore` reports the `!` negation, `git ls-files` non-empty) so step 2 is not being justified by a state that has since changed back.
-8. **`create-feature-from-plans` still hands off correctly** — its three fallback references (`:19`, `:26`, `:71`) now land on a section that can complete the job. No edit expected there; assert it rather than assume it.
+1. **`npm run mirror:check` is green** after the edit and regeneration.
+2. **The two copies differ only by the generated YAML frontmatter.**
+3. **No skill teaches file-based membership.** Grep every skill for `**Feature:**` used as a linking
+   instruction; assert none remains. Covers all three passages, not just `:113`.
+4. **No skill says linking must wait for VS Code**, or that a user should drag-and-drop instead.
+5. **No skill repeats the stale gitignore claim** — in `manage-features` or anywhere it was copied.
+6. **`.switchboard/features/` is still tracked** (`.gitignore:63` negation present, `git ls-files`
+   non-empty), so the commit guidance is not justified by a state that has since changed back.
+7. **Read-through as the target reader.** Follow the revised skill with the board **stopped** and
+   assert it ends in a clear "start the board" error — not an empty feature, and not a file written
+   to `.switchboard/features/`.
 
-No `npm run compile` dependency for the skill text itself; step 5's script addition touches `package.json` only. The relevant gate is `mirror:check`.
+### Goal Invariants
+
+1. `.agents/skills/manage-features/SKILL.md` contains no instruction to write `**Feature:**` or
+   `**Project:**` into a plan file to change membership. *(Paired positive: it still documents
+   `assign-to-feature.js` and the board endpoints, so linking is documented — through one path.)*
+2. It contains no sentence stating that subtask linking requires VS Code or must wait for it.
+3. It contains no reference to `expose-features-folder-in-gitignore`, and no blanket "do NOT commit".
+4. It states both invariants: the UUID lives only in the filename, and `**Plan ID:**` is never
+   written.
+5. `.claude/skills/manage-features/SKILL.md` differs from the `.agents/` copy only by frontmatter.
