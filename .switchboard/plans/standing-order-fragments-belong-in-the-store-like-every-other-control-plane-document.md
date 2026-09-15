@@ -350,3 +350,33 @@ needed.
 ## Implementation Summary
 
 Implemented all five proposed changes. Five static fragment bodies (`gitSafety`, `reviewHead`, `headCommit`, `orchestratorReport`, `globalCompletion`) now live in the `control_plane` store as `kind: 'standing-order-fragment'` rows, seeded at startup alongside protocols. An in-memory cache (module-level `Map` in `standingOrderFragments.ts`) is warmed after `seedControlPlaneFromBundle` in `bootstrap.ts` and invalidated+reloaded on every fragment-kind `override_body`/`upsert` write in `KanbanDatabase.ts`, so an operator's override reaches the next delivered prompt with no rebuild and no restart. The sync composition path reads the cache via `resolveStaticFragmentBody` closures — no async in the delivery path. `composeStandingOrderFragments` returns a `sources` map (`'store'` vs `'compiled-default'`) per static fragment, logged by `resolveStandingOrderInstruction` to satisfy the repo's fallback rule. `projectControlPlane` skips the new kind to prevent junk `.agents/` files. A new contract test (`standing-order-fragment-store-contract.test.js`) covers the census gate, store-backed delivery through `renderStandaloneOrdersBlock`, compiled-default fallback, override-survives-reseed, and projection skip. The additive-contract test's invariant 2 comment was reconciled to reflect that the live source for a moved static fragment is the store, not src.
+
+---
+
+## Review Findings
+
+Goal achieved: the five static bodies resolve from `control_plane` through the real sync delivery
+path, and an `override_body` edit reaches the next prompt with no rebuild and no restart — verified,
+not assumed, by mutating the compiled cache read in `out/` and confirming the store-backed-delivery
+assertion fails. Files changed by this review: `src/services/standingOrderFragments.ts` (an empty
+`override_body` was read as "unconfigured" and the compiled constant served instead — the exact quiet
+fallback the repo's rule forbids, and the opposite of §1/§5; now only `NULL` falls through, via a new
+`resolveStoredBody`), `src/services/teamWiring.ts` (the second composition site materialises
+`member-orders.md` to disk and recorded no source), `src/test/standing-order-fragment-store-contract.test.js`
+(its `test()` helper was never called, so the suite always printed `0 passed, 0 failed` and the
+`failed > 0` exit gate was dead; plus new coverage that an empty override suppresses and that every
+static id has a non-empty compiled default), and `.github/workflows/integration-tests.yml` (the suite
+was defined in `package.json` and invoked by no workflow — the "green while incomplete" hole).
+Validation: fragment-store 4/4, standing-orders-additive 9/9, `compile-tests` clean; the webpack build
+was not run on this machine at the operator's instruction. Remaining risk: `GIT_SAFETY_DIRECTIVE` has
+a second, un-overridable delivery channel at `agentPromptBuilder.ts:913`, so overriding
+`team.git-safety` changes the standing-orders block but not the per-dispatch GIT POLICY block.
+
+## Deferred Findings
+
+- MAJOR `src/services/agentPromptBuilder.ts:913` — `GIT_SAFETY_DIRECTIVE` is emitted per-dispatch straight from the compiled constant, so an operator override of the `team.git-safety` row changes only one of its two delivery channels. Not fixed: routing it through the cache would make `agentPromptBuilder` import `standingOrderFragments`, which already imports `agentPromptBuilder` (import cycle), and `GIT_SAFETY_DIRECTIVE_WORKTREE_MODE` has no store row to pair with. Needs a plan of its own.
+- NIT `src/services/teamWiring.ts:318` — `GLOBAL_QUEUE_DONE_ORDER_BODY` aliases the compiled constant, not the store. Referenced only by tests today, so no live divergence, but it is a latent second channel.
+- NIT `src/services/teamWiring.ts:598` — `TEAM_HEAD_COMMIT_INSTRUCTION` likewise aliases the compiled constant; its docblock still claims an installer that no longer references it.
+- NIT `src/services/teamWiring.ts:1502` — `member-orders.md` is a disk snapshot of composed fragments, so a later override does not reach it until the team is re-wired. Source logging was added; the staleness itself predates this plan.
+- NIT `src/services/dbMerge.ts:1076` — `INSERT OR REPLACE INTO control_plane` bypasses `upsertControlPlaneEntry`, so it never invalidates the fragment cache. Harmless today because both callers run at startup (`bootstrap.ts:431`) before the warm at `:883`; it becomes a live staleness hole the moment a merge runs at runtime.
+- NIT `src/services/standingOrders.ts:663` — the per-delivery `console.log` of fragment sources is unconditional, so it fires on every composed prompt even when every source is `store`.
