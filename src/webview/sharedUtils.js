@@ -698,10 +698,9 @@ function initOverflowMenus() {
             endpointEditable: false,
             needsKey: true,
             // BARE ids — Google's own API, no vendor prefix and no ':free'
-            // suffix. The OpenRouter block below lists the SAME model families
-            // under 'google/…:free', and the two forms are not interchangeable:
-            // Google rejects a prefixed id, and OpenRouter bills the unsuffixed
-            // one. Do not copy an id between these two lists.
+            // suffix. The OpenRouter block below lists the same model families
+            // under 'google/…:free'; each provider owns its own list, so these
+            // two never meet at runtime.
             models: [
                 { id: 'gemma-4-31b-it', label: 'Gemma 4 31B' },
                 { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash-Lite' },
@@ -713,11 +712,12 @@ function initOverflowMenus() {
             endpoint: 'https://openrouter.ai/api/v1/chat/completions',
             endpointEditable: false,
             needsKey: true,
-            // The `:free` SUFFIX is load-bearing: `google/gemma-4-31b-it` and
-            // `google/gemma-4-31b-it:free` are both real models on OpenRouter and
-            // only the suffixed one is free. Dropping it bills the account
-            // silently — the call succeeds either way, which is exactly the kind
-            // of wrong-but-plausible value that never announces itself.
+            // OpenRouter's own ids: vendor-prefixed, `:free` suffixed. The same
+            // model families appear in the Google block above under bare ids,
+            // and the two forms are not interchangeable — which is why each
+            // provider carries its own list and its own saved row. Switching
+            // provider rebuilds this select from THIS array and reloads THIS
+            // provider's record, so an id from another list has no path in.
             // Verified against GET https://openrouter.ai/api/v1/models
             // (pricing.prompt === '0') on 2026-09-16.
             models: [
@@ -753,13 +753,6 @@ function initOverflowMenus() {
 
     const byId = id => PROVIDERS.find(p => p.id === id) || null;
 
-    /**
-     * Map a stored endpoint back to its provider, so a config written before
-     * the provider dropdown existed renders as the provider it actually is
-     * rather than as an empty form. Returns a TAGGED result — `matched` says
-     * whether the endpoint was recognised, so "we know this is Google" is
-     * never indistinguishable from "we defaulted to Google".
-     */
     // There is deliberately NO inferFromEndpoint here. Guessing a provider from
     // a stored URL was the client twin of LocalApiServer's _providerIdForEndpoint,
     // and both existed only to place a flat pre-normalisation endpoint. An
